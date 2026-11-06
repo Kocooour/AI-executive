@@ -18,6 +18,7 @@ import {
   type MyPlanStatus,type MyPlanStatusCommand,type MyPlanStatusFailure,
 } from "../../lib/target-staging-my-plan-status-client";
 import {canRetryUncertainMyPlanRead} from "../../lib/target-staging-my-plan-status-recovery";
+import {myPlanToolbarChangeBlocked} from "../../lib/target-staging-my-plan-toolbar-lock";
 import {
   myPlanWhenTarget,prepareMyPlanWhen,dispatchMyPlanWhen,checkMyPlanWhenReceipt,
   type MyPlanWhenCommand,type MyPlanWhenFailure,
@@ -724,6 +725,12 @@ export function TargetStagingMyPlanPreview({
   const whenPending=whenAction.kind==="pending"||
     whenAction.kind==="checking"||whenAction.kind==="uncertain";
   const anyPending=actionPending||whenPending;
+  // Read the live synchronous refs from EACH handler, not just disabled state.
+  // A second event may arrive before React commits the pending render.
+  const toolbarChangeBlocked=()=>myPlanToolbarChangeBlocked({
+    anyPending,statusInFlight:statusOperation.current!==null,
+    whenInFlight:whenOperation.current!==null,
+  });
   const canComplete=statusWriteEnabled&&!anyPending;
   const canWhen=whenWriteEnabled&&!anyPending&&
     followToday&&date!==null&&date===localMyPlanDate();
@@ -769,7 +776,7 @@ export function TargetStagingMyPlanPreview({
           onChange={event=>{
             const chosen=event.target.value;
             if(!validMyPlanDate(chosen))return;
-            if(anyPending||statusOperation.current||whenOperation.current)return;
+            if(toolbarChangeBlocked())return;
             resetFeedback();
             setFollowToday(false); // A manual date remains pinned at midnight.
             if(chosen!==date){invalidate("stale",true);setDate(chosen);}
@@ -778,7 +785,7 @@ export function TargetStagingMyPlanPreview({
       <label>Moje práce
         <select value={areaFilter} disabled={anyPending}
           onChange={event=>{
-            if(actionPending||statusOperation.current)return;
+            if(toolbarChangeBlocked())return;
             resetFeedback();
             invalidate("stale",true);
             setAreaFilter(event.target.value as MyPlanSliceFilter);
@@ -789,7 +796,7 @@ export function TargetStagingMyPlanPreview({
         </select>
       </label>
       <button type="button" disabled={anyPending} onClick={()=>{
-        if(actionPending||statusOperation.current)return;
+        if(toolbarChangeBlocked())return;
         resetFeedback();
         const chosen=localMyPlanDate();
         invalidate("stale",true);
