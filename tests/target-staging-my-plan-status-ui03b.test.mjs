@@ -219,7 +219,7 @@ test("P1: failed-read recovery is visible outside ready state and never changes 
   assert.match(ui,/state\.status==="error"&&state\.reason!=="signed-out"/);
   assert.match(ui,/uncertainCommand\.current!==null&&/);
   assert.match(ui,/onClick=\{retryUncertainRead\}/);
-  assert.match(ui,/\{!actionPending&&<>/);
+  assert.match(ui,/\{!anyPending&&<>/);
 });
 
 test("P1: Undo receipt/preflight failures preserve same actor's completion instead of losing it",()=>{
