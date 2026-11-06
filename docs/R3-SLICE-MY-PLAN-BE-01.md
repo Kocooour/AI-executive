@@ -1,4 +1,4 @@
-# R3-slice / BE-01 až BE-08 — stagingový Můj plán a bezpečné CAS
+# R3-slice / BE-01 až BE-09 — stagingový Můj plán a bezpečné CAS
 
 **Stav:** implementační podklad pro první vertikální řez, nikoli aktivovaný produkt. Navazuje na rozhodnutí [5. 11. 2026](decisions/2026-11-05-ui-revize-a-vertikalni-rez.md) a existující task-only `R2d.3l.2` read endpoint.
 
@@ -65,6 +65,14 @@ BE-01/BE-02/BE-03 **nevytváří nový zápis** ani nerozšiřuje ACL. UI vertik
 - HTTP nadále vydává přesně **čtyři** pole `{expectedRevision,dueOn,writeAreaId,restoreGeneration}`, pouze po živé kontrole session, Area policy, task/parent revize a staging konfigurace. `Cache-Control: no-store` a rate limiting zůstávají.
 - Náhled **neautorizuje pozdější zápis**: `PATCH` dál nezávisle v `BEGIN IMMEDIATE` kontroluje session, oprávnění, generaci a CAS. Syntetické regrese ověřují shodu revize s kanonickým hashováním, úpravu termínu mezi snapshotem a release, viewer/foreign actor, downgrade role, podvržené interní DTO a dlouhý název.
 - `dueOn` se nesmí zaměnit za soukromé `whenOn`. Beze změny ostatních endpointů, Undo, produkčních dat, migrací a aktivace funkcí; staging zůstává default-off.
+
+## BE-09 — syntetické integrační kontrakty vertikálního řezu
+
+- `tests/target-staging-my-plan-slice-http.test.mjs` ověřuje **jednu skutečnou identitu a jeden izolovaný SQLite staging** napříč `GET My Plan Dnes/Zítra`, `GET/PATCH/receipt personal-when` a `GET/PATCH/receipt status`. Volá skutečné Node HTTP route handlery i autentizační, podprocesové, CAS a live-release vrstvy; **žádné mockované endpointy** ani externí/serverová produkční data.
+- Scénář nejprve přesune Bobův soukromý úkol zítra na dnes (`whenOn`, nikoli sdílený `dueOn`) a ověří zneplatnění starého dvoudenního cursoru změnou jeho private epoch. Samostatně dokončí přiřazený sdílený úkol a ověří jeho zmizení. Následně provede **dvě nové reverzní CAS operace** (vyčištění soukromého dne, obnovení úkolu), každou s novým serverovým preview a UUID; výsledný Můj plán musí odpovídat původnímu a nesmí mít duplicity.
+- Každý úspěšný příkaz má read-only actor-bound receipt `committed`; starší potvrzení zůstane dohledatelné i po pozdějším reverzním příkazu, neznamená však povolení znovu odeslat původní PATCH. Jiný aktér se k němu nedostane a jeho Můj plán nezobrazuje Bobova data.
+- Revokační scénář ověřuje, že odebrání sdíleného přiřazení a role zneplatní cursor, skryje sdílený úkol a odmítne obě původní write preview a receipt cesty; po revokaci durable session nefunguje ani čtení osobního plánu.
+- Jde o **CI regresní bránu na syntetických datech** a integritu existujících default-off API, **nikoli** aktivaci klientského UI, produkčních příznaků, migraci, reset, deployment nebo kompletní browser E2E. BE-09 nepřidává nový endpoint ani nezměkčuje ACL.
 
 ## Co zůstává mimo iteraci
 
