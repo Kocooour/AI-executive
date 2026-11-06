@@ -34,3 +34,15 @@ export async function prepareConfirmedMyPlanUndo(
       ?{kind:"signed-out"}:{kind:"retry",reason:prepared.reason};
   return {kind:"ready",command:prepared.command};
 }
+
+/** Preserve Undo on manual same-context read retry, never on actor/context loss.
+ * An authorized fresh list read still controls whether Undo is rendered. */
+export function keepConfirmedMyPlanUndoOnRefresh(
+  action:{kind:string;status?:string;taskId?:string;areaId?:string},
+  command:MyPlanStatusCommand|null,
+):boolean{
+  return action.kind==="committed"&&action.status==="completed"&&
+    command!==null&&validStatusCommand(command)&&
+    command.status==="completed"&&command.taskId===action.taskId&&
+    command.writeAreaId===action.areaId;
+}
