@@ -17,6 +17,7 @@ import {
   prepareMyPlanStatus,dispatchMyPlanStatus,checkMyPlanStatusReceipt,
   type MyPlanStatus,type MyPlanStatusCommand,type MyPlanStatusFailure,
 } from "../../lib/target-staging-my-plan-status-client";
+import {canRetryUncertainMyPlanRead} from "../../lib/target-staging-my-plan-status-recovery";
 
 type StatusAction=
   |{kind:"idle"}
@@ -373,6 +374,21 @@ export function TargetStagingMyPlanPreview({
     }else setAction({kind:"uncertain"});
   }
 
+  /** Escape hatch when the fresh ACL-checked list read fails after a PATCH.
+   * Preserve the original command, prevent new mutations, and retry ONLY GET.
+   * The existing fetch effect will reauthorize the current session and Area
+   * before the separate receipt-only button can be shown again. */
+  function retryUncertainRead(){
+    if(!canRetryUncertainMyPlanRead({
+      statusWriteEnabled,actionKind:action.kind,readStatus:state.status,
+      hasOriginalCommand:uncertainCommand.current!==null,
+      operationInFlight:statusOperation.current!==null,
+      visible:document.visibilityState==="visible",online:navigator.onLine,
+    }))return;
+    invalidate("stale",true);
+    setRefresh(n=>n+1);
+  }
+
   function resetFeedback(){
     uncertainCommand.current=null;
     confirmedCommand.current=null;
@@ -463,6 +479,16 @@ export function TargetStagingMyPlanPreview({
       <p role="status" className="stagingMyPlanMutation">Ověřuji potvrzení předchozí operace…</p>}
     {state.status==="error"&&
       <p role="alert" className="stagingMyPlanWarning">{reasons[state.reason]}</p>}
+    {statusWriteEnabled&&action.kind==="uncertain"&&
+      state.status==="error"&&state.reason!=="signed-out"&&
+      uncertainCommand.current!==null&&
+      <div role="alert" className="stagingMyPlanWarning">
+        <p>Výsledek předchozího zápisu není potvrzen. Obnovení přehledu
+          provede pouze nové autorizované čtení, nikdy další zápis.</p>
+        <button type="button" onClick={retryUncertainRead}>
+          Znovu ověřit přehled (bez zápisu)
+        </button>
+      </div>}
     {state.status==="ready"&&date&&
       state.page.evaluationDate===date&&state.page.areaFilter===areaFilter&&<>
       {statusWriteEnabled&&action.kind==="uncertain"&&
