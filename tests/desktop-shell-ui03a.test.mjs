@@ -35,7 +35,9 @@ test("UI-03a: desktop FAB is preview-only, accessible and uses existing private-
   assert.match(fab, /if \(!mobileDesignV1Preview\) return null/);
   assert.match(fab, /window\.matchMedia\("\(min-width: 701px\)"\)/);
   assert.match(fab, /state\.capture \|\| state\.assistantOpen \|\| state\.moreOpen/);
-  assert.match(fab, /state\.selected \|\| state\.confirmRequest/);
+  assert.match(fab, /state\.confirmRequest \|\| document\.querySelector/);
+  const keyBlock = fab.slice(fab.indexOf("const blocked = Boolean(state.capture"), fab.indexOf("if (!desktopCaptureShortcut"));
+  assert.doesNotMatch(keyBlock, /state\.selected/, "nonmodal desktop inspector must not block capture shortcut");
   assert.match(fab, /document\.querySelector\('\[aria-modal="true"\]'\)/);
   assert.match(fab, /window\.addEventListener\("keydown", onKeyDown\)/);
   assert.match(fab, /window\.removeEventListener\("keydown", onKeyDown\)/);
@@ -54,9 +56,17 @@ test("UI-03a: desktop FAB is preview-only, accessible and uses existing private-
 test("UI-03a: direct desktop views and untruncated workspace-scoped projects remain independent of legacy", () => {
   const sidebar = read("../app/ui/views/sidebar.tsx");
   const app = read("../app/ui/use-lumi-app.tsx");
-  assert.match(sidebar, /\{\(mobileDesignV1Preview \|\| secondaryOpen\) && \(/);
+  assert.match(sidebar, /\{mobileDesignV1Preview && \(\s*<div className="secondaryNav"/);
+  assert.match(sidebar, /\{!mobileDesignV1Preview && secondaryOpen && \(/);
   assert.match(sidebar, /\{!mobileDesignV1Preview && \(\s*<>/);
   assert.match(sidebar, /className="secondaryNav"/);
+  assert.match(sidebar, /data-desktop-v1-direct-views/);
+  assert.match(sidebar, /role="navigation"/);
+  const directNav = sidebar.indexOf("data-desktop-v1-direct-views");
+  const projects = sidebar.indexOf("{sidebarProjects.length > 0 && (");
+  const legacyNav = sidebar.indexOf("{!mobileDesignV1Preview && secondaryOpen && (");
+  assert.ok(directNav > 0 && directNav < projects && projects < legacyNav,
+    "v1 direct views must precede all 26 project rows, legacy More remains below projects");
   assert.match(app, /activeSidebarProjects\(\s*projects, activeWorkspaceId, mobileDesignV1Preview \? Number\.POSITIVE_INFINITY : undefined/);
   const project = (id, workspaceId = "personal", status = "active") =>
     ({ id, type: "project", title: id, workspaceId, status, properties: {}, createdAt: Number(id.slice(1)) || 0, updatedAt: 1 });
@@ -96,5 +106,58 @@ test("UI-03a: purple FAB stays outside inspector and actions in a reserved scrol
   assert.match(css, /scroll-margin-block-end: 122px/);
   assert.match(css, /\.appShell\[data-design-system="lumi-v1"\]\.inspectorOpen \.desktopCaptureFab/);
   assert.match(css, /:has\(\[aria-modal="true"\]\) \.desktopCaptureFab/);
+  assert.match(css, /\.appShell\[data-design-system="lumi-v1"\]\.inspectorOpen > aside \.desktopInspectorCapture/);
   assert.match(css, /grid-template-areas:\s*"workspace assistant"\s*"search search"/);
+});
+
+
+test("UI-03a: capture remains available in sidebar with 701–1199px and wide side-by-side inspectors", () => {
+  const sidebar = read("../app/ui/views/sidebar.tsx");
+  const fab = read("../app/ui/views/desktop-capture-fab.tsx");
+  const css = read("../app/lumi-desktop-v1.css");
+  const inspectorCss = read("../app/lumi-inspector.css");
+  // At both desktop breakpoints the existing sidebar is not a blocking modal.
+  assert.match(inspectorCss, /@media \(min-width: 1200px\)/);
+  assert.match(inspectorCss, /@media \(min-width: 701px\) and \(max-width: 1199px\)/);
+  assert.match(sidebar, /\{mobileDesignV1Preview && app\.selected && \(\s*<button/);
+  assert.match(sidebar, /data-desktop-inspector-capture/);
+  assert.match(sidebar, /aria-label=\{tr\("quickCapture"\)\}/);
+  assert.match(sidebar, /disabled=\{Boolean\(app\.capture \|\| app\.assistantOpen \|\| app\.moreOpen \|\| app\.confirmRequest\)\}/);
+  assert.match(sidebar, /onClick=\{\(\) => openCapture\(\)\}/);
+  assert.match(css, /\.inspectorOpen > aside \.desktopInspectorCapture \{/);
+  assert.match(css, /\.desktopInspectorCapture:focus-visible/);
+  assert.match(css, /\.desktopInspectorCapture:disabled/);
+  assert.match(css, /min-height: 44px/);
+  // The floating action remains hidden near an inspector; keyboard and
+  // accessible sidebar button are still available, but true modals block both.
+  assert.match(css, /\.inspectorOpen \.desktopCaptureFab/);
+  const keyboardBlock = fab.slice(fab.indexOf("const blocked = Boolean(state.capture"),
+    fab.indexOf("if (!desktopCaptureShortcut"));
+  assert.doesNotMatch(keyboardBlock, /state\.selected/);
+  assert.match(keyboardBlock, /state\.confirmRequest/);
+  assert.match(keyboardBlock, /aria-modal/);
+  assert.equal(desktopCaptureShortcut(key, false, false), true,
+    "nonmodal inspector does not enter the blocked state");
+  assert.equal(desktopCaptureShortcut(key, false, true), false,
+    "modal overlay still blocks the shortcut");
+});
+
+test("UI-03a: 26+ projects do not push direct destinations below projects", () => {
+  const sidebar = read("../app/ui/views/sidebar.tsx");
+  const css = read("../app/lumi-navigation.css");
+  const previewNav = sidebar.indexOf("data-desktop-v1-direct-views");
+  const firstProject = sidebar.indexOf("{sidebarProjects.length > 0");
+  const legacyMore = sidebar.indexOf("{!mobileDesignV1Preview && secondaryOpen");
+  assert.ok(previewNav >= 0 && previewNav < firstProject && legacyMore > firstProject);
+  assert.match(sidebar, /aria-label=\{tr\("moreViews"\)\} data-desktop-v1-direct-views/);
+  assert.match(sidebar, /\{secondaryViews\.map\(\(x\) => <button/);
+  assert.match(sidebar, /<section className="sidebarProjects"/);
+  assert.match(css, /\.appShell > aside > \.sidebarScroll \{/);
+  assert.match(css, /overflow-y: auto/);
+  const records = Array.from({ length: 30 }, (_, i) => ({
+    id: `p${i}`, title: `Project ${i}`, type: "project", status: "active",
+    workspaceId: "personal", properties: {}, createdAt: i + 1, updatedAt: 1,
+  }));
+  assert.equal(activeSidebarProjects(records, "personal", Number.POSITIVE_INFINITY).length, 30);
+  assert.equal(activeSidebarProjects(records, "personal").length, 7);
 });
