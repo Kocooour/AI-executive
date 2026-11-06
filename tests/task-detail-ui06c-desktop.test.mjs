@@ -68,11 +68,13 @@ test("UI-06c P2: unresolved viewport cannot expose unguarded legacy completion i
   const detail = read("../app/ui/views/detail-panel.tsx");
   // Until matchMedia runs (including first mobile hydration), neither new
   // completion exists. The old unguarded action must also remain absent.
-  assert.match(detail, /useState<boolean \\| null>\\(null\\)/);
-  assert.match(detail, /const mobileTaskPreview = Boolean\\(mobileDesignV1Preview && mobileViewport && selectedTask\\)/);
-  assert.match(detail, /const desktopTaskPreview = Boolean\\(mobileDesignV1Preview && mobileViewport === false && selectedTask\\)/);
-  assert.match(detail, /\\{!mobileDesignV1Preview && \\(selected.status === "completed" \\?/);
-  assert.doesNotMatch(detail, /\\{!mobileTaskPreview && !desktopTaskPreview && \\(selected.status === "completed"/,
+  assert.ok(detail.includes("useState<boolean | null>(null)"));
+  assert.ok(detail.includes(
+    "const mobileTaskPreview = Boolean(mobileDesignV1Preview && mobileViewport && selectedTask)"));
+  assert.ok(detail.includes(
+    "const desktopTaskPreview = Boolean(mobileDesignV1Preview && mobileViewport === false && selectedTask)"));
+  assert.ok(detail.includes('!mobileDesignV1Preview && (selected.status === "completed" ?'));
+  assert.ok(!detail.includes('!mobileTaskPreview && !desktopTaskPreview && (selected.status === "completed"'),
     "both viewport predicates are false on hydration, so they cannot guard old actions");
   for (const viewport of [null, true, false]) {
     const designPreview = true;
