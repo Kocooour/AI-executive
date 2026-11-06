@@ -1441,6 +1441,22 @@ export async function readStagingTemporalStatusPreviewInChild(
   return parsed;
 }
 
+/** BE-08: exact same strict task CAS/guard DTO as BE-04, but the
+ * dueOn endpoint has independent gating and its own dedicated worker. */
+export type StagingTemporalDueOnPreviewResult=StagingTemporalStatusPreviewResult;
+
+export const parseStagingTemporalDueOnPreview=parseStagingTemporalStatusPreview;
+
+export async function readStagingTemporalDueOnPreviewInChild(
+  config:StagingPersonalReadConfig,taskId:string,
+):Promise<StagingTemporalDueOnPreviewResult|null> {
+  const payload=await runChild(config,"target-staging-temporal-due-on-preview-child.mjs",[taskId]);
+  const parsed=parseStagingTemporalDueOnPreview(payload,taskId);
+  if(payload!==null&&!parsed)
+    logStagingFailure("temporal_due_on_preview","invalid_atomic_child_dto");
+  return parsed;
+}
+
 export type StagingTaskDetailResult =
   | StagingPersonalDetailResult
   | { ok: true; scope: "shared"; task: TargetScopedReadableTask; linearization: TargetReadLinearization;
