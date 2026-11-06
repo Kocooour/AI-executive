@@ -13,6 +13,7 @@ import type {TargetGlobalTaskPage,TargetGlobalTask,TargetGlobalTaskScope} from "
 import type {TargetGlobalProjectPage,TargetGlobalProject} from "./target-global-project-read-model";
 import type {TargetGlobalNotePage,TargetGlobalNote,GlobalNoteAreaEpoch} from "./target-global-note-read-model";
 import type {TargetGlobalCombinedPage,GlobalCombinedItem,GlobalCombinedPositions} from "./target-global-combined-read-model";
+import type {AuthorizedSearchPage,AuthorizedSearchItem} from "./target-authorized-title-search";
 import {validCombinedPositions} from "./target-staging-global-combined-http-cursor";
 import type {PersonalWhenCommandPreview} from "./target-personal-when-command-read";
 import type { TemporalScope, TemporalStatus, TemporalTask, TemporalTaskPage, TemporalTaskDetail, TargetTemporalTaskLiveGuard, TemporalDueWindow, TemporalDueWindowPage } from "./target-task-temporal-read-model";
@@ -96,6 +97,8 @@ export function createStagingReadRunner(
           process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_GLOBAL_NOTES_ENABLED || "",
         AI_EXECUTIVE_TARGET_STAGING_HTTP_GLOBAL_COMBINED_ENABLED:
           process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_GLOBAL_COMBINED_ENABLED || "",
+        AI_EXECUTIVE_TARGET_STAGING_HTTP_TITLE_SEARCH_ENABLED:
+          process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_TITLE_SEARCH_ENABLED || "",
         AI_EXECUTIVE_TARGET_STAGING_HTTP_PERSONAL_WHEN_WRITE_ENABLED:
           process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_PERSONAL_WHEN_WRITE_ENABLED || "",
         AI_EXECUTIVE_TARGET_STAGING_DIRECTORY: config.stagingDirectory,
@@ -988,6 +991,109 @@ export async function readStagingGlobalNotePageInChild(
   ]);
   const parsed=parseStagingGlobalNotePage(payload,scope,limit);
   if(payload!==null&&!parsed)logStagingFailure("global_notes","invalid_child_dto");
+  return parsed;
+}
+
+/** R2d.4c: fail-closed actor-authorized title-only child DTO. All
+ * Area and note-specific epochs are mandatory for atomic LIVE release. */
+export function parseStagingTitleSearchPage(
+  value:unknown,scope:TargetGlobalTaskScope,limit:number,offset:number,
+):AuthorizedSearchPage|null{
+  if(!value||typeof value!=="object"||Array.isArray(value)||
+    !["all","personal","shared"].includes(scope)||
+    !Number.isSafeInteger(limit)||limit<1||limit>50||
+    !Number.isSafeInteger(offset)||offset<0||offset>1_000_000)return null;
+  const p=value as Record<string,unknown>;
+  if(Object.keys(p).sort().join(",")!==
+      "areaEpochs,hasMore,items,linearization,nextOffset,noteAreaEpochs,ok,revision,scope"||
+    p.ok!==true||p.scope!==scope||
+    typeof p.revision!=="string"||!REVISION.test(p.revision)||
+    typeof p.hasMore!=="boolean"||!Array.isArray(p.items)||
+    p.items.length>limit||(p.hasMore&&p.items.length!==limit)||
+    !Array.isArray(p.areaEpochs)||!Array.isArray(p.noteAreaEpochs)||
+    (p.hasMore?(p.nextOffset!==offset+p.items.length||
+      !Number.isSafeInteger(p.nextOffset)||p.nextOffset>1_000_000)
+      :p.nextOffset!==null))return null;
+  const items:AuthorizedSearchItem[]=[];
+  const rowAreas=new Map<string,"private"|"shared">();
+  const validId=(x:unknown)=>isReadableStagingProjectId(x)&&
+    typeof x==="string"&&x.trim()===x;
+  const safeEpoch=(x:unknown)=>typeof x==="number"&&
+    Number.isSafeInteger(x)&&x>=0;
+  const kindRank:Record<AuthorizedSearchItem["kind"],number>=
+    {project:0,task:1,note:2};
+  for(const raw of p.items){
+    if(!raw||typeof raw!=="object"||Array.isArray(raw))return null;
+    const i=raw as Record<string,unknown>;
+    if(!["project","task","note"].includes(String(i.kind))||
+      Object.keys(i).sort().join(",")!==
+        (i.kind==="project"?"areaId,areaKind,id,kind,title":
+         "areaId,areaKind,id,kind,projectId,title")||
+      !validId(i.id)||!validId(i.areaId)||
+      (i.areaKind!=="private"&&i.areaKind!=="shared")||
+      (scope==="personal"&&i.areaKind!=="private")||
+      (scope==="shared"&&i.areaKind!=="shared")||
+      typeof i.title!=="string"||!i.title.trim()||
+      Buffer.byteLength(i.title,"utf8")>4096||
+      (i.kind!=="project"&&i.projectId!==null&&!validId(i.projectId))||
+      (rowAreas.has(i.areaId as string)&&rowAreas.get(i.areaId as string)!==i.areaKind))
+      return null;
+    const prev=items[items.length-1];
+    if(prev){
+      const order=Buffer.compare(Buffer.from(prev.id),Buffer.from(i.id as string));
+      if(order>0||(order===0&&kindRank[prev.kind]>=
+        kindRank[i.kind as AuthorizedSearchItem["kind"]]))return null;
+    }
+    rowAreas.set(i.areaId as string,i.areaKind as "private"|"shared");
+    items.push({
+      kind:i.kind as AuthorizedSearchItem["kind"],id:i.id as string,
+      title:i.title as string,areaId:i.areaId as string,
+      areaKind:i.areaKind as "private"|"shared",
+      ...(i.kind==="project"?{}:{projectId:i.projectId as string|null}),
+    });
+  }
+  const linearization=parseLinearization(p.linearization,rowAreas);
+  if(!linearization||p.areaEpochs.length!==linearization.areas.length||
+    p.noteAreaEpochs.length!==linearization.areas.length)return null;
+  const areaEpochs:HomeSummaryAreaEpoch[]=[];
+  const noteAreaEpochs:GlobalNoteAreaEpoch[]=[];
+  for(let i=0;i<linearization.areas.length;i++){
+    const a=p.areaEpochs[i],note=p.noteAreaEpochs[i];
+    if(!a||typeof a!=="object"||Array.isArray(a)||
+      !note||typeof note!=="object"||Array.isArray(note))return null;
+    const v=a as Record<string,unknown>,n=note as Record<string,unknown>;
+    const w=linearization.areas[i];
+    if(Object.keys(v).sort().join(",")!==
+        "access,areaId,areaKind,contentRevision,policyRevision,projectContentRevision"||
+      v.areaId!==w.areaId||v.areaKind!==w.areaKind||
+      v.access!==w.access||v.policyRevision!==w.policyRevision||
+      !safeEpoch(v.contentRevision)||!safeEpoch(v.projectContentRevision)||
+      Object.keys(n).sort().join(",")!=="areaId,noteSyncRevision"||
+      n.areaId!==w.areaId||!safeEpoch(n.noteSyncRevision)||
+      (scope==="personal"&&w.areaKind!=="private")||
+      (scope==="shared"&&w.areaKind!=="shared")||
+      (i>0&&Buffer.compare(Buffer.from(linearization.areas[i-1].areaId),
+        Buffer.from(w.areaId))>=0))return null;
+    areaEpochs.push({areaId:w.areaId,areaKind:w.areaKind,access:w.access,
+      policyRevision:w.policyRevision,contentRevision:v.contentRevision as number,
+      projectContentRevision:v.projectContentRevision as number});
+    noteAreaEpochs.push({areaId:w.areaId,noteSyncRevision:n.noteSyncRevision as number});
+  }
+  return {scope,items,hasMore:p.hasMore as boolean,
+    nextOffset:p.nextOffset as number|null,revision:p.revision as string,
+    linearization,areaEpochs,noteAreaEpochs};
+}
+
+export async function readStagingTitleSearchPageInChild(
+  config:StagingPersonalReadConfig,scope:TargetGlobalTaskScope,
+  query:string,limit:number,offset:number,
+):Promise<AuthorizedSearchPage|null>{
+  const encoded=Buffer.from(query,"utf8").toString("base64url");
+  const payload=await runChild(config,"target-staging-title-search-child.mjs",[
+    scope,encoded,String(limit),String(offset),
+  ]);
+  const parsed=parseStagingTitleSearchPage(payload,scope,limit,offset);
+  if(payload!==null&&!parsed)logStagingFailure("title_search","invalid_child_dto");
   return parsed;
 }
 

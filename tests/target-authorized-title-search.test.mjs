@@ -9,12 +9,32 @@ const root=mkdtempSync(path.join(os.tmpdir(),"lumi-r2d4a-title-search-"));
 const legacy=path.join(root,"legacy");mkdirSync(legacy);
 writeFileSync(path.join(legacy,"sentinel"),"untouched");
 const saved=process.env.AI_EXECUTIVE_DATA_DIR;
+const httpEnv=["NODE_ENV","AI_EXECUTIVE_AUTH_ENABLED","AI_EXECUTIVE_PASSWORD_HASH",
+  "AI_EXECUTIVE_SESSION_SECRET","AI_EXECUTIVE_TARGET_STAGING_HTTP_ENABLED",
+  "AI_EXECUTIVE_TARGET_STAGING_HTTP_TITLE_SEARCH_ENABLED",
+  "AI_EXECUTIVE_TARGET_STAGING_DIRECTORY",
+  "AI_EXECUTIVE_TARGET_STAGING_RESTORE_GENERATION",
+  "AI_EXECUTIVE_TARGET_STAGING_OWNER_USER_ID"];
+const oldHttp=Object.fromEntries(httpEnv.map(key=>[key,process.env[key]]));
+Object.assign(process.env,{
+  NODE_ENV:"production",AI_EXECUTIVE_AUTH_ENABLED:"true",
+  AI_EXECUTIVE_PASSWORD_HASH:"scrypt:"+Buffer.alloc(16,1).toString("base64url")+
+    ":"+Buffer.alloc(64,2).toString("base64url"),
+  AI_EXECUTIVE_SESSION_SECRET:"synthetic-title-search-http-session-secret-longer-than-32",
+  AI_EXECUTIVE_TARGET_STAGING_HTTP_ENABLED:"true",
+  AI_EXECUTIVE_TARGET_STAGING_HTTP_TITLE_SEARCH_ENABLED:"true",
+});
+
 process.env.AI_EXECUTIVE_DATA_DIR=legacy;
 const {bootstrapIsolatedTargetStore}=await import("../lib/target-store-bootstrap.ts");
 const {readAuthorizedTitleSearchPage,validAuthorizedTitleQuery}=
   await import("../lib/target-authorized-title-search.ts");
 const {TargetStagingSessionAuthority}=await import("../lib/target-staging-session-authority.ts");
 const durable=await import("../lib/target-staging-durable-session.ts");
+const {createSessionToken,sessionCookieName}=await import("../lib/auth.ts");
+const {GET:searchGET}=await import("../app/api/target-staging/title-search/route.ts");
+const {parseStagingTitleSearchPage}=await import("../lib/target-staging-read-process.ts");
+
 let serial=0;const fixtures=[];
 function fixture(){
   const stage=bootstrapIsolatedTargetStore({
@@ -76,6 +96,9 @@ function fixture(){
 }
 after(()=>{
   for(const f of fixtures){f.authority.close();f.reader.close();f.db.close();}
+  for(const [key,value] of Object.entries(oldHttp)){
+    if(value===undefined)delete process.env[key];else process.env[key]=value;
+  }
   if(saved===undefined)delete process.env.AI_EXECUTIVE_DATA_DIR;
   else process.env.AI_EXECUTIVE_DATA_DIR=saved;
   assert.equal(readFileSync(path.join(legacy,"sentinel"),"utf8"),"untouched");
@@ -230,4 +253,111 @@ test("signed staging authority, complete live ACL and note-sync epoch fences",()
   assert.notEqual(guard(f,hash,revoked).ok,true);
   f.authority.close();
   assert.equal(f.authority.readAuthorizedTitleSearchPage("carol","all","Shared",10,0),null);
+});
+
+function httpFor(f){
+  Object.assign(process.env,{
+    AI_EXECUTIVE_TARGET_STAGING_DIRECTORY:f.stage.directory,
+    AI_EXECUTIVE_TARGET_STAGING_RESTORE_GENERATION:f.stage.restoreGeneration,
+    AI_EXECUTIVE_TARGET_STAGING_OWNER_USER_ID:"alice",
+  });
+}
+const url="http://localhost:3001/api/target-staging/title-search";
+const ownerCookie=()=>sessionCookieName+"="+createSessionToken();
+function loginHttp(f,who){
+  const issued=durable.issueDurableTargetStagingSession(f.store,who,900);
+  assert.equal(issued.ok,true,JSON.stringify(issued));
+  return durable.TARGET_STAGING_SESSION_COOKIE+"="+issued.sessionToken;
+}
+function httpRequest(params="q=Shared",cookie=ownerCookie()){
+  return searchGET(new Request(url+"?"+params,{headers:{
+    cookie,"x-forwarded-for":"10.79.37."+Math.max(1,serial),
+  }}));
+}
+async function httpOk(promise){
+  const res=await promise,body=await res.json();
+  assert.equal(res.status,200,JSON.stringify(body));
+  assert.equal(res.headers.get("cache-control"),"no-store");
+  assert.deepEqual(Object.keys(body).sort(),
+    ["hasMore","items","nextCursor","query","scope"]);
+  for(const item of body.items)
+    assert.deepEqual(Object.keys(item).sort(),
+      (item.kind==="project"
+        ?["areaId","areaKind","id","kind","title"]
+        :["areaId","areaKind","id","kind","projectId","title"]));
+  for(const field of ["linearization","areaEpochs","noteAreaEpochs",
+    "revision","actorUserId","restoreGeneration"])
+    assert.equal(field in body,false,field);
+  const serialized=JSON.stringify(body);
+  for(const forbidden of ["BODY secret","owner_user_id","Erin hidden",
+    "Alice private","Bob BODY","Carol BODY"])
+    assert.equal(serialized.includes(forbidden),false,forbidden);
+  return body;
+}
+test("R2d.4c HTTP independent default-off and strict query validation",async()=>{
+  const f=fixture();httpFor(f);
+  for(const flag of ["AI_EXECUTIVE_TARGET_STAGING_HTTP_ENABLED",
+    "AI_EXECUTIVE_TARGET_STAGING_HTTP_TITLE_SEARCH_ENABLED"]){
+    process.env[flag]="false";
+    assert.equal((await httpRequest()).status,404,flag);
+    process.env[flag]="true";
+  }
+  assert.equal((await searchGET(new Request(url+"?q=Shared"))).status,401);
+  for(const q of ["","q=x","q=+Shared","q=Shared+","q=Shared&q=Shared",
+    "q=Shared&scope=foreign","q=Shared&scope=all&scope=shared",
+    "q=Shared&limit=0","q=Shared&limit=51","q=Shared&limit=01",
+    "q=Shared&actor=erin","q=Shared&offset=1",
+    "q=Shared&cursor=bad", "q=Shared&cursor=a.b&cursor=a.b",
+    "q=a+b+c+d+e+f+g+h+i"]){
+    assert.equal((await httpRequest(q)).status,400,q);
+  }
+  const ok=await httpOk(httpRequest("q=Shared&scope=all"));
+  assert.deepEqual(ok.items.map(x=>x.kind+":"+x.id),
+    ["project:s-empty","project:s-shared","task:s-shared",
+      "note:s-shared","task:wild"]);
+});
+test("R2d.4c HTTP actor ACL, multiword matching and HMAC continuation",async()=>{
+  const f=fixture();httpFor(f);
+  const bob=loginHttp(f,"bob"),carol=loginHttp(f,"carol");
+  assert.deepEqual((await httpOk(httpRequest("q=Bob+task",bob))).items.map(x=>x.id),
+    ["b-bob"]);
+  assert.deepEqual((await httpOk(httpRequest("q=Bob+task&scope=shared",bob))).items,[]);
+  assert.deepEqual((await httpOk(httpRequest("q=Erin",bob))).items,[]);
+  assert.deepEqual((await httpOk(httpRequest("q=Shared&scope=shared",carol))).items.length,5);
+  const first=await httpOk(httpRequest("q=Shared&scope=all&limit=1",bob));
+  assert.deepEqual(first.items.map(x=>x.kind+":"+x.id),["project:s-empty"]);
+  assert.equal(first.hasMore,true);
+  assert.match(first.nextCursor,/^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/);
+  const cursor=encodeURIComponent(first.nextCursor);
+  const second=await httpOk(httpRequest("q=Shared&scope=all&limit=1&cursor="+cursor,bob));
+  assert.deepEqual(second.items.map(x=>x.kind+":"+x.id),["project:s-shared"]);
+  for(const [params,cookie] of [
+    ["q=Shared&scope=all&limit=1&cursor="+cursor,carol],
+    ["q=project+Shared&scope=all&limit=1&cursor="+cursor,bob],
+    ["q=Shared&scope=personal&limit=1&cursor="+cursor,bob],
+    ["q=Shared&scope=all&limit=2&cursor="+cursor,bob],
+    ["q=Shared&scope=all&limit=1&cursor="+cursor.slice(0,-1)+"X",bob],
+  ])assert.equal((await httpRequest(params,cookie)).status,400,params);
+  // Even a body-only edit changes note_sync epoch and invalidates cursor.
+  f.db.prepare("UPDATE notes SET body='new secret content' WHERE id='s-shared'").run();
+  assert.equal((await httpRequest("q=Shared&scope=all&limit=1&cursor="+cursor,bob)).status,409);
+  assert.deepEqual((await httpOk(httpRequest("q=Shared",bob))).items.length,5);
+  assert.equal(durable.revokeAllDurableTargetStagingSessionsForUser(
+    f.store,"bob").ok,true);
+  assert.equal((await httpRequest("q=Shared",bob)).status,401);
+});
+test("R2d.4c fail-closed child DTO requires all Area and note witnesses",()=>{
+  const f=fixture();
+  const internal=page(f,"bob","all","Shared");
+  assert.ok(internal);
+  const dto={ok:true,...internal};
+  assert.ok(parseStagingTitleSearchPage(dto,"all",50,0));
+  assert.equal(parseStagingTitleSearchPage({...dto,noteAreaEpochs:[]},"all",50,0),null);
+  assert.equal(parseStagingTitleSearchPage({...dto,areaEpochs:[]},"all",50,0),null);
+  assert.equal(parseStagingTitleSearchPage({...dto,extra:"leak"},"all",50,0),null);
+  assert.equal(parseStagingTitleSearchPage({...dto,items:[
+    {...dto.items[0],title:" "},...dto.items.slice(1)]},"all",50,0),null);
+  assert.equal(parseStagingTitleSearchPage({...dto,items:[
+    dto.items[0],dto.items[0],...dto.items.slice(2)]},"all",50,0),null);
+  assert.equal(parseStagingTitleSearchPage({...dto,nextOffset:1},"all",50,0),null);
 });
