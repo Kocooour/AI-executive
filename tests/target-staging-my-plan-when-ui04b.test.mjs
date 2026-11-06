@@ -82,7 +82,8 @@ test("UI-04b: synchronous cross-family lock and no stale visible rows during unc
   assert.match(ui,/if\(!statusWriteEnabled\|\|statusOperation\.current\|\|whenOperation\.current\|\|/);
   assert.match(ui,/whenAction\.kind==="uncertain"\|\|/);
   assert.match(ui,/const anyPending=actionPending\|\|whenPending/);
-  assert.match(ui,/const canWhen=whenWriteEnabled&&!anyPending/);
+  assert.match(ui,/const canWhen=whenWriteEnabled&&!anyPending&&/);
+  assert.match(ui,/followToday&&date!==null&&date===localMyPlanDate\(\)/);
   assert.match(ui,/const canComplete=statusWriteEnabled&&!anyPending/);
   assert.match(ui,/\{!anyPending&&<>/);
   assert.match(ui,/disabled=\{anyPending\}/);
