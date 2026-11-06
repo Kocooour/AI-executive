@@ -39,8 +39,10 @@ const {GET,PATCH}=await import("../app/api/target-staging/task-temporal/status/r
 const {POST}=await import("../app/api/target-staging/task-temporal/status/receipt/route.ts");
 const {parseTemporalStatusWriteReply,parseTemporalStatusReceiptReply}=
   await import("../lib/target-staging-temporal-status-http-process.ts");
-const {readStagingTemporalDetailInChild}=
-  await import("../lib/target-staging-read-process.ts");
+const {
+  readStagingTemporalDetailInChild,readStagingTemporalStatusPreviewInChild,
+  parseStagingTemporalStatusPreview,
+}=await import("../lib/target-staging-read-process.ts");
 const {verifyTemporalStatusTaskLive}=
   await import("../lib/target-staging-temporal-status-http.ts");
 let counter=0;
@@ -152,6 +154,51 @@ test("four independent gates and authentication fail closed, preview validates I
     assert.equal(r.status,400,s);
   }
   assert.equal((await query("unknown")).status,404);
+});
+
+test("BE-04 status CAS token and task guard share one current actor snapshot",async()=>{
+  const fx=fixture(),bob=login(fx,"bob"),carol=login(fx,"carol");
+  const config={...fx.store,ownerUserId:"alice",
+    sessionTokenHash:durable.hashTargetStagingSessionToken(bob.split("=")[1])};
+  const captured=await readStagingTemporalStatusPreviewInChild(config,"s-bob");
+  assert.equal(captured?.ok,true,JSON.stringify(captured));
+  assert.equal(captured.detail.task.areaId,"family-area");
+  assert.equal(captured.detail.linearization.areas[0].access,"editor");
+  assert.match(captured.expectedRevision,/^[a-f0-9]{64}$/);
+  const live=()=>verifyTemporalStatusTaskLive(
+    new Request(base+"?taskId=s-bob",{headers:{cookie:bob}}),
+    {kind:"session",tokenHash:config.sessionTokenHash},
+    {...fx.store,ownerUserId:"alice"},captured.detail);
+  assert.equal(live(),"ok");
+  assert.equal((await preview("s-bob",bob)).expectedRevision,captured.expectedRevision);
+  assert.equal((await readStagingTemporalStatusPreviewInChild(
+    {...fx.store,ownerUserId:"alice",
+      sessionTokenHash:durable.hashTargetStagingSessionToken(carol.split("=")[1])},
+    "s-bob")).ok,false,"viewer cannot obtain a status CAS preview");
+  assert.equal((await readStagingTemporalStatusPreviewInChild(config,"p-alice")).ok,false);
+  const db=new DatabaseSync(fx.stage.databasePath);
+  try{db.prepare("UPDATE tasks SET title='New title' WHERE id='s-bob'").run();}
+  finally{db.close();}
+  assert.equal(live(),"stale");
+  const updated=await readStagingTemporalStatusPreviewInChild(config,"s-bob");
+  assert.equal(updated?.ok,true);
+  assert.notEqual(updated.expectedRevision,captured.expectedRevision);
+  assert.equal((await preview("s-bob",bob)).expectedRevision,updated.expectedRevision);
+});
+
+test("BE-04 child status preview DTO fails closed on tampering",async()=>{
+  const fx=fixture(),bob=login(fx,"bob");
+  const config={...fx.store,ownerUserId:"alice",
+    sessionTokenHash:durable.hashTargetStagingSessionToken(bob.split("=")[1])};
+  const valid=await readStagingTemporalStatusPreviewInChild(config,"s-bob");
+  assert.equal(valid?.ok,true);
+  for(const malformed of [
+    {...valid,expectedRevision:"bad"},
+    {...valid,actorUserId:"bob"},
+    {...valid,detail:{...valid.detail,extra:"private"}},
+    {...valid,detail:{...valid.detail,guard:{...valid.detail.guard,areaId:"bob-private"}}},
+    {...valid,detail:{...valid.detail,task:{...valid.detail.task,id:"p-alice"}}},
+  ])assert.equal(parseStagingTemporalStatusPreview(malformed,"s-bob"),null);
 });
 
 test("private complete, replay, read-only receipt and reopen are atomic",async()=>{
