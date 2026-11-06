@@ -1,5 +1,6 @@
 "use client";
 import type { LumiApp } from "../use-lumi-app";
+import { mobileDesignV1Preview } from "../navigation";
 import { WorkspaceTile, workspaceTone } from "../workspace-appearance";
 
 export function Topbar({ app }: { app: LumiApp }) {
@@ -58,15 +59,17 @@ export function Topbar({ app }: { app: LumiApp }) {
             />
             <kbd>⌘ K</kbd>
           </label>
-          <button
-            className="themeToggle"
-            type="button"
-            aria-label={resolvedTheme === "dark" ? tr("switchLight") : tr("switchDark")}
-            title={resolvedTheme === "dark" ? tr("switchLight") : tr("switchDark")}
-            onClick={() => saveTheme(resolvedTheme === "dark" ? "light" : "dark")}
-          >
-            <span aria-hidden="true">{resolvedTheme === "dark" ? "☀" : "☾"}</span>
-          </button>
+          {!mobileDesignV1Preview && (
+            <button
+              className="themeToggle"
+              type="button"
+              aria-label={resolvedTheme === "dark" ? tr("switchLight") : tr("switchDark")}
+              title={resolvedTheme === "dark" ? tr("switchLight") : tr("switchDark")}
+              onClick={() => saveTheme(resolvedTheme === "dark" ? "light" : "dark")}
+            >
+              <span aria-hidden="true">{resolvedTheme === "dark" ? "☀" : "☾"}</span>
+            </button>
+          )}
           <button
             className="aiButton"
             onClick={() => setAssistantOpen(true)}

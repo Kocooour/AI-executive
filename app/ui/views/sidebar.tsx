@@ -1,6 +1,6 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
-import { primaryViews, secondaryViews } from "../navigation";
+import { mobileDesignV1Preview, primaryViews, secondaryViews } from "../navigation";
 import type { LumiApp } from "../use-lumi-app";
 import { ProjectIcon, ViewIcon } from "./project-icon";
 import { WorkspaceTile, workspaceTone } from "../workspace-appearance";
@@ -124,9 +124,17 @@ export function Sidebar({ app }: { app: LumiApp }) {
             </button>
           ))}
         </nav>
-        {/* The aggregate shows no project list: projects of several workspaces would be confusing. */}
-        {/* Projects and the "More views" list scroll as one area; the primary list above and the footer below stay put. */}
+        {/* Legacy aggregate has no direct project list: this preview never infers target ACL or cross-workspace permissions. */}
+        {/* In v1, direct destinations come BEFORE the unbounded projects so that
+            Areas/Notes/filters remain reachable without crossing 25+ project
+            rows. Legacy keeps its old order and collapsed More control. */}
         <div className="sidebarScroll">
+        {mobileDesignV1Preview && (
+          <div className="secondaryNav" id="sidebar-secondary-views" role="navigation"
+            aria-label={tr("moreViews")} data-desktop-v1-direct-views>
+            {secondaryViews.map((x) => <button key={x} className={view === x ? "active" : ""} onClick={() => { setView(x); closeDetail(); }}>{tr(x)}</button>)}
+          </div>
+        )}
         {sidebarProjects.length > 0 && (
           <section className="sidebarProjects" aria-label={tr("sidebarProjects")}>
             {sidebarProjects.map((project) => (
@@ -148,19 +156,36 @@ export function Sidebar({ app }: { app: LumiApp }) {
             ))}
           </section>
         )}
-        {secondaryOpen && (
+        {!mobileDesignV1Preview && secondaryOpen && (
           <div className="secondaryNav" id="sidebar-secondary-views" ref={secondaryRef}>
             {secondaryViews.map((x) => <button key={x} className={view === x ? "active" : ""} onClick={() => { setView(x); closeDetail(); }}>{tr(x)}</button>)}
           </div>
         )}
         </div>
         <footer className="sidebarActions">
-          <button onClick={() => openCapture()} aria-label={tr("addTask")}>
-            ＋ {tr("new")}
-          </button>
-          <button type="button" className="secondaryNavToggle" aria-expanded={secondaryOpen} aria-controls="sidebar-secondary-views" onClick={() => setSecondaryOpen((open) => !open)}>
-            <span aria-hidden="true">{secondaryOpen ? "▾" : "▸"}</span> {tr("moreViews")}
-          </button>
+          {/* The FAB is the normal desktop entry point. With a nonmodal
+              inspector open it is hidden to keep the inspector unobstructed,
+              so provide a fixed, keyboard-accessible sidebar entry instead.
+              Legacy sidebar controls remain unchanged when preview is off. */}
+          {mobileDesignV1Preview && app.selected && (
+            <button type="button" className="desktopInspectorCapture"
+              data-desktop-inspector-capture
+              aria-label={tr("quickCapture")}
+              disabled={Boolean(app.capture || app.assistantOpen || app.moreOpen || app.confirmRequest)}
+              onClick={() => openCapture()}>
+              ＋ {tr("new")}
+            </button>
+          )}
+          {!mobileDesignV1Preview && (
+            <>
+              <button onClick={() => openCapture()} aria-label={tr("addTask")}>
+                ＋ {tr("new")}
+              </button>
+              <button type="button" className="secondaryNavToggle" aria-expanded={secondaryOpen} aria-controls="sidebar-secondary-views" onClick={() => setSecondaryOpen((open) => !open)}>
+                <span aria-hidden="true">{secondaryOpen ? "▾" : "▸"}</span> {tr("moreViews")}
+              </button>
+            </>
+          )}
           <button
             className={view === "Settings" ? "active" : ""}
             onClick={() => {
