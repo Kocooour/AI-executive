@@ -606,6 +606,15 @@ export function readPreflightedTemporalStatusPreview(
     }, () => null));
 }
 
+/** BE-08: dueOn and task-status share the same task-write CAS domain and
+ * authorization. Reuse the canonical one-snapshot task/Area/parent witness,
+ * never compose a second dueOn-specific read with the CAS revision. */
+export function readPreflightedTemporalDueOnPreview(
+  store:TargetStagingReadStore,access:TargetStagingReadCredential,taskId:string,
+):{detail:TemporalTaskDetail;expectedRevision:string}|null {
+  return readPreflightedTemporalStatusPreview(store,access,taskId);
+}
+
 /**
  * Dry-run per-item write authorization on a pinned preflighted snapshot. The
  * returned SHA-256 covers this task and its Area policy revision, not every
