@@ -112,6 +112,7 @@ test("UI-05c: status and delete validate inside their IndexedDB write transactio
   assert.match(setter, /await db\.transaction\("rw", db\.entities, db\.relations, async \(\) => \{\s*if \(expectedPreview\) \{\s*const current = await db\.entities\.get\(e\.id\);\s*assertPreviewProjectMutation\(expectedPreview, current\);/);
   assert.match(setter, /projectPreviewCanCommit\(expected, current, activeWorkspaceRef\.current, blocked\)/);
   assert.match(setter, /projectPreviewCanCommit\(expected, visible, activeWorkspaceRef\.current, blocked\)/);
+  assert.match(setter, /openProjectIdRef\.current !== expected\.id/);
   assert.match(page, /await remove\(project, project\)/);
   assert.match(page, /actionInFlight\.current = true/);
   assert.match(page, /reportPreviewActionError\(error\)/);
