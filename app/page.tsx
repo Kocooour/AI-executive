@@ -13,6 +13,7 @@ import { AgentsView } from "./ui/views/agents-view";
 import { SettingsView } from "./ui/views/settings-view";
 import { EntityList } from "./ui/views/entity-list";
 import { MobileNav } from "./ui/views/mobile-nav";
+import { DesktopCaptureFab } from "./ui/views/desktop-capture-fab";
 import { CaptureDialog } from "./ui/views/capture-dialog";
 import { DetailPanel } from "./ui/views/detail-panel";
 import { AssistantPanel } from "./ui/views/assistant-panel";
@@ -105,6 +106,7 @@ export default function App() {
         </div>
       </section>
       <MobileNav app={app} />
+      <DesktopCaptureFab app={app} />
       <CaptureDialog app={app} />
       <DetailPanel app={app} />
       <AssistantPanel app={app} />
