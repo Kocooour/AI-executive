@@ -5,7 +5,7 @@ import { projectPreviewCanToggle, projectPreviewCanCommit, projectPreviewDepende
 import { settleSyncOperation } from "../lib/sync-result.ts";
 import { projectSyncNoticeAfterUndo, projectSyncNoticeResolved, sameProjectSyncNotice,
   projectSyncNoticesAfterUndo, withProjectSyncNotice, withoutProjectSyncNotice,
-  withoutResolvedProjectSyncNotices } from "../lib/project-sync-notice.ts";
+  withoutResolvedProjectSyncNotices, projectSyncNoticeTitle } from "../lib/project-sync-notice.ts";
 
 const read = (path) => readFileSync(new URL(path, import.meta.url), "utf8");
 const page = read("../app/ui/views/project-page.tsx");
@@ -201,8 +201,8 @@ test("UI-05c: both preview mutations request failures and preserve a persistent 
     "completion and deletion must each observe the result of their own server write");
   assert.match(sync, /syncQueue\.current = settled\.queue;\s*return settled\.result;/);
   assert.match(sync, /if \(reportFailure\) throw new Error\("SYNC_NOT_CONFIRMED"\)/);
-  assert.match(app, /setProjectSyncNotices\(\(current\) => withProjectSyncNotice\(current, \{ kind: "delete", projectId: e\.id \}\)\);\s*throw new Error\("project_preview_sync_pending"\)/);
-  assert.match(app, /setProjectSyncNotices\(\(current\) => withProjectSyncNotice\(current,\s*\{ kind: "status", projectId: project\.id, status, updatedAt: committedAt \}\)\);\s*throw new Error\("project_preview_sync_pending"\)/);
+  assert.match(app, /setProjectSyncNotices\(\(current\) => withProjectSyncNotice\(current,\s*\{ kind: "delete", projectId: e\.id, projectTitle: e\.title \}\)\);\s*throw new Error\("project_preview_sync_pending"\)/);
+  assert.match(app, /setProjectSyncNotices\(\(current\) => withProjectSyncNotice\(current,\s*\{ kind: "status", projectId: project\.id, projectTitle: project\.title, status, updatedAt: committedAt \}\)\);\s*throw new Error\("project_preview_sync_pending"\)/);
   assert.match(root, /role="alert"\s+data-testid="project-sync-warning"/);
   assert.match(root, /notice\.kind === "delete"/);
   assert.match(root, /onClick=\{\(\) => app\.dismissProjectSyncNotice\(notice\.projectId\)\}/);
@@ -302,4 +302,24 @@ test("UI-05c: app renders and dismisses warnings independently for every affecte
   assert.match(app, /projectSyncNotices: Object\.values\(projectSyncNotices\)/);
   assert.match(app, /setProjectSyncNotices\(\(current\) => withProjectSyncNotice\(current,/);
   assert.match(app, /setProjectSyncNotices\(\(current\) => projectSyncNoticesAfterUndo\(current, undo\.id\)\)/);
+});
+
+test("UI-05d: multiple pending project notices are individually identified and accessible", () => {
+  const a = { kind: "status", projectId: "project-a", projectTitle: "Dům", status: "completed", updatedAt: 200 };
+  const b = { kind: "delete", projectId: "project-b", projectTitle: "Práce" };
+  const pending = withProjectSyncNotice(withProjectSyncNotice({}, a), b);
+  assert.equal(projectSyncNoticeTitle(pending["project-a"]), "Dům");
+  assert.equal(projectSyncNoticeTitle(pending["project-b"]), "Práce");
+  assert.equal(projectSyncNoticeTitle({ ...a, projectTitle: "  " }), "project-a",
+    "a missing or blank name still supplies an unambiguous identity");
+  assert.deepEqual(Object.keys(projectSyncNoticesAfterUndo(pending, "project-b")), ["project-a"]);
+  assert.equal(projectSyncNoticeTitle(withoutResolvedProjectSyncNotices(pending, [b])["project-a"]), "Dům");
+  const root = read("../app/page.tsx"), app = read("../app/ui/use-lumi-app.tsx");
+  assert.match(root, /<strong>\{projectSyncNoticeTitle\(notice\)\}<\/strong>/);
+  assert.match(root, /aria-label=\{language === "cs"/);
+  assert.match(root, /Skrýt upozornění projektu \$\{projectSyncNoticeTitle\(notice\)\}/);
+  assert.match(root, /Dismiss notice for project \$\{projectSyncNoticeTitle\(notice\)\}/);
+  assert.match(root, /onClick=\{\(\) => app\.dismissProjectSyncNotice\(notice\.projectId\)\}/);
+  assert.match(app, /projectTitle: e\.title/);
+  assert.match(app, /projectTitle: project\.title/);
 });
