@@ -5,6 +5,9 @@ import {test} from "node:test";
 import {
   MY_PLAN_STATUS_UI_WRITE_FLAGS,myPlanStagingWriteUiEnabled,
 } from "../lib/target-staging-my-plan-ui-write-gate.ts";
+import {canRetryUncertainMyPlanRead} from "../lib/target-staging-my-plan-status-recovery.ts";
+import {fetchMyPlanSlice} from "../lib/target-staging-my-plan-client.ts";
+import {checkMyPlanStatusReceipt} from "../lib/target-staging-my-plan-status-client.ts";
 
 const root=path.join(import.meta.dirname,"..");
 const source=filename=>readFileSync(path.join(root,filename),"utf8");
@@ -115,4 +118,106 @@ test("Undo is a fresh authorized open command, not an old PATCH replay",()=>{
   assert.match(ui,/Vrátit dokončení \(Undo\)/);
   assert.match(ui,/areaId:action\.areaId,[\s\S]*?\},"open"\)/);
   assert.doesNotMatch(ui,/checkMyPlanStatusReceipt\(.*"open"/);
+});
+
+test("P1: uncertain PATCH + failed list GET can reauthorize, then reconcile original receipt",async()=>{
+  const original={
+    commandId:"123e4567-e89b-42d3-a456-426614174000",
+    taskId:"task-3",status:"completed",expectedRevision:"a".repeat(64),
+    writeAreaId:"area-1",restoreGeneration:"765e4567-e89b-42d3-a456-426614174000",
+  };
+  const params={evaluationDate:"2026-11-06",areaFilter:"all"};
+  const emptyPage={
+    ...params,today:{tasks:[],hasMore:false},
+    tomorrow:{tasks:[],hasMore:false},hasMore:false,nextCursor:null,
+  };
+  const readCalls=[];
+  const read=async(success)=>{
+    return fetchMyPlanSlice(params,async(url,opts)=>{
+      readCalls.push({url,method:opts.method,credentials:opts.credentials,cache:opts.cache});
+      assert.equal(opts.method,"GET");
+      assert.equal(opts.credentials,"same-origin");
+      assert.equal(opts.cache,"no-store");
+      return Response.json(success?emptyPage:{error:"staging unavailable"},{
+        status:success?200:503,headers:{"cache-control":"no-store"},
+      });
+    });
+  };
+  // An ambiguous completion has already attempted its SINGLE PATCH.
+  let action="uncertain";
+  let command=original;
+  let readState="loading";
+  let result=await read(false);
+  assert.deepEqual(result,{ok:false,reason:"unavailable"});
+  readState="error";
+  assert.equal(canRetryUncertainMyPlanRead({
+    statusWriteEnabled:true,actionKind:action,readStatus:readState,
+    hasOriginalCommand:command===original,operationInFlight:false,
+    visible:true,online:true,
+  }),true,"failed reauthorization must not deadlock receipt recovery");
+
+  // The UI's retry path changes ONLY the read generation: no new PATCH,
+  // no resetFeedback and no mutation/UUID replacement.
+  readState="loading";
+  result=await read(true);
+  assert.equal(result.ok,true);
+  readState="ready";
+  assert.equal(command,original,"original CAS/UUID must survive the error and retry");
+  assert.equal(canRetryUncertainMyPlanRead({
+    statusWriteEnabled:true,actionKind:action,readStatus:readState,
+    hasOriginalCommand:true,operationInFlight:false,visible:true,online:true,
+  }),false,"after reauthorization the distinct receipt-only action is available");
+
+  const receiptCalls=[];
+  const receipt=(status)=>checkMyPlanStatusReceipt(command,async(url,opts)=>{
+    receiptCalls.push({url,method:opts.method,body:JSON.parse(opts.body)});
+    assert.equal(opts.method,"POST");
+    assert.match(url,/\/status\/receipt$/);
+    assert.deepEqual(JSON.parse(opts.body),original);
+    return Response.json({status},{headers:{"cache-control":"no-store"}});
+  });
+  assert.deepEqual(await receipt("not_recorded"),{kind:"not-recorded"});
+  assert.equal(action,"uncertain","not_recorded must not clear an unresolved write");
+  assert.deepEqual(await receipt("committed"),{kind:"committed"});
+  assert.equal(receiptCalls.length,2);
+  assert.deepEqual([...readCalls,...receiptCalls].map(x=>x.method),
+    ["GET","GET","POST","POST"],"recovery must not replay PATCH");
+});
+
+test("P1: recovery policy refuses hidden, offline, signed-out, absent-command or busy reads",()=>{
+  const valid={
+    statusWriteEnabled:true,actionKind:"uncertain",readStatus:"error",
+    hasOriginalCommand:true,operationInFlight:false,visible:true,online:true,
+  };
+  for(const patch of [
+    {statusWriteEnabled:false},{actionKind:"idle"},
+    {actionKind:"pending"},{actionKind:"checking"},
+    {readStatus:"ready"},{readStatus:"loading"},
+    {hasOriginalCommand:false},{operationInFlight:true},
+    {visible:false},{online:false},
+  ]){
+    assert.equal(canRetryUncertainMyPlanRead({...valid,...patch}),false,
+      JSON.stringify(patch));
+  }
+  assert.equal(canRetryUncertainMyPlanRead(valid),true);
+});
+
+test("P1: failed-read recovery is visible outside ready state and never changes the original command",()=>{
+  const ui=source("app/ui/target-staging-my-plan-preview.tsx");
+  const start=ui.indexOf("function retryUncertainRead()");
+  const end=ui.indexOf("function resetFeedback()",start);
+  assert.ok(start>0&&end>start);
+  const retry=ui.slice(start,end);
+  assert.match(retry,/canRetryUncertainMyPlanRead\(\{/);
+  assert.match(retry,/hasOriginalCommand:uncertainCommand\.current!==null/);
+  assert.match(retry,/invalidate\("stale",true\)/);
+  assert.match(retry,/setRefresh\(n=>n\+1\)/);
+  assert.doesNotMatch(retry,/dispatchMyPlanStatus|prepareMyPlanStatus|resetFeedback\(|uncertainCommand\.current\s*=/);
+  const control=ui.indexOf("Znovu ověřit přehled (bez zápisu)");
+  const ready=ui.indexOf('{state.status==="ready"&&date&&');
+  assert.ok(control>0&&control<ready,"read recovery must appear even when list is in error");
+  assert.match(ui,/state\.status==="error"&&state\.reason!=="signed-out"/);
+  assert.match(ui,/uncertainCommand\.current!==null&&/);
+  assert.match(ui,/onClick=\{retryUncertainRead\}/);
+  assert.match(ui,/\{!actionPending&&<>/);
 });
