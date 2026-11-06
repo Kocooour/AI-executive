@@ -10,11 +10,10 @@ import {
 } from "../../../../../../lib/target-staging-http-identity";
 import {
   temporalDueOnEnabled,temporalDueOnConfig,temporalDueOnUnchanged,
-  temporalDueOnAnswer,temporalDueOnCommand,temporalDueOnWriterCanRead,
-  verifyTemporalDueOnTaskLive,
+  temporalDueOnAnswer,temporalDueOnCommand,verifyTemporalDueOnTaskLive,
 } from "../../../../../../lib/target-staging-temporal-due-on-http";
-import {readStagingTemporalDetailInChild} from "../../../../../../lib/target-staging-read-process";
-import {readTemporalDueOnReceiptInChild} from "../../../../../../lib/target-staging-temporal-due-on-http-process";
+import {readTemporalDueOnAtomicReceiptInChild}
+  from "../../../../../../lib/target-staging-temporal-due-on-http-process";
 import {
   targetProtocolRefusal,legacySnapshotRefusal,resyncRequiredResponse,
   writeAreaMismatchResponse,
@@ -55,26 +54,22 @@ export async function POST(request:Request):Promise<Response> {
     if (before!=="ok") return stagingIdentityRefusal(before);
     if (!temporalDueOnUnchanged(base)) return refuse(503,"Staging unavailable");
 
-    const child={...base,...stagingChildSessionConfig(identity)};
-    const detail=await readStagingTemporalDetailInChild(child,command.taskId);
-    if (!temporalDueOnUnchanged(base)) return refuse(503,"Staging unavailable");
-    const result=detail?.ok===true && temporalDueOnWriterCanRead(detail.detail)
-      ? await readTemporalDueOnReceiptInChild(child,command):null;
-    // The receipt lookup itself rechecks current write ACL on the pinned
-    // snapshot. Release also rechecks exact live task/parent/Area+session.
-    const released=detail?.ok===true
-      ? verifyTemporalDueOnTaskLive(request,identity,base,detail.detail)
+    // Use one actor-bound, pinned task/Area+receipt snapshot instead of two
+    // independently timed workers. The live release guard remains mandatory.
+    const snapshot=await readTemporalDueOnAtomicReceiptInChild(
+      {...base,...stagingChildSessionConfig(identity)},command);
+    const released=snapshot?.ok===true
+      ? verifyTemporalDueOnTaskLive(request,identity,base,snapshot.detail)
       : verifyStagingIdentityBeforeRelease(request,identity,base);
-    if (released!=="ok"&&released!=="stale") return stagingIdentityRefusal(released);
-    if (!temporalDueOnUnchanged(base)) return refuse(503,"Staging unavailable");
-    if (released==="stale"||detail?.ok===false||
-        (detail?.ok===true && !temporalDueOnWriterCanRead(detail.detail)))
-      return refuse(404,"Not found");
-    if (!detail||!result) return refuse(503,"Staging unavailable");
-    if (result.ok===false) {
-      if (result.reason==="unavailable") return refuse(404,"Not found");
-      if (result.reason==="resync_required") return resyncRequiredResponse();
-      if (result.reason==="write_area_mismatch") return writeAreaMismatchResponse();
+    if(released!=="ok"&&released!=="stale")return stagingIdentityRefusal(released);
+    if(!temporalDueOnUnchanged(base))return refuse(503,"Staging unavailable");
+    if(released==="stale"||snapshot?.ok===false)return refuse(404,"Not found");
+    if(!snapshot)return refuse(503,"Staging unavailable");
+    const result=snapshot.receipt;
+    if(result.ok===false){
+      if(result.reason==="unavailable")return refuse(404,"Not found");
+      if(result.reason==="resync_required")return resyncRequiredResponse();
+      if(result.reason==="write_area_mismatch")return writeAreaMismatchResponse();
       return refuse(409,"Revision conflict");
     }
     return Response.json({status:result.status},{headers});

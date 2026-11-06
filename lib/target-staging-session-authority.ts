@@ -58,6 +58,7 @@ import {
   readPreflightedPersonalWhenReceiptSnapshot,
   readPreflightedTemporalStatusReceipt,readPreflightedTemporalStatusReceiptSnapshot,
   readPreflightedTemporalDueOnReceipt,
+  readPreflightedTemporalDueOnReceiptSnapshot,
   readPreflightedAuthorizedProjectStructuralRelations,
   readPreflightedAuthorizedTargetParentBacklink,
   readPreflightedAuthorizedTargetNote,
@@ -77,7 +78,7 @@ import type { AuthorizedScopedHomeSummary, TargetHomeScope } from "./target-scop
 import type { TargetChangeFeedResult } from "./target-change-feed-read-model";
 import type { FeedClaims } from "./target-staging-feed-cursor";
 import type { TargetPrivateTaskTitleAuditResult } from "./target-task-read-model";
-import type { TargetStagingTaskTitleCommandStatusResult, TargetTemporalStatusReceiptResult, TargetTemporalStatusReceiptSnapshot, TargetTemporalDueOnReceiptResult } from "./target-task-staging-reader";
+import type { TargetStagingTaskTitleCommandStatusResult, TargetTemporalStatusReceiptResult, TargetTemporalStatusReceiptSnapshot, TargetTemporalDueOnReceiptResult, TargetTemporalDueOnReceiptSnapshot } from "./target-task-staging-reader";
 import type { TargetNoteEditCommandStatus } from "./target-note-command-status";
 import type { TargetNoteDeleteCommandStatus } from "./target-note-delete-command-status";
 import { validTargetTaskTitleEditPreviewRequest } from "./target-task-write-preflight";
@@ -992,6 +993,15 @@ export class TargetStagingSessionAuthority {
       return {ok:false,reason:"invalid_request"};
     return writePreflightedPersonalWhen(
       this.#store,credential,command,durableSessionTokenHash);
+  }
+
+  /** BE-07: current actor's pinned dueOn receipt and live-release witness. */
+  temporalDueOnReceiptSnapshot(
+    sessionToken:string,command:TargetStagingTemporalDueOnCommand,
+  ):TargetTemporalDueOnReceiptSnapshot {
+    const credential=this.#credential(sessionToken,true);
+    if(!credential)return {ok:false,reason:"inaccessible"};
+    return readPreflightedTemporalDueOnReceiptSnapshot(this.#store,credential,command);
   }
 
   /** R2d.3i.2: read-only command reconciliation with current live write ACL. */

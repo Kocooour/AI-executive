@@ -1,4 +1,4 @@
-# R3-slice / BE-01 až BE-06 — stagingový Můj plán a bezpečné CAS
+# R3-slice / BE-01 až BE-07 — stagingový Můj plán a bezpečné CAS
 
 **Stav:** implementační podklad pro první vertikální řez, nikoli aktivovaný produkt. Navazuje na rozhodnutí [5. 11. 2026](decisions/2026-11-05-ui-revize-a-vertikalni-rez.md) a existující task-only `R2d.3l.2` read endpoint.
 
@@ -49,6 +49,14 @@ BE-01/BE-02/BE-03 **nevytváří nový zápis** ani nerozšiřuje ACL. UI vertik
 - Před odesláním je zachována **atomická živá kontrola** session, Area role, task/parent a actor-private plánovací epochy. Zastaralý snapshot či odebrání oprávnění → fail closed. Změna osobního dne jiného úkolu tedy konzervativně zneplatní staré svědectví.
 - Worker má samostatně omezený interní výstup (32 KiB) pro dlouhá ID a revizní svědectví; ostatní write/receipt procesy zůstávají na původním 1 KiB limitu, status BE-05 na své dosavadní výjimce. Bez změny GET/PATCH CAS, jiných klientských kontraktů, aktivace stagingu, migrace, resetu či deploye.
 - Izolované syntetické regrese ověřují `not_recorded`/commit, změnu soukromé epochy po snapshotu, viewer a neautorizované přidělení, downgrade role, padělané DTO a dlouhá ID.
+
+## BE-07 — atomické potvrzení změny `dueOn`
+
+- `POST /api/target-staging/task-temporal/due-on/receipt` nyní používá **jediné preflightované, actor-bound SQLite čtení** pro aktuální oprávnění zapisujícího, Area a task/parent revize i přesný potvrzovací receipt původního příkazu. Dva časově oddělené worker snapshoty již nemohou vytvořit nekonzistentní potvrzení.
+- Přísně omezený interní proces načítá původní nezměněný příkaz ze `stdin` (nikdy `argv`), přes existující podepsanou write-session authority získá jen interní `{detail,receipt}` nebo `inaccessible`. DTO se znovu striktně validuje před živou serverovou kontrolou. Zvýšený limit 64 KiB platí jen pro tento konkrétní worker, kvůli dlouhým názvům úkolů; žádný detail se klientovi nevrací.
+- Živý release guard znovu ověřuje session, Area policy a revize task/parent před odpovědí. Veřejné response schema a chybové kódy zůstávají stejné; `not_recorded` **neznamená povolení zopakovat PATCH**. Receipt jen kontroluje původní digest, nikdy nesrovnává starou očekávanou revizi s post-commit stavem.
+- Negativní syntetické regrese pokrývají private/shared write ACL, viewer a foreign task, změnu úkolu mezi snapshoty, downgrade editor role, podvržený child payload, dlouhý název a původní idempotentní set/clear kontrakt.
+- `GET/PATCH` statusu, `whenOn`, Undo ani globální `Vše` se nemění. Pouze **výchozí vypnutý staging**; bez migrace, produkčního přepnutí a nasazení.
 
 ## Co zůstává mimo iteraci
 

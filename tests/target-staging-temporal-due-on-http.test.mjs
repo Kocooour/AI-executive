@@ -37,8 +37,10 @@ const durable=await import("../lib/target-staging-durable-session.ts");
 const {createSessionToken,sessionCookieName}=await import("../lib/auth.ts");
 const {GET,PATCH}=await import("../app/api/target-staging/task-temporal/due-on/route.ts");
 const {POST}=await import("../app/api/target-staging/task-temporal/due-on/receipt/route.ts");
-const {parseTemporalDueOnWriteReply,parseTemporalDueOnReceiptReply}=
-  await import("../lib/target-staging-temporal-due-on-http-process.ts");
+const {
+  parseTemporalDueOnWriteReply,parseTemporalDueOnReceiptReply,
+  parseTemporalDueOnAtomicReceiptReply,readTemporalDueOnAtomicReceiptInChild,
+}=await import("../lib/target-staging-temporal-due-on-http-process.ts");
 const {readStagingTemporalDetailInChild}=
   await import("../lib/target-staging-read-process.ts");
 const {verifyTemporalDueOnTaskLive}=
@@ -181,6 +183,91 @@ test("private dueOn set, replay, read-only receipt and clear are atomic",async()
   assert.equal(state(fx,"p-alice").completedAtMs,initial.completedAtMs);
   assert.equal(receiptCount(fx),2);
   assert.deepEqual(await (await call("POST",c)).json(),{status:"committed"});
+});
+
+test("BE-07 dueOn receipt and task/Area witness use one pinned snapshot",async()=>{
+  const fx=fixture(),bob=login(fx,"bob"),carol=login(fx,"carol");
+  const cmd=await command("s-bob","2028-04-15",bob);
+  const tokenHash=durable.hashTargetStagingSessionToken(bob.split("=")[1]);
+  const config={...fx.store,ownerUserId:"alice",sessionTokenHash:tokenHash};
+  const snapshot=()=>readTemporalDueOnAtomicReceiptInChild(config,cmd);
+  const before=await snapshot();
+  assert.equal(before?.ok,true,JSON.stringify(before));
+  assert.deepEqual(before.receipt,{ok:true,status:"not_recorded"});
+  assert.equal(before.detail.task.areaId,"family-area");
+  const identity={kind:"session",tokenHash};
+  const request=new Request(base+"/receipt",{
+    method:"POST",headers:{cookie:bob,origin:"http://localhost:3001"},body:"{}",
+  });
+  const live=witness=>verifyTemporalDueOnTaskLive(request,identity,{
+    ...fx.store,ownerUserId:"alice",
+  },witness.detail);
+  assert.equal(live(before),"ok");
+  assert.deepEqual(await (await call("PATCH",cmd,bob)).json(),{ok:true});
+  assert.equal(live(before),"stale","the original task revision cannot release a later receipt");
+  const committed=await snapshot();
+  assert.equal(committed?.ok,true,JSON.stringify(committed));
+  assert.deepEqual(committed.receipt,{ok:true,status:"committed"});
+  assert.equal(live(committed),"ok");
+  assert.deepEqual(await (await call("POST",cmd,bob)).json(),{status:"committed"});
+  const viewer=await readTemporalDueOnAtomicReceiptInChild({
+    ...config,sessionTokenHash:durable.hashTargetStagingSessionToken(carol.split("=")[1]),
+  },cmd);
+  assert.deepEqual(viewer,{ok:false,reason:"inaccessible"});
+  const foreign=await readTemporalDueOnAtomicReceiptInChild(config,
+    {...cmd,taskId:"p-alice"});
+  assert.deepEqual(foreign,{ok:false,reason:"inaccessible"});
+  const db=new DatabaseSync(fx.stage.databasePath);
+  try{
+    // This fixture contains no assigned shared tasks; the role transition
+    // satisfies the schema's membership downgrade integrity rule.
+    db.prepare("UPDATE area_members SET role='viewer' WHERE area_id='family-area' AND user_id='bob'").run();
+  }finally{db.close();}
+  assert.equal(live(committed),"stale");
+  assert.deepEqual(await snapshot(),{ok:false,reason:"inaccessible"});
+  assert.equal((await call("POST",cmd,bob)).status,404);
+});
+
+test("BE-07 strict internal child rejects extra receipt or forged task witness",async()=>{
+  const fx=fixture(),cmd=await command("p-alice","2028-02-29");
+  const sample=await readTemporalDueOnAtomicReceiptInChild({
+    ...fx.store,ownerUserId:"alice",
+  },cmd);
+  assert.equal(sample?.ok,true,JSON.stringify(sample));
+  for(const broken of [
+    {...sample,actorUserId:"alice"},
+    {...sample,receipt:{ok:true,status:"committed",commandId:cmd.commandId}},
+    {...sample,receipt:{ok:true,status:"unknown"}},
+    {...sample,detail:{...sample.detail,secret:"untrusted"}},
+    {...sample,detail:{...sample.detail,guard:{
+      ...sample.detail.guard,areaId:"foreign",
+    }}},
+    {...sample,detail:{...sample.detail,task:{
+      ...sample.detail.task,id:"p-bob",
+    }}},
+    {...sample,detail:{...sample.detail,linearization:{
+      ...sample.detail.linearization,areas:[{
+        ...sample.detail.linearization.areas[0],access:"viewer",
+      }],
+    }}},
+    {ok:true,detail:sample.detail},
+  ])assert.equal(parseTemporalDueOnAtomicReceiptReply(broken,cmd.taskId),null);
+});
+
+test("BE-07 dueOn reconciliation accepts a bounded task title over 1 KiB",async()=>{
+  const fx=fixture();
+  const db=new DatabaseSync(fx.stage.databasePath);
+  try{db.prepare("UPDATE tasks SET title=? WHERE id='p-alice'").run("x".repeat(1800));}
+  finally{db.close();}
+  const cmd=await command("p-alice","2028-02-29");
+  const reply=await readTemporalDueOnAtomicReceiptInChild({
+    ...fx.store,ownerUserId:"alice",
+  },cmd);
+  assert.equal(reply?.ok,true,JSON.stringify(reply));
+  assert.deepEqual(reply.receipt,{ok:true,status:"not_recorded"});
+  const response=await call("POST",cmd);
+  assert.equal(response.status,200,JSON.stringify(await response.clone().json()));
+  assert.deepEqual(await response.json(),{status:"not_recorded"});
 });
 
 test("current private/shared ACL denies foreign users and shared viewers before receipt",async()=>{
