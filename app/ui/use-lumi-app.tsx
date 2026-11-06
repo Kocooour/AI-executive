@@ -29,7 +29,7 @@ import { todayProposalTaskSignature } from "../../lib/today-summary";
 import { homeTodayList } from "../../lib/home-today";
 import { groupProjectsByArea, projectsNeedAttention, activeSidebarProjects } from "../../lib/project-navigation";
 import { projectAcceptsNewItems } from "../../lib/project-summary";
-import { projectPreviewCanCommit } from "../../lib/project-list-preview";
+import { projectPreviewCanCommit, projectPreviewDependents, waitForProjectPreviewWrites, type ProjectPreviewActionSnapshot } from "../../lib/project-list-preview";
 import { byManualOrder, isEveningTask, manualOrder, newTaskPlacement, parseCaptureText, taskDateSortKey, taskMatchesView } from "../../lib/task-views";
 import { buildMyPlanPreview, previewManualRankUpdates, previewRankNextRecords, previewRankWritesAllowed, previewReorderPeers } from "../../lib/my-plan-preview";
 import { inSentenceDate } from "./format";
@@ -324,6 +324,21 @@ export function useLumiApp() {
   // A confirmation outlives its render; hold the live pending/held state for commit-time checks.
   const previewWriteGuardsRef = useRef({ unsent, heldBack });
   previewWriteGuardsRef.current = { unsent, heldBack };
+  const pendingProjectWrites = useRef(new Map<string, Set<Promise<unknown>>>());
+  function trackProjectWrite(projectId: string, write: Promise<unknown>) {
+    const active = pendingProjectWrites.current.get(projectId) ?? new Set<Promise<unknown>>();
+    active.add(write);
+    pendingProjectWrites.current.set(projectId, active);
+    const settle = () => {
+      active.delete(write);
+      if (active.size === 0) pendingProjectWrites.current.delete(projectId);
+    };
+    void write.then(settle, settle);
+    return write;
+  }
+  async function waitForProjectWrites(projectId: string) {
+    await waitForProjectPreviewWrites(() => [...(pendingProjectWrites.current.get(projectId) ?? [])]);
+  }
   useEffect(() => {
     // A workspace transition makes any earlier inspection result ineligible.
     inspectionVersion.current += 1;
@@ -3166,6 +3181,21 @@ export function useLumiApp() {
       return typedSince ? { ...saved, title: open.title } : saved;
     });
   }
+  // Build the confirmation baseline after the title/context blur writes settle.
+  async function projectPreviewActionSnapshot(projectId: string): Promise<ProjectPreviewActionSnapshot> {
+    await waitForProjectWrites(projectId);
+    return db.transaction("r", db.entities, db.relations, async () => {
+      const current = await db.entities.get(projectId);
+      assertPreviewProjectMutation(current as Entity, current);
+      const dependents = await projectPreviewDependencies(current);
+      return { project: current, dependents: dependents.signature, openTasks: dependents.openTaskCount };
+    });
+  }
+  async function projectPreviewDependencies(project: Entity) {
+    const entities = await db.entities.where("workspaceId").equals(project.workspaceId).toArray();
+    const relations = await db.relations.toArray();
+    return projectPreviewDependents(project, entities, relations);
+  }
   // Recheck both the current in-scope snapshot and the IndexedDB row within the write lock.
   function assertPreviewProjectMutation(expected: Entity, current: Entity | undefined): asserts current is Entity {
     const guards = previewWriteGuardsRef.current;
@@ -3174,12 +3204,12 @@ export function useLumiApp() {
       guards.heldBack.some((entity) => entity.id === expected.id) ||
       (current ? entityConflicts(current).length > 0 : true);
     const visible = latestItemsRef.current.find((entity) => entity.id === expected.id);
-    if (!projectPreviewCanCommit(expected, current, activeWorkspaceRef.current, blocked) ||
-        !projectPreviewCanCommit(expected, visible, activeWorkspaceRef.current, blocked)) {
+    if (!current || !visible || visible.type !== "project" || visible.workspaceId !== expected.workspaceId ||
+        !projectPreviewCanCommit(expected, current, activeWorkspaceRef.current, blocked)) {
       throw new Error("project_preview_changed");
     }
   }
-  async function remove(e: Entity, expectedPreview?: Entity) {
+  async function remove(e: Entity, expectedPreview?: ProjectPreviewActionSnapshot) {
     if (isFallbackArea(e, items)) return;
     let linkedRelations = expectedPreview ? [] as Relation[] : (await db.relations.toArray()).filter(
       (relation) => relation.sourceEntityId === e.id || relation.targetEntityId === e.id,
@@ -3189,7 +3219,9 @@ export function useLumiApp() {
       await db.transaction("rw", db.entities, db.relations, async () => {
         if (expectedPreview) {
           const current = await db.entities.get(e.id);
-          assertPreviewProjectMutation(expectedPreview, current);
+          assertPreviewProjectMutation(expectedPreview.project, current);
+          if ((await projectPreviewDependencies(current)).signature !== expectedPreview.dependents)
+            throw new Error("project_preview_changed");
           linkedRelations = (await db.relations.toArray()).filter(
             (relation) => relation.sourceEntityId === e.id || relation.targetEntityId === e.id,
           );
@@ -3221,14 +3253,16 @@ export function useLumiApp() {
     if (openProjectIdRef.current === e.id) closeProjectPage();
     load();
   }
-  async function setProjectStatus(project: Entity, status: "active" | "completed", expectedPreview?: Entity) {
+  async function setProjectStatus(project: Entity, status: "active" | "completed", expectedPreview?: ProjectPreviewActionSnapshot) {
     if (project.type !== "project") return;
     if (expectedPreview) {
       localDataVersion.current += 1;
       try {
-        await db.transaction("rw", db.entities, async () => {
+        await db.transaction("rw", db.entities, db.relations, async () => {
           const current = await db.entities.get(project.id);
-          assertPreviewProjectMutation(expectedPreview, current);
+          assertPreviewProjectMutation(expectedPreview.project, current);
+          if ((await projectPreviewDependencies(current)).signature !== expectedPreview.dependents)
+            throw new Error("project_preview_changed");
           const timestamp = writeTime();
           const activity = Array.isArray(current.properties.activity) ? current.properties.activity : [];
           await db.entities.update(project.id, {
@@ -4373,6 +4407,8 @@ export function useLumiApp() {
     aiText,
     approveContextInbox,
     areas,
+    projectPreviewActionSnapshot,
+    trackProjectWrite,
     askAI,
     assistantOpen,
     attentionTaskCount,
