@@ -1,4 +1,4 @@
-# R3-slice / BE-01 až BE-07 — stagingový Můj plán a bezpečné CAS
+# R3-slice / BE-01 až BE-08 — stagingový Můj plán a bezpečné CAS
 
 **Stav:** implementační podklad pro první vertikální řez, nikoli aktivovaný produkt. Navazuje na rozhodnutí [5. 11. 2026](decisions/2026-11-05-ui-revize-a-vertikalni-rez.md) a existující task-only `R2d.3l.2` read endpoint.
 
@@ -57,6 +57,14 @@ BE-01/BE-02/BE-03 **nevytváří nový zápis** ani nerozšiřuje ACL. UI vertik
 - Živý release guard znovu ověřuje session, Area policy a revize task/parent před odpovědí. Veřejné response schema a chybové kódy zůstávají stejné; `not_recorded` **neznamená povolení zopakovat PATCH**. Receipt jen kontroluje původní digest, nikdy nesrovnává starou očekávanou revizi s post-commit stavem.
 - Negativní syntetické regrese pokrývají private/shared write ACL, viewer a foreign task, změnu úkolu mezi snapshoty, downgrade editor role, podvržený child payload, dlouhý název a původní idempotentní set/clear kontrakt.
 - `GET/PATCH` statusu, `whenOn`, Undo ani globální `Vše` se nemění. Pouze **výchozí vypnutý staging**; bez migrace, produkčního přepnutí a nasazení.
+
+## BE-08 — atomický náhled CAS pro změnu `dueOn`
+
+- `GET /api/target-staging/task-temporal/due-on?taskId=...` nově vrací `expectedRevision`, `dueOn` a `writeAreaId` z **jediné actor-bound, kanonicky preflightované SQLite read transakce**. Dřívější oddělené čtení task/Area guardu a title-CAS tokenu mohlo smíchat dva okamžiky. Nový výsledek navazuje na BE-07 atomický receipt stejného `dueOn` zápisu.
+- Náhled sdílí existující kanonickou logiku BE-04 pro status: stejný task-write CAS hash, write role (private owner/editor/admin), aktuální projektové dědění Oblasti a task/parent/Area revize. Vlastní izolovaný child vyžaduje pouze `dueOn` staging flags a vrací striktní interní DTO s task guardem, nikoli žádná nová veřejná data.
+- HTTP nadále vydává přesně **čtyři** pole `{expectedRevision,dueOn,writeAreaId,restoreGeneration}`, pouze po živé kontrole session, Area policy, task/parent revize a staging konfigurace. `Cache-Control: no-store` a rate limiting zůstávají.
+- Náhled **neautorizuje pozdější zápis**: `PATCH` dál nezávisle v `BEGIN IMMEDIATE` kontroluje session, oprávnění, generaci a CAS. Syntetické regrese ověřují shodu revize s kanonickým hashováním, úpravu termínu mezi snapshotem a release, viewer/foreign actor, downgrade role, podvržené interní DTO a dlouhý název.
+- `dueOn` se nesmí zaměnit za soukromé `whenOn`. Beze změny ostatních endpointů, Undo, produkčních dat, migrací a aktivace funkcí; staging zůstává default-off.
 
 ## Co zůstává mimo iteraci
 
