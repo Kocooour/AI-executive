@@ -59,10 +59,13 @@ export function ProjectPage({ app, project, renderRow, reorderPreview = false, o
     query.addEventListener("change", update);
     return () => query.removeEventListener("change", update);
   }, []);
-  const mobileDetailPreview = mobileDesignV1Preview && mobileViewport;
+  const projectDetailPreview = mobileDesignV1Preview;
+  const mobileDetailPreview = projectDetailPreview && mobileViewport;
   const canChangeStatus = projectPreviewCanToggle(project, activeWorkspaceId,
     isHeld || unsent.has(project.id) || entityConflicts(project).length > 0 || actionBusy);
-  async function mobileToggleStatus() {
+  // The same confirmation and sync/held/conflict guard applies to desktop
+  // and phone previews. Legacy production controls remain unchanged.
+  async function previewToggleStatus() {
     if (!canChangeStatus) return;
     const completed = project.status === "completed";
     const count = openTasks.length;
@@ -85,14 +88,14 @@ export function ProjectPage({ app, project, renderRow, reorderPreview = false, o
     finally { setActionBusy(false); }
   }
   const projectActions = <div className="projectActions" data-project-actions>
-    <button type="button" disabled={mobileDetailPreview && !canChangeStatus}
-      onClick={() => mobileDetailPreview
-        ? void mobileToggleStatus()
+    <button type="button" disabled={projectDetailPreview && !canChangeStatus}
+      onClick={() => projectDetailPreview
+        ? void previewToggleStatus()
         : void setProjectStatus(project, project.status === "completed" ? "active" : "completed")}>
       {tr(project.status === "completed" ? "reopen" : "complete")}
     </button>
     <button type="button" className="danger"
-      disabled={mobileDetailPreview && !canChangeStatus}
+      disabled={projectDetailPreview && !canChangeStatus}
       onClick={async () => {
         if (await askConfirm({ title: tr("projectDeleteTitle"),
           message: tr("projectDeleteConfirm").replace("{title}", () => project.title),
@@ -103,7 +106,7 @@ export function ProjectPage({ app, project, renderRow, reorderPreview = false, o
 
   return (
     <article className="projectPage" aria-label={`${t.page}: ${project.title}`} data-project-page={project.id}
-      data-project-detail-preview={mobileDetailPreview ? "lumi-v1" : undefined}>
+      data-project-detail-preview={projectDetailPreview ? "lumi-v1" : undefined}>
       <button type="button" className="projectBack" aria-label={t.backAria} onClick={closeProjectPage}>{t.back}</button>
 
       <div className="projectHeader">
@@ -140,7 +143,7 @@ export function ProjectPage({ app, project, renderRow, reorderPreview = false, o
         {isHeld && <p className="recordState recordHeldBack" role="status">{tr("heldBackDetail").replace("{reason}", () => heldBackReason(app, project))}</p>}
         {!isHeld && unsent.has(project.id) && <p className="recordState" role="status">{tr("unsentDetail")}</p>}
         <SyncConflicts app={app} entity={project} />
-        {!mobileDetailPreview && <ProjectContext key={project.id} app={app} project={project} />}
+        {!projectDetailPreview && <ProjectContext key={project.id} app={app} project={project} />}
         {!mobileDetailPreview && projectActions}
       </div>
 
@@ -161,7 +164,7 @@ export function ProjectPage({ app, project, renderRow, reorderPreview = false, o
         {projectAcceptsNewItems(project) && <button type="button" className="projectAdd" onClick={() => openCapture("task", project.id)}>＋ {tr("addTask")}</button>}
       </section>
 
-      {mobileDetailPreview && (
+      {projectDetailPreview && (
         <details key={project.id} className="projectContextFold" data-project-context-fold>
           <summary>{t.contextTitle}</summary>
           <ProjectContext key={project.id} app={app} project={project} />
