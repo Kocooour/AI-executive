@@ -8,7 +8,8 @@ const read = (path) => readFileSync(new URL(path, import.meta.url), "utf8");
 
 test("UI-06c: desktop preview has one square task completion at the heading, never the old action duplicate", () => {
   const detail = read("../app/ui/views/detail-panel.tsx");
-  assert.match(detail, /const desktopTaskPreview = Boolean\(mobileDesignV1Preview && !mobileViewport && selectedTask\);/);
+  assert.match(detail, /const \[mobileViewport, setMobileViewport\] = useState<boolean \| null>\(null\);/);
+  assert.match(detail, /const desktopTaskPreview = Boolean\(mobileDesignV1Preview && mobileViewport === false && selectedTask\);/);
   assert.match(detail, /data-task-detail-desktop-preview=\{desktopTaskPreview \? "lumi-v1" : undefined\}/);
   assert.match(detail, /\{desktopTaskPreview && selectedTask && \(\s*<LumiCompletionControl kind="task" className="taskDetailDesktopCompletion"/);
   assert.equal(detail.split('className="taskDetailDesktopCompletion"').length - 1, 1);
