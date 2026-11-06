@@ -65,9 +65,9 @@ test("UI-03b: selected project is exposed as the current page in the in-scope fu
   const sidebar = read("../app/ui/views/sidebar.tsx");
   const css = read("../app/lumi-desktop-v1.css");
   const app = read("../app/ui/use-lumi-app.tsx");
-  assert.match(sidebar, /mobileDesignV1Preview && app\.openProjectId === project\.id \? "active" : ""/);
-  assert.match(sidebar, /aria-current=\{mobileDesignV1Preview && app\.openProjectId === project\.id \? "page" : undefined\}/);
-  assert.match(sidebar, /data-current-project=\{mobileDesignV1Preview && app\.openProjectId === project\.id \? "true" : undefined\}/);
+  assert.match(sidebar, /mobileDesignV1Preview && app\.openProject\?\.id === project\.id \? "active" : ""/);
+  assert.match(sidebar, /aria-current=\{mobileDesignV1Preview && app\.openProject\?\.id === project\.id \? "page" : undefined\}/);
+  assert.match(sidebar, /data-current-project=\{mobileDesignV1Preview && app\.openProject\?\.id === project\.id \? "true" : undefined\}/);
   assert.match(css, /\.sidebarProjects button\[data-current-project="true"\]/);
   assert.match(app, /const sidebarProjects = activeSidebarProjects\(/);
   assert.match(app, /mobileDesignV1Preview \? Number\.POSITIVE_INFINITY : undefined/);
