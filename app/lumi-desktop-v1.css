@@ -1,0 +1,68 @@
+/* UI-03a: desktop shell work is isolated behind the v1 preview flag.
+   The default legacy sidebar, topbar, mobile navigation and capture stay intact. */
+.desktopCaptureFab { display: none; }
+
+@media (min-width: 701px) {
+  .appShell[data-design-system="lumi-v1"] .desktopCaptureFab {
+    position: fixed;
+    z-index: 12;
+    right: clamp(20px, 3vw, 42px);
+    bottom: calc(28px + env(safe-area-inset-bottom));
+    display: grid;
+    place-items: center;
+    width: 58px;
+    height: 58px;
+    border: 1px solid var(--v1-accent);
+    border-radius: 18px;
+    background: var(--v1-accent);
+    color: var(--v1-on-accent);
+    box-shadow: var(--shadow-soft);
+    font: inherit;
+    font-size: 30px;
+    line-height: 1;
+    cursor: pointer;
+  }
+  .appShell[data-design-system="lumi-v1"] .desktopCaptureFab:hover {
+    background: color-mix(in srgb, var(--v1-accent) 88%, var(--text));
+  }
+  .appShell[data-design-system="lumi-v1"] .desktopCaptureFab:focus-visible {
+    outline: 3px solid var(--focus-ring);
+    outline-offset: 3px;
+  }
+  /* Fixed capture sits in a dedicated right-hand action rail.
+     The last list row and its controls can scroll above the button. */
+  .appShell[data-design-system="lumi-v1"] .appPane .content {
+    box-sizing: border-box;
+    padding-inline-end: 112px;
+    padding-block-end: 120px;
+  }
+  .appShell[data-design-system="lumi-v1"] .appPane .content :is(button, a, input, select, textarea):focus-visible {
+    scroll-margin-block-end: 122px;
+  }
+  /* Never float over an inspector or modal; their own controls remain usable. */
+  .appShell[data-design-system="lumi-v1"].inspectorOpen .desktopCaptureFab,
+  .appShell[data-design-system="lumi-v1"]:has([aria-modal="true"]) .desktopCaptureFab {
+    display: none;
+  }
+  .appShell[data-design-system="lumi-v1"] > aside .sidebarScroll {
+    overflow-y: auto;
+    overscroll-behavior-y: contain;
+  }
+}
+
+/* Removing theme from the preview topbar must not leave its empty grid column.
+   Theme remains in Settings on both desktop and mobile. */
+@media (max-width: 700px) {
+  .appShell[data-design-system="lumi-v1"] .appPane .topbar {
+    grid-template-columns: minmax(0, 1fr) 44px;
+    grid-template-areas:
+      "workspace assistant"
+      "search search";
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .appShell[data-design-system="lumi-v1"] .desktopCaptureFab {
+    transition: none;
+  }
+}
