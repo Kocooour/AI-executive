@@ -39,10 +39,35 @@
   .appShell[data-design-system="lumi-v1"] .appPane .content :is(button, a, input, select, textarea):focus-visible {
     scroll-margin-block-end: 122px;
   }
-  /* Never float over an inspector or modal; their own controls remain usable. */
+  /* Never float over an inspector or modal; their own controls remain usable.
+     The inspector is nonmodal: the sidebar gains a capture action while the
+     floating action stays hidden to avoid covering the inspector. */
   .appShell[data-design-system="lumi-v1"].inspectorOpen .desktopCaptureFab,
   .appShell[data-design-system="lumi-v1"]:has([aria-modal="true"]) .desktopCaptureFab {
     display: none;
+  }
+  .appShell[data-design-system="lumi-v1"].inspectorOpen > aside .desktopInspectorCapture {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    min-height: 44px;
+    width: 100%;
+    background: var(--v1-accent);
+    color: var(--v1-on-accent);
+    border: 1px solid var(--v1-accent);
+    border-radius: var(--radius-xs);
+    font: inherit;
+    font-size: 13px;
+    cursor: pointer;
+  }
+  .appShell[data-design-system="lumi-v1"].inspectorOpen > aside .desktopInspectorCapture:focus-visible {
+    outline: 3px solid var(--focus-ring);
+    outline-offset: 3px;
+  }
+  .appShell[data-design-system="lumi-v1"].inspectorOpen > aside .desktopInspectorCapture:disabled {
+    opacity: 0.6;
+    cursor: default;
   }
   .appShell[data-design-system="lumi-v1"] > aside .sidebarScroll {
     overflow-y: auto;
