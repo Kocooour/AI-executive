@@ -1,4 +1,4 @@
-# R3-slice / BE-01 až BE-09 — stagingový Můj plán a bezpečné CAS
+# R3-slice / BE-01 až BE-10 — stagingový Můj plán a bezpečné CAS
 
 **Stav:** implementační podklad pro první vertikální řez, nikoli aktivovaný produkt. Navazuje na rozhodnutí [5. 11. 2026](decisions/2026-11-05-ui-revize-a-vertikalni-rez.md) a existující task-only `R2d.3l.2` read endpoint.
 
@@ -73,6 +73,14 @@ BE-01/BE-02/BE-03 **nevytváří nový zápis** ani nerozšiřuje ACL. UI vertik
 - Každý úspěšný příkaz má read-only actor-bound receipt `committed`; starší potvrzení zůstane dohledatelné i po pozdějším reverzním příkazu, neznamená však povolení znovu odeslat původní PATCH. Jiný aktér se k němu nedostane a jeho Můj plán nezobrazuje Bobova data.
 - Revokační scénář ověřuje, že odebrání sdíleného přiřazení a role zneplatní cursor, skryje sdílený úkol a odmítne obě původní write preview a receipt cesty; po revokaci durable session nefunguje ani čtení osobního plánu.
 - Jde o **CI regresní bránu na syntetických datech** a integritu existujících default-off API, **nikoli** aktivaci klientského UI, produkčních příznaků, migraci, reset, deployment nebo kompletní browser E2E. BE-09 nepřidává nový endpoint ani nezměkčuje ACL.
+
+## BE-10 — současná sdílená lhůta a soukromé „Kdy“ (actor-bound integrace)
+
+- Samostatný integrační regresní scénář nad reálnými existujícími `GET/PATCH/receipt` handlery pro sdílené `dueOn`, soukromé `whenOn` a dvoudenní `Můj plán` používá **jednu izolovanou databázi a tři identity** (admin, editor/řešitel, viewer), bez mockování těchto hranic.
+- Bob může naplánovat osobní `whenOn` až za sdílený deadline. Výsledné `attentionOn` zůstane **dřívější `dueOn`** a úkol se ani při souběhu obou dat nezobrazí dvakrát. Samotné soukromé plánování nijak nemění sdílený deadline; podepsaný cursor se po změně jeho osobní epochy zneplatní (`409`).
+- Alice může jako admin změnit sdílený `dueOn` úkolu přiřazeného Bobovi, aniž by se tento nepřiřazený sdílený úkol objevil v *jejím* Mém plánu. Bobovi se dřívější termín propíše z *zítra* do *dnes*, ale jeho osobní plánovaný den zůstane soukromě nezměněný. Dříve pořízený Bobův `dueOn` CAS nesmí po zásahu Alice přepsat aktuální stav: `PATCH → 409`, read-only receipt původního nezapsaného příkazu → `not_recorded`.
+- Shared viewer nesmí získat zápisový `dueOn` preview ani cizí receipt. Obě změny se vracejí **novými, aktuálně potvrzenými CAS příkazy a novými UUID**, bez automatického opakování starého příkazu. Výsledné dvoudenní členění odpovídá počátečnímu; starší skutečně provedené příkazy stále mají `committed` receipt bez ohledu na současné datum.
+- Tato bezpečnostní a datově konzistentní smlouva je **pouze regresní CI test** na syntetických datech. BE-10 nezavádí API, databázové migrace, příznaky ani produkční aktivaci. Není to plné browser E2E ani důkaz dokončeného klientského UI.
 
 ## Co zůstává mimo iteraci
 
