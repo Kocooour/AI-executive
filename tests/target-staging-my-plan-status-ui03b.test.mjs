@@ -228,16 +228,21 @@ test("P1: Undo receipt/preflight failures preserve same actor's completion inste
   const end=ui.indexOf("async function verifyUncertainReceipt()",start);
   assert.ok(start>0&&end>start);
   const method=ui.slice(start,end);
-  assert.match(method,/if\(!prior\)confirmedCommand\.current=null/);
+  assert.match(method,/const retainedStatusUndo=prior\?\?/);
+  assert.doesNotMatch(method,/if\(!prior\)confirmedCommand\.current=null/,
+    "a new status preflight must not discard a prior confirmed completion");
+  assert.match(method,/const restoreStatusUndoOnFailure=/);
+  assert.match(method,/setUndoFailure\(reason\)/);
+  assert.match(method,/setAction\(\{kind:"committed",taskId:retainedStatusUndo\.taskId/);
   assert.match(method,/const undo=await prepareConfirmedMyPlanUndo\(/);
   assert.match(method,/if\(undo\.kind!=="ready"\)\{/);
-  assert.match(method,/setUndoFailure\(undo\.reason\)/);
-  assert.match(method,/setAction\(\{kind:"committed",taskId:prior\.taskId/);
+  assert.match(method,/restoreStatusUndoOnFailure\(undo\.reason\)/);
+  assert.match(method,/restoreStatusUndoOnFailure\(prepared\.reason\)/);
+  assert.match(method,/restoreStatusUndoOnFailure\(result\.reason\)/);
   assert.match(method,/command=undo\.command/);
   assert.match(method,/op\.command=command/);
   assert.match(method,/confirmedCommand\.current=status==="completed"\?result\.command:null/);
   assert.match(method,/confirmedCommand\.current=null;\s*uncertainCommand\.current=result\.command/);
-  assert.match(method,/else if\(prior\)\{[\s\S]*?setUndoFailure\(result\.reason\)/);
   assert.match(method,/if\(undo\.kind==="signed-out"\)\{\s*confirmedCommand\.current=null/);
 });
 
