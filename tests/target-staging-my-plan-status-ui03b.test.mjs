@@ -205,7 +205,7 @@ test("P1: recovery policy refuses hidden, offline, signed-out, absent-command or
 test("P1: failed-read recovery is visible outside ready state and never changes the original command",()=>{
   const ui=source("app/ui/target-staging-my-plan-preview.tsx");
   const start=ui.indexOf("function retryUncertainRead()");
-  const end=ui.indexOf("function refreshPlan()",start);
+  const end=ui.indexOf("\n  }\n",start)+"\n  }".length;
   assert.ok(start>0&&end>start);
   const retry=ui.slice(start,end);
   assert.match(retry,/canRetryUncertainMyPlanRead\(\{/);
