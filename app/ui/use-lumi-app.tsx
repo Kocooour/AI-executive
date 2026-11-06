@@ -211,7 +211,7 @@ export function useLumiApp() {
   // proves this exact project operation was sent (or it was superseded).
   // An unrelated successful sync must not hide this warning.
   useEffect(() => {
-    if (!projectSyncNotice || syncStatus !== "synced") return;
+    if (!projectSyncNotice) return;
     const warning = projectSyncNotice;
     let cancelled = false;
     void db.transaction("r", db.entities, db.baseEntities, async () => {
