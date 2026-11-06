@@ -2,6 +2,7 @@
  * feature gate hides this staging-only read preview by default. */
 import {notFound} from "next/navigation";
 import {TargetStagingMyPlanPreview} from "../../../ui/target-staging-my-plan-preview";
+import {myPlanStagingWriteUiEnabled} from "../../../../lib/target-staging-my-plan-ui-write-gate";
 import "./preview.css";
 
 export const dynamic="force-dynamic";
@@ -17,12 +18,6 @@ export default function StagingMyPlanPreviewPage(){
   // UI write affordances require a separate opt-in on this SERVER render.
   // This is NOT authorization: the status endpoints independently enforce all
   // four write flags, current session, Area ACL and optimistic CAS.
-  const statusWriteEnabled=[
-    "AI_EXECUTIVE_TARGET_STAGING_MY_PLAN_STATUS_UI_ENABLED",
-    "AI_EXECUTIVE_TARGET_STAGING_HTTP_ENABLED",
-    "AI_EXECUTIVE_TARGET_STAGING_HTTP_WRITE_ENABLED",
-    "AI_EXECUTIVE_TARGET_STAGING_HTTP_TEMPORAL_ENABLED",
-    "AI_EXECUTIVE_TARGET_STAGING_HTTP_TEMPORAL_WRITE_ENABLED",
-  ].every(name=>process.env[name]==="true");
+  const statusWriteEnabled=myPlanStagingWriteUiEnabled(process.env);
   return <TargetStagingMyPlanPreview statusWriteEnabled={statusWriteEnabled}/>;
 }
