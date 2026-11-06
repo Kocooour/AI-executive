@@ -18,4 +18,6 @@
 
 `tests/target-authorized-title-search.test.mjs` přidává end-to-end HTTP volání nad izolovaným syntetickým SQLite store (včetně reálných durable sessions, actor-scoped child, HMAC cursoru, role viewer/editor, privátních a skrytých Oblastí, note-body-only editace, revokace session a podvrženého worker DTO). Testy ověřují i `no-store` a zákaz interních polí v odpovědi.
 
+Aktuální desktopové UI-06c/UI-06d změny se integrují nezávisle; tento endpoint **nemění** jejich obrazovky, focus management ani výchozí navigaci. Před sloučením je potřeba ověřit CI na aktuálním integrovaném `main`.
+
 Bez produkční migrace, deploymentu, aktivace flagů, UI komponenty, indexace obsahu, přihlašovacích změn či vyhledávání přes AI. Plné browser E2E, VoiceOver/mobilní náhled, restore a souhlas s produkčním cutoverem zůstávají výhradně v samostatné release bráně R4.
