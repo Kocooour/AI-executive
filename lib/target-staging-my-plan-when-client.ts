@@ -36,6 +36,8 @@ const exact=(x:Record<string,unknown>,keys:readonly string[]):boolean=>
   Object.keys(x).sort().join("|")===keys.slice().sort().join("|");
 const epoch=(x:unknown):x is number=>
   typeof x==="number"&&Number.isSafeInteger(x)&&x>=0;
+const optionalEpoch=(x:unknown):x is number|null=>
+  x===null||epoch(x);
 
 /** Same Gregorian date-only domain as the staging personal-when writer. */
 export function validMyPlanWhenDate(x:unknown):x is string|null{
@@ -67,7 +69,7 @@ export function validMyPlanWhenCommand(x:unknown):x is MyPlanWhenCommand{
     validStatusTaskId(x.taskId)&&validMyPlanWhenDate(x.whenOn)&&
     typeof x.expectedRevision==="string"&&revision.test(x.expectedRevision)&&
     epoch(x.expectedPrivateEpoch)&&
-    (x.expectedPlanRevision===null||epoch(x.expectedPlanRevision))&&
+    optionalEpoch(x.expectedPlanRevision)&&
     typeof x.writeAreaId==="string"&&area.test(x.writeAreaId)&&
     typeof x.restoreGeneration==="string"&&uuid.test(x.restoreGeneration);
 }
@@ -118,7 +120,7 @@ export async function prepareMyPlanWhen(params:{
       typeof data.expectedRevision!=="string"||
       !revision.test(data.expectedRevision)||
       !epoch(data.expectedPrivateEpoch)||
-      !(data.expectedPlanRevision===null||epoch(data.expectedPlanRevision))||
+      !optionalEpoch(data.expectedPlanRevision)||
       !validMyPlanWhenDate(data.whenOn)||
       typeof data.writeAreaId!=="string"||
       !area.test(data.writeAreaId)||
