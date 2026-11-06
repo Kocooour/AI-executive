@@ -411,8 +411,9 @@ export function TargetStagingMyPlanPreview({
     <header>
       <p className="stagingMyPlanEyebrow">Lumi · izolovaný staging</p>
       <h1>Můj plán</h1>
-      <p>Čtecí náhled cílového modelu. Jen úkoly; bez kalendářových
-        událostí, úprav, synchronizační fronty a ukládání offline.</p>
+      <p>{statusWriteEnabled
+        ?"Izolovaný stagingový náhled s dokončením a bezpečným Undo. Bez kalendářových událostí, přesunu dne a offline fronty."
+        :"Čtecí náhled cílového modelu. Jen úkoly; bez úprav, kalendářových událostí a offline ukládání."}</p>
     </header>
     <div className="stagingMyPlanToolbar">
       <label>Den
