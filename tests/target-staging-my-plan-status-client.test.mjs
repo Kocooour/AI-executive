@@ -189,7 +189,7 @@ test("Undo uses a fresh preview and new idempotency key instead of PATCH replay"
   assert.notEqual(undo.command.expectedRevision,first.command.expectedRevision);
 });
 
-test("transport has no persistent cache and is not linked into production UI",()=>{
+test("transport has no persistent cache and is only used by server-gated staging UI",()=>{
   const root=path.join(import.meta.dirname,"..");
   const code=readFileSync(path.join(root,
     "lib/target-staging-my-plan-status-client.ts"),"utf8");
@@ -197,7 +197,13 @@ test("transport has no persistent cache and is not linked into production UI",()
     "app/ui/target-staging-my-plan-preview.tsx"),"utf8");
   assert.doesNotMatch(code,/indexedDB|localStorage|sessionStorage|serviceWorker/);
   assert.doesNotMatch(code,/\bwindow\.location\b|\bfetch\("https?:/);
-  assert.doesNotMatch(preview,/dispatchMyPlanStatus|changeMyPlanStatus/);
+  const page=readFileSync(path.join(root,
+    "app/target-staging/my-plan/preview/page.tsx"),"utf8");
+  const productionPage=readFileSync(path.join(root,"app/page.tsx"),"utf8");
+  assert.match(preview,/statusWriteEnabled=false/);
+  assert.match(preview,/dispatchMyPlanStatus/);
+  assert.match(page,/myPlanStagingWriteUiEnabled\(process\.env\)/);
+  assert.doesNotMatch(productionPage,/target-staging-my-plan-status-client/);
   assert.match(code,/method:"GET",credentials:"same-origin",cache:"no-store"/);
   assert.match(code,/No retries/);
 });
