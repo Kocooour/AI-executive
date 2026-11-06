@@ -6,6 +6,7 @@ import { captureMarkers as captureMarkersIn, clearAllMarkers, clearSentMarkers a
 import { forServer, unsentIds, type HeldBackReason } from "../../../lib/sendable";
 import { mergeEntity, mergeRelations, sameValue, withConflicts } from "../../../lib/field-merge";
 import { writeTime } from "../../../lib/clock";
+import { settleSyncOperation } from "../../../lib/sync-result";
 import { hasChangesBeyond, postToTabs, requestTimeout, tabChannelName, withSyncLock, type TabMessage } from "../../../lib/tab-coordination";
 import { markSignedIn } from "../../../lib/local-data";
 import { beginAdoption, isAdopting, setAfterRestoreFlag } from "../../../lib/adoption";
@@ -415,9 +416,14 @@ export function useSync() {
     if (queuedSaves.current > 0 || localDataVersion.current % 2 === 1 || signedOut.current) return;
     void syncToServer();
   }
-  async function syncToServer() {
+  async function syncToServer({ reportFailure = false }: { reportFailure?: boolean } = {}) {
+    // Existing callers keep the non-rejecting offline-first queue. Preview project
+    // actions opt in to observing the result of THEIR particular server write.
     // Restored data is being adopted: nothing of the replaced data is sent.
-    if (isAdopting()) return;
+    if (isAdopting()) {
+      if (reportFailure) throw new Error("SYNC_NOT_CONFIRMED");
+      return;
+    }
     // Marked at once, before waiting for an earlier save or another tab's synchronization, so
     // that no tab takes the server copy over this change in the meantime.
     markPending();
@@ -430,7 +436,10 @@ export function useSync() {
     const operation = syncQueue.current.then(() => withSyncLock(async () => {
       queuedSaves.current -= 1;
       // Restored data was adopted while this save waited: nothing is marked or sent.
-      if (isAdopting()) return;
+      if (isAdopting()) {
+        if (reportFailure) throw new Error("SYNC_NOT_CONFIRMED");
+        return;
+      }
       setSyncStatus("syncing");
       localStorage.setItem(pendingKey, "1");
       const localVersion = localDataVersion.current;
@@ -460,6 +469,7 @@ export function useSync() {
           // (nothing from before to protect) learns the number and goes on.
           if (restoredSinceKnown(current.restoreGeneration)) {
             await adoptServerCopy(current, true);
+            if (reportFailure) throw new Error("SYNC_NOT_CONFIRMED");
             return;
           }
           rememberGeneration(current.restoreGeneration);
@@ -529,12 +539,12 @@ export function useSync() {
       if (offlineRecoveryIsHeld()) {
         setRecoveryHeld(true);
         setSyncStatus("offline");
+        if (reportFailure) throw new Error("SYNC_NOT_CONFIRMED");
       } else setSyncStatus("synced");
     }));
-    syncQueue.current = operation.catch(() => {
-      setSyncStatus("offline");
-    });
-    return syncQueue.current;
+    const settled = settleSyncOperation(operation, () => setSyncStatus("offline"), reportFailure);
+    syncQueue.current = settled.queue;
+    return settled.result;
   }
   // `afterSignIn`: the browser has just signed in, so nothing local predates the server copy and,
   // once that copy is taken over, the local copy counts as synchronized (see below).

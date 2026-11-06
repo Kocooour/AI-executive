@@ -23,7 +23,7 @@ export function ProjectPage({ app, project, renderRow, reorderPreview = false, o
   reorderPreview?: boolean; onToggleReorder?: () => void;
 }) {
   const { activeWorkspaceId, areas, askConfirm, closeProjectPage, contextClaims, contextPredicateLabel, heldBack, items, language,
-    openCapture, patch, relate, remove, rename, scopedRelations, setProjectStatus, targets, today, tr, unsent } = app;
+    openCapture, patch, projectPreviewActionSnapshot, trackProjectWrite, relate, remove, rename, scopedRelations, setProjectStatus, targets, today, tr, unsent } = app;
   const t = labelsFor(language);
   const { tasks, notes } = projectTasks(project, items, scopedRelations);
   const summary = summarizeProject(project, items, scopedRelations, today);
@@ -51,6 +51,7 @@ export function ProjectPage({ app, project, renderRow, reorderPreview = false, o
   const [mobileViewport, setMobileViewport] = useState(false);
   const [actionBusy, setActionBusy] = useState(false);
   const [actionError, setActionError] = useState("");
+  const actionInFlight = useRef(false);
   useEffect(() => {
     if (!mobileDesignV1Preview) return;
     const query = window.matchMedia("(max-width: 700px)");
@@ -59,41 +60,72 @@ export function ProjectPage({ app, project, renderRow, reorderPreview = false, o
     query.addEventListener("change", update);
     return () => query.removeEventListener("change", update);
   }, []);
-  const mobileDetailPreview = mobileDesignV1Preview && mobileViewport;
+  const projectDetailPreview = mobileDesignV1Preview;
+  const mobileDetailPreview = projectDetailPreview && mobileViewport;
   const canChangeStatus = projectPreviewCanToggle(project, activeWorkspaceId,
     isHeld || unsent.has(project.id) || entityConflicts(project).length > 0 || actionBusy);
-  async function mobileToggleStatus() {
-    if (!canChangeStatus) return;
-    const completed = project.status === "completed";
-    const count = openTasks.length;
-    const notice = !completed && count > 0
-      ? language === "cs"
-        ? `Projekt má ${count} ${count === 1 ? "otevřený úkol" : count < 5 ? "otevřené úkoly" : "otevřených úkolů"}. Dokončení projektu stav těchto úkolů nezmění.`
-        : `This project has ${count} open ${count === 1 ? "task" : "tasks"}. Completing it will leave those tasks open.`
-      : "";
-    const confirmed = await askConfirm({
-      title: completed ? (language === "cs" ? "Znovu otevřít projekt?" : "Reopen project?")
-        : (language === "cs" ? "Dokončit projekt?" : "Complete project?"),
-      message: `${project.title}${notice ? `\n\n${notice}` : ""}`,
-      confirmLabel: tr(completed ? "reopen" : "complete"),
-    });
-    if (!confirmed) return;
+  // The same confirmation and sync/held/conflict guard applies to desktop
+  // and phone previews. Legacy production controls remain unchanged.
+  function reportPreviewActionError(error: unknown) {
+    // The app-level role=alert persists when a deleted project page unmounts.
+    if (error instanceof Error && error.message === "project_preview_sync_pending") return;
+    const stale = error instanceof Error && error.message === "project_preview_changed";
+    setActionError(stale
+      ? (language === "cs" ? "Projekt se mezitím změnil. Zkontrolujte aktuální stav a akci zopakujte." :
+        "The project changed during confirmation. Review its current state and try again.")
+      : (language === "cs" ? "Akci se nepodařilo provést. Zkontrolujte stav projektu." :
+        "Could not perform this action. Check the project status."));
+  }
+  // Lock both controls during confirmation; the store guards again inside the transaction.
+  async function previewToggleStatus() {
+    if (!canChangeStatus || actionInFlight.current) return;
+    actionInFlight.current = true;
     setActionBusy(true); setActionError("");
-    try { await setProjectStatus(project, completed ? "active" : "completed"); }
-    catch { setActionError(language === "cs" ? "Změnu se nepodařilo synchronizovat. Zkontrolujte stav projektu." :
-      "Could not synchronize this change. Check the project status."); }
-    finally { setActionBusy(false); }
+    try {
+      const snapshot = await projectPreviewActionSnapshot(project.id);
+      const completed = snapshot.project.status === "completed";
+      const count = snapshot.openTasks;
+      const notice = !completed && count > 0
+        ? language === "cs"
+          ? `Projekt má ${count} ${count === 1 ? "otevřený úkol" : count < 5 ? "otevřené úkoly" : "otevřených úkolů"}. Dokončení projektu stav těchto úkolů nezmění.`
+          : `This project has ${count} open ${count === 1 ? "task" : "tasks"}. Completing it will leave those tasks open.`
+        : "";
+      const confirmed = await askConfirm({
+        title: completed ? (language === "cs" ? "Znovu otevřít projekt?" : "Reopen project?")
+          : (language === "cs" ? "Dokončit projekt?" : "Complete project?"),
+        message: `${snapshot.project.title}${notice ? `\n\n${notice}` : ""}`,
+        confirmLabel: tr(completed ? "reopen" : "complete"),
+      });
+      if (!confirmed) return;
+      await setProjectStatus(snapshot.project, completed ? "active" : "completed", snapshot);
+    } catch (error) { reportPreviewActionError(error); }
+    finally { actionInFlight.current = false; setActionBusy(false); }
+  }
+  async function previewDeleteProject() {
+    if (!canChangeStatus || actionInFlight.current) return;
+    actionInFlight.current = true;
+    setActionBusy(true); setActionError("");
+    try {
+      const snapshot = await projectPreviewActionSnapshot(project.id);
+      const confirmed = await askConfirm({ title: tr("projectDeleteTitle"),
+        message: tr("projectDeleteConfirm").replace("{title}", () => snapshot.project.title),
+        confirmLabel: tr("delete"), danger: true });
+      if (!confirmed) return;
+      await remove(snapshot.project, snapshot);
+    } catch (error) { reportPreviewActionError(error); }
+    finally { actionInFlight.current = false; setActionBusy(false); }
   }
   const projectActions = <div className="projectActions" data-project-actions>
-    <button type="button" disabled={mobileDetailPreview && !canChangeStatus}
-      onClick={() => mobileDetailPreview
-        ? void mobileToggleStatus()
+    <button type="button" disabled={projectDetailPreview && !canChangeStatus}
+      onClick={() => projectDetailPreview
+        ? void previewToggleStatus()
         : void setProjectStatus(project, project.status === "completed" ? "active" : "completed")}>
       {tr(project.status === "completed" ? "reopen" : "complete")}
     </button>
     <button type="button" className="danger"
-      disabled={mobileDetailPreview && !canChangeStatus}
+      disabled={projectDetailPreview && !canChangeStatus}
       onClick={async () => {
+        if (projectDetailPreview) { await previewDeleteProject(); return; }
         if (await askConfirm({ title: tr("projectDeleteTitle"),
           message: tr("projectDeleteConfirm").replace("{title}", () => project.title),
           confirmLabel: tr("delete"), danger: true })) void remove(project);
@@ -103,7 +135,7 @@ export function ProjectPage({ app, project, renderRow, reorderPreview = false, o
 
   return (
     <article className="projectPage" aria-label={`${t.page}: ${project.title}`} data-project-page={project.id}
-      data-project-detail-preview={mobileDetailPreview ? "lumi-v1" : undefined}>
+      data-project-detail-preview={projectDetailPreview ? "lumi-v1" : undefined}>
       <button type="button" className="projectBack" aria-label={t.backAria} onClick={closeProjectPage}>{t.back}</button>
 
       <div className="projectHeader">
@@ -120,7 +152,7 @@ export function ProjectPage({ app, project, renderRow, reorderPreview = false, o
               titleFocused.current = false;
               const next = event.target.value;
               if (!next.trim()) { setTitle(project.title); return; }
-              void rename(project, next);
+              void trackProjectWrite(project.id, rename(project, next));
             }}
           />
         </h1>
@@ -140,7 +172,7 @@ export function ProjectPage({ app, project, renderRow, reorderPreview = false, o
         {isHeld && <p className="recordState recordHeldBack" role="status">{tr("heldBackDetail").replace("{reason}", () => heldBackReason(app, project))}</p>}
         {!isHeld && unsent.has(project.id) && <p className="recordState" role="status">{tr("unsentDetail")}</p>}
         <SyncConflicts app={app} entity={project} />
-        {!mobileDetailPreview && <ProjectContext key={project.id} app={app} project={project} />}
+        {!projectDetailPreview && <ProjectContext key={project.id} app={app} project={project} />}
         {!mobileDetailPreview && projectActions}
       </div>
 
@@ -161,7 +193,7 @@ export function ProjectPage({ app, project, renderRow, reorderPreview = false, o
         {projectAcceptsNewItems(project) && <button type="button" className="projectAdd" onClick={() => openCapture("task", project.id)}>＋ {tr("addTask")}</button>}
       </section>
 
-      {mobileDetailPreview && (
+      {projectDetailPreview && (
         <details key={project.id} className="projectContextFold" data-project-context-fold>
           <summary>{t.contextTitle}</summary>
           <ProjectContext key={project.id} app={app} project={project} />

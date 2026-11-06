@@ -58,6 +58,21 @@ export default function App() {
           </div>
         )}
         <Topbar app={app} />
+        {mobileDesignV1Preview && app.projectSyncNotices.map((notice) => (
+          <div key={notice.projectId} className="navigationUnavailableNotice" role="alert"
+            data-testid="project-sync-warning">
+            <p>{language === "cs"
+              ? (notice.kind === "delete"
+                ? "Projekt byl odstraněn v tomto zařízení, ale server zatím nepotvrdil smazání. Změna může čekat na synchronizaci; zkontrolujte připojení."
+                : "Stav projektu byl změněn v tomto zařízení, ale server zatím nepotvrdil uložení. Změna může čekat na synchronizaci; zkontrolujte připojení.")
+              : (notice.kind === "delete"
+                ? "The project was deleted on this device, but the server has not confirmed the deletion. The change may be pending sync; check your connection."
+                : "The project status changed on this device, but the server has not confirmed the save. The change may be pending sync; check your connection.")}</p>
+            <button type="button" onClick={() => app.dismissProjectSyncNotice(notice.projectId)}>
+              {language === "cs" ? "Skrýt upozornění" : "Dismiss notice"}
+            </button>
+          </div>
+        ))}
         {app.navigationUnavailable && (
           <div className="navigationUnavailableNotice" role="status" data-testid="navigation-unavailable">
             <p>{language === "cs"
