@@ -108,7 +108,8 @@ test("hide/offline abort active requests, discard confirmed Undo and reauthorize
 
 test("Undo is a fresh authorized open command, not an old PATCH replay",()=>{
   const ui=source("app/ui/target-staging-my-plan-preview.tsx");
-  assert.match(ui,/action\.kind==="committed"&&action\.status==="completed"/);
+  assert.match(ui,/statusWriteEnabled&&action\.kind==="committed"/);
+  assert.match(ui,/action\.status==="completed"&&/);
   assert.match(ui,/action\.taskId===task\.taskId&&action\.areaId===task\.areaId/);
   assert.match(ui,/Vrátit dokončení \(Undo\)/);
   assert.match(ui,/areaId:action\.areaId,[\s\S]*?\},"open"\)/);
