@@ -51,7 +51,7 @@ test("task completion uses square control with screen reader label and large tou
   const ui=source("app/ui/target-staging-my-plan-preview.tsx");
   const css=source("app/target-staging/my-plan/preview/preview.css");
   assert.match(ui,/statusWriteEnabled=false/);
-  assert.match(ui,/\{statusWriteEnabled\s*\?\s*"Izolovaný stagingový náhled s dokončením/);
+  assert.match(ui,/statusWriteEnabled\s*\?\s*"Izolovaný stagingový náhled s dokončením/);
   assert.match(ui,/\{canComplete[\s\S]*?<button type="button" className="stagingMyPlanSquare stagingMyPlanComplete"/);
   assert.match(ui,/aria-label=\{"Dokončit úkol: "\+task\.title\}/);
   assert.match(ui,/canComplete=\{canComplete\}/);
@@ -89,8 +89,8 @@ test("manual receipt verification never resends a PATCH and blocks new status co
   assert.match(method,/receipt\.reason==="signed-out"/);
   assert.match(method,/setAction\(\{kind:"uncertain"\}\)/);
   assert.match(ui,/const actionPending=action\.kind==="pending"\|\|action\.kind==="checking"\|\|\s*action\.kind==="uncertain"/);
-  assert.match(ui,/disabled=\{actionPending\}/);
-  assert.match(ui,/\{!actionPending&&<>[\s\S]*?<PlanDay/);
+  assert.match(ui,/disabled=\{anyPending\}/);
+  assert.match(ui,/\{!anyPending&&<>[\s\S]*?<PlanDay/);
   assert.match(ui,/Ověřit původní potvrzení/);
   assert.doesNotMatch(ui,/localStorage|indexedDB|sessionStorage|serviceWorker/);
 });
