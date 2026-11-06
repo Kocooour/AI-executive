@@ -89,7 +89,8 @@ export function MobileProjectRowV1({ app, project, summary, dragScope, reorderEn
         onClick={(event) => { event.stopPropagation(); void toggle(); }} />
       <div className="taskRowMain v1ProjectMain">
         <strong className="v1ProjectName">
-          <button type="button" className="taskRowOpen" onClick={(event) => { event.stopPropagation(); void inspect(project); }}>
+          <button type="button" className="taskRowOpen" data-project-open={project.id}
+            onClick={(event) => { event.stopPropagation(); void inspect(project); }}>
             {name}
           </button>
         </strong>
