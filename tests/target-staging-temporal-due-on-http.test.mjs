@@ -165,6 +165,28 @@ test("four independent gates and authentication fail closed, preview validates I
   assert.equal((await query("p-alice")).status,200);
 });
 
+test("BE-08 dueOn child gate stays independent of status-write gate",async()=>{
+  const fx=fixture();
+  const oldStatus=process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_TEMPORAL_WRITE_ENABLED;
+  const oldDue=process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_TEMPORAL_DUE_ON_WRITE_ENABLED;
+  const config={...fx.store,ownerUserId:"alice"};
+  try{
+    process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_TEMPORAL_WRITE_ENABLED="false";
+    process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_TEMPORAL_DUE_ON_WRITE_ENABLED="true";
+    const preview=await readStagingTemporalDueOnPreviewInChild(config,"p-alice");
+    assert.equal(preview?.ok,true,JSON.stringify(preview));
+    assert.equal((await query("p-alice")).status,200);
+    process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_TEMPORAL_DUE_ON_WRITE_ENABLED="false";
+    assert.equal(await readStagingTemporalDueOnPreviewInChild(config,"p-alice"),null);
+    assert.equal((await query("p-alice")).status,404);
+  }finally{
+    if(oldStatus===undefined)delete process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_TEMPORAL_WRITE_ENABLED;
+    else process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_TEMPORAL_WRITE_ENABLED=oldStatus;
+    if(oldDue===undefined)delete process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_TEMPORAL_DUE_ON_WRITE_ENABLED;
+    else process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_TEMPORAL_DUE_ON_WRITE_ENABLED=oldDue;
+  }
+});
+
 test("BE-08 dueOn CAS, date and task guard share one pinned snapshot",async()=>{
   const fx=fixture(),bob=login(fx,"bob"),carol=login(fx,"carol");
   const config={...fx.store,ownerUserId:"alice",
