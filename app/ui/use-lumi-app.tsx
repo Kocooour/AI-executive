@@ -3285,7 +3285,8 @@ export function useLumiApp() {
     if (expectedPreview) await load(); else void load();
     if (syncFailed) {
       setProjectSyncNotices((current) => withProjectSyncNotice(current,
-        { kind: "delete", projectId: e.id, projectTitle: e.title }));
+        { kind: "delete", projectId: e.id, projectTitle: e.title, workspaceId: e.workspaceId,
+          workspaceTitle: items.find((item) => item.type === "workspace" && item.workspaceId === e.workspaceId)?.title }));
       throw new Error("project_preview_sync_pending");
     }
     if (expectedPreview) setProjectSyncNotices((current) => withoutProjectSyncNotice(current, e.id));
@@ -3342,7 +3343,10 @@ export function useLumiApp() {
     setSelected((open) => open?.id === project.id ? saved : open);
     if (syncFailed) {
       setProjectSyncNotices((current) => withProjectSyncNotice(current,
-        { kind: "status", projectId: project.id, projectTitle: project.title, status, updatedAt: committedAt }));
+        { kind: "status", projectId: project.id, projectTitle: project.title,
+          workspaceId: project.workspaceId,
+          workspaceTitle: items.find((item) => item.type === "workspace" && item.workspaceId === project.workspaceId)?.title,
+          status, updatedAt: committedAt }));
       throw new Error("project_preview_sync_pending");
     }
     if (expectedPreview) setProjectSyncNotices((current) => withoutProjectSyncNotice(current, project.id));
