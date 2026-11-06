@@ -1,6 +1,6 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
-import { primaryViews, secondaryViews } from "../navigation";
+import { mobileDesignV1Preview, primaryViews, secondaryViews } from "../navigation";
 import type { LumiApp } from "../use-lumi-app";
 import { ProjectIcon, ViewIcon } from "./project-icon";
 import { WorkspaceTile, workspaceTone } from "../workspace-appearance";
@@ -124,7 +124,7 @@ export function Sidebar({ app }: { app: LumiApp }) {
             </button>
           ))}
         </nav>
-        {/* The aggregate shows no project list: projects of several workspaces would be confusing. */}
+        {/* Legacy aggregate has no direct project list: this preview never infers target ACL or cross-workspace permissions. */}
         {/* Projects and the "More views" list scroll as one area; the primary list above and the footer below stay put. */}
         <div className="sidebarScroll">
         {sidebarProjects.length > 0 && (
@@ -148,19 +148,25 @@ export function Sidebar({ app }: { app: LumiApp }) {
             ))}
           </section>
         )}
-        {secondaryOpen && (
+        {(mobileDesignV1Preview || secondaryOpen) && (
           <div className="secondaryNav" id="sidebar-secondary-views" ref={secondaryRef}>
             {secondaryViews.map((x) => <button key={x} className={view === x ? "active" : ""} onClick={() => { setView(x); closeDetail(); }}>{tr(x)}</button>)}
           </div>
         )}
         </div>
         <footer className="sidebarActions">
-          <button onClick={() => openCapture()} aria-label={tr("addTask")}>
-            ＋ {tr("new")}
-          </button>
-          <button type="button" className="secondaryNavToggle" aria-expanded={secondaryOpen} aria-controls="sidebar-secondary-views" onClick={() => setSecondaryOpen((open) => !open)}>
-            <span aria-hidden="true">{secondaryOpen ? "▾" : "▸"}</span> {tr("moreViews")}
-          </button>
+          {/* The desktop v1 FAB is the one Quick Capture entry point. Legacy
+              sidebar keeps its existing controls when the preview is off. */}
+          {!mobileDesignV1Preview && (
+            <>
+              <button onClick={() => openCapture()} aria-label={tr("addTask")}>
+                ＋ {tr("new")}
+              </button>
+              <button type="button" className="secondaryNavToggle" aria-expanded={secondaryOpen} aria-controls="sidebar-secondary-views" onClick={() => setSecondaryOpen((open) => !open)}>
+                <span aria-hidden="true">{secondaryOpen ? "▾" : "▸"}</span> {tr("moreViews")}
+              </button>
+            </>
+          )}
           <button
             className={view === "Settings" ? "active" : ""}
             onClick={() => {
