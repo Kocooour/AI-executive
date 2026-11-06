@@ -299,8 +299,8 @@ export function TargetStagingMyPlanPreview({
           setAction({kind:"idle"});
           invalidate("signed-out");
         }else{
-          setAction({kind:"error",reason:receipt.kind==="not-recorded"
-            ?"stale":receipt.reason});
+          setAction({kind:"error",reason:receipt.kind==="unknown"
+            ?receipt.reason:"stale"});
           refreshAfterStatus();
         }
         return;
@@ -382,7 +382,8 @@ export function TargetStagingMyPlanPreview({
     action.kind==="uncertain";
   const canComplete=statusWriteEnabled&&!actionPending;
   async function more(){
-    if(moreInFlight.current||state.status!=="ready"||
+    if(statusOperation.current||actionPending||
+      moreInFlight.current||state.status!=="ready"||
       !state.page.hasMore||!state.page.nextCursor||!date)return;
     moreInFlight.current=true;
     setMoreBusy(true);
@@ -419,7 +420,7 @@ export function TargetStagingMyPlanPreview({
           onChange={event=>{
             const chosen=event.target.value;
             if(!validMyPlanDate(chosen))return;
-            if(actionPending)return;
+            if(actionPending||statusOperation.current)return;
             resetFeedback();
             setFollowToday(false); // A manual date remains pinned at midnight.
             if(chosen!==date){invalidate("stale",true);setDate(chosen);}
@@ -428,6 +429,7 @@ export function TargetStagingMyPlanPreview({
       <label>Moje práce
         <select value={areaFilter} disabled={actionPending}
           onChange={event=>{
+            if(actionPending||statusOperation.current)return;
             resetFeedback();
             invalidate("stale",true);
             setAreaFilter(event.target.value as MyPlanSliceFilter);
@@ -438,6 +440,7 @@ export function TargetStagingMyPlanPreview({
         </select>
       </label>
       <button type="button" disabled={actionPending} onClick={()=>{
+        if(actionPending||statusOperation.current)return;
         resetFeedback();
         const chosen=localMyPlanDate();
         invalidate("stale",true);
@@ -446,6 +449,7 @@ export function TargetStagingMyPlanPreview({
         else setDate(chosen);
       }}>Aktuální den</button>
       <button type="button" disabled={actionPending} onClick={()=>{
+        if(actionPending||statusOperation.current)return;
         resetFeedback();
         invalidate("stale",true);
         setRefresh(n=>n+1);
