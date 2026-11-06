@@ -1,4 +1,4 @@
-# R3-slice / BE-01 až BE-12 — stagingový Můj plán a bezpečné CAS
+# R3-slice / BE-01 až BE-13 — stagingový Můj plán a bezpečné CAS
 
 **Stav:** implementační podklad pro první vertikální řez, nikoli aktivovaný produkt. Navazuje na rozhodnutí [5. 11. 2026](decisions/2026-11-05-ui-revize-a-vertikalni-rez.md) a existující task-only `R2d.3l.2` read endpoint.
 
@@ -97,6 +97,14 @@ BE-01/BE-02/BE-03 **nevytváří nový zápis** ani nerozšiřuje ACL. UI vertik
 - Klientské osobní `whenOn` a sdílené dokončení fungují se **skutečným serverovým šestipolovým/osmipolovým CAS**, původním read-only receipt a čerstvým Undo s novým UUID. Pro simulaci ztracené odpovědi adapter počká na úspěšné zpracování PATCH a potom **zahodí jeho HTTP odpověď**. Obě implementace klientského transportu smějí vyvolat jen `GET → PATCH → POST receipt`, žádný druhý PATCH. Výsledný dvoudenní Můj plán je bez duplicit a po reverzi odpovídá původnímu.
 - Viewer nedostane zápisový náhled a nemůže z klientského transportu dojít ke `PATCH`. Při **revokaci durable session těsně po commitu** se klientský transport rozhodne pro `uncertain`, protože původní cookie odmítne receipt. Původní příkaz lze read-only potvrdit až pod **novým přihlášením stejné identity**; staré session se nijak neobnoví. Nový CAS/UUID potom bezpečně vrátí plán.
 - Testuje se reálné rozhraní **transport → HTTP handler → autorizační brána → SQLite**, nikoli React rendering, časování DOM, skutečné přerušení síťového stacku ani browser E2E. Nová funkce pro uživatele se tím automaticky neaktivuje; UI-04b ji používá jen přes samostatnou serverovou default-off bránu. Žádné produkční flagy, migrace, reset, nasazení ani změna backendové API smlouvy.
+
+## BE-13 — odlišení role a přiřazení; revokace mezi klientským CAS a zápisem
+
+- Dvě integrační regrese používají nezměněný **skutečný klientský CAS transport**, existující autentizované staging HTTP handlery a izolovaná syntetická SQLite data. Žádné mockované serverové odpovědi, klientská autorizace, produkční zápisy ani nové endpointy.
+- Na **stejném stále otevřeném** sdíleném úkolu se rozlišuje aktér, kterému je práce přiřazena (Alice, `admin`), nepřiřazený člen s právem upravovat sdílenou Oblast (Bob, `editor`) a nepřiřazený člen s rolí `viewer` (Carol). Osobní `whenOn` preview dostane jen **přiřazený oprávněný** aktér; nepřiřazený editor jej nedostane, ale může požádat o společný `status` CAS preview; viewer nedostane ani jedno. Pozitivní kontrola potvrzuje, že Bob dostane osobní preview na **jiném sdíleném úkolu stejné Oblasti**, který je skutečně přiřazen jemu. Všechny tyto sondy jsou jen GET bez PATCH, stav otevřeného úkolu se nemění. Nejde o izolované porovnání `viewer` přiřazeného úkolu, které aktuální model přiřazování nepovoluje.
+- Druhý scénář připraví Bobův **skutečný** osmipolový osobní CAS k přiřazenému sdílenému úkolu, ale mezi GET preview a PATCH mu odebere přiřazení, **aniž** by měnil jeho roli editora či session. Původní `PATCH` je zamítnut a klient pro jeho nejistý HTTP výsledek smí volat pouze **read-only původní receipt**, nikoliv zápis zopakovat. Úkol zmizí z Bobova Mého plánu; Bob nemůže přečíst původní receipt a nevznikne soukromý záznam.
+- Po novém přiřazení stejnému aktérovi se původní nezapsaný receipt jeví jako `not_recorded`. Další uživatelem **výslovně** zvolený zápis vyžaduje aktuální preview, novou task revizi a nové UUID. Potvrdí se přes skutečný serverový receipt a promítne se právě jednou do dvoudenního Mého plánu; nový reverzní CAS/UUID pak vrátí oba dny bez duplicit. Starý příkaz zůstává `not_recorded`.
+- BE-13 doplňuje regresní kontrakt pro UI-04b a navazující klientský release gate; nemění produkční chování, oprávnění, data, staging flagy ani UI. Neprovádí skutečné browser E2E či reálný síťový abort, migraci, cutover ani deployment.
 
 ## Co zůstává mimo iteraci
 
