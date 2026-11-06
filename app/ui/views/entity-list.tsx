@@ -176,6 +176,7 @@ export function EntityList({ app }: { app: LumiApp }) {
             <strong><button
               type="button"
               className="taskRowOpen"
+              data-project-open={x.type === "project" ? x.id : undefined}
               onClick={(event) => { event.stopPropagation(); void inspect(x); }}
             >{x.title || tr("untitledItem")}</button></strong>
             {view === "Today" && x.type === "task" && previewDay !== "tomorrow" &&
