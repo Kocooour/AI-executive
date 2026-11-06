@@ -472,7 +472,9 @@ export function TargetStagingMyPlanPreview({
         item=>item.taskId===task.taskId&&item.areaId===task.areaId);
       const today=date?myPlanWhenTarget(date,"today"):null;
       const tomorrow=date?myPlanWhenTarget(date,"tomorrow"):null;
-      if(!row||target===null||target!==today&&target!==tomorrow||
+      // "Dnes/Zítra" is never silently relative to a pinned historical day.
+      if(!followToday||date!==localMyPlanDate()||
+        !row||target===null||target!==today&&target!==tomorrow||
         row.whenOn===target)return;
     }
     const op:WhenOperation={
@@ -723,7 +725,8 @@ export function TargetStagingMyPlanPreview({
     whenAction.kind==="checking"||whenAction.kind==="uncertain";
   const anyPending=actionPending||whenPending;
   const canComplete=statusWriteEnabled&&!anyPending;
-  const canWhen=whenWriteEnabled&&!anyPending;
+  const canWhen=whenWriteEnabled&&!anyPending&&
+    followToday&&date!==null&&date===localMyPlanDate();
   async function more(){
     if(statusOperation.current||whenOperation.current||anyPending||
       moreInFlight.current||state.status!=="ready"||
