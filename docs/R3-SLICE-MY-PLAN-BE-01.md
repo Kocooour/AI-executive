@@ -1,4 +1,4 @@
-# R3-slice / BE-01 až BE-10 — stagingový Můj plán a bezpečné CAS
+# R3-slice / BE-01 až BE-11 — stagingový Můj plán a bezpečné CAS
 
 **Stav:** implementační podklad pro první vertikální řez, nikoli aktivovaný produkt. Navazuje na rozhodnutí [5. 11. 2026](decisions/2026-11-05-ui-revize-a-vertikalni-rez.md) a existující task-only `R2d.3l.2` read endpoint.
 
@@ -81,6 +81,15 @@ BE-01/BE-02/BE-03 **nevytváří nový zápis** ani nerozšiřuje ACL. UI vertik
 - Alice může jako admin změnit sdílený `dueOn` úkolu přiřazeného Bobovi, aniž by se tento nepřiřazený sdílený úkol objevil v *jejím* Mém plánu. Bobovi se dřívější termín propíše z *zítra* do *dnes*, ale jeho osobní plánovaný den zůstane soukromě nezměněný. Dříve pořízený Bobův `dueOn` CAS nesmí po zásahu Alice přepsat aktuální stav: `PATCH → 409`, read-only receipt původního nezapsaného příkazu → `not_recorded`.
 - Shared viewer nesmí získat zápisový `dueOn` preview ani cizí receipt. Obě změny se vracejí **novými, aktuálně potvrzenými CAS příkazy a novými UUID**, bez automatického opakování starého příkazu. Výsledné dvoudenní členění odpovídá počátečnímu; starší skutečně provedené příkazy stále mají `committed` receipt bez ohledu na současné datum.
 - Tato bezpečnostní a datově konzistentní smlouva je **pouze regresní CI test** na syntetických datech. BE-10 nezavádí API, databázové migrace, příznaky ani produkční aktivaci. Není to plné browser E2E ani důkaz dokončeného klientského UI.
+
+## BE-11 — ztracená odpověď, obnova přes receipt a nové přihlášení
+
+- Nové **integrační regresní scénáře** používají nezměněné autentizované HTTP route handlery, jednu izolovanou syntetickou SQLite databázi a **aktuální durable identitu**. Klientská simulace odesílá skutečný `PATCH` `whenOn` a poté `status`, ale **záměrně nečte obdrženou odpověď**: samotný transportní výpadek nesmí být považován za rollback ani důvod zopakovat `PATCH`.
+- Dočasně vypnutý samostatný `personal-when` stagingový write flag vrací na receipt `404`, což při výpadku brány **nevyvrací předchozí commit**. Po obnovení brány vrací stejný přesný původní `commandId` s úplným CAS vstupem read-only `committed`; v `Mém plánu` se změna projeví právě jednou.
+- Po revokaci durable session původní cookie **nesmí** přečíst receipt ani Můj plán (`401`); **nové přihlášení stejného aktéra** může přečíst potvrzení jeho dřívějšího příkazu (receipt je vázán na aktéra a samotný příkaz, nikoli na konkrétní přihlášení). Totéž je ověřeno odděleně pro `status` dokončení. Předchozí povolený obsah nevytéká přes revokovanou session.
+- Undo není replay: po opětovné autentizaci vyžaduje obě aktuální CAS preview a **nová UUID**, obnoví původní denní výběry bez duplicit. Starší potvrzení `committed` se nezmění ani po Undo.
+- Protipříklad: když se původní `PATCH` **vůbec neodeslal**, jeho read-only receipt je `not_recorded` a žádná mutace se neprovede. Pozdější **výslovná nová** akce používá nové preview a UUID; starý nezapsaný příkaz zůstává `not_recorded`, bez automatického opakování.
+- BE-11 zavádí pouze testy a tento kontrakt, ne produkční API, úpravu soukromí/ACL, lokální offline frontu, feature flag, deployment, data cutover ani plné Browser E2E. Všechny staging write flagy v testu se vrací do původního stavu.
 
 ## Co zůstává mimo iteraci
 
