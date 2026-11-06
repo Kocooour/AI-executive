@@ -26,7 +26,8 @@ import type {TargetGlobalNotePage} from "./target-global-note-read-model";
 import type {TargetGlobalCombinedPage,GlobalCombinedPositions} from "./target-global-combined-read-model";
 import type {AuthorizedSearchPage} from "./target-authorized-title-search";
 import type {PersonalWhenCommandPreview} from "./target-personal-when-command-read";
-import type {TargetPersonalWhenReceiptResult} from "./target-task-staging-reader";
+import type {TargetPersonalWhenReceiptResult,TargetPersonalWhenReceiptSnapshot}
+  from "./target-task-staging-reader";
 import type {
   AuthenticatedTargetTaskDetailResult, AuthenticatedTargetTaskListResult,
   TargetStagingTaskDetailRequest, TargetStagingTaskListRequest,
@@ -54,6 +55,7 @@ import {
   readPreflightedGlobalCombinedPage,
   readPreflightedAuthorizedTitleSearchPage,
   readPreflightedPersonalWhenCommandPreview,readPreflightedPersonalWhenReceipt,
+  readPreflightedPersonalWhenReceiptSnapshot,
   readPreflightedTemporalStatusReceipt,readPreflightedTemporalStatusReceiptSnapshot,
   readPreflightedTemporalDueOnReceipt,
   readPreflightedAuthorizedProjectStructuralRelations,
@@ -958,6 +960,15 @@ export class TargetStagingSessionAuthority {
       return credential?readPreflightedPersonalWhenCommandPreview(
         this.#store,credential,taskId):null;
     }catch{return null;}
+  }
+
+  /** BE-06: read-only private scheduling receipt and live-release witness. */
+  personalWhenReceiptSnapshot(
+    sessionToken:string,command:TargetStagingPersonalWhenCommand,
+  ):TargetPersonalWhenReceiptSnapshot {
+    const credential=this.#credential(sessionToken,true);
+    if(!credential)return {ok:false,reason:"inaccessible"};
+    return readPreflightedPersonalWhenReceiptSnapshot(this.#store,credential,command);
   }
 
   /** Read-only outcome reconciliation requires a WRITE credential and current
