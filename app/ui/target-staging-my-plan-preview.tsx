@@ -344,6 +344,18 @@ export function TargetStagingMyPlanPreview({
     const prior= status==="open"?confirmedCommand.current:null;
     if(status==="open"&&(!prior||prior.taskId!==task.taskId||
       prior.writeAreaId!==task.areaId||prior.status!=="completed"))return;
+    // A second action of the SAME family must not discard an earlier committed
+    // Undo if its new read-only preflight (or definite PATCH refusal) fails.
+    const retainedStatusUndo=prior??(status==="completed"&&
+      keepConfirmedMyPlanUndoOnRefresh(action,confirmedCommand.current)
+        ?confirmedCommand.current:null);
+    const restoreStatusUndoOnFailure=(reason:MyPlanStatusFailure)=>{
+      if(retainedStatusUndo){
+        setUndoFailure(reason);
+        setAction({kind:"committed",taskId:retainedStatusUndo.taskId,
+          areaId:retainedStatusUndo.writeAreaId,status:"completed"});
+      }else setAction({kind:"error",reason});
+    };
     const op:StatusOperation={
       controller:new AbortController(),privacyEpoch:privacyEpoch.current,command:null,
     };
@@ -351,9 +363,8 @@ export function TargetStagingMyPlanPreview({
     // Do not erase the previously confirmed personal-plan Undo before a status
     // PATCH: a failed read-only preflight must leave it recoverable.
     uncertainCommand.current=null;
-    // Never discard the original confirmed completion BEFORE a possible Undo.
-    // Receipt/preflight/400/409 failures cannot have reversed this task.
-    if(!prior)confirmedCommand.current=null;
+    // Preserve the prior confirmed command until an accepted or uncertain
+    // PATCH supersedes it. Read-only failures never erase the Undo.
     setUndoFailure(null);
     setAction({kind:"pending"});
     invalidate("stale",true); // No stale open row during a possible PATCH.
@@ -381,11 +392,8 @@ export function TargetStagingMyPlanPreview({
           invalidate("signed-out");
           return;
         }
-        // Only read-only work happened, so the original completion is still
-        // available for a manual retry after a freshly authorized list GET.
-        setUndoFailure(undo.reason);
-        setAction({kind:"committed",taskId:prior.taskId,
-          areaId:prior.writeAreaId,status:"completed"});
+        // Only read-only work happened; the original confirmed Undo survives.
+        restoreStatusUndoOnFailure(undo.reason);
         refreshAfterStatus();
         return;
       }
@@ -412,7 +420,7 @@ export function TargetStagingMyPlanPreview({
           setAction({kind:"idle"});
           invalidate("signed-out");
         }else{
-          setAction({kind:"error",reason:prepared.reason});
+          restoreStatusUndoOnFailure(prepared.reason);
           refreshAfterStatus();
         }
         return;
@@ -460,12 +468,10 @@ export function TargetStagingMyPlanPreview({
       setAction({kind:"idle"});
       invalidate("signed-out");
       return;
-    }else if(prior){
-      // Only a definite pre-commit refusal: original Undo remains available.
-      setUndoFailure(result.reason);
-      setAction({kind:"committed",taskId:prior.taskId,
-        areaId:prior.writeAreaId,status:"completed"});
-    }else setAction({kind:"error",reason:result.reason});
+    }else{
+      // A definite 400/409 did not write B; keep any confirmed A Undo.
+      restoreStatusUndoOnFailure(result.reason);
+    }
     refreshAfterStatus();
   }
 
@@ -482,6 +488,18 @@ export function TargetStagingMyPlanPreview({
       whenAction.kind==="uncertain"||state.status!=="ready"||
       document.visibilityState!=="visible"||!navigator.onLine)return;
     const prior=undo?confirmedWhen.current:null;
+    const retainedWhenUndo=prior??(!undo&&
+      keepConfirmedWhenOnRefresh(whenAction,confirmedWhen.current)
+        ?confirmedWhen.current:null);
+    const restoreWhenUndoOnFailure=(reason:MyPlanWhenFailure)=>{
+      if(retainedWhenUndo){
+        setWhenFailure(reason);
+        setWhenAction({kind:"committed",taskId:retainedWhenUndo.command.taskId,
+          areaId:retainedWhenUndo.command.writeAreaId,
+          whenOn:retainedWhenUndo.command.whenOn,
+          previousWhenOn:retainedWhenUndo.previousWhenOn,undoable:true});
+      }else setWhenAction({kind:"error",reason});
+    };
     if(undo){
       if(!prior||whenAction.kind!=="committed"||!whenAction.undoable||
         prior.command.taskId!==task.taskId||
@@ -531,11 +549,8 @@ export function TargetStagingMyPlanPreview({
           invalidate("signed-out");
           return;
         }
-        setWhenFailure(prepared.reason);
-        // No PATCH yet: previous completion of the private plan is intact.
-        setWhenAction({kind:"committed",taskId:prior.command.taskId,
-          areaId:prior.command.writeAreaId,whenOn:prior.command.whenOn,
-          previousWhenOn:prior.previousWhenOn,undoable:true});
+        // A failed read-only receipt/CAS cannot invalidate the earlier Undo.
+        restoreWhenUndoOnFailure(prepared.reason);
         refreshAfterStatus();
         return;
       }
@@ -563,7 +578,7 @@ export function TargetStagingMyPlanPreview({
           setWhenAction({kind:"idle"});
           invalidate("signed-out");
         }else{
-          setWhenAction({kind:"error",reason:prepared.reason});
+          restoreWhenUndoOnFailure(prepared.reason);
           refreshAfterStatus();
         }
         return;
@@ -602,16 +617,10 @@ export function TargetStagingMyPlanPreview({
     }else if(result.kind==="uncertain"){
       confirmedWhen.current=null;
       setWhenAction({kind:"uncertain"});
-    }else if(prior){
-      // Only a definite 400/409 PRE-COMMIT rejection can retain original Undo.
-      uncertainWhen.current=null;
-      setWhenFailure(result.reason);
-      setWhenAction({kind:"committed",taskId:prior.command.taskId,
-        areaId:prior.command.writeAreaId,whenOn:prior.command.whenOn,
-        previousWhenOn:prior.previousWhenOn,undoable:true});
     }else{
+      // A definite 400/409 refused B; A's confirmed Undo remains valid.
       uncertainWhen.current=null;
-      setWhenAction({kind:"error",reason:result.reason});
+      restoreWhenUndoOnFailure(result.reason);
     }
     refreshAfterStatus(); // Always fresh actor/ACL/private epoch list GET.
   }
@@ -908,8 +917,8 @@ export function TargetStagingMyPlanPreview({
         <div role="status" className="stagingMyPlanMutation">
           <span>Osobní plán potvrzen: {whenAction.whenOn
             ?humanDate(whenAction.whenOn):"bez plánovaného dne"}.</span>
-          {whenFailure&&<span role="alert">Undo nebylo provedeno:
-            {" "+whenReasons[whenFailure]} Původní plán zůstává potvrzený.</span>}
+          {whenFailure&&<span role="alert">Nová změna nebyla provedena:
+            {" "+whenReasons[whenFailure]} Předchozí plán zůstává potvrzený.</span>}
           {whenAction.undoable&&
             <button type="button" onClick={()=>{void changeWhen({
               taskId:whenAction.taskId,areaId:whenAction.areaId,
@@ -928,8 +937,8 @@ export function TargetStagingMyPlanPreview({
         <div role="status" className="stagingMyPlanMutation">
           <span>{action.status==="completed"?"Dokončení potvrzeno.":"Obnovení potvrzeno."}</span>
           {action.status==="completed"&&undoFailure&&
-            <span role="alert">Undo nebylo provedeno: {statusReasons[undoFailure]}
-              Původní dokončení zůstává potvrzené; Undo můžete zkusit znovu.</span>}
+            <span role="alert">Nová změna nebyla provedena: {statusReasons[undoFailure]}
+              Předchozí dokončení zůstává potvrzené; Undo je stále dostupné.</span>}
           {action.status==="completed"&&
             <button type="button" onClick={()=>{void changeStatus({
               taskId:action.taskId,areaId:action.areaId,
