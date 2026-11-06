@@ -18,7 +18,9 @@ import {
   type MyPlanStatus,type MyPlanStatusCommand,type MyPlanStatusFailure,
 } from "../../lib/target-staging-my-plan-status-client";
 import {canRetryUncertainMyPlanRead} from "../../lib/target-staging-my-plan-status-recovery";
-import {prepareConfirmedMyPlanUndo} from "../../lib/target-staging-my-plan-undo";
+import {
+  prepareConfirmedMyPlanUndo,keepConfirmedMyPlanUndoOnRefresh,
+} from "../../lib/target-staging-my-plan-undo";
 
 type StatusAction=
   |{kind:"idle"}
@@ -434,8 +436,8 @@ export function TargetStagingMyPlanPreview({
     if(statusOperation.current||action.kind==="pending"||
       action.kind==="checking"||action.kind==="uncertain"||
       document.visibilityState!=="visible"||!navigator.onLine)return;
-    if(!(action.kind==="committed"&&action.status==="completed"&&
-      confirmedCommand.current!==null))resetFeedback();
+    if(!keepConfirmedMyPlanUndoOnRefresh(action,confirmedCommand.current))
+      resetFeedback();
     invalidate("stale",true);
     setRefresh(n=>n+1);
   }
