@@ -510,6 +510,52 @@ export type TargetPersonalWhenReceiptResult=
   | {ok:true;status:"committed"|"not_recorded"}
   | {ok:false;reason:"invalid_request"|"unauthorized"|"unavailable"|
       "idempotency_conflict"|"resync_required"|"write_area_mismatch"};
+/** Shared receipt validation, always called from an already-pinned actor
+ * snapshot. Never compare an old command CAS against revisions after commit. */
+function personalWhenReceiptInSnapshot(
+  db:DatabaseSync,actor:string,command:TargetStagingPersonalWhenCommand,
+  restoreGeneration:string,preview?:PersonalWhenCommandPreview,
+):TargetPersonalWhenReceiptResult {
+  const check=checkTargetTaskWriteContract(db,actor,command);
+  if(check.ok===false)return {ok:false,reason:check.reason};
+  if(!preview&&!readAuthorizedPersonalWhenCommandPreview(
+    db,actor,command.taskId,restoreGeneration))
+    return {ok:false,reason:"unavailable"};
+  const prior=db.prepare("SELECT value FROM metadata WHERE key=?")
+    .get(personalWhenReceiptKey(actor,command.taskId,command.commandId)) as
+      {value:string}|undefined;
+  if(!prior)return {ok:true,status:"not_recorded"};
+  return prior.value===personalWhenReceiptDigest(command)
+    ? {ok:true,status:"committed"}
+    : {ok:false,reason:"idempotency_conflict"};
+}
+
+/** BE-06: actor-private scheduling witness and exact command receipt from
+ * one canonical preflighted pinned transaction, including the private epoch. */
+export type TargetPersonalWhenReceiptSnapshot=
+  | {ok:true;preview:PersonalWhenCommandPreview;receipt:TargetPersonalWhenReceiptResult}
+  | {ok:false;reason:"inaccessible"};
+
+export function readPreflightedPersonalWhenReceiptSnapshot(
+  store:TargetStagingReadStore,access:TargetStagingReadCredential,
+  command:TargetStagingPersonalWhenCommand,
+):TargetPersonalWhenReceiptSnapshot {
+  const denied=():TargetPersonalWhenReceiptSnapshot=>({ok:false,reason:"inaccessible"});
+  if(!validTargetStagingPersonalWhenCommand(command))return denied();
+  return withPreflightedStore<TargetPersonalWhenReceiptSnapshot>(store,denied,
+    (db,preflight)=>inReadSnapshot(db,()=>{
+      if(!preflight(db))return denied();
+      const actor=verifiedActor(db,access,true);
+      if(!actor)return denied();
+      const preview=readAuthorizedPersonalWhenCommandPreview(
+        db,actor,command.taskId,store.expectedRestoreGeneration);
+      if(!preview)return denied();
+      const receipt=personalWhenReceiptInSnapshot(
+        db,actor,command,store.expectedRestoreGeneration,preview);
+      return {ok:true,preview,receipt};
+    },denied));
+}
+
 export function readPreflightedPersonalWhenReceipt(
   store:TargetStagingReadStore,access:TargetStagingReadCredential,
   command:TargetStagingPersonalWhenCommand,
@@ -522,19 +568,8 @@ export function readPreflightedPersonalWhenReceipt(
       if(!preflight(db))return denied();
       const actor=verifiedActor(db,access,true);
       if(!actor)return denied();
-      const check=checkTargetTaskWriteContract(db,actor,command);
-      if(check.ok===false)return {ok:false,reason:check.reason};
-      // Shared Area editors cannot inspect another assignee's receipts.
-      if(!readAuthorizedPersonalWhenCommandPreview(
-          db,actor,command.taskId,store.expectedRestoreGeneration))
-        return {ok:false,reason:"unavailable"};
-      const prior=db.prepare("SELECT value FROM metadata WHERE key=?")
-        .get(personalWhenReceiptKey(actor,command.taskId,command.commandId)) as
-          {value:string}|undefined;
-      if(!prior)return {ok:true,status:"not_recorded"};
-      return prior.value===personalWhenReceiptDigest(command)
-        ? {ok:true,status:"committed"}
-        : {ok:false,reason:"idempotency_conflict"};
+      return personalWhenReceiptInSnapshot(
+        db,actor,command,store.expectedRestoreGeneration);
     },denied));
 }
 

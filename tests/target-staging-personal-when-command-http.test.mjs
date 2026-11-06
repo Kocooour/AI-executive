@@ -35,8 +35,10 @@ const durable=await import("../lib/target-staging-durable-session.ts");
 const {createSessionToken,sessionCookieName}=await import("../lib/auth.ts");
 const {GET,PATCH}=await import("../app/api/target-staging/task-temporal/personal-when/command/route.ts");
 const {POST}=await import("../app/api/target-staging/task-temporal/personal-when/command/receipt/route.ts");
-const {parsePersonalWhenWriteReply,parsePersonalWhenReceiptReply}=
-  await import("../lib/target-staging-personal-when-http-process.ts");
+const {
+  parsePersonalWhenWriteReply,parsePersonalWhenReceiptReply,
+  readPersonalWhenAtomicReceiptInChild,parsePersonalWhenAtomicReceiptReply,
+}=await import("../lib/target-staging-personal-when-http-process.ts");
 const {parseStagingPersonalWhenPreview,readStagingPersonalWhenPreviewInChild}=
   await import("../lib/target-staging-read-process.ts");
 const {verifyPersonalWhenPreviewLive}=
@@ -184,6 +186,90 @@ test("private set/update/clear, replay and receipt preserve shared dueOn/task re
     "SELECT due_on AS dueOn,revision,status FROM tasks WHERE id='p-alice'")},initial);
   assert.equal(receiptCount(fx),3);
   assert.deepEqual(await (await call("POST",first,cookie)).json(),{status:"committed"});
+});
+
+test("BE-06 receipt and actor-private epoch share one pinned read",async()=>{
+  const fx=fixture(),bob=login(fx,"bob"),carol=login(fx,"carol");
+  const cmd=await command("s-bob","2028-04-15",bob);
+  const tokenHash=durable.hashTargetStagingSessionToken(bob.split("=")[1]);
+  const config={...fx.store,ownerUserId:"alice",sessionTokenHash:tokenHash};
+  const snapshot=()=>readPersonalWhenAtomicReceiptInChild(config,cmd);
+  const before=await snapshot();
+  assert.equal(before?.ok,true,JSON.stringify(before));
+  assert.deepEqual(before.receipt,{ok:true,status:"not_recorded"});
+  assert.equal(before.preview.writeAreaId,"family-area");
+  const request=new Request(base+"/receipt",{
+    method:"POST",headers:{cookie:bob,origin:"http://localhost:3001"},body:"{}",
+  });
+  const identity={kind:"session",tokenHash};
+  const live=entry=>verifyPersonalWhenPreviewLive(
+    request,identity,{...fx.store,ownerUserId:"alice"},entry.preview);
+  assert.equal(live(before),"ok");
+  assert.deepEqual(await (await call("PATCH",cmd,bob)).json(),{ok:true});
+  assert.equal(live(before),"stale","private epoch changes after the commit");
+  const committed=await snapshot();
+  assert.equal(committed?.ok,true,JSON.stringify(committed));
+  assert.deepEqual(committed.receipt,{ok:true,status:"committed"});
+  assert.equal(live(committed),"ok");
+  assert.deepEqual(await (await call("POST",cmd,bob)).json(),{status:"committed"});
+  assert.deepEqual(await readPersonalWhenAtomicReceiptInChild(
+    {...config,sessionTokenHash:durable.hashTargetStagingSessionToken(carol.split("=")[1])},
+    cmd),{ok:false,reason:"inaccessible"});
+  assert.deepEqual(await readPersonalWhenAtomicReceiptInChild(config,
+    {...cmd,taskId:"s-other"}),{ok:false,reason:"inaccessible"});
+  const other=await command("child","2028-04-16",bob);
+  assert.equal((await call("PATCH",other,bob)).status,200);
+  assert.equal(live(committed),"stale","another personal task changes the private epoch");
+  // The staging schema correctly forbids downgrading a member with assigned
+  // shared tasks. Revoke assignments first, then the member role; both are
+  // legitimate database transitions and must invalidate receipt access.
+  const db=new DatabaseSync(fx.stage.databasePath);
+  try{
+    db.prepare("UPDATE tasks SET assignee_user_id=NULL WHERE assignee_user_id='bob'").run();
+    db.prepare("UPDATE area_members SET role='viewer' WHERE area_id='family-area' AND user_id='bob'").run();
+  }finally{db.close();}
+  assert.equal(live(committed),"stale","revoked assignment and role invalidate the old witness");
+  assert.deepEqual(await snapshot(),{ok:false,reason:"inaccessible"});
+  assert.equal((await call("POST",cmd,bob)).status,404);
+});
+
+test("BE-06 atomic child rejects extra fields, fake receipts, and invalid witnesses",async()=>{
+  const fx=fixture(),c=await command("p-alice","2028-02-22");
+  const sample=await readPersonalWhenAtomicReceiptInChild({
+    ...fx.store,ownerUserId:"alice",
+  },c);
+  assert.equal(sample?.ok,true,JSON.stringify(sample));
+  for(const invalid of [
+    {...sample,actor:"alice"},
+    {...sample,receipt:{ok:true,status:"committed",commandId:c.commandId}},
+    {...sample,receipt:{ok:true,status:"unknown"}},
+    {...sample,preview:{...sample.preview,privatePlan:"secret"}},
+    {...sample,preview:{...sample.preview,expectedPrivateEpoch:-1}},
+    {...sample,preview:{...sample.preview,guard:{...sample.preview.guard,taskId:"foreign"}}},
+    {...sample,preview:{...sample.preview,linearization:{
+      ...sample.preview.linearization,areas:[{
+        ...sample.preview.linearization.areas[0],access:"viewer",
+      }],
+    }}},
+    {ok:true,receipt:sample.receipt},
+  ])assert.equal(parsePersonalWhenAtomicReceiptReply(invalid,c.taskId),null);
+});
+
+test("BE-06 receipt child accepts long UTF-8 task IDs without widening other worker caps",async()=>{
+  const fx=fixture();
+  const taskId="d".repeat(1500);
+  const db=new DatabaseSync(fx.stage.databasePath);
+  try{db.prepare("INSERT INTO tasks(id,area_id,title) VALUES (?,?,'Long ID')").run(
+    taskId,fx.stage.unassignedAreaId);}
+  finally{db.close();}
+  const c=await command(taskId,"2028-04-01");
+  const snap=await readPersonalWhenAtomicReceiptInChild({...fx.store,ownerUserId:"alice"},c);
+  assert.equal(snap?.ok,true,JSON.stringify(snap));
+  assert.deepEqual(snap.receipt,{ok:true,status:"not_recorded"});
+  assert.equal(snap.preview.guard.taskId,taskId);
+  const res=await call("POST",c);
+  assert.equal(res.status,200,JSON.stringify(await res.clone().json()));
+  assert.deepEqual(await res.json(),{status:"not_recorded"});
 });
 
 test("shared plans require current assignment/editor ACL and never leak to another actor",async()=>{
