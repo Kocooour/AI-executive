@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 import { projectPreviewCanToggle, projectPreviewCanCommit, projectPreviewDependents, waitForProjectPreviewWrites } from "../lib/project-list-preview.ts";
 import { settleSyncOperation } from "../lib/sync-result.ts";
+import { projectSyncNoticeAfterUndo, projectSyncNoticeResolved, sameProjectSyncNotice } from "../lib/project-sync-notice.ts";
 
 const read = (path) => readFileSync(new URL(path, import.meta.url), "utf8");
 const page = read("../app/ui/views/project-page.tsx");
@@ -198,10 +199,58 @@ test("UI-05c: both preview mutations request failures and preserve a persistent 
     "completion and deletion must each observe the result of their own server write");
   assert.match(sync, /syncQueue\.current = settled\.queue;\s*return settled\.result;/);
   assert.match(sync, /if \(reportFailure\) throw new Error\("SYNC_NOT_CONFIRMED"\)/);
-  assert.match(app, /setProjectSyncNotice\("delete"\);\s*throw new Error\("project_preview_sync_pending"\)/);
-  assert.match(app, /setProjectSyncNotice\("status"\);\s*throw new Error\("project_preview_sync_pending"\)/);
+  assert.match(app, /setProjectSyncNotice\(\{ kind: "delete", projectId: e\.id \}\);\s*throw new Error\("project_preview_sync_pending"\)/);
+  assert.match(app, /setProjectSyncNotice\(\{ kind: "status", projectId: project\.id, status, updatedAt: committedAt \}\);\s*throw new Error\("project_preview_sync_pending"\)/);
   assert.match(root, /role="alert" data-testid="project-sync-warning"/);
-  assert.match(root, /app\.projectSyncNotice === "delete"/);
+  assert.match(root, /app\.projectSyncNotice\.kind === "delete"/);
   assert.match(root, /onClick=\{app\.dismissProjectSyncNotice\}/);
   assert.match(page, /if \(error instanceof Error && error\.message === "project_preview_sync_pending"\) return;/);
+});
+
+test("UI-05c: pending status warning resolves only on acknowledged matching or superseding project revision", () => {
+  const pending = { kind: "status", projectId: "p", status: "completed", updatedAt: 200 };
+  const row = { id: "p", type: "project", status: "completed", updatedAt: 200 };
+  assert.equal(projectSyncNoticeResolved(pending, row, { ...row, updatedAt: 199 }, false), false,
+    "an older server base is not proof of this completion");
+  assert.equal(projectSyncNoticeResolved(pending, row, { ...row, updatedAt: 200 }, false), true);
+  assert.equal(projectSyncNoticeResolved(pending, row, undefined, false), false,
+    "a healthy sync of another record cannot resolve the project warning");
+  assert.equal(projectSyncNoticeResolved(pending, row, { ...row, status: "active", updatedAt: 201 }, false), false,
+    "the server acknowledging another status is not proof that this completion was sent");
+  const reopened = { ...row, status: "active", updatedAt: 250 };
+  assert.equal(projectSyncNoticeResolved(pending, reopened, reopened, false), true,
+    "an acknowledged newer local status supersedes an old warning");
+  assert.equal(projectSyncNoticeResolved(pending, reopened, { ...row, updatedAt: 199 }, false), false);
+  assert.equal(sameProjectSyncNotice(pending, { ...pending }), true);
+  assert.equal(sameProjectSyncNotice(pending, { ...pending, updatedAt: 201 }), false,
+    "an old async confirmation cannot dismiss a newer failure for the same project");
+});
+
+test("UI-05c: pending deletion warning requires deletion receipt; Undo cancels that exact warning", () => {
+  const deletion = { kind: "delete", projectId: "project-a" };
+  assert.equal(projectSyncNoticeResolved(deletion, undefined, undefined, true), false,
+    "delete marker still pending even when the record is locally absent");
+  assert.equal(projectSyncNoticeResolved(deletion, undefined, undefined, false), true,
+    "server base absent and delete marker consumed");
+  assert.equal(projectSyncNoticeResolved(deletion, { id: "project-a" }, undefined, true), true,
+    "a restored local project makes the deletion warning obsolete");
+  assert.equal(projectSyncNoticeResolved(deletion, undefined, { id: "project-a" }, false), false,
+    "server still holds the project");
+  assert.equal(projectSyncNoticeAfterUndo(deletion, "project-b"), deletion,
+    "Undo of a different project must not dismiss the warning");
+  assert.equal(projectSyncNoticeAfterUndo(deletion, "project-a"), null);
+  const status = { kind: "status", projectId: "project-a", status: "completed", updatedAt: 200 };
+  assert.equal(projectSyncNoticeAfterUndo(status, "project-a"), status);
+});
+
+test("UI-05c: status and deletion warnings reconcile on successful retry and matching Undo", () => {
+  const app = read("../app/ui/use-lumi-app.tsx");
+  assert.match(app, /if \(!projectSyncNotice \|\| syncStatus !== "synced"\) return;/);
+  assert.match(app, /db\.transaction\("r", db\.entities, db\.baseEntities, async \(\) => \{/);
+  assert.match(app, /projectSyncNoticeResolved\(warning, local, acknowledged,/);
+  assert.match(app, /pendingDeletedIds\(\)\.includes\(warning\.projectId\)/);
+  assert.match(app, /sameProjectSyncNotice\(current, warning\) \? null : current/);
+  assert.match(app, /setProjectSyncNotice\(\(current\) => projectSyncNoticeAfterUndo\(current, undo\.id\)\)/);
+  assert.match(app, /if \(expectedPreview\) setProjectSyncNotice\(\(current\) => current\?\.projectId === project\.id \? null : current\)/);
+  assert.match(app, /if \(expectedPreview\) setProjectSyncNotice\(\(current\) => current\?\.projectId === e\.id \? null : current\)/);
 });
