@@ -18,6 +18,7 @@ import {
   type MyPlanStatus,type MyPlanStatusCommand,type MyPlanStatusFailure,
 } from "../../lib/target-staging-my-plan-status-client";
 import {canRetryUncertainMyPlanRead} from "../../lib/target-staging-my-plan-status-recovery";
+import {prepareConfirmedMyPlanUndo} from "../../lib/target-staging-my-plan-undo";
 
 type StatusAction=
   |{kind:"idle"}
@@ -108,6 +109,7 @@ export function TargetStagingMyPlanPreview({
   const [state,setState]=useState<ReadState>({status:"loading"});
   const [moreBusy,setMoreBusy]=useState(false);
   const [action,setAction]=useState<StatusAction>({kind:"idle"});
+  const [undoFailure,setUndoFailure]=useState<MyPlanStatusFailure|null>(null);
   // A command needed for read-only reconciliation is kept in volatile memory,
   // never in React-rendered state, browser storage, or a background queue.
   const uncertainCommand=useRef<MyPlanStatusCommand|null>(null);
@@ -174,6 +176,7 @@ export function TargetStagingMyPlanPreview({
    * Receipt may be checked only after a fresh authorized My Plan read. */
   function privacyChange(){
     privacyEpoch.current++;
+    setUndoFailure(null);
     confirmedCommand.current=null;
     statusOperation.current?.controller.abort();
     setAction(old=>old.kind==="committed"||old.kind==="error"
@@ -281,47 +284,73 @@ export function TargetStagingMyPlanPreview({
     };
     statusOperation.current=op; // Synchronous mutex against double clicks.
     uncertainCommand.current=null;
-    confirmedCommand.current=null;
+    // Never discard the original confirmed completion BEFORE a possible Undo.
+    // Receipt/preflight/400/409 failures cannot have reversed this task.
+    if(!prior)confirmedCommand.current=null;
+    setUndoFailure(null);
     setAction({kind:"pending"});
-    invalidate("stale",true); // No stale open row during an uncertain PATCH.
-    // Re-read the ORIGINAL actor-bound completion receipt before Undo.
-    // A different session/actor must not inherit an old actor's Undo affordance.
+    invalidate("stale",true); // No stale open row during a possible PATCH.
+
+    let command:MyPlanStatusCommand;
     if(prior){
-      const receipt=await checkMyPlanStatusReceipt(prior,fetch,op.controller.signal);
+      const undo=await prepareConfirmedMyPlanUndo(
+        prior,fetch,op.controller.signal,
+      );
       if(statusOperation.current!==op)return;
       if(op.privacyEpoch!==privacyEpoch.current){
         statusOperation.current=null;
         setAction({kind:"idle"});
         return;
       }
-      if(receipt.kind!=="committed"){
+      if(undo.kind!=="ready"){
         statusOperation.current=null;
-        if(receipt.kind==="unknown"&&receipt.reason==="signed-out"){
+        if(undo.kind==="signed-out"){
+          confirmedCommand.current=null;
+          setAction({kind:"idle"});
+          invalidate("signed-out");
+          return;
+        }
+        // Only read-only work happened, so the original completion is still
+        // available for a manual retry after a freshly authorized list GET.
+        setUndoFailure(undo.reason);
+        setAction({kind:"committed",taskId:prior.taskId,
+          areaId:prior.writeAreaId,status:"completed"});
+        refreshAfterStatus();
+        return;
+      }
+      command=undo.command; // NEW idempotency key, never a replay of the old PATCH.
+    }else{
+      const prepared=await prepareMyPlanStatus({
+        taskId:task.taskId,areaId:task.areaId,status,
+        signal:op.controller.signal,
+      });
+      if(statusOperation.current!==op)return;
+      if(op.privacyEpoch!==privacyEpoch.current){
+        statusOperation.current=null;
+        setAction({kind:"idle"});
+        return;
+      }
+      if(prepared.ok===false){
+        statusOperation.current=null;
+        if(prepared.reason==="signed-out"){
           setAction({kind:"idle"});
           invalidate("signed-out");
         }else{
-          setAction({kind:"error",reason:receipt.kind==="unknown"
-            ?receipt.reason:"stale"});
+          setAction({kind:"error",reason:prepared.reason});
           refreshAfterStatus();
         }
         return;
       }
+      command=prepared.command;
     }
-    const prepared=await prepareMyPlanStatus({
-      taskId:task.taskId,areaId:task.areaId,status,signal:op.controller.signal,
-    });
-    if(statusOperation.current!==op)return;
-    const result=prepared.ok===false
-      ?{kind:"rejected" as const,reason:prepared.reason}
-      :await (async()=>{
-        op.command=prepared.command;
-        return dispatchMyPlanStatus(prepared.command,fetch,op.controller.signal);
-      })();
+
+    op.command=command;
+    const result=await dispatchMyPlanStatus(command,fetch,op.controller.signal);
     if(statusOperation.current!==op)return;
     statusOperation.current=null;
     if(op.privacyEpoch!==privacyEpoch.current){
-      // If pagehide/offline interrupted a possible write, don't expose
-      // the old actor's completion or retry it after the identity changes.
+      // A privacy transition invalidates prior Undo, including if a PATCH
+      // might have committed. Keep only its new command for receipt recovery.
       if(op.command){
         uncertainCommand.current=op.command;
         setAction({kind:"uncertain"});
@@ -329,16 +358,25 @@ export function TargetStagingMyPlanPreview({
       return;
     }
     if(result.kind==="committed"){
-      confirmedCommand.current=result.command;
+      confirmedCommand.current=status==="completed"?result.command:null;
       setAction({kind:"committed",taskId:task.taskId,areaId:task.areaId,status});
     }else if(result.kind==="uncertain"){
+      // An Undo PATCH may already have reversed the task: don't offer the
+      // previous Undo again until the NEW command's receipt is reconciled.
+      confirmedCommand.current=null;
       uncertainCommand.current=result.command;
       setAction({kind:"uncertain"});
     }else if(result.reason==="signed-out"){
+      confirmedCommand.current=null;
       uncertainCommand.current=null;
       setAction({kind:"idle"});
       invalidate("signed-out");
       return;
+    }else if(prior){
+      // Only a definite pre-commit refusal: original Undo remains available.
+      setUndoFailure(result.reason);
+      setAction({kind:"committed",taskId:prior.taskId,
+        areaId:prior.writeAreaId,status:"completed"});
     }else setAction({kind:"error",reason:result.reason});
     refreshAfterStatus();
   }
@@ -389,9 +427,23 @@ export function TargetStagingMyPlanPreview({
     setRefresh(n=>n+1);
   }
 
+  /** Explicit GET-only refresh: preserve a confirmed Undo through
+   * temporary slice failures. Context changes still call resetFeedback().
+   * The list GET enforces current actor/ACL and clears old data on 401/403. */
+  function refreshPlan(){
+    if(statusOperation.current||action.kind==="pending"||
+      action.kind==="checking"||action.kind==="uncertain"||
+      document.visibilityState!=="visible"||!navigator.onLine)return;
+    if(!(action.kind==="committed"&&action.status==="completed"&&
+      confirmedCommand.current!==null))resetFeedback();
+    invalidate("stale",true);
+    setRefresh(n=>n+1);
+  }
+
   function resetFeedback(){
     uncertainCommand.current=null;
     confirmedCommand.current=null;
+    setUndoFailure(null);
     setAction({kind:"idle"});
   }
   const actionPending=action.kind==="pending"||action.kind==="checking"||
@@ -465,12 +517,8 @@ export function TargetStagingMyPlanPreview({
         if(chosen===date)setRefresh(n=>n+1);
         else setDate(chosen);
       }}>Aktuální den</button>
-      <button type="button" disabled={actionPending} onClick={()=>{
-        if(actionPending||statusOperation.current)return;
-        resetFeedback();
-        invalidate("stale",true);
-        setRefresh(n=>n+1);
-      }}>Obnovit</button>
+      <button type="button" disabled={actionPending}
+        onClick={refreshPlan}>Obnovit</button>
     </div>
     {state.status==="loading"&&<p role="status">Načítám aktuální přehled…</p>}
     {statusWriteEnabled&&state.status!=="error"&&action.kind==="pending"&&
@@ -479,6 +527,16 @@ export function TargetStagingMyPlanPreview({
       <p role="status" className="stagingMyPlanMutation">Ověřuji potvrzení předchozí operace…</p>}
     {state.status==="error"&&
       <p role="alert" className="stagingMyPlanWarning">{reasons[state.reason]}</p>}
+    {statusWriteEnabled&&state.status==="error"&&
+      state.reason!=="signed-out"&&action.kind==="committed"&&
+      action.status==="completed"&&confirmedCommand.current!==null&&
+      <div className="stagingMyPlanWarning" role="status">
+        <p>Dokončení je potvrzené. Načtení přehledu selhalo;
+          po novém ověření oprávnění bude možné Undo.</p>
+        <button type="button" onClick={refreshPlan}>
+          Znovu načíst přehled (Undo zůstane)
+        </button>
+      </div>}
     {statusWriteEnabled&&action.kind==="uncertain"&&
       state.status==="error"&&state.reason!=="signed-out"&&
       uncertainCommand.current!==null&&
@@ -503,6 +561,9 @@ export function TargetStagingMyPlanPreview({
       {statusWriteEnabled&&action.kind==="committed"&&
         <div role="status" className="stagingMyPlanMutation">
           <span>{action.status==="completed"?"Dokončení potvrzeno.":"Obnovení potvrzeno."}</span>
+          {action.status==="completed"&&undoFailure&&
+            <span role="alert">Undo nebylo provedeno: {statusReasons[undoFailure]}
+              Původní dokončení zůstává potvrzené; Undo můžete zkusit znovu.</span>}
           {action.status==="completed"&&
             <button type="button" onClick={()=>{void changeStatus({
               taskId:action.taskId,areaId:action.areaId,
