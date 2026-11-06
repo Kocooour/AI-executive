@@ -159,3 +159,60 @@ test("BE-16 abort before dispatch or during network/JSON never returns stale dat
   },async()=>{during.abort();return json(page());});
   assert.deepEqual(result,{ok:false,reason:"aborted"});
 });
+
+// Regression for P2 on merged PR #291: neither header may be authorized by a
+// substring inside a different directive, a quoted parameter or a wrong MIME.
+test("BE-16: reject deceptive cache directives instead of substring no-store",async()=>{
+  const options={query:"Shared project",scope:"shared",limit:2};
+  for(const cacheControl of [
+    "x-no-store",
+    "public, max-age=3600, x-no-store",
+    "no-store-extra",
+    "no-store=1",
+    'private="foo,no-store,bar"',
+    'private="unfinished, no-store',
+  ]){
+    let calls=0;
+    const result=await loadStagingTitleSearchPage(options,async()=>{
+      calls++;
+      return json(page(),{headers:{"cache-control":cacheControl}});
+    });
+    assert.deepEqual(result,{ok:false,reason:"invalid-response"},cacheControl);
+    assert.equal(calls,1,"no implicit retry");
+  }
+  for(const cacheControl of [
+    "no-store",
+    "NO-STORE",
+    "private, max-age=0, no-store",
+    'private="foo,no-store,bar", No-StOrE',
+  ]){
+    const result=await loadStagingTitleSearchPage(options,async()=>
+      json(page(),{headers:{"cache-control":cacheControl}}));
+    assert.equal(result.ok,true,cacheControl);
+  }
+});
+
+test("BE-16: require JSON media type, not application/json in a parameter",async()=>{
+  const options={query:"Shared project",scope:"shared",limit:2};
+  for(const contentType of [
+    "text/html; charset=application/json",
+    "application/json-patch+json",
+    "text/plain; name=application/json",
+    "application/json-extra",
+    "application/json, text/html",
+  ]){
+    const result=await loadStagingTitleSearchPage(options,async()=>
+      json(page(),{headers:{"content-type":contentType}}));
+    assert.deepEqual(result,{ok:false,reason:"invalid-response"},contentType);
+  }
+  for(const contentType of [
+    "application/json",
+    "Application/JSON",
+    "application/json; charset=utf-8",
+    " application/json ; charset=UTF-8",
+  ]){
+    const result=await loadStagingTitleSearchPage(options,async()=>
+      json(page(),{headers:{"content-type":contentType}}));
+    assert.equal(result.ok,true,contentType);
+  }
+});
