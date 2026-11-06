@@ -584,6 +584,25 @@ test("BE-12 real client CAS transports and authenticated route handlers agree en
   assert.deepEqual(ids(moved.tomorrow),["b-next2","s-bob"]);
   assert.equal(unique(moved),true);
 
+  // ACL negative control must run while the SAME shared task is OPEN.
+  // Its assignee Bob (editor) receives a real, writable personal-when
+  // preview; Carol (viewer, not an eligible assignee) must be refused.
+  // Neither side submits a PATCH, so the later completion CAS stays valid.
+  const sharedWhen=await prepareMyPlanWhen({
+    taskId:"s-bob",areaId:"family-area",whenOn:"2026-11-04",
+  },bridge.fetch);
+  assert.equal(sharedWhen.ok,true,JSON.stringify(sharedWhen));
+  assert.equal(sharedWhen.previousWhenOn,null);
+  assert.equal(sharedWhen.command.taskId,"s-bob");
+  assert.equal(sharedWhen.command.writeAreaId,"family-area");
+  const viewer=routedClient(carol);
+  assert.deepEqual(await prepareMyPlanWhen({
+    taskId:"s-bob",areaId:"family-area",whenOn:"2026-11-04",
+  },viewer.fetch),{ok:false,reason:"unavailable"});
+  assert.deepEqual(viewer.calls,[[
+    "GET","/api/target-staging/task-temporal/personal-when/command",
+  ]],"viewer cannot advance from preview to PATCH");
+
   const prepStatus=await prepareMyPlanStatus({
     taskId:"s-bob",areaId:"family-area",status:"completed",
   },bridge.fetch);
@@ -596,13 +615,6 @@ test("BE-12 real client CAS transports and authenticated route handlers agree en
   const after=await ok(get(query(),bob));
   assert.deepEqual(ids(after.tomorrow),["b-next2"]);
   assert.equal(unique(after),true);
-
-  // A viewer's transport can GET only a refused preview; it cannot PATCH.
-  const viewer=routedClient(carol);
-  assert.deepEqual(await prepareMyPlanWhen({
-    taskId:"s-bob",areaId:"family-area",whenOn:"2026-11-04",
-  },viewer.fetch),{ok:false,reason:"unavailable"});
-  assert.deepEqual(viewer.calls.map(([method])=>method),["GET"]);
 
   const undoStatus=await prepareMyPlanStatus({
     taskId:"s-bob",areaId:"family-area",status:"open",
