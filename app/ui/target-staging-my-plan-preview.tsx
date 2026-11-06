@@ -347,11 +347,8 @@ export function TargetStagingMyPlanPreview({
       controller:new AbortController(),privacyEpoch:privacyEpoch.current,command:null,
     };
     statusOperation.current=op; // Synchronous mutex against double clicks.
-    // Switching mutation families is deliberate; never during an unresolved CAS.
-    confirmedWhen.current=null;
-    uncertainWhen.current=null;
-    setWhenAction({kind:"idle"});
-    setWhenFailure(null);
+    // Do not erase the previously confirmed personal-plan Undo before a status
+    // PATCH: a failed read-only preflight must leave it recoverable.
     uncertainCommand.current=null;
     // Never discard the original confirmed completion BEFORE a possible Undo.
     // Receipt/preflight/400/409 failures cannot have reversed this task.
@@ -375,6 +372,10 @@ export function TargetStagingMyPlanPreview({
         statusOperation.current=null;
         if(undo.kind==="signed-out"){
           confirmedCommand.current=null;
+          confirmedWhen.current=null;
+          uncertainWhen.current=null;
+          setWhenFailure(null);
+          setWhenAction({kind:"idle"});
           setAction({kind:"idle"});
           invalidate("signed-out");
           return;
@@ -402,6 +403,11 @@ export function TargetStagingMyPlanPreview({
       if(prepared.ok===false){
         statusOperation.current=null;
         if(prepared.reason==="signed-out"){
+          confirmedCommand.current=null;
+          confirmedWhen.current=null;
+          uncertainWhen.current=null;
+          setWhenFailure(null);
+          setWhenAction({kind:"idle"});
           setAction({kind:"idle"});
           invalidate("signed-out");
         }else{
@@ -427,9 +433,19 @@ export function TargetStagingMyPlanPreview({
       return;
     }
     if(result.kind==="committed"){
+      // Only an actual/possibly committed status PATCH supersedes an older
+      // private-when Undo; pre-PATCH and definitive reject paths preserve it.
+      confirmedWhen.current=null;
+      uncertainWhen.current=null;
+      setWhenAction({kind:"idle"});
+      setWhenFailure(null);
       confirmedCommand.current=status==="completed"?result.command:null;
       setAction({kind:"committed",taskId:task.taskId,areaId:task.areaId,status});
     }else if(result.kind==="uncertain"){
+      confirmedWhen.current=null;
+      uncertainWhen.current=null;
+      setWhenAction({kind:"idle"});
+      setWhenFailure(null);
       // An Undo PATCH may already have reversed the task: don't offer the
       // previous Undo again until the NEW command's receipt is reconciled.
       confirmedCommand.current=null;
@@ -438,6 +454,10 @@ export function TargetStagingMyPlanPreview({
     }else if(result.reason==="signed-out"){
       confirmedCommand.current=null;
       uncertainCommand.current=null;
+      confirmedWhen.current=null;
+      uncertainWhen.current=null;
+      setWhenFailure(null);
+      setWhenAction({kind:"idle"});
       setAction({kind:"idle"});
       invalidate("signed-out");
       return;
@@ -483,12 +503,8 @@ export function TargetStagingMyPlanPreview({
     };
     whenOperation.current=op; // Synchronous cross-family submission lock.
     uncertainWhen.current=null;
-    // A confirmed status operation is no longer undoable after this different
-    // explicit action; status cannot have been uncertain (guard above).
-    uncertainCommand.current=null;
-    confirmedCommand.current=null;
-    setUndoFailure(null);
-    setAction({kind:"idle"});
+    // Keep a confirmed status Undo while the new whenOn request performs only
+    // read-only receipt/preflight. Supersede it on accepted/uncertain PATCH.
     setWhenFailure(null);
     setWhenAction({kind:"pending"});
     invalidate("stale",true); // Hide potentially stale rows BEFORE preflight.
@@ -508,6 +524,10 @@ export function TargetStagingMyPlanPreview({
         whenOperation.current=null;
         if(prepared.kind==="signed-out"){
           confirmedWhen.current=null;
+          confirmedCommand.current=null;
+          uncertainCommand.current=null;
+          setUndoFailure(null);
+          setAction({kind:"idle"});
           setWhenAction({kind:"idle"});
           invalidate("signed-out");
           return;
@@ -536,6 +556,11 @@ export function TargetStagingMyPlanPreview({
       if(prepared.ok===false){
         whenOperation.current=null;
         if(prepared.reason==="signed-out"){
+          confirmedWhen.current=null;
+          confirmedCommand.current=null;
+          uncertainCommand.current=null;
+          setUndoFailure(null);
+          setAction({kind:"idle"});
           setWhenAction({kind:"idle"});
           invalidate("signed-out");
         }else{
@@ -562,12 +587,20 @@ export function TargetStagingMyPlanPreview({
       return;
     }
     if(result.kind==="committed"){
+      confirmedCommand.current=null;
+      uncertainCommand.current=null;
+      setUndoFailure(null);
+      setAction({kind:"idle"});
       uncertainWhen.current=null;
       confirmedWhen.current=undo?null:{command,previousWhenOn};
       setWhenAction({kind:"committed",taskId:task.taskId,
         areaId:task.areaId,whenOn:command.whenOn,
         previousWhenOn,undoable:!undo});
     }else if(result.kind==="uncertain"){
+      confirmedCommand.current=null;
+      uncertainCommand.current=null;
+      setUndoFailure(null);
+      setAction({kind:"idle"});
       confirmedWhen.current=null;
       setWhenAction({kind:"uncertain"});
     }else if(prior){
@@ -872,7 +905,7 @@ export function TargetStagingMyPlanPreview({
         <p role="alert" className="stagingMyPlanWarning">
           {whenReasons[whenAction.reason]}
         </p>}
-      {whenWriteEnabled&&whenAction.kind==="committed"&&
+      {whenWriteEnabled&&!anyPending&&whenAction.kind==="committed"&&
         <div role="status" className="stagingMyPlanMutation">
           <span>Osobní plán potvrzen: {whenAction.whenOn
             ?humanDate(whenAction.whenOn):"bez plánovaného dne"}.</span>
@@ -892,7 +925,7 @@ export function TargetStagingMyPlanPreview({
         </div>}
       {statusWriteEnabled&&action.kind==="error"&&
         <p role="alert" className="stagingMyPlanWarning">{statusReasons[action.reason]}</p>}
-      {statusWriteEnabled&&action.kind==="committed"&&
+      {statusWriteEnabled&&!anyPending&&action.kind==="committed"&&
         <div role="status" className="stagingMyPlanMutation">
           <span>{action.status==="completed"?"Dokončení potvrzeno.":"Obnovení potvrzeno."}</span>
           {action.status==="completed"&&undoFailure&&
