@@ -32,6 +32,7 @@ import { projectAcceptsNewItems } from "../../lib/project-summary";
 import { projectPreviewCanCommit, projectPreviewDependents, waitForProjectPreviewWrites, type ProjectPreviewActionSnapshot } from "../../lib/project-list-preview";
 import { projectSyncNoticeResolved, projectSyncNoticesAfterUndo, withProjectSyncNotice, withoutProjectSyncNotice,
   withoutResolvedProjectSyncNotices, type ProjectSyncNotice, type ProjectSyncNotices } from "../../lib/project-sync-notice";
+import { shouldRestoreProjectFocus, type ProjectReturnFocusIntent } from "../../lib/project-return-focus";
 import { byManualOrder, isEveningTask, manualOrder, newTaskPlacement, parseCaptureText, taskDateSortKey, taskMatchesView } from "../../lib/task-views";
 import { buildMyPlanPreview, previewManualRankUpdates, previewRankNextRecords, previewRankWritesAllowed, previewReorderPeers } from "../../lib/my-plan-preview";
 import { inSentenceDate } from "./format";
@@ -343,6 +344,9 @@ export function useLumiApp() {
   const pendingRecordRef = useRef<{ kind: "task" | "note"; id: string; view: string; projectId?: string; workspaceId: string } | null>(null);
   const selectWorkspaceRef = useRef<(workspaceId: string) => void>(() => undefined);
   const visibleProjectsRef = useRef<Entity[]>([]);
+  // UI-01d: only user-opened preview projects may return focus to their opener.
+  // An opaque URL alone never creates a focus target or an authorization grant.
+  const projectReturnFocusRef = useRef<{ intent: ProjectReturnFocusIntent; opener: HTMLElement } | null>(null);
   const inspectorSelectionRef = useRef(selected);
   inspectorSelectionRef.current = selected;
   const activeWorkspaceRef = useRef(activeWorkspaceId);
@@ -478,6 +482,8 @@ export function useLumiApp() {
   // Explicit navigation away from a project creates its own history step.
   // Back then returns to the project, including when the next view is Projects (list).
   function setView(next: string, options?: { previewMyPlan?: boolean }) {
+    // Explicit navigation is not Back: never steal focus from the chosen nav control.
+    projectReturnFocusRef.current = null;
     setNavigationUnavailable(false);
     pendingRecordRef.current = null;
     const planPreview = mobileDesignV1Preview && next === "Today" && options?.previewMyPlan === true;
@@ -508,6 +514,19 @@ export function useLumiApp() {
   function openProjectPage(project: Entity) {
     // A stale sidebar/search result must not open a project outside the current scope.
     if (!visibleProjectsRef.current.some((visible) => visible.id === project.id && visible.workspaceId === project.workspaceId)) return;
+    if (mobileDesignV1Preview) {
+      const active = document.activeElement;
+      const focusedButton = active instanceof HTMLElement && active.dataset.projectOpen === project.id ? active : null;
+      // Clicking the nonfocusable row background still has a matching list button.
+      const listButton = [...document.querySelectorAll<HTMLButtonElement>("button[data-project-open]")]
+        .find((button) => button.dataset.projectOpen === project.id && button.closest(".content"));
+      const opener = focusedButton ?? listButton ?? null;
+      projectReturnFocusRef.current = opener ? {
+        intent: { projectId: project.id, workspaceId: activeWorkspaceRef.current, view,
+          source: opener.closest("aside") ? "sidebar" : "content" },
+        opener,
+      } : null;
+    }
     closeDetail();
     setNavigationUnavailable(false);
     try {
@@ -531,6 +550,28 @@ export function useLumiApp() {
       catch { /* The in-memory list remains available. */ }
     }
   }
+  // Restore focus only when a user-opened preview project closes back to its
+  // original view and workspace. Back/Forward may change scope or revoke items;
+  // never focus a stale target or disclose a newly unavailable project.
+  useEffect(() => {
+    if (!mobileDesignV1Preview || openProjectId !== null || !projectReturnFocusRef.current) return;
+    const pending = projectReturnFocusRef.current;
+    projectReturnFocusRef.current = null;
+    const visible = visibleProjectsRef.current.some((item) =>
+      item.id === pending.intent.projectId && item.workspaceId === pending.intent.workspaceId);
+    if (!shouldRestoreProjectFocus(pending.intent,
+      { openProjectId, workspaceId: activeWorkspaceId, view }, visible)) return;
+    const eligible = (button: HTMLElement) =>
+      button.isConnected && button.dataset.projectOpen === pending.intent.projectId &&
+      button.getClientRects().length > 0;
+    const candidates = [...document.querySelectorAll<HTMLButtonElement>("button[data-project-open]")]
+      .filter(eligible);
+    const sameSource = (button: HTMLElement) =>
+      pending.intent.source === "sidebar" ? Boolean(button.closest("aside")) : Boolean(button.closest(".content"));
+    const target = eligible(pending.opener) ? pending.opener :
+      candidates.find(sameSource) ?? candidates[0];
+    target?.focus({ preventScroll: true });
+  }, [openProjectId, activeWorkspaceId, view, items]);
   async function inspect(e: Entity, options: { navigate?: boolean } = {}) {
     if (options.navigate !== false) pendingRecordRef.current = null;
     if (e.type === "project") { openProjectPage(e); return; }
