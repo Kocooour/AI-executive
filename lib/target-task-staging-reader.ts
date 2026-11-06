@@ -677,6 +677,48 @@ export type TargetTemporalStatusReceiptResult =
   | { ok:false; reason:"invalid_request" | "unauthorized" | "unavailable" |
       "idempotency_conflict" | "resync_required" | "write_area_mismatch" };
 
+/** The exact command receipt is read only after the same snapshot's live
+ * actor/write-Area checks. A receipt never grants a write or retry capability. */
+function temporalStatusReceiptInSnapshot(
+  db:DatabaseSync,actor:string,request:TargetStagingTemporalStatusCommand,
+):TargetTemporalStatusReceiptResult {
+  const check=checkTargetTaskWriteContract(db,actor,request);
+  if(check.ok===false)return {ok:false,reason:check.reason};
+  const receipt=db.prepare("SELECT value FROM metadata WHERE key=?")
+    .get(temporalStatusReceiptKey(actor,request.taskId,request.commandId)) as
+    {value:string}|undefined;
+  if(!receipt)return {ok:true,status:"not_recorded"};
+  return receipt.value===temporalStatusReceiptDigest(request)
+    ? {ok:true,status:"committed"}
+    : {ok:false,reason:"idempotency_conflict"};
+}
+
+/** BE-05: status receipt and the exact live-release task/Area guard are from
+ * one pinned, preflighted, writable-actor SQLite snapshot. */
+export type TargetTemporalStatusReceiptSnapshot =
+  | {ok:true;detail:TemporalTaskDetail;receipt:TargetTemporalStatusReceiptResult}
+  | {ok:false;reason:"inaccessible"};
+
+export function readPreflightedTemporalStatusReceiptSnapshot(
+  store:TargetStagingReadStore,access:TargetStagingReadCredential,
+  request:TargetStagingTemporalStatusCommand,
+):TargetTemporalStatusReceiptSnapshot {
+  const denied=():TargetTemporalStatusReceiptSnapshot=>({ok:false,reason:"inaccessible"});
+  if(!validTargetStagingTemporalStatusCommand(request))return denied();
+  return withPreflightedStore<TargetTemporalStatusReceiptSnapshot>(store,denied,
+    (db,preflight)=>inReadSnapshot(db,()=>{
+      if(!preflight(db))return denied();
+      const actor=verifiedActor(db,access,true);
+      if(!actor||!canEditIsolatedTargetTaskTitle(db,actor,request.taskId))
+        return denied();
+      const detail=readAuthorizedTemporalTaskDetail(db,actor,request.taskId);
+      if(!detail||detail.linearization.areas.length!==1||
+          !["private-owner","editor","admin"].includes(
+            detail.linearization.areas[0].access))return denied();
+      return {ok:true,detail,receipt:temporalStatusReceiptInSnapshot(db,actor,request)};
+    },denied));
+}
+
 export function readPreflightedTemporalStatusReceipt(
   store:TargetStagingReadStore, access:TargetStagingReadCredential,
   request:TargetStagingTemporalStatusCommand,
@@ -689,15 +731,7 @@ export function readPreflightedTemporalStatusReceipt(
       if (!preflight(db)) return denied();
       const actor=verifiedActor(db,access,true);
       if (!actor) return denied();
-      const check=checkTargetTaskWriteContract(db,actor,request);
-      if (check.ok===false) return {ok:false,reason:check.reason};
-      const receipt=db.prepare("SELECT value FROM metadata WHERE key=?")
-        .get(temporalStatusReceiptKey(actor,request.taskId,request.commandId)) as
-        {value:string}|undefined;
-      if (!receipt) return {ok:true,status:"not_recorded"};
-      return receipt.value===temporalStatusReceiptDigest(request)
-        ? {ok:true,status:"committed"}
-        : {ok:false,reason:"idempotency_conflict"};
+      return temporalStatusReceiptInSnapshot(db,actor,request);
     },denied));
 }
 

@@ -54,7 +54,8 @@ import {
   readPreflightedGlobalCombinedPage,
   readPreflightedAuthorizedTitleSearchPage,
   readPreflightedPersonalWhenCommandPreview,readPreflightedPersonalWhenReceipt,
-  readPreflightedTemporalStatusReceipt, readPreflightedTemporalDueOnReceipt,
+  readPreflightedTemporalStatusReceipt,readPreflightedTemporalStatusReceiptSnapshot,
+  readPreflightedTemporalDueOnReceipt,
   readPreflightedAuthorizedProjectStructuralRelations,
   readPreflightedAuthorizedTargetParentBacklink,
   readPreflightedAuthorizedTargetNote,
@@ -74,7 +75,7 @@ import type { AuthorizedScopedHomeSummary, TargetHomeScope } from "./target-scop
 import type { TargetChangeFeedResult } from "./target-change-feed-read-model";
 import type { FeedClaims } from "./target-staging-feed-cursor";
 import type { TargetPrivateTaskTitleAuditResult } from "./target-task-read-model";
-import type { TargetStagingTaskTitleCommandStatusResult, TargetTemporalStatusReceiptResult, TargetTemporalDueOnReceiptResult } from "./target-task-staging-reader";
+import type { TargetStagingTaskTitleCommandStatusResult, TargetTemporalStatusReceiptResult, TargetTemporalStatusReceiptSnapshot, TargetTemporalDueOnReceiptResult } from "./target-task-staging-reader";
 import type { TargetNoteEditCommandStatus } from "./target-note-command-status";
 import type { TargetNoteDeleteCommandStatus } from "./target-note-delete-command-status";
 import { validTargetTaskTitleEditPreviewRequest } from "./target-task-write-preflight";
@@ -989,6 +990,15 @@ export class TargetStagingSessionAuthority {
     const credential=this.#credential(sessionToken,true);
     if (!credential) return {ok:false,reason:"unauthorized"};
     return readPreflightedTemporalDueOnReceipt(this.#store,credential,command);
+  }
+
+  /** BE-05 actor-scoped pinned receipt plus task/parent live-release witness. */
+  temporalStatusReceiptSnapshot(
+    sessionToken:string,command:TargetStagingTemporalStatusCommand,
+  ):TargetTemporalStatusReceiptSnapshot {
+    const credential=this.#credential(sessionToken,true);
+    if(!credential)return {ok:false,reason:"inaccessible"};
+    return readPreflightedTemporalStatusReceiptSnapshot(this.#store,credential,command);
   }
 
   /** Read-only current-write-ACL-bound receipt check, no mutation. */
