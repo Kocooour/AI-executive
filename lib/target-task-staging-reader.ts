@@ -776,6 +776,49 @@ export type TargetTemporalDueOnReceiptResult =
   | {ok:false;reason:"invalid_request"|"unauthorized"|"unavailable"|
       "idempotency_conflict"|"resync_required"|"write_area_mismatch"};
 
+/** Exact dueOn receipt check, always inside the caller's pinned actor snapshot.
+ * The old command's expected CAS is in the digest; it must not be compared
+ * against the task revision after the original command was committed. */
+function temporalDueOnReceiptInSnapshot(
+  db:DatabaseSync,actor:string,request:TargetStagingTemporalDueOnCommand,
+):TargetTemporalDueOnReceiptResult {
+  const check=checkTargetTaskWriteContract(db,actor,request);
+  if(check.ok===false)return {ok:false,reason:check.reason};
+  const receipt=db.prepare("SELECT value FROM metadata WHERE key=?")
+    .get(temporalDueOnReceiptKey(actor,request.taskId,request.commandId)) as
+    {value:string}|undefined;
+  if(!receipt)return {ok:true,status:"not_recorded"};
+  return receipt.value===temporalDueOnReceiptDigest(request)
+    ? {ok:true,status:"committed"}
+    : {ok:false,reason:"idempotency_conflict"};
+}
+
+/** BE-07: task/parent/Area witness plus dueOn receipt from ONE canonical
+ * actor-bound and preflighted SQLite read snapshot. Internal-only DTO. */
+export type TargetTemporalDueOnReceiptSnapshot =
+  | {ok:true;detail:TemporalTaskDetail;receipt:TargetTemporalDueOnReceiptResult}
+  | {ok:false;reason:"inaccessible"};
+
+export function readPreflightedTemporalDueOnReceiptSnapshot(
+  store:TargetStagingReadStore,access:TargetStagingReadCredential,
+  request:TargetStagingTemporalDueOnCommand,
+):TargetTemporalDueOnReceiptSnapshot {
+  const denied=():TargetTemporalDueOnReceiptSnapshot=>({ok:false,reason:"inaccessible"});
+  if(!validTargetStagingTemporalDueOnCommand(request))return denied();
+  return withPreflightedStore<TargetTemporalDueOnReceiptSnapshot>(store,denied,
+    (db,preflight)=>inReadSnapshot(db,()=>{
+      if(!preflight(db))return denied();
+      const actor=verifiedActor(db,access,true);
+      if(!actor||!canEditIsolatedTargetTaskTitle(db,actor,request.taskId))
+        return denied();
+      const detail=readAuthorizedTemporalTaskDetail(db,actor,request.taskId);
+      if(!detail||detail.linearization.areas.length!==1||
+        !["private-owner","editor","admin"].includes(
+          detail.linearization.areas[0].access))return denied();
+      return {ok:true,detail,receipt:temporalDueOnReceiptInSnapshot(db,actor,request)};
+    },denied));
+}
+
 export function readPreflightedTemporalDueOnReceipt(
   store:TargetStagingReadStore,access:TargetStagingReadCredential,
   request:TargetStagingTemporalDueOnCommand,
@@ -788,16 +831,7 @@ export function readPreflightedTemporalDueOnReceipt(
       if (!preflight(db)) return denied();
       const actor=verifiedActor(db,access,true);
       if (!actor) return denied();
-      // Check the current live task and writable Area BEFORE any receipt lookup.
-      const check=checkTargetTaskWriteContract(db,actor,request);
-      if (check.ok===false) return {ok:false,reason:check.reason};
-      const receipt=db.prepare("SELECT value FROM metadata WHERE key=?")
-        .get(temporalDueOnReceiptKey(actor,request.taskId,request.commandId)) as
-        {value:string}|undefined;
-      if (!receipt) return {ok:true,status:"not_recorded"};
-      return receipt.value===temporalDueOnReceiptDigest(request)
-        ? {ok:true,status:"committed"}
-        : {ok:false,reason:"idempotency_conflict"};
+      return temporalDueOnReceiptInSnapshot(db,actor,request);
     },denied));
 }
 
