@@ -19,6 +19,14 @@ import {
 } from "../../lib/target-staging-my-plan-status-client";
 import {canRetryUncertainMyPlanRead} from "../../lib/target-staging-my-plan-status-recovery";
 import {
+  myPlanWhenTarget,prepareMyPlanWhen,dispatchMyPlanWhen,checkMyPlanWhenReceipt,
+  type MyPlanWhenCommand,type MyPlanWhenFailure,
+} from "../../lib/target-staging-my-plan-when-client";
+import {
+  prepareConfirmedWhenUndo,keepConfirmedWhenOnRefresh,
+  type ConfirmedWhen,
+} from "../../lib/target-staging-my-plan-when-undo";
+import {
   prepareConfirmedMyPlanUndo,keepConfirmedMyPlanUndoOnRefresh,
 } from "../../lib/target-staging-my-plan-undo";
 
@@ -38,6 +46,26 @@ const statusReasons:Record<MyPlanStatusFailure,string>={
   "invalid-request":"Neplatné parametry zápisu; úkol nebyl potvrzen.",
   "offline":"Připojení selhalo. Neproběhl žádný automatický opakovaný zápis.",
   "aborted":"Operace byla přerušena. Aktuální stav je třeba znovu ověřit.",
+};
+
+type WhenAction=
+  |{kind:"idle"|"pending"|"checking"|"uncertain"}
+  |{kind:"committed";taskId:string;areaId:string;
+    whenOn:string|null;previousWhenOn:string|null;undoable:boolean}
+  |{kind:"error";reason:MyPlanWhenFailure};
+type WhenOperation={
+  controller:AbortController;privacyEpoch:number;command:MyPlanWhenCommand|null;
+};
+type UncertainWhen={command:MyPlanWhenCommand;previousWhenOn:string|null;undo:boolean};
+const whenReasons:Record<MyPlanWhenFailure,string>={
+  "signed-out":"Přístup k osobnímu plánu zanikl. Přihlaste se znovu.",
+  "stale":"Osobní plán nebo úkol se mezitím změnil. Načetl se aktuální přehled.",
+  "unavailable":"Osobní plánování na stagingu není dostupné nebo bylo vypnuto.",
+  "invalid-response":"Odpověď plánovacího endpointu nebyla bezpečně ověřena.",
+  "invalid-request":"Plánovací požadavek nesplňuje bezpečný kontrakt.",
+  "offline":"Spojení selhalo; žádný automatický zápis se neopakuje.",
+  "aborted":"Požadavek byl přerušen; stav je nutné znovu ověřit.",
+  "unchanged":"Zvolený osobní den už je nastavený.",
 };
 
 type ReadState=
@@ -63,9 +91,10 @@ const nextHumanDate=(day:string)=>{
   return humanDate(following.toISOString().slice(0,10));
 };
 
-function PlanDay({label,tasks,date,canComplete,onComplete}:{
+function PlanDay({label,tasks,date,canComplete,onComplete,canWhen,onWhen}:{
   label:string;tasks:MyPlanSliceTask[];date:string;
   canComplete:boolean;onComplete:(task:MyPlanSliceTask)=>void;
+  canWhen:boolean;onWhen:(task:MyPlanSliceTask,whenOn:string)=>void;
 }){
   const areas=new Map<string,{kind:"private"|"shared";tasks:MyPlanSliceTask[]}>();
   for(const task of tasks){
@@ -95,6 +124,20 @@ function PlanDay({label,tasks,date,canComplete,onComplete}:{
                     <small>Vyžaduje pozornost od {humanDate(task.attentionOn)}</small>}
                   {task.dueOn&&<small>Termín: {humanDate(task.dueOn)}</small>}
                   {task.whenOn&&<small>Naplánováno: {humanDate(task.whenOn)}</small>}
+                  {canWhen&&<div className="stagingMyPlanWhenControls" role="group"
+                    aria-label={"Osobní plán pro úkol: "+task.title}>
+                    {(["today","tomorrow"] as const).map(choice=>{
+                      const target=myPlanWhenTarget(date,choice);
+                      return target&&task.whenOn!==target
+                        ?<button key={choice} type="button"
+                            aria-label={choice==="today"
+                              ?"Naplánovat osobně na dnešek: "+task.title
+                              :"Naplánovat osobně na zítřek: "+task.title}
+                            onClick={()=>onWhen(task,target)}>
+                            {choice==="today"?"Kdy: Dnes":"Kdy: Zítra"}
+                          </button>:null;
+                    })}
+                  </div>}
                 </div>
               </li>)}</ul>
           </div>)}
@@ -102,8 +145,8 @@ function PlanDay({label,tasks,date,canComplete,onComplete}:{
   </section>;
 }
 export function TargetStagingMyPlanPreview({
-  statusWriteEnabled=false,
-}:{statusWriteEnabled?:boolean}){
+  statusWriteEnabled=false,whenWriteEnabled=false,
+}:{statusWriteEnabled?:boolean;whenWriteEnabled?:boolean}){
   const [date,setDate]=useState<string|null>(null);
   const [followToday,setFollowToday]=useState(true);
   const [areaFilter,setAreaFilter]=useState<MyPlanSliceFilter>("all");
@@ -112,6 +155,11 @@ export function TargetStagingMyPlanPreview({
   const [moreBusy,setMoreBusy]=useState(false);
   const [action,setAction]=useState<StatusAction>({kind:"idle"});
   const [undoFailure,setUndoFailure]=useState<MyPlanStatusFailure|null>(null);
+  const [whenAction,setWhenAction]=useState<WhenAction>({kind:"idle"});
+  const [whenFailure,setWhenFailure]=useState<MyPlanWhenFailure|null>(null);
+  const confirmedWhen=useRef<ConfirmedWhen|null>(null);
+  const uncertainWhen=useRef<UncertainWhen|null>(null);
+  const whenOperation=useRef<WhenOperation|null>(null);
   // A command needed for read-only reconciliation is kept in volatile memory,
   // never in React-rendered state, browser storage, or a background queue.
   const uncertainCommand=useRef<MyPlanStatusCommand|null>(null);
@@ -129,6 +177,7 @@ export function TargetStagingMyPlanPreview({
     requestSequence.current++;
     current.current?.abort();
     statusOperation.current?.controller.abort();
+    whenOperation.current?.controller.abort();
   };},[]);
 
   useEffect(()=>{
@@ -155,6 +204,9 @@ export function TargetStagingMyPlanPreview({
           uncertainCommand.current=null;
           confirmedCommand.current=null;
           setAction({kind:"idle"});
+          confirmedWhen.current=null;
+          uncertainWhen.current=null;
+          setWhenAction({kind:"idle"});
         }
         setState({status:"error",reason:result.reason});
       }
@@ -178,6 +230,13 @@ export function TargetStagingMyPlanPreview({
    * Receipt may be checked only after a fresh authorized My Plan read. */
   function privacyChange(){
     privacyEpoch.current++;
+    confirmedWhen.current=null;
+    setWhenFailure(null);
+    whenOperation.current?.controller.abort();
+    setWhenAction(old=>old.kind==="committed"||old.kind==="error"
+      ?{kind:"idle"}:old.kind==="checking"?{kind:"uncertain"}:
+      old.kind==="pending"
+        ?whenOperation.current?.command?{kind:"uncertain"}:{kind:"idle"}:old);
     setUndoFailure(null);
     confirmedCommand.current=null;
     statusOperation.current?.controller.abort();
@@ -268,7 +327,9 @@ export function TargetStagingMyPlanPreview({
   async function changeStatus(
     task:{taskId:string;areaId:string},status:MyPlanStatus,
   ){
-    if(!statusWriteEnabled||statusOperation.current||
+    if(!statusWriteEnabled||statusOperation.current||whenOperation.current||
+      whenAction.kind==="pending"||whenAction.kind==="checking"||
+      whenAction.kind==="uncertain"||
       action.kind==="pending"||action.kind==="checking"||
       action.kind==="uncertain"||state.status!=="ready"||
       document.visibilityState!=="visible"||!navigator.onLine)return;
@@ -285,6 +346,11 @@ export function TargetStagingMyPlanPreview({
       controller:new AbortController(),privacyEpoch:privacyEpoch.current,command:null,
     };
     statusOperation.current=op; // Synchronous mutex against double clicks.
+    // Switching mutation families is deliberate; never during an unresolved CAS.
+    confirmedWhen.current=null;
+    uncertainWhen.current=null;
+    setWhenAction({kind:"idle"});
+    setWhenFailure(null);
     uncertainCommand.current=null;
     // Never discard the original confirmed completion BEFORE a possible Undo.
     // Receipt/preflight/400/409 failures cannot have reversed this task.
@@ -387,6 +453,7 @@ export function TargetStagingMyPlanPreview({
   async function verifyUncertainReceipt(){
     const command=uncertainCommand.current;
     if(!statusWriteEnabled||!command||statusOperation.current||
+      whenOperation.current||
       action.kind!=="uncertain"||state.status!=="ready"||
       document.visibilityState!=="visible"||!navigator.onLine)return;
     const op:StatusOperation={
