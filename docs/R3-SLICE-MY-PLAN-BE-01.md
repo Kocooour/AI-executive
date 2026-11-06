@@ -105,6 +105,7 @@ BE-01/BE-02/BE-03 **nevytváří nový zápis** ani nerozšiřuje ACL. UI vertik
 - Druhý scénář připraví Bobův **skutečný** osmipolový osobní CAS k přiřazenému sdílenému úkolu, ale mezi GET preview a PATCH mu odebere přiřazení, **aniž** by měnil jeho roli editora či session. Původní `PATCH` je zamítnut a klient pro jeho nejistý HTTP výsledek smí volat pouze **read-only původní receipt**, nikoliv zápis zopakovat. Úkol zmizí z Bobova Mého plánu; Bob nemůže přečíst původní receipt a nevznikne soukromý záznam.
 - Po novém přiřazení stejnému aktérovi se původní nezapsaný receipt jeví jako `not_recorded`. Další uživatelem **výslovně** zvolený zápis vyžaduje aktuální preview, novou task revizi a nové UUID. Potvrdí se přes skutečný serverový receipt a promítne se právě jednou do dvoudenního Mého plánu; nový reverzní CAS/UUID pak vrátí oba dny bez duplicit. Starý příkaz zůstává `not_recorded`.
 - BE-13 doplňuje regresní kontrakt pro UI-04b a navazující klientský release gate; nemění produkční chování, oprávnění, data, staging flagy ani UI. Neprovádí skutečné browser E2E či reálný síťový abort, migraci, cutover ani deployment.
+- UI-04b je již sloučený do `main` jako **default-off stagingový klient**. BE-13 ověřuje jeho existující klientské transporty proti skutečné autorizované backendové hranici i po této integraci; samostatný browserový mobilní/desktopový release gate a schválení zapnutí funkcí zůstávají povinné.
 
 ## Co zůstává mimo iteraci
 
