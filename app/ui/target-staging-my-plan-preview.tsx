@@ -685,11 +685,24 @@ export function TargetStagingMyPlanPreview({
    * temporary slice failures. Context changes still call resetFeedback().
    * The list GET enforces current actor/ACL and clears old data on 401/403. */
   function refreshPlan(){
-    if(statusOperation.current||action.kind==="pending"||
+    if(statusOperation.current||whenOperation.current||
+      whenAction.kind==="pending"||whenAction.kind==="checking"||
+      whenAction.kind==="uncertain"||
+      action.kind==="pending"||
       action.kind==="checking"||action.kind==="uncertain"||
       document.visibilityState!=="visible"||!navigator.onLine)return;
-    if(!keepConfirmedMyPlanUndoOnRefresh(action,confirmedCommand.current))
-      resetFeedback();
+    if(!keepConfirmedMyPlanUndoOnRefresh(action,confirmedCommand.current)){
+      uncertainCommand.current=null;
+      confirmedCommand.current=null;
+      setUndoFailure(null);
+      setAction({kind:"idle"});
+    }
+    if(!keepConfirmedWhenOnRefresh(whenAction,confirmedWhen.current)){
+      uncertainWhen.current=null;
+      confirmedWhen.current=null;
+      setWhenFailure(null);
+      setWhenAction({kind:"idle"});
+    }
     invalidate("stale",true);
     setRefresh(n=>n+1);
   }
@@ -699,12 +712,20 @@ export function TargetStagingMyPlanPreview({
     confirmedCommand.current=null;
     setUndoFailure(null);
     setAction({kind:"idle"});
+    uncertainWhen.current=null;
+    confirmedWhen.current=null;
+    setWhenFailure(null);
+    setWhenAction({kind:"idle"});
   }
   const actionPending=action.kind==="pending"||action.kind==="checking"||
     action.kind==="uncertain";
-  const canComplete=statusWriteEnabled&&!actionPending;
+  const whenPending=whenAction.kind==="pending"||
+    whenAction.kind==="checking"||whenAction.kind==="uncertain";
+  const anyPending=actionPending||whenPending;
+  const canComplete=statusWriteEnabled&&!anyPending;
+  const canWhen=whenWriteEnabled&&!anyPending;
   async function more(){
-    if(statusOperation.current||actionPending||
+    if(statusOperation.current||whenOperation.current||anyPending||
       moreInFlight.current||state.status!=="ready"||
       !state.page.hasMore||!state.page.nextCursor||!date)return;
     moreInFlight.current=true;
@@ -733,24 +754,26 @@ export function TargetStagingMyPlanPreview({
     <header>
       <p className="stagingMyPlanEyebrow">Lumi · izolovaný staging</p>
       <h1>Můj plán</h1>
-      <p>{statusWriteEnabled
-        ?"Izolovaný stagingový náhled s dokončením a bezpečným Undo. Bez kalendářových událostí, přesunu dne a offline fronty."
-        :"Čtecí náhled cílového modelu. Jen úkoly; bez úprav, kalendářových událostí a offline ukládání."}</p>
+      <p>{whenWriteEnabled
+        ?"Izolovaný stagingový Můj plán: osobní Kdy Dnes/Zítra s novým CAS a bezpečným Undo. Bez offline fronty a změn společných termínů."
+        :statusWriteEnabled
+          ?"Izolovaný stagingový náhled s dokončením a bezpečným Undo. Bez kalendářových událostí, přesunu dne a offline fronty."
+          :"Čtecí náhled cílového modelu. Jen úkoly; bez úprav, kalendářových událostí a offline ukládání."}</p>
     </header>
     <div className="stagingMyPlanToolbar">
       <label>Den
-        <input type="date" disabled={actionPending} value={date??""}
+        <input type="date" disabled={anyPending} value={date??""}
           onChange={event=>{
             const chosen=event.target.value;
             if(!validMyPlanDate(chosen))return;
-            if(actionPending||statusOperation.current)return;
+            if(anyPending||statusOperation.current||whenOperation.current)return;
             resetFeedback();
             setFollowToday(false); // A manual date remains pinned at midnight.
             if(chosen!==date){invalidate("stale",true);setDate(chosen);}
           }}/>
       </label>
       <label>Moje práce
-        <select value={areaFilter} disabled={actionPending}
+        <select value={areaFilter} disabled={anyPending}
           onChange={event=>{
             if(actionPending||statusOperation.current)return;
             resetFeedback();
@@ -762,7 +785,7 @@ export function TargetStagingMyPlanPreview({
           <option value="shared">Přiřazené sdílené</option>
         </select>
       </label>
-      <button type="button" disabled={actionPending} onClick={()=>{
+      <button type="button" disabled={anyPending} onClick={()=>{
         if(actionPending||statusOperation.current)return;
         resetFeedback();
         const chosen=localMyPlanDate();
@@ -771,10 +794,14 @@ export function TargetStagingMyPlanPreview({
         if(chosen===date)setRefresh(n=>n+1);
         else setDate(chosen);
       }}>Aktuální den</button>
-      <button type="button" disabled={actionPending}
+      <button type="button" disabled={anyPending}
         onClick={refreshPlan}>Obnovit</button>
     </div>
     {state.status==="loading"&&<p role="status">Načítám aktuální přehled…</p>}
+    {whenWriteEnabled&&whenAction.kind==="pending"&&
+      <p role="status" className="stagingMyPlanMutation">Ověřuji osobní plán a ukládám změnu…</p>}
+    {whenWriteEnabled&&whenAction.kind==="checking"&&
+      <p role="status" className="stagingMyPlanMutation">Kontroluji původní potvrzení plánování…</p>}
     {statusWriteEnabled&&state.status!=="error"&&action.kind==="pending"&&
       <p role="status" className="stagingMyPlanMutation">Ověřuji oprávnění a ukládám změnu…</p>}
     {statusWriteEnabled&&state.status!=="error"&&action.kind==="checking"&&
@@ -791,6 +818,26 @@ export function TargetStagingMyPlanPreview({
           Znovu načíst přehled (Undo zůstane)
         </button>
       </div>}
+    {whenWriteEnabled&&state.status==="error"&&
+      state.reason!=="signed-out"&&whenAction.kind==="committed"&&
+      whenAction.undoable&&confirmedWhen.current!==null&&
+      <div role="status" className="stagingMyPlanWarning">
+        <p>Osobní plán je potvrzený, ale načtení přehledu selhalo.
+          Undo bude dostupné po novém ověření oprávnění.</p>
+        <button type="button" onClick={refreshPlan}>
+          Znovu načíst osobní plán (Undo zůstane)
+        </button>
+      </div>}
+    {whenWriteEnabled&&whenAction.kind==="uncertain"&&
+      state.status==="error"&&state.reason!=="signed-out"&&
+      uncertainWhen.current!==null&&
+      <div role="alert" className="stagingMyPlanWarning">
+        <p>Výsledek osobního plánování je nejistý.
+          Znovu se načte pouze autorizovaný přehled, nikoli zápis.</p>
+        <button type="button" onClick={retryUncertainWhenRead}>
+          Znovu ověřit osobní přehled (bez zápisu)
+        </button>
+      </div>}
     {statusWriteEnabled&&action.kind==="uncertain"&&
       state.status==="error"&&state.reason!=="signed-out"&&
       uncertainCommand.current!==null&&
@@ -803,6 +850,29 @@ export function TargetStagingMyPlanPreview({
       </div>}
     {state.status==="ready"&&date&&
       state.page.evaluationDate===date&&state.page.areaFilter===areaFilter&&<>
+      {whenWriteEnabled&&whenAction.kind==="uncertain"&&
+        <div role="alert" className="stagingMyPlanWarning">
+          <p>Předchozí osobní zápis nebyl potvrzen.
+            Další změny jsou zablokované; žádný PATCH se neopakuje.</p>
+          <button type="button" onClick={()=>{void verifyUncertainWhenReceipt();}}>
+            Ověřit původní osobní potvrzení
+          </button>
+        </div>}
+      {whenWriteEnabled&&whenAction.kind==="error"&&
+        <p role="alert" className="stagingMyPlanWarning">
+          {whenReasons[whenAction.reason]}
+        </p>}
+      {whenWriteEnabled&&whenAction.kind==="committed"&&
+        <div role="status" className="stagingMyPlanMutation">
+          <span>Osobní plán potvrzen: {whenAction.whenOn
+            ?humanDate(whenAction.whenOn):"bez plánovaného dne"}.</span>
+          {whenFailure&&<span role="alert">Undo nebylo provedeno:
+            {" "+whenReasons[whenFailure]} Původní plán zůstává potvrzený.</span>}
+          {whenAction.undoable&&
+            <button type="button" onClick={()=>{void changeWhen({
+              taskId:whenAction.taskId,areaId:whenAction.areaId,
+            },whenAction.previousWhenOn,true);}}>Vrátit osobní plán (Undo)</button>}
+        </div>}
       {statusWriteEnabled&&action.kind==="uncertain"&&
         <div role="alert" className="stagingMyPlanWarning">
           <p>Výsledek zápisu není potvrzen. Žádná další změna se neodešle automaticky.</p>
@@ -825,22 +895,25 @@ export function TargetStagingMyPlanPreview({
         </div>}
       {/* During an uncertain write, a read could have raced the commit.
           Never render its potentially stale open-task list until confirmed. */}
-      {!actionPending&&<>
+      {!anyPending&&<>
       <PlanDay label={followToday?"Dnes a dřívější":"Do vybraného dne včetně"}
         date={date} tasks={state.page.today.tasks}
-        canComplete={canComplete} onComplete={task=>{void changeStatus(task,"completed");}}/>
+        canComplete={canComplete} onComplete={task=>{void changeStatus(task,"completed");}}
+        canWhen={canWhen} onWhen={(task,on)=>{void changeWhen(task,on);}}/>
       <PlanDay label={(followToday?"Zítra · ":"Následující den · ")+
         nextHumanDate(date)}
         date={date} tasks={state.page.tomorrow.tasks}
         canComplete={canComplete} onComplete={task=>{void changeStatus(task,"completed");}}/>
       {state.page.hasMore&&
-        <button disabled={moreBusy} type="button" onClick={()=>{void more();}}>
+        <button disabled={moreBusy||anyPending} type="button" onClick={()=>{void more();}}>
           {moreBusy?"Načítám…":"Načíst další úkoly"}
         </button>}
       </>}
-      <p className="stagingMyPlanScope">{statusWriteEnabled
-        ?"Izolované dokončení a Undo používají nové serverové CAS, nikoli offline synchronizaci. Přesun dne zůstává vypnutý."
-        :"Náhled je pouze pro čtení: dokončení, přesun a Undo nejsou zapnuté."}
+      <p className="stagingMyPlanScope">{whenWriteEnabled
+        ?"Osobní Kdy mění jen plán aktuálního uživatele, nikdy společný termín dueOn. Každý zápis vyžaduje nový CAS; žádná offline fronta."
+        :statusWriteEnabled
+          ?"Izolované dokončení a Undo používají nové serverové CAS, nikoli offline synchronizaci. Přesun dne zůstává vypnutý."
+          :"Náhled je pouze pro čtení: dokončení, přesun a Undo nejsou zapnuté."}
         {" "}Oprávnění se ověřují na serveru při každém načtení.</p>
     </>}
   </main>;
