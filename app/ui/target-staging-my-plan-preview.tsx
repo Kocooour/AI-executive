@@ -19,6 +19,7 @@ import {
 } from "../../lib/target-staging-my-plan-status-client";
 import {canRetryUncertainMyPlanRead} from "../../lib/target-staging-my-plan-status-recovery";
 import {myPlanToolbarChangeBlocked} from "../../lib/target-staging-my-plan-toolbar-lock";
+import {supersedesCrossFamilyUndo} from "../../lib/target-staging-my-plan-cross-family-undo";
 import {
   myPlanWhenTarget,prepareMyPlanWhen,dispatchMyPlanWhen,checkMyPlanWhenReceipt,
   type MyPlanWhenCommand,type MyPlanWhenFailure,
@@ -432,20 +433,18 @@ export function TargetStagingMyPlanPreview({
       }else setAction({kind:"idle"});
       return;
     }
-    if(result.kind==="committed"){
-      // Only an actual/possibly committed status PATCH supersedes an older
-      // private-when Undo; pre-PATCH and definitive reject paths preserve it.
+    if(supersedesCrossFamilyUndo(result.kind)){
+      // Neither read-only preflight nor definitive PATCH refusal can discard
+      // the previously confirmed private-plan Undo.
       confirmedWhen.current=null;
       uncertainWhen.current=null;
       setWhenAction({kind:"idle"});
       setWhenFailure(null);
+    }
+    if(result.kind==="committed"){
       confirmedCommand.current=status==="completed"?result.command:null;
       setAction({kind:"committed",taskId:task.taskId,areaId:task.areaId,status});
     }else if(result.kind==="uncertain"){
-      confirmedWhen.current=null;
-      uncertainWhen.current=null;
-      setWhenAction({kind:"idle"});
-      setWhenFailure(null);
       // An Undo PATCH may already have reversed the task: don't offer the
       // previous Undo again until the NEW command's receipt is reconciled.
       confirmedCommand.current=null;
@@ -586,21 +585,21 @@ export function TargetStagingMyPlanPreview({
       setWhenAction({kind:"uncertain"});
       return;
     }
-    if(result.kind==="committed"){
+    if(supersedesCrossFamilyUndo(result.kind)){
+      // Previous status Undo remains until this different command actually
+      // commits or might have committed. A definite 400/409 retains it.
       confirmedCommand.current=null;
       uncertainCommand.current=null;
       setUndoFailure(null);
       setAction({kind:"idle"});
+    }
+    if(result.kind==="committed"){
       uncertainWhen.current=null;
       confirmedWhen.current=undo?null:{command,previousWhenOn};
       setWhenAction({kind:"committed",taskId:task.taskId,
         areaId:task.areaId,whenOn:command.whenOn,
         previousWhenOn,undoable:!undo});
     }else if(result.kind==="uncertain"){
-      confirmedCommand.current=null;
-      uncertainCommand.current=null;
-      setUndoFailure(null);
-      setAction({kind:"idle"});
       confirmedWhen.current=null;
       setWhenAction({kind:"uncertain"});
     }else if(prior){
