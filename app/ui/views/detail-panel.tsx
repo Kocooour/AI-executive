@@ -14,6 +14,7 @@ import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "re
 import { mobileDesignV1Preview } from "../navigation";
 import { entityConflicts } from "../../../lib/field-merge";
 import { taskPreviewCanToggle } from "../../../lib/task-detail-preview";
+import { inspectorPreviewEscapeAllowed } from "../../../lib/desktop-inspector-ui03b";
 
 // What a field has sent and not yet seen come back as the stored value. Saves finish later than
 // they start: comparing a new value with the stored one would skip a change back to it (A → B →
@@ -206,7 +207,21 @@ export function DetailPanel({ app }: { app: LumiApp }) {
             data-task-detail-preview={mobileTaskPreview ? "lumi-v1" : undefined}
             data-task-due-tone={mobileTaskPreview ? taskPreviewDueTone : undefined}
             data-task-completed={mobileTaskPreview && selectedTask ? selectedTask.status === "completed" : undefined}
-            onClick={(e) => e.stopPropagation()}>
+            onClick={(e) => e.stopPropagation()}
+            onKeyDown={(event) => {
+              if (!mobileDesignV1Preview) return;
+              const target = event.target instanceof Element ? event.target : null;
+              const editing = Boolean(target?.closest(
+                'input, textarea, select, [contenteditable]:not([contenteditable="false"])',
+              ) || (target as HTMLElement | null)?.isContentEditable);
+              const blocking = Boolean(app.capture || app.moreOpen || app.assistantOpen ||
+                app.confirmRequest || document.querySelector('[aria-modal="true"]') ||
+                target?.closest('[role="listbox"], [role="menu"], [role="dialog"]'));
+              if (!inspectorPreviewEscapeAllowed(event.nativeEvent, editing, blocking)) return;
+              event.preventDefault();
+              event.stopPropagation();
+              closeInspector();
+            }}>
             <button
               className="close inspectorClose"
               type="button"
