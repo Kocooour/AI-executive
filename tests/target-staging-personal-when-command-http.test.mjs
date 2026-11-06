@@ -220,9 +220,16 @@ test("BE-06 receipt and actor-private epoch share one pinned read",async()=>{
   const other=await command("child","2028-04-16",bob);
   assert.equal((await call("PATCH",other,bob)).status,200);
   assert.equal(live(committed),"stale","another personal task changes the private epoch");
+  // The staging schema correctly forbids downgrading a member with assigned
+  // shared tasks. Revoke assignments first, then the member role; both are
+  // legitimate database transitions and must invalidate receipt access.
   const db=new DatabaseSync(fx.stage.databasePath);
-  try{db.prepare("UPDATE area_members SET role='viewer' WHERE area_id='family-area' AND user_id='bob'").run();}
-  finally{db.close();}
+  try{
+    db.prepare("UPDATE tasks SET assignee_user_id=NULL WHERE assignee_user_id='bob'").run();
+    db.prepare("UPDATE area_members SET role='viewer' WHERE area_id='family-area' AND user_id='bob'").run();
+  }finally{db.close();}
+  assert.equal(live(committed),"stale","revoked assignment and role invalidate the old witness");
+  assert.deepEqual(await snapshot(),{ok:false,reason:"inaccessible"});
   assert.equal((await call("POST",cmd,bob)).status,404);
 });
 
