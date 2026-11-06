@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import { projectPreviewCanToggle, projectPreviewCanCommit, projectPreviewDependents, waitForProjectPreviewWrites } from "../lib/project-list-preview.ts";
+import { settleSyncOperation } from "../lib/sync-result.ts";
 
 const read = (path) => readFileSync(new URL(path, import.meta.url), "utf8");
 const page = read("../app/ui/views/project-page.tsx");
@@ -164,4 +165,43 @@ test("UI-05c: task, note, relation and status changes invalidate a pending confi
   const setter = read("../app/ui/use-lumi-app.tsx");
   assert.match(setter, /if \(\(await projectPreviewDependencies\(current\)\)\.signature !== expectedPreview\.dependents\)/g);
   assert.match(setter, /await db\.transaction\("rw", db\.entities, db\.relations, async \(\) => \{/g);
+});
+
+test("UI-05c: rejected server PUT reaches preview status and delete actions, while the normal queue stays usable", async () => {
+  // The same queue machinery runs for both preview actions, even if Delete unmounts its page.
+  for (const action of ["complete", "delete"]) {
+    const failure = new Error(`PUT /api/store failed for ${action}`);
+    let offlineCount = 0;
+    const operation = Promise.reject(failure);
+    const { queue, result } = settleSyncOperation(operation, () => { offlineCount += 1; }, true);
+    await assert.rejects(result, (error) => error === failure,
+      `${action} must receive its own PUT error`);
+    await assert.doesNotReject(queue, "the background queue must still be reusable");
+    assert.equal(offlineCount, 1, "the shared queue must mark offline once");
+  }
+  const { queue, result } = settleSyncOperation(Promise.reject(new Error("offline")),
+    () => {}, false);
+  await assert.doesNotReject(result, "non-preview callers retain the offline-first contract");
+  await assert.doesNotReject(queue);
+  let successMarkedOffline = false;
+  const completed = settleSyncOperation(Promise.resolve(), () => { successMarkedOffline = true; }, true);
+  await assert.doesNotReject(completed.result);
+  await completed.queue;
+  assert.equal(successMarkedOffline, false, "successful server sync must not raise an error");
+});
+
+test("UI-05c: both preview mutations request failures and preserve a persistent accessible warning", () => {
+  const app = read("../app/ui/use-lumi-app.tsx");
+  const sync = read("../app/ui/hooks/use-sync.ts");
+  const root = read("../app/page.tsx");
+  assert.equal(app.split('await syncToServer({ reportFailure: Boolean(expectedPreview) });').length - 1, 2,
+    "completion and deletion must each observe the result of their own server write");
+  assert.match(sync, /syncQueue\.current = settled\.queue;\s*return settled\.result;/);
+  assert.match(sync, /if \(reportFailure\) throw new Error\("SYNC_NOT_CONFIRMED"\)/);
+  assert.match(app, /setProjectSyncNotice\("delete"\);\s*throw new Error\("project_preview_sync_pending"\)/);
+  assert.match(app, /setProjectSyncNotice\("status"\);\s*throw new Error\("project_preview_sync_pending"\)/);
+  assert.match(root, /role="alert" data-testid="project-sync-warning"/);
+  assert.match(root, /app\.projectSyncNotice === "delete"/);
+  assert.match(root, /onClick=\{app\.dismissProjectSyncNotice\}/);
+  assert.match(page, /if \(error instanceof Error && error\.message === "project_preview_sync_pending"\) return;/);
 });
