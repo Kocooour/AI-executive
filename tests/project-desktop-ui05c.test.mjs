@@ -203,7 +203,7 @@ test("UI-05c: both preview mutations request failures and preserve a persistent 
   assert.match(sync, /if \(reportFailure\) throw new Error\("SYNC_NOT_CONFIRMED"\)/);
   assert.match(app, /setProjectSyncNotices\(\(current\) => withProjectSyncNotice\(current, \{ kind: "delete", projectId: e\.id \}\)\);\s*throw new Error\("project_preview_sync_pending"\)/);
   assert.match(app, /setProjectSyncNotices\(\(current\) => withProjectSyncNotice\(current,\s*\{ kind: "status", projectId: project\.id, status, updatedAt: committedAt \}\)\);\s*throw new Error\("project_preview_sync_pending"\)/);
-  assert.match(root, /role="alert" data-testid="project-sync-warning"/);
+  assert.match(root, /role="alert"\s+data-testid="project-sync-warning"/);
   assert.match(root, /notice\.kind === "delete"/);
   assert.match(root, /onClick=\{\(\) => app\.dismissProjectSyncNotice\(notice\.projectId\)\}/);
   assert.match(page, /if \(error instanceof Error && error\.message === "project_preview_sync_pending"\) return;/);
