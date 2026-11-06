@@ -58,6 +58,10 @@ const {GET:whenGET,PATCH:whenPATCH}=
   await import("../app/api/target-staging/task-temporal/personal-when/command/route.ts");
 const {POST:whenReceiptPOST}=
   await import("../app/api/target-staging/task-temporal/personal-when/command/receipt/route.ts");
+const {prepareMyPlanWhen,dispatchMyPlanWhen,checkMyPlanWhenReceipt}=
+  await import("../lib/target-staging-my-plan-when-client.ts");
+const {prepareMyPlanStatus,dispatchMyPlanStatus,checkMyPlanStatusReceipt}=
+  await import("../lib/target-staging-my-plan-status-client.ts");
 let serial=0;const fixtures=[];
 after(()=>{
   for(const f of fixtures)f.db.close();
@@ -509,6 +513,162 @@ test("BE-11 never-sent command stays not_recorded and does not mutate the plan",
   const changed=await ok(get(query(),bob));
   assert.ok(ids(changed.today).includes("b-next"));
   assert.equal(unique(changed),true);
+});
+
+/** BE-12: a real fetch-compatible in-process HTTP bridge from the
+ * actual UI-04a transports to real Node route handlers. No stub responses:
+ * only the network-transport outcome can be intentionally lost AFTER PATCH. */
+function routedClient(cookie){
+  const calls=[];
+  let lostPatch=0;
+  let afterPatch=null;
+  const handlers={
+    "/api/target-staging/task-temporal/personal-when/command":{
+      GET:whenGET,PATCH:whenPATCH,
+    },
+    "/api/target-staging/task-temporal/personal-when/command/receipt":{
+      POST:whenReceiptPOST,
+    },
+    "/api/target-staging/task-temporal/status":{
+      GET:statusGET,PATCH:statusPATCH,
+    },
+    "/api/target-staging/task-temporal/status/receipt":{
+      POST:statusReceiptPOST,
+    },
+  };
+  async function fetchRequest(relative,init={}){
+    const url=new URL(relative,"http://localhost:3001");
+    assert.equal(url.origin,"http://localhost:3001");
+    const method=init.method??"GET";
+    const handler=handlers[url.pathname]?.[method];
+    assert.equal(typeof handler,"function","only exact staging endpoints are allowed");
+    const headers=new Headers(init.headers);
+    headers.set("cookie",cookie);
+    headers.set("x-forwarded-for","10.99.8.116");
+    if(method!=="GET")headers.set("origin",url.origin);
+    const request=new Request(url,{method,headers,body:init.body,signal:init.signal});
+    calls.push([method,url.pathname]);
+    const response=await handler(request);
+    if(method==="PATCH"&&lostPatch>0){
+      lostPatch--;
+      const callback=afterPatch;
+      afterPatch=null;
+      if(callback)callback(response);
+      throw Error("simulated lost HTTP response after real write handler");
+    }
+    return response;
+  }
+  return {
+    fetch:fetchRequest,calls,
+    loseNextPatch(callback=null){lostPatch++;afterPatch=callback;},
+  };
+}
+
+test("BE-12 real client CAS transports and authenticated route handlers agree end-to-end",async()=>{
+  const f=fixture(),bob=login(f,"bob"),carol=login(f,"carol");
+  const original=await ok(get(query(),bob));
+  const bridge=routedClient(bob);
+  const prepWhen=await prepareMyPlanWhen({
+    taskId:"b-next",areaId:"bob-private",whenOn:"2026-11-04",
+  },bridge.fetch);
+  assert.equal(prepWhen.ok,true,JSON.stringify(prepWhen));
+  assert.equal(prepWhen.previousWhenOn,null);
+  bridge.loseNextPatch(response=>assert.equal(response.status,200));
+  const saved=await dispatchMyPlanWhen(prepWhen.command,bridge.fetch);
+  assert.equal(saved.kind,"committed");
+  assert.deepEqual(bridge.calls.map(([method])=>method),["GET","PATCH","POST"]);
+  assert.deepEqual(await checkMyPlanWhenReceipt(prepWhen.command,bridge.fetch),
+    {kind:"committed"});
+  const moved=await ok(get(query(),bob));
+  assert.deepEqual(ids(moved.today),["b-overdue","b-next","b-today"]);
+  assert.deepEqual(ids(moved.tomorrow),["b-next2","s-bob"]);
+  assert.equal(unique(moved),true);
+
+  const prepStatus=await prepareMyPlanStatus({
+    taskId:"s-bob",areaId:"family-area",status:"completed",
+  },bridge.fetch);
+  assert.equal(prepStatus.ok,true,JSON.stringify(prepStatus));
+  bridge.loseNextPatch(response=>assert.equal(response.status,200));
+  const completed=await dispatchMyPlanStatus(prepStatus.command,bridge.fetch);
+  assert.equal(completed.kind,"committed");
+  assert.deepEqual(await checkMyPlanStatusReceipt(prepStatus.command,bridge.fetch),
+    {kind:"committed"});
+  const after=await ok(get(query(),bob));
+  assert.deepEqual(ids(after.tomorrow),["b-next2"]);
+  assert.equal(unique(after),true);
+
+  // A viewer's transport can GET only a refused preview; it cannot PATCH.
+  const viewer=routedClient(carol);
+  assert.deepEqual(await prepareMyPlanWhen({
+    taskId:"s-bob",areaId:"family-area",whenOn:"2026-11-04",
+  },viewer.fetch),{ok:false,reason:"unavailable"});
+  assert.deepEqual(viewer.calls.map(([method])=>method),["GET"]);
+
+  const undoStatus=await prepareMyPlanStatus({
+    taskId:"s-bob",areaId:"family-area",status:"open",
+  },bridge.fetch);
+  assert.equal(undoStatus.ok,true,JSON.stringify(undoStatus));
+  assert.notEqual(undoStatus.command.commandId,prepStatus.command.commandId);
+  assert.equal((await dispatchMyPlanStatus(undoStatus.command,bridge.fetch)).kind,
+    "committed");
+  const undoWhen=await prepareMyPlanWhen({
+    taskId:"b-next",areaId:"bob-private",whenOn:null,
+  },bridge.fetch);
+  assert.equal(undoWhen.ok,true,JSON.stringify(undoWhen));
+  assert.equal(undoWhen.previousWhenOn,"2026-11-04");
+  assert.notEqual(undoWhen.command.commandId,prepWhen.command.commandId);
+  assert.equal((await dispatchMyPlanWhen(undoWhen.command,bridge.fetch)).kind,
+    "committed");
+  const restored=await ok(get(query(),bob));
+  assert.deepEqual(ids(restored.today),ids(original.today));
+  assert.deepEqual(ids(restored.tomorrow),ids(original.tomorrow));
+  assert.equal(unique(restored),true);
+  assert.deepEqual(await checkMyPlanWhenReceipt(prepWhen.command,bridge.fetch),
+    {kind:"committed"});
+  assert.deepEqual(await checkMyPlanStatusReceipt(prepStatus.command,bridge.fetch),
+    {kind:"committed"});
+});
+
+test("BE-12 client remains uncertain on post-commit session revocation until new-actor-session receipt",async()=>{
+  const f=fixture(),oldCookie=login(f,"bob");
+  const oldBridge=routedClient(oldCookie);
+  const prepared=await prepareMyPlanWhen({
+    taskId:"b-next",areaId:"bob-private",whenOn:"2026-11-04",
+  },oldBridge.fetch);
+  assert.equal(prepared.ok,true,JSON.stringify(prepared));
+  oldBridge.loseNextPatch(response=>{
+    assert.equal(response.status,200);
+    assert.equal(durable.revokeAllDurableTargetStagingSessionsForUser(
+      f.store,"bob").ok,true);
+  });
+  const dispatched=await dispatchMyPlanWhen(prepared.command,oldBridge.fetch);
+  assert.equal(dispatched.kind,"uncertain");
+  assert.deepEqual(oldBridge.calls.map(([method])=>method),
+    ["GET","PATCH","POST"]);
+  assert.equal((await get(query(),oldCookie)).status,401);
+  assert.deepEqual(await checkMyPlanWhenReceipt(
+    prepared.command,oldBridge.fetch),{kind:"unknown",reason:"signed-out"});
+
+  const newCookie=login(f,"bob"),newBridge=routedClient(newCookie);
+  assert.deepEqual(await checkMyPlanWhenReceipt(
+    prepared.command,newBridge.fetch),{kind:"committed"});
+  const read=await ok(get(query(),newCookie));
+  assert.deepEqual(ids(read.today),["b-overdue","b-next","b-today"]);
+  assert.equal(unique(read),true);
+  // The newly authenticated actor can issue a FRESH, independent Undo CAS.
+  const undo=await prepareMyPlanWhen({
+    taskId:"b-next",areaId:"bob-private",whenOn:null,
+  },newBridge.fetch);
+  assert.equal(undo.ok,true,JSON.stringify(undo));
+  assert.notEqual(undo.command.commandId,prepared.command.commandId);
+  assert.equal((await dispatchMyPlanWhen(undo.command,newBridge.fetch)).kind,
+    "committed");
+  const restored=await ok(get(query(),newCookie));
+  assert.deepEqual(ids(restored.today),["b-overdue","b-today"]);
+  assert.deepEqual(ids(restored.tomorrow),["b-next","b-next2","s-bob"]);
+  assert.deepEqual(await checkMyPlanWhenReceipt(
+    prepared.command,newBridge.fetch),{kind:"committed"});
+  assert.equal(oldBridge.calls.filter(([method])=>method==="PATCH").length,1);
 });
 
 test("independent default-off flags, owner cookie, strict request fields",async()=>{
