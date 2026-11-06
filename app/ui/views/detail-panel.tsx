@@ -17,6 +17,8 @@ import { taskPreviewCanToggle } from "../../../lib/task-detail-preview";
 import { taskPreviewCompletionTone, taskPreviewStateText } from "../../../lib/lumi-completion-state";
 import { LumiCompletionControl } from "./lumi-completion-control";
 import { inspectorPreviewEscapeAllowed } from "../../../lib/desktop-inspector-ui03b";
+import { inspectorOpenerMatchesSelection, shouldRestoreInspectorFocus,
+  type InspectorFocusOrigin } from "../../../lib/inspector-return-focus";
 
 // What a field has sent and not yet seen come back as the stored value. Saves finish later than
 // they start: comparing a new value with the stored one would skip a change back to it (A → B →
@@ -191,21 +193,38 @@ export function DetailPanel({ app }: { app: LumiApp }) {
     ? projects.find((project) => project.id === taskProjectId && project.workspaceId === selectedTask.workspaceId)
     : null;
   const inspectorRef = useRef<HTMLElement>(null);
-  const returnFocusRef = useRef<HTMLElement | null>(null);
-  // Opening with the keyboard moves focus into the inspector; closing returns it to the
-  // row that opened it. Pointer-driven selection is left alone.
+  // Each selected entity owns its focus origin. A stale opener from task A
+  // must never be reused when task B is opened from another surface.
+  const returnFocusRef = useRef<{ origin: InspectorFocusOrigin; opener: HTMLElement } | null>(null);
   useEffect(() => {
     if (selected) {
+      // Reset on every selected ID or scope change, including pointer-driven
+      // selections that have no focused row opener of their own.
+      returnFocusRef.current = null;
       const active = document.activeElement;
-      if (active instanceof HTMLElement && active.matches(".taskRowOpen")) {
-        returnFocusRef.current = active;
+      const rowEntityId = active instanceof HTMLElement
+        ? active.closest<HTMLElement>("[data-drop-entity]")?.dataset.dropEntity ?? null
+        : null;
+      if (active instanceof HTMLElement && active.matches(".taskRowOpen") &&
+          inspectorOpenerMatchesSelection(selected.id, rowEntityId)) {
+        returnFocusRef.current = {
+          origin: { entityId: selected.id, workspaceId: app.activeWorkspaceId, view },
+          opener: active,
+        };
         inspectorRef.current?.focus();
       }
-    } else if (returnFocusRef.current) {
-      if (returnFocusRef.current.isConnected) returnFocusRef.current.focus();
-      returnFocusRef.current = null;
+      return;
     }
-  }, [selected?.id]);
+    const pending = returnFocusRef.current;
+    returnFocusRef.current = null; // Consume exactly once, including an unavailable target.
+    if (!pending) return;
+    const opener = pending.opener;
+    const rowEntityId = opener.closest<HTMLElement>("[data-drop-entity]")?.dataset.dropEntity ?? null;
+    if (shouldRestoreInspectorFocus(pending.origin, {
+      workspaceId: app.activeWorkspaceId, view, rowEntityId,
+      connected: opener.isConnected, rendered: opener.getClientRects().length > 0,
+    })) opener.focus({ preventScroll: true });
+  }, [selected?.id, app.activeWorkspaceId, view]);
   return (
     <>
       {selected && (
