@@ -394,6 +394,123 @@ test("BE-10 shared deadline and actor-private whenOn preserve earliest attention
   assert.equal(readFileSync(path.join(legacy,"sentinel"),"utf8"),"unchanged");
 });
 
+test("BE-11 committed writes can be reconciled after lost responses and reauthentication",async()=>{
+  const f=fixture(),firstSession=login(f,"bob");
+  const baseline=await ok(get(query(),firstSession));
+  assert.deepEqual(ids(baseline.today),["b-overdue","b-today"]);
+  assert.deepEqual(ids(baseline.tomorrow),["b-next","b-next2","s-bob"]);
+
+  // The server receives the write but the client never observes its response.
+  // The next action is read-only reconciliation, NEVER a second PATCH.
+  const {whenOn:initialWhen,...whenCAS}=await writePreview(
+    whenGET,whenURL,"b-next",firstSession);
+  assert.equal(initialWhen,null);
+  const scheduling={...whenCAS,taskId:"b-next",whenOn:"2026-11-04",
+    commandId:randomUUID()};
+  await writeCommand(whenPATCH,whenURL,scheduling,firstSession);
+
+  // During a temporary feature-gate outage receipt is unavailable, NOT a
+  // reliable signal that a previous command was rolled back.
+  const oldWhenGate=process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_PERSONAL_WHEN_WRITE_ENABLED;
+  try {
+    process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_PERSONAL_WHEN_WRITE_ENABLED="false";
+    assert.equal((await writeCommand(whenReceiptPOST,whenURL+"/receipt",
+      scheduling,firstSession)).status,404);
+  } finally {
+    if(oldWhenGate===undefined)
+      delete process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_PERSONAL_WHEN_WRITE_ENABLED;
+    else process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_PERSONAL_WHEN_WRITE_ENABLED=oldWhenGate;
+  }
+  await accepted(whenReceiptPOST,whenURL+"/receipt",scheduling,firstSession,
+    {status:"committed"});
+  const scheduled=await ok(get(query(),firstSession));
+  assert.deepEqual(ids(scheduled.today),["b-overdue","b-next","b-today"]);
+  assert.deepEqual(ids(scheduled.tomorrow),["b-next2","s-bob"]);
+  assert.equal(unique(scheduled),true);
+
+  // A permanently revoked durable session cannot inspect receipts. The SAME
+  // actor with a freshly issued session can recover the original command.
+  assert.equal(durable.revokeAllDurableTargetStagingSessionsForUser(f.store,"bob").ok,true);
+  assert.equal((await writeCommand(whenReceiptPOST,whenURL+"/receipt",
+    scheduling,firstSession)).status,401);
+  assert.equal((await get(query(),firstSession)).status,401);
+  const secondSession=login(f,"bob");
+  await accepted(whenReceiptPOST,whenURL+"/receipt",scheduling,secondSession,
+    {status:"committed"});
+
+  // Simulate a second lost response for shared completion, independently
+  // confirmed from its original exact six-field command.
+  const statusCAS=await writePreview(statusGET,statusURL,"s-bob",secondSession);
+  const completing={...statusCAS,taskId:"s-bob",status:"completed",
+    commandId:randomUUID()};
+  await writeCommand(statusPATCH,statusURL,completing,secondSession);
+  assert.equal(durable.revokeAllDurableTargetStagingSessionsForUser(f.store,"bob").ok,true);
+  assert.equal((await writeCommand(statusReceiptPOST,statusURL+"/receipt",
+    completing,secondSession)).status,401);
+  const thirdSession=login(f,"bob");
+  await accepted(statusReceiptPOST,statusURL+"/receipt",completing,thirdSession,
+    {status:"committed"});
+  const afterCompletion=await ok(get(query(),thirdSession));
+  assert.deepEqual(ids(afterCompletion.today),["b-overdue","b-next","b-today"]);
+  assert.deepEqual(ids(afterCompletion.tomorrow),["b-next2"]);
+  assert.equal(unique(afterCompletion),true);
+
+  // Both Undo mutations must obtain CURRENT CAS from the reauthenticated
+  // identity and use fresh IDs. Old original-command receipts stay committed.
+  const {whenOn:nowWhen,...clearCAS}=await writePreview(
+    whenGET,whenURL,"b-next",thirdSession);
+  assert.equal(nowWhen,"2026-11-04");
+  const clear={...clearCAS,taskId:"b-next",whenOn:null,
+    commandId:randomUUID()};
+  assert.notEqual(clear.commandId,scheduling.commandId);
+  await accepted(whenPATCH,whenURL,clear,thirdSession,{ok:true});
+  const reopenCAS=await writePreview(statusGET,statusURL,"s-bob",thirdSession);
+  const reopen={...reopenCAS,taskId:"s-bob",status:"open",
+    commandId:randomUUID()};
+  assert.notEqual(reopen.commandId,completing.commandId);
+  await accepted(statusPATCH,statusURL,reopen,thirdSession,{ok:true});
+
+  const restored=await ok(get(query(),thirdSession));
+  assert.deepEqual(ids(restored.today),ids(baseline.today));
+  assert.deepEqual(ids(restored.tomorrow),ids(baseline.tomorrow));
+  assert.equal(unique(restored),true);
+  await accepted(whenReceiptPOST,whenURL+"/receipt",scheduling,thirdSession,
+    {status:"committed"});
+  await accepted(statusReceiptPOST,statusURL+"/receipt",completing,thirdSession,
+    {status:"committed"});
+  assert.equal(readFileSync(path.join(legacy,"sentinel"),"utf8"),"unchanged");
+});
+
+test("BE-11 never-sent command stays not_recorded and does not mutate the plan",async()=>{
+  const f=fixture(),bob=login(f,"bob");
+  const baseline=await ok(get(query(),bob));
+  const {whenOn:before,...previewCAS}=await writePreview(
+    whenGET,whenURL,"b-next",bob);
+  assert.equal(before,null);
+  const lostBeforeDispatch={...previewCAS,taskId:"b-next",
+    whenOn:"2026-11-04",commandId:randomUUID()};
+  // The network fails BEFORE PATCH dispatch, so only the receipt is queried.
+  await accepted(whenReceiptPOST,whenURL+"/receipt",lostBeforeDispatch,bob,
+    {status:"not_recorded"});
+  const unchanged=await ok(get(query(),bob));
+  assert.deepEqual(unchanged,baseline);
+  // An explicit fresh action is distinct from a replay of an uncertain one.
+  const {whenOn:stillNull,...newCAS}=await writePreview(
+    whenGET,whenURL,"b-next",bob);
+  assert.equal(stillNull,null);
+  const explicit={...newCAS,taskId:"b-next",whenOn:"2026-11-04",
+    commandId:randomUUID()};
+  assert.notEqual(explicit.commandId,lostBeforeDispatch.commandId);
+  await accepted(whenPATCH,whenURL,explicit,bob,{ok:true});
+  await accepted(whenReceiptPOST,whenURL+"/receipt",explicit,bob,
+    {status:"committed"});
+  await accepted(whenReceiptPOST,whenURL+"/receipt",lostBeforeDispatch,bob,
+    {status:"not_recorded"});
+  const changed=await ok(get(query(),bob));
+  assert.ok(ids(changed.today).includes("b-next"));
+  assert.equal(unique(changed),true);
+});
+
 test("independent default-off flags, owner cookie, strict request fields",async()=>{
   fixture();
   for(const flag of [
