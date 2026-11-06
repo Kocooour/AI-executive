@@ -201,6 +201,48 @@ test("cursor cannot cross session, filter, date, limit or a changed private plan
   assert.equal((await get(query({limit:"1",cursor}),bob)).status,409);
 });
 
+test("project-only revision in an empty authorized Area invalidates cursor",async()=>{
+  const f=fixture(),bob=login(f,"bob");
+  f.db.prepare("INSERT INTO areas(id,title,kind,workspace_id,owner_user_id) VALUES ('bob-empty','Empty','private','bob-ws','bob')").run();
+  const first=await ok(get(query({limit:"1"}),bob));
+  const cursor=first.nextCursor;assert.ok(cursor);
+  // An unrelated person's Area cannot invalidate Bob's continuation.
+  f.db.prepare("UPDATE areas SET project_content_revision=project_content_revision+1 WHERE id='carol-private'").run();
+  assert.equal((await get(query({limit:"1",cursor}),bob)).status,200);
+  const before=f.db.prepare(
+    "SELECT content_revision AS content,project_content_revision AS project FROM areas WHERE id='bob-empty'"
+  ).get();
+  // Simulate a project-only content change not reflected in task content.
+  f.db.prepare("UPDATE areas SET project_content_revision=project_content_revision+1 WHERE id='bob-empty'").run();
+  const after=f.db.prepare(
+    "SELECT content_revision AS content,project_content_revision AS project FROM areas WHERE id='bob-empty'"
+  ).get();
+  assert.equal(after.content,before.content);
+  assert.equal(after.project,before.project+1);
+  assert.equal((await get(query({limit:"1",cursor}),bob)).status,409);
+  const fresh=await ok(get(query({limit:"1"}),bob));
+  assert.deepEqual(ids(fresh.today),ids(first.today));
+  assert.deepEqual(ids(fresh.tomorrow),ids(first.tomorrow));
+});
+
+test("real project rename expires My Plan cursor without a task epoch change",async()=>{
+  const f=fixture(),bob=login(f,"bob");
+  f.db.prepare("INSERT INTO projects(id,area_id,title) VALUES ('b-project','bob-private','Old title')").run();
+  const cursor=(await ok(get(query({limit:"1"}),bob))).nextCursor;
+  assert.ok(cursor);
+  const epochs=()=>f.db.prepare(
+    "SELECT content_revision AS content,project_content_revision AS project FROM areas WHERE id='bob-private'"
+  ).get();
+  const before=epochs();
+  // Project title trigger bumps project revision / Area project-content epoch.
+  f.db.prepare("UPDATE projects SET title='New title' WHERE id='b-project'").run();
+  const after=epochs();
+  assert.equal(after.content,before.content);
+  assert.equal(after.project,before.project+1);
+  assert.equal((await get(query({limit:"1",cursor}),bob)).status,409);
+  assert.equal((await get(query({limit:"1"}),bob)).status,200);
+});
+
 test("live role revocation invalidates continuation; fresh request hides old shared work",async()=>{
   const f=fixture(),bob=login(f,"bob");
   const cursor=(await ok(get(query({limit:"1"}),bob))).nextCursor;

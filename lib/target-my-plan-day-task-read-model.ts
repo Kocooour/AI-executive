@@ -145,7 +145,9 @@ export function readAuthorizedMyPlanDayTaskPage(db:DatabaseSync,request:{
         .filter((d):d is string=>d!==null).sort()[0]))
       return null;
 
-    const hash=createHash("sha256").update("lumi:r2d:my-plan-day-tasks:v1\0")
+    // A project-only content epoch must invalidate signed HTTP continuations,
+    // even if this Area's task-content epoch did not change.
+    const hash=createHash("sha256").update("lumi:r2d:my-plan-day-tasks:v2\0")
       .update(JSON.stringify([
         request.restoreGeneration,request.actorUserId,request.areaFilter,
         request.window,request.evaluationDate,request.throughDate,
@@ -153,6 +155,7 @@ export function readAuthorizedMyPlanDayTaskPage(db:DatabaseSync,request:{
       ]));
     for(const a of areas)hash.update("\0").update(JSON.stringify([
       a.areaId,a.areaKind,a.access,a.policyRevision,a.contentRevision,
+      a.projectContentRevision,
     ]));
     return {
       tasks:rows.slice(0,request.limit).map(r=>({

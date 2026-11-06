@@ -1,4 +1,4 @@
-# R3-slice / BE-01 + BE-02 — stagingový dvoudenní adaptér Mého plánu
+# R3-slice / BE-01 + BE-02 + BE-03 — stagingový dvoudenní adaptér Mého plánu
 
 **Stav:** implementační podklad pro první vertikální řez, nikoli aktivovaný produkt. Navazuje na rozhodnutí [5. 11. 2026](decisions/2026-11-05-ui-revize-a-vertikalni-rez.md) a existující task-only `R2d.3l.2` read endpoint.
 
@@ -13,9 +13,16 @@
 - **BE-02:** oba dny čte **jeden krátký izolovaný podproces v jediné připnuté SQLite read transakci**, s jediným canonical preflightem a actor credential. Výstupy musí mít identický kompletní **Area + private-plan epoch witness**; odlišný nebo neplatný interní výstup se bezpečně odmítne. Následuje **jediné aktuální serverové** ověření session, ACL a epoch proti živému store před vydáním odpovědi. Změna dat po snapshotu → 409. Odpadá okno pro skládání dvou různých snapshotů. Nesoulad kurzoru či revize → 409; po revokaci session → 401. Chybný request/cursor → 400; nenakonfigurovaná staging služba → 503. Odpovědi mají `Cache-Control: no-store`; nezpřístupňují interní svědectví, ID uživatele, cizí přiřazení ani poznámky.
 - Na posledním dni reprezentovatelném v kalendářním kontraktu se místo přetečení datumu vrátí 400.
 
+## BE-03 — úplná revize pro bezpečné stránkování
+
+- Podepsaný dvoudenní cursor odkazuje na revizi obou oken. Revize teď zahrnuje **všechny tři Area epochy**: `policy_revision`, `content_revision` a `project_content_revision`, včetně oprávněných, ale aktuálně prázdných Oblastí. Nadále obsahuje restore generation, aktéra, filtr, datumy a soukromou plánovací epochu.
+- Samostatná změna projektového obsahu tedy zneplatní pokračování starého cursoru (`409`) i tehdy, pokud se `content_revision` úkolů nezměnila. Změny v cizích nepřístupných Oblastech cursor daného aktéra neovlivní.
+- Hashovací doména revize se posouvá na `v2`. Staré, nanejvýš 15minutové cursory bezpečně skončí konfliktem a vyžádají nové první čtení; HTTP struktura, HMAC podepisování i ACL zůstávají stejné.
+- Regresní test používá výhradně syntetický izolovaný staging SQLite store a prověřuje změnu projektové epochy v prázdné vlastní Oblasti, nezávislost na cizí Oblasti i nové autorizované načtení.
+
 ## Zápisy a bezpečné Undo — již existující oddělené endpointy
 
-BE-01/BE-02 **nevytváří nový zápis** ani nerozšiřuje ACL. UI vertikálního řezu následně použije existující nezávisle vypnuté:
+BE-01/BE-02/BE-03 **nevytváří nový zápis** ani nerozšiřuje ACL. UI vertikálního řezu následně použije existující nezávisle vypnuté:
 - `GET/PATCH /api/target-staging/task-temporal/status` + `POST .../status/receipt` pro CAS dokončení/obnovení a zjištění výsledku nejistého zápisu.
 - `GET/PATCH /api/target-staging/task-temporal/personal-when/command` + odpovídající receipt pro soukromé `whenOn` dnes/zítra.
 - Před zápisem se vždy vyžaduje aktuální **serverový preview**, aktuální `writeAreaId`, restore generation a revize. Starý preview či revokace se nikdy automaticky znovu neodesílá. Po nejasném výsledku se použije read-only receipt; Undo je **nový reverzní CAS příkaz s novým preview**, ne opakování starého příkazu.
