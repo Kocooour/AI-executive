@@ -223,6 +223,7 @@ export function ProjectContext({ app, project }: { app: LumiApp; project: Entity
       }
     });
     saveTail.current = run.then(() => undefined, () => undefined);
+    app.trackProjectWrite(project.id, run);
     try {
       await run;
       if (version === editVersion.current && pendingSaves.current === 1) setState("saved");

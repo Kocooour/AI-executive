@@ -1,4 +1,4 @@
-import type { Entity } from "./db";
+import type { Entity, Relation } from "./db";
 import type { ProjectSummary } from "./project-summary";
 
 export type ProjectPreviewTone = "plain" | "warning" | "danger" | "complete";
@@ -24,6 +24,53 @@ export function projectPreviewCanToggle(
 ): boolean {
   return project.type === "project" && activeWorkspaceId === project.workspaceId &&
     (project.status === "active" || project.status === "completed") && !blocked;
+}
+
+/** Reject stale project confirmations at commit time, inside the local write transaction. */
+export function projectPreviewCanCommit(
+  expected: Entity, current: Entity | undefined, activeWorkspaceId: string, blocked: boolean,
+): boolean {
+  return !!current && current.id === expected.id && current.workspaceId === expected.workspaceId &&
+    current.status === expected.status && current.updatedAt === expected.updatedAt &&
+    projectPreviewCanToggle(current, activeWorkspaceId, blocked) &&
+    JSON.stringify(current) === JSON.stringify(expected);
+}
+
+/** A confirmation covers the links and statuses that completion/deletion would affect. */
+export function projectPreviewDependents(project: Entity, entities: Entity[], relations: Relation[]) {
+  const links = relations.filter((relation) =>
+    relation.sourceEntityId === project.id || relation.targetEntityId === project.id);
+  const relationMembers = new Set(links.filter((relation) =>
+    relation.relationType === "belongs_to_project" && relation.targetEntityId === project.id &&
+    relation.workspaceId === project.workspaceId).map((relation) => relation.sourceEntityId));
+  const members = entities.filter((entity) => entity.workspaceId === project.workspaceId &&
+    (relationMembers.has(entity.id) ||
+      ((entity.type === "task" || entity.type === "note") && entity.properties.projectId === project.id)))
+    .map((entity) => ({ id: entity.id, type: entity.type, status: entity.status,
+      workspaceId: entity.workspaceId,
+      legacyProjectId: entity.properties.projectId === project.id ? project.id : null }))
+    .sort((a, b) => a.id.localeCompare(b.id));
+  return {
+    signature: JSON.stringify({
+      links: links.map((relation) => [relation.id, relation.sourceEntityId, relation.targetEntityId,
+        relation.workspaceId, relation.relationType, relation.createdAt])
+        .sort((a, b) => String(a[0]).localeCompare(String(b[0]))),
+      members,
+    }),
+    openTaskCount: members.filter((member) => member.type === "task" && member.status === "open" &&
+      relationMembers.has(member.id)).length,
+  };
+}
+
+export type ProjectPreviewActionSnapshot = { project: Entity; dependents: string; openTasks: number };
+
+/** Wait for blur/autosaves registered before the action, including chained context saves. */
+export async function waitForProjectPreviewWrites(pending: () => Promise<unknown>[]): Promise<void> {
+  while (true) {
+    const writes = pending();
+    if (writes.length === 0) return;
+    await Promise.all(writes);
+  }
 }
 
 export function projectPreviewTone(project: Pick<Entity, "status">, summary: ProjectSummary): ProjectPreviewTone {
