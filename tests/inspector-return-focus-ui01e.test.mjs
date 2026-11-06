@@ -88,7 +88,7 @@ test("UI-01e: selection, view and workspace changes invalidate the pending opene
     const a = opener("task-a", events);
     const inspector = { focus: () => events.push({ id: "inspector" }) };
     let pending = advanceInspectorReturnFocus(null, "task-a", a, inspector, "personal", "Today");
-    pending = advanceInspectorReturnFocus(pending, next.id, inspector, inspector, next.workspace, next.view);
+    pending = advanceInspectorReturnFocus(pending, next.id, null, inspector, next.workspace, next.view);
     assert.equal(pending, null, "no matching active row in new selection/scope");
     pending = advanceInspectorReturnFocus(pending, null, null, null, next.workspace, next.view);
     assert.equal(pending, null);
