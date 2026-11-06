@@ -1,5 +1,7 @@
 /** Bounded subprocess serializers for opt-in R2d.3k.4b private whenOn command/receipt. */
-import type {StagingPersonalReadConfig} from "./target-staging-read-process";
+import {parseStagingPersonalWhenPreview,type StagingPersonalReadConfig}
+  from "./target-staging-read-process";
+import type {PersonalWhenCommandPreview} from "./target-personal-when-command-read";
 import type {TargetStagingPersonalWhenCommand} from "./target-personal-when-writer";
 import {runStagingWriteChild} from "./target-staging-title-http-process";
 
@@ -41,6 +43,43 @@ export function parsePersonalWhenReceiptReply(v:unknown):PersonalWhenReceiptRepl
       Extract<PersonalWhenReceiptReply,{ok:false}>["reason"]};
   return null;
 }
+/** BE-06: no receipt can be published without the exact same snapshot's
+ * actor-private epoch and task/Area linearization witness. */
+export type PersonalWhenAtomicReceiptReply=
+  | {ok:true;preview:PersonalWhenCommandPreview;receipt:PersonalWhenReceiptReply}
+  | {ok:false;reason:"inaccessible"};
+
+export function parsePersonalWhenAtomicReceiptReply(
+  value:unknown,taskId:string,
+):PersonalWhenAtomicReceiptReply|null {
+  if(!value||typeof value!=="object"||Array.isArray(value))return null;
+  const v=value as Record<string,unknown>;
+  const keys=Object.keys(v).sort().join(",");
+  if(keys==="ok,reason"&&v.ok===false&&v.reason==="inaccessible")
+    return {ok:false,reason:"inaccessible"};
+  if(keys!=="ok,preview,receipt"||v.ok!==true||
+    !v.preview||typeof v.preview!=="object"||Array.isArray(v.preview))
+    return null;
+  const preview=v.preview as Record<string,unknown>;
+  if(Object.keys(preview).sort().join(",")!==
+    "expectedPlanRevision,expectedPrivateEpoch,expectedRevision,guard,linearization,whenOn,writeAreaId")
+    return null;
+  const parsed=parseStagingPersonalWhenPreview({ok:true,...preview},taskId);
+  if(!parsed||parsed.ok!==true)return null;
+  const receipt=parsePersonalWhenReceiptReply(v.receipt);
+  return receipt?{ok:true,preview:parsed.preview,receipt}:null;
+}
+
+export async function readPersonalWhenAtomicReceiptInChild(
+  config:StagingPersonalReadConfig,command:TargetStagingPersonalWhenCommand,
+):Promise<PersonalWhenAtomicReceiptReply|null> {
+  // Task IDs and Area witnesses can exceed the legacy 1 KiB receipt-only cap.
+  // Restrict the higher bound to this allowlisted worker, not other commands.
+  return parsePersonalWhenAtomicReceiptReply(await runStagingWriteChild(
+    config,"target-staging-personal-when-atomic-receipt-child.mjs",
+    JSON.stringify(command),32*1024),command.taskId);
+}
+
 export async function writePersonalWhenInChild(
   config:StagingPersonalReadConfig,command:TargetStagingPersonalWhenCommand,
 ):Promise<PersonalWhenWriteReply|null> {
