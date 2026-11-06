@@ -11,10 +11,9 @@ import {
 import {
   temporalStatusEnabled,temporalStatusConfig,temporalStatusUnchanged,
   temporalStatusAnswer,temporalStatusTaskId,temporalStatusCommand,
-  temporalStatusWriterCanRead,verifyTemporalStatusTaskLive,
+  verifyTemporalStatusTaskLive,
 } from "../../../../../lib/target-staging-temporal-status-http";
-import {readStagingTemporalDetailInChild} from "../../../../../lib/target-staging-read-process";
-import {previewPrivateTaskTitleInChild} from "../../../../../lib/target-staging-title-http-process";
+import {readStagingTemporalStatusPreviewInChild} from "../../../../../lib/target-staging-read-process";
 import {writeTemporalTaskStatusInChild} from "../../../../../lib/target-staging-temporal-status-http-process";
 import {
   targetProtocolRefusal,legacySnapshotRefusal,resyncRequiredResponse,
@@ -48,25 +47,20 @@ export async function GET(request:Request):Promise<Response> {
     if (limited) return Response.json({error:"Too many requests"},{
       status:429,headers:{...headers,"retry-after":String(limited.retryAfter)},
     });
-    const child={...base,...stagingChildSessionConfig(identity)};
-    const detail=await readStagingTemporalDetailInChild(child,taskId);
-    // The preview independently confirms the same actor's current write ACL.
-    const preview=detail?.ok===true && temporalStatusWriterCanRead(detail.detail)
-      ? await previewPrivateTaskTitleInChild(child,taskId):null;
-    const released=detail?.ok===true
-      ? verifyTemporalStatusTaskLive(request,identity,base,detail.detail)
+    // CAS revision and task/Area live-release guard share one actor-bound
+    // pinned snapshot, not two independently timed subprocess reads.
+    const preview=await readStagingTemporalStatusPreviewInChild(
+      {...base,...stagingChildSessionConfig(identity)},taskId);
+    const released=preview?.ok===true
+      ? verifyTemporalStatusTaskLive(request,identity,base,preview.detail)
       : verifyStagingIdentityBeforeRelease(request,identity,base);
     if (released!=="ok" && released!=="stale") return stagingIdentityRefusal(released);
     if (!temporalStatusUnchanged(base)) return refuse(503,"Staging unavailable");
-    if (released==="stale"||detail?.ok===false||
-        (detail?.ok===true && !temporalStatusWriterCanRead(detail.detail)))
-      return refuse(404,"Not found");
-    if (!detail) return refuse(503,"Staging unavailable");
-    if (!preview) return refuse(503,"Staging unavailable");
-    if (preview.ok===false) return refuse(404,"Not found");
+    if (released==="stale"||preview?.ok===false)return refuse(404,"Not found");
+    if (!preview)return refuse(503,"Staging unavailable");
     return Response.json({
-      expectedRevision:preview.snapshotRevision,
-      writeAreaId:detail.detail.task.areaId,
+      expectedRevision:preview.expectedRevision,
+      writeAreaId:preview.detail.task.areaId,
       restoreGeneration:base.expectedRestoreGeneration,
     },{headers});
   } catch(error) {
