@@ -162,7 +162,7 @@ test("P1: React wiring preserves opposite Undo before PATCH and hides it during 
   assert.match(statusPost,/if\(supersedesCrossFamilyUndo\(result\.kind\)\)\{[\s\S]*?confirmedWhen\.current=null/);
   assert.match(statusPost,/if\(result\.kind==="committed"\)/);
   assert.match(statusPost,/result\.kind==="uncertain"/);
-  assert.match(statusPost,/prepared\.reason==="signed-out"\)[\s\S]*?confirmedWhen\.current=null|confirmedWhen\.current=null[\s\S]*?prepared\.reason==="signed-out"/);
+  assert.match(code.slice(statusStart,statusEnd),/prepared\.reason==="signed-out"\)[\s\S]*?confirmedWhen\.current=null|confirmedWhen\.current=null[\s\S]*?prepared\.reason==="signed-out"/);
 
   const whenStart=code.indexOf("async function changeWhen(");
   const whenDispatch=code.indexOf("const result=await dispatchMyPlanWhen(",whenStart);
