@@ -35,3 +35,37 @@ export function shouldRestoreInspectorFocus(
     inspectorOpenerMatchesSelection(origin.entityId, current.rowEntityId) &&
     current.connected && current.rendered;
 }
+
+/** The exact focus lifecycle used by DetailPanel, including ref consumption.
+ * Kept here so regression tests execute transitions rather than inspecting
+ * JSX source with regular expressions.
+ */
+export type InspectorPendingReturn = { origin: InspectorFocusOrigin; opener: HTMLElement };
+
+export function advanceInspectorReturnFocus(
+  pending: InspectorPendingReturn | null,
+  selectedId: string | null,
+  active: HTMLElement | null,
+  inspector: HTMLElement | null,
+  workspaceId: string,
+  view: string,
+): InspectorPendingReturn | null {
+  if (selectedId !== null) {
+    // Every selection or scope transition invalidates the previous opener.
+    const rowEntityId = active?.closest<HTMLElement>("[data-drop-entity]")?.dataset.dropEntity ?? null;
+    if (!active?.matches(".taskRowOpen") || !inspectorOpenerMatchesSelection(selectedId, rowEntityId)) return null;
+    inspector?.focus();
+    return { origin: { entityId: selectedId, workspaceId, view }, opener: active };
+  }
+  // Closing consumes the origin even when the target has been detached,
+  // hidden or rebound to another entity.
+  if (pending) {
+    const opener = pending.opener;
+    const rowEntityId = opener.closest<HTMLElement>("[data-drop-entity]")?.dataset.dropEntity ?? null;
+    if (shouldRestoreInspectorFocus(pending.origin, {
+      workspaceId, view, rowEntityId,
+      connected: opener.isConnected, rendered: opener.getClientRects().length > 0,
+    })) opener.focus({ preventScroll: true });
+  }
+  return null;
+}

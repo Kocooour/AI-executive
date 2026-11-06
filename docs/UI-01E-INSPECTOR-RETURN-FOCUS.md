@@ -14,4 +14,4 @@ Dosavadní `DetailPanel` si držel jediný DOM element `returnFocusRef`. Když u
 
 ## Kontrola
 
-Cílené Node unit testy zahrnují A→B→zavření, shodu ID, původní pohled/prostor, odstraněný/skrytý prvek a platný klávesnicový návrat. PR checks: typecheck, cílené testy a build. Reálné browserové testy s klávesnicí/VoiceOver patří do předprodukční release brány.
+Cílené Node unit testy nyní **vykonávají skutečný životní cyklus** `advanceInspectorReturnFocus` s DOM doubles: A→zavření→B→zavření, shodu ID, změnu pohledu/prostoru, odstraněný/skrytý/převázaný prvek a jediný platný návrat. Nejde pouze o regex kontroly zdrojového kódu. `e2e/inspector-return-focus-ui01e.spec.ts` navíc ověřuje skutečné React události a fokus v Chromium (včetně výběru B kliknutím do nefokusovatelného řádku a přímého odkazu); spouští se v předprodukční browserové bráně. PR checks nadále zahrnují typecheck, cílené unit testy a build; manuální VoiceOver zůstává součástí předprodukční přístupnostní kontroly.
