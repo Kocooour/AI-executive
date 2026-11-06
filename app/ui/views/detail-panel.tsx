@@ -874,7 +874,9 @@ export function DetailPanel({ app }: { app: LumiApp }) {
                   {tr("moveSomeday")}
                 </button>
                 {selected.status === "open" && app.activeWorkspaceId !== "all" && <DeferChip app={app} task={selected} />}
-                {!mobileTaskPreview && !desktopTaskPreview && (selected.status === "completed" ? (
+                {/* The viewport is null until hydration. A preview must NEVER
+                    expose the legacy, unguarded completion in that gap. */}
+                {!mobileDesignV1Preview && (selected.status === "completed" ? (
                   <button onClick={() => reopenTask(selected)}>{tr("reopen")}</button>
                 ) : (
                   <button className="primaryAction" onClick={() => done(selected.id)}>{workSession?.taskId === selected.id ? tr("workFinish") : tr("complete")}</button>
