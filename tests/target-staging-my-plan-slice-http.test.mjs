@@ -124,8 +124,12 @@ function query(extra={}){
   return "?"+new URLSearchParams({evaluationDate:"2026-11-04",...extra}).toString();
 }
 function get(q=query(),cookie=owner()){
+  // Each isolated SQLite fixture simulates an independent proxy client.
+  // Preserve the real 60/10min limiter within a fixture while preventing
+  // unrelated tests in this same Node process from exhausting one bucket.
+  const fixtureIp="10.99.8."+Math.max(1,serial);
   return GET(new Request(base+q,{headers:{
-    cookie,"x-forwarded-for":"10.99.8.1",
+    cookie,"x-forwarded-for":fixtureIp,
   }}));
 }
 const ids=section=>section.tasks.map(x=>x.taskId);
@@ -681,6 +685,138 @@ test("BE-12 client remains uncertain on post-commit session revocation until new
   assert.deepEqual(await checkMyPlanWhenReceipt(
     prepared.command,newBridge.fetch),{kind:"committed"});
   assert.equal(oldBridge.calls.filter(([method])=>method==="PATCH").length,1);
+});
+
+test("BE-13 open shared tasks distinguish edit role from personal assignment",async()=>{
+  const f=fixture(),alice=owner(),bob=login(f,"bob"),carol=login(f,"carol");
+  const actor={
+    alice:routedClient(alice),
+    bob:routedClient(bob),
+    carol:routedClient(carol),
+  };
+  const baseline=await ok(get(query(),bob));
+  assert.equal(baseline.tomorrow.tasks.some(x=>x.taskId==="s-bob"),true);
+  assert.equal([...ids(baseline.today),...ids(baseline.tomorrow)]
+    .includes("s-foreign"),false,"editor does not see a task assigned to Alice");
+
+  // SAME OPEN task (s-foreign): Alice is assigned admin, Bob unassigned
+  // editor, Carol unassigned viewer. Only Alice may set her private whenOn.
+  const assigned=await prepareMyPlanWhen({
+    taskId:"s-foreign",areaId:"family-area",whenOn:"2026-11-05",
+  },actor.alice.fetch);
+  assert.equal(assigned.ok,true,JSON.stringify(assigned));
+  assert.equal(assigned.command.taskId,"s-foreign");
+  assert.equal(assigned.command.writeAreaId,"family-area");
+  const unassigned=await prepareMyPlanWhen({
+    taskId:"s-foreign",areaId:"family-area",whenOn:"2026-11-05",
+  },actor.bob.fetch);
+  assert.deepEqual(unassigned,{ok:false,reason:"unavailable"});
+  const viewerWhen=await prepareMyPlanWhen({
+    taskId:"s-foreign",areaId:"family-area",whenOn:"2026-11-05",
+  },actor.carol.fetch);
+  assert.deepEqual(viewerWhen,{ok:false,reason:"unavailable"});
+
+  // The same Bob editor can edit a shared task's STATUS even when he is
+  // not its assignee. Carol viewer cannot, with the task still OPEN.
+  const editorStatus=await prepareMyPlanStatus({
+    taskId:"s-foreign",areaId:"family-area",status:"completed",
+  },actor.bob.fetch);
+  assert.equal(editorStatus.ok,true,JSON.stringify(editorStatus));
+  assert.equal(editorStatus.command.writeAreaId,"family-area");
+  const viewerStatus=await prepareMyPlanStatus({
+    taskId:"s-foreign",areaId:"family-area",status:"completed",
+  },actor.carol.fetch);
+  assert.deepEqual(viewerStatus,{ok:false,reason:"unavailable"});
+
+  // Positive control: Bob is the actual assignee on another open task in
+  // the very same Area, so his actor-private whenOn preview must succeed.
+  const bobAssigned=await prepareMyPlanWhen({
+    taskId:"s-bob",areaId:"family-area",whenOn:"2026-11-04",
+  },actor.bob.fetch);
+  assert.equal(bobAssigned.ok,true,JSON.stringify(bobAssigned));
+  for(const [name,client] of Object.entries(actor)){
+    assert.ok(client.calls.length>0,name);
+    assert.ok(client.calls.every(([method])=>method==="GET"),
+      name+" must not send PATCH while verifying ACL");
+  }
+  assert.equal(f.db.prepare("SELECT status FROM tasks WHERE id='s-foreign'")
+    .get().status,"open");
+  assert.deepEqual(await ok(get(query(),bob)),baseline);
+});
+
+test("BE-13 task reassignment between preview and PATCH denies stale client write",async()=>{
+  const f=fixture(),bob=login(f,"bob"),bridge=routedClient(bob);
+  const baseline=await ok(get(query(),bob));
+  const preview=await prepareMyPlanWhen({
+    taskId:"s-bob",areaId:"family-area",whenOn:"2026-11-04",
+  },bridge.fetch);
+  assert.equal(preview.ok,true,JSON.stringify(preview));
+  assert.equal(preview.previousWhenOn,null);
+
+  // Assignment is revoked AFTER the authorized preview, but BEFORE PATCH.
+  // No session or Area role changes: refusal must be based on current
+  // assignee, not the now-stale preview or Bob's editor membership.
+  assert.equal(f.db.prepare(
+    "UPDATE tasks SET assignee_user_id=NULL WHERE id='s-bob'"
+  ).run().changes,1);
+  const refused=await dispatchMyPlanWhen(preview.command,bridge.fetch);
+  assert.deepEqual(refused,{kind:"uncertain",command:preview.command},
+    "a 404 post-dispatch remains uncertain, not automatic rollback");
+  assert.deepEqual(bridge.calls.map(([method])=>method),
+    ["GET","PATCH","POST"],"no automatic PATCH retry");
+  assert.deepEqual(await prepareMyPlanWhen({
+    taskId:"s-bob",areaId:"family-area",whenOn:"2026-11-04",
+  },bridge.fetch),{ok:false,reason:"unavailable"});
+  assert.deepEqual(await checkMyPlanWhenReceipt(preview.command,bridge.fetch),
+    {kind:"unknown",reason:"unavailable"});
+  const deniedPage=await ok(get(query(),bob));
+  assert.deepEqual(ids(deniedPage.tomorrow),["b-next","b-next2"]);
+  assert.equal(unique(deniedPage),true);
+  assert.equal(f.db.prepare(
+    "SELECT COUNT(*) AS n FROM personal_task_plans WHERE user_id='bob' AND task_id='s-bob'"
+  ).get().n,0,"no private write may occur after assignment loss");
+
+  // Reassignment permits an EXPLICIT new action only with a fresh
+  // canonical preview and new UUID; the original unknown command remains
+  // not_recorded. Never replay the stale original PATCH.
+  assert.equal(f.db.prepare(
+    "UPDATE tasks SET assignee_user_id='bob' WHERE id='s-bob'"
+  ).run().changes,1);
+  assert.deepEqual(await checkMyPlanWhenReceipt(preview.command,bridge.fetch),
+    {kind:"not-recorded"});
+  const renewed=await prepareMyPlanWhen({
+    taskId:"s-bob",areaId:"family-area",whenOn:"2026-11-04",
+  },bridge.fetch);
+  assert.equal(renewed.ok,true,JSON.stringify(renewed));
+  assert.notEqual(renewed.command.commandId,preview.command.commandId);
+  assert.notEqual(renewed.command.expectedRevision,
+    preview.command.expectedRevision,"assignment flip invalidates task CAS");
+  const committed=await dispatchMyPlanWhen(renewed.command,bridge.fetch);
+  assert.equal(committed.kind,"committed");
+  assert.deepEqual(await checkMyPlanWhenReceipt(renewed.command,bridge.fetch),
+    {kind:"committed"});
+  assert.deepEqual(await checkMyPlanWhenReceipt(preview.command,bridge.fetch),
+    {kind:"not-recorded"});
+  const moved=await ok(get(query(),bob));
+  assert.deepEqual(ids(moved.today),["b-overdue","b-today","s-bob"]);
+  assert.deepEqual(ids(moved.tomorrow),["b-next","b-next2"]);
+  assert.equal(unique(moved),true);
+
+  const undo=await prepareMyPlanWhen({
+    taskId:"s-bob",areaId:"family-area",whenOn:null,
+  },bridge.fetch);
+  assert.equal(undo.ok,true,JSON.stringify(undo));
+  assert.notEqual(undo.command.commandId,renewed.command.commandId);
+  assert.equal((await dispatchMyPlanWhen(undo.command,bridge.fetch)).kind,
+    "committed");
+  const restored=await ok(get(query(),bob));
+  assert.deepEqual(ids(restored.today),ids(baseline.today));
+  assert.deepEqual(ids(restored.tomorrow),ids(baseline.tomorrow));
+  assert.equal(unique(restored),true);
+  assert.equal(bridge.calls.filter(([method])=>method==="PATCH").length,3,
+    "one denied, one explicitly new, one fresh Undo");
+  assert.deepEqual(await checkMyPlanWhenReceipt(preview.command,bridge.fetch),
+    {kind:"not-recorded"});
 });
 
 test("independent default-off flags, owner cookie, strict request fields",async()=>{
