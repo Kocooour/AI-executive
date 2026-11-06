@@ -14,5 +14,15 @@ export default function StagingMyPlanPreviewPage(){
     "AI_EXECUTIVE_TARGET_STAGING_HTTP_MY_PLAN_SLICE_ENABLED",
     "AI_EXECUTIVE_TARGET_STAGING_MY_PLAN_CLIENT_PREVIEW_ENABLED",
   ].some(name=>process.env[name]!=="true"))notFound();
-  return <TargetStagingMyPlanPreview/>;
+  // UI write affordances require a separate opt-in on this SERVER render.
+  // This is NOT authorization: the status endpoints independently enforce all
+  // four write flags, current session, Area ACL and optimistic CAS.
+  const statusWriteEnabled=[
+    "AI_EXECUTIVE_TARGET_STAGING_MY_PLAN_STATUS_UI_ENABLED",
+    "AI_EXECUTIVE_TARGET_STAGING_HTTP_ENABLED",
+    "AI_EXECUTIVE_TARGET_STAGING_HTTP_WRITE_ENABLED",
+    "AI_EXECUTIVE_TARGET_STAGING_HTTP_TEMPORAL_ENABLED",
+    "AI_EXECUTIVE_TARGET_STAGING_HTTP_TEMPORAL_WRITE_ENABLED",
+  ].every(name=>process.env[name]==="true");
+  return <TargetStagingMyPlanPreview statusWriteEnabled={statusWriteEnabled}/>;
 }
