@@ -2,7 +2,7 @@
  * then fresh-preview the CURRENT value before creating a NEW CAS for Undo.
  * Never PATCH here. Fails closed if another private-plan write intervened. */
 import {
-  checkMyPlanWhenReceipt,prepareMyPlanWhen,validMyPlanWhenCommand,
+  checkMyPlanWhenReceipt,prepareMyPlanWhen,validMyPlanWhenCommand,validMyPlanWhenDate,
   type MyPlanWhenCommand,type MyPlanWhenFailure,
 } from "./target-staging-my-plan-when-client";
 
@@ -14,9 +14,7 @@ export type WhenUndoPreparation=
 
 export function validConfirmedWhen(x:ConfirmedWhen|null):x is ConfirmedWhen{
   return x!==null&&validMyPlanWhenCommand(x.command)&&
-    (x.previousWhenOn===null||
-      (typeof x.previousWhenOn==="string"&&
-        /^\d{4}-\d{2}-\d{2}$/.test(x.previousWhenOn)));
+    validMyPlanWhenDate(x.previousWhenOn);
 }
 
 export function keepConfirmedWhenOnRefresh(
