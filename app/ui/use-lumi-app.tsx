@@ -29,6 +29,7 @@ import { todayProposalTaskSignature } from "../../lib/today-summary";
 import { homeTodayList } from "../../lib/home-today";
 import { groupProjectsByArea, projectsNeedAttention, activeSidebarProjects } from "../../lib/project-navigation";
 import { projectAcceptsNewItems } from "../../lib/project-summary";
+import { projectPreviewCanCommit } from "../../lib/project-list-preview";
 import { byManualOrder, isEveningTask, manualOrder, newTaskPlacement, parseCaptureText, taskDateSortKey, taskMatchesView } from "../../lib/task-views";
 import { buildMyPlanPreview, previewManualRankUpdates, previewRankNextRecords, previewRankWritesAllowed, previewReorderPeers } from "../../lib/my-plan-preview";
 import { inSentenceDate } from "./format";
@@ -320,6 +321,9 @@ export function useLumiApp() {
   inspectorSelectionRef.current = selected;
   const activeWorkspaceRef = useRef(activeWorkspaceId);
   activeWorkspaceRef.current = activeWorkspaceId;
+  // A confirmation outlives its render; hold the live pending/held state for commit-time checks.
+  const previewWriteGuardsRef = useRef({ unsent, heldBack });
+  previewWriteGuardsRef.current = { unsent, heldBack };
   useEffect(() => {
     // A workspace transition makes any earlier inspection result ineligible.
     inspectionVersion.current += 1;
@@ -3162,14 +3166,34 @@ export function useLumiApp() {
       return typedSince ? { ...saved, title: open.title } : saved;
     });
   }
-  async function remove(e: Entity) {
+  // Recheck both the current in-scope snapshot and the IndexedDB row within the write lock.
+  function assertPreviewProjectMutation(expected: Entity, current: Entity | undefined): asserts current is Entity {
+    const guards = previewWriteGuardsRef.current;
+    const blocked = isAdopting() || signedOut.current || guards.unsent.has(expected.id) ||
+      guards.heldBack.some((entity) => entity.id === expected.id) ||
+      (current ? entityConflicts(current).length > 0 : true);
+    const visible = latestItemsRef.current.find((entity) => entity.id === expected.id);
+    if (!projectPreviewCanCommit(expected, current, activeWorkspaceRef.current, blocked) ||
+        !projectPreviewCanCommit(expected, visible, activeWorkspaceRef.current, blocked)) {
+      throw new Error("project_preview_changed");
+    }
+  }
+  async function remove(e: Entity, expectedPreview?: Entity) {
     if (isFallbackArea(e, items)) return;
-    const linkedRelations = (await db.relations.toArray()).filter(
+    let linkedRelations = expectedPreview ? [] as Relation[] : (await db.relations.toArray()).filter(
       (relation) => relation.sourceEntityId === e.id || relation.targetEntityId === e.id,
     );
     localDataVersion.current += 1;
-    await db.transaction("rw", db.entities, db.relations, async () => {
-      await db.entities.delete(e.id);
+    try {
+      await db.transaction("rw", db.entities, db.relations, async () => {
+        if (expectedPreview) {
+          const current = await db.entities.get(e.id);
+          assertPreviewProjectMutation(expectedPreview, current);
+          linkedRelations = (await db.relations.toArray()).filter(
+            (relation) => relation.sourceEntityId === e.id || relation.targetEntityId === e.id,
+          );
+        }
+        await db.entities.delete(e.id);
       await db.relations.bulkDelete(linkedRelations.map((relation) => relation.id));
       // Deleting a project: its member tasks become standalone tasks, which have exactly one Area (the fallback), and
       // no longer point at the project (2a part 4; the server does the same for a write that removes a project).
@@ -3186,8 +3210,8 @@ export function useLumiApp() {
           await assignFallbackArea(updated, stamp);
         }
       }
-    });
-    localDataVersion.current += 1;
+      });
+    } finally { localDataVersion.current += 1; }
     recordDeleted(localStorage, e.id);
     setUndo(e);
     setUndoRelations(linkedRelations);
@@ -3196,22 +3220,44 @@ export function useLumiApp() {
     if (openProjectIdRef.current === e.id) closeProjectPage();
     load();
   }
-  async function setProjectStatus(project: Entity, status: "active" | "completed") {
+  async function setProjectStatus(project: Entity, status: "active" | "completed", expectedPreview?: Entity) {
     if (project.type !== "project") return;
-    const current = (await db.entities.get(project.id)) || project;
-    const timestamp = writeTime();
-    const activity = Array.isArray(current.properties.activity) ? current.properties.activity : [];
-    localDataVersion.current += 1;
-    await db.entities.update(project.id, {
-      status,
-      properties: {
-        ...current.properties,
-        completedAt: status === "completed" ? timestamp : null,
-        activity: [...activity, { at: timestamp, action: status === "completed" ? "completed" : "reopened" }].slice(-50),
-      },
-      updatedAt: timestamp,
-    });
-    localDataVersion.current += 1;
+    if (expectedPreview) {
+      localDataVersion.current += 1;
+      try {
+        await db.transaction("rw", db.entities, async () => {
+          const current = await db.entities.get(project.id);
+          assertPreviewProjectMutation(expectedPreview, current);
+          const timestamp = writeTime();
+          const activity = Array.isArray(current.properties.activity) ? current.properties.activity : [];
+          await db.entities.update(project.id, {
+            status,
+            properties: {
+              ...current.properties,
+              completedAt: status === "completed" ? timestamp : null,
+              activity: [...activity, { at: timestamp, action: status === "completed" ? "completed" : "reopened" }].slice(-50),
+            },
+            updatedAt: timestamp,
+          });
+        });
+      } finally { localDataVersion.current += 1; }
+    } else {
+      // Default-off legacy mutation keeps its original behavior.
+      const current = (await db.entities.get(project.id)) || project;
+      const timestamp = writeTime();
+      const activity = Array.isArray(current.properties.activity) ? current.properties.activity : [];
+      localDataVersion.current += 1;
+      await db.entities.update(project.id, {
+        status,
+        properties: {
+          ...current.properties,
+          completedAt: status === "completed" ? timestamp : null,
+          activity: [...activity, { at: timestamp, action: status === "completed" ? "completed" : "reopened" }].slice(-50),
+        },
+        updatedAt: timestamp,
+      });
+      localDataVersion.current += 1;
+    }
     await syncToServer();
     await load();
     const saved = (await db.entities.get(project.id)) || null;
