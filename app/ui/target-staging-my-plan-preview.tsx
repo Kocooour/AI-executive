@@ -906,7 +906,8 @@ export function TargetStagingMyPlanPreview({
       <PlanDay label={(followToday?"Zítra · ":"Následující den · ")+
         nextHumanDate(date)}
         date={date} tasks={state.page.tomorrow.tasks}
-        canComplete={canComplete} onComplete={task=>{void changeStatus(task,"completed");}}/>
+        canComplete={canComplete} onComplete={task=>{void changeStatus(task,"completed");}}
+        canWhen={canWhen} onWhen={(task,on)=>{void changeWhen(task,on);}}/>
       {state.page.hasMore&&
         <button disabled={moreBusy||anyPending} type="button" onClick={()=>{void more();}}>
           {moreBusy?"Načítám…":"Načíst další úkoly"}
