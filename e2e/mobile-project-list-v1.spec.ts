@@ -219,6 +219,26 @@ for (const theme of ["light", "dark"] as const) {
       await expect(desktopGroup.locator(".projectGroupHeading")).toHaveCSS("clip-path", "inset(50%)");
       const desktopBorder = await computedContrast(page, groupSelector, "borderTopColor", groupSelector);
       expect(desktopBorder, theme + ": desktop Area group border").toBeGreaterThanOrEqual(3);
+      await expect(desktopGroup).toHaveAttribute("data-preview-area-tone", "family");
+      // Read *computed* background colors from the mounted group at desktop
+      // width. Changing its tone attribute exposes CSS cascade regressions
+      // without writing synthetic additional Areas to the persistent store.
+      const desktopColors = await desktopGroup.evaluate((node) => {
+        const originalTone = node.getAttribute("data-preview-area-tone");
+        const tones = ["personal", "work", "family", "extra-a", "extra-b", "extra-c"];
+        const colors: string[] = [];
+        try {
+          for (const tone of tones) {
+            node.setAttribute("data-preview-area-tone", tone);
+            colors.push(getComputedStyle(node).backgroundColor);
+          }
+        } finally {
+          if (originalTone === null) node.removeAttribute("data-preview-area-tone");
+          else node.setAttribute("data-preview-area-tone", originalTone);
+        }
+        return colors;
+      });
+      expect(new Set(desktopColors).size, theme + ": six desktop Area tones must render distinct colors").toBe(6);
       await expect(desktopGroup.locator('[data-project-preview-row="' + ids.overdue + '"] .v1ProjectCircle')).toBeVisible();
     } finally {
       await cleanPreview(page, ids);
