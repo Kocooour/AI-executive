@@ -67,12 +67,14 @@ export function ProjectPage({ app, project, renderRow, reorderPreview = false, o
   // The same confirmation and sync/held/conflict guard applies to desktop
   // and phone previews. Legacy production controls remain unchanged.
   function reportPreviewActionError(error: unknown) {
+    // The app-level role=alert persists when a deleted project page unmounts.
+    if (error instanceof Error && error.message === "project_preview_sync_pending") return;
     const stale = error instanceof Error && error.message === "project_preview_changed";
     setActionError(stale
       ? (language === "cs" ? "Projekt se mezitím změnil. Zkontrolujte aktuální stav a akci zopakujte." :
         "The project changed during confirmation. Review its current state and try again.")
-      : (language === "cs" ? "Akci se nepodařilo synchronizovat. Zkontrolujte stav projektu." :
-        "Could not synchronize this action. Check the project status."));
+      : (language === "cs" ? "Akci se nepodařilo provést. Zkontrolujte stav projektu." :
+        "Could not perform this action. Check the project status."));
   }
   // Lock both controls during confirmation; the store guards again inside the transaction.
   async function previewToggleStatus() {
