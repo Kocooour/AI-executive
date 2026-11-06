@@ -30,6 +30,7 @@ import { homeTodayList } from "../../lib/home-today";
 import { groupProjectsByArea, projectsNeedAttention, activeSidebarProjects } from "../../lib/project-navigation";
 import { projectAcceptsNewItems } from "../../lib/project-summary";
 import { projectPreviewCanCommit, projectPreviewDependents, waitForProjectPreviewWrites, type ProjectPreviewActionSnapshot } from "../../lib/project-list-preview";
+import { projectSyncNoticeAfterUndo, projectSyncNoticeResolved, sameProjectSyncNotice, type ProjectSyncNotice } from "../../lib/project-sync-notice";
 import { byManualOrder, isEveningTask, manualOrder, newTaskPlacement, parseCaptureText, taskDateSortKey, taskMatchesView } from "../../lib/task-views";
 import { buildMyPlanPreview, previewManualRankUpdates, previewRankNextRecords, previewRankWritesAllowed, previewReorderPeers } from "../../lib/my-plan-preview";
 import { inSentenceDate } from "./format";
@@ -69,7 +70,7 @@ export function useLumiApp() {
     [openProjectId, setOpenProjectId] = useState<string | null>(null),
     [navigationUnavailable, setNavigationUnavailable] = useState(false),
     // A failed preview sync must stay visible even after local deletion closes its detail page.
-    [projectSyncNotice, setProjectSyncNotice] = useState<"status" | "delete" | null>(null),
+    [projectSyncNotice, setProjectSyncNotice] = useState<ProjectSyncNotice | null>(null),
     [text, setText] = useState(""),
     [rowError, setRowError] = useState(false),
     // Only the opt-in Můj plán reorder displays this; never silently treat a
@@ -206,6 +207,24 @@ export function useLumiApp() {
     recoveryHeld, recoveryPreparing, recoveryReady, recoveryError, recoveryOffline, recoveryDownloadRequested,
     recoveryInspecting, recoveryInspection, recoveryInspectionError, inspectOfflineRecoveryFile,
     prepareOfflineRecoveryDownload, downloadOfflineRecovery } = useSync();
+  // Reconcile a prior preview failure only after a server-acknowledged state
+  // proves this exact project operation was sent (or it was superseded).
+  // An unrelated successful sync must not hide this warning.
+  useEffect(() => {
+    if (!projectSyncNotice || syncStatus !== "synced") return;
+    const warning = projectSyncNotice;
+    let cancelled = false;
+    void db.transaction("r", db.entities, db.baseEntities, async () => {
+      const local = await db.entities.get(warning.projectId);
+      const acknowledged = await db.baseEntities.get(warning.projectId);
+      return projectSyncNoticeResolved(warning, local, acknowledged,
+        pendingDeletedIds().includes(warning.projectId));
+    }).then((resolved) => {
+      if (cancelled || !resolved) return;
+      setProjectSyncNotice((current) => sameProjectSyncNotice(current, warning) ? null : current);
+    }, () => undefined);
+    return () => { cancelled = true; };
+  }, [projectSyncNotice, syncStatus, items]);
   // The translator reads the current language when it is called, so a message set after a request
   // that was started before a language change is shown in the new language.
   const languageRef = useRef(language);
@@ -3260,12 +3279,14 @@ export function useLumiApp() {
     if (openProjectIdRef.current === e.id) closeProjectPage();
     if (expectedPreview) await load(); else void load();
     if (syncFailed) {
-      setProjectSyncNotice("delete");
+      setProjectSyncNotice({ kind: "delete", projectId: e.id });
       throw new Error("project_preview_sync_pending");
     }
+    if (expectedPreview) setProjectSyncNotice((current) => current?.projectId === e.id ? null : current);
   }
   async function setProjectStatus(project: Entity, status: "active" | "completed", expectedPreview?: ProjectPreviewActionSnapshot) {
     if (project.type !== "project") return;
+    let committedAt = 0;
     if (expectedPreview) {
       localDataVersion.current += 1;
       try {
@@ -3275,6 +3296,7 @@ export function useLumiApp() {
           if ((await projectPreviewDependencies(current)).signature !== expectedPreview.dependents)
             throw new Error("project_preview_changed");
           const timestamp = writeTime();
+          committedAt = timestamp;
           const activity = Array.isArray(current.properties.activity) ? current.properties.activity : [];
           await db.entities.update(project.id, {
             status,
@@ -3313,9 +3335,10 @@ export function useLumiApp() {
     const saved = (await db.entities.get(project.id)) || null;
     setSelected((open) => open?.id === project.id ? saved : open);
     if (syncFailed) {
-      setProjectSyncNotice("status");
+      setProjectSyncNotice({ kind: "status", projectId: project.id, status, updatedAt: committedAt });
       throw new Error("project_preview_sync_pending");
     }
+    if (expectedPreview) setProjectSyncNotice((current) => current?.projectId === project.id ? null : current);
   }
   async function restore() {
     if (!undo) return;
@@ -3363,6 +3386,8 @@ export function useLumiApp() {
     });
     localDataVersion.current += 1;
     recordRevived(localStorage, undo.id);
+    // The old pending-delete banner is already false once Undo has recreated the record.
+    setProjectSyncNotice((current) => projectSyncNoticeAfterUndo(current, undo.id));
     await syncToServer();
     setUndo(null);
     setUndoRelations([]);
