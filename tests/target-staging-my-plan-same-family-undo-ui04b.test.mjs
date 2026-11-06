@@ -180,7 +180,7 @@ test("P1 same-family: React preserves previous committed UI on definite failure 
   assert.match(status,/setAction\(\{kind:"committed",taskId:retainedStatusUndo\.taskId/);
   assert.match(status,/restoreStatusUndoOnFailure\(prepared\.reason\)/);
   assert.match(status,/restoreStatusUndoOnFailure\(result\.reason\)/);
-  assert.doesNotMatch(status.slice(0,status.indexOf("const result=await dispatchMyPlanStatus(")),
+  assert.doesNotMatch(status.slice(0,status.indexOf("let command:MyPlanStatusCommand;")),
     /confirmedCommand\.current=null/,
     "status B read-only phase must preserve status A receipt");
   assert.match(status,/confirmedCommand\.current=status==="completed"\?result\.command:null/);
@@ -192,7 +192,7 @@ test("P1 same-family: React preserves previous committed UI on definite failure 
   assert.match(when,/setWhenAction\(\{kind:"committed",taskId:retainedWhenUndo\.command\.taskId/);
   assert.match(when,/restoreWhenUndoOnFailure\(prepared\.reason\)/);
   assert.match(when,/restoreWhenUndoOnFailure\(result\.reason\)/);
-  assert.doesNotMatch(when.slice(0,when.indexOf("const result=await dispatchMyPlanWhen(")),
+  assert.doesNotMatch(when.slice(0,when.indexOf("let command:MyPlanWhenCommand;")),
     /confirmedWhen\.current=null/,
     "When B read-only phase must preserve When A receipt");
   assert.match(when,/confirmedWhen\.current=undo\?null:\{command,previousWhenOn\}/);
