@@ -44,7 +44,7 @@ import {
   readPreflightedMyPlanHomeSummary,
   readPreflightedScopedHomeSummary,
   readPreflightedTemporalTaskPage, readPreflightedTemporalTaskDetail,
-  readPreflightedTemporalDueWindowPage,
+  readPreflightedTemporalStatusPreview, readPreflightedTemporalDueWindowPage,
   readPreflightedPersonalWhenPage,
   readPreflightedMyPlanDayTaskPage,
   readPreflightedMyPlanTwoDayTaskPage,
@@ -537,6 +537,19 @@ export class TargetStagingSessionAuthority {
     try {
       const credential = this.#oneShotReadCredential(actorUserId);
       return credential ? readPreflightedTemporalTaskDetail(this.#store, credential, taskId) : null;
+    } catch { return null; }
+  }
+
+  /** BE-04: single actor-bound, pinned CAS + temporal guard read. */
+  readTemporalStatusPreview(
+    actorUserId: string, taskId: string,
+  ): {detail: TemporalTaskDetail; expectedRevision: string} | null {
+    if (this.#closed) return null;
+    try {
+      const credential = this.#oneShotReadCredential(actorUserId);
+      return credential ? readPreflightedTemporalStatusPreview(
+        this.#store, credential, taskId,
+      ) : null;
     } catch { return null; }
   }
 
