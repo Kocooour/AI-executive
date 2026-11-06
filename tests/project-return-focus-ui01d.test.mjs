@@ -1,94 +1,126 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
-import { projectFocusReturnForHistory, shouldRestoreProjectFocus } from "../lib/project-return-focus.ts";
+import { knownProjectFocusPosition, projectFocusReturnForHistory, shouldRestoreProjectFocus } from "../lib/project-return-focus.ts";
 
 const read = (path) => readFileSync(new URL(path, import.meta.url), "utf8");
 const listSearch = "?view=Projects";
 const projectASearch = "?view=Projects&projectId=project-a";
 const projectBSearch = "?view=Projects&projectId=project-b";
-const intentA = {
+const positions = new Set(["list-1", "entry-a1", "entry-b", "entry-a2"]);
+const intentA1 = {
   projectId: "project-a", workspaceId: "personal", view: "Projects",
-  source: "content", originProjectId: null, originSearch: listSearch,
+  source: "content", originProjectId: null, originSearch: listSearch, originPositionId: "list-1",
 };
 const intentB = {
   projectId: "project-b", workspaceId: "personal", view: "Projects",
   source: "sidebar", originProjectId: "project-a", originSearch: projectASearch,
+  originPositionId: "entry-a1",
+};
+const intentA2 = {
+  projectId: "project-a", workspaceId: "personal", view: "Projects",
+  source: "sidebar", originProjectId: "project-b", originSearch: projectBSearch,
+  originPositionId: "entry-b",
 };
 const entries = new Map([
-  ["entry-a", { intent: intentA, opener: "list-button-a" }],
+  ["entry-a1", { intent: intentA1, opener: "list-button-a" }],
   ["entry-b", { intent: intentB, opener: "sidebar-button-b" }],
+  ["entry-a2", { intent: intentA2, opener: "sidebar-button-a" }],
 ]);
 
 test("UI-01d: A→B→Back A→Back list keeps both separate opener intents", () => {
-  const toA = projectFocusReturnForHistory("entry-b", entries, projectASearch);
+  const toA = projectFocusReturnForHistory("entry-b", entries, "entry-a1", projectASearch);
   assert.equal(toA?.opener, "sidebar-button-b");
   assert.equal(shouldRestoreProjectFocus(toA?.intent ?? null, {
-    openProjectId: "project-a", workspaceId: "personal", view: "Projects", search: projectASearch,
+    openProjectId: "project-a", workspaceId: "personal", view: "Projects",
+    search: projectASearch, positionId: "entry-a1",
   }, true), true);
-
-  // The next Back departs A, not B. It must restore the list's A button.
-  const toList = projectFocusReturnForHistory("entry-a", entries, listSearch);
+  const toList = projectFocusReturnForHistory("entry-a1", entries, "list-1", listSearch);
   assert.equal(toList?.opener, "list-button-a");
   assert.equal(shouldRestoreProjectFocus(toList?.intent ?? null, {
-    openProjectId: null, workspaceId: "personal", view: "Projects", search: listSearch,
+    openProjectId: null, workspaceId: "personal", view: "Projects",
+    search: listSearch, positionId: "list-1",
   }, true), true);
-  assert.equal(entries.size, 2, "Back must preserve intents for Forward/Back later");
+  assert.equal(entries.size, 3, "Back must preserve intents for Forward and Back again");
 });
 
-test("UI-01d: Forward never borrows a Back focus intent, repeated Back still works", () => {
-  assert.equal(projectFocusReturnForHistory(null, entries, projectASearch), null,
-    "Forward list→A has no departing project token");
-  assert.equal(projectFocusReturnForHistory("entry-a", entries, projectBSearch), null,
-    "Forward A→B does not match A's recorded origin list URL");
-  assert.equal(projectFocusReturnForHistory("entry-b", entries, projectASearch)?.opener,
-    "sidebar-button-b", "Back B→A again uses B's own token");
-  assert.equal(projectFocusReturnForHistory("entry-a", entries, listSearch)?.opener,
-    "list-button-a", "Back A→list again uses A's original token");
-  assert.equal(projectFocusReturnForHistory("unknown-token", entries, listSearch), null,
-    "history.state from a reloaded/pasted entry has no in-memory opener");
-  assert.equal(projectFocusReturnForHistory("entry-b", entries, listSearch), null,
-    "Back skipping the expected origin cannot borrow B's focus intent");
+test("UI-01d: A₁→B→A₂→Back→Back→Forward→Forward cannot mistake repeated A URLs for Back", () => {
+  // A₁ and A₂ have the exact same URL but distinct browser-history positions.
+  assert.equal(projectFocusReturnForHistory("entry-a2", entries, "entry-b", projectBSearch)?.opener,
+    "sidebar-button-a", "Back from A₂ must return the button that opened A₂");
+  assert.equal(projectFocusReturnForHistory("entry-b", entries, "entry-a1", projectASearch)?.opener,
+    "sidebar-button-b", "Back from B must return B's opener on A₁");
+  assert.equal(projectFocusReturnForHistory("entry-a1", entries, "entry-b", projectBSearch), null,
+    "Forward from A₁ to B is never a focus return");
+  assert.equal(projectFocusReturnForHistory("entry-b", entries, "entry-a2", projectASearch), null,
+    "Forward to A₂ must NOT use B's opener from A₁ despite the duplicate URL");
+  assert.equal(projectFocusReturnForHistory("entry-a2", entries, "entry-b", projectBSearch)?.opener,
+    "sidebar-button-a", "another Back must still use the right intent");
 });
 
-test("UI-01d: restoration requires committed route, same legacy workspace and local visibility", () => {
+test("UI-01d: exact destination history entry, route and scope must all match", () => {
+  assert.equal(projectFocusReturnForHistory("entry-b", entries, "entry-a2", projectASearch), null,
+    "origin search alone is insufficient when A appears twice in history");
+  assert.equal(projectFocusReturnForHistory("entry-b", entries, "entry-a1", projectBSearch), null);
+  assert.equal(projectFocusReturnForHistory("entry-b", entries, null, projectASearch), null);
+  assert.equal(projectFocusReturnForHistory("unknown-token", entries, "entry-a1", projectASearch), null);
+  assert.equal(projectFocusReturnForHistory(null, entries, "entry-a1", projectASearch), null);
   const current = {
-    openProjectId: "project-a", workspaceId: "personal", view: "Projects", search: projectASearch,
+    openProjectId: "project-a", workspaceId: "personal", view: "Projects",
+    search: projectASearch, positionId: "entry-a1",
   };
   assert.equal(shouldRestoreProjectFocus(intentB, current, true), true);
+  assert.equal(shouldRestoreProjectFocus(intentB, { ...current, positionId: "entry-a2" }, true), false);
+  assert.equal(shouldRestoreProjectFocus(intentB, { ...current, positionId: null }, true), false);
   assert.equal(shouldRestoreProjectFocus(intentB, { ...current, workspaceId: "shared" }, true), false);
   assert.equal(shouldRestoreProjectFocus(intentB, { ...current, view: "Today" }, true), false);
   assert.equal(shouldRestoreProjectFocus(intentB, { ...current, search: projectBSearch }, true), false);
   assert.equal(shouldRestoreProjectFocus(intentB, { ...current, openProjectId: null }, true), false);
   assert.equal(shouldRestoreProjectFocus(intentB, current, false), false,
-    "deleted/revoked B cannot receive focus");
+    "revoked/deleted B is never a safe focus target");
   assert.equal(shouldRestoreProjectFocus(null, current, true), false,
-    "direct URL without a local origin never focuses a stale button");
+    "direct URL without a local origin does not restore focus");
 });
 
-test("UI-01d: opening captures one token per new project history entry", () => {
+test("UI-01d: unrecognized or stale history.state never authenticates a focus position", () => {
+  assert.equal(knownProjectFocusPosition({ lumiFocusEntry: "entry-a1" }, positions), "entry-a1");
+  assert.equal(knownProjectFocusPosition({ lumiFocusEntry: "stale-after-reload" }, positions), null);
+  assert.equal(knownProjectFocusPosition({ lumiFocusEntry: 123 }, positions), null);
+  assert.equal(knownProjectFocusPosition({ other: "entry-a1" }, positions), null);
+  assert.equal(knownProjectFocusPosition(null, positions), null);
+  assert.equal(knownProjectFocusPosition("entry-a1", positions), null);
+  assert.equal(knownProjectFocusPosition({ lumiFocusEntry: "entry-a1" }, new Set()), null);
+});
+
+test("UI-01d: clicking a project assigns fresh destination position and marks its origin", () => {
   const app = read("../app/ui/use-lumi-app.tsx");
   assert.match(app, /if \(!visibleProjectsRef\.current\.some\(\(visible\) => visible\.id === project\.id && visible\.workspaceId === project\.workspaceId\)\) return;/);
-  assert.match(app, /const active = document\.activeElement;/);
   assert.match(app, /active\.dataset\.projectOpen === project\.id/);
   assert.match(app, /querySelectorAll<HTMLButtonElement>\("button\[data-project-open\]"\)/);
-  assert.match(app, /const focusEntryId = opener \? crypto\.randomUUID\(\) : null;/);
-  assert.match(app, /const originProjectId = openProjectIdRef\.current;/);
+  assert.match(app, /const focusEntryId = mobileDesignV1Preview \? crypto\.randomUUID\(\) : null;/);
   assert.match(app, /const originSearch = window\.location\.search;/);
+  assert.match(app, /const originProjectId = openProjectIdRef\.current;/);
+  assert.match(app, /originPositionId = knownProjectFocusPosition\(\s*window\.history\.state, knownProjectFocusPositionsRef\.current\)/);
+  assert.match(app, /window\.history\.replaceState\(\{\s*\.\.\.\(originalState && typeof originalState === "object"/,
+    "mark the original project/list history entry before opening the next one");
   assert.match(app, /window\.history\.pushState\(\{\s*lumiProject: project\.id,/);
   assert.match(app, /lumiFocusEntry: focusEntryId/);
+  assert.match(app, /knownProjectFocusPositionsRef\.current\.add\(focusEntryId\)/);
+  assert.match(app, /originSearch, originProjectId, originPositionId/);
   assert.match(app, /projectFocusEntriesRef\.current\.set\(focusEntryId,/);
   assert.match(app, /window\.history\.replaceState\(window\.history\.state \?\? \{ lumiProject: project\.id \}/,
-    "clicking the same project must preserve its existing entry identity");
+    "reopening the same entry must preserve its identity");
 });
 
-test("UI-01d: popstate tracks outgoing vs incoming tokens and waits for committed destination", () => {
+test("UI-01d: popstate resolves exact departure and destination position before focus", () => {
   const app = read("../app/ui/use-lumi-app.tsx");
-  assert.match(app, /pendingProjectFocusRef\.current = projectFocusReturnForHistory\(\s*activeProjectFocusEntryRef\.current, projectFocusEntriesRef\.current, window\.location\.search\);/);
-  assert.match(app, /activeProjectFocusEntryRef\.current = typeof destinationFocusId === "string" \? destinationFocusId : null;/);
+  assert.match(app, /const destinationFocusId = knownProjectFocusPosition\(\s*window\.history\.state, knownProjectFocusPositionsRef\.current\)/);
+  assert.match(app, /pendingProjectFocusRef\.current = projectFocusReturnForHistory\(\s*activeProjectFocusEntryRef\.current, projectFocusEntriesRef\.current,\s*destinationFocusId, window\.location\.search\);/);
+  assert.match(app, /activeProjectFocusEntryRef\.current = destinationFocusId;/);
+  assert.match(app, /knownProjectFocusPosition\(window\.history\.state, knownProjectFocusPositionsRef\.current\) !==\s*pending\.intent\.originPositionId/);
   assert.match(app, /if \(openProjectId !== pending\.intent\.originProjectId \|\|\s*view !== pending\.intent\.view \|\| activeWorkspaceId !== pending\.intent\.workspaceId\) return;/);
-  assert.match(app, /window\.location\.search !== pending\.intent\.originSearch/);
   assert.match(app, /shouldRestoreProjectFocus\(pending\.intent,/);
+  assert.match(app, /positionId: knownProjectFocusPosition\(window\.history\.state, knownProjectFocusPositionsRef\.current\)/);
   assert.match(app, /item\.id === pending\.intent\.projectId && item\.workspaceId === pending\.intent\.workspaceId/);
   assert.match(app, /button\.isConnected && button\.dataset\.projectOpen === pending\.intent\.projectId/);
   assert.match(app, /button\.getClientRects\(\)\.length > 0/);
@@ -97,11 +129,11 @@ test("UI-01d: popstate tracks outgoing vs incoming tokens and waits for committe
   assert.match(app, /window\.addEventListener\("popstate", followAddress\)/);
   assert.match(app, /if \(window\.history\.state\?\.lumiProject\) window\.history\.back\(\)/);
   assert.match(app, /pendingProjectFocusRef\.current = null;\s*activeProjectFocusEntryRef\.current = null;\s*setNavigationUnavailable\(false\)/,
-    "explicit navigation clears active focus state");
+    "explicit view navigation clears a pending focus return");
   assert.doesNotMatch(read("../lib/project-return-focus.ts"), /localStorage|sessionStorage|fetch\(|\.pushState/);
 });
 
-test("UI-01d: all project openers publish the same opaque ID and no new URL params", () => {
+test("UI-01d: all project openers publish opaque IDs without changing navigation URLs", () => {
   const mobile = read("../app/ui/views/mobile-project-row-v1.tsx");
   const rows = read("../app/ui/views/entity-list.tsx");
   const sidebar = read("../app/ui/views/sidebar.tsx");
