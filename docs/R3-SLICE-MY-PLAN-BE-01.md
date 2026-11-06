@@ -1,4 +1,4 @@
-# R3-slice / BE-01 až BE-11 — stagingový Můj plán a bezpečné CAS
+# R3-slice / BE-01 až BE-12 — stagingový Můj plán a bezpečné CAS
 
 **Stav:** implementační podklad pro první vertikální řez, nikoli aktivovaný produkt. Navazuje na rozhodnutí [5. 11. 2026](decisions/2026-11-05-ui-revize-a-vertikalni-rez.md) a existující task-only `R2d.3l.2` read endpoint.
 
@@ -90,6 +90,13 @@ BE-01/BE-02/BE-03 **nevytváří nový zápis** ani nerozšiřuje ACL. UI vertik
 - Undo není replay: po opětovné autentizaci vyžaduje obě aktuální CAS preview a **nová UUID**, obnoví původní denní výběry bez duplicit. Starší potvrzení `committed` se nezmění ani po Undo.
 - Protipříklad: když se původní `PATCH` **vůbec neodeslal**, jeho read-only receipt je `not_recorded` a žádná mutace se neprovede. Pozdější **výslovná nová** akce používá nové preview a UUID; starý nezapsaný příkaz zůstává `not_recorded`, bez automatického opakování.
 - BE-11 zavádí pouze testy a tento kontrakt, ne produkční API, úpravu soukromí/ACL, lokální offline frontu, feature flag, deployment, data cutover ani plné Browser E2E. Všechny staging write flagy v testu se vrací do původního stavu.
+
+## BE-12 — skutečný klientský CAS transport proti autorizovanému HTTP
+
+- Integrační regresní scénáře propojují **přímo stávající klientské transporty** `prepareMyPlanWhen/dispatchMyPlanWhen/checkMyPlanWhenReceipt` a analogické `MyPlanStatus` s reálnými stagingovými Node HTTP route handlery. `fetch` adapter pouze připojí původní HTTP cookie, same-origin hlavičky a přesměruje čtyři přesné URL na odpovídající handler. **Nefabrikuje preview, výsledky PATCH ani receipt**; všechny autorizace a SQLite CAS probíhají na izolovaném syntetickém store.
+- Klientské osobní `whenOn` a sdílené dokončení fungují se **skutečným serverovým šestipolovým/osmipolovým CAS**, původním read-only receipt a čerstvým Undo s novým UUID. Pro simulaci ztracené odpovědi adapter počká na úspěšné zpracování PATCH a potom **zahodí jeho HTTP odpověď**. Obě implementace klientského transportu smějí vyvolat jen `GET → PATCH → POST receipt`, žádný druhý PATCH. Výsledný dvoudenní Můj plán je bez duplicit a po reverzi odpovídá původnímu.
+- Viewer nedostane zápisový náhled a nemůže z klientského transportu dojít ke `PATCH`. Při **revokaci durable session těsně po commitu** se klientský transport rozhodne pro `uncertain`, protože původní cookie odmítne receipt. Původní příkaz lze read-only potvrdit až pod **novým přihlášením stejné identity**; staré session se nijak neobnoví. Nový CAS/UUID potom bezpečně vrátí plán.
+- Testuje se reálné rozhraní **transport → HTTP handler → autorizační brána → SQLite**, nikoli React rendering, časování DOM, skutečné přerušení síťového stacku ani browser E2E. Nová funkce pro uživatele se tím automaticky neaktivuje; UI-04b ji používá jen přes samostatnou serverovou default-off bránu. Žádné produkční flagy, migrace, reset, nasazení ani změna backendové API smlouvy.
 
 ## Co zůstává mimo iteraci
 
