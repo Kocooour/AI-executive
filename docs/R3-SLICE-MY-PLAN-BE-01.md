@@ -1,4 +1,4 @@
-# R3-slice / BE-01 až BE-05 — stagingový Můj plán a bezpečné CAS
+# R3-slice / BE-01 až BE-06 — stagingový Můj plán a bezpečné CAS
 
 **Stav:** implementační podklad pro první vertikální řez, nikoli aktivovaný produkt. Navazuje na rozhodnutí [5. 11. 2026](decisions/2026-11-05-ui-revize-a-vertikalni-rez.md) a existující task-only `R2d.3l.2` read endpoint.
 
@@ -41,6 +41,14 @@ BE-01/BE-02/BE-03 **nevytváří nový zápis** ani nerozšiřuje ACL. UI vertik
 - Nový bounded stdin worker má vlastní přísný vnitřní DTO: buď `inaccessible`, nebo současný task witness a jen povolený výsledek receiptu. Větší maximální odpověď je povolena **pouze** tomuto internímu procesu, ostatní write/receipt children zachovávají svůj původní 1 KiB limit. Nikdy se nevydává obsah úkolu klientovi.
 - Před odpovědí server dál atomicky ověřuje živou session, roli, task/parent/Area revizi i restore generation; při změně oprávnění nebo úkolu vrátí 401/404, nikoli potvrzení starého zápisu. Vnější odpověď zůstává `{status:"committed"|"not_recorded"}` a stejné chybové kódy. `not_recorded` není povolení opakovat příkaz.
 - Přidány syntetické regresní testy pro obě hodnoty receiptu, commit mezi snapshoty, viewer/foreign actor, role downgrade, tampered child DTO a dlouhý název úkolu. API status GET/PATCH, Undo i osobní `whenOn` se tímto PR nemění.
+
+## BE-06 — atomické potvrzení osobního dne „Kdy“
+
+- `POST /api/target-staging/task-temporal/personal-when/command/receipt` nyní čte **z jediného kanonicky preflightovaného, actor/session-bound SQLite snapshotu** aktuální oprávnění k úkolu a jeho přiřazení, soukromou plánovací epochu, task/parent/Area svědectví a přesný receipt původního příkazu. Dosavadní dvojice oddělených podprocesů již nemůže složit potvrzení z různých okamžiků.
+- Krátký read-only stdin worker přijímá pouze existující přesný příkaz a vrací interní `{preview,receipt}` s přísným typovým allowlistem; žádný detail úkolu, soukromá epocha ani actor ID nejdou do veřejné HTTP odpovědi. Výsledek zůstává `{status:"committed"|"not_recorded"}` nebo stejné chyby. `not_recorded` není povolení původní příkaz znovu odeslat.
+- Před odesláním je zachována **atomická živá kontrola** session, Area role, task/parent a actor-private plánovací epochy. Zastaralý snapshot či odebrání oprávnění → fail closed. Změna osobního dne jiného úkolu tedy konzervativně zneplatní staré svědectví.
+- Worker má samostatně omezený interní výstup (32 KiB) pro dlouhá ID a revizní svědectví; ostatní write/receipt procesy zůstávají na původním 1 KiB limitu, status BE-05 na své dosavadní výjimce. Bez změny GET/PATCH CAS, jiných klientských kontraktů, aktivace stagingu, migrace, resetu či deploye.
+- Izolované syntetické regrese ověřují `not_recorded`/commit, změnu soukromé epochy po snapshotu, viewer a neautorizované přidělení, downgrade role, padělané DTO a dlouhá ID.
 
 ## Co zůstává mimo iteraci
 
