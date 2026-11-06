@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import {randomUUID} from "node:crypto";
 import {mkdtempSync,mkdirSync,readFileSync,rmSync,writeFileSync} from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -11,6 +12,11 @@ const vars=[
   "AI_EXECUTIVE_TARGET_STAGING_HTTP_ENABLED",
   "AI_EXECUTIVE_TARGET_STAGING_HTTP_MY_PLAN_DAY_ENABLED",
   "AI_EXECUTIVE_TARGET_STAGING_HTTP_MY_PLAN_SLICE_ENABLED",
+  "AI_EXECUTIVE_TARGET_STAGING_HTTP_WRITE_ENABLED",
+  "AI_EXECUTIVE_TARGET_STAGING_HTTP_TEMPORAL_ENABLED",
+  "AI_EXECUTIVE_TARGET_STAGING_HTTP_TEMPORAL_WRITE_ENABLED",
+  "AI_EXECUTIVE_TARGET_STAGING_HTTP_PERSONAL_WHEN_ENABLED",
+  "AI_EXECUTIVE_TARGET_STAGING_HTTP_PERSONAL_WHEN_WRITE_ENABLED",
   "AI_EXECUTIVE_TARGET_STAGING_DIRECTORY",
   "AI_EXECUTIVE_TARGET_STAGING_RESTORE_GENERATION",
   "AI_EXECUTIVE_TARGET_STAGING_OWNER_USER_ID",
@@ -28,11 +34,24 @@ Object.assign(process.env,{
   AI_EXECUTIVE_TARGET_STAGING_HTTP_ENABLED:"true",
   AI_EXECUTIVE_TARGET_STAGING_HTTP_MY_PLAN_DAY_ENABLED:"true",
   AI_EXECUTIVE_TARGET_STAGING_HTTP_MY_PLAN_SLICE_ENABLED:"true",
+  AI_EXECUTIVE_TARGET_STAGING_HTTP_WRITE_ENABLED:"true",
+  AI_EXECUTIVE_TARGET_STAGING_HTTP_TEMPORAL_ENABLED:"true",
+  AI_EXECUTIVE_TARGET_STAGING_HTTP_TEMPORAL_WRITE_ENABLED:"true",
+  AI_EXECUTIVE_TARGET_STAGING_HTTP_PERSONAL_WHEN_ENABLED:"true",
+  AI_EXECUTIVE_TARGET_STAGING_HTTP_PERSONAL_WHEN_WRITE_ENABLED:"true",
 });
 const {bootstrapIsolatedTargetStore}=await import("../lib/target-store-bootstrap.ts");
 const durable=await import("../lib/target-staging-durable-session.ts");
 const {createSessionToken,sessionCookieName}=await import("../lib/auth.ts");
 const {GET}=await import("../app/api/target-staging/my-plan/slice/route.ts");
+const {GET:statusGET,PATCH:statusPATCH}=
+  await import("../app/api/target-staging/task-temporal/status/route.ts");
+const {POST:statusReceiptPOST}=
+  await import("../app/api/target-staging/task-temporal/status/receipt/route.ts");
+const {GET:whenGET,PATCH:whenPATCH}=
+  await import("../app/api/target-staging/task-temporal/personal-when/command/route.ts");
+const {POST:whenReceiptPOST}=
+  await import("../app/api/target-staging/task-temporal/personal-when/command/receipt/route.ts");
 let serial=0;const fixtures=[];
 after(()=>{
   for(const f of fixtures)f.db.close();
@@ -118,6 +137,146 @@ async function ok(request){
   }
   return body;
 }
+
+/** BE-09: exercise real HTTP route handlers with the SAME durable actor
+ * and isolated SQLite store; no mocks, external server or production data. */
+const statusURL="http://localhost:3001/api/target-staging/task-temporal/status";
+const whenURL="http://localhost:3001/api/target-staging/task-temporal/personal-when/command";
+async function writePreview(handler,url,taskId,cookie){
+  const response=await handler(new Request(url+"?taskId="+encodeURIComponent(taskId),{
+    headers:{cookie,"x-forwarded-for":"10.99.8.64"},
+  }));
+  const body=await response.json();
+  assert.equal(response.status,200,JSON.stringify(body));
+  assert.equal(response.headers.get("cache-control"),"no-store");
+  return body;
+}
+function writeCommand(handler,url,command,cookie){
+  return handler(new Request(url,{
+    method:handler===statusPATCH||handler===whenPATCH?"PATCH":"POST",
+    headers:{
+      cookie,"x-forwarded-for":"10.99.8.64",
+      "content-type":"application/json",
+      origin:"http://localhost:3001","x-lumi-target-protocol":"1",
+    },
+    body:JSON.stringify(command),
+  }));
+}
+async function accepted(handler,url,command,cookie,expected){
+  const response=await writeCommand(handler,url,command,cookie);
+  const body=await response.json();
+  assert.equal(response.status,200,JSON.stringify(body));
+  assert.equal(response.headers.get("cache-control"),"no-store");
+  assert.deepEqual(body,expected);
+}
+const unique=page=>new Set([...ids(page.today),...ids(page.tomorrow)]).size===
+  ids(page.today).length+ids(page.tomorrow).length;
+
+test("BE-09 My Plan -> private whenOn -> status -> receipts -> fresh Undo stays coherent",async()=>{
+  const f=fixture(),bob=login(f,"bob"),carol=login(f,"carol");
+  const initial=await ok(get(query(),bob));
+  assert.deepEqual(ids(initial.today),["b-overdue","b-today"]);
+  assert.deepEqual(ids(initial.tomorrow),["b-next","b-next2","s-bob"]);
+  const cursor=(await ok(get(query({limit:"1"}),bob))).nextCursor;
+  assert.ok(cursor);
+
+  // Scheduling belongs to Bob, not the shared dueOn; it moves the task
+  // from Tomorrow into Today under a fresh private epoch and CAS.
+  const {whenOn:oldWhen,...whenCAS}=await writePreview(
+    whenGET,whenURL,"b-next",bob);
+  assert.equal(oldWhen,null);
+  const schedule={...whenCAS,taskId:"b-next",whenOn:"2026-11-04",
+    commandId:randomUUID()};
+  await accepted(whenPATCH,whenURL,schedule,bob,{ok:true});
+  await accepted(whenReceiptPOST,whenURL+"/receipt",schedule,bob,
+    {status:"committed"});
+  assert.equal((await get(query({limit:"1",cursor}),bob)).status,409);
+  const moved=await ok(get(query(),bob));
+  assert.deepEqual(ids(moved.today),["b-overdue","b-next","b-today"]);
+  assert.deepEqual(ids(moved.tomorrow),["b-next2","s-bob"]);
+  assert.equal(unique(moved),true);
+
+  // Completion is a distinct shared task write, not a private plan write.
+  const statusCAS=await writePreview(statusGET,statusURL,"s-bob",bob);
+  const complete={...statusCAS,taskId:"s-bob",status:"completed",
+    commandId:randomUUID()};
+  await accepted(statusPATCH,statusURL,complete,bob,{ok:true});
+  await accepted(statusReceiptPOST,statusURL+"/receipt",complete,bob,
+    {status:"committed"});
+  const completed=await ok(get(query(),bob));
+  assert.deepEqual(ids(completed.today),["b-overdue","b-next","b-today"]);
+  assert.deepEqual(ids(completed.tomorrow),["b-next2"]);
+  assert.equal(unique(completed),true);
+
+  // Undo means fresh independently authorized CAS, not old command replay.
+  const {whenOn:planned,...currentWhenCAS}=await writePreview(
+    whenGET,whenURL,"b-next",bob);
+  assert.equal(planned,"2026-11-04");
+  const clear={...currentWhenCAS,taskId:"b-next",whenOn:null,
+    commandId:randomUUID()};
+  assert.notEqual(clear.commandId,schedule.commandId);
+  await accepted(whenPATCH,whenURL,clear,bob,{ok:true});
+  const refreshed=await writePreview(statusGET,statusURL,"s-bob",bob);
+  const reopen={...refreshed,taskId:"s-bob",status:"open",commandId:randomUUID()};
+  assert.notEqual(reopen.commandId,complete.commandId);
+  await accepted(statusPATCH,statusURL,reopen,bob,{ok:true});
+  await accepted(statusReceiptPOST,statusURL+"/receipt",reopen,bob,
+    {status:"committed"});
+
+  const restored=await ok(get(query(),bob));
+  assert.deepEqual(ids(restored.today),ids(initial.today));
+  assert.deepEqual(ids(restored.tomorrow),ids(initial.tomorrow));
+  assert.equal(unique(restored),true);
+  // Old original receipts remain readable by the SAME current writer and
+  // cannot authorize a duplicate PATCH or leak to a different actor.
+  await accepted(whenReceiptPOST,whenURL+"/receipt",schedule,bob,
+    {status:"committed"});
+  await accepted(statusReceiptPOST,statusURL+"/receipt",complete,bob,
+    {status:"committed"});
+  assert.equal((await writeCommand(whenReceiptPOST,whenURL+"/receipt",
+    schedule,carol)).status,404);
+  assert.equal((await writeCommand(statusReceiptPOST,statusURL+"/receipt",
+    complete,carol)).status,404);
+  const outsider=await ok(get(query(),carol));
+  assert.deepEqual(ids(outsider.today),["c-private"]);
+  assert.deepEqual(ids(outsider.tomorrow),[]);
+  assert.ok(!JSON.stringify(outsider).includes("Bob"));
+  assert.equal(readFileSync(path.join(legacy,"sentinel"),"utf8"),"unchanged");
+});
+
+test("BE-09 role and session revocation invalidate old My Plan cursor and write receipts",async()=>{
+  const f=fixture(),bob=login(f,"bob");
+  const cursor=(await ok(get(query({limit:"1"}),bob))).nextCursor;
+  assert.ok(cursor);
+  const savedStatus={...await writePreview(statusGET,statusURL,"s-bob",bob),
+    taskId:"s-bob",status:"completed",commandId:randomUUID()};
+  const {whenOn:ignored,...whenCAS}=await writePreview(
+    whenGET,whenURL,"s-bob",bob);
+  const savedWhen={...whenCAS,taskId:"s-bob",whenOn:"2026-11-04",
+    commandId:randomUUID()};
+  // Assignment must be revoked before role downgrade (SQLite invariant).
+  f.db.prepare("UPDATE tasks SET assignee_user_id=NULL WHERE id='s-bob'").run();
+  f.db.prepare("UPDATE area_members SET role='viewer' WHERE area_id='family-area' AND user_id='bob'").run();
+  assert.equal((await get(query({limit:"1",cursor}),bob)).status,409);
+  const fresh=await ok(get(query(),bob));
+  assert.deepEqual(ids(fresh.tomorrow),["b-next","b-next2"]);
+  for(const [handler,url] of [[statusGET,statusURL],[whenGET,whenURL]]){
+    const response=await handler(new Request(url+"?taskId=s-bob",{
+      headers:{cookie:bob},
+    }));
+    assert.equal(response.status,404);
+  }
+  assert.equal((await writeCommand(statusReceiptPOST,statusURL+"/receipt",
+    savedStatus,bob)).status,404);
+  assert.equal((await writeCommand(whenReceiptPOST,whenURL+"/receipt",
+    savedWhen,bob)).status,404);
+  assert.equal(durable.revokeAllDurableTargetStagingSessionsForUser(f.store,"bob").ok,true);
+  assert.equal((await get(query(),bob)).status,401);
+  const denied=await whenGET(new Request(whenURL+"?taskId=b-next",{
+    headers:{cookie:bob},
+  }));
+  assert.equal(denied.status,401);
+});
 
 test("independent default-off flags, owner cookie, strict request fields",async()=>{
   fixture();
