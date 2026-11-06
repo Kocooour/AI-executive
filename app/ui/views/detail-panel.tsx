@@ -195,7 +195,11 @@ export function DetailPanel({ app }: { app: LumiApp }) {
   // Each selected entity owns its focus origin. A stale opener from task A
   // must never be reused when task B is opened from another surface.
   const returnFocusRef = useRef<InspectorPendingReturn | null>(null);
+  const lastFocusScopeRef = useRef({ workspaceId: app.activeWorkspaceId, view });
   useEffect(() => {
+    const previousScope = lastFocusScopeRef.current;
+    const scopeChanged = previousScope.workspaceId !== app.activeWorkspaceId || previousScope.view !== view;
+    lastFocusScopeRef.current = { workspaceId: app.activeWorkspaceId, view };
     const active = document.activeElement;
     returnFocusRef.current = advanceInspectorReturnFocus(
       returnFocusRef.current,
@@ -204,6 +208,7 @@ export function DetailPanel({ app }: { app: LumiApp }) {
       inspectorRef.current,
       app.activeWorkspaceId,
       view,
+      scopeChanged,
     );
   }, [selected?.id, app.activeWorkspaceId, view]);
   return (

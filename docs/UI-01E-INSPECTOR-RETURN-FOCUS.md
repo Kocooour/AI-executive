@@ -6,7 +6,7 @@ Dosavadní `DetailPanel` si držel jediný DOM element `returnFocusRef`. Když u
 
 ## UI-01e
 
-- Při každé nové inspektované entitě nebo změně aktivního pohledu/prostoru se stará reference bezpodmínečně vymaže. Nový fokusový původ vznikne jen tehdy, když je aktivní tlačítko `.taskRowOpen` **skutečně uvnitř řádku `[data-drop-entity]` pro právě vybranou entitu**.
+- Při každé nové inspektované entitě nebo změně aktivního pohledu/prostoru se stará reference bezpodmínečně vymaže. Změna prostoru/pohledu **zakáže nové zachycení v daném přechodu**, i když je předchozí `.taskRowOpen` stále aktivní a ID výběru se nezmění. Nový fokusový původ vznikne jen při novém otevření ve stejném kontextu a jen tehdy, když je aktivní tlačítko `.taskRowOpen` **skutečně uvnitř řádku `[data-drop-entity]` pro právě vybranou entitu**.
 - Původ nese ID entity, prostor a pohled, nikoliv její text či obecný DOM selektor.
 - Při zavření se reference spotřebuje **právě jednou**, i když je prvek odstraněn; návrat je povolen jen při stále připojeném, vykresleném a identickém řádku v původním prostoru/pohledu.
 - Přímé URL, otevření bez identifikovatelného řádku, přepnutí jiného úkolu nebo prostoru a odstraněný řádek nevyvolávají chybný fokus. Klávesnicové otevření ze správného řádku a zavření/Zpět zachovávají dosavadní vhodný návrat.
@@ -14,4 +14,4 @@ Dosavadní `DetailPanel` si držel jediný DOM element `returnFocusRef`. Když u
 
 ## Kontrola
 
-Cílené Node unit testy nyní **vykonávají skutečný životní cyklus** `advanceInspectorReturnFocus` s DOM doubles: A→zavření→B→zavření, shodu ID, změnu pohledu/prostoru, odstraněný/skrytý/převázaný prvek a jediný platný návrat. Nejde pouze o regex kontroly zdrojového kódu. `e2e/inspector-return-focus-ui01e.spec.ts` navíc ověřuje skutečné React události a fokus v Chromium (včetně výběru B kliknutím do nefokusovatelného řádku a přímého odkazu); spouští se v předprodukční browserové bráně. PR checks nadále zahrnují typecheck, cílené unit testy a build; manuální VoiceOver zůstává součástí předprodukční přístupnostní kontroly.
+Cílené Node unit testy nyní **vykonávají skutečný životní cyklus** `advanceInspectorReturnFocus` s DOM doubles: A→zavření→B→zavření, shodu ID, změnu pohledu/prostoru, odstraněný/skrytý/převázaný prvek a jediný platný návrat. Nejde pouze o regex kontroly zdrojového kódu. `e2e/inspector-return-focus-ui01e.spec.ts` navíc ověřuje skutečné React události a fokus v Chromium (včetně přímého přepnutí A→B bez zavření A, výběru B kliknutím do nefokusovatelného řádku a přímého odkazu); spouští se v předprodukční browserové bráně. PR checks nadále zahrnují typecheck, cílené unit testy a build; manuální VoiceOver zůstává součástí předprodukční přístupnostní kontroly.

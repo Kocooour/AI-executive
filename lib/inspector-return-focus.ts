@@ -49,9 +49,13 @@ export function advanceInspectorReturnFocus(
   inspector: HTMLElement | null,
   workspaceId: string,
   view: string,
+  scopeChanged: boolean,
 ): InspectorPendingReturn | null {
   if (selectedId !== null) {
-    // Every selection or scope transition invalidates the previous opener.
+    // A scope transition must invalidate the opener even if the same row button
+    // remains focused and the selected entity ID is unchanged.
+    if (scopeChanged) return null;
+    // A new selection never inherits the earlier entity's opener.
     const rowEntityId = active?.closest<HTMLElement>("[data-drop-entity]")?.dataset.dropEntity ?? null;
     if (!active?.matches(".taskRowOpen") || !inspectorOpenerMatchesSelection(selectedId, rowEntityId)) return null;
     inspector?.focus();

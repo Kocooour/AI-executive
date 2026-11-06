@@ -100,3 +100,40 @@ test("UI-01e: keyboard opener is restored once and direct link cannot borrow its
     await removeInboxPair(page, names);
   }
 });
+
+test("UI-01e: switching A directly to B without closing A cannot steal B's return focus", async ({ page }) => {
+  const names = await createInboxPair(page);
+  try {
+    const [nameA, nameB] = names;
+    const openerA = page.locator(".taskRow[data-entity-type='task']", { hasText: nameA }).locator(".taskRowOpen");
+    const rowB = page.locator(".taskRow[data-entity-type='task']", { hasText: nameB });
+    const openerB = rowB.locator(".taskRowOpen");
+
+    // A is open and owns a keyboard-origin focus; B is selected directly
+    // from the non-focusable row, without closing A first.
+    await openerA.focus();
+    await page.keyboard.press("Enter");
+    await expect(page.locator("aside.inspectorDetail")).toBeFocused();
+    await rowB.click({ position: { x: 2, y: 2 } });
+    await expect(page.locator("aside.inspectorDetail .titleEdit")).toHaveValue(nameB);
+    await page.locator(".inspectorClose").click();
+    await expect(page.locator("aside.inspectorDetail")).toHaveCount(0);
+    await expect(openerA).not.toBeFocused();
+
+    // When B itself is opened by keyboard while A remains inspected,
+    // only B's opener may receive focus after Back/close.
+    await openerA.focus();
+    await page.keyboard.press("Enter");
+    await expect(page.locator("aside.inspectorDetail .titleEdit")).toHaveValue(nameA);
+    await openerB.focus();
+    await page.keyboard.press("Enter");
+    await expect(page.locator("aside.inspectorDetail .titleEdit")).toHaveValue(nameB);
+    await expect(page.locator("aside.inspectorDetail")).toBeFocused();
+    await page.locator(".inspectorClose").click();
+    await expect(page.locator("aside.inspectorDetail")).toHaveCount(0);
+    await expect(openerB).toBeFocused();
+    await expect(openerA).not.toBeFocused();
+  } finally {
+    await removeInboxPair(page, names);
+  }
+});

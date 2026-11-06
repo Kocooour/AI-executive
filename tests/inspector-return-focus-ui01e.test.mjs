@@ -53,15 +53,15 @@ test("UI-01e: A keyboard open, close, pointer-select B, close B never refocuses 
   const events = [];
   const a = opener("task-a", events);
   const inspector = { focus: () => events.push({ id: "inspector" }) };
-  let pending = advanceInspectorReturnFocus(null, "task-a", a, inspector, "personal", "Today");
+  let pending = advanceInspectorReturnFocus(null, "task-a", a, inspector, "personal", "Today", false);
   assert.deepEqual(events, [{ id: "inspector" }]);
-  pending = advanceInspectorReturnFocus(pending, null, inspector, null, "personal", "Today");
+  pending = advanceInspectorReturnFocus(pending, null, inspector, null, "personal", "Today", false);
   assert.equal(pending, null, "the first close must consume A's origin");
   assert.deepEqual(events.at(-1), { id: "task-a", options: { preventScroll: true } });
   // Clicking a non-focusable row leaves the previous opener in document.activeElement.
-  pending = advanceInspectorReturnFocus(pending, "task-b", a, inspector, "personal", "Today");
+  pending = advanceInspectorReturnFocus(pending, "task-b", a, inspector, "personal", "Today", false);
   assert.equal(pending, null, "A's still-active button cannot become B's opener");
-  pending = advanceInspectorReturnFocus(pending, null, inspector, null, "personal", "Today");
+  pending = advanceInspectorReturnFocus(pending, null, inspector, null, "personal", "Today", false);
   assert.equal(pending, null);
   assert.deepEqual(events, [{ id: "inspector" }, { id: "task-a", options: { preventScroll: true } }]);
 });
@@ -70,10 +70,10 @@ test("UI-01e: keyboard B takes ownership and gets exactly one return focus", () 
   const events = [];
   const b = opener("task-b", events);
   const inspector = { focus: () => events.push({ id: "inspector" }) };
-  let pending = advanceInspectorReturnFocus(null, "task-b", b, inspector, "personal", "Inbox");
+  let pending = advanceInspectorReturnFocus(null, "task-b", b, inspector, "personal", "Inbox", false);
   assert.equal(pending.origin.entityId, "task-b");
-  pending = advanceInspectorReturnFocus(pending, null, inspector, null, "personal", "Inbox");
-  pending = advanceInspectorReturnFocus(pending, null, null, null, "personal", "Inbox");
+  pending = advanceInspectorReturnFocus(pending, null, inspector, null, "personal", "Inbox", false);
+  pending = advanceInspectorReturnFocus(pending, null, null, null, "personal", "Inbox", false);
   assert.equal(pending, null);
   assert.deepEqual(events, [{ id: "inspector" }, { id: "task-b", options: { preventScroll: true } }]);
 });
@@ -87,12 +87,37 @@ test("UI-01e: selection, view and workspace changes invalidate the pending opene
     const events = [];
     const a = opener("task-a", events);
     const inspector = { focus: () => events.push({ id: "inspector" }) };
-    let pending = advanceInspectorReturnFocus(null, "task-a", a, inspector, "personal", "Today");
-    pending = advanceInspectorReturnFocus(pending, next.id, null, inspector, next.workspace, next.view);
-    assert.equal(pending, null, "no matching active row in new selection/scope");
-    pending = advanceInspectorReturnFocus(pending, null, null, null, next.workspace, next.view);
+    let pending = advanceInspectorReturnFocus(null, "task-a", a, inspector, "personal", "Today", false);
+    // Keep A's opener active: the old test used null and missed recapture.
+    const scopeChanged = next.workspace !== "personal" || next.view !== "Today";
+    pending = advanceInspectorReturnFocus(pending, next.id, a, inspector, next.workspace, next.view, scopeChanged);
+    assert.equal(pending, null, "old opener must never be captured for a new ID or scope");
+    pending = advanceInspectorReturnFocus(pending, null, null, null, next.workspace, next.view, false);
     assert.equal(pending, null);
     assert.deepEqual(events, [{ id: "inspector" }]);
+  }
+});
+
+test("UI-01e: a scope transition cannot re-arm a focused opener, even without pending origin", () => {
+  for (const scope of [
+    { workspaceId: "personal", view: "Projects" },
+    { workspaceId: "shared", view: "Today" },
+  ]) {
+    const events = [];
+    const a = opener("task-a", events);
+    const inspector = { focus: () => events.push({ id: "inspector" }) };
+    let pending = advanceInspectorReturnFocus(null, "task-a", a, inspector, "personal", "Today", false);
+    assert.equal(pending.origin.entityId, "task-a");
+    pending = advanceInspectorReturnFocus(pending, "task-a", a, inspector,
+      scope.workspaceId, scope.view, true);
+    assert.equal(pending, null, "view/workspace change invalidates the origin");
+    pending = advanceInspectorReturnFocus(null, "task-a", a, inspector,
+      scope.workspaceId, scope.view, true);
+    assert.equal(pending, null, "scope change cannot recapture even after pointer opening");
+    pending = advanceInspectorReturnFocus(pending, null, null, null,
+      scope.workspaceId, scope.view, false);
+    assert.equal(pending, null);
+    assert.deepEqual(events, [{ id: "inspector" }], "focus is never restored to the previous opener");
   }
 });
 
@@ -103,16 +128,16 @@ test("UI-01e: detached, hidden, reused or absent rows fail closed", () => {
     const events = [];
     const a = opener("task-a", events);
     const inspector = { focus: () => events.push({ id: "inspector" }) };
-    let pending = advanceInspectorReturnFocus(null, "task-a", a, inspector, "personal", "Today");
+    let pending = advanceInspectorReturnFocus(null, "task-a", a, inspector, "personal", "Today", false);
     invalidate(a);
-    pending = advanceInspectorReturnFocus(pending, null, null, null, "personal", "Today");
+    pending = advanceInspectorReturnFocus(pending, null, null, null, "personal", "Today", false);
     assert.equal(pending, null);
     assert.deepEqual(events, [{ id: "inspector" }]);
   }
   const events = [];
   const missing = opener("task-a", events, { missingRow: true });
-  assert.equal(advanceInspectorReturnFocus(null, "task-a", missing, null, "personal", "Today"), null);
-  assert.equal(advanceInspectorReturnFocus(null, "task-a", null, null, "personal", "Today"), null,
+  assert.equal(advanceInspectorReturnFocus(null, "task-a", missing, null, "personal", "Today", false), null);
+  assert.equal(advanceInspectorReturnFocus(null, "task-a", null, null, "personal", "Today", false), null,
     "direct URL has no opener");
 });
 
@@ -127,4 +152,6 @@ test("UI-01e: matching row metadata is used and no new navigation authority is i
     "existing preview-only Escape behavior and keyboard affordance are unchanged");
   assert.match(panel, /advanceInspectorReturnFocus\(/,
     "DetailPanel must actually use the lifecycle tested above");
+  assert.match(panel, /lastFocusScopeRef/,
+    "DetailPanel must detect scope transitions rather than recapturing the active row");
 });
