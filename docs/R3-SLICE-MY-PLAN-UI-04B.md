@@ -31,3 +31,10 @@ Tento řez neobsahuje celý kalendář, projektové plánování, globální `V�
 `tests/target-staging-my-plan-when-ui04b.test.mjs` a existující klientské/statusové testy kontrolují všechny brány, 44px ovládání, vzájemný mutex, klientské CAS a receipt, 503/revokaci, absence PATCH retry, datum/DST, vlastní a cizí Oblast, Undo i možnost návratu po neúspěšném načtení. Cílené testy používají mock HTTP a zdrojové invarianty Reactu, nikoli reálné browserové toky.
 
 **Před produkčním releasem:** exact-SHA browser E2E pro mobil/desktop, offline, synchronní dvojklik, změnu identity, sdílenou Area / odebrání přiřazení, restore generation a případné konflikty osobního plánu; bezpečnostní revize, backup+restore, samostatné schválení aktivace. Bez explicitního schválení se neprovádí produkční deploy, cutover, migrace ani reset.
+
+
+## Oprava P1 — synchronní ochrana toolbaru
+
+`Den`, `Moje práce` i `Aktuální den` používají společnou funkci `myPlanToolbarChangeBlocked`. Kontrola probíhá **přímo v obsluze události před `resetFeedback()`**, nejen přes `disabled`: zahrnuje poslední React stav `anyPending` a zároveň aktuální, synchronně nastavované `statusOperation.current` i `whenOperation.current`. Rychlá druhá událost ještě před překreslením proto nemůže vymazat původní osmipolový CAS/UUID, změnit filtr či den nebo zahájit jiný tok, zatímco mohl být odeslán PATCH.
+
+`tests/target-staging-my-plan-toolbar-lock-ui04b.test.mjs` ověřuje všechny tři propojené handlery a vykonává závod `whenOn PATCH in-flight → queued Area/Today event before React render → network response lost/receipt 503 → original receipt committed`. Očekává jediný PATCH, nulové resetování příkazu a možnost původní read-only receipt kontroly.
