@@ -1,7 +1,7 @@
 "use client";
 import { useLumiApp } from "./ui/use-lumi-app";
 import { mobileDesignV1Preview } from "./ui/navigation";
-import { projectSyncNoticeTitle } from "../lib/project-sync-notice";
+import { projectSyncNoticeLabel } from "../lib/project-sync-notice";
 import { AuthScreen } from "./ui/views/auth-screen";
 import { Sidebar } from "./ui/views/sidebar";
 import { Topbar } from "./ui/views/topbar";
@@ -62,7 +62,7 @@ export default function App() {
         {mobileDesignV1Preview && app.projectSyncNotices.map((notice) => (
           <div key={notice.projectId} className="navigationUnavailableNotice" role="alert"
             data-testid="project-sync-warning">
-            <p><strong>{projectSyncNoticeTitle(notice)}</strong>: {language === "cs"
+            <p><strong>{projectSyncNoticeLabel(notice, app.projectSyncNotices, language)}</strong>: {language === "cs"
               ? (notice.kind === "delete"
                 ? "Projekt byl odstraněn v tomto zařízení, ale server zatím nepotvrdil smazání. Změna může čekat na synchronizaci; zkontrolujte připojení."
                 : "Stav projektu byl změněn v tomto zařízení, ale server zatím nepotvrdil uložení. Změna může čekat na synchronizaci; zkontrolujte připojení.")
@@ -71,8 +71,8 @@ export default function App() {
                 : "The project status changed on this device, but the server has not confirmed the save. The change may be pending sync; check your connection.")}</p>
             <button type="button"
               aria-label={language === "cs"
-                ? `Skrýt upozornění projektu ${projectSyncNoticeTitle(notice)}`
-                : `Dismiss notice for project ${projectSyncNoticeTitle(notice)}`}
+                ? `Skrýt upozornění projektu ${projectSyncNoticeLabel(notice, app.projectSyncNotices, language)}`
+                : `Dismiss notice for project ${projectSyncNoticeLabel(notice, app.projectSyncNotices, language)}`}
               onClick={() => app.dismissProjectSyncNotice(notice.projectId)}>
               {language === "cs" ? "Skrýt upozornění" : "Dismiss notice"}
             </button>
