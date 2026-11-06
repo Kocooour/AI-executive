@@ -10,11 +10,10 @@ import {
 } from "../../../../../../lib/target-staging-http-identity";
 import {
   temporalStatusEnabled,temporalStatusConfig,temporalStatusUnchanged,
-  temporalStatusAnswer,temporalStatusCommand,temporalStatusWriterCanRead,
-  verifyTemporalStatusTaskLive,
+  temporalStatusAnswer,temporalStatusCommand,verifyTemporalStatusTaskLive,
 } from "../../../../../../lib/target-staging-temporal-status-http";
-import {readStagingTemporalDetailInChild} from "../../../../../../lib/target-staging-read-process";
-import {readTemporalTaskStatusReceiptInChild} from "../../../../../../lib/target-staging-temporal-status-http-process";
+import {readTemporalStatusAtomicReceiptInChild}
+  from "../../../../../../lib/target-staging-temporal-status-http-process";
 import {
   targetProtocolRefusal,legacySnapshotRefusal,resyncRequiredResponse,
   writeAreaMismatchResponse,
@@ -55,26 +54,22 @@ export async function POST(request:Request):Promise<Response> {
     if (before!=="ok") return stagingIdentityRefusal(before);
     if (!temporalStatusUnchanged(base)) return refuse(503,"Staging unavailable");
 
-    const child={...base,...stagingChildSessionConfig(identity)};
-    const detail=await readStagingTemporalDetailInChild(child,command.taskId);
-    if (!temporalStatusUnchanged(base)) return refuse(503,"Staging unavailable");
-    const result=detail?.ok===true && temporalStatusWriterCanRead(detail.detail)
-      ? await readTemporalTaskStatusReceiptInChild(child,command):null;
-    // The receipt lookup itself rechecks current write ACL on the pinned
-    // snapshot. Release also rechecks exact live task/parent/Area+session.
-    const released=detail?.ok===true
-      ? verifyTemporalStatusTaskLive(request,identity,base,detail.detail)
+    // One pinned task/Area + receipt read. A separate read could otherwise
+    // produce a confirmation for a different moment than the live guard.
+    const snapshot=await readTemporalStatusAtomicReceiptInChild(
+      {...base,...stagingChildSessionConfig(identity)},command);
+    const released=snapshot?.ok===true
+      ? verifyTemporalStatusTaskLive(request,identity,base,snapshot.detail)
       : verifyStagingIdentityBeforeRelease(request,identity,base);
-    if (released!=="ok"&&released!=="stale") return stagingIdentityRefusal(released);
-    if (!temporalStatusUnchanged(base)) return refuse(503,"Staging unavailable");
-    if (released==="stale"||detail?.ok===false||
-        (detail?.ok===true && !temporalStatusWriterCanRead(detail.detail)))
-      return refuse(404,"Not found");
-    if (!detail||!result) return refuse(503,"Staging unavailable");
-    if (result.ok===false) {
-      if (result.reason==="unavailable") return refuse(404,"Not found");
-      if (result.reason==="resync_required") return resyncRequiredResponse();
-      if (result.reason==="write_area_mismatch") return writeAreaMismatchResponse();
+    if(released!=="ok"&&released!=="stale")return stagingIdentityRefusal(released);
+    if(!temporalStatusUnchanged(base))return refuse(503,"Staging unavailable");
+    if(released==="stale"||snapshot?.ok===false)return refuse(404,"Not found");
+    if(!snapshot)return refuse(503,"Staging unavailable");
+    const result=snapshot.receipt;
+    if(result.ok===false) {
+      if(result.reason==="unavailable")return refuse(404,"Not found");
+      if(result.reason==="resync_required")return resyncRequiredResponse();
+      if(result.reason==="write_area_mismatch")return writeAreaMismatchResponse();
       return refuse(409,"Revision conflict");
     }
     return Response.json({status:result.status},{headers});
