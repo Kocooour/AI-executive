@@ -52,7 +52,7 @@ se posílat klientům**.
 
 Revize stránky zahrnuje staging restore generation,
 aktéra, Area filtr, okno a datumy, osobní epoch aktéra,
-a policy+content epochy všech jeho přispívajících Oblastí.
+a policy, task-content i project-content epochy všech jeho přispívajících Oblastí (včetně prázdných).
 Plánování jiného člověka nemění soukromou epochu aktéra;
 změny sdílených úkolů mohou revidovat Area obsah.
 Jakýkoli budoucí HTTP adaptér musí před vydáním výsledku
