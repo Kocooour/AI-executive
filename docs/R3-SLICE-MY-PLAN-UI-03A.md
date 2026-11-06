@@ -1,6 +1,6 @@
 # R3-slice / UI-03a — bezpečný klientský transport dokončení a obnovení
 
-**Stav:** samostatný neaktivní klientský transport pro první vertikální řez Mého plánu. Navazuje na sloučené BE-01/#258, BE-02/#260, UI-01/#261 a UI-02/#262. Nepřipojuje žádný klikací ovladač ani produkční store, neaktivuje žádný endpoint.
+**Původní rozsah UI-03a:** samostatný neaktivní klientský transport pro první vertikální řez Mého plánu, navazující na BE-01/#258, BE-02/#260, UI-01/#261 a UI-02/#262. V této iteraci neměl žádný klikací ovladač ani vazbu na produkční store. **Navazující [UI-03b](R3-SLICE-MY-PLAN-UI-03B.md) tento transport propojuje s výchozím vypnutým stagingovým UI**, nikoliv s produkcí.
 
 ## Přesný stávající serverový kontrakt
 
@@ -13,7 +13,7 @@
 
 ## Bezpečnostní izolace a následující UI
 
-- Nové funkce jsou pouze v `lib/target-staging-my-plan-status-client.ts`. **Žádná komponenta je nyní nevolá.** Dosavadní `/target-staging/my-plan/preview` zůstává read-only, výchozím nastavením vypnutý. Umožnění zápisu později vyžaduje další **samostatný serverový feature flag UI** a současně čtyři stávající, default-off endpoint flagy `AI_EXECUTIVE_TARGET_STAGING_HTTP_ENABLED`, `AI_EXECUTIVE_TARGET_STAGING_HTTP_WRITE_ENABLED`, `AI_EXECUTIVE_TARGET_STAGING_HTTP_TEMPORAL_ENABLED`, `AI_EXECUTIVE_TARGET_STAGING_HTTP_TEMPORAL_WRITE_ENABLED`. Client flag není zdroj ACL.
-- Budoucí UI musí ukazovat explicitní pending/offline/konflikt, přestat zobrazovat původní řádky po ztrátě identity, mít aktérovu aktuální session, autoritativně znovu načíst My Plan po potvrzené změně a u nejistých výsledků uživatelsky nabídnout pouze nové read-only ověření receipt (nikoli opakovat PATCH). Undo musí být znovu autorizováno z čerstvého preview.
+- Transport UI-03a je v `lib/target-staging-my-plan-status-client.ts`. **V původní iteraci jej žádná komponenta nevolala; UI-03b jej již používá pouze za novou, výchozím stavem vypnutou serverovou bránou.** Čtecí `/target-staging/my-plan/preview` zůstává dostupný jen po povolení svých read flags. Zápisové ovládání má **samostatný serverový feature flag UI** a současně vyžaduje čtyři stávající, default-off endpoint flagy `AI_EXECUTIVE_TARGET_STAGING_HTTP_ENABLED`, `AI_EXECUTIVE_TARGET_STAGING_HTTP_WRITE_ENABLED`, `AI_EXECUTIVE_TARGET_STAGING_HTTP_TEMPORAL_ENABLED`, `AI_EXECUTIVE_TARGET_STAGING_HTTP_TEMPORAL_WRITE_ENABLED`. Client flag není zdroj ACL.
+- Navazující [UI-03b](R3-SLICE-MY-PLAN-UI-03B.md) implementuje pending/offline/konflikt, skrytí původních řádků, opětovné autorizované čtení po potvrzené změně a manuální read-only ověření receipt bez opakování PATCH. Undo znovu ověřuje původní actor-bound receipt a poté získá čerstvý CAS preview.
 - UI-03a **nezavádí** nové serverové API, skutečný task status v read-only My Plan DTO, časované `whenOn`, kalendář ani definitivní rozhraní. Zápisy a dokončení v aplikaci zatím nejsou aktivované.
 - Test `tests/target-staging-my-plan-status-client.test.mjs` používá výhradně syntetické mock odpovědi a zahrnuje CAS, přísný protokol, chybné odpovědi a ACL, síťovou nejistotu, receipt, zákaz auto-retry, revokaci po commit, Unicode ID a čerstvé Undo. Browser E2E proběhne až jako release gate na přesném produkčním SHA; žádný deploy, DB reset, migrace či přepnutí produkce.
