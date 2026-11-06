@@ -38,3 +38,12 @@ Tento řez neobsahuje celý kalendář, projektové plánování, globální `V�
 `Den`, `Moje práce` i `Aktuální den` používají společnou funkci `myPlanToolbarChangeBlocked`. Kontrola probíhá **přímo v obsluze události před `resetFeedback()`**, nejen přes `disabled`: zahrnuje poslední React stav `anyPending` a zároveň aktuální, synchronně nastavované `statusOperation.current` i `whenOperation.current`. Rychlá druhá událost ještě před překreslením proto nemůže vymazat původní osmipolový CAS/UUID, změnit filtr či den nebo zahájit jiný tok, zatímco mohl být odeslán PATCH.
 
 `tests/target-staging-my-plan-toolbar-lock-ui04b.test.mjs` ověřuje všechny tři propojené handlery a vykonává závod `whenOn PATCH in-flight → queued Area/Today event before React render → network response lost/receipt 503 → original receipt committed`. Očekává jediný PATCH, nulové resetování příkazu a možnost původní read-only receipt kontroly.
+
+
+## Oprava P1 — potvrzené Undo při neúspěšném zápisu v jiné větvi
+
+Potvrzené Undo dokončení nebo osobního dne **nesmí zmizet pouhým zahájením jiné operace**. Rozpracovaný status/when příkaz synchronně zablokuje obě rodiny akcí a skryje staré řádky i tlačítka Undo. Při 503/offline/409/chybné odpovědi na **čtecí** CAS preflight nebo při definitivním odmítnutí 400/409 z PATCH se původní potvrzení jiné rodiny zachová ve volatilní paměti; po dalším serverově autorizovaném GET je Undo opět dostupné.
+
+Původní Undo druhé rodiny se zneplatní **pouze po skutečně potvrzeném nebo potenciálně potvrzeném** novém zápisu (výsledek `committed` nebo `uncertain`). U nejistého příkazu se zachová jen přesný aktuální CAS/UUID pro manuální read-only receipt, nikoli možnost zopakovat PATCH. Při signed-out, revokaci ACL při načítání, skrytí stránky, offline nebo změně kontextu se obě dřívější potvrzení zneplatní.
+
+`tests/target-staging-my-plan-cross-family-undo-ui04b.test.mjs` vykonává `status A committed → when B GET 503 → fresh actor list GET → original status Undo receipt/CAS` i `when A committed → status B GET 503 → fresh list GET → original when Undo receipt/CAS`, bez nového PATCH. Ověřuje 400/409 oproti committed/uncertain pro obě transportní rodiny a současně kontroluje, že při rozpracované druhé operaci nejsou tlačítka Undo vykreslená. Tyto testy nenahrazují browser E2E nad release SHA.
