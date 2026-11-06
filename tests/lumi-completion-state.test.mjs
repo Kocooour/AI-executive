@@ -126,9 +126,13 @@ test("UI-04b: desktop Projects keep accessible Area blocks in every preview them
   assert.match(css,/@media \(min-width: 701px\)/);
   assert.match(css,/\.projectGroups\[data-projects-preview="lumi-v1"\] > \.projectGroup \{/);
   assert.match(css,/border: 1px solid var\(--v1-neutral-stroke\);/);
+  // Check the *whole* selector: the previous test passed despite a
+  // weaker tone selector losing the CSS cascade to --v1-area-color default.
+  const group = '.appShell[data-design-system="lumi-v1"] .projectGroups[data-projects-preview="lumi-v1"] > .projectGroup';
+  assert.ok(css.includes(`${group} {\n    --v1-area-color: var(--v1-surface-subtle);`));
   for(const area of ["personal","work","family","extra-a","extra-b","extra-c"]){
-    assert.ok(css.includes(`[data-preview-area-tone="${area}"] { --v1-area-color: var(--v1-area-${area}); }`),
-      `desktop missing ${area} Area tone`);
+    assert.ok(css.includes(`${group}[data-preview-area-tone="${area}"] { --v1-area-color: var(--v1-area-${area}); }`),
+      `desktop ${area} tone must override the default --v1-area-color selector`);
   }
   assert.match(css,/html\[data-theme="dark"\] \.appShell\[data-design-system="lumi-v1"\] \.projectGroups/);
   assert.match(css,/html:not\(\[data-theme\]\) \.appShell\[data-design-system="lumi-v1"\] \.projectGroups/);
