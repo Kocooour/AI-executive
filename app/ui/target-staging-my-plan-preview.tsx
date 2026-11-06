@@ -110,6 +110,9 @@ export function TargetStagingMyPlanPreview({
   // A command needed for read-only reconciliation is kept in volatile memory,
   // never in React-rendered state, browser storage, or a background queue.
   const uncertainCommand=useRef<MyPlanStatusCommand|null>(null);
+  // The previous command's actor-bound receipt must STILL be visible to the
+  // current identity before offering its reversal, even in a shared Area.
+  const confirmedCommand=useRef<MyPlanStatusCommand|null>(null);
   const statusOperation=useRef<StatusOperation|null>(null);
   const privacyEpoch=useRef(0);
   const requestSequence=useRef(0);
@@ -145,6 +148,7 @@ export function TargetStagingMyPlanPreview({
       else{
         if(result.reason==="signed-out"){
           uncertainCommand.current=null;
+          confirmedCommand.current=null;
           setAction({kind:"idle"});
         }
         setState({status:"error",reason:result.reason});
@@ -169,6 +173,7 @@ export function TargetStagingMyPlanPreview({
    * Receipt may be checked only after a fresh authorized My Plan read. */
   function privacyChange(){
     privacyEpoch.current++;
+    confirmedCommand.current=null;
     statusOperation.current?.controller.abort();
     setAction(old=>old.kind==="committed"||old.kind==="error"
       ?{kind:"idle"}
@@ -267,13 +272,40 @@ export function TargetStagingMyPlanPreview({
     if(status==="open"&&
       !(action.kind==="committed"&&action.status==="completed"&&
         action.taskId===task.taskId&&action.areaId===task.areaId))return;
+    const prior= status==="open"?confirmedCommand.current:null;
+    if(status==="open"&&(!prior||prior.taskId!==task.taskId||
+      prior.writeAreaId!==task.areaId||prior.status!=="completed"))return;
     const op:StatusOperation={
       controller:new AbortController(),privacyEpoch:privacyEpoch.current,command:null,
     };
     statusOperation.current=op; // Synchronous mutex against double clicks.
     uncertainCommand.current=null;
+    confirmedCommand.current=null;
     setAction({kind:"pending"});
     invalidate("stale",true); // No stale open row during an uncertain PATCH.
+    // Re-read the ORIGINAL actor-bound completion receipt before Undo.
+    // A different session/actor must not inherit an old actor's Undo affordance.
+    if(prior){
+      const receipt=await checkMyPlanStatusReceipt(prior,fetch,op.controller.signal);
+      if(statusOperation.current!==op)return;
+      if(op.privacyEpoch!==privacyEpoch.current){
+        statusOperation.current=null;
+        setAction({kind:"idle"});
+        return;
+      }
+      if(receipt.kind!=="committed"){
+        statusOperation.current=null;
+        if(receipt.kind==="unknown"&&receipt.reason==="signed-out"){
+          setAction({kind:"idle"});
+          invalidate("signed-out");
+        }else{
+          setAction({kind:"error",reason:receipt.kind==="not-recorded"
+            ?"stale":receipt.reason});
+          refreshAfterStatus();
+        }
+        return;
+      }
+    }
     const prepared=await prepareMyPlanStatus({
       taskId:task.taskId,areaId:task.areaId,status,signal:op.controller.signal,
     });
@@ -296,6 +328,7 @@ export function TargetStagingMyPlanPreview({
       return;
     }
     if(result.kind==="committed"){
+      confirmedCommand.current=result.command;
       setAction({kind:"committed",taskId:task.taskId,areaId:task.areaId,status});
     }else if(result.kind==="uncertain"){
       uncertainCommand.current=result.command;
@@ -329,6 +362,7 @@ export function TargetStagingMyPlanPreview({
     }
     if(receipt.kind==="committed"){
       uncertainCommand.current=null;
+      confirmedCommand.current=command;
       setAction({kind:"committed",taskId:command.taskId,
         areaId:command.writeAreaId,status:command.status});
       refreshAfterStatus();
@@ -341,6 +375,7 @@ export function TargetStagingMyPlanPreview({
 
   function resetFeedback(){
     uncertainCommand.current=null;
+    confirmedCommand.current=null;
     setAction({kind:"idle"});
   }
   const actionPending=action.kind==="pending"||action.kind==="checking"||
