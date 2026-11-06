@@ -3186,7 +3186,8 @@ export function useLumiApp() {
     await waitForProjectWrites(projectId);
     return db.transaction("r", db.entities, db.relations, async () => {
       const current = await db.entities.get(projectId);
-      assertPreviewProjectMutation(current as Entity, current);
+      if (!current) throw new Error("project_preview_changed");
+      assertPreviewProjectMutation(current, current);
       const dependents = await projectPreviewDependencies(current);
       return { project: current, dependents: dependents.signature, openTasks: dependents.openTaskCount };
     });
