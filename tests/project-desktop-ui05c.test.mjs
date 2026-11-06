@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
-import { projectPreviewCanToggle, projectPreviewCanCommit } from "../lib/project-list-preview.ts";
+import { projectPreviewCanToggle, projectPreviewCanCommit, projectPreviewDependents, waitForProjectPreviewWrites } from "../lib/project-list-preview.ts";
 
 const read = (path) => readFileSync(new URL(path, import.meta.url), "utf8");
 const page = read("../app/ui/views/project-page.tsx");
@@ -37,7 +37,7 @@ test("UI-05c: desktop v1 project completion uses the same confirmed, guarded pat
   assert.match(page, /const confirmed = await askConfirm\(/);
   assert.match(page, /Dokončení projektu stav těchto úkolů nezmění/);
   assert.match(page, /if \(!confirmed\) return/);
-  assert.match(page, /await setProjectStatus\(project, completed \? "active" : "completed", project\)/);
+  assert.match(page, /await setProjectStatus\(snapshot\.project, completed \? "active" : "completed", snapshot\)/);
   assert.match(page, /function reportPreviewActionError\(error: unknown\)/);
   assert.doesNotMatch(page, /mobileToggleStatus/);
   const a = { type: "project", status: "active", workspaceId: "personal" };
@@ -55,9 +55,9 @@ test("UI-05c: preview cannot silently complete child tasks or weaken the legacy 
   const setter = read("../app/ui/use-lumi-app.tsx");
   const projectHelper = read("../lib/project-list-preview.ts");
   assert.match(page, /const openTasks = tasks\.filter\(\(task\) => task\.status === "open"\)/);
-  assert.match(page, /const count = openTasks\.length/);
+  assert.match(page, /const count = snapshot\.openTasks/);
   assert.match(page, /Completing it will leave those tasks open/);
-  assert.match(page, /await setProjectStatus\(project, completed \? "active" : "completed", project\)/);
+  assert.match(page, /await setProjectStatus\(snapshot\.project, completed \? "active" : "completed", snapshot\)/);
   assert.match(projectHelper, /activeWorkspaceId === project\.workspaceId/);
   assert.match(setter, /async function setProjectStatus\(/);
   assert.doesNotMatch(page, /await done\(task\.id\)/);
@@ -107,13 +107,61 @@ test("UI-05c: current snapshot rejects mid-confirm status, revision, scope, held
 
 test("UI-05c: status and delete validate inside their IndexedDB write transactions", () => {
   const setter = read("../app/ui/use-lumi-app.tsx");
-  assert.match(setter, /async function setProjectStatus\(project: Entity, status: "active" \| "completed", expectedPreview\?: Entity\)/);
-  assert.match(setter, /await db\.transaction\("rw", db\.entities, async \(\) => \{\s*const current = await db\.entities\.get\(project\.id\);\s*assertPreviewProjectMutation\(expectedPreview, current\);/);
-  assert.match(setter, /await db\.transaction\("rw", db\.entities, db\.relations, async \(\) => \{\s*if \(expectedPreview\) \{\s*const current = await db\.entities\.get\(e\.id\);\s*assertPreviewProjectMutation\(expectedPreview, current\);/);
+  assert.match(setter, /async function setProjectStatus\(project: Entity, status: "active" \| "completed", expectedPreview\?: ProjectPreviewActionSnapshot\)/);
+  assert.match(setter, /await db\.transaction\("rw", db\.entities, db\.relations, async \(\) => \{\s*const current = await db\.entities\.get\(project\.id\);\s*assertPreviewProjectMutation\(expectedPreview\.project, current\);/);
+  assert.match(setter, /await db\.transaction\("rw", db\.entities, db\.relations, async \(\) => \{\s*if \(expectedPreview\) \{\s*const current = await db\.entities\.get\(e\.id\);\s*assertPreviewProjectMutation\(expectedPreview\.project, current\);/);
   assert.match(setter, /projectPreviewCanCommit\(expected, current, activeWorkspaceRef\.current, blocked\)/);
-  assert.match(setter, /projectPreviewCanCommit\(expected, visible, activeWorkspaceRef\.current, blocked\)/);
+  assert.match(setter, /visible\.workspaceId !== expected\.workspaceId/);
   assert.match(setter, /openProjectIdRef\.current !== expected\.id/);
-  assert.match(page, /await remove\(project, project\)/);
+  assert.match(page, /await remove\(snapshot\.project, snapshot\)/);
   assert.match(page, /actionInFlight\.current = true/);
   assert.match(page, /reportPreviewActionError\(error\)/);
+});
+
+test("UI-05c: completing after title/context blur waits for the local autosaves", async () => {
+  const page = read("../app/ui/views/project-page.tsx");
+  const ctx = read("../app/ui/views/project-context.tsx");
+  const app = read("../app/ui/use-lumi-app.tsx");
+  assert.match(page, /trackProjectWrite\(project\.id, rename\(project, next\)\)/);
+  assert.match(ctx, /app\.trackProjectWrite\(project\.id, run\)/);
+  assert.match(page, /const snapshot = await projectPreviewActionSnapshot\(project\.id\)/g);
+  assert.match(app, /await waitForProjectWrites\(projectId\);/);
+  let resolveRename, resolveContext;
+  const rename = new Promise((resolve) => { resolveRename = resolve; });
+  const context = new Promise((resolve) => { resolveContext = resolve; });
+  const outstanding = new Set([rename, context]);
+  const settle = (promise) => promise.then(() => outstanding.delete(promise));
+  rename.then(() => outstanding.delete(rename));
+  context.then(() => outstanding.delete(context));
+  let prepared = false;
+  const preparing = waitForProjectPreviewWrites(() => [...outstanding]).then(() => { prepared = true; });
+  await Promise.resolve();
+  assert.equal(prepared, false);
+  resolveRename();
+  await rename;
+  await Promise.resolve();
+  assert.equal(prepared, false, "context save also has to finish");
+  resolveContext();
+  await preparing;
+  assert.equal(prepared, true);
+});
+
+test("UI-05c: task, note, relation and status changes invalidate a pending confirmation", () => {
+  const project = { id: "p", type: "project", title: "Project", workspaceId: "personal", status: "active", properties: {} };
+  const task = { id: "t", type: "task", workspaceId: "personal", status: "open", properties: {} };
+  const relation = { id: "r", sourceEntityId: "t", targetEntityId: "p",
+    workspaceId: "personal", relationType: "belongs_to_project", createdAt: 1 };
+  const initial = projectPreviewDependents(project, [task], [relation]);
+  assert.equal(initial.openTaskCount, 1);
+  assert.notEqual(projectPreviewDependents(project, [{ ...task, status: "completed" }], [relation]).signature, initial.signature);
+  assert.notEqual(projectPreviewDependents(project, [task, { ...task, id: "new" }],
+    [relation, { ...relation, id: "r2", sourceEntityId: "new" }]).signature, initial.signature);
+  assert.notEqual(projectPreviewDependents(project, [task], []).signature, initial.signature);
+  assert.notEqual(projectPreviewDependents(project, [task, { ...task, id: "n", type: "note", status: "active" }],
+    [relation, { ...relation, id: "r3", sourceEntityId: "n" }]).signature, initial.signature);
+  assert.notEqual(projectPreviewDependents(project, [task, { ...task, id: "legacy", properties: { projectId: "p" } }],
+    [relation]).signature, initial.signature);
+  const setter = read("../app/ui/use-lumi-app.tsx");
+  assert.match(setter, /if \(\(await projectPreviewDependencies\(current\)\)\.signature !== expectedPreview\.dependents\)/g);
+  assert.match(setter, /await db\.transaction\("rw", db\.entities, db\.relations, async \(\) => \{/g);
 });
