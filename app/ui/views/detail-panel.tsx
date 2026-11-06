@@ -134,7 +134,9 @@ export function DetailPanel({ app }: { app: LumiApp }) {
     workSession,
   } = app;
   const source = selected?.type === "task" ? gmailSource(selected.properties.mailSource) : null;
-  const [mobileViewport, setMobileViewport] = useState(false);
+  // Unknown until matchMedia runs. Never show desktop-only actions during the
+  // initial mobile hydration frame before the actual viewport is known.
+  const [mobileViewport, setMobileViewport] = useState<boolean | null>(null);
   const [taskMoreOpen, setTaskMoreOpen] = useState(false);
   const lastMobileMatch = useRef<boolean | null>(null);
   const resizeFocus = useRef<{ element: HTMLElement; start: number | null; end: number | null } | null>(null);
@@ -178,7 +180,7 @@ export function DetailPanel({ app }: { app: LumiApp }) {
   const mobileTaskPreview = Boolean(mobileDesignV1Preview && mobileViewport && selectedTask);
   // UI-06c: the Mac preview uses the same square completion affordance as the
   // phone, while retaining the existing desktop field layout and write guards.
-  const desktopTaskPreview = Boolean(mobileDesignV1Preview && !mobileViewport && selectedTask);
+  const desktopTaskPreview = Boolean(mobileDesignV1Preview && mobileViewport === false && selectedTask);
   const taskPreviewDueTone = selectedTask ? taskDueTone(selectedTask, today) : "";
   const taskPreviewMayToggle = taskPreviewCanToggle(selectedTask, app.activeWorkspaceId,
     Boolean(selectedTask && (isFallbackArea(selectedTask, app.items) ||
