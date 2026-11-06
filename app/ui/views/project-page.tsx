@@ -51,6 +51,7 @@ export function ProjectPage({ app, project, renderRow, reorderPreview = false, o
   const [mobileViewport, setMobileViewport] = useState(false);
   const [actionBusy, setActionBusy] = useState(false);
   const [actionError, setActionError] = useState("");
+  const actionInFlight = useRef(false);
   useEffect(() => {
     if (!mobileDesignV1Preview) return;
     const query = window.matchMedia("(max-width: 700px)");
@@ -65,27 +66,50 @@ export function ProjectPage({ app, project, renderRow, reorderPreview = false, o
     isHeld || unsent.has(project.id) || entityConflicts(project).length > 0 || actionBusy);
   // The same confirmation and sync/held/conflict guard applies to desktop
   // and phone previews. Legacy production controls remain unchanged.
+  function reportPreviewActionError(error: unknown) {
+    const stale = error instanceof Error && error.message === "project_preview_changed";
+    setActionError(stale
+      ? (language === "cs" ? "Projekt se mezitím změnil. Zkontrolujte aktuální stav a akci zopakujte." :
+        "The project changed during confirmation. Review its current state and try again.")
+      : (language === "cs" ? "Akci se nepodařilo synchronizovat. Zkontrolujte stav projektu." :
+        "Could not synchronize this action. Check the project status."));
+  }
+  // Lock both controls during confirmation; the store guards again inside the transaction.
   async function previewToggleStatus() {
-    if (!canChangeStatus) return;
-    const completed = project.status === "completed";
-    const count = openTasks.length;
-    const notice = !completed && count > 0
-      ? language === "cs"
-        ? `Projekt má ${count} ${count === 1 ? "otevřený úkol" : count < 5 ? "otevřené úkoly" : "otevřených úkolů"}. Dokončení projektu stav těchto úkolů nezmění.`
-        : `This project has ${count} open ${count === 1 ? "task" : "tasks"}. Completing it will leave those tasks open.`
-      : "";
-    const confirmed = await askConfirm({
-      title: completed ? (language === "cs" ? "Znovu otevřít projekt?" : "Reopen project?")
-        : (language === "cs" ? "Dokončit projekt?" : "Complete project?"),
-      message: `${project.title}${notice ? `\n\n${notice}` : ""}`,
-      confirmLabel: tr(completed ? "reopen" : "complete"),
-    });
-    if (!confirmed) return;
+    if (!canChangeStatus || actionInFlight.current) return;
+    actionInFlight.current = true;
     setActionBusy(true); setActionError("");
-    try { await setProjectStatus(project, completed ? "active" : "completed"); }
-    catch { setActionError(language === "cs" ? "Změnu se nepodařilo synchronizovat. Zkontrolujte stav projektu." :
-      "Could not synchronize this change. Check the project status."); }
-    finally { setActionBusy(false); }
+    try {
+      const completed = project.status === "completed";
+      const count = openTasks.length;
+      const notice = !completed && count > 0
+        ? language === "cs"
+          ? `Projekt má ${count} ${count === 1 ? "otevřený úkol" : count < 5 ? "otevřené úkoly" : "otevřených úkolů"}. Dokončení projektu stav těchto úkolů nezmění.`
+          : `This project has ${count} open ${count === 1 ? "task" : "tasks"}. Completing it will leave those tasks open.`
+        : "";
+      const confirmed = await askConfirm({
+        title: completed ? (language === "cs" ? "Znovu otevřít projekt?" : "Reopen project?")
+          : (language === "cs" ? "Dokončit projekt?" : "Complete project?"),
+        message: `${project.title}${notice ? `\n\n${notice}` : ""}`,
+        confirmLabel: tr(completed ? "reopen" : "complete"),
+      });
+      if (!confirmed) return;
+      await setProjectStatus(project, completed ? "active" : "completed", project);
+    } catch (error) { reportPreviewActionError(error); }
+    finally { actionInFlight.current = false; setActionBusy(false); }
+  }
+  async function previewDeleteProject() {
+    if (!canChangeStatus || actionInFlight.current) return;
+    actionInFlight.current = true;
+    setActionBusy(true); setActionError("");
+    try {
+      const confirmed = await askConfirm({ title: tr("projectDeleteTitle"),
+        message: tr("projectDeleteConfirm").replace("{title}", () => project.title),
+        confirmLabel: tr("delete"), danger: true });
+      if (!confirmed) return;
+      await remove(project, project);
+    } catch (error) { reportPreviewActionError(error); }
+    finally { actionInFlight.current = false; setActionBusy(false); }
   }
   const projectActions = <div className="projectActions" data-project-actions>
     <button type="button" disabled={projectDetailPreview && !canChangeStatus}
@@ -97,6 +121,7 @@ export function ProjectPage({ app, project, renderRow, reorderPreview = false, o
     <button type="button" className="danger"
       disabled={projectDetailPreview && !canChangeStatus}
       onClick={async () => {
+        if (projectDetailPreview) { await previewDeleteProject(); return; }
         if (await askConfirm({ title: tr("projectDeleteTitle"),
           message: tr("projectDeleteConfirm").replace("{title}", () => project.title),
           confirmLabel: tr("delete"), danger: true })) void remove(project);
