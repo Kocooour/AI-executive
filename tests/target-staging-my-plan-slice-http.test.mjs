@@ -124,8 +124,12 @@ function query(extra={}){
   return "?"+new URLSearchParams({evaluationDate:"2026-11-04",...extra}).toString();
 }
 function get(q=query(),cookie=owner()){
+  // Each isolated SQLite fixture simulates an independent proxy client.
+  // Preserve the real 60/10min limiter within a fixture while preventing
+  // unrelated tests in this same Node process from exhausting one bucket.
+  const fixtureIp="10.99.8."+Math.max(1,serial);
   return GET(new Request(base+q,{headers:{
-    cookie,"x-forwarded-for":"10.99.8.1",
+    cookie,"x-forwarded-for":fixtureIp,
   }}));
 }
 const ids=section=>section.tasks.map(x=>x.taskId);
