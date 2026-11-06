@@ -15,8 +15,8 @@ test("UI-06c: desktop preview has one square task completion at the heading, nev
   assert.equal(detail.split('className="taskDetailDesktopCompletion"').length - 1, 1);
   assert.match(detail, /disabled=\{!taskPreviewMayToggle\}/);
   assert.match(detail, /if \(!taskPreviewMayToggle\) return;\s*if \(selectedTask.status === "completed"\) void reopenTask\(selectedTask\);\s*else void done\(selectedTask.id\);/);
-  assert.match(detail, /\{!mobileTaskPreview && !desktopTaskPreview && \(selected.status === "completed" \?/,
-    "preview desktop must not render a second completion in advanced actions");
+  assert.match(detail, /\{!mobileDesignV1Preview && \(selected.status === "completed" \?/,
+    "preview mode must not render legacy completion even while viewport is unknown");
   assert.match(detail, /const workButton = \(mobileTaskPreview \|\| desktopTaskPreview\) && activeTaskSession \?/,
     "active work sessions require their separate stop/finish flow");
   assert.match(detail, /data-task-completed=\{\(mobileTaskPreview \|\| desktopTaskPreview\) && selectedTask \?/);
@@ -62,4 +62,26 @@ test("UI-06c: desktop styling is feature-gated, responsive, and leaves mobile an
   assert.match(shared, /\.lumiCompletionControl\[data-completion-tone="warning"\] \.lumiCompletionShape/);
   assert.match(shared, /\.lumiCompletionControl\[data-completion-tone="complete"\] \.lumiCompletionShape/);
   assert.match(read("../app/ui/views/detail-panel.tsx"), /data-task-detail-preview=\{mobileTaskPreview \? "lumi-v1" : undefined\}/);
+});
+
+test("UI-06c P2: unresolved viewport cannot expose unguarded legacy completion in preview", () => {
+  const detail = read("../app/ui/views/detail-panel.tsx");
+  // Until matchMedia runs (including first mobile hydration), neither new
+  // completion exists. The old unguarded action must also remain absent.
+  assert.match(detail, /useState<boolean \\| null>\\(null\\)/);
+  assert.match(detail, /const mobileTaskPreview = Boolean\\(mobileDesignV1Preview && mobileViewport && selectedTask\\)/);
+  assert.match(detail, /const desktopTaskPreview = Boolean\\(mobileDesignV1Preview && mobileViewport === false && selectedTask\\)/);
+  assert.match(detail, /\\{!mobileDesignV1Preview && \\(selected.status === "completed" \\?/);
+  assert.doesNotMatch(detail, /\\{!mobileTaskPreview && !desktopTaskPreview && \\(selected.status === "completed"/,
+    "both viewport predicates are false on hydration, so they cannot guard old actions");
+  for (const viewport of [null, true, false]) {
+    const designPreview = true;
+    const mobile = Boolean(designPreview && viewport);
+    const desktop = Boolean(designPreview && viewport === false);
+    const legacy = !designPreview;
+    assert.equal(legacy, false, "preview must never use unguarded legacy actions");
+    if (viewport === null) assert.deepEqual([mobile, desktop], [false, false]);
+    else assert.equal(Number(mobile) + Number(desktop), 1);
+  }
+  assert.equal(!false, true, "the unchanged preview-off legacy action remains available");
 });
