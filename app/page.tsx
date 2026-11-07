@@ -103,7 +103,7 @@ export default function App() {
               </p>
             )}
             <div className="pageTitleRow">
-              <h1 tabIndex={-1}>{mobileDesignV1Preview && app.mobilePlanPreviewActive && view === "Today" ? (
+              <h1 tabIndex={mobileDesignV1Preview ? -1 : undefined}>{mobileDesignV1Preview && app.mobilePlanPreviewActive && view === "Today" ? (
                 <>
                   <span className="mobileV1DesktopTitle">{tr(view)}</span>
                   <span className="mobileV1PhoneTitle">{language === "cs" ? "Můj plán" : "My Plan"}</span>
