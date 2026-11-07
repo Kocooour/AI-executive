@@ -258,3 +258,37 @@ test("BE-17 exact 1,000-result server exhaustion is complete, not truncated",asy
   assert.deepEqual(await session.next(),{ok:false,reason:"invalid-request"});
   assert.equal(calls,20);
 });
+
+test("BE-19 session reset wakes stalled continuation and clears old titles",async()=>{
+  let calls=0,reading;
+  const stalled=new Promise(resolve=>{reading=resolve;});
+  let cancelled=false;
+  const session=createStagingTitleSearchSession(async()=>{
+    calls++;
+    if(calls===1)return json(page([one("project","a")],true,cursorA));
+    return new Response(new ReadableStream({
+      pull(){
+        reading();
+        return new Promise(()=>{}); // simulates a stuck server response body
+      },
+      cancel(){cancelled=true;},
+    },{highWaterMark:0}),{headers:{
+      "content-type":"application/json","cache-control":"no-store",
+    }});
+  });
+  assert.deepEqual(await session.first(options),{ok:true});
+  const pending=session.next();
+  await stalled;
+  session.reset();
+  const outcome=await Promise.race([
+    pending,
+    new Promise((_,reject)=>setTimeout(()=>reject(Error("reset left reader pending")),2000)),
+  ]);
+  assert.deepEqual(outcome,{ok:false,reason:"aborted"});
+  assert.equal(cancelled,true);
+  const snapshot=session.getSnapshot();
+  assert.deepEqual(snapshot.items,[]);
+  assert.equal(snapshot.nextCursor,null);
+  assert.equal(snapshot.status,"idle");
+  assert.equal(calls,2);
+});

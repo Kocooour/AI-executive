@@ -34,6 +34,8 @@ const durable=await import("../lib/target-staging-durable-session.ts");
 const {createSessionToken,sessionCookieName}=await import("../lib/auth.ts");
 const {GET:searchGET}=await import("../app/api/target-staging/title-search/route.ts");
 const {parseStagingTitleSearchPage}=await import("../lib/target-staging-read-process.ts");
+const {createStagingTitleSearchSession}=
+  await import("../lib/target-staging-title-search-session.ts");
 
 let serial=0;const fixtures=[];
 function fixture(){
@@ -360,4 +362,55 @@ test("R2d.4c fail-closed child DTO requires all Area and note witnesses",()=>{
   assert.equal(parseStagingTitleSearchPage({...dto,items:[
     dto.items[0],dto.items[0],...dto.items.slice(2)]},"all",50,0),null);
   assert.equal(parseStagingTitleSearchPage({...dto,nextOffset:1},"all",50,0),null);
+});
+
+test("BE-19 live HTTP → streaming client → session: ACL, stale and revocation",async()=>{
+  const f=fixture();httpFor(f);
+  let cookie=loginHttp(f,"bob"),calls=0;
+  const session=createStagingTitleSearchSession(async(resource,init)=>{
+    calls++;
+    assert.equal(init.credentials,"same-origin");
+    assert.equal(init.cache,"no-store");
+    const req=new Request(new URL(resource,url),{
+      method:init.method,
+      signal:init.signal,
+      headers:{
+        cookie,"x-forwarded-for":"10.89.42."+Math.max(1,serial),
+      },
+    });
+    return searchGET(req);
+  });
+  const opts={query:"Shared",scope:"shared",limit:1};
+  assert.deepEqual(await session.first(opts),{ok:true});
+  assert.deepEqual(session.getSnapshot().items.map(x=>x.kind+":"+x.id),
+    ["project:s-empty"]);
+  assert.deepEqual(await session.next(),{ok:true});
+  assert.deepEqual(session.getSnapshot().items.map(x=>x.kind+":"+x.id),
+    ["project:s-empty","project:s-shared"]);
+
+  // A note body mutation changes the server-side note epoch; old cursor
+  // cannot be appended, even if the titles themselves did not change.
+  f.db.prepare("UPDATE notes SET body='changed after first pages' WHERE id='s-shared'").run();
+  assert.deepEqual(await session.next(),{ok:false,reason:"stale"});
+  assert.equal(session.getSnapshot().status,"error");
+  assert.deepEqual(session.getSnapshot().items,[]);
+  assert.equal(session.getSnapshot().nextCursor,null);
+
+  assert.deepEqual(await session.first(opts),{ok:true});
+  assert.deepEqual(await session.next(),{ok:true});
+  assert.equal(durable.revokeAllDurableTargetStagingSessionsForUser(f.store,"bob").ok,true);
+  assert.deepEqual(await session.next(),{ok:false,reason:"signed-out"});
+  assert.deepEqual(session.getSnapshot().items,[]);
+  assert.equal(session.getSnapshot().query,null);
+
+  // The consuming UI must reset on a session switch, not reuse an old cursor.
+  session.reset();
+  cookie=loginHttp(f,"carol");
+  assert.deepEqual(await session.first({query:"Bob",scope:"personal",limit:1}),
+    {ok:true});
+  assert.deepEqual(session.getSnapshot().items,[],
+    "Carol must never observe Bob's private project/task/note titles");
+  assert.equal(session.getSnapshot().hasMore,false);
+  assert.equal(session.getSnapshot().failure,null);
+  assert.equal(calls,8,"explicit requests only, never automatic retry");
 });
