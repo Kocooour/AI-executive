@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import {
-  appendFileSync, chmodSync, closeSync, copyFileSync, existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync,
+  appendFileSync, chmodSync, closeSync, copyFileSync, existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, readdirSync,
   renameSync, rmSync, statSync, symlinkSync, truncateSync, unlinkSync, writeFileSync,
 } from "node:fs";
 import os from "node:os";
@@ -367,9 +367,10 @@ function runChild(fx, mode, gate = "", rounds = 1) {
     "tests/support/target-anchor-gated-child.mjs", fx.stage.directory, fx.stage.restoreGeneration, mode, gate,
     String(rounds)],
   { stdio: ["ignore", "pipe", "pipe"] });
-  let stdout = "";
+  let stdout = "", stderr = "";
   child.stdout.on("data", chunk => { stdout += chunk; });
-  const done = new Promise(resolve => child.on("close", (code, signal) => resolve({ code, signal, stdout })));
+  child.stderr.on("data", chunk => { stderr += chunk; });
+  const done = new Promise(resolve => child.on("close", (code, signal) => resolve({ code, signal, stdout, stderr })));
   return { child, done };
 }
 const recoverHotJournal = fx => {
@@ -1054,11 +1055,30 @@ test("cold processes verify the long chain BEFORE taking the write lock: two col
   const fx = makeFixture();
   inflate(fx, 20000);
   const base0 = anchorOf(fx);
-  const first = runChild(fx, "raw");
-  await sleep(100);
-  const second = runChild(fx, "raw");
-  const results = await Promise.all([first.done, second.done]);
-  assert.deepEqual(results.map(r => JSON.parse(r.stdout).outcome), ["ok", "ok"], results.map(r => r.stdout + r.signal).join(" "));
+  // Both processes must be fully loaded *before* either starts its cold
+  // journal verification. An arbitrary 100ms stagger raced the OS scheduler
+  // and could instead start the second process under the first fsync/lock.
+  // This barrier still tests two genuinely cold verifications racing for the
+  // same 200ms SQLite lock: no warm-up in the child and no retry.
+  const gate = mkdtempSync(path.join(root, "cold-writer-start-"));
+  const writers = [runChild(fx, "raw-cold-gated", gate),
+    runChild(fx, "raw-cold-gated", gate)];
+  let readyCount = 0;
+  try {
+    for (let i = 0; i < 500; i++) {
+      readyCount = readdirSync(gate).filter(name => name.startsWith("ready-")).length;
+      if (readyCount === 2) break;
+      await sleep(10);
+    }
+    assert.equal(readyCount, 2, "both cold writer processes must load before release");
+  } finally {
+    // Always unblock children even when startup fails, so the test cannot hang.
+    writeFileSync(path.join(gate, "go"), "");
+  }
+  const results = await Promise.all(writers.map(writer => writer.done));
+  assert.ok(results.every(result => result.code === 0), JSON.stringify(results));
+  assert.deepEqual(results.map(result => JSON.parse(result.stdout).outcome),
+    ["ok", "ok"], JSON.stringify(results));
   assert.equal(anchorOf(fx), base0 + 2);
   assert.equal(journalState(fx).pending, null);
   assert.equal(durable.checkTargetStagingAnchorLive(fx.store), "ok");
