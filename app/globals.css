@@ -3795,25 +3795,27 @@ input::placeholder, textarea::placeholder { color: var(--muted-light); opacity: 
 
 /* UI-02a preview: four tabs in the approved Lumi Design v1.0 arrangement.
    Only available with NEXT_PUBLIC_LUMI_DESIGN_V1_PREVIEW=1; legacy nav is unchanged. */
-.mobileV1PreviewNotice, .mobileV1PhoneTitle { display: none; }
+/* The preview-only legacy-data warning must remain visible on desktop too;
+   the plan tab does not become an actor-authorized target My Plan on Mac. */
+.appShell[data-design-system="lumi-v1"] .mobileV1PreviewNotice {
+  display: block;
+  margin: 10px 28px 0;
+  padding: 8px 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--muted);
+}
 @media (max-width: 700px) {
-  .mobileV1DesktopTitle { display: none; }
-  .mobileV1PhoneTitle { display: inline; }
   .mobileNav[data-design-preview="lumi-v1"] { justify-content: space-between; }
   .mobileNav[data-design-preview="lumi-v1"] button {
     flex: 1 1 25%;
     min-width: 0;
     min-height: 48px;
   }
-  .mobileV1PreviewNotice {
-    display: block;
+  .appShell[data-design-system="lumi-v1"] .mobileV1PreviewNotice {
     margin: 10px 16px 0;
-    padding: 8px 12px;
-    border: 1px solid var(--line);
-    border-radius: 10px;
-    font-size: 12px;
-    line-height: 1.4;
-    color: var(--muted);
   }
 }
 
