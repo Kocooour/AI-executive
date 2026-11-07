@@ -244,3 +244,31 @@ test("desktop v1 My Plan is a distinct, honest and restorable preview route", as
   await expect(heading).toBeFocused();
   await expect(plan).toHaveAttribute("aria-current", "page");
 });
+
+test("v1 preview Projects uses a circle in phone and desktop navigation, not a checkbox", async ({ page }) => {
+  test.skip(process.env.NEXT_PUBLIC_LUMI_DESIGN_V1_PREVIEW !== "1", "UI v1 preview is disabled by default");
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/?view=Projects");
+  await waitUntilSynced(page);
+
+  const phoneTab = page.locator('.mobileNav button[data-nav-view="Projects"]');
+  const phoneGlyph = phoneTab.locator('svg[data-project-shape="circle"]');
+  await expect(phoneTab).toHaveAttribute("aria-current", "page");
+  await expect(phoneGlyph).toHaveCount(1);
+  await expect(phoneGlyph.locator("circle")).toHaveCount(1);
+  await expect(phoneGlyph.locator("rect")).toHaveCount(0);
+  await expect(phoneGlyph).toHaveAttribute("aria-hidden", "true");
+  await expect(phoneTab).not.toHaveAttribute("role", "checkbox");
+
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await expect(page.locator('aside nav button[data-nav-view="Projects"] svg[data-project-shape="circle"]')).toHaveCount(1);
+  const sidebarProject = page.locator('aside .sidebarProjects button[data-sidebar-project="e2e-project"]');
+  await expect(sidebarProject).toBeVisible();
+  const projectGlyph = sidebarProject.locator('svg[data-project-shape="circle"]');
+  await expect(projectGlyph.locator("circle")).toHaveCount(1);
+  await expect(projectGlyph).toHaveAttribute("aria-hidden", "true");
+  await expect(sidebarProject).not.toHaveAttribute("role", "checkbox");
+  // Selecting the sidebar project navigates; it must not toggle completion.
+  await sidebarProject.click();
+  await expect(page).toHaveURL(/[?]view=Projects&projectId=e2e-project$/);
+});
