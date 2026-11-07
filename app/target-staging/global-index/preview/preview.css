@@ -1,0 +1,39 @@
+.stagingGlobalIndex {
+  box-sizing:border-box;max-width:880px;padding:24px 20px 90px;margin:0 auto;
+  font-family:ui-sans-serif,system-ui,-apple-system,sans-serif;
+  line-height:1.5;color:var(--text,#20242a);
+}
+.stagingGlobalIndex h1{font-size:clamp(24px,4vw,34px);margin:6px 0 10px}
+.stagingGlobalIndex header p{max-width:65ch}
+.stagingGlobalEyebrow{font-size:12px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted,#666)}
+.stagingGlobalScopes,.stagingGlobalActions{display:flex;flex-wrap:wrap;gap:8px;margin:18px 0}
+.stagingGlobalIndex button{
+  min-height:44px;padding:9px 14px;background:var(--surface,#fff);color:inherit;
+  border:1px solid var(--line,#c8cbd0);border-radius:10px;font:inherit;
+  font-weight:600;cursor:pointer
+}
+.stagingGlobalScopes button[aria-pressed="true"]{
+  background:var(--accent-soft,#eee7ff);border-color:var(--accent,#7b52a8)
+}
+.stagingGlobalIndex button:focus-visible{
+  outline:3px solid var(--focus-ring,#6e4dc7);outline-offset:2px
+}
+.stagingGlobalError{padding:12px;border:1px solid var(--danger,#b33);border-radius:10px}
+.stagingGlobalItems{list-style:none;display:grid;gap:9px;margin:18px 0;padding:0}
+.stagingGlobalItem{
+  min-width:0;display:flex;gap:12px;align-items:center;padding:12px;
+  border-radius:12px;background:var(--surface-subtle,#f7f7f9);
+  border-inline-start:4px solid #29804b
+}
+.stagingGlobalItem[data-area-kind="shared"]{border-inline-start-color:#2677b7}
+.stagingGlobalGlyph{flex:none;width:16px;height:16px;border:2px solid currentColor;border-radius:3px}
+.stagingGlobalGlyph[data-kind="project"]{border-radius:50%}
+.stagingGlobalGlyph[data-kind="note"]{border-radius:2px;border-width:1px;transform:rotate(-3deg)}
+.stagingGlobalItemTitle{flex:1;min-width:0;overflow-wrap:anywhere;font-weight:600}
+.stagingGlobalKind{color:var(--muted,#666);font-size:12px;white-space:nowrap}
+.stagingGlobalPrivacy{font-size:13px;color:var(--muted,#666)}
+@media(max-width:550px){
+  .stagingGlobalIndex{padding:18px 14px 86px}
+  .stagingGlobalScopes button{flex:1 1 28%}
+  .stagingGlobalItem{gap:9px}
+}
