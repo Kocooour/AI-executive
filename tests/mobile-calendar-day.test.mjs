@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mobileCalendarDateParts, mobileCalendarEventsForDay, mobileCalendarStripDays, mobileCalendarReadWindow } from "../lib/mobile-calendar-day.ts";
+import { mobileCalendarDateParts, mobileCalendarEventsForDay, mobileCalendarStripDays, mobileCalendarReadWindow, mobileCalendarKeyboardTarget } from "../lib/mobile-calendar-day.ts";
 
 test("date strip walks actual civil dates across DST and year boundaries", () => {
   assert.deepEqual(mobileCalendarStripDays("2026-03-29", 1, 2), ["2026-03-28", "2026-03-29", "2026-03-30", "2026-03-31"]);
@@ -75,4 +75,16 @@ test("VALUE=DATE events are filtered by civil date after UTC-overlap API reads e
   // Exclusive midnight bounds must not turn two adjacent all-day dates into one.
   assert.deepEqual(mobileCalendarEventsForDay(events, "2026-11-03", "Europe/Prague").map((event) => event.id),
     ["previous", "three-days"]);
+});
+
+test("keyboard date navigation uses civil days, crosses DST/year boundaries and ignores other keys", () => {
+  assert.equal(mobileCalendarKeyboardTarget("2026-03-29", "ArrowRight"), "2026-03-30");
+  assert.equal(mobileCalendarKeyboardTarget("2026-10-25", "ArrowLeft"), "2026-10-24");
+  assert.equal(mobileCalendarKeyboardTarget("2026-12-31", "ArrowRight"), "2027-01-01");
+  assert.equal(mobileCalendarKeyboardTarget("2026-01-01", "PageUp"), "2025-12-25");
+  assert.equal(mobileCalendarKeyboardTarget("2026-03-29", "PageDown"), "2026-04-05");
+  assert.equal(mobileCalendarKeyboardTarget("2026-11-07", "Enter"), null);
+  assert.equal(mobileCalendarKeyboardTarget("2026-11-07", "Tab"), null);
+  assert.equal(mobileCalendarKeyboardTarget("invalid", "ArrowLeft"), null);
+  assert.equal(mobileCalendarKeyboardTarget("2026-11-07", "__proto__"), null);
 });
