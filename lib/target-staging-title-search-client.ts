@@ -3,6 +3,7 @@
  * The server exclusively authorizes the actor and every Area. A parsed client
  * response is display data, never proof of ACL. No UI imports this yet.
  * R2d.4f / BE-18 bounds the parsed response body and rejects malformed UTF-8.
+ * R2d.4g / BE-19 wakes stalled reads on abort; no auto-refetch or UI use.
  */
 export type TitleSearchScope="all"|"personal"|"shared";
 export type TitleSearchKind="project"|"task"|"note";
@@ -143,6 +144,10 @@ async function readBoundedSearchJson(
   const reader=response.body.getReader();
   const decoder=new TextDecoder("utf-8",{fatal:true});
   let bytes=0,text="",complete=false;
+  // Abort must wake a pending reader.read() even if the stream producer stalls.
+  // The fetch signal is still forwarded to fetch for network-level cancellation.
+  const onAbort=()=>{void reader.cancel().catch(()=>{});};
+  signal?.addEventListener("abort",onAbort,{once:true});
   try{
     for(;;){
       if(signal?.aborted)throw new InvalidSearchBody();
@@ -159,6 +164,7 @@ async function readBoundedSearchJson(
     text+=decoder.decode();
     return JSON.parse(text) as unknown;
   }finally{
+    signal?.removeEventListener("abort",onAbort);
     if(!complete)void reader.cancel().catch(()=>{});
     reader.releaseLock();
   }
