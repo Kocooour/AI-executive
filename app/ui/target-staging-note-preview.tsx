@@ -96,7 +96,7 @@ export function TargetStagingNotePreview({noteId}:{noteId:string}){
     </p>
     {state.status==="error"&&<p role="alert" className="stagingNoteError">
       {reasons[state.reason]}</p>}
-    {note&&<article className="stagingNoteContent" aria-label="Autorizovaná poznámka">
+    {note&&<article className="stagingNoteContent" data-area-kind={note.areaKind} aria-label="Autorizovaná poznámka">
       <p className="stagingNoteScope">
         {note.areaKind==="shared"?"Sdílená oblast":"Osobní oblast"}
       </p>
