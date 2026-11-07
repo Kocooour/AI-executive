@@ -238,5 +238,8 @@ test("policy stays pure and DTO matches merged v22 storage, not legacy Attention
   assert.ok(schema.includes("personal_attention_state_insert_epoch"));
   assert.ok(schema.includes("personal_attention_state_delete_epoch"));
   assert.ok(reader.includes("lifecycleRevision:number|null"));
-  assert.doesNotMatch(policy,/expectedChangedAtMs|changedAtMs|record\.sourceRevision/);
+  // Guard actual DTO/property definitions, not prose explaining removed fields.
+  assert.doesNotMatch(policy,/\bexpectedChangedAtMs\s*:/);
+  assert.doesNotMatch(policy,/\bchangedAtMs\s*:/);
+  assert.doesNotMatch(policy,/\brecord\.sourceRevision\b/);
 });
