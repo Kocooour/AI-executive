@@ -105,6 +105,20 @@ test("BE-18 changing the non-secret auth epoch immediately invalidates visible i
   assert.equal(calls,1,"no more GET from a stale reader");
 });
 
+test("BE-18 cannot resurrect a revoked reader after auth-epoch ABA reuse",async()=>{
+  let epoch="a",calls=0;
+  const controller=reader(async()=>{
+    calls++;return answer(page([project("private")]));
+  },()=>epoch);
+  assert.equal((await controller.loadFirst()).ok,true);
+  epoch="b";
+  assert.deepEqual(controller.getSnapshot(),{status:"failed",reason:"stale"});
+  epoch="a";
+  assert.deepEqual(controller.getSnapshot(),{status:"failed",reason:"stale"});
+  assert.deepEqual(await controller.loadFirst(),{ok:false,reason:"stale"});
+  assert.equal(calls,1,"stale session must be recreated instead of revived");
+});
+
 test("BE-18 a throwing auth epoch reader fails closed without network",async()=>{
   let calls=0,epoch="stable";
   const controller=reader(async()=>{calls++;return answer(page([project("a")]));},
