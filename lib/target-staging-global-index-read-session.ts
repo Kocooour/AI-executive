@@ -11,6 +11,13 @@ export type GlobalIndexReadSessionResult=
   |{ok:true;page:GlobalIndexPage}
   |{ok:false;reason:GlobalIndexFailure|"superseded"|"busy"|"not-ready"};
 
+/** Never expose the internal chain's mutable row references. */
+function detachPage(page:GlobalIndexPage):GlobalIndexPage{
+  return {...page,items:page.items.map(entry=>({
+    ...entry,item:{...entry.item},
+  }))};
+}
+
 export type GlobalIndexReadSessionSnapshot=
   |{status:"idle"|"loading"|"disposed"}
   |{status:"ready";page:GlobalIndexPage}
@@ -66,7 +73,9 @@ export function createGlobalIndexReadSession(
   };
   const getSnapshot=():GlobalIndexReadSessionSnapshot=>{
     guard();
-    if(status==="ready"&&chain)return{status,page:chain.page};
+    if(status==="ready")
+      return chain?{status:"ready",page:detachPage(chain.page)}
+        :{status:"failed",reason:"invalid-response"};
     if(status==="failed")return{status,reason:failure};
     return{status};
   };
@@ -108,7 +117,7 @@ export function createGlobalIndexReadSession(
     }
     chain=next;
     status="ready";
-    return{ok:true,page:next.page};
+    return{ok:true,page:detachPage(next.page)};
   };
   const loadFirst=async():Promise<GlobalIndexReadSessionResult>=>{
     if(status==="disposed")return{ok:false,reason:"aborted"};
@@ -122,8 +131,11 @@ export function createGlobalIndexReadSession(
     if(!guard())return{ok:false,reason:"stale"};
     if(status==="loading")return{ok:false,reason:"busy"};
     if(status!=="ready"||!chain)return{ok:false,reason:"not-ready"};
-    if(!chain.page.hasMore)return{ok:true,page:chain.page};
-    if(!chain.page.nextCursor)return{ok:false,reason:"invalid-response"};
+    if(!chain.page.hasMore)return{ok:true,page:detachPage(chain.page)};
+    if(!chain.page.nextCursor){
+      chain=null;status="failed";failure="invalid-response";
+      return{ok:false,reason:failure};
+    }
     return request(chain.page.nextCursor);
   };
   return{getSnapshot,loadFirst,loadMore,dispose};
