@@ -77,9 +77,14 @@ const KEY=/^tatt1:[a-f0-9]{64}$/;
 const DAY=86_400_000;
 const MAX_SNOOZE_MS=30*DAY;
 const validRevision=(v:unknown):v is number=>
-  typeof v==="number"&&Number.isSafeInteger(v)&&v>=0;
+  typeof v==="number"&&Number.isSafeInteger(v)&&v>=0&&
+  v<Number.MAX_SAFE_INTEGER;
 const validMs=(v:unknown):v is number=>
   validRevision(v)&&v<=8_640_000_000_000_000;
+// v22 permits the maximum safe integer for a stored snooze_until_ms,
+// even though the JavaScript Date domain for a new command is narrower.
+const validStoredUntil=(v:unknown):v is number=>
+  typeof v==="number"&&Number.isSafeInteger(v)&&v>0;
 const validId=(v:unknown):v is string=>
   typeof v==="string"&&v.length>0&&v!=="."&&v!==".."&&
   Buffer.byteLength(v,"utf8")<=512&&!/[\u0000-\u001f\u007f]/.test(v);
@@ -121,7 +126,7 @@ function validBinding(snapshot:unknown,witness:unknown):boolean {
     !validRevision(r.revision)||
     !(r.state==="snoozed"||r.state==="dismissed")||
     (r.state==="snoozed"?
-      !validMs(r.snoozedUntilMs)||r.snoozedUntilMs<=0:
+      !validStoredUntil(r.snoozedUntilMs):
       r.snoozedUntilMs!==null)))return false;
   return snapshot.attentionKey===attentionKey(snapshot.ruleId,snapshot.taskId,snapshot.relevantOn)&&
     c.attentionKey===attentionKey(c.ruleId,c.taskId,c.relevantOn);
