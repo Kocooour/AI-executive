@@ -14,5 +14,5 @@ export default async function ProjectTasksPreviewPage({
     notFound();
   const {projectId}=await params;
   if(!isReadableStagingProjectId(projectId))notFound();
-  return <TargetStagingProjectTasksPreview projectId={projectId}/>;
+  return <TargetStagingProjectTasksPreview key={projectId} projectId={projectId}/>;
 }
