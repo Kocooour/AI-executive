@@ -134,22 +134,65 @@ test("UI-09a: 409 and 401 during cursor pagination erase previously visible priv
   await send(page,1,result("all",[title("Citlivý titul před 409","a")],true,"YQ.Yg"));
   await expect(page.getByText("Citlivý titul před 409")).toBeVisible();
 
-  await page.getByRole("button",{name:"Načíst další položky"}).click();
+  const firstPageButton=page.getByRole("button",{name:"Načíst další položky"});
+  await firstPageButton.focus();
+  await firstPageButton.press("Enter");
   await requests(page,2);
   await expect(page.getByText("Citlivý titul před 409")).toHaveCount(0);
+  await expect(page.locator(".stagingGlobalResultStatus")).toBeFocused();
   await expect(page.getByRole("status")).toContainText("Načítám");
   await send(page,2,{error:"Cursor stale"},409);
   await expect(page.locator(".stagingGlobalIndex .stagingGlobalError[role=alert]")).toContainText("Obsah nebo oprávnění");
   await expect(page.getByText("Citlivý titul před 409")).toHaveCount(0);
+  await expect(page.locator(".stagingGlobalResultStatus")).toBeFocused();
 
   await page.getByRole("button",{name:"Znovu ověřit a načíst"}).click();
   await requests(page,3);
   await send(page,3,result("all",[title("Citlivý titul před 401","b")],true,"Yw.ZA"));
   await expect(page.getByText("Citlivý titul před 401")).toBeVisible();
-  await page.getByRole("button",{name:"Načíst další položky"}).click();
+  const secondPageButton=page.getByRole("button",{name:"Načíst další položky"});
+  await secondPageButton.focus();
+  await secondPageButton.press("Enter");
   await requests(page,4);
   await expect(page.getByText("Citlivý titul před 401")).toHaveCount(0);
+  await expect(page.locator(".stagingGlobalResultStatus")).toBeFocused();
   await send(page,4,{error:"Unauthorized"},401);
   await expect(page.locator(".stagingGlobalIndex .stagingGlobalError[role=alert]")).toContainText("Přihlášení nebo přístup zanikl");
   await expect(page.getByText("Citlivý titul před 401")).toHaveCount(0);
+  await expect(page.locator(".stagingGlobalResultStatus")).toBeFocused();
+});
+
+test("UI-09a: mixed Vše labels are readable and keyboard focus survives successful pagination",async({page})=>{
+  await setup(page);
+  await requests(page,1);
+  await send(page,1,result("all",[
+    title("Rodinný osobní projekt","a","private"),
+    title("Sdílený týmový projekt","b","shared"),
+  ],true,"YQ.Yg"));
+  const rows=page.locator(".stagingGlobalItem");
+  await expect(rows).toHaveCount(2);
+  const personal=rows.filter({hasText:"Rodinný osobní projekt"});
+  const shared=rows.filter({hasText:"Sdílený týmový projekt"});
+  await expect(personal.locator(".stagingGlobalArea")).toHaveText("Osobní");
+  await expect(shared.locator(".stagingGlobalArea")).toHaveText("Sdílené");
+  // The labels must be in the accessibility tree, not just border colors.
+  await expect(personal).toHaveAttribute("data-area-kind","private");
+  await expect(shared).toHaveAttribute("data-area-kind","shared");
+  await expect(personal.getByText("Osobní")).toBeVisible();
+  await expect(shared.getByText("Sdílené")).toBeVisible();
+
+  const load=page.getByRole("button",{name:"Načíst další položky"});
+  await load.focus();
+  await load.press("Enter");
+  await requests(page,2);
+  await expect(rows).toHaveCount(0);
+  const liveStatus=page.locator(".stagingGlobalResultStatus");
+  await expect(liveStatus).toBeFocused();
+  await expect(liveStatus).toHaveText("Načítám autorizovaný přehled…");
+  await send(page,2,result("all",[title("Další autorizovaný sdílený","c","shared")]));
+  await expect(rows).toHaveCount(3);
+  await expect(liveStatus).toBeFocused();
+  await expect(liveStatus).toHaveText("Zobrazeno 3 autorizovaných položek.");
+  await expect(rows.filter({hasText:"Další autorizovaný sdílený"})
+    .locator(".stagingGlobalArea")).toHaveText("Sdílené");
 });
