@@ -1,0 +1,49 @@
+name: Scoped UI-09b browser regression
+
+on:
+  pull_request:
+    paths:
+      - "app/target-staging/title-search/preview/**"
+      - "app/ui/target-staging-title-search-preview.tsx"
+      - "lib/target-staging-title-search-client.ts"
+      - "lib/target-staging-title-search-session.ts"
+      - "e2e/title-search-ui09b.spec.ts"
+      - "playwright.config.ts"
+      - ".github/workflows/title-search-preview-browser.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ui09b-browser-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  scoped-browser:
+    name: Scoped title-search Chromium
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    env:
+      CI: "true"
+      NEXT_TELEMETRY_DISABLED: "1"
+      LUMI_TITLE_SEARCH_PREVIEW_E2E: "true"
+      E2E_PORT: "3101"
+    steps:
+      - name: Checkout PR integrated code
+        uses: actions/checkout@v5
+      - name: Install pnpm
+        uses: pnpm/action-setup@v5
+        with:
+          version: 10.20.0
+      - name: Set up Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+          cache: pnpm
+      - name: Install locked dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Install browser
+        run: pnpm exec playwright install --with-deps chromium
+      # Only the named test file is allowed: the complete suite is the release gate.
+      - name: Run UI-09b targeted browser cases on synthetic local data
+        run: pnpm exec playwright test e2e/title-search-ui09b.spec.ts --project=desktop
