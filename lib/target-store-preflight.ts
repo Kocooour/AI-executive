@@ -13,7 +13,7 @@ import {
   TARGET_STAGING_NOTE_LIFECYCLE_RECEIPT_PREFIX,
   TARGET_STAGING_MAX_TOMBSTONES, TARGET_STAGING_NOTE_CHANGE_MAX_EVENTS, TARGET_STAGING_RESTORE_HISTORY_MAX,
   TARGET_STAGING_SUPERSEDED_SESSIONS_MAX, TARGET_STAGING_MAX_NOTES,
-  TARGET_STAGING_MAX_PERSONAL_PLANS, verifyExistingTargetStagingPath,
+  TARGET_STAGING_MAX_PERSONAL_PLANS, TARGET_STAGING_MAX_ATTENTION_STATES, verifyExistingTargetStagingPath,
 } from "./target-store-bootstrap";
 
 export type TargetPreflightMode = "stage" | "r2-model";
@@ -26,7 +26,8 @@ export type TargetPreflightCode =
   | "change_log_invalid" | "membership_log_invalid" | "change_log_floor_invalid"
   | "assignee_invalid" | "shared_mapping_invalid" | "shared_admin_missing"
   | "restore_history_invalid" | "note_invalid" | "note_sync_journal_invalid"
-  | "personal_plan_invalid";
+  | "personal_plan_invalid"
+  | "personal_attention_invalid";
 
 export interface TargetPreflightOptions {
   stagingDirectory: string;
@@ -585,6 +586,34 @@ export function inspectIsolatedTargetStore(
                   AND m.role IN ('editor','admin')))`) !== 0)
         fail("personal_plan_invalid");
     } catch { fail("personal_plan_invalid"); }
+
+    // v22: Attention lifecycle rows must be ACL-valid, occurrence-consistent
+    // and column-consistent; every identity owns an independent epoch row.
+    try {
+      if (count("SELECT COUNT(*) AS n FROM personal_attention_states") >
+            TARGET_STAGING_MAX_ATTENTION_STATES ||
+          count("SELECT COUNT(*) AS n FROM identities i LEFT JOIN personal_attention_epochs e ON e.user_id=i.id WHERE e.user_id IS NULL") !== 0 ||
+          count("SELECT COUNT(*) AS n FROM personal_attention_epochs e LEFT JOIN identities i ON i.id=e.user_id WHERE i.id IS NULL") !== 0 ||
+          count(`SELECT COUNT(*) AS n FROM personal_attention_states s
+            LEFT JOIN tasks t ON t.id=s.task_id
+            LEFT JOIN projects p ON p.id=t.project_id
+            LEFT JOIN areas a ON a.id=COALESCE(t.area_id,p.area_id)
+            LEFT JOIN area_members m ON m.area_id=a.id AND m.user_id=s.user_id
+            WHERE t.id IS NULL OR t.status<>'open' OR a.id IS NULL OR
+              NOT ((a.kind='private' AND a.owner_user_id=s.user_id) OR
+                (a.kind='shared' AND t.assignee_user_id=s.user_id
+                  AND m.role IN ('editor','admin'))) OR
+              s.rule_id NOT IN ('deadline_overdue','deadline_soon','planned_date_passed') OR
+              (s.rule_id IN ('deadline_overdue','deadline_soon') AND
+                t.due_on IS NOT s.occurrence_on) OR
+              (s.rule_id='planned_date_passed' AND NOT EXISTS (
+                SELECT 1 FROM personal_task_plans pl WHERE pl.user_id=s.user_id
+                  AND pl.task_id=s.task_id AND pl.when_on=s.occurrence_on)) OR
+              NOT ((s.state='snoozed' AND typeof(s.snoozed_until_ms)='integer'
+                    AND s.snoozed_until_ms > 0 AND s.snoozed_until_ms <= 9007199254740991) OR
+                   (s.state='dismissed' AND s.snoozed_until_ms IS NULL))`) !== 0)
+        fail("personal_attention_invalid");
+    } catch { fail("personal_attention_invalid"); }
 
     if (mode === "r2-model") {
       try {

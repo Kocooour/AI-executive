@@ -1,9 +1,10 @@
 # R2d.5a — autorizované Attention kandidáty aktéra (staging, interní)
 
 První řez R2d.5. Čistě serverový, **staging-only, interní, jen čtecí**
-selektor nad izolovaným cílovým úložištěm (schéma v21). Žádné HTTP,
-UI, změna schématu ani push. Lifecycle (snooze/dismiss) a doručení
-přijdou v dalších iteracích.
+selektor nad izolovaným cílovým úložištěm (schéma v22). Žádné HTTP,
+UI ani push. Lifecycle stav (snooze/dismiss) čte selektor od R2d.5b.1
+(viz [R2D5-ATTENTION-LIFECYCLE-SCHEMA.md](R2D5-ATTENTION-LIFECYCLE-SCHEMA.md));
+zapisovač a doručení přijdou v dalších iteracích.
 
 ## Kontrakt
 
@@ -14,7 +15,7 @@ a `TargetStagingSessionAuthority.readAttentionCandidatePage` vytváří
 podepsanou interní čtecí identitu (zavřená autorita nebo chyba → `null`).
 
 Request: `actorUserId`, `areaFilter all|personal|shared`,
-`evaluatedAtMs` (nezáporné bezpečné celé číslo), `timeZone` (IANA,
+`view` (`active` | `hidden`, povinné), `evaluatedAtMs` (nezáporné bezpečné celé číslo), `timeZone` (IANA,
 1–64 znaků, přísný regex a akceptace `Intl.DateTimeFormat`),
 `limit` 1–100, `offset` 0–10 000, `restoreGeneration` (UUID).
 Neplatný vstup vrací `null`; jakákoli chyba nebo anomálie **vydávaného**
@@ -56,6 +57,25 @@ položku (po termínu XOR brzy XOR plán). Cizí plány nikdy nerozhodují.
 schématu v21 vyhodnotit (není stav čekání, stav projektu, časová razítka
 aktivity ani kalendář), proto **nic nevytvářejí**.
 
+## Lifecycle a `view` (R2d.5b.1)
+
+Do téhož jediného SQL se po výpočtu `ruleId`/`relevantOn` připojí
+`LEFT JOIN personal_attention_states` **výhradně na aktéra** a shodu
+`(taskId, ruleId, relevantOn)`. Filtr se aplikuje **před** `ORDER BY`,
+`LIMIT` a `OFFSET`, takže skryté položky nikdy neovlivní stránkování ani
+`hasMore`:
+
+- `view:"active"`: bez stavu, nebo `snoozed` s `snoozed_until_ms <= evaluatedAtMs`
+  (vypršelý snooze se znovu vyhodnotí: položka se zobrazí jen proto, že podmínka
+  stále platí; skončila-li, kandidát prostě neexistuje).
+- `view:"hidden"`: `dismissed`, nebo `snoozed` s `snoozed_until_ms > evaluatedAtMs`.
+
+Výstupní položka přidává `lifecycle: "active"|"snoozed"|"dismissed"`
+(vypršelý snooze = `active`), `snoozedUntilMs` (jen u právě odloženého,
+jinak `null`) a `lifecycleRevision` (revize stavového řádku, pokud
+`lifecycle` není `active`, jinak `null`). Nekonzistentní řádek stavu
+(např. `dismissed` s časem, `snoozed` bez času) vrací celý výsledek `null`.
+
 ## Pořadí a stránkování
 
 Jediný SQL příkaz (CTE): `ORDER BY severity ASC, relevantOn BINARY ASC,
@@ -87,23 +107,24 @@ dne je **nový výskyt** (dedup pravidla PRODUCT).
 ## Stránka a revize
 
 `{items, hasMore, revision, evaluatedAtMs, timeZone, evaluationDate,
-soonThroughDate, areaFilter, privateEpoch, linearization, areaEpochs}`.
-`revision` = sha256 přes doménu `lumi:r2d5:attention-candidates:v1\0`,
-restore generation, aktéra, filtr, okamžik, pásmo, `D`, `S`, osobní
-epoch a policy/content/project-content epochy **všech** oprávněných
-Oblastí včetně prázdných. `privateEpoch`, `linearization` a
+soonThroughDate, areaFilter, view, attentionEpoch, privateEpoch, linearization,
+areaEpochs}`.
+`revision` = sha256 přes doménu `lumi:r2d5:attention-candidates:v2\0`,
+restore generation, aktéra, filtr, `view`, okamžik, pásmo, `D`, `S`, osobní
+plánovací epoch, osobní attention epoch (`attentionEpoch`; chybějící
+nebo poškozený řádek vrací celý výsledek `null`) a policy/content/project-content epochy **všech** oprávněných
+Oblastí včetně prázdných. `attentionEpoch`, `privateEpoch`, `linearization` a
 `areaEpochs` jsou **jen interní — nikdy se neposílají klientům**;
 budoucí HTTP adaptér musí před vydáním ověřit LIVE session, Area
 policy a osobní epochu. Revize zahrnuje okamžik vyhodnocení, takže se
 mění s každým `evaluatedAtMs`; porovnání mezi dotazy musí okamžik
 připnout (množina kandidátů je pro stejný okamžik deterministická).
 
-## Poznámky pro navazující lifecycle (R2d.5b)
+## Poznámky
 
-- Klíč obsahuje `ruleId`: přechod `deadline_soon` → `deadline_overdue`
-  téhož termínu vytvoří nový klíč. Lifecycle musí výslovně rozhodnout,
-  zda dismiss „soon“ potlačí i „overdue“ (PRODUCT: urgentní výjimka
-  pro nově zpožděný termín).
+- Klíč obsahuje `ruleId`; rozhodnutí, že dismiss `deadline_soon` nepotlačí
+  pozdější `deadline_overdue` téhož termínu, je v
+  [R2D5-ATTENTION-LIFECYCLE-SCHEMA.md](R2D5-ATTENTION-LIFECYCLE-SCHEMA.md).
 - Sdílená Oblast bez admina selže v preflightu (`shared_admin_missing`)
   a celé čtení je fail-closed pro všechny aktéry; jde o invariant úložiště.
 
@@ -112,4 +133,6 @@ připnout (množina kandidátů je pro stejný okamžik deterministická).
 `tests/target-attention-read.test.mjs`: klasifikace pravidel,
 řazení, stabilita klíče, ACL, revokace/degradace/přeřazení, filtr
 Oblasti, pásma a DST, neplatný vstup, stránkování, autorita
-(vč. živé revokace a close) a allowlist bez úniků.
+(vč. živé revokace a close), allowlist bez úniků a lifecycle `view`
+(skrytí/zobrazení, vypršelý snooze, stránkování bez skrytých, izolace
+cizího stavu, revize, nový výskyt po změně termínu, soon → overdue).

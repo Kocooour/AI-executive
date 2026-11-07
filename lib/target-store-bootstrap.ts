@@ -45,9 +45,13 @@ import { bootstrapTargetStagingWitness } from "./target-staging-anchor-witness";
 // v21 (R2d.3k.1) adds actor-private when_on plan rows, bounded independently
 // and versioned by user-specific epochs, never through the shared task/Area log.
 // Older staging stores are rejected, not silently migrated; no activation.
-export const TARGET_STORE_SCHEMA_VERSION = 21;
+// v22 (R2d.5b.1) adds actor-private Attention lifecycle state (snooze/dismiss)
+// with its own per-user epoch. Older staging stores are rejected, not migrated.
+export const TARGET_STORE_SCHEMA_VERSION = 22;
 /** Maximum active actor-private planned-day rows in a fresh isolated store. */
 export const TARGET_STAGING_MAX_PERSONAL_PLANS = 4096;
+/** Maximum actor-private Attention lifecycle rows in a fresh isolated store. */
+export const TARGET_STAGING_MAX_ATTENTION_STATES = 4096;
 /** Staging-only cap on live notes. */
 export const TARGET_STAGING_MAX_NOTES = 4096;
 export const TARGET_STORE_FILENAME = "lumi-target.sqlite";
@@ -407,6 +411,162 @@ BEGIN
        WHERE a.id=NEW.area_id AND
          ((a.kind='private' AND a.owner_user_id=personal_task_plans.user_id)
          OR (a.kind='shared' AND t.assignee_user_id=personal_task_plans.user_id
+             AND m.role IN ('editor','admin')))
+    ));
+END;
+
+-- v22 (R2d.5b.1): actor-private Attention lifecycle. Absence of a row means
+-- "active"; resolved/superseded are derived (the candidate no longer exists and
+-- reconcile triggers delete the row). Separate epoch so snoozing never
+-- invalidates My Plan paging. Never part of shared task/Area epochs or log.
+CREATE TABLE personal_attention_epochs (
+  user_id TEXT PRIMARY KEY REFERENCES identities(id),
+  revision INTEGER NOT NULL DEFAULT 0
+    CHECK(typeof(revision)='integer' AND revision >= 0 AND revision < 9007199254740991)
+) WITHOUT ROWID;
+CREATE TRIGGER personal_attention_epoch_on_identity AFTER INSERT ON identities BEGIN
+  INSERT INTO personal_attention_epochs(user_id) VALUES (NEW.id);
+END;
+CREATE TRIGGER personal_attention_epoch_immutable BEFORE UPDATE OF user_id ON personal_attention_epochs
+BEGIN SELECT RAISE(ABORT,'attention epoch user immutable'); END;
+CREATE TRIGGER personal_attention_epoch_monotonic BEFORE UPDATE OF revision ON personal_attention_epochs
+WHEN NEW.revision <> OLD.revision+1
+BEGIN SELECT RAISE(ABORT,'attention epoch must increment by one'); END;
+CREATE TRIGGER personal_attention_epoch_no_replace BEFORE INSERT ON personal_attention_epochs
+WHEN EXISTS(SELECT 1 FROM personal_attention_epochs WHERE user_id=NEW.user_id)
+BEGIN SELECT RAISE(ABORT,'attention epoch replacement forbidden'); END;
+CREATE TRIGGER personal_attention_epoch_no_delete BEFORE DELETE ON personal_attention_epochs
+BEGIN SELECT RAISE(ABORT,'attention epoch deletion forbidden'); END;
+
+CREATE TABLE personal_attention_states (
+  user_id TEXT NOT NULL REFERENCES identities(id),
+  task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+  rule_id TEXT NOT NULL CHECK(rule_id IN ('deadline_overdue','deadline_soon','planned_date_passed')),
+  occurrence_on TEXT NOT NULL CHECK(
+    typeof(occurrence_on)='text' AND length(occurrence_on)=10 AND
+    occurrence_on GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]' AND
+    CAST(substr(occurrence_on,1,4) AS INTEGER) BETWEEN 1 AND 9999 AND
+    COALESCE(date(occurrence_on,'+0 days')=occurrence_on,0)),
+  state TEXT NOT NULL CHECK(state IN ('snoozed','dismissed')),
+  snoozed_until_ms INTEGER,
+  revision INTEGER NOT NULL DEFAULT 0
+    CHECK(typeof(revision)='integer' AND revision >= 0 AND revision < 9007199254740991),
+  PRIMARY KEY(user_id,task_id,rule_id,occurrence_on),
+  CHECK((state='snoozed' AND typeof(snoozed_until_ms)='integer'
+         AND snoozed_until_ms > 0 AND snoozed_until_ms <= 9007199254740991)
+     OR (state='dismissed' AND snoozed_until_ms IS NULL))
+) WITHOUT ROWID;
+CREATE INDEX personal_attention_states_by_task ON personal_attention_states(user_id,task_id);
+CREATE TRIGGER personal_attention_state_insert_guard BEFORE INSERT ON personal_attention_states
+WHEN NOT EXISTS (
+  SELECT 1 FROM tasks t LEFT JOIN projects p ON p.id=t.project_id
+    JOIN areas a ON a.id=COALESCE(t.area_id,p.area_id)
+    LEFT JOIN area_members m ON m.area_id=a.id AND m.user_id=NEW.user_id
+   WHERE t.id=NEW.task_id AND t.status='open' AND
+    ((a.kind='private' AND a.owner_user_id=NEW.user_id) OR
+     (a.kind='shared' AND t.assignee_user_id=NEW.user_id AND m.role IN ('editor','admin')))
+    AND ((NEW.rule_id IN ('deadline_overdue','deadline_soon') AND t.due_on = NEW.occurrence_on)
+      OR (NEW.rule_id='planned_date_passed' AND EXISTS (
+        SELECT 1 FROM personal_task_plans pl WHERE pl.user_id=NEW.user_id
+          AND pl.task_id=NEW.task_id AND pl.when_on=NEW.occurrence_on)))
+)
+BEGIN SELECT RAISE(ABORT,'attention state requires eligible task occurrence'); END;
+CREATE TRIGGER personal_attention_state_update_guard BEFORE UPDATE ON personal_attention_states
+WHEN NEW.user_id IS NOT OLD.user_id OR NEW.task_id IS NOT OLD.task_id OR
+  NEW.rule_id IS NOT OLD.rule_id OR NEW.occurrence_on IS NOT OLD.occurrence_on OR
+  NOT EXISTS (
+    SELECT 1 FROM tasks t LEFT JOIN projects p ON p.id=t.project_id
+      JOIN areas a ON a.id=COALESCE(t.area_id,p.area_id)
+      LEFT JOIN area_members m ON m.area_id=a.id AND m.user_id=NEW.user_id
+     WHERE t.id=NEW.task_id AND t.status='open' AND
+      ((a.kind='private' AND a.owner_user_id=NEW.user_id) OR
+       (a.kind='shared' AND t.assignee_user_id=NEW.user_id AND m.role IN ('editor','admin')))
+      AND ((NEW.rule_id IN ('deadline_overdue','deadline_soon') AND t.due_on = NEW.occurrence_on)
+        OR (NEW.rule_id='planned_date_passed' AND EXISTS (
+          SELECT 1 FROM personal_task_plans pl WHERE pl.user_id=NEW.user_id
+            AND pl.task_id=NEW.task_id AND pl.when_on=NEW.occurrence_on)))
+  )
+BEGIN SELECT RAISE(ABORT,'attention state identity or task ACL invalid'); END;
+CREATE TRIGGER personal_attention_state_revision_guard BEFORE UPDATE OF revision ON personal_attention_states
+WHEN NEW.revision <> OLD.revision+1
+BEGIN SELECT RAISE(ABORT,'attention state revision must increment by one'); END;
+CREATE TRIGGER personal_attention_state_no_replace BEFORE INSERT ON personal_attention_states
+WHEN EXISTS(SELECT 1 FROM personal_attention_states WHERE user_id=NEW.user_id
+  AND task_id=NEW.task_id AND rule_id=NEW.rule_id AND occurrence_on=NEW.occurrence_on)
+BEGIN SELECT RAISE(ABORT,'attention state replacement forbidden'); END;
+CREATE TRIGGER personal_attention_state_capacity BEFORE INSERT ON personal_attention_states
+WHEN (SELECT COUNT(*) FROM personal_attention_states) >= 4096
+BEGIN SELECT RAISE(ABORT,'attention state capacity reached'); END;
+CREATE TRIGGER personal_attention_state_insert_epoch AFTER INSERT ON personal_attention_states BEGIN
+  UPDATE personal_attention_epochs SET revision=revision+1 WHERE user_id=NEW.user_id;
+END;
+CREATE TRIGGER personal_attention_state_update_epoch AFTER UPDATE OF state,snoozed_until_ms ON personal_attention_states
+WHEN NEW.state IS NOT OLD.state OR NEW.snoozed_until_ms IS NOT OLD.snoozed_until_ms
+BEGIN
+  UPDATE personal_attention_states SET revision=OLD.revision+1
+    WHERE user_id=NEW.user_id AND task_id=NEW.task_id
+      AND rule_id=NEW.rule_id AND occurrence_on=NEW.occurrence_on;
+  UPDATE personal_attention_epochs SET revision=revision+1 WHERE user_id=NEW.user_id;
+END;
+CREATE TRIGGER personal_attention_state_delete_epoch AFTER DELETE ON personal_attention_states BEGIN
+  UPDATE personal_attention_epochs SET revision=revision+1 WHERE user_id=OLD.user_id;
+END;
+-- Reconcile: resolved (task completed), lost access and superseded occurrences
+-- delete the state; re-assignment or re-planning never restores it.
+CREATE TRIGGER personal_attention_state_task_reconcile AFTER UPDATE OF
+  assignee_user_id,status,project_id,area_id ON tasks
+BEGIN
+  DELETE FROM personal_attention_states WHERE task_id=NEW.id AND
+    (NEW.status<>'open' OR NOT EXISTS (
+      SELECT 1 FROM areas a LEFT JOIN area_members m
+        ON m.area_id=a.id AND m.user_id=personal_attention_states.user_id
+       WHERE a.id=COALESCE(NEW.area_id,
+         (SELECT area_id FROM projects WHERE id=NEW.project_id))
+         AND ((a.kind='private' AND a.owner_user_id=personal_attention_states.user_id)
+           OR (a.kind='shared' AND NEW.assignee_user_id=personal_attention_states.user_id
+               AND m.role IN ('editor','admin')))
+    ));
+END;
+CREATE TRIGGER personal_attention_state_due_reconcile AFTER UPDATE OF due_on ON tasks
+WHEN NEW.due_on IS NOT OLD.due_on
+BEGIN
+  DELETE FROM personal_attention_states WHERE task_id=NEW.id
+    AND rule_id IN ('deadline_overdue','deadline_soon')
+    AND occurrence_on IS NOT NEW.due_on;
+END;
+CREATE TRIGGER personal_attention_state_plan_reconcile AFTER UPDATE OF when_on ON personal_task_plans
+WHEN NEW.when_on IS NOT OLD.when_on
+BEGIN
+  DELETE FROM personal_attention_states WHERE user_id=NEW.user_id AND task_id=NEW.task_id
+    AND rule_id='planned_date_passed' AND occurrence_on<>NEW.when_on;
+END;
+CREATE TRIGGER personal_attention_state_plan_delete AFTER DELETE ON personal_task_plans
+BEGIN
+  DELETE FROM personal_attention_states WHERE user_id=OLD.user_id AND task_id=OLD.task_id
+    AND rule_id='planned_date_passed';
+END;
+CREATE TRIGGER personal_attention_state_membership_delete AFTER DELETE ON area_members BEGIN
+  DELETE FROM personal_attention_states WHERE user_id=OLD.user_id
+    AND task_id IN (SELECT task_id FROM task_effective_areas
+      WHERE effective_area_id=OLD.area_id);
+END;
+CREATE TRIGGER personal_attention_state_membership_downgrade AFTER UPDATE OF role ON area_members
+WHEN NEW.role='viewer' AND OLD.role IN ('editor','admin')
+BEGIN
+  DELETE FROM personal_attention_states WHERE user_id=NEW.user_id
+    AND task_id IN (SELECT task_id FROM task_effective_areas
+      WHERE effective_area_id=NEW.area_id);
+END;
+CREATE TRIGGER personal_attention_state_project_move AFTER UPDATE OF area_id ON projects
+WHEN NEW.area_id IS NOT OLD.area_id
+BEGIN
+  DELETE FROM personal_attention_states WHERE task_id IN (
+    SELECT t.id FROM tasks t WHERE t.project_id=NEW.id AND NOT EXISTS (
+      SELECT 1 FROM areas a LEFT JOIN area_members m
+        ON m.area_id=a.id AND m.user_id=personal_attention_states.user_id
+       WHERE a.id=NEW.area_id AND
+         ((a.kind='private' AND a.owner_user_id=personal_attention_states.user_id)
+         OR (a.kind='shared' AND t.assignee_user_id=personal_attention_states.user_id
              AND m.role IN ('editor','admin')))
     ));
 END;

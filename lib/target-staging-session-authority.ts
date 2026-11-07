@@ -19,7 +19,7 @@ import { MAX_STAGING_PAGE_OFFSET } from "./target-task-read-model";
 import type { TargetScopedOffsetPage } from "./target-task-read-model";
 import type { TemporalScope, TemporalStatus, TemporalTaskPage, TemporalTaskDetail, TemporalDueWindow, TemporalDueWindowPage } from "./target-task-temporal-read-model";
 import type { PersonalWhenWindow, PersonalWhenPage } from "./target-personal-when-read-model";
-import type {AttentionCandidatePage,AttentionAreaFilter} from "./target-attention-read-model";
+import type {AttentionCandidatePage,AttentionAreaFilter,AttentionView} from "./target-attention-read-model";
 import type {MyPlanDayTaskPage,MyPlanTaskDayWindow,MyPlanTaskAreaFilter} from "./target-my-plan-day-task-read-model";
 import type {TargetGlobalTaskPage,TargetGlobalTaskScope} from "./target-global-task-read-model";
 import type {TargetGlobalProjectPage} from "./target-global-project-read-model";
@@ -525,14 +525,14 @@ export class TargetStagingSessionAuthority {
 
   /** R2d.5a: staging-only Attention candidates, never an HTTP response. */
   readAttentionCandidatePage(
-    actorUserId:string,areaFilter:AttentionAreaFilter,evaluatedAtMs:number,
-    timeZone:string,limit:number,offset:number,
+    actorUserId:string,areaFilter:AttentionAreaFilter,view:AttentionView,
+    evaluatedAtMs:number,timeZone:string,limit:number,offset:number,
   ):AttentionCandidatePage|null {
     if(this.#closed)return null;
     try {
       const credential=this.#oneShotReadCredential(actorUserId);
       return credential?readPreflightedAttentionCandidatePage(this.#store,credential,{
-        areaFilter,evaluatedAtMs,timeZone,limit,offset,
+        areaFilter,view,evaluatedAtMs,timeZone,limit,offset,
       }):null;
     }catch{return null;}
   }
