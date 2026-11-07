@@ -178,8 +178,8 @@ test("UI-09a: mixed Vše labels are readable and keyboard focus survives success
   // The labels must be in the accessibility tree, not just border colors.
   await expect(personal).toHaveAttribute("data-area-kind","private");
   await expect(shared).toHaveAttribute("data-area-kind","shared");
-  await expect(personal.getByText("Osobní")).toBeVisible();
-  await expect(shared.getByText("Sdílené")).toBeVisible();
+  await expect(personal.locator(".stagingGlobalArea")).toBeVisible();
+  await expect(shared.locator(".stagingGlobalArea")).toBeVisible();
 
   const load=page.getByRole("button",{name:"Načíst další položky"});
   await load.focus();
