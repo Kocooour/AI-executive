@@ -38,6 +38,8 @@ export const gmailMockPort = Number(process.env.LUMI_E2E_GMAIL_PORT);
 
 // A sandbox may ship its own Chromium; elsewhere `pnpm exec playwright install chromium` provides it.
 const systemChromium = process.env.E2E_CHROMIUM || (existsSync("/opt/pw-browsers/chromium") ? "/opt/pw-browsers/chromium" : undefined);
+// Only a separately selected synthetic browser scenario opts in to this staging preview.
+const titleSearchPreviewTest = process.env.LUMI_TITLE_SEARCH_PREVIEW_E2E === "true";
 
 export default defineConfig({
   testDir: "e2e",
@@ -68,6 +70,9 @@ export default defineConfig({
     stderr: "pipe",
     env: {
       AI_EXECUTIVE_AUTH_ENABLED: "true",
+      AI_EXECUTIVE_TARGET_STAGING_HTTP_ENABLED: titleSearchPreviewTest ? "true" : "false",
+      AI_EXECUTIVE_TARGET_STAGING_HTTP_TITLE_SEARCH_ENABLED: titleSearchPreviewTest ? "true" : "false",
+      AI_EXECUTIVE_TARGET_STAGING_TITLE_SEARCH_CLIENT_PREVIEW_ENABLED: titleSearchPreviewTest ? "true" : "false",
       AI_EXECUTIVE_PASSWORD_HASH: passwordHash,
       AI_EXECUTIVE_SESSION_SECRET: sessionSecret,
       AI_EXECUTIVE_DATA_DIR: path.join(runDir, "data"),
