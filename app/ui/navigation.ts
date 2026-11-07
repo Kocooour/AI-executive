@@ -19,6 +19,9 @@ export const views = [
 // Search is the topbar field and ⌘K); they stay one click away under "More views".
 export const primaryViews = ["Home", "Inbox", "Today", "Upcoming", "Projects", "Calendar"];
 export const secondaryViews = ["Areas", "Notes", "Overdue", "Anytime", "Someday", "Completed", "Context", "Agents"];
+// UI-03f: opt-in desktop navigation treats My Plan as a preview-only presentation,
+// not a third data scope or the legacy Today list. Production keeps primaryViews.
+export const desktopV1PrimaryViews = ["MyPlanPreview", ...primaryViews] as const;
 // One source of truth for grouped mobile menu and active-view detection.
 export const mobileMoreGroups: { title: string; views: string[] }[] = [
   // Owner decision 2026-10-23: Search is the field at the top of every screen, not a menu item.
