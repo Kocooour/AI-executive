@@ -17,5 +17,5 @@ export default async function TargetStagingNotePreviewPage({
   ].some(flag=>process.env[flag]!=="true"))notFound();
   const {noteId}=await params;
   if(!validNotePreviewId(noteId))notFound();
-  return <TargetStagingNotePreview noteId={noteId}/>;
+  return <TargetStagingNotePreview key={noteId} noteId={noteId}/>;
 }
