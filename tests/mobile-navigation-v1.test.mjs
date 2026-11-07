@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 const { mobileViews, mobileMoreGroups, mobileV1Tabs, mobileV1MoreGroups,
-  mobileV1MoreViews, mobileV1Destination, mobileV1IsPlanPreviewRoute } = await import("../app/ui/navigation.ts");
+  mobileV1MoreViews, mobileV1Destination, mobileV1IsPlanPreviewRoute,
+  primaryViews, desktopV1PrimaryViews } = await import("../app/ui/navigation.ts");
 
 test("approved v1 preview has exactly four mobile tabs in the agreed order", () => {
   assert.deepEqual([...mobileV1Tabs], ["MyPlanPreview", "Calendar", "Projects", "More"]);
@@ -34,4 +35,14 @@ test("the preview-only route cannot be confused with Today or record URLs", () =
   assert.equal(mobileV1IsPlanPreviewRoute("?view=MyPlanPreview&taskId=id"), false);
   assert.equal(mobileV1IsPlanPreviewRoute("?view=MyPlanPreview&view=Today"), false);
   assert.equal(mobileV1IsPlanPreviewRoute("?view=MyPlanPreview&other=1"), false);
+});
+
+test("UI-03f desktop preview adds My Plan as a distinct first destination without changing legacy", () => {
+  assert.deepEqual([...desktopV1PrimaryViews], ["MyPlanPreview", ...primaryViews]);
+  assert.equal(desktopV1PrimaryViews[0], "MyPlanPreview");
+  assert.equal(desktopV1PrimaryViews.filter((view) => view === "Today").length, 1);
+  assert.equal(primaryViews.includes("MyPlanPreview"), false);
+  assert.equal(new Set(desktopV1PrimaryViews).size, desktopV1PrimaryViews.length);
+  assert.equal(mobileV1IsPlanPreviewRoute("?view=MyPlanPreview"), true);
+  assert.equal(mobileV1IsPlanPreviewRoute("?view=Today"), false);
 });

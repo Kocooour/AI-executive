@@ -52,7 +52,7 @@ export function MobileNav({ app }: { app: LumiApp }) {
               setView(planPreview ? "Today" : x, planPreview ? { previewMyPlan: true } : undefined);
             }}
           >
-            <span className="mobileNavIcon" aria-hidden="true"><ViewIcon name={planPreview ? "Today" : x} /></span><span>{label}</span>
+            <span className="mobileNavIcon" aria-hidden="true"><ViewIcon name={planPreview ? "MyPlanPreview" : x} /></span><span>{label}</span>
           </button>
         );})}
       </nav>
@@ -82,7 +82,7 @@ export function MobileNav({ app }: { app: LumiApp }) {
                       setMoreOpen(false);
                     }}
                   >
-                    <span className="mobileMoreItemIcon" aria-hidden="true"><ViewIcon name={item} /></span>
+                    <span className="mobileMoreItemIcon" aria-hidden="true"><ViewIcon name={mobileDesignV1Preview && item === "Today" ? "TodayV1" : item} /></span>
                     <span>{tr(item)}</span>
                   </button>
                 ))}
