@@ -1,0 +1,65 @@
+name: Scoped UI-09d note-preview browser
+
+on:
+  pull_request:
+    paths:
+      - "app/target-staging/notes/**"
+      - "app/ui/target-staging-note-preview.tsx"
+      - "lib/target-staging-note-preview-client.ts"
+      - "e2e/note-preview-ui09d*.spec.ts"
+      - "playwright.config.ts"
+      - ".github/workflows/note-preview-browser.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ui09d-browser-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  scoped-note-browser:
+    name: Scoped note-preview Chromium
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      CI: "true"
+      NEXT_TELEMETRY_DISABLED: "1"
+      E2E_PORT: "3127"
+      E2E_SKIP_BUILD: "1"
+    steps:
+      - name: Checkout PR integrated code
+        uses: actions/checkout@v5
+      - name: Install pnpm
+        uses: pnpm/action-setup@v5
+        with:
+          version: 10.20.0
+      - name: Set up Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+          cache: pnpm
+      - name: Install locked dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Build isolated preview
+        run: pnpm build
+      - name: Install Chromium
+        run: pnpm exec playwright install --with-deps chromium
+      - name: Assert default-off 404 without note permission flags
+        env:
+          LUMI_NOTE_PREVIEW_E2E: "false"
+        run: pnpm exec playwright test e2e/note-preview-ui09d-default-off.spec.ts --project=desktop
+      - name: Test note DOM and revocation with synthetic HTTP responses
+        env:
+          LUMI_NOTE_PREVIEW_E2E: "true"
+        run: pnpm exec playwright test e2e/note-preview-ui09d.spec.ts --project=desktop
+      - name: Upload browser traces after failure
+        if: failure()
+        uses: actions/upload-artifact@v6
+        with:
+          name: lumi-note-preview-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            test-results/
+            playwright-report/
+          if-no-files-found: ignore
+          retention-days: 7
