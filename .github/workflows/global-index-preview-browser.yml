@@ -1,0 +1,70 @@
+name: Focused global Vše privacy preview browser
+
+# Explicitly test mounted React/DOM privacy behavior; not the full Browser E2E.
+# This job runs only on synthetic data with a default-off preview opted in
+# inside its private, loopback-only, throwaway Playwright test server.
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/global-index-preview-browser.yml"
+      - "app/target-staging/global-index/preview/**"
+      - "app/ui/target-staging-global-index-preview.tsx"
+      - "lib/target-staging-global-index-client.ts"
+      - "lib/target-staging-global-index-lifecycle.ts"
+      - "e2e/global-index-preview-ui09a.spec.ts"
+      - "e2e/auth.setup.ts"
+      - "playwright.config.ts"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: lumi-global-index-preview-browser-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  chromium:
+    name: Global index privacy preview (Chromium)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    env:
+      CI: "true"
+      NEXT_TELEMETRY_DISABLED: "1"
+      E2E_SKIP_BUILD: "1"
+      E2E_PORT: "3113"
+      # Staging flags are local to the synthetic Playwright server only.
+      # Production/staging deployment config remains unchanged and OFF.
+      AI_EXECUTIVE_TARGET_STAGING_HTTP_ENABLED: "true"
+      AI_EXECUTIVE_TARGET_STAGING_HTTP_GLOBAL_COMBINED_ENABLED: "true"
+      AI_EXECUTIVE_TARGET_STAGING_GLOBAL_INDEX_CLIENT_PREVIEW_ENABLED: "true"
+    steps:
+      - name: Checkout isolated PR code
+        uses: actions/checkout@v5
+      - name: Install pnpm
+        uses: pnpm/action-setup@v5
+        with:
+          version: 10.20.0
+      - name: Set up Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+          cache: pnpm
+      - name: Install locked dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Build default-off staging preview against synthetic server
+        run: pnpm build
+      - name: Install focused Chromium browser
+        run: pnpm exec playwright install --with-deps chromium
+      - name: Run only global index privacy DOM race scenarios
+        run: pnpm exec playwright test e2e/global-index-preview-ui09a.spec.ts --project=desktop
+      - name: Upload failed browser traces
+        if: failure()
+        uses: actions/upload-artifact@v6
+        with:
+          name: lumi-global-index-preview-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            test-results/
+            playwright-report/
+          if-no-files-found: ignore
+          retention-days: 7
