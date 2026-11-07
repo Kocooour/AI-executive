@@ -28,5 +28,6 @@ test("UI-02c: preview-only More selection and modal cleanup use the same decisio
   assert.match(app, /heading\.focus\(\{ preventScroll: true \}\)/);
   assert.match(app, /moreTriggerRef\.current\?\.focus\(\)/);
   assert.match(nav, /markMobileMoreNavigation\(item\);[\s\S]*?setView\(item\);[\s\S]*?setMoreOpen\(false\)/);
-  assert.match(page, /<h1 tabIndex=\{-1\}>/);
+  assert.match(page, /<h1 tabIndex=\{mobileDesignV1Preview \? -1 : undefined\}>/);
+  assert.match(app, /activeElement !== document\.body && activeElement !== moreTriggerRef\.current/);
 });
