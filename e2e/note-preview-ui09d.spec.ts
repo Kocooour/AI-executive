@@ -28,6 +28,7 @@ test("read is explicit, displays authorized body as text only and never exposes 
   expect(calls).toBe(0);
   await page.getByRole("button",{name:"Načíst poznámku"}).click();
   await expect(page.locator(article)).toBeVisible();
+  await expect(page.locator(".stagingNoteStatus")).toBeFocused();
   await expect(page.locator(article)).toContainText("Přístupná poznámka");
   await expect(page.locator(".stagingNoteBody")).toHaveText('<img src=x onerror=alert(1)>');
   await expect(page.locator(article+" img")).toHaveCount(0);
