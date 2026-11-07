@@ -41,6 +41,7 @@ const systemChromium = process.env.E2E_CHROMIUM || (existsSync("/opt/pw-browsers
 // Only a separately selected synthetic browser scenario opts in to this staging preview.
 const titleSearchPreviewTest = process.env.LUMI_TITLE_SEARCH_PREVIEW_E2E === "true";
 const notePreviewTest = process.env.LUMI_NOTE_PREVIEW_E2E === "true";
+const indexDetailPreviewTest = process.env.LUMI_INDEX_DETAIL_PREVIEW_E2E === "true";
 
 export default defineConfig({
   testDir: "e2e",
@@ -82,6 +83,12 @@ export default defineConfig({
       // UI-09d has an independent default-off synthetic browser flag.
       ...(notePreviewTest ? {
         AI_EXECUTIVE_TARGET_STAGING_HTTP_ENABLED: "true",
+        AI_EXECUTIVE_TARGET_STAGING_HTTP_NOTES_ENABLED: "true",
+        AI_EXECUTIVE_TARGET_STAGING_NOTE_CLIENT_PREVIEW_ENABLED: "true",
+      } : {}),
+      ...(indexDetailPreviewTest ? {
+        AI_EXECUTIVE_TARGET_STAGING_INDEX_DETAIL_LINKS_ENABLED: "true",
+        AI_EXECUTIVE_TARGET_STAGING_PROJECT_TASKS_CLIENT_PREVIEW_ENABLED: "true",
         AI_EXECUTIVE_TARGET_STAGING_HTTP_NOTES_ENABLED: "true",
         AI_EXECUTIVE_TARGET_STAGING_NOTE_CLIENT_PREVIEW_ENABLED: "true",
       } : {}),
