@@ -1,0 +1,22 @@
+.stagingNotePreview{box-sizing:border-box;max-width:840px;padding:24px 16px 90px;margin:auto;
+  font-family:system-ui,-apple-system,sans-serif;line-height:1.55;color:var(--text,#20242a)}
+.stagingNotePreview h1{font-size:clamp(25px,4vw,34px);margin:4px 0 8px}
+.stagingNotePreview header p{max-width:70ch}
+.stagingNoteEyebrow{font-size:12px;letter-spacing:.08em;text-transform:uppercase}
+.stagingNoteRead{font:inherit;font-weight:650;min-height:44px;border-radius:10px;
+  border:1px solid var(--line,#8e949c);background:var(--surface,#fff);
+  color:inherit;cursor:pointer;padding:8px 16px;margin:12px 0 0}
+.stagingNoteRead:focus-visible{outline:3px solid #6e4dc7;outline-offset:2px}
+.stagingNoteRead:disabled{opacity:.65;cursor:wait}
+.stagingNoteStatus{min-height:1.5em}
+.stagingNoteError{padding:12px;border:1px solid #a93631;border-radius:10px}
+.stagingNoteContent{padding:18px;border-radius:13px;background:var(--surface-subtle,#f7f8fa);
+  border-inline-start:4px solid #29804b}
+.stagingNoteScope{color:var(--muted,#555);font-size:13px;margin:0 0 7px}
+.stagingNoteContent:has(.stagingNoteScope){} 
+.stagingNoteContent h2{font-size:21px;line-height:1.35;overflow-wrap:anywhere;margin:0 0 12px}
+.stagingNoteBody{font:inherit;white-space:pre-wrap;overflow-wrap:anywhere;overflow-x:auto;
+  margin:0;max-width:100%;tab-size:4}
+.stagingNoteDisclaimer{font-size:13px;color:var(--muted,#555);margin-top:20px}
+@media(max-width:550px){.stagingNotePreview{padding:18px 12px 86px}
+  .stagingNoteContent{padding:13px}}
