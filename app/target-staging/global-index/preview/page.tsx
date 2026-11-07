@@ -12,5 +12,15 @@ export default function GlobalIndexStagingPreviewPage(){
     "AI_EXECUTIVE_TARGET_STAGING_HTTP_GLOBAL_COMBINED_ENABLED",
     "AI_EXECUTIVE_TARGET_STAGING_GLOBAL_INDEX_CLIENT_PREVIEW_ENABLED",
   ].some(flag=>process.env[flag]!=="true"))notFound();
-  return <TargetStagingGlobalIndexPreview/>;
+  // Both the source index and target preview must be independently opted in.
+  // This flag only exposes hrefs; it does not grant data or make a detail GET.
+  const linkDetails=process.env.AI_EXECUTIVE_TARGET_STAGING_INDEX_DETAIL_LINKS_ENABLED==="true";
+  const projectDetailEnabled=linkDetails&&
+    process.env.AI_EXECUTIVE_TARGET_STAGING_PROJECT_TASKS_CLIENT_PREVIEW_ENABLED==="true";
+  const noteDetailEnabled=linkDetails&&
+    process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_NOTES_ENABLED==="true"&&
+    process.env.AI_EXECUTIVE_TARGET_STAGING_NOTE_CLIENT_PREVIEW_ENABLED==="true";
+  return <TargetStagingGlobalIndexPreview
+    projectDetailEnabled={projectDetailEnabled}
+    noteDetailEnabled={noteDetailEnabled}/>;
 }
