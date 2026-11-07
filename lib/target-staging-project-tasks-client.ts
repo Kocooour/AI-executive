@@ -74,8 +74,24 @@ export function parseProjectTasksPage(
 function discard(res:Response):void{
   try{if(res.body)void res.body.cancel().catch(()=>{});}catch{}
 }
+/** Commas inside quoted cache-control parameters are not directives. */
 function noStore(header:string|null):boolean{
-  return header!==null&&header.split(",").some(v=>/^no-store$/i.test(v.trim()));
+  if(header===null)return false;
+  let quoted=false,escaped=false,start=0;
+  const directives:string[]=[];
+  for(let i=0;i<header.length;i++){
+    const char=header[i];
+    if(escaped){escaped=false;continue;}
+    if(quoted&&char==="\\"){escaped=true;continue;}
+    if(char==='"'){quoted=!quoted;continue;}
+    if(char===","&&!quoted){
+      directives.push(header.slice(start,i).trim());
+      start=i+1;
+    }
+  }
+  if(quoted||escaped)return false;
+  directives.push(header.slice(start).trim());
+  return directives.some(v=>/^no-store$/i.test(v));
 }
 async function boundedJson(res:Response,signal?:AbortSignal):Promise<unknown>{
   const length=res.headers.get("content-length");
