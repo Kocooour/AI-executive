@@ -12,6 +12,7 @@ export function MobileNav({ app }: { app: LumiApp }) {
     moreDialogRef,
     moreOpen,
     moreTriggerRef,
+    markMobileMoreNavigation,
     openCapture,
     setMoreOpen,
     setInboxTab,
@@ -75,6 +76,7 @@ export function MobileNav({ app }: { app: LumiApp }) {
                     data-nav-view={item}
                     aria-current={view === item ? "page" : undefined}
                     onClick={() => {
+                      markMobileMoreNavigation(item);
                       setView(item);
                       closeDetail();
                       setMoreOpen(false);
