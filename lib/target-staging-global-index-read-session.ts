@@ -106,7 +106,12 @@ export function createGlobalIndexReadSession(
    */
   const resume=():boolean=>{
     if(status==="disposed"||!guard())return false;
-    if(status==="suspended")status="idle";
+    // A focus/pageshow may arrive WITHOUT a paired pagehide/visibility event
+    // (e.g. BFCache quirks). Even then, the old titles must be discarded.
+    // Duplicate wakes can safely invalidate an in-flight GET; never auto-fetch.
+    revision++;
+    clear();
+    status="idle";
     return true;
   };
   const dispose=()=>{

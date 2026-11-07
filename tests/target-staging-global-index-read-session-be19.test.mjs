@@ -35,6 +35,32 @@ test("BE-19 suspend clears ready titles, blocks GET, and resume never fetches it
   assert.equal(calls,2,"only explicit loadFirst reauthorizes on the server");
 });
 
+test("BE-19 resume without prior suspend still drops private titles and old cursor",async()=>{
+  let calls=0,release;
+  const reader=make(async()=>{
+    calls++;
+    if(calls===1)return response(page([project("old")],"aA.bA"));
+    if(calls===2)return new Promise(resolve=>{release=resolve;});
+    return response(page([project("fresh")]));
+  });
+  assert.equal((await reader.loadFirst()).ok,true);
+  assert.equal(reader.getSnapshot().status,"ready");
+  assert.equal(reader.resume(),true,"lost hide event cannot retain an old title");
+  assert.deepEqual(reader.getSnapshot(),{status:"idle"});
+  assert.deepEqual(await reader.loadMore(),{ok:false,reason:"not-ready"});
+  assert.equal(calls,1,"wake never prefetches");
+
+  const pending=reader.loadFirst();
+  assert.deepEqual(reader.getSnapshot(),{status:"loading"});
+  assert.equal(reader.resume(),true,"duplicate wake invalidates pending read");
+  assert.deepEqual(reader.getSnapshot(),{status:"idle"});
+  assert.deepEqual(await pending,{ok:false,reason:"superseded"});
+  release(response(page([project("too-late")])));
+  const fresh=await reader.loadFirst();
+  assert.deepEqual(fresh,{ok:true,page:page([project("fresh")])});
+  assert.equal(calls,3);
+});
+
 test("BE-19 suspension during stalled headers aborts immediately and discards late private body",async()=>{
   let release,calls=0;
   const reader=make(async()=>{
