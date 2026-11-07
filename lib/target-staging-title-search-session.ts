@@ -17,12 +17,14 @@ export type TitleSearchSessionSnapshot = {
   limit:number;
   items:TitleSearchItem[];
   hasMore:boolean;
+  /** True when server has more, but another fixed-size page may exceed the local cap. */
+  limitReached:boolean;
   nextCursor:string|null;
   failure:TitleSearchFailure|null;
 };
 export type TitleSearchSessionOutcome =
   | {ok:true}
-  | {ok:false;reason:TitleSearchFailure};
+  | {ok:false;reason:TitleSearchFailure|"limit-reached"};
 
 const encoder=new TextEncoder();
 const rank:Record<TitleSearchItem["kind"],number>={project:0,task:1,note:2};
@@ -39,7 +41,7 @@ function itemOrder(a:TitleSearchItem,b:TitleSearchItem):number{
 
 const empty=():TitleSearchSessionSnapshot=>({
   status:"idle",query:null,scope:"all",limit:50,items:[],
-  hasMore:false,nextCursor:null,failure:null,
+  hasMore:false,limitReached:false,nextCursor:null,failure:null,
 });
 
 /**
@@ -97,10 +99,15 @@ export function createStagingTitleSearchSession(fetchImpl:typeof fetch=fetch){
       return {ok:false,reason:"invalid-response"};
     }
     if(cursor!==undefined)seenCursors.add(cursor);
+    const items=[...previous,...page.items];
+    // The HMAC cursor is bound to the original page limit. We cannot safely
+    // request a smaller final page, so stop before the next full page might
+    // overflow the local cap (even when the cap is not divisible by limit).
+    const limitReached=page.hasMore&&items.length+limit>maxRetainedItems;
     state={
-      status:"ready",query,scope,limit,
-      items:[...previous,...page.items],
-      hasMore:page.hasMore,nextCursor:page.nextCursor,failure:null,
+      status:"ready",query,scope,limit,items,
+      hasMore:page.hasMore&&!limitReached,limitReached,
+      nextCursor:limitReached?null:page.nextCursor,failure:null,
     };
     return {ok:true};
   }
@@ -119,6 +126,8 @@ export function createStagingTitleSearchSession(fetchImpl:typeof fetch=fetch){
   }
 
   function next():Promise<TitleSearchSessionOutcome>{
+    if(state.status==="ready"&&state.limitReached)
+      return Promise.resolve({ok:false,reason:"limit-reached"});
     if(state.status!=="ready"||!state.hasMore||
       state.nextCursor===null||running!==null)
       return Promise.resolve({ok:false,reason:"invalid-request"});

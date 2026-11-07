@@ -183,23 +183,78 @@ test("BE-17 invalid first request erases earlier titles without network call",as
   assert.equal(session.getSnapshot().failure,null);
 });
 
-test("BE-17 bounded retained search pages purge an oversized multi-page result",async()=>{
+test("BE-17 local cap stops before 21st request and keeps all 1,000 results",async()=>{
   let calls=0;
   const itemsFor=i=>Array.from({length:50},(_,j)=>
     one("project",String(i*50+j).padStart(5,"0")));
   const session=createStagingTitleSearchSession(async()=>{
     const i=calls++;
-    return json({
-      ...page(itemsFor(i),true,i===0?cursorA:cursorC),
-      // use unique valid cursor each time
-      nextCursor:"e30."+String(i+1).padStart(43,"A"),
-    });
+    return json(page(itemsFor(i),true,
+      "e30."+String(i+1).padStart(43,"A")));
   });
   const big={...options,limit:50};
   assert.deepEqual(await session.first(big),{ok:true});
   for(let i=1;i<20;i++)assert.deepEqual(await session.next(),{ok:true});
-  assert.equal(session.getSnapshot().items.length,1000);
-  assert.deepEqual(await session.next(),{ok:false,reason:"invalid-response"});
+  const capped=session.getSnapshot();
+  assert.equal(capped.status,"ready");
+  assert.equal(capped.items.length,1000);
+  assert.equal(capped.items[0].id,"00000");
+  assert.equal(capped.items[999].id,"00999");
+  assert.equal(capped.hasMore,false,"no fetchable continuation");
+  assert.equal(capped.limitReached,true,"server has more, local cap hit");
+  assert.equal(capped.nextCursor,null);
+  assert.equal(capped.failure,null);
+  assert.deepEqual(await session.next(),{ok:false,reason:"limit-reached"});
+  assert.deepEqual(await session.next(),{ok:false,reason:"limit-reached"});
+  assert.deepEqual(session.getSnapshot(),capped,"no result loss");
+  assert.equal(calls,20,"never send the 21st HTTP request");
+  session.reset();
+  assert.equal(session.getSnapshot().limitReached,false);
   assert.deepEqual(session.getSnapshot().items,[]);
-  assert.equal(calls,21);
+});
+
+test("BE-17 cap respects page sizes that do not divide 1,000",async()=>{
+  let calls=0;
+  const session=createStagingTitleSearchSession(async()=>{
+    const i=calls++;
+    const items=Array.from({length:30},(_,j)=>
+      one("project",String(i*30+j).padStart(5,"0")));
+    return json(page(items,true,"e30."+String(i+1).padStart(43,"A")));
+  });
+  const small={...options,limit:30};
+  assert.deepEqual(await session.first(small),{ok:true});
+  for(let i=1;i<33;i++)assert.deepEqual(await session.next(),{ok:true});
+  const capped=session.getSnapshot();
+  assert.equal(capped.items.length,990);
+  assert.equal(capped.items[989].id,"00989");
+  assert.equal(capped.hasMore,false);
+  assert.equal(capped.limitReached,true);
+  assert.equal(capped.nextCursor,null);
+  assert.equal(capped.status,"ready");
+  assert.equal(capped.failure,null);
+  assert.deepEqual(await session.next(),{ok:false,reason:"limit-reached"});
+  assert.equal(calls,33,"no potentially oversized 34th page");
+  assert.equal(session.getSnapshot().items.length,990);
+});
+
+test("BE-17 exact 1,000-result server exhaustion is complete, not truncated",async()=>{
+  let calls=0;
+  const session=createStagingTitleSearchSession(async()=>{
+    const i=calls++;
+    const items=Array.from({length:50},(_,j)=>
+      one("project",String(i*50+j).padStart(5,"0")));
+    const hasMore=i<19;
+    return json(page(items,hasMore,hasMore
+      ?"e30."+String(i+1).padStart(43,"A"):null));
+  });
+  assert.deepEqual(await session.first({...options,limit:50}),{ok:true});
+  for(let i=1;i<20;i++)assert.deepEqual(await session.next(),{ok:true});
+  const complete=session.getSnapshot();
+  assert.equal(complete.items.length,1000);
+  assert.equal(complete.status,"ready");
+  assert.equal(complete.hasMore,false);
+  assert.equal(complete.limitReached,false);
+  assert.equal(complete.nextCursor,null);
+  assert.deepEqual(await session.next(),{ok:false,reason:"invalid-request"});
+  assert.equal(calls,20);
 });
