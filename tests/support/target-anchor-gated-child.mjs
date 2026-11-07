@@ -74,7 +74,9 @@ if (mode === "raw" || mode === "raw-many" || mode === "raw-cold-gated" ||
     if (mode === "raw-cold-gated-fail-before-ready") {
       // Test-only fault injection: verifies parent joins the other child before
       // unwinding fixture cleanup, without changing the real writer behavior.
-      process.stderr.write("synthetic pre-ready child failure");
+      // A direct exit can drop buffered stderr on a pipe; write synchronously
+      // so the parent test can reliably report the injected failure.
+      fs.writeSync(2, "synthetic pre-ready child failure\n");
       process.exit(42);
     }
     writeFileSync(gate + "/ready-" + process.pid, "");
