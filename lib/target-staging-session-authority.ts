@@ -97,6 +97,9 @@ import {
 import {writePreflightedPersonalWhen,validTargetStagingPersonalWhenCommand,
   type TargetStagingPersonalWhenCommand,type TargetStagingPersonalWhenResult,
 } from "./target-personal-when-writer";
+import {writePreflightedAttentionLifecycle,validTargetStagingAttentionLifecycleCommand,
+  type TargetStagingAttentionLifecycleCommand,type TargetStagingAttentionLifecycleResult,
+} from "./target-attention-lifecycle-writer";
 import { editPreflightedTargetNote, validTargetStagingNoteEditRequest } from "./target-note-staging-writer";
 import type { TargetStagingNoteEditRequest, TargetStagingNoteEditResult } from "./target-note-staging-writer";
 import { deletePreflightedTargetNote, validTargetStagingNoteDeleteRequest } from "./target-note-delete-writer";
@@ -1023,6 +1026,19 @@ export class TargetStagingSessionAuthority {
     if(!validTargetStagingPersonalWhenCommand(command))
       return {ok:false,reason:"invalid_request"};
     return writePreflightedPersonalWhen(
+      this.#store,credential,command,durableSessionTokenHash);
+  }
+
+  /** R2d.5b.2: actor-private Attention snooze/dismiss/restore, isolated staging only. */
+  changeAttentionLifecycle(
+    sessionToken:string,command:TargetStagingAttentionLifecycleCommand,
+    durableSessionTokenHash?:string,
+  ):TargetStagingAttentionLifecycleResult {
+    const credential=this.#credential(sessionToken,true);
+    if(!credential)return {ok:false,reason:"unauthorized"};
+    if(!validTargetStagingAttentionLifecycleCommand(command))
+      return {ok:false,reason:"invalid_request"};
+    return writePreflightedAttentionLifecycle(
       this.#store,credential,command,durableSessionTokenHash);
   }
 

@@ -3,7 +3,7 @@
 **Rozsah:** pouze nové, ručně vytvořené izolované staging SQLite
 (schéma v22) a čtecí integrace do selektoru z R2d.5a. **Bez zapisovače,
 HTTP, UI, push, migrace či produktové aktivace.** Příkazy
-snooze/dismiss/restore (idempotentní, s receipty) přidá R2d.5b.2.
+snooze/dismiss/restore (idempotentní, s receipty) přidal R2d.5b.2 ([zapisovač](R2D5-ATTENTION-LIFECYCLE-WRITER.md)).
 
 ## Model
 
@@ -82,9 +82,11 @@ výskyt a starý stav je smazán.
   odstranění se tentýž plánovaný den vrátí stále skrytý. Odpovídá pravidlu
   „dismiss potlačí tentýž výskyt“; zda je doplnění termínu podstatnou
   změnou, rozhodne vlastník produktu.
-- Stav `deadline_soon` zůstane po přechodu na `deadline_overdue` uložen,
-  dokud se termín nezmění nebo úkol nedokončí; zabírá kapacitu (4096).
-  Úklid patří do zapisovacího příkazu R2d.5b.2.
+- Stav `deadline_soon` po přechodu na `deadline_overdue` smaže příkaz nad
+  `deadline_overdue` téhož (úkol, výskyt) uživatele (R2d.5b.2,
+  [zapisovač](R2D5-ATTENTION-LIFECYCLE-WRITER.md)). Řádek, který nikdo
+  nepřepíše overdue příkazem, zůstane do změny termínu nebo dokončení úkolu
+  a zabírá kapacitu (4096).
 
 ## Preflight
 

@@ -77,6 +77,8 @@ export const TARGET_STAGING_TEMPORAL_STATUS_RECEIPT_PREFIX = "r2:task-temporal-s
 export const TARGET_STAGING_TEMPORAL_DUE_ON_RECEIPT_PREFIX = "r2:task-temporal-due-on-receipt-v1:";
 /** Actor-private whenOn receipts, kept separate from shared dueOn writes. */
 export const TARGET_STAGING_PERSONAL_WHEN_RECEIPT_PREFIX = "r2:task-personal-when-receipt-v1:";
+/** Actor-private Attention snooze/dismiss/restore receipts; capped independently. */
+export const TARGET_STAGING_PERSONAL_ATTENTION_RECEIPT_PREFIX = "r2:task-personal-attention-receipt-v1:";
 /** Actor/note/command-scoped staging note edit confirmations; never note content. */
 export const TARGET_STAGING_NOTE_RECEIPT_PREFIX = "r2:note-edit-receipt-v1:";
 /** Isolated actor/note/command receipts for the irreversible note deletion. */

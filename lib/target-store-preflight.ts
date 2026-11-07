@@ -9,6 +9,7 @@ import {
   TARGET_STAGING_RECEIPT_PREFIX, TARGET_STAGING_DELETE_RECEIPT_PREFIX,
   TARGET_STAGING_TEMPORAL_STATUS_RECEIPT_PREFIX, TARGET_STAGING_TEMPORAL_DUE_ON_RECEIPT_PREFIX,
   TARGET_STAGING_PERSONAL_WHEN_RECEIPT_PREFIX,
+  TARGET_STAGING_PERSONAL_ATTENTION_RECEIPT_PREFIX,
   TARGET_STAGING_NOTE_RECEIPT_PREFIX, TARGET_STAGING_NOTE_DELETE_RECEIPT_PREFIX,
   TARGET_STAGING_NOTE_LIFECYCLE_RECEIPT_PREFIX,
   TARGET_STAGING_MAX_TOMBSTONES, TARGET_STAGING_NOTE_CHANGE_MAX_EVENTS, TARGET_STAGING_RESTORE_HISTORY_MAX,
@@ -231,6 +232,8 @@ export function inspectIsolatedTargetStore(
         row.key.startsWith(TARGET_STAGING_TEMPORAL_DUE_ON_RECEIPT_PREFIX));
       const privateWhenReceipts = rows.filter(row => typeof row.key === "string" &&
         row.key.startsWith(TARGET_STAGING_PERSONAL_WHEN_RECEIPT_PREFIX));
+      const attentionReceipts = rows.filter(row => typeof row.key === "string" &&
+        row.key.startsWith(TARGET_STAGING_PERSONAL_ATTENTION_RECEIPT_PREFIX));
       const noteReceipts = rows.filter(row => typeof row.key === "string" &&
         row.key.startsWith(TARGET_STAGING_NOTE_RECEIPT_PREFIX));
       const noteDeleteReceipts = rows.filter(row => typeof row.key === "string" &&
@@ -245,13 +248,14 @@ export function inspectIsolatedTargetStore(
         typeof row.key === "string" &&
         sha256Hex.test(row.key.slice(prefix.length)) &&
         typeof row.value === "string" && sha256Hex.test(row.value));
-      if (rows.length !== 6 + receipts.length + deleteReceipts.length + temporalReceipts.length + dueOnReceipts.length + privateWhenReceipts.length + noteReceipts.length +
+      if (rows.length !== 6 + receipts.length + deleteReceipts.length + temporalReceipts.length + dueOnReceipts.length + privateWhenReceipts.length + attentionReceipts.length + noteReceipts.length +
             noteDeleteReceipts.length + lifecycleReceipts.length ||
           receipts.length > TARGET_STAGING_MAX_RECEIPTS ||
           deleteReceipts.length > TARGET_STAGING_MAX_RECEIPTS ||
           temporalReceipts.length > TARGET_STAGING_MAX_RECEIPTS ||
           dueOnReceipts.length > TARGET_STAGING_MAX_RECEIPTS ||
           privateWhenReceipts.length > TARGET_STAGING_MAX_RECEIPTS ||
+          attentionReceipts.length > TARGET_STAGING_MAX_RECEIPTS ||
           noteReceipts.length > TARGET_STAGING_MAX_RECEIPTS ||
           noteDeleteReceipts.length > TARGET_STAGING_MAX_RECEIPTS ||
           lifecycleReceipts.length > TARGET_STAGING_MAX_RECEIPTS ||
@@ -260,6 +264,7 @@ export function inspectIsolatedTargetStore(
           !receiptValid(temporalReceipts, TARGET_STAGING_TEMPORAL_STATUS_RECEIPT_PREFIX) ||
           !receiptValid(dueOnReceipts, TARGET_STAGING_TEMPORAL_DUE_ON_RECEIPT_PREFIX) ||
           !receiptValid(privateWhenReceipts, TARGET_STAGING_PERSONAL_WHEN_RECEIPT_PREFIX) ||
+          !receiptValid(attentionReceipts, TARGET_STAGING_PERSONAL_ATTENTION_RECEIPT_PREFIX) ||
           !receiptValid(noteReceipts, TARGET_STAGING_NOTE_RECEIPT_PREFIX) ||
           !receiptValid(noteDeleteReceipts, TARGET_STAGING_NOTE_DELETE_RECEIPT_PREFIX) ||
           !receiptValid(lifecycleReceipts, TARGET_STAGING_NOTE_LIFECYCLE_RECEIPT_PREFIX) ||
@@ -271,6 +276,7 @@ export function inspectIsolatedTargetStore(
               row.key.startsWith(TARGET_STAGING_TEMPORAL_STATUS_RECEIPT_PREFIX) ||
               row.key.startsWith(TARGET_STAGING_TEMPORAL_DUE_ON_RECEIPT_PREFIX) ||
               row.key.startsWith(TARGET_STAGING_PERSONAL_WHEN_RECEIPT_PREFIX) ||
+              row.key.startsWith(TARGET_STAGING_PERSONAL_ATTENTION_RECEIPT_PREFIX) ||
               row.key.startsWith(TARGET_STAGING_NOTE_RECEIPT_PREFIX) ||
               row.key.startsWith(TARGET_STAGING_NOTE_DELETE_RECEIPT_PREFIX) ||
               row.key.startsWith(TARGET_STAGING_NOTE_LIFECYCLE_RECEIPT_PREFIX))) ||
