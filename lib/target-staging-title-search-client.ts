@@ -2,6 +2,7 @@
  * R2d.4d / BE-16 — inactive staging-only title search client transport.
  * The server exclusively authorizes the actor and every Area. A parsed client
  * response is display data, never proof of ACL. No UI imports this yet.
+ * R2d.4f / BE-18 bounds the parsed response body and rejects malformed UTF-8.
  */
 export type TitleSearchScope="all"|"personal"|"shared";
 export type TitleSearchKind="project"|"task"|"note";
@@ -120,6 +121,46 @@ function isJsonContentType(header:string|null):boolean{
   const [mediaType]=header.split(";");
   return mediaType.trim().toLowerCase()==="application/json";
 }
+// Bounded before JSON parsing: a valid page may contain 50 escaped 4 KiB
+// titles, so the cap accommodates the largest legitimate DTO with margin.
+const MAX_SEARCH_RESPONSE_BYTES=2*1024*1024;
+
+/** Reject oversized or malformed responses before materializing unbounded JSON. */
+async function readBoundedSearchJson(
+  response:Response,signal?:AbortSignal,
+):Promise<unknown>{
+  const header=response.headers.get("content-length");
+  if(header!==null&&(!/^(?:0|[1-9][0-9]*)$/.test(header)||
+    !Number.isSafeInteger(Number(header))||
+    Number(header)>MAX_SEARCH_RESPONSE_BYTES)){
+    if(response.body)void response.body.cancel().catch(()=>{});
+    throw new Error("Invalid search content length");
+  }
+  if(!response.body)throw new Error("Missing search response body");
+  const reader=response.body.getReader();
+  const decoder=new TextDecoder("utf-8",{fatal:true});
+  let bytes=0,text="",complete=false;
+  try{
+    for(;;){
+      if(signal?.aborted)throw new Error("Search aborted");
+      const chunk=await reader.read();
+      if(signal?.aborted)throw new Error("Search aborted");
+      if(chunk.done){complete=true;break;}
+      if(!(chunk.value instanceof Uint8Array))
+        throw new Error("Invalid search stream chunk");
+      bytes+=chunk.value.byteLength;
+      if(bytes>MAX_SEARCH_RESPONSE_BYTES)
+        throw new Error("Search response too large");
+      text+=decoder.decode(chunk.value,{stream:true});
+    }
+    text+=decoder.decode();
+    return JSON.parse(text) as unknown;
+  }finally{
+    if(!complete)void reader.cancel().catch(()=>{});
+    reader.releaseLock();
+  }
+}
+
 function reasonForStatus(status:number):TitleSearchFailure{
   if(status===401||status===403)return "signed-out";
   if(status===409)return "stale";
@@ -161,7 +202,7 @@ export async function loadStagingTitleSearchPage(
     !isJsonContentType(response.headers.get("content-type")))
     return {ok:false,reason:"invalid-response"};
   try{
-    const payload:unknown=await response.json();
+    const payload:unknown=await readBoundedSearchJson(response,options.signal);
     if(options.signal?.aborted)return {ok:false,reason:"aborted"};
     const page=parseTitleSearchPage(payload,{query:options.query,scope,limit});
     return page?{ok:true,page}:{ok:false,reason:"invalid-response"};

@@ -216,3 +216,116 @@ test("BE-16: require JSON media type, not application/json in a parameter",async
     assert.equal(result.ok,true,contentType);
   }
 });
+
+
+test("BE-18 accepts a streamed UTF-8 JSON page across byte boundaries",async()=>{
+  const bytes=new TextEncoder().encode(JSON.stringify(page([
+    {...item("project","a"),title:"Český projekt – úkol"},
+  ],false)));
+  let offset=0;
+  const stream=new ReadableStream({
+    pull(controller){
+      if(offset===bytes.length){controller.close();return;}
+      controller.enqueue(bytes.slice(offset,offset+1));
+      offset++;
+    },
+  });
+  const result=await loadStagingTitleSearchPage({
+    query:"Shared project",scope:"shared",limit:2,
+  },async()=>new Response(stream,{headers:{
+    "content-type":"application/json","cache-control":"no-store",
+  }}));
+  assert.equal(result.ok,true);
+  assert.equal(result.page.items[0].title,"Český projekt – úkol");
+});
+
+test("BE-18 retains legitimate 50-item pages with heavily escaped titles",async()=>{
+  const largeTitle="\\u0001".repeat(4096);
+  const items=Array.from({length:50},(_,i)=>({
+    ...item("project",String(i).padStart(3,"0")),title:largeTitle,
+  }));
+  const body=JSON.stringify(page(items,false));
+  assert.ok(new TextEncoder().encode(body).byteLength>1_000_000,
+    "valid escaped JSON is larger than a simplistic 512 KiB cap");
+  const result=await loadStagingTitleSearchPage({
+    query:"Shared project",scope:"shared",limit:50,
+  },async()=>new Response(body,{headers:{
+    "content-type":"application/json","cache-control":"no-store",
+  }}));
+  assert.equal(result.ok,true,JSON.stringify(result));
+  assert.equal(result.page.items.length,50);
+  assert.equal(result.page.items[0].title.length,4096);
+});
+
+test("BE-18 rejects an over-limit stream without buffering its remainder",async()=>{
+  let pulls=0,cancelled=false;
+  const stream=new ReadableStream({
+    pull(controller){
+      pulls++;
+      controller.enqueue(new Uint8Array(256*1024).fill(32));
+    },
+    cancel(){cancelled=true;},
+  });
+  const result=await loadStagingTitleSearchPage({
+    query:"Shared project",scope:"shared",limit:2,
+  },async()=>new Response(stream,{headers:{
+    "content-type":"application/json","cache-control":"no-store",
+  }}));
+  assert.deepEqual(result,{ok:false,reason:"invalid-response"});
+  assert.equal(cancelled,true,"cancel surplus response data");
+  assert.ok(pulls<=12,"do not consume unlimited response chunks");
+});
+
+test("BE-18 rejects oversized or forged Content-Length without reading body",async()=>{
+  for(const length of [String(2*1024*1024+1),"999999999999999999999",
+    "1e6","-1","20,20"," 12","12abc"]){
+    let cancelled=false,pulls=0;
+    const stream=new ReadableStream({
+      pull(controller){
+        pulls++;
+        controller.enqueue(new Uint8Array([123,125]));
+        controller.close();
+      },
+      cancel(){cancelled=true;},
+    });
+    const result=await loadStagingTitleSearchPage({
+      query:"Shared project",scope:"shared",limit:2,
+    },async()=>new Response(stream,{headers:{
+      "content-type":"application/json","cache-control":"no-store",
+      "content-length":length,
+    }}));
+    assert.deepEqual(result,{ok:false,reason:"invalid-response"},length);
+    assert.equal(cancelled,true,length);
+    assert.ok(pulls<=1,"reject before parsing response body");
+  }
+});
+
+test("BE-18 fails closed on invalid UTF-8 and mid-stream abort",async()=>{
+  const body=JSON.stringify(page([item("project","a")],false));
+  const bytes=new TextEncoder().encode(body);
+  const marker=body.indexOf('"title":"')+'"title":"'.length;
+  assert.ok(marker>8);
+  bytes[marker]=0xff;
+  const result=await loadStagingTitleSearchPage({
+    query:"Shared project",scope:"shared",limit:2,
+  },async()=>new Response(bytes,{headers:{
+    "content-type":"application/json","cache-control":"no-store",
+  }}));
+  assert.deepEqual(result,{ok:false,reason:"invalid-response"});
+  const controller=new AbortController();
+  let cancelled=false;
+  const stream=new ReadableStream({
+    pull(chunkController){
+      chunkController.enqueue(new TextEncoder().encode(body.slice(0,10)));
+      controller.abort();
+    },
+    cancel(){cancelled=true;},
+  });
+  const aborted=await loadStagingTitleSearchPage({
+    query:"Shared project",scope:"shared",limit:2,signal:controller.signal,
+  },async()=>new Response(stream,{headers:{
+    "content-type":"application/json","cache-control":"no-store",
+  }}));
+  assert.deepEqual(aborted,{ok:false,reason:"aborted"});
+  assert.equal(cancelled,true);
+});
