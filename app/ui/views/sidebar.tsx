@@ -205,7 +205,6 @@ export function Sidebar({ app }: { app: LumiApp }) {
                 data-current-project={mobileDesignV1Preview && app.openProject?.id === project.id ? "true" : undefined}
                 data-sidebar-project={project.id}
                 data-project-open={project.id}
-                data-project-completed={mobileDesignV1Preview && project.status === "completed" ? "true" : undefined}
                 title={project.title || tr("untitledItem")}
                 data-drop-entity={project.id}
                 onDragEnter={() => setActiveDragTarget(`entity:${project.id}`)}
