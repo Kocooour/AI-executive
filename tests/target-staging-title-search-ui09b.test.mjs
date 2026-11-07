@@ -82,3 +82,16 @@ test("UI-09b uses real server query bounds and does not silently make network ca
   assert.ok(ui.includes('onSubmit={event=>{event.preventDefault();void search();}}'));
   assert.ok(!ui.includes("useEffect(()=>{void search()"));
 });
+
+test("UI-09b Playwright opt-in never disables another staging preview's transport",()=>{
+  const config=read("playwright.config.ts");
+  const workflow=read(".github/workflows/title-search-preview-browser.yml");
+  assert.match(config,/\.\.\.\(titleSearchPreviewTest \? \{/);
+  assert.match(config,/\}\s*:\s*\{\}\),/);
+  assert.doesNotMatch(config,/AI_EXECUTIVE_TARGET_STAGING_HTTP_ENABLED:\s*titleSearchPreviewTest\s*\?\s*"true"\s*:\s*"false"/);
+  assert.match(workflow,/AI_EXECUTIVE_TARGET_STAGING_HTTP_GLOBAL_COMBINED_ENABLED: "true"/);
+  assert.match(workflow,/LUMI_EXPECT_SHARED_STAGING_HTTP: "true"/);
+  const integration=read("e2e/title-search-ui09b-default-off.spec.ts");
+  assert.match(integration,/preserves independently enabled global index API/);
+  assert.match(integration,/response\.status\(\)\)\.toBe\(503\)/);
+});
