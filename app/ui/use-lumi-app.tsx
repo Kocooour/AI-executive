@@ -66,8 +66,8 @@ export function useLumiApp() {
   // The Inbox shows tasks or connected Gmail. Its active tab and message IDs are
   // in-memory only; navigation URLs never expose a mail message ID.
   const [inboxTab, setInboxTab] = useState<"tasks" | "mail">("tasks");
-  // UI-02a opt-in preview: distinguish the presentation-only plan tab
-  // from the existing Today list without claiming target-model permissions.
+  // UI-03f: the presentation-only My Plan route is shared by mobile and
+  // desktop v1 preview. Never claim target-model data permissions.
   const [mobilePlanPreviewActive, setMobilePlanPreviewActive] = useState(false);
   const [view, setViewState] = useState("Home"),
     // The project page is resolved from the authorized current scope; the URL carries only its opaque ID.
@@ -1426,7 +1426,7 @@ export function useLumiApp() {
     );
     const isPreviewPhone = mobileDesignV1Preview && window.matchMedia("(max-width: 700px)").matches;
     const previewMobileStart = isPreviewPhone && window.location.search === "";
-    const previewDirectLink = isPreviewPhone && mobileV1IsPlanPreviewRoute(window.location.search);
+    const previewDirectLink = mobileDesignV1Preview && mobileV1IsPlanPreviewRoute(window.location.search);
     if (previewMobileStart || previewDirectLink) {
       setMobilePlanPreviewActive(true);
       if (previewMobileStart) setStartupView("Today");
@@ -1873,7 +1873,7 @@ export function useLumiApp() {
           destinationFocusId, window.location.search);
         activeProjectFocusEntryRef.current = destinationFocusId;
       }
-      const previewRoute = mobileDesignV1Preview && window.matchMedia("(max-width: 700px)").matches &&
+      const previewRoute = mobileDesignV1Preview &&
         mobileV1IsPlanPreviewRoute(window.location.search);
       const next = previewRoute ? "Today" :
         viewFromSearch(window.location.search, addressableViews) || localStorage.getItem("ai-executive-startup-view") || "Home";
