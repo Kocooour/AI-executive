@@ -1,0 +1,68 @@
+name: Focused Lumi mobile More preview
+
+# Preview navigation is disabled in ordinary production builds. This narrow
+# browser check compiles with that preview on; it is NOT the full release E2E.
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/mobile-more-preview-browser.yml"
+      - "app/page.tsx"
+      - "app/ui/use-lumi-app.tsx"
+      - "app/ui/views/mobile-nav.tsx"
+      - "app/ui/navigation.ts"
+      - "app/lumi-mobile-more.css"
+      - "lib/mobile-more-focus.ts"
+      - "e2e/mobile-navigation-v1.spec.ts"
+      - "e2e/fixtures.ts"
+      - "e2e/auth.setup.ts"
+      - "playwright.config.ts"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: lumi-mobile-more-browser-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  preview-chromium:
+    name: Mobile More preview (Chromium)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      CI: "true"
+      NEXT_TELEMETRY_DISABLED: "1"
+      NEXT_PUBLIC_LUMI_DESIGN_V1_PREVIEW: "1"
+      E2E_SKIP_BUILD: "1"
+      E2E_PORT: "3107"
+    steps:
+      - name: Checkout isolated PR code
+        uses: actions/checkout@v5
+      - name: Install pnpm
+        uses: pnpm/action-setup@v5
+        with:
+          version: 10.20.0
+      - name: Set up Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+          cache: pnpm
+      - name: Install locked dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Build explicit v1 preview
+        run: pnpm build
+      - name: Install Chromium and Linux dependencies
+        run: pnpm exec playwright install --with-deps chromium
+      - name: Run focused More-navigation browser tests only
+        run: pnpm exec playwright test e2e/mobile-navigation-v1.spec.ts
+      - name: Upload traces on failure
+        if: failure()
+        uses: actions/upload-artifact@v6
+        with:
+          name: lumi-mobile-more-preview-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            test-results/
+            playwright-report/
+          if-no-files-found: ignore
+          retention-days: 7
