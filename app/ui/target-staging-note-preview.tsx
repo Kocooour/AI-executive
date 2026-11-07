@@ -20,6 +20,7 @@ const reasons:Record<NotePreviewFailure,string>={
   "aborted":"Čtení bylo přerušeno. Pro nové ověření jej znovu spusťte.",
   "invalid-response":"Odpověď neprošla kontrolou. Obsah není zobrazen.",
 };
+function foregroundOnline(){return document.visibilityState!=="hidden"&&navigator.onLine;}
 type State={status:"idle"|"loading"}|
   {status:"ready";note:NotePreview}|
   {status:"error";reason:NotePreviewFailure};
@@ -72,11 +73,10 @@ export function TargetStagingNotePreview({noteId}:{noteId:string}){
     current.current=controller;
     setState({status:"loading"});
     const result=await readStagingNotePreview(noteId,controller.signal);
-    if(controller.signal.aborted||epoch.current!==id||
-      document.visibilityState==="hidden"||!navigator.onLine)return;
+    if(controller.signal.aborted||epoch.current!==id||!foregroundOnline())return;
     current.current=null;
-    setState(result.ok?{status:"ready",note:result.note}:
-      {status:"error",reason:result.reason});
+    if(result.ok===true)setState({status:"ready",note:result.note});
+    else setState({status:"error",reason:result.reason});
   }
   const note=state.status==="ready"?state.note:null;
   return <main className="stagingNotePreview">
