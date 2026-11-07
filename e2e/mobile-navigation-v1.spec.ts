@@ -147,3 +147,41 @@ test("mobile calendar date strip offers one Tab stop with day/week arrow navigat
   await page.keyboard.press("Tab");
   await expect(dates.locator(".mobileCalendarDateBubble:focus")).toHaveCount(0);
 });
+
+test("desktop v1 sidebar focuses selected view titles and preserves search focus", async ({ page }) => {
+  test.skip(process.env.NEXT_PUBLIC_LUMI_DESIGN_V1_PREVIEW !== "1", "UI v1 preview is disabled by default");
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await page.goto("/?view=Projects");
+  await waitUntilSynced(page);
+  const heading = page.locator(".appPane .pageTitleRow h1");
+
+  // Main, direct secondary and footer routes use the same focus contract.
+  await page.locator('aside nav [data-nav-view="Calendar"]').click();
+  await expect(heading).toHaveText(/Kalendář|Calendar/);
+  await expect(heading).toBeFocused();
+  await page.locator('[data-desktop-v1-direct-views] [data-nav-view="Notes"]').click();
+  await expect(heading).toHaveText(/Poznámky|Notes/);
+  await expect(heading).toBeFocused();
+  await page.locator("aside footer.sidebarActions button").filter({ hasText: /Nastavení|Settings/ }).click();
+  await expect(heading).toHaveText(/Nastavení|Settings/);
+  await expect(heading).toBeFocused();
+
+  // A search-field navigation owns its own focus and is not stolen by Sidebar.
+  const search = page.locator(".searchField input");
+  await search.focus();
+  await expect(search).toBeFocused();
+  await expect(heading).toHaveText(/Hledání|Search/);
+
+  // A long former screen must not leave the next heading behind the toolbar.
+  await page.addStyleTag({ content: ".appPane .content { min-height: 2400px !important; }" });
+  await page.evaluate(() => window.scrollTo(0, 1200));
+  await expect.poll(() => page.evaluate(() => window.scrollY)).toBeGreaterThan(700);
+  await page.locator('aside nav [data-nav-view="Home"]').click();
+  await expect(heading).toHaveText(/Domů|Home/);
+  await expect(heading).toBeFocused();
+  await expect.poll(() => heading.evaluate((el) => {
+    const title = el.getBoundingClientRect();
+    const toolbar = document.querySelector(".appPane .topbar")?.getBoundingClientRect();
+    return title.top >= (toolbar?.bottom ?? 0) + 8 && title.bottom <= window.innerHeight - 8;
+  })).toBe(true);
+});
