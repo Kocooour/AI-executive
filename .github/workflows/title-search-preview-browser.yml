@@ -53,6 +53,15 @@ jobs:
         env:
           LUMI_TITLE_SEARCH_PREVIEW_E2E: "false"
         run: pnpm exec playwright test e2e/title-search-ui09b-default-off.spec.ts --project=desktop
+      # Independently enabled UI-09a/global-index transport must survive the
+      # title-search preview's explicit OFF state (503, not forced-off 404).
+      - name: Verify shared staging HTTP is preserved for other preview jobs
+        env:
+          LUMI_TITLE_SEARCH_PREVIEW_E2E: "false"
+          LUMI_EXPECT_SHARED_STAGING_HTTP: "true"
+          AI_EXECUTIVE_TARGET_STAGING_HTTP_ENABLED: "true"
+          AI_EXECUTIVE_TARGET_STAGING_HTTP_GLOBAL_COMBINED_ENABLED: "true"
+        run: pnpm exec playwright test e2e/title-search-ui09b-default-off.spec.ts --project=desktop
       # Run only the named opt-in scenarios, never the complete release E2E suite.
       - name: Test title-search DOM privacy and keyboard focus with synthetic data
         run: pnpm exec playwright test e2e/title-search-ui09b.spec.ts --project=desktop
