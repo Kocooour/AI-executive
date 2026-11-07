@@ -94,6 +94,8 @@ test("HTTP 401, 404, 409 and malformed response fail without rows",async()=>{
   for(const headers of [
     {"cache-control":"public,max-age=30"},
     {"cache-control":"private"},
+    {"cache-control":'private="x, no-store, y"'},
+    {"cache-control":'max-age=60, foo="no-store"'},
     {"content-type":"text/html"},
   ]){
     const result=await loadProjectTasksPage({projectId:"family"},
