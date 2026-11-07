@@ -261,3 +261,92 @@ test("BE-14 abort cancels a stalled My Plan response body",async()=>{
   assert.deepEqual(result,{ok:false,reason:"aborted"});
   assert.equal(cancelled,true);
 });
+
+
+test("BE-15 pre-header abort settles when adapter ignores AbortSignal",async()=>{
+  const controller=new AbortController();
+  let calls=0,release;
+  const pending=fetchMyPlanSlice({...params,signal:controller.signal},
+    async(url,init)=>{
+      calls++;
+      assert.equal(init.signal,controller.signal);
+      assert.equal(init.credentials,"same-origin");
+      assert.equal(init.cache,"no-store");
+      assert.equal(init.redirect,"error");
+      return new Promise(resolve=>{release=resolve;});
+    });
+  assert.equal(calls,1,"GET dispatch remains synchronous");
+  controller.abort();
+  assert.deepEqual(await Promise.race([
+    pending,
+    new Promise((_,reject)=>setTimeout(()=>reject(Error("stalled headers")),2000)),
+  ]),{ok:false,reason:"aborted"});
+  let didCancel;
+  const cancelled=new Promise(resolve=>{didCancel=resolve;});
+  release(new Response(new ReadableStream({
+    cancel(){didCancel();},
+  },{highWaterMark:0}),{headers:{
+    "content-type":"application/json","cache-control":"no-store",
+  }}));
+  await Promise.race([
+    cancelled,
+    new Promise((_,reject)=>setTimeout(()=>reject(Error("late body leaked")),2000)),
+  ]);
+  assert.equal(calls,1,"never retry aborted GET");
+});
+
+test("BE-15 adapter abort in dispatch cannot publish a late private page",async()=>{
+  const controller=new AbortController();
+  let cancelled=false;
+  const response=new Response(new ReadableStream({
+    cancel(){cancelled=true;},
+  },{highWaterMark:0}),{headers:{
+    "content-type":"application/json","cache-control":"no-store",
+  }});
+  const result=await fetchMyPlanSlice({...params,signal:controller.signal},
+    async()=>{
+      controller.abort();
+      return response;
+    });
+  assert.deepEqual(result,{ok:false,reason:"aborted"});
+  assert.equal(cancelled,true,"already returned body is discarded on abort");
+});
+
+test("BE-15 aborted signal never sends GET; overlapping reads stay ordered",async()=>{
+  const firstController=new AbortController();
+  const alreadyAborted=new AbortController();
+  alreadyAborted.abort();
+  let calls=0;
+  assert.deepEqual(await fetchMyPlanSlice({
+    ...params,signal:alreadyAborted.signal,
+  },async()=>{calls++;return goodResponse(current());}),
+  {ok:false,reason:"aborted"});
+  assert.equal(calls,0);
+  let releaseOld;
+  const previous=fetchMyPlanSlice({...params,signal:firstController.signal},
+    async()=>{
+      calls++;
+      return new Promise(resolve=>{releaseOld=resolve;});
+    });
+  assert.equal(calls,1);
+  const newest=fetchMyPlanSlice(params,async()=>{
+    calls++;
+    return goodResponse(current());
+  });
+  assert.equal(calls,2,"a subsequent explicit request starts immediately");
+  firstController.abort();
+  assert.deepEqual(await previous,{ok:false,reason:"aborted"});
+  assert.deepEqual(await newest,{ok:true,page:current()});
+  let cancel;
+  const cancelled=new Promise(resolve=>{cancel=resolve;});
+  releaseOld(new Response(new ReadableStream({
+    cancel(){cancel();},
+  },{highWaterMark:0}),{headers:{
+    "content-type":"application/json","cache-control":"no-store",
+  }}));
+  await Promise.race([
+    cancelled,new Promise((_,reject)=>setTimeout(
+      ()=>reject(Error("old stream remained open")),2000)),
+  ]);
+  assert.equal(calls,2);
+});
