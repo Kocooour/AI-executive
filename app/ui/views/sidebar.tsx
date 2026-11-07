@@ -171,7 +171,7 @@ export function Sidebar({ app }: { app: LumiApp }) {
               }}
               key={x}
             >
-              <span className="navLabel"><span aria-hidden="true"><ViewIcon name={planPreview ? "MyPlanPreview" : mobileDesignV1Preview && x === "Today" ? "TodayV1" : x} /></span>{planPreview ? (language === "cs" ? "Můj plán" : "My Plan") : tr(x)}</span>
+              <span className="navLabel"><span aria-hidden="true"><ViewIcon name={planPreview ? "MyPlanPreview" : mobileDesignV1Preview && x === "Today" ? "TodayV1" : mobileDesignV1Preview && x === "Projects" ? "ProjectsV1" : x} /></span>{planPreview ? (language === "cs" ? "Můj plán" : "My Plan") : tr(x)}</span>
               {x === "Inbox" || x === "Today" ? (
                 <span className="navCount">{sidebarCounts[x]}</span>
               ) : null}
@@ -212,7 +212,7 @@ export function Sidebar({ app }: { app: LumiApp }) {
                 onDrop={(event) => acceptNativeDrop(event, `entity:${project.id}`)}
                 onClick={() => void inspect(project)}
               >
-                <span aria-hidden="true"><ProjectIcon /></span>
+                <span aria-hidden="true"><ProjectIcon previewCircle={mobileDesignV1Preview} /></span>
                 <span className="sidebarProjectTitle">{project.title || tr("untitledItem")}</span>
               </button>
             ))}

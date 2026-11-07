@@ -52,7 +52,7 @@ export function MobileNav({ app }: { app: LumiApp }) {
               setView(planPreview ? "Today" : x, planPreview ? { previewMyPlan: true } : undefined);
             }}
           >
-            <span className="mobileNavIcon" aria-hidden="true"><ViewIcon name={planPreview ? "MyPlanPreview" : x} /></span><span>{label}</span>
+            <span className="mobileNavIcon" aria-hidden="true"><ViewIcon name={planPreview ? "MyPlanPreview" : mobileDesignV1Preview && x === "Projects" ? "ProjectsV1" : x} /></span><span>{label}</span>
           </button>
         );})}
       </nav>
