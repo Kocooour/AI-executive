@@ -31,7 +31,15 @@ test("UI-09b explicit search and pagination only, with no writes, cache or synth
   assert.ok(ui.includes('session.current!.first({query,scope,limit:25})'));
   assert.ok(ui.includes('session.current!.next()'));
   assert.ok(ui.includes('if(pageInFlight.current)return;'),"double next-page actions are ignored");
-  assert.ok(ui.includes('Zobrazeno {ready.items.length} autorizovaných názvů.'));
+  assert.ok(ui.includes("Zobrazeno ${ready.items.length} autorizovaných názvů."));
+  assert.ok(ui.includes("ref={resultStatusRef}"));
+  assert.ok(ui.includes("resultStatusRef.current?.focus()"));
+  assert.ok(ui.includes("tabIndex={-1}"));
+  const browser=read("e2e/title-search-ui09b.spec.ts");
+  assert.ok(browser.includes("toBeFocused()"));
+  assert.ok(browser.includes("failed continuation"));
+  assert.ok(browser.includes("late pages cannot restore titles"));
+  assert.ok(browser.includes("BFCache invalidation"));
   assert.ok(ui.includes('item.areaKind==="shared"?"Sdílené":"Osobní"'));
   assert.match(css,/stagingTitleSearchSrOnly/);
   assert.ok(ui.includes('all:"Vše",personal:"Osobní",shared:"Sdílené"'));
