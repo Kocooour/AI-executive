@@ -70,9 +70,14 @@ export default defineConfig({
     stderr: "pipe",
     env: {
       AI_EXECUTIVE_AUTH_ENABLED: "true",
-      AI_EXECUTIVE_TARGET_STAGING_HTTP_ENABLED: titleSearchPreviewTest ? "true" : "false",
-      AI_EXECUTIVE_TARGET_STAGING_HTTP_TITLE_SEARCH_ENABLED: titleSearchPreviewTest ? "true" : "false",
-      AI_EXECUTIVE_TARGET_STAGING_TITLE_SEARCH_CLIENT_PREVIEW_ENABLED: titleSearchPreviewTest ? "true" : "false",
+      // Never override the shared staging transport used by other focused UI
+      // workflows (for example UI-09a). These flags only exist in this server
+      // when the UI-09b test explicitly opted in. Default-off means omitted.
+      ...(titleSearchPreviewTest ? {
+        AI_EXECUTIVE_TARGET_STAGING_HTTP_ENABLED: "true",
+        AI_EXECUTIVE_TARGET_STAGING_HTTP_TITLE_SEARCH_ENABLED: "true",
+        AI_EXECUTIVE_TARGET_STAGING_TITLE_SEARCH_CLIENT_PREVIEW_ENABLED: "true",
+      } : {}),
       AI_EXECUTIVE_PASSWORD_HASH: passwordHash,
       AI_EXECUTIVE_SESSION_SECRET: sessionSecret,
       AI_EXECUTIVE_DATA_DIR: path.join(runDir, "data"),
