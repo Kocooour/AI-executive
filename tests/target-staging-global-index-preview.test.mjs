@@ -30,6 +30,12 @@ test("R3 UI-09a global scopes, type glyphs and readable mobile controls",()=>{
   assert.ok(ui.includes("Vše není Můj plán."));
   assert.ok(ui.includes('aria-pressed={scope===value}'));
   assert.ok(ui.includes('data-area-kind={entry.item.areaKind}'));
+  assert.ok(ui.includes('entry.item.areaKind==="private"?"Osobní":"Sdílené"'));
+  assert.ok(ui.includes('className="stagingGlobalArea"'));
+  assert.ok(ui.includes('ref={resultStatusRef} role="status" tabIndex={-1}'));
+  assert.ok(ui.includes('resultStatusRef.current?.focus()'));
+  assert.match(css,/stagingGlobalArea/);
+  assert.match(css,/stagingGlobalResultStatus:focus-visible/);
   assert.match(css,/min-height:44px/);
   assert.match(css,/data-kind="project"/);
   assert.match(css,/data-area-kind="shared"/);
@@ -70,6 +76,17 @@ test("R3 UI-09a hidden/show under 350ms always reauthorizes",()=>{
   assert.equal(consumeGlobalIndexWake(resumed.gate,10_065).reload,false);
   gate=invalidateGlobalIndexWakeGate(resumed.gate);
   assert.equal(consumeGlobalIndexWake(gate,10_070).reload,true);
+});
+
+test("R3 UI-09a has executable focused keyboard and mixed Area Chromium regressions",()=>{
+  const browser=read("e2e/global-index-preview-ui09a.spec.ts");
+  assert.ok(browser.includes("mixed Vše labels are readable"));
+  assert.ok(browser.includes('firstPageButton.press("Enter")'));
+  assert.ok(browser.includes('secondPageButton.press("Enter")'));
+  assert.ok(browser.includes('load.press("Enter")'));
+  assert.ok(browser.includes("toBeFocused()"));
+  assert.ok(browser.includes('toHaveText("Osobní")'));
+  assert.ok(browser.includes('toHaveText("Sdílené")'));
 });
 
 test("R3 UI-09a BFCache, explicit recheck and backwards clock reauthorize",()=>{
