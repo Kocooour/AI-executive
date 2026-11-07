@@ -4,6 +4,7 @@
 //   crash-before-commit   - SIGKILL right after the intent is fsynced (hot SQLite journal remains)
 //   crash-before-confirm  - SIGKILL after COMMIT, just before the confirm line is written
 //   raw                   - one pinned write with the DEFAULT 200 ms busy timeout (no hook); prints ok|denied|failed
+//   raw-cold-gated        - one equally cold 200ms write after an external start barrier
 //   plain                 - no hook; `rounds` (argv[5]) sessions are issued back to back
 import fs, { existsSync, writeFileSync } from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
@@ -61,10 +62,17 @@ if (mode === "hold-sidecar" || mode === "hold-sidecar-long") {
   process.stdout.write("released");
   process.exit(0);
 }
-if (mode === "raw" || mode === "raw-many") {
+if (mode === "raw-cold-gated") {
+  // Synchronize the start of two independent Node child processes *after*
+  // module loading; do not prewarm the journal or alter the real write limit.
+  if (!gate) throw new Error("raw-cold-gated requires an isolated gate");
+  writeFileSync(gate + "/ready-" + process.pid, "");
+  while (!existsSync(gate + "/go")) wait(5);
+}
+if (mode === "raw" || mode === "raw-many" || mode === "raw-cold-gated") {
   const { withPinnedTargetStagingWrite } = await import("../../lib/target-staging-pinned-write.ts");
   const counts = { ok: 0, failed: 0, denied: 0 };
-  const attempts = mode === "raw" ? 1 : Number(rounds);
+  const attempts = mode === "raw-many" ? Number(rounds) : 1;
   for (let i = 0; i < attempts; i++) {
     const outcome = withPinnedTargetStagingWrite(
       { stagingDirectory: directory, expectedRestoreGeneration: generation },
@@ -72,8 +80,8 @@ if (mode === "raw" || mode === "raw-many") {
       () => "denied", () => "failed");
     counts[outcome]++;
   }
-  process.stdout.write(JSON.stringify(mode === "raw" ?
-    { outcome: Object.keys(counts).find(key => counts[key]) } : counts));
+  process.stdout.write(JSON.stringify(mode === "raw-many" ?
+    counts : { outcome: Object.keys(counts).find(key => counts[key]) }));
   process.exit(0);
 }
 const durable = await import("../../lib/target-staging-durable-session.ts");
