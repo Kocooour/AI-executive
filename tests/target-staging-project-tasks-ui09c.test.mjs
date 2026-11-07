@@ -29,6 +29,7 @@ test("UI-09c server preview is default-off, isolated and not indexed",()=>{
   assert.match(page,/notFound\(\)/);
   assert.match(page,/index:false,follow:false/);
   assert.match(page,/force-dynamic/);
+  assert.match(page,/key=\{projectId\}/);
   for(const file of ["app/ui/views/sidebar.tsx","app/ui/views/mobile-nav.tsx",
     "app/ui/navigation.ts"]){
     assert.ok(!read(file).includes("/target-staging/projects/"),file);
