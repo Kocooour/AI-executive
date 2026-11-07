@@ -15,6 +15,22 @@
 | **R4 — Cutover a release** | **Nespouštěno** | Vyžaduje dokončené bezpečnostní brány, inventuru, ověřenou archivní zálohu/restore a **samostatný výslovný souhlas** s přesným rozsahem případného resetu. |
 | **R5 — Rozšířená spolupráce a asistence** | **Navazující vývoj** | Pozvánky, víceuživatelské sdílení a rozšířené integrace až po úplném identity/ACL/sync/revokačním kontraktu. |
 
+### HumanWiki — Context Bootstrap & Continuous Learning (přidáno 2026-11-08)
+
+**Nově zařazená produktová priorita LUMI-FR-014:** ucelená, zdrojově doložená osobní wiki nad existujícím Context Graphem. [Schválené rozhodnutí a akceptace](decisions/2026-11-08-humanwiki-knowledge-bootstrap.md), [produkt](PRODUCT.md#humanwiki-a-context-bootstrap--continuous-learning--cílový-požadavek-lumi-fr-014-2026-11-08), [technická brána](ARCHITECTURE.md#humanwiki-ingestion-a-learning--cílová-architektura-2026-11-08), [UX](UX-UI.md#humanwiki--cílové-ux-a-průvodce-importem-2026-11-08).
+
+| Fáze / priorita | Dodat | Závislosti / zapnutí |
+|---|---|---|
+| **H0 / P0 — návrh a fixture** | Importní threat model, schéma zdroje/claimu, syntetické exporty ChatGPT/Claude, test idempotence, retenční a souhlasový model | **Začít souběžně s R2d/R3**; pouze dokumentace, izolovaná data; žádný produkční přístup |
+| **H1 / P0 — první užitečný bootstrap** | Ruční ingestace exportů ChatGPT/Claude do owner-private izolovaného stagingu, deduplikace, zdrojové lokátory, časová platnost, konflikty a review queue | Serverová identita, oblastní ACL, Context Resolver, revokace a bezpečný sync z R2d/R3; **default-off**, produkce až po R4 |
+| **H2 / P0–P1 — čitelná HumanWiki** | „Více → Kontext“ + univerzální hledání, kategorie, stránka entity, editace claimu, citace, historie, vztahy a status pokrytí | H1 + autorizační review/editace, ověřené čtení/gating; bez pátého mobilního tabu |
+| **H3 / P1 — soukromá obsahová pošta** | Oddělený opt-in pro historický Gmail content bootstrap a inkrementální změny, později iCloud IMAP | Nejprve H1/H2 a explicitní souhlas **nad rámec** Gmail v4 metadata-only, source ACL, štítky/citlivost, retention, audit, bezpečnostní testy; přístup k produkčnímu obsahu až po R4 |
+| **H4 / P1 — continuous learning** | Nové autorizované interakce vedené v Lumi a vybrané změny zdrojů → návrhy aktualizací/review | H2/H3 dle zdroje; ChatGPT/Claude mimo Lumi bez exportu nebo nové samostatné integrace nejsou live zdrojem |
+
+**Pořadí vůči stávající kritické cestě:** R2d a první vertikální R3-slice zůstávají předpokladem pro produkčně bezpečnou znalostní vrstvu; H0 může běžet paralelně a H1 na syntetickém stagingu bez aktivace klienta. **H1/H2 jsou před H3**, aby nejdřív fungovala přenosná paměť z historických rozhovorů a kontrola zdrojů, než se připojí celá schránka. R4 nadále vyžaduje vlastníka, inventuru, backup/restore a přesný E2E release gate; nový návrh nepovoluje reset ani provozní import. R5 spolupráce se nemění, HumanWiki je samostatný proud závislý na stejném ACL.
+
+**Zastavení / přijetí:** každá etapa se hodnotí podle skutečně použitelného toku a negativních testů: opakovaný import bez duplicit, nulový únik napříč Oblastmi a modely, explicitní review, změny v čase, odvolání zdroje s revalidací, export/restore, fallback bez indexu. Žádný staging helper, sémantický index ani metadata-only Gmail nelze prezentovat jako hotové učení o uživateli. Tento dodatek **nemění historický snapshot vývoje z 2026-11-05 výše** ani nepovažuje otevřené implementační PR za sloučené.
+
 ### Rozhodnutí 2026-11-05 — revize UI a první vertikální řez
 
 Podle [rozhodnutí vlastníka 2026-11-05](decisions/2026-11-05-ui-revize-a-vertikalni-rez.md): Návrh Lumi má ikonu jiskry ✦ (hvězda zůstává Mému plánu), přepínač motivu je jen v Nastavení a Quick Capture je plovoucí tlačítko na telefonu i desktopu. **Prvním vertikálním řezem je Můj plán pro jednu identitu**, zařazený **před R2d.4 a R2d.5**: UI nad cílovými staging endpointy (#215, #229, #233) pro čtení dne, dokončení/obnovení, „Kdy“ dnes/zítra a Undo. Řez je **staging a default-off**; produkční aktivace dál vyžaduje UI-09/R3, R4 brány a samostatný souhlas.

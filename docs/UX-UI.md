@@ -35,6 +35,7 @@ Ověření: na Home, Inboxu, Today, Calendar, Projects a v detailu úkolu nejsou
 | **LUMI-UX-013** | Mobile Calendar | P1 | LUMI-FR-004 |
 | **LUMI-UX-014** | Proaktivní oznámení | P2 | LUMI-FR-009 |
 | **LUMI-UX-015** | Voice interaction | P2 | LUMI-FR-012 |
+| **LUMI-UX-016** | HumanWiki / Kontext + průvodce importem a review | P1 (bootstrap P0) | LUMI-FR-014, 007, 008, 011 |
 
 ## Testování a interakční pravidla
 
@@ -158,3 +159,17 @@ Tato kapitola rozšiřuje obrazovky Notes, Project detail a Global search; revie
 - Mobilní detail zachová štítek významu, citaci a zdroj před zkráceným náhledem; kanonický úkol nebo poznámka se otevírá jako další celá stránka v zásobníku; přechodná kontrola či akce může použít sheet. Přepnutí workspace/odhlášení odstraní odvozené výsledky a úryvky podle policy; na klientovi není vektorový index. Stávající offline čtení uložených kanonických dat řídí dosavadní sync kontrakt.
 
 Akceptace: český online dotaz s odlišnou formulací lze ověřit otevřením přesné citace; podobný výsledek nevytváří claim ani úkol; nepřístupná položka se neobjeví v seznamu, počtu, autocomplete ani při chybě a neodhalí existenci cíle wikilinku; confidential i restricted obsah se standardně nevydává externímu poskytovateli ani MCP; offline zůstanou čitelná uložená kanonická data a funguje jen lexikální lokální hledání; po změně zdroje UI nepředstírá čerstvost; graf a Search jsou klávesnicí i čtečkou ovladatelné a stav nesdělují jen barvou.
+
+## HumanWiki — cílové UX a průvodce importem (2026-11-08)
+
+**Status:** cílová specifikace LUMI-UX-016, nikoli hotové UI. [Schválené rozhodnutí](decisions/2026-11-08-humanwiki-knowledge-bootstrap.md). HumanWiki **není pátá mobilní záložka** ani nová výchozí Home; v Lumi se otevírá **Více → Kontext** a z globálního hledání, na Macu rovněž přes sidebar/inspektor. „Můj plán / Kalendář / Projekty / Více“ zůstává beze změny.
+
+- **Přehled Kontext:** stejné Vše / Osobní / Sdílené jako jiné autorizované pohledy; sekce Lidé, Projekty, Témata, Rozhodnutí/historie, Organizace a místa, Události/závazky. Vyhledání konkrétní osoby či tématu se vždy omezuje serverovým ACL. Poslední změny a stav zdrojů neprozradí ani počet neveřejných záznamů.
+- **Wiki detail:** krátký souhrn, „Co aktuálně platí“, propojené entity, související rozhodnutí/historie a odkazy na zdroje. U každého výroku je čitelný stav **Potvrzené / Návrh / Sporné / Zastaralé**, datum a „Proč to vím?“ s autorizovaným locator/evidence. Původní zpráva může zůstat nedostupná po smazání/odpojení; UI netvrdí opak.
+- **Upravit znalost:** uživatel zvolí opravit, potvrdit, zamítnout nebo označit za neaktuální; v dialogu vidí přesný dopad a zdroje. Úprava kanonického claimu se projeví na wiki i v AI odpovědi, má historii a bezpečné Undo pouze tam, kde to dovoluje současná revize a práva. Změna claimu není automatickým úkolem ani odesláním zprávy.
+- **Importní průvodce:** výběr ChatGPT/Claude exportu a později výslovně povolené účty/štítky/období v Gmailu či iCloud Mail. Přehled ukáže počet skutečně načtených zdrojů, vynechané části, omezení rozsahu, osobní default, retention, případný egress do AI a tlačítka spustit/zastavit. Žádný UI přepínač Gmail v4 metadata sync nemůže sloužit jako souhlas s analýzou těla zpráv.
+- **Review inbox:** navržená fakta, konflikty platnosti a pochybné identity mají původ, čas a možnost opravy; hromadné potvrzení je konkrétní a vědomé. Souhrnný profil nevydává návrhy za ověřené informace. U citlivých a třetích osob minimalizovat text v přehledech a zamknutých notifikacích.
+- **Odvolání:** jasně oddělené odpojit synchronizaci, zrušit souhlas, smazat importovaná data / odvozené indexy a odstranit konkrétní tvrzení; uživateli se zobrazí dopad na nezávislé zdroje, historii a zálohy. Po revoke okamžitě skrýt stale výsledky a zobrazit pravdivý stav revalidace.
+- **Přístupnost a offline:** souhrny a linky ovladatelné klávesnicí i čtečkou, české popisky, bez technických ID v běžném UI. Mobilní detail používá stávající full-page navigaci. Offline lze číst jen dříve autorizovaná uložená kanonická data; live provenance/semantic search a import jsou nedostupné a stav je označen jako neúplný.
+
+**UX akceptace:** z opakovaného importu vznikne jediný viditelný návrh a více korektně označených zdrojů; conflicting date se neupraví bez potvrzení; člověk může opravit fakt na stránce a novou odpověď Lumi lze dohledat ke stejné revizi; změna Vše/Osobní/Sdílené nebo identity nepropustí text, počty ani odkazy cizí Oblasti; chybějící export či odpojený Gmail je pravdivě označen a nevyvolá falešný pocit úplné znalosti.
