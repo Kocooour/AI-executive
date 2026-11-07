@@ -190,17 +190,15 @@ export function TargetStagingGlobalIndexPreview({
       {ready.items.length===0
         ?<p className="stagingGlobalEmpty">V tomto rozsahu nejsou dostupné položky.</p>
         :<ul className="stagingGlobalItems">
-          {ready.items.map(entry=><li
+          {ready.items.map(entry=>{const href=stagingIndexDetailHref(entry.kind,entry.item.id,{
+            project:projectDetailEnabled,note:noteDetailEnabled,
+          });return <li
             key={entry.kind+":"+entry.item.id}
             className="stagingGlobalItem" data-area-kind={entry.item.areaKind}>
             <span className="stagingGlobalGlyph" data-kind={entry.kind}
               aria-hidden="true"/>
-            {stagingIndexDetailHref(entry.kind,entry.item.id,{
-              project:projectDetailEnabled,note:noteDetailEnabled,
-            }) ? <a className="stagingGlobalItemTitle stagingGlobalItemLink"
-              href={stagingIndexDetailHref(entry.kind,entry.item.id,{
-                project:projectDetailEnabled,note:noteDetailEnabled,
-              })!}
+            {href ? <a className="stagingGlobalItemTitle stagingGlobalItemLink"
+              href={href}
               aria-label={entry.kind==="project"
                 ?"Otevřít projekt: "+entry.item.title
                 :"Otevřít poznámku: "+entry.item.title}>
@@ -210,7 +208,7 @@ export function TargetStagingGlobalIndexPreview({
             <span className="stagingGlobalArea">
               {entry.item.areaKind==="private"?"Osobní":"Sdílené"}
             </span>
-          </li>)}
+          </li>;})}
         </ul>}
       {ready.hasMore&&<button type="button" disabled={moreBusy}
         onClick={()=>{void loadMore();}}>Načíst další položky</button>}
