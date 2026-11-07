@@ -86,4 +86,5 @@ test("keyboard date navigation uses civil days, crosses DST/year boundaries and 
   assert.equal(mobileCalendarKeyboardTarget("2026-11-07", "Enter"), null);
   assert.equal(mobileCalendarKeyboardTarget("2026-11-07", "Tab"), null);
   assert.equal(mobileCalendarKeyboardTarget("invalid", "ArrowLeft"), null);
+  assert.equal(mobileCalendarKeyboardTarget("2026-11-07", "__proto__"), null);
 });
