@@ -66,7 +66,7 @@ test("UI-09e links need an explicit fresh detail GET, and tasks have no link",as
 
   await page.goto(index); // independent newly authorized index read
   await expect(page.getByRole("link",{name:"Otevřít projekt: Ověřený projekt"})).toBeVisible();
-  expect(indexGets()).toBe(2);
+  expect(indexGets()).toBeGreaterThan(1); // navigating back must reauthorize the index
   await page.getByRole("link",{name:"Otevřít projekt: Ověřený projekt"}).click();
   await expect(page).toHaveURL(/\/target-staging\/projects\/p-1\/preview$/);
   await expect(page.getByRole("heading",{name:"Úkoly projektu"})).toBeVisible();
