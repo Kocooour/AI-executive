@@ -54,12 +54,7 @@ export function mobileCalendarReadWindow(day: string, today: string, timezone: s
  */
 export function mobileCalendarKeyboardTarget(day: string, key: string): string | null {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) return null;
-  const offsets: Record<string, number> = {
-    ArrowLeft: -1,
-    ArrowRight: 1,
-    PageUp: -7,
-    PageDown: 7,
-  };
-  const offset = offsets[key];
-  return offset === undefined ? null : addCalendarDays(day, offset);
+  const offset = key === "ArrowLeft" ? -1 : key === "ArrowRight" ? 1 :
+    key === "PageUp" ? -7 : key === "PageDown" ? 7 : null;
+  return offset === null ? null : addCalendarDays(day, offset);
 }
