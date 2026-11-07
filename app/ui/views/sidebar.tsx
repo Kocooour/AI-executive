@@ -151,6 +151,9 @@ export function Sidebar({ app }: { app: LumiApp }) {
             <button
               className={`${active ? "active" : ""} ${dragTarget === `section:${x}` ? "dropActive" : ""}`.trim()}
               aria-current={active ? "page" : undefined}
+              aria-label={planPreview ? (language === "cs"
+                ? "Můj plán – vývojový náhled nad stávajícími daty"
+                : "My Plan – development preview with legacy data") : undefined}
               data-nav-view={destination}
               data-nav-tab={planPreview ? "my-plan-preview" : undefined}
               data-drop-section={draggable ? x : undefined}
