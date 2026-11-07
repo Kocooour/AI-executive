@@ -30,6 +30,8 @@ const failures:Record<TitleSearchFailure,string>={
   "invalid-response":"Odpověď neprošla kontrolou. Žádné výsledky se nezobrazují.",
 };
 
+function foregroundOnline(){return document.visibilityState!=="hidden"&&navigator.onLine;}
+
 export function TargetStagingTitleSearchPreview(){
   const session=useRef<ReturnType<typeof createStagingTitleSearchSession>|null>(null);
   if(session.current===null)session.current=createStagingTitleSearchSession();
@@ -100,9 +102,9 @@ export function TargetStagingTitleSearchPreview(){
     const pending=session.current!.first({query,scope,limit:25});
     setSnapshot(session.current!.getSnapshot());
     const result=await pending;
-    if(epoch.current!==id||document.visibilityState==="hidden"||!navigator.onLine)return;
+    if(epoch.current!==id||!foregroundOnline())return;
     setSnapshot(session.current!.getSnapshot());
-    setFailure(result.ok?null:result.reason);
+    setFailure(result.ok===false?result.reason:null);
   }
   async function loadMore(){
     if(snapshot?.status!=="ready"||!snapshot.hasMore||
@@ -115,9 +117,10 @@ export function TargetStagingTitleSearchPreview(){
     // Snapshot is loading and cannot render old titles while server rechecks ACL.
     setSnapshot(session.current!.getSnapshot());
     const result=await pending;
-    if(epoch.current!==id||document.visibilityState==="hidden"||!navigator.onLine)return;
+    if(epoch.current!==id||!foregroundOnline())return;
     setSnapshot(session.current!.getSnapshot());
-    setFailure(result.ok?null:result.reason==="limit-reached"?"invalid-request":result.reason);
+    setFailure(result.ok===false
+      ?(result.reason==="limit-reached"?"invalid-request":result.reason):null);
   }
 
   const ready=snapshot?.status==="ready"?snapshot:null;
