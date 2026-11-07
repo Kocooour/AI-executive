@@ -46,3 +46,15 @@ export function mobileCalendarReadWindow(day: string, today: string, timezone: s
     ? { from: range.start, to: range.end }
     : null;
 }
+
+/**
+ * Keyboard movement for the one-day mobile date strip. Civil-day arithmetic
+ * keeps navigation stable across DST transitions and month/year boundaries.
+ * Non-navigation keys must retain their native behavior.
+ */
+export function mobileCalendarKeyboardTarget(day: string, key: string): string | null {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) return null;
+  const offset = key === "ArrowLeft" ? -1 : key === "ArrowRight" ? 1 :
+    key === "PageUp" ? -7 : key === "PageDown" ? 7 : null;
+  return offset === null ? null : addCalendarDays(day, offset);
+}
