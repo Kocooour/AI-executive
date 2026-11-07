@@ -1,4 +1,4 @@
-/** R3-slice/UI-01 and BE-14: read-only, browser-side staging My Plan transport.
+/** R3-slice/UI-01 and BE-14/15: read-only, browser-side staging My Plan transport.
  * The server remains the authority for identity, Area ACL, cursor and epochs.
  * No task data is cached, persisted, or projected into the legacy task store. */
 export type MyPlanSliceFilter="all"|"personal"|"shared";
@@ -135,6 +135,35 @@ export function appendMyPlanSlice(
     tomorrow:{tasks:mergedTomorrow,hasMore:next.tomorrow.hasMore}};
 }
 
+/** BE-15: settle My Plan reads on abort before HTTP headers arrive.
+ * A custom fetch adapter can ignore AbortSignal indefinitely; keep the real
+ * GET and its signal unchanged, and cancel a response if it arrives too late.
+ * Dispatch synchronously to preserve request ordering with rapid reloads. */
+async function fetchMyPlanUntilAbort(
+  request:()=>Promise<Response>,signal?:AbortSignal,
+):Promise<Response|null>{
+  if(!signal)return request();
+  if(signal.aborted)return null;
+  let onAbort=()=>{};
+  const aborted=new Promise<null>(resolve=>{
+    onAbort=()=>resolve(null);
+    signal.addEventListener("abort",onAbort,{once:true});
+  });
+  try{
+    if(signal.aborted)return null;
+    const pending=Promise.resolve(request());
+    const response=await Promise.race([pending,aborted]);
+    if(response===null){
+      // The caller has already discarded this generation; no late body is
+      // parsed or exposed, and the adapter cannot trigger a retry.
+      void pending.then(late=>{discardMyPlanBody(late);},()=>{});
+    }
+    return response;
+  }finally{
+    signal.removeEventListener("abort",onAbort);
+  }
+}
+
 // R3-slice/BE-14. Two day buckets may each hold 100 title-rich tasks.
 // Eight MiB accommodates even JSON-escaped 4096-byte titles, yet bounds
 // hostile/corrupted responses before JSON.parse and the strict DTO allowlist.
@@ -225,10 +254,15 @@ export async function fetchMyPlanSlice(
   if(params.cursor!==undefined)query.set("cursor",params.cursor);
   let response:Response;
   try {
-    response=await fetchImpl("/api/target-staging/my-plan/slice?"+query,{
+    const url="/api/target-staging/my-plan/slice?"+query;
+    const init:RequestInit={
       method:"GET",credentials:"same-origin",cache:"no-store",redirect:"error",
       headers:{accept:"application/json"},signal:params.signal,
-    });
+    };
+    const received=await fetchMyPlanUntilAbort(
+      ()=>fetchImpl(url,init),params.signal);
+    if(received===null)return {ok:false,reason:"aborted"};
+    response=received;
   }catch{
     return {ok:false,reason:params.signal?.aborted?"aborted":"offline"};
   }
