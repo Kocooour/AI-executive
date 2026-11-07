@@ -116,6 +116,56 @@ export function appendGlobalIndexPage(
     return null;
   return {...next,items:[...previous.items,...next.items]};
 }
+/** R3 / BE-17: ephemeral continuation state for EXPLICIT global-index reads.
+ * The server still authorizes every page. Caller must discard the chain on
+ * logout, identity/scope change or ANY failed fetch (including 401/409).
+ * Never persist titles/cursors or silently prefetch the next page. */
+export type GlobalIndexPageChain={
+  readonly scope:GlobalIndexScope;
+  readonly limit:number;
+  readonly page:GlobalIndexPage;
+  readonly issuedCursors:readonly string[];
+};
+
+/** Start only with a successfully decoded and individually validated page. */
+export function beginGlobalIndexPageChain(
+  result:GlobalIndexResult,params:{scope:GlobalIndexScope;limit:number},
+):GlobalIndexPageChain|null{
+  if(!result.ok||!scopes.includes(params.scope)||
+    !Number.isSafeInteger(params.limit)||params.limit<1||params.limit>100)return null;
+  const page=parseGlobalIndexPage(result.page,params);
+  if(!page)return null;
+  return {scope:params.scope,limit:params.limit,page,
+    issuedCursors:page.nextCursor?[page.nextCursor]:[]};
+}
+
+/** Consume ONE explicitly requested continuation, never reusing an old cursor.
+ * Returns null instead of a partial title list on any protocol/ACL failure.
+ * This pure function does not fetch or retain anything outside its caller. */
+export function advanceGlobalIndexPageChain(
+  previous:GlobalIndexPageChain,requestedCursor:string,result:GlobalIndexResult,
+):GlobalIndexPageChain|null{
+  if(!previous||!result.ok||
+    !scopes.includes(previous.scope)||
+    !Number.isSafeInteger(previous.limit)||previous.limit<1||previous.limit>100||
+    !previous.page.hasMore||
+    !validCursor(requestedCursor)||
+    previous.page.nextCursor!==requestedCursor||
+    !Array.isArray(previous.issuedCursors)||
+    !previous.issuedCursors.includes(requestedCursor))return null;
+  const next=parseGlobalIndexPage(result.page,{
+    scope:previous.scope,limit:previous.limit,
+  });
+  if(!next||(next.nextCursor!==null&&
+    previous.issuedCursors.includes(next.nextCursor)))return null;
+  const combined=appendGlobalIndexPage(previous.page,next);
+  if(!combined)return null;
+  return {scope:previous.scope,limit:previous.limit,page:combined,
+    issuedCursors:next.nextCursor
+      ?[...previous.issuedCursors,next.nextCursor]
+      :[...previous.issuedCursors]};
+}
+
 function discard(response:Response):void{
   try{if(response.body)void response.body.cancel().catch(()=>{});}
   catch{/* Synthetic or already-locked body; no task content retained. */}
