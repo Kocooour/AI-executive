@@ -31,6 +31,9 @@
 .stagingGlobalGlyph[data-kind="project"]{border-radius:50%}
 .stagingGlobalGlyph[data-kind="note"]{border-radius:2px;border-width:1px;transform:rotate(-3deg)}
 .stagingGlobalItemTitle{flex:1;min-width:0;overflow-wrap:anywhere;font-weight:600}
+.stagingGlobalItemLink{color:inherit;text-decoration:underline;text-decoration-color:var(--muted,#888);
+  text-underline-offset:3px;display:inline-flex;align-items:center;min-height:44px}
+.stagingGlobalItemLink:hover{text-decoration-color:currentColor}
 .stagingGlobalKind{color:var(--muted,#666);font-size:12px;white-space:nowrap}
 .stagingGlobalArea{font-size:12px;font-weight:600;white-space:nowrap;color:var(--text,#20242a)}
 .stagingGlobalPrivacy{font-size:13px;color:var(--muted,#666)}
