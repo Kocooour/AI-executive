@@ -50,11 +50,11 @@ async function performSearch(page:import("@playwright/test").Page,query="synteti
 
 test("explicit search and paging preserve focus while all old titles remain concealed",async({page})=>{
   let calls=0;
-  let pending:Route|null=null;
+  const pending:{route?:Route}={};
   await page.route(endpoint,route=>{
     calls++;
     const url=new URL(route.request().url());
-    if(url.searchParams.has("cursor")){pending=route;return;}
+    if(url.searchParams.has("cursor")){pending.route=route;return;}
     return fulfill(route,{items:items(1,25),nextCursor:"YQ.Yg"});
   });
   await page.goto(preview);
@@ -67,11 +67,11 @@ test("explicit search and paging preserve focus while all old titles remain conc
   const loadMore=page.getByRole("button",{name:"Načíst další výsledky"});
   await loadMore.focus();
   await loadMore.press("Enter");
-  await expect.poll(()=>pending!==null).toBe(true);
+  await expect.poll(()=>pending.route!==undefined).toBe(true);
   await expect(page.locator(rows)).toHaveCount(0);
   await expect(page.locator(status)).toHaveText("Načítám autorizované výsledky…");
   await expect(page.locator(status)).toBeFocused();
-  await pending!.fulfill({
+  await pending.route!.fulfill({
     status:200,
     headers:{"cache-control":"no-store","content-type":"application/json"},
     body:JSON.stringify({
