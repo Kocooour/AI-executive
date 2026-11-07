@@ -1971,6 +1971,11 @@ export function useLumiApp() {
         if (mobileMoreExitFocus(destination, currentViewForMoreFocusRef.current,
           Boolean(moreDialogRef.current), window.matchMedia("(max-width: 700px)").matches) !== "destination") return;
         const heading = document.querySelector<HTMLElement>(".appPane .pageTitleRow h1");
+        // A subsequent pointer/keyboard action owns its new focus; do not
+        // steal it on the next animation frame after the sheet disappears.
+        const activeElement = document.activeElement;
+        if (activeElement instanceof HTMLElement && activeElement.isConnected &&
+            activeElement !== document.body && activeElement !== moreTriggerRef.current) return;
         if (heading?.isConnected && heading.getClientRects().length) heading.focus({ preventScroll: true });
       });
     };
