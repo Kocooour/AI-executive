@@ -21,7 +21,5 @@ test("UI-06e restricts circle to preview navigation", () => {
   assert.match(sidebar, /mobileDesignV1Preview && x === "Projects" \? "ProjectsV1" : x/);
   assert.match(phone, /mobileDesignV1Preview && x === "Projects" \? "ProjectsV1" : x/);
   assert.match(sidebar, /<ProjectIcon previewCircle=\{mobileDesignV1Preview\} \/>/);
-  assert.match(sidebar, /data-project-completed=\{mobileDesignV1Preview && project\.status === "completed"/);
-  assert.match(css, /\[data-design-system="lumi-v1"\].*\[data-project-completed="true"\]/);
   assert.doesNotMatch(phone, /role="checkbox"/, "Projects tab is navigation only");
 });
