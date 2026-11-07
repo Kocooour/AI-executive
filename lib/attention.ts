@@ -48,7 +48,7 @@ function validDate(date: string): boolean {
 }
 
 const dateFormats = new Map<string, Intl.DateTimeFormat>();
-function localDate(at: number, timezone: string): string {
+export function localDate(at: number, timezone: string): string {
   let format = dateFormats.get(timezone);
   if (!format) {
     format = new Intl.DateTimeFormat("en-US", { timeZone: timezone, year: "numeric", month: "2-digit", day: "2-digit" });
@@ -59,7 +59,7 @@ function localDate(at: number, timezone: string): string {
   return `${byType.year}-${byType.month}-${byType.day}`;
 }
 
-function endOfLocalDate(date: string, timezone: string): number | null {
+export function endOfLocalDate(date: string, timezone: string): number | null {
   if (!validDate(date)) return null;
   const nominal = Date.parse(`${date}T00:00:00Z`);
   let lo = nominal - 2 * DAY;
@@ -74,7 +74,7 @@ function endOfLocalDate(date: string, timezone: string): number | null {
 }
 
 // The first millisecond of a local date.
-function startOfLocalDate(date: string, timezone: string): number | null {
+export function startOfLocalDate(date: string, timezone: string): number | null {
   if (!validDate(date)) return null;
   const previous = new Date(Date.parse(`${date}T00:00:00Z`) - DAY).toISOString().slice(0, 10);
   return endOfLocalDate(previous, timezone);

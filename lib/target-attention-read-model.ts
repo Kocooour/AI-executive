@@ -1,0 +1,197 @@
+/**
+ * R2d.5a — authorized, actor-scoped Attention candidates (staging only).
+ *
+ * Internal, read-only selector: no HTTP, UI, schema change or push. It derives
+ * deadline / planned-date candidates for ONE actor from exactly the My Plan
+ * population (own private Areas + shared Areas where the actor is
+ * editor/admin AND the task is assigned to the actor). Lifecycle state
+ * (snooze/dismiss) is a later slice. One SQL statement applies ACL, rules,
+ * ordering and pagination before any row is released.
+ */
+import {createHash} from "node:crypto";
+import type {DatabaseSync} from "node:sqlite";
+import {MAX_SCOPED_READ_AREAS} from "./target-staging-read-limits";
+import {temporalCalendarOrdinal} from "./target-task-temporal-read-model";
+import type {TargetReadLinearization} from "./target-task-read-model";
+import type {HomeSummaryAreaEpoch} from "./target-my-plan-home-summary";
+import {endOfLocalDate,localDate} from "./attention";
+
+export type AttentionAreaFilter="all"|"personal"|"shared";
+export type AttentionRuleId="deadline_overdue"|"deadline_soon"|"planned_date_passed";
+export type AttentionCandidate={
+  attentionKey:string;subjectType:"task";taskId:string;title:string;
+  projectId:string|null;areaId:string;areaKind:"private"|"shared";
+  assignedToMe?:true;
+  ruleId:AttentionRuleId;ruleVersion:1;severity:1|2|5;reasonCode:AttentionRuleId;
+  relevantOn:string;relevantAt:number;dueOn:string|null;
+  /** Only the actor's own planned day. */
+  whenOn:string|null;thresholdHours:0|48;sourceRevision:number;
+};
+export type AttentionCandidatePage={
+  items:AttentionCandidate[];hasMore:boolean;revision:string;
+  evaluatedAtMs:number;timeZone:string;evaluationDate:string;
+  soonThroughDate:string|null;areaFilter:AttentionAreaFilter;
+  /** Internal-only (never sent to clients): live session+Area+private-epoch check. */
+  privateEpoch:number;linearization:TargetReadLinearization;
+  areaEpochs:HomeSummaryAreaEpoch[];
+};
+type Area={areaId:string;areaKind:"private"|"shared";
+  access:"private-owner"|"editor"|"admin";
+  policyRevision:number;contentRevision:number;projectContentRevision:number};
+type Row={taskId:string;title:string;projectId:string|null;areaId:string;
+  areaKind:"private"|"shared";dueOn:string|null;whenOn:string|null;
+  ruleId:string;severity:number;relevantOn:string;sourceRevision:number};
+const ACTOR=/^[A-Za-z0-9_.:@-]{1,120}$/;
+const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const TZ=/^[A-Za-z][A-Za-z0-9_+\-]*(\/[A-Za-z0-9_+\-]+){0,2}$/;
+const HOUR=3_600_000;
+const safeInt=(n:unknown):n is number=>
+  typeof n==="number"&&Number.isSafeInteger(n)&&n>=0;
+const addDays=(date:string,n:number)=>
+  new Date(Date.parse(date+"T00:00:00Z")+n*86_400_000).toISOString().slice(0,10);
+
+/** Stable per rule+task+occurrence; deliberately no actor/area/title/revision. */
+export function attentionKey(ruleId:string,taskId:string,relevantOn:string):string {
+  return "tatt1:"+createHash("sha256").update("lumi:r2d5:attention:v1\0")
+    .update(JSON.stringify([ruleId,1,taskId,"date-"+relevantOn])).digest("hex");
+}
+
+export function readAuthorizedAttentionCandidatePage(db:DatabaseSync,request:{
+  actorUserId:string;areaFilter:AttentionAreaFilter;evaluatedAtMs:number;
+  timeZone:string;limit:number;offset:number;restoreGeneration:string;
+}):AttentionCandidatePage|null {
+  try {
+    if(!request||typeof request.actorUserId!=="string"||!ACTOR.test(request.actorUserId)||
+      !["all","personal","shared"].includes(request.areaFilter)||
+      !safeInt(request.evaluatedAtMs)||
+      typeof request.timeZone!=="string"||request.timeZone.length<1||
+      request.timeZone.length>64||!TZ.test(request.timeZone)||
+      !safeInt(request.limit)||request.limit<1||request.limit>100||
+      !safeInt(request.offset)||request.offset>10_000||
+      typeof request.restoreGeneration!=="string"||!UUID.test(request.restoreGeneration))
+      return null;
+    const tz=request.timeZone,now=request.evaluatedAtMs;
+    new Intl.DateTimeFormat("en-US",{timeZone:tz});
+    const D=localDate(now,tz);
+    if(temporalCalendarOrdinal(D)===null)return null;
+    // Largest local date whose all-day deadline instant is within 48h.
+    let S:string|null=null;
+    for(const n of [0,1,2]){
+      const d=addDays(D,n),end=endOfLocalDate(d,tz);
+      if(end===null)return null;
+      if(end-now>=0&&end-now<=48*HOUR)S=d;
+    }
+    const privateRow=db.prepare(
+      "SELECT revision FROM personal_plan_epochs WHERE user_id=?"
+    ).get(request.actorUserId) as {revision:number}|undefined;
+    if(!privateRow||!safeInt(privateRow.revision))return null;
+    // Includes EMPTY accessible Areas so revocation during paging is detected.
+    const areas=db.prepare(`SELECT a.id AS areaId,a.kind AS areaKind,
+        CASE WHEN a.kind='private' THEN 'private-owner' ELSE m.role END AS access,
+        a.policy_revision AS policyRevision,a.content_revision AS contentRevision,
+        a.project_content_revision AS projectContentRevision
+      FROM areas a JOIN workspaces w ON w.id=a.workspace_id
+      JOIN identities actor ON actor.id=?
+      LEFT JOIN area_members m ON m.area_id=a.id AND m.user_id=actor.id
+      WHERE a.owner_user_id=w.owner_user_id AND
+        ((a.kind='private' AND w.kind='personal' AND a.owner_user_id=actor.id)
+         OR (a.kind='shared' AND w.kind='shared'
+             AND m.role IN ('editor','admin')))
+      ORDER BY a.id COLLATE BINARY LIMIT ?`)
+      .all(request.actorUserId,MAX_SCOPED_READ_AREAS+1) as Area[];
+    if(areas.length>MAX_SCOPED_READ_AREAS||
+      areas.some(a=>typeof a.areaId!=="string"||!a.areaId||
+        !safeInt(a.policyRevision)||!safeInt(a.contentRevision)||
+        !safeInt(a.projectContentRevision)||
+        (a.areaKind==="private"&&a.access!=="private-owner")||
+        (a.areaKind==="shared"&&!["editor","admin"].includes(a.access))))
+      return null;
+
+    // $d = evaluation date, $s = soon-through date (or NULL: no soon items).
+    const q=`WITH eligible AS (
+      SELECT t.id AS taskId,t.title AS title,t.project_id AS projectId,
+        a.id AS areaId,a.kind AS areaKind,t.due_on AS dueOn,
+        plan.when_on AS whenOn,t.revision AS sourceRevision
+      FROM tasks t LEFT JOIN projects p ON p.id=t.project_id
+      JOIN areas a ON a.id=COALESCE(t.area_id,p.area_id)
+      JOIN workspaces w ON w.id=a.workspace_id AND w.owner_user_id=a.owner_user_id
+      JOIN identities actor ON actor.id=?
+      LEFT JOIN area_members m ON m.area_id=a.id AND m.user_id=actor.id
+      LEFT JOIN personal_task_plans plan
+        ON plan.task_id=t.id AND plan.user_id=actor.id
+      WHERE t.status='open'
+        AND ((t.project_id IS NULL AND t.area_id IS NOT NULL)
+          OR (t.project_id IS NOT NULL AND t.area_id IS NULL AND p.id IS NOT NULL))
+        AND ((a.kind='private' AND w.kind='personal' AND a.owner_user_id=actor.id)
+          OR (a.kind='shared' AND w.kind='shared' AND
+              m.role IN ('editor','admin') AND t.assignee_user_id=actor.id))
+        AND (?='all' OR (?='personal' AND a.kind='private')
+             OR (?='shared' AND a.kind='shared'))
+    ), ruled AS (
+      SELECT *,CASE
+        WHEN dueOn IS NOT NULL AND dueOn < ? THEN 'deadline_overdue'
+        WHEN dueOn IS NOT NULL AND ? IS NOT NULL AND dueOn >= ? AND dueOn <= ?
+          THEN 'deadline_soon'
+        WHEN whenOn IS NOT NULL AND whenOn < ? AND NOT
+          (dueOn IS NOT NULL AND ? IS NOT NULL AND dueOn <= ?)
+          THEN 'planned_date_passed' END AS ruleId
+      FROM eligible
+    ) SELECT taskId,title,projectId,areaId,areaKind,dueOn,whenOn,sourceRevision,ruleId,
+        CASE ruleId WHEN 'deadline_overdue' THEN 1 WHEN 'deadline_soon' THEN 2
+          ELSE 5 END AS severity,
+        CASE ruleId WHEN 'planned_date_passed' THEN whenOn ELSE dueOn END AS relevantOn
+      FROM ruled WHERE ruleId IS NOT NULL
+      ORDER BY severity ASC,relevantOn COLLATE BINARY ASC,taskId COLLATE BINARY ASC
+      LIMIT ? OFFSET ?`;
+    const rows=db.prepare(q).all(request.actorUserId,
+      request.areaFilter,request.areaFilter,request.areaFilter,
+      D,S,D,S,D,S,S,request.limit+1,request.offset) as unknown as Row[];
+    const available=new Set(areas.map(a=>a.areaId));
+    const RULES:Record<string,number>={deadline_overdue:1,deadline_soon:2,planned_date_passed:5};
+    const iso=(d:unknown):d is string=>typeof d==="string"&&temporalCalendarOrdinal(d)!==null;
+    if(rows.some(r=>
+      typeof r.taskId!=="string"||typeof r.title!=="string"||
+      (r.projectId!==null&&typeof r.projectId!=="string")||
+      !available.has(r.areaId)||(r.areaKind!=="private"&&r.areaKind!=="shared")||
+      (r.dueOn!==null&&!iso(r.dueOn))||(r.whenOn!==null&&!iso(r.whenOn))||
+      !safeInt(r.sourceRevision)||RULES[r.ruleId]!==r.severity||
+      !iso(r.relevantOn)||
+      r.relevantOn!==(r.ruleId==="planned_date_passed"?r.whenOn:r.dueOn)))
+      return null;
+    const items:AttentionCandidate[]=[];
+    for(const r of rows.slice(0,request.limit)){
+      const at=endOfLocalDate(r.relevantOn,tz);
+      if(at===null)return null;
+      const ruleId=r.ruleId as AttentionRuleId;
+      items.push({
+        attentionKey:attentionKey(ruleId,r.taskId,r.relevantOn),subjectType:"task",
+        taskId:r.taskId,title:r.title,projectId:r.projectId,areaId:r.areaId,
+        areaKind:r.areaKind,
+        ...(r.areaKind==="shared"?{assignedToMe:true as const}:{}),
+        ruleId,ruleVersion:1,severity:r.severity as 1|2|5,reasonCode:ruleId,
+        relevantOn:r.relevantOn,relevantAt:at,dueOn:r.dueOn,whenOn:r.whenOn,
+        thresholdHours:ruleId==="deadline_soon"?48:0,sourceRevision:r.sourceRevision,
+      });
+    }
+    const hash=createHash("sha256").update("lumi:r2d5:attention-candidates:v1\0")
+      .update(JSON.stringify([
+        request.restoreGeneration,request.actorUserId,request.areaFilter,
+        now,tz,D,S,privateRow.revision,
+      ]));
+    for(const a of areas)hash.update("\0").update(JSON.stringify([
+      a.areaId,a.areaKind,a.access,a.policyRevision,a.contentRevision,
+      a.projectContentRevision,
+    ]));
+    return {
+      items,hasMore:rows.length>request.limit,revision:hash.digest("hex"),
+      evaluatedAtMs:now,timeZone:tz,evaluationDate:D,soonThroughDate:S,
+      areaFilter:request.areaFilter,privateEpoch:privateRow.revision,
+      linearization:{actorUserId:request.actorUserId,
+        areas:areas.map(a=>({areaId:a.areaId,areaKind:a.areaKind,
+          access:a.access,policyRevision:a.policyRevision}))},
+      areaEpochs:areas.map(a=>({areaId:a.areaId,areaKind:a.areaKind,
+        access:a.access,policyRevision:a.policyRevision,
+        contentRevision:a.contentRevision,projectContentRevision:a.projectContentRevision})),
+    };
+  }catch{return null;}
+}
