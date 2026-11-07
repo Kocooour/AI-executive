@@ -213,7 +213,7 @@ export function Sidebar({ app }: { app: LumiApp }) {
                 onDrop={(event) => acceptNativeDrop(event, `entity:${project.id}`)}
                 onClick={() => void inspect(project)}
               >
-                <span aria-hidden="true"><ProjectIcon /></span>
+                <span aria-hidden="true"><ProjectIcon previewCircle={mobileDesignV1Preview} /></span>
                 <span className="sidebarProjectTitle">{project.title || tr("untitledItem")}</span>
               </button>
             ))}
