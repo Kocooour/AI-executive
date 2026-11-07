@@ -62,7 +62,7 @@ export function TargetStagingGlobalIndexPreview(){
     setState({status:"loading"});
     void fetchGlobalIndexPage({scope,signal:controller.signal}).then(result=>{
       if(controller.signal.aborted||requestSequence.current!==id)return;
-      if(result.ok)setState({status:"ready",page:result.page});
+      if(result.ok===true)setState({status:"ready",page:result.page});
       else setState({status:"error",reason:result.reason});
     }).catch(()=>{
       if(!controller.signal.aborted&&requestSequence.current===id)
@@ -147,7 +147,7 @@ export function TargetStagingGlobalIndexPreview(){
     if(controller.signal.aborted||requestSequence.current!==id)return;
     moreInFlight.current=false;
     setMoreBusy(false);
-    if(!result.ok){setState({status:"error",reason:result.reason});return;}
+    if(result.ok===false){setState({status:"error",reason:result.reason});return;}
     const combined=appendGlobalIndexPage(previous,result.page);
     setState(combined?{status:"ready",page:combined}:
       {status:"error",reason:"invalid-response"});
