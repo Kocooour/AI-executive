@@ -380,7 +380,7 @@ function runChild(fx, mode, gate = "", rounds = 1) {
 // A failed readiness assertion must not skip child joins: the test file's
 // after() hook deletes the shared fixture root. Always release the gate,
 // collect both exits (and stderr), and bound a genuinely hung child.
-async function releaseColdWriterGateAndJoin(writers, gate) {
+async function releaseColdWriterGateAndJoin(writers, gate, { terminateAfterMs = 15000, forceAfterMs = 17000 } = {}) {
   let readyCount = 0;
   let setupError = null;
   try {
@@ -408,8 +408,8 @@ async function releaseColdWriterGateAndJoin(writers, gate) {
     stopLive("SIGTERM");
   }
   let timedOut = false;
-  const terminate = setTimeout(() => { timedOut = true; stopLive("SIGTERM"); }, 15000);
-  const forceKill = setTimeout(() => { timedOut = true; stopLive("SIGKILL"); }, 17000);
+  const terminate = setTimeout(() => { timedOut = true; stopLive("SIGTERM"); }, terminateAfterMs);
+  const forceKill = setTimeout(() => { timedOut = true; stopLive("SIGKILL"); }, forceAfterMs);
   let results;
   try {
     results = await Promise.all(writers.map(writer => writer.done));
@@ -1144,6 +1144,20 @@ test("failed cold writer readiness releases the gate and joins ALL children befo
   assert.equal(results[0].code, 0);
   assert.equal(JSON.parse(results[0].stdout).outcome, "ok");
   assert.equal(anchorOf(fx), before + 1, "the released healthy writer must finish before cleanup");
+  assert.equal(journalState(fx).pending, null);
+  assert.equal(durable.checkTargetStagingAnchorLive(fx.store), "ok");
+});
+
+test("a hung cold writer is killed and joined before fixture cleanup", async () => {
+  const fx = makeFixture();
+  const gate = mkdtempSync(path.join(root, "cold-writer-stall-"));
+  const writer = runChild(fx, "raw-cold-gated-hang-after-ready", gate);
+  await assert.rejects(
+    releaseColdWriterGateAndJoin([writer], gate, { terminateAfterMs: 200, forceAfterMs: 500 }),
+    /cold writer startup\/cleanup failed.*child exit deadline expired/,
+  );
+  const result = await writer.done;
+  assert.ok(["SIGTERM", "SIGKILL"].includes(result.signal), JSON.stringify(result));
   assert.equal(journalState(fx).pending, null);
   assert.equal(durable.checkTargetStagingAnchorLive(fx.store), "ok");
 });
