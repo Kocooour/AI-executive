@@ -42,7 +42,7 @@ import { readAuthorizedTemporalTaskPage, readAuthorizedTemporalTaskDetail, readA
 import { readAuthorizedPersonalWhenPage } from "./target-personal-when-read-model";
 import {readAuthorizedMyPlanDayTaskPage} from "./target-my-plan-day-task-read-model";
 import {readAuthorizedAttentionCandidatePage} from "./target-attention-read-model";
-import type {AttentionCandidatePage,AttentionAreaFilter} from "./target-attention-read-model";
+import type {AttentionCandidatePage,AttentionAreaFilter,AttentionView} from "./target-attention-read-model";
 import {readAuthorizedGlobalTaskPage} from "./target-global-task-read-model";
 import type {TargetGlobalTaskPage,TargetGlobalTaskScope} from "./target-global-task-read-model";
 import {readAuthorizedGlobalProjectPage} from "./target-global-project-read-model";
@@ -459,7 +459,7 @@ export function readPreflightedMyPlanDayTaskPage(
  * pinned snapshot. A future HTTP adapter MUST verify session/Area/private epoch live. */
 export function readPreflightedAttentionCandidatePage(
   store:TargetStagingReadStore,access:TargetStagingReadCredential,
-  request:{areaFilter:AttentionAreaFilter;evaluatedAtMs:number;timeZone:string;
+  request:{areaFilter:AttentionAreaFilter;view:AttentionView;evaluatedAtMs:number;timeZone:string;
     limit:number;offset:number},
 ):AttentionCandidatePage|null {
   return withPreflightedStore(store,()=>null,(db,preflight)=>

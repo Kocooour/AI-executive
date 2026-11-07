@@ -6,7 +6,7 @@
 
 Snooze/dismiss musí být atomicky svázán s aktérem, generací obnovy úložiště, čerstvě autorizovaným kandidátem a očekávanou revizí. Funkce **planTargetAttentionLifecycle(record, witness, action)** vrací pouze plán, nikoli zápis či oprávnění.
 
-Volající jí **nesmí** předat identitu, aktuální stav kandidáta ani čas z neověřeného HTTP vstupu. Budoucí pinned writer (R2d.5b.1) musí uvnitř atomické transakce znovu ověřit live session, Area ACL, osobní epochu, stav zdroje a CAS/receipt, teprve poté commitnout změnu s auditní událostí. Čistý výsledek se nesmí automaticky serializovat klientovi.
+Volající jí **nesmí** předat identitu, aktuální stav kandidáta ani čas z neověřeného HTTP vstupu. Budoucí pinned writer (R2d.5b.2) musí uvnitř atomické transakce znovu ověřit live session, Area ACL, osobní epochu, stav zdroje a CAS/receipt, teprve poté commitnout změnu s auditní událostí. Čistý výsledek se nesmí automaticky serializovat klientovi.
 
 ## Přesný kontrakt
 
@@ -20,7 +20,7 @@ Volající jí **nesmí** předat identitu, aktuální stav kandidáta ani čas 
 
 Tento díl **neimplementuje resolved ani superseded**: nepřítomnost na stránce či ve filtrovaných kandidátech může znamenat revokaci oprávnění, nikoli ukončení podmínky. K tomu bude nutný zdrojově ověřený stav a kompletní autorizovaný snapshot. Přechod deadline_soon na deadline_overdue vytváří nový key, takže dřívější dismiss se automaticky nepřenáší; naléhavost a notifikace vyřeší další podřez.
 
-Navazuje R2d.5b.1: v22 schema s per-user content-free lifecycle, auditem a receipts, schema preflight + interní pinned write s CAS; R2d.5b.2: bezpečné reconcile resolved/superseded; R2d.5c: default-off HTTP s live guardem a příkazy. Produkční cutover ani migrace nejsou povolené.
+Navazuje R2d.5b.1 (sloučeno #319): schéma v22 s per-user content-free lifecycle, preflightem a reconcile triggery (resolved/superseded mazáním řádku při konkrétní zdrojové změně, nikoli z pouhé nepřítomnosti kandidáta); R2d.5b.2: interní pinned writer s CAS, receipts a auditem podle této politiky (navíc `restore` pro Undo); R2d.5c: default-off HTTP s live guardem a příkazy. Produkční cutover ani migrace nejsou povolené.
 
 ## Testy
 

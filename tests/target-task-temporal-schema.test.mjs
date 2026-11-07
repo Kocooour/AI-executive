@@ -48,8 +48,8 @@ const taskEvents = db => db.prepare(
   "SELECT op,revision FROM change_log WHERE entity_kind='task' AND entity_id='t' ORDER BY seq",
 ).all().map(x=>[x.op,x.revision]);
 
-test("v21 fresh staging retains v20 open task, due date and exact preflight", () => {
-  assert.equal(TARGET_STORE_SCHEMA_VERSION, 21);
+test("v22 fresh staging retains v20 open task, due date and exact preflight", () => {
+  assert.equal(TARGET_STORE_SCHEMA_VERSION, 22);
   const { db, result } = fixture();
   try {
     const columns = new Set(db.prepare("PRAGMA table_info(tasks)").all().map(r=>r.name));
