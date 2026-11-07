@@ -36,12 +36,14 @@ export function TargetStagingTitleSearchPreview(){
   const session=useRef<ReturnType<typeof createStagingTitleSearchSession>|null>(null);
   if(session.current===null)session.current=createStagingTitleSearchSession();
   const epoch=useRef(0);
+  const pageInFlight=useRef(false);
   const [draft,setDraft]=useState("");
   const [scope,setScope]=useState<TitleSearchScope>("all");
   const [snapshot,setSnapshot]=useState<TitleSearchSessionSnapshot|null>(null);
   const [failure,setFailure]=useState<TitleSearchFailure|null>(null);
 
   function invalidate(reason:TitleSearchFailure|null=null){
+    pageInFlight.current=false;
     epoch.current++;
     session.current?.reset();
     setSnapshot(null);
@@ -50,6 +52,7 @@ export function TargetStagingTitleSearchPreview(){
 
   useEffect(()=>{
     const conceal=(reason:TitleSearchFailure="stale")=>{
+      pageInFlight.current=false;
       epoch.current++;
       session.current?.reset();
       setSnapshot(null);
@@ -107,17 +110,20 @@ export function TargetStagingTitleSearchPreview(){
     setFailure(result.ok===false?result.reason:null);
   }
   async function loadMore(){
+    if(pageInFlight.current)return;
     if(snapshot?.status!=="ready"||!snapshot.hasMore||
       document.visibilityState==="hidden"||!navigator.onLine){
       if(!navigator.onLine)invalidate("offline");
       return;
     }
+    pageInFlight.current=true;
     const id=++epoch.current;
     const pending=session.current!.next();
     // Snapshot is loading and cannot render old titles while server rechecks ACL.
     setSnapshot(session.current!.getSnapshot());
     const result=await pending;
     if(epoch.current!==id||!foregroundOnline())return;
+    pageInFlight.current=false;
     setSnapshot(session.current!.getSnapshot());
     setFailure(result.ok===false
       ?(result.reason==="limit-reached"?"invalid-request":result.reason):null);
