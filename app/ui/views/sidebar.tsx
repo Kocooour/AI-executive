@@ -154,7 +154,7 @@ export function Sidebar({ app }: { app: LumiApp }) {
               aria-label={planPreview ? (language === "cs"
                 ? "Můj plán – vývojový náhled nad stávajícími daty"
                 : "My Plan – development preview with legacy data") : undefined}
-              data-nav-view={destination}
+              data-nav-view={x}
               data-nav-tab={planPreview ? "my-plan-preview" : undefined}
               data-drop-section={draggable ? x : undefined}
               onDragEnter={() => draggable && setActiveDragTarget(`section:${x}`)}
