@@ -29,6 +29,7 @@ export function TargetStagingNotePreview({noteId}:{noteId:string}){
   const [state,setState]=useState<State>({status:"idle"});
   const current=useRef<AbortController|null>(null);
   const epoch=useRef(0);
+  const statusRef=useRef<HTMLParagraphElement>(null);
 
   function conceal(reason:NotePreviewFailure|null=null){
     epoch.current++;
@@ -71,6 +72,9 @@ export function TargetStagingNotePreview({noteId}:{noteId:string}){
     const id=++epoch.current;
     const controller=new AbortController();
     current.current=controller;
+    // The read button is disabled during authorization; retain keyboard focus
+    // on a stable live status instead of losing it to the document.
+    statusRef.current?.focus();
     setState({status:"loading"});
     const result=await readStagingNotePreview(noteId,controller.signal);
     if(controller.signal.aborted||epoch.current!==id||!foregroundOnline())return;
@@ -90,7 +94,7 @@ export function TargetStagingNotePreview({noteId}:{noteId:string}){
       onClick={()=>{void load();}}>
       {state.status==="loading"?"Ověřuji přístup…":"Načíst poznámku"}
     </button>
-    <p role="status" className="stagingNoteStatus">
+    <p role="status" tabIndex={-1} ref={statusRef} className="stagingNoteStatus">
       {state.status==="loading"?"Načítám autorizovaný obsah…":
         note?"Autorizovaný obsah je zobrazen.":""}
     </p>
