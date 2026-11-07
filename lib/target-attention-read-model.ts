@@ -110,6 +110,16 @@ export function readAuthorizedAttentionCandidatePage(db:DatabaseSync,request:{
     ).get(request.actorUserId) as {revision:number}|undefined;
     if(!attRow||!safeInt(attRow.revision))return null;
     const attentionEpoch=attRow.revision;
+    // A malformed own lifecycle row would match neither view and silently drop
+    // a candidate: fail the whole read closed instead (preflight also rejects).
+    const badLife=db.prepare(`SELECT COUNT(*) AS n FROM personal_attention_states
+      WHERE user_id=? AND NOT (
+        (state='dismissed' AND snoozed_until_ms IS NULL) OR
+        (state='snoozed' AND typeof(snoozed_until_ms)='integer'
+          AND snoozed_until_ms > 0 AND snoozed_until_ms <= 9007199254740991))
+        OR (user_id=? AND (typeof(revision)<>'integer' OR revision < 0))`)
+      .get(request.actorUserId,request.actorUserId) as {n:number}|undefined;
+    if(!badLife||badLife.n!==0)return null;
     // Includes EMPTY accessible Areas so revocation during paging is detected.
     const areas=db.prepare(`SELECT a.id AS areaId,a.kind AS areaKind,
         CASE WHEN a.kind='private' THEN 'private-owner' ELSE m.role END AS access,

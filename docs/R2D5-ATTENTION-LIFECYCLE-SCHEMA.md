@@ -63,6 +63,10 @@ CHECK: `snoozed` ⇒ celé číslo `0 < x <= 9007199254740991`;
    - smazání člena, snížení role na viewer, přesun projektu mezi
      Oblastmi — zrcadlo plánovacích triggerů.
    Opětovné přiřazení stav **nikdy neobnoví**.
+6. Nový řádek musí začínat `revision = 0` (insert guard). Samostatné
+   navýšení `revision` bez změny stavu raw SQL nezablokuje, protože právě
+   tak revizi navyšuje vnitřní AFTER trigger (stejný vzor jako
+   `personal_task_plans`); veřejným zápisem bude až příkaz R2d.5b.2.
 
 ## Rozhodnutí: `ruleId` je součástí identity
 
@@ -72,13 +76,25 @@ legacy klíčem `lib/attention.ts` a s urgentní výjimkou PRODUCT pro nově
 zpožděný termín. Naopak nový termín nebo nový plánovaný den je nový
 výskyt a starý stav je smazán.
 
+## Známé hranice (pro R2d.5b.2+)
+
+- Skrytý `planned_date_passed` přežije doplnění termínu; po jeho
+  odstranění se tentýž plánovaný den vrátí stále skrytý. Odpovídá pravidlu
+  „dismiss potlačí tentýž výskyt“; zda je doplnění termínu podstatnou
+  změnou, rozhodne vlastník produktu.
+- Stav `deadline_soon` zůstane po přechodu na `deadline_overdue` uložen,
+  dokud se termín nezmění nebo úkol nedokončí; zabírá kapacitu (4096).
+  Úklid patří do zapisovacího příkazu R2d.5b.2.
+
 ## Preflight
 
 Nový kód `personal_attention_invalid`: kapacita; každá identita má
 epoch a žádný epoch není osiřelý; každý stavový řádek je ACL-platný a
 konzistentní s výskytem (deadline: `due_on = occurrence_on`; planned:
-odpovídající plán) a splňuje sloupcové invarianty. Jakákoli výjimka dotazu
-je tento nález.
+odpovídající plán) a splňuje sloupcové invarianty včetně rozsahu `revision`
+řádku i epochy. Kontrola role je odolná vůči `NULL` (`COALESCE(m.role,'')`):
+stav po zmizelém členství se neschová; stejná oprava platí pro dosavadní
+kontrolu `personal_plan_invalid`. Jakákoli výjimka dotazu je tento nález.
 
 ## Čtení
 

@@ -583,7 +583,7 @@ export function inspectIsolatedTargetStore(
             WHERE t.id IS NULL OR t.status<>'open' OR a.id IS NULL OR
               NOT ((a.kind='private' AND a.owner_user_id=plan.user_id) OR
                 (a.kind='shared' AND t.assignee_user_id=plan.user_id
-                  AND m.role IN ('editor','admin')))`) !== 0)
+                  AND COALESCE(m.role,'') IN ('editor','admin')))`) !== 0)
         fail("personal_plan_invalid");
     } catch { fail("personal_plan_invalid"); }
 
@@ -594,6 +594,7 @@ export function inspectIsolatedTargetStore(
             TARGET_STAGING_MAX_ATTENTION_STATES ||
           count("SELECT COUNT(*) AS n FROM identities i LEFT JOIN personal_attention_epochs e ON e.user_id=i.id WHERE e.user_id IS NULL") !== 0 ||
           count("SELECT COUNT(*) AS n FROM personal_attention_epochs e LEFT JOIN identities i ON i.id=e.user_id WHERE i.id IS NULL") !== 0 ||
+          count("SELECT COUNT(*) AS n FROM personal_attention_epochs WHERE typeof(revision)<>'integer' OR revision < 0 OR revision >= 9007199254740991") !== 0 ||
           count(`SELECT COUNT(*) AS n FROM personal_attention_states s
             LEFT JOIN tasks t ON t.id=s.task_id
             LEFT JOIN projects p ON p.id=t.project_id
@@ -602,7 +603,9 @@ export function inspectIsolatedTargetStore(
             WHERE t.id IS NULL OR t.status<>'open' OR a.id IS NULL OR
               NOT ((a.kind='private' AND a.owner_user_id=s.user_id) OR
                 (a.kind='shared' AND t.assignee_user_id=s.user_id
-                  AND m.role IN ('editor','admin'))) OR
+                  AND COALESCE(m.role,'') IN ('editor','admin'))) OR
+              typeof(s.revision)<>'integer' OR s.revision < 0 OR
+                s.revision >= 9007199254740991 OR
               s.rule_id NOT IN ('deadline_overdue','deadline_soon','planned_date_passed') OR
               (s.rule_id IN ('deadline_overdue','deadline_soon') AND
                 t.due_on IS NOT s.occurrence_on) OR

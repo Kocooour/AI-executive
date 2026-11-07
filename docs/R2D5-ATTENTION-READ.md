@@ -20,10 +20,13 @@ Request: `actorUserId`, `areaFilter all|personal|shared`,
 `limit` 1–100, `offset` 0–10 000, `restoreGeneration` (UUID).
 Neplatný vstup vrací `null`; jakákoli chyba nebo anomálie **vydávaného**
 řádku (typ, datum, Oblast mimo oprávněnou množinu, nesoulad pravidla a
-severity) vrací celý výsledek `null` (fail-closed). Řádek, který SQL
+severity) vrací celý výsledek `null` (fail-closed). Řádek úkolu, který SQL
 nevybere žádným pravidlem, se nevydává ani nevaliduje — stejně jako u
 selektoru Mého plánu; databázové CHECK omezení takové poškození běžně
-nepřipustí.
+nepřipustí. **Aktérův vlastní** lifecycle řádek se před výběrem ověří
+celý: jakýkoli poškozený stav, termín odložení nebo revize vrací `null` v
+obou pohledech (jinak by tiše odpovídal žádnému pohledu a kandidát by
+zmizel). Poškozený stav jiného uživatele čtení aktéra neovlivní.
 
 ## Populace
 

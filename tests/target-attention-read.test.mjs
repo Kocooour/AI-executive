@@ -416,5 +416,5 @@ test("fail closed on a corrupt lifecycle row",()=>{
   f.db.exec("DROP TRIGGER personal_attention_state_revision_guard");
   f.db.prepare("UPDATE personal_attention_states SET snoozed_until_ms=5 WHERE task_id='b-over'").run();
   assert.equal(hidden(f),null);
-  assert.ok(page(f),"unselected corrupt rows are not issued (same as other rules)");
+  assert.equal(page(f),null,"any malformed own lifecycle row fails every view closed");
 });

@@ -323,3 +323,66 @@ test("preflight: valid store ok; tampered rows and missing epoch are personal_at
     assert.ok(result.issues.includes("personal_attention_invalid"),name+" "+JSON.stringify(result));
   }
 });
+
+test("review fixes: new rows start at revision 0; selector and preflight fail closed on malformed or stale rows",async()=>{
+  const {readAuthorizedAttentionCandidatePage}=await import("../lib/target-attention-read-model.ts");
+  const read=(db,stage)=>readAuthorizedAttentionCandidatePage(db,{
+    actorUserId:"bob",areaFilter:"all",view:"active",
+    evaluatedAtMs:Date.parse("2026-11-04T11:00:00Z"),timeZone:"Europe/Prague",
+    limit:100,offset:0,restoreGeneration:stage.restoreGeneration,
+  });
+  {
+    const {db}=setup();
+    assert.throws(()=>db.prepare(
+      "INSERT INTO personal_attention_states(user_id,task_id,rule_id,occurrence_on,state,revision) VALUES ('bob','bob-private',?,'2026-11-01','dismissed',7)")
+      .run(OVER),/attention state requires eligible task occurrence/);
+    assert.equal(count(db),0);
+  }
+  {
+    // A malformed own row (CHECK bypassed) matches neither view: null, not omission.
+    const {db,stage}=setup();
+    assert.ok(read(db,stage));
+    db.exec("PRAGMA ignore_check_constraints=ON");
+    put(db,"bob","bob-private2",OVER,"2026-11-02","snoozed",null);
+    db.exec("PRAGMA ignore_check_constraints=OFF");
+    assert.equal(read(db,stage),null);
+    assert.ok(inspect(stage).issues.includes("personal_attention_invalid"));
+  }
+  {
+    // Another user's malformed row never affects the actor.
+    const {db,stage}=setup();
+    db.exec("PRAGMA ignore_check_constraints=ON");
+    put(db,"erin","erin-private",OVER,"2026-11-01","bogus",null);
+    db.exec("PRAGMA ignore_check_constraints=OFF");
+    assert.ok(read(db,stage));
+  }
+  {
+    // Stale shared state whose membership vanished (reconcile + guards bypassed):
+    // NULL role must not hide it from preflight (plans checked the same way).
+    const {db,stage}=setup();
+    put(db,"bob","shared-bob",OVER,"2026-11-01");
+    plan(db,"bob","shared-bob","2026-11-01");
+    for(const t of ["personal_attention_state_membership_delete","personal_task_plan_membership_delete",
+      "member_revocation_guard"])db.exec(`DROP TRIGGER IF EXISTS ${t}`);
+    db.prepare("DELETE FROM area_members WHERE area_id='family-area' AND user_id='bob'").run();
+    const issues=inspect(stage).issues;
+    assert.ok(issues.includes("personal_attention_invalid"),issues.join());
+    assert.ok(issues.includes("personal_plan_invalid"),issues.join());
+  }
+  {
+    // Revision invariants of state rows and epochs are checked by preflight.
+    const {db,stage}=setup();
+    put(db,"bob","bob-private",OVER,"2026-11-01");
+    db.exec("DROP TRIGGER personal_attention_state_revision_guard");
+    db.exec("PRAGMA ignore_check_constraints=ON");
+    db.prepare("UPDATE personal_attention_states SET revision=-1 WHERE user_id='bob'").run();
+    assert.ok(inspect(stage).issues.includes("personal_attention_invalid"));
+  }
+  {
+    const {db,stage}=setup();
+    db.exec("DROP TRIGGER personal_attention_epoch_monotonic");
+    db.exec("PRAGMA ignore_check_constraints=ON");
+    db.prepare("UPDATE personal_attention_epochs SET revision=-3 WHERE user_id='erin'").run();
+    assert.ok(inspect(stage).issues.includes("personal_attention_invalid"));
+  }
+});

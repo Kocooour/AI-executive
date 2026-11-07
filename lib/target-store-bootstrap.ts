@@ -458,7 +458,7 @@ CREATE TABLE personal_attention_states (
 ) WITHOUT ROWID;
 CREATE INDEX personal_attention_states_by_task ON personal_attention_states(user_id,task_id);
 CREATE TRIGGER personal_attention_state_insert_guard BEFORE INSERT ON personal_attention_states
-WHEN NOT EXISTS (
+WHEN NEW.revision IS NOT 0 OR NOT EXISTS (
   SELECT 1 FROM tasks t LEFT JOIN projects p ON p.id=t.project_id
     JOIN areas a ON a.id=COALESCE(t.area_id,p.area_id)
     LEFT JOIN area_members m ON m.area_id=a.id AND m.user_id=NEW.user_id
