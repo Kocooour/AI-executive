@@ -9,7 +9,7 @@ import {
 } from "../../lib/target-staging-title-search-client";
 import {
   createStagingTitleSearchSession,
-  type TitleSearchSessionSnapshot,
+  type TitleSearchSessionSnapshot,type TitleSearchSessionOutcome,
 } from "../../lib/target-staging-title-search-session";
 
 const scopes:Record<TitleSearchScope,string>={
@@ -31,6 +31,10 @@ const failures:Record<TitleSearchFailure,string>={
 };
 
 function foregroundOnline(){return document.visibilityState!=="hidden"&&navigator.onLine;}
+function outcomeFailure(result:TitleSearchSessionOutcome):TitleSearchFailure|null{
+  if(result.ok===true)return null;
+  return result.reason==="limit-reached"?"invalid-request":result.reason;
+}
 
 export function TargetStagingTitleSearchPreview(){
   const session=useRef<ReturnType<typeof createStagingTitleSearchSession>|null>(null);
@@ -107,7 +111,7 @@ export function TargetStagingTitleSearchPreview(){
     const result=await pending;
     if(epoch.current!==id||!foregroundOnline())return;
     setSnapshot(session.current!.getSnapshot());
-    setFailure(result.ok===false?result.reason:null);
+    setFailure(outcomeFailure(result));
   }
   async function loadMore(){
     if(pageInFlight.current)return;
@@ -125,8 +129,7 @@ export function TargetStagingTitleSearchPreview(){
     if(epoch.current!==id||!foregroundOnline())return;
     pageInFlight.current=false;
     setSnapshot(session.current!.getSnapshot());
-    setFailure(result.ok===false
-      ?(result.reason==="limit-reached"?"invalid-request":result.reason):null);
+    setFailure(outcomeFailure(result));
   }
 
   const ready=snapshot?.status==="ready"?snapshot:null;
