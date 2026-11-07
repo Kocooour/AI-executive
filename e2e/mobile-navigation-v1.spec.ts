@@ -121,7 +121,7 @@ test("mobile calendar date strip offers one Tab stop with day/week arrow navigat
   await expect(chosen).toBeFocused();
 
   const initialDay = await chosen.getAttribute("data-date");
-  expect(initialDay).toMatch(/^\\d{4}-\\d{2}-\\d{2}$/);
+  expect(initialDay).toMatch(/^\d{4}-\d{2}-\d{2}$/);
   const move = (day: string, offset: number) => {
     const d = new Date(`${day}T12:00:00Z`);
     d.setUTCDate(d.getUTCDate() + offset);
