@@ -25,7 +25,7 @@ function detachPage(page:GlobalIndexPage):GlobalIndexPage{
 }
 
 export type GlobalIndexReadSessionSnapshot=
-  |{status:"idle"|"loading"|"disposed"}
+  |{status:"idle"|"loading"|"suspended"|"disposed"}
   |{status:"ready";page:GlobalIndexPage}
   |{status:"failed";reason:GlobalIndexFailure};
 
@@ -59,7 +59,7 @@ export function createGlobalIndexReadSession(
   let invalidated=false;
   let active:AbortController|null=null;
   let chain:GlobalIndexPageChain|null=null;
-  let status:"idle"|"loading"|"ready"|"failed"|"disposed"=
+  let status:"idle"|"loading"|"ready"|"failed"|"suspended"|"disposed"=
     validParams?"idle":"failed";
   let failure:GlobalIndexFailure="invalid-request";
 
@@ -88,6 +88,26 @@ export function createGlobalIndexReadSession(
         :{status:"failed",reason:"invalid-response"};
     if(status==="failed")return{status,reason:failure};
     return{status};
+  };
+  /**
+   * BE-19: hide all titles immediately when a tab is hidden, goes offline or
+   * navigates into BFCache. Terminal auth-generation failure is never revived.
+   * Does not store, refetch or initiate any request.
+   */
+  const suspend=():void=>{
+    if(status==="disposed"||!guard())return;
+    revision++;
+    clear();
+    status="suspended";
+  };
+  /**
+   * Re-enable only EXPLICIT reads after a fresh caller lifecycle signal.
+   * No old cursor/page survives and no GET is sent until loadFirst() is called.
+   */
+  const resume=():boolean=>{
+    if(status==="disposed"||!guard())return false;
+    if(status==="suspended")status="idle";
+    return true;
   };
   const dispose=()=>{
     revision++;
@@ -133,12 +153,14 @@ export function createGlobalIndexReadSession(
     if(status==="disposed")return{ok:false,reason:"aborted"};
     if(!validParams)return{ok:false,reason:"invalid-request"};
     if(!guard())return{ok:false,reason:"stale"};
+    if(status==="suspended")return{ok:false,reason:"not-ready"};
     return request();
   };
   const loadMore=async():Promise<GlobalIndexReadSessionResult>=>{
     if(status==="disposed")return{ok:false,reason:"aborted"};
     if(!validParams)return{ok:false,reason:"invalid-request"};
     if(!guard())return{ok:false,reason:"stale"};
+    if(status==="suspended")return{ok:false,reason:"not-ready"};
     if(status==="loading")return{ok:false,reason:"busy"};
     if(status!=="ready"||!chain)return{ok:false,reason:"not-ready"};
     if(!chain.page.hasMore)return{ok:true,page:detachPage(chain.page)};
@@ -148,5 +170,5 @@ export function createGlobalIndexReadSession(
     }
     return request(chain.page.nextCursor);
   };
-  return{getSnapshot,loadFirst,loadMore,dispose};
+  return{getSnapshot,loadFirst,loadMore,suspend,resume,dispose};
 }
