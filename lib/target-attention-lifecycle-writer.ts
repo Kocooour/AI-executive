@@ -15,6 +15,8 @@ import type {TargetStagingReadCredential} from "./target-task-authenticated-read
 import type {TargetStagingReadStore} from "./target-task-staging-reader";
 import {fingerprint} from "./target-task-staging-writer";
 import {validTargetDueOn} from "./target-task-temporal-due-on-writer";
+import {attentionEvaluationWindow,currentAttentionRule}
+  from "./target-attention-read-model";
 import {checkTargetTaskWriteContract,targetTaskWriteRevision,
   validTargetTaskTitleEditPreviewRequest} from "./target-task-write-preflight";
 
@@ -48,6 +50,8 @@ export interface TargetStagingAttentionLifecycleCommand {
   readonly expectedStateRevision:number|null;
   readonly writeAreaId:string;
   readonly restoreGeneration:string;
+  /** Actor's IANA zone: snooze/dismiss require the rule to fire NOW there. */
+  readonly timeZone:string;
 }
 export type TargetStagingAttentionLifecycleResult =
   | {ok:true;replayed?:true}
@@ -64,7 +68,8 @@ export function validTargetStagingAttentionLifecycleCommand(
   if(!input||typeof input!=="object"||Array.isArray(input))return false;
   const x=input as Record<string,unknown>;
   return Object.keys(x).sort().join(",")===
-      "action,commandId,expectedAttentionEpoch,expectedRevision,expectedStateRevision,occurrenceOn,restoreGeneration,ruleId,snoozedUntilMs,taskId,writeAreaId" &&
+      "action,commandId,expectedAttentionEpoch,expectedRevision,expectedStateRevision,occurrenceOn,restoreGeneration,ruleId,snoozedUntilMs,taskId,timeZone,writeAreaId" &&
+    typeof x.timeZone==="string"&&attentionEvaluationWindow(0,x.timeZone)!==null&&
     typeof x.commandId==="string"&&UUID.test(x.commandId)&&
     typeof x.expectedRevision==="string"&&/^[a-f0-9]{64}$/.test(x.expectedRevision)&&
     RULES.has(x.ruleId)&&ACTIONS.has(x.action)&&
@@ -95,7 +100,7 @@ export function attentionLifecycleReceiptDigest(
     "personal-attention-v1",command.taskId,command.ruleId,command.occurrenceOn,
     command.action,command.snoozedUntilMs,command.expectedRevision,
     command.expectedAttentionEpoch,command.expectedStateRevision,
-    command.writeAreaId,command.restoreGeneration.toLowerCase(),
+    command.writeAreaId,command.restoreGeneration.toLowerCase(),command.timeZone,
   ])).digest("hex");
 }
 
@@ -134,10 +139,10 @@ export function writePreflightedAttentionLifecycle(
             (task.kind==="shared"&&task.assignee===actor)))
         return {ok:false,reason:"unavailable"};
       // The occurrence must still be current; nothing about it is echoed back.
+      const plan=db.prepare(
+        "SELECT when_on AS whenOn FROM personal_task_plans WHERE user_id=? AND task_id=?"
+      ).get(actor,command.taskId) as {whenOn:string}|undefined;
       if(command.ruleId==="planned_date_passed"){
-        const plan=db.prepare(
-          "SELECT when_on AS whenOn FROM personal_task_plans WHERE user_id=? AND task_id=?"
-        ).get(actor,command.taskId) as {whenOn:string}|undefined;
         if(!plan||plan.whenOn!==command.occurrenceOn)
           return {ok:false,reason:"unavailable"};
       }else if(task.dueOn!==command.occurrenceOn)
@@ -171,6 +176,15 @@ export function writePreflightedAttentionLifecycle(
         return {ok:false,reason:"stale_revision"};
 
       const now=Date.now();
+      // Snooze/dismiss act only on a CURRENT candidate (same rule evaluation as
+      // the selector, server clock, actor zone): no pre-dismissal of a future
+      // deadline or of a soon item outside 48 h. Restore (Undo) needs no window.
+      if(command.action!=="restore"){
+        const window=attentionEvaluationWindow(now,command.timeZone);
+        if(!window)return {ok:false,reason:"invalid_request"};
+        if(currentAttentionRule(task.dueOn,plan?.whenOn??null,window)!==command.ruleId)
+          return {ok:false,reason:"unavailable"};
+      }
       if(command.action==="snooze"){
         const until=command.snoozedUntilMs as number;
         if(!(now<until&&until<=now+TARGET_ATTENTION_MAX_SNOOZE_MS))

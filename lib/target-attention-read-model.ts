@@ -37,7 +37,7 @@ export type AttentionCandidate={
   lifecycle:AttentionLifecycle;
   /** Only for a currently snoozed item, else null. */
   snoozedUntilMs:number|null;
-  /** State-row revision when lifecycle is not "active", else null. */
+  /** State-row revision whenever the actor's row exists (incl. expired snooze), else null. */
   lifecycleRevision:number|null;
 };
 export type AttentionCandidatePage={
@@ -67,6 +67,36 @@ const safeInt=(n:unknown):n is number=>
 const addDays=(date:string,n:number)=>
   new Date(Date.parse(date+"T00:00:00Z")+n*86_400_000).toISOString().slice(0,10);
 
+export type AttentionEvaluationWindow={evaluationDate:string;soonThroughDate:string|null};
+/** Local evaluation date D and the largest date S whose all-day deadline ends
+ * within 48 h (DST-correct). Shared by the selector and the lifecycle writer. */
+export function attentionEvaluationWindow(nowMs:number,timeZone:string):AttentionEvaluationWindow|null {
+  try {
+    if(!safeInt(nowMs)||typeof timeZone!=="string"||timeZone.length<1||
+      timeZone.length>64||!TZ.test(timeZone))return null;
+    new Intl.DateTimeFormat("en-US",{timeZone});
+    const D=localDate(nowMs,timeZone);
+    if(temporalCalendarOrdinal(D)===null)return null;
+    let S:string|null=null;
+    for(const n of [0,1,2]){
+      const d=addDays(D,n),end=endOfLocalDate(d,timeZone);
+      if(end===null)return null;
+      if(end-nowMs>=0&&end-nowMs<=48*HOUR)S=d;
+    }
+    return {evaluationDate:D,soonThroughDate:S};
+  }catch{return null;}
+}
+/** Which rule (if any) currently fires for one task — the same CASE as the selector SQL. */
+export function currentAttentionRule(dueOn:string|null,whenOn:string|null,
+  w:AttentionEvaluationWindow):AttentionRuleId|null {
+  const D=w.evaluationDate,S=w.soonThroughDate;
+  if(dueOn!==null&&dueOn<D)return "deadline_overdue";
+  if(dueOn!==null&&S!==null&&dueOn>=D&&dueOn<=S)return "deadline_soon";
+  if(whenOn!==null&&whenOn<D&&!(dueOn!==null&&S!==null&&dueOn<=S))
+    return "planned_date_passed";
+  return null;
+}
+
 /** Stable per rule+task+occurrence; deliberately no actor/area/title/revision. */
 export function attentionKey(ruleId:string,taskId:string,relevantOn:string):string {
   return "tatt1:"+createHash("sha256").update("lumi:r2d5:attention:v1\0")
@@ -90,16 +120,9 @@ export function readAuthorizedAttentionCandidatePage(db:DatabaseSync,request:{
       typeof request.restoreGeneration!=="string"||!UUID.test(request.restoreGeneration))
       return null;
     const tz=request.timeZone,now=request.evaluatedAtMs;
-    new Intl.DateTimeFormat("en-US",{timeZone:tz});
-    const D=localDate(now,tz);
-    if(temporalCalendarOrdinal(D)===null)return null;
-    // Largest local date whose all-day deadline instant is within 48h.
-    let S:string|null=null;
-    for(const n of [0,1,2]){
-      const d=addDays(D,n),end=endOfLocalDate(d,tz);
-      if(end===null)return null;
-      if(end-now>=0&&end-now<=48*HOUR)S=d;
-    }
+    const window=attentionEvaluationWindow(now,tz);
+    if(!window)return null;
+    const D=window.evaluationDate,S=window.soonThroughDate;
     const privateRow=db.prepare(
       "SELECT revision FROM personal_plan_epochs WHERE user_id=?"
     ).get(request.actorUserId) as {revision:number}|undefined;
@@ -232,7 +255,8 @@ export function readAuthorizedAttentionCandidatePage(db:DatabaseSync,request:{
         thresholdHours:ruleId==="deadline_soon"?48:0,sourceRevision:r.sourceRevision,
         lifecycle:lifecycleOf(r),
         snoozedUntilMs:lifecycleOf(r)==="snoozed"?r.lifeUntil:null,
-        lifecycleRevision:lifecycleOf(r)==="active"?null:r.lifeRevision,
+        // Any existing row (also an expired snooze) is the writer's CAS input.
+        lifecycleRevision:r.lifeState===null?null:r.lifeRevision,
       });
     }
     const hash=createHash("sha256").update("lumi:r2d5:attention-candidates:v2\0")

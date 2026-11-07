@@ -75,8 +75,9 @@ Do téhož jediného SQL se po výpočtu `ruleId`/`relevantOn` připojí
 
 Výstupní položka přidává `lifecycle: "active"|"snoozed"|"dismissed"`
 (vypršelý snooze = `active`), `snoozedUntilMs` (jen u právě odloženého,
-jinak `null`) a `lifecycleRevision` (revize stavového řádku, pokud
-`lifecycle` není `active`, jinak `null`). Nekonzistentní řádek stavu
+jinak `null`) a `lifecycleRevision` (revize stavového řádku, kdykoli řádek aktéra
+existuje — i u vypršelého snooze, kde je `lifecycle: "active"`; jinak
+`null`). Je to CAS vstup `expectedStateRevision` zapisovače R2d.5b.2. Nekonzistentní řádek stavu
 (např. `dismissed` s časem, `snoozed` bez času) vrací celý výsledek `null`.
 
 ## Pořadí a stránkování

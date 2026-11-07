@@ -91,7 +91,7 @@ function command(fx,token,who,taskId,action,extra={}){
     expectedRevision:preview.snapshotRevision,
     expectedAttentionEpoch:epoch(fx,who),
     expectedStateRevision:rowOf(fx,who,taskId,ruleId,occurrenceOn)?.revision??null,
-    writeAreaId:area,restoreGeneration:fx.stage.restoreGeneration,...extra};
+    writeAreaId:area,restoreGeneration:fx.stage.restoreGeneration,timeZone:"UTC",...extra};
 }
 const change=(fx,token,c,hash)=>fx.authority.changeAttentionLifecycle(token,c,hash);
 const preflight=fx=>inspectIsolatedTargetStore({
@@ -158,6 +158,10 @@ test("snooze, dismiss, restore: rows, epochs, receipts, content-free journal, sh
 
 test("planned_date_passed lifecycle and receipt identity",()=>{
   const fx=fixture(),token=fx.authority.issueWritable("alice").sessionToken;
+  // A current deadline item suppresses planned_date_passed: no pre-dismissal.
+  assert.deepEqual(change(fx,token,command(fx,token,"alice","p-alice","dismiss",
+    {ruleId:"planned_date_passed",occurrenceOn:"2026-10-30"})),denied("unavailable"));
+  fx.db.prepare("UPDATE tasks SET due_on=NULL WHERE id='p-alice'").run();
   const c=command(fx,token,"alice","p-alice","dismiss",
     {ruleId:"planned_date_passed",occurrenceOn:"2026-10-30"});
   assert.deepEqual(change(fx,token,c),{ok:true});
@@ -314,9 +318,35 @@ test("overdue command removes only the actor's matching soon row",()=>{
     .split("\n").filter(Boolean).map(JSON.parse).filter(r=>r.k==="personal_attention");
   assert.equal(j[0].p.epoch,e0+2);
   // overdue restore also cleans a (re-created) soon row; soon command never touches overdue
-  assert.deepEqual(change(fx,token,command(fx,token,"alice","p-alice2","dismiss",{ruleId:"deadline_soon"})),denied("not_active"));
+  assert.deepEqual(change(fx,token,command(fx,token,"alice","p-alice2","dismiss",{ruleId:"deadline_soon"})),denied("unavailable"),
+    "an overdue occurrence is no longer a current soon candidate");
   assert.deepEqual(preflight(fx),{ok:true,mode:"r2-model",issues:[]});
   void bob;
+});
+
+test("snooze/dismiss require the rule to fire now in the actor's zone; restore does not",()=>{
+  const fx=fixture(),token=fx.authority.issueWritable("alice").sessionToken;
+  const day=n=>new Date(Date.now()+n*DAY).toISOString().slice(0,10);
+  const setDue=on=>fx.db.prepare("UPDATE tasks SET due_on=? WHERE id='p-alice'").run(on);
+  setDue(day(10));
+  for(const ruleId of ["deadline_overdue","deadline_soon"])
+    assert.deepEqual(change(fx,token,command(fx,token,"alice","p-alice","dismiss",
+      {ruleId,occurrenceOn:day(10)})),denied("unavailable"),ruleId);
+  setDue(day(1));
+  assert.deepEqual(change(fx,token,command(fx,token,"alice","p-alice","dismiss",
+    {ruleId:"deadline_overdue",occurrenceOn:day(1)})),denied("unavailable"));
+  assert.deepEqual(change(fx,token,command(fx,token,"alice","p-alice","snooze",
+    {ruleId:"deadline_soon",occurrenceOn:day(1)})),{ok:true});
+  assert.equal(epoch(fx,"alice"),1);
+  // Zone matters: an unknown zone is rejected by validation.
+  assert.deepEqual(change(fx,token,command(fx,token,"alice","p-alice","dismiss",
+    {ruleId:"deadline_soon",occurrenceOn:day(1),timeZone:"Mars/Olympus"})),
+    denied("invalid_request"));
+  // Undo works even after the occurrence is no longer a current candidate.
+  setDue(day(1));
+  fx.db.prepare("UPDATE tasks SET title='renamed' WHERE id='p-alice'").run();
+  assert.deepEqual(change(fx,token,command(fx,token,"alice","p-alice","restore",
+    {ruleId:"deadline_soon",occurrenceOn:day(1),timeZone:"Pacific/Kiritimati"})),{ok:true});
 });
 
 test("end to end with the selector: dismiss hides, restore re-activates",()=>{
