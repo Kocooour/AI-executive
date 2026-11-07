@@ -370,8 +370,59 @@ function runChild(fx, mode, gate = "", rounds = 1) {
   let stdout = "", stderr = "";
   child.stdout.on("data", chunk => { stdout += chunk; });
   child.stderr.on("data", chunk => { stderr += chunk; });
+  // A failed spawn emits "error" before "close". Keep its diagnosis instead
+  // of throwing an unhandled EventEmitter error while another child is live.
+  child.on("error", error => { stderr += `spawn error: ${error.message}\n`; });
   const done = new Promise(resolve => child.on("close", (code, signal) => resolve({ code, signal, stdout, stderr })));
   return { child, done };
+}
+
+// A failed readiness assertion must not skip child joins: the test file's
+// after() hook deletes the shared fixture root. Always release the gate,
+// collect both exits (and stderr), and bound a genuinely hung child.
+async function releaseColdWriterGateAndJoin(writers, gate) {
+  let readyCount = 0;
+  let setupError = null;
+  try {
+    for (let i = 0; i < 500; i++) {
+      readyCount = readdirSync(gate).filter(name => name.startsWith("ready-")).length;
+      if (readyCount === writers.length) break;
+      // No need to wait the entire readiness timeout for a crashed child.
+      if (writers.some(({ child }) => child.exitCode !== null || child.signalCode !== null)) break;
+      await sleep(10);
+    }
+    assert.equal(readyCount, writers.length, "all cold writer processes must load before release");
+  } catch (error) {
+    setupError = error;
+  }
+
+  const stopLive = signal => {
+    for (const { child } of writers) {
+      if (child.exitCode === null && child.signalCode === null) child.kill(signal);
+    }
+  };
+  try {
+    writeFileSync(path.join(gate, "go"), "");
+  } catch (error) {
+    setupError ??= error;
+    stopLive("SIGTERM");
+  }
+  let timedOut = false;
+  const terminate = setTimeout(() => { timedOut = true; stopLive("SIGTERM"); }, 15000);
+  const forceKill = setTimeout(() => { timedOut = true; stopLive("SIGKILL"); }, 17000);
+  let results;
+  try {
+    results = await Promise.all(writers.map(writer => writer.done));
+  } finally {
+    clearTimeout(terminate);
+    clearTimeout(forceKill);
+  }
+  if (setupError || timedOut) {
+    const reason = setupError?.message ?? "child exit deadline expired";
+    throw new Error(`cold writer startup/cleanup failed (${readyCount}/${writers.length} ready): ${reason}; children: ${JSON.stringify(results)}`,
+      { cause: setupError ?? undefined });
+  }
+  return results;
 }
 const recoverHotJournal = fx => {
   // What an operator does after a killed writer: one ordinary open lets SQLite roll back.
@@ -1063,23 +1114,36 @@ test("cold processes verify the long chain BEFORE taking the write lock: two col
   const gate = mkdtempSync(path.join(root, "cold-writer-start-"));
   const writers = [runChild(fx, "raw-cold-gated", gate),
     runChild(fx, "raw-cold-gated", gate)];
-  let readyCount = 0;
-  try {
-    for (let i = 0; i < 500; i++) {
-      readyCount = readdirSync(gate).filter(name => name.startsWith("ready-")).length;
-      if (readyCount === 2) break;
-      await sleep(10);
-    }
-    assert.equal(readyCount, 2, "both cold writer processes must load before release");
-  } finally {
-    // Always unblock children even when startup fails, so the test cannot hang.
-    writeFileSync(path.join(gate, "go"), "");
-  }
-  const results = await Promise.all(writers.map(writer => writer.done));
+  const results = await releaseColdWriterGateAndJoin(writers, gate);
   assert.ok(results.every(result => result.code === 0), JSON.stringify(results));
   assert.deepEqual(results.map(result => JSON.parse(result.stdout).outcome),
     ["ok", "ok"], JSON.stringify(results));
   assert.equal(anchorOf(fx), base0 + 2);
+  assert.equal(journalState(fx).pending, null);
+  assert.equal(durable.checkTargetStagingAnchorLive(fx.store), "ok");
+});
+
+test("failed cold writer readiness releases the gate and joins ALL children before cleanup", async () => {
+  const fx = makeFixture();
+  const before = anchorOf(fx);
+  const gate = mkdtempSync(path.join(root, "cold-writer-failure-"));
+  const writers = [
+    runChild(fx, "raw-cold-gated", gate),
+    runChild(fx, "raw-cold-gated-fail-before-ready", gate),
+  ];
+  await assert.rejects(
+    releaseColdWriterGateAndJoin(writers, gate),
+    error => error.message.includes("cold writer startup/cleanup failed") &&
+      error.message.includes("synthetic pre-ready child failure"),
+  );
+  // Reaching this assertion means the rejected helper awaited both close events.
+  const results = await Promise.all(writers.map(writer => writer.done));
+  assert.ok(writers.every(({ child }) => child.exitCode !== null || child.signalCode !== null));
+  assert.equal(results[1].code, 42);
+  assert.match(results[1].stderr, /synthetic pre-ready child failure/);
+  assert.equal(results[0].code, 0);
+  assert.equal(JSON.parse(results[0].stdout).outcome, "ok");
+  assert.equal(anchorOf(fx), before + 1, "the released healthy writer must finish before cleanup");
   assert.equal(journalState(fx).pending, null);
   assert.equal(durable.checkTargetStagingAnchorLive(fx.store), "ok");
 });
