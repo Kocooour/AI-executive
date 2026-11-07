@@ -62,15 +62,16 @@ if (mode === "hold-sidecar" || mode === "hold-sidecar-long") {
   process.stdout.write("released");
   process.exit(0);
 }
-if (mode === "raw-cold-gated") {
-  // Synchronize the start of two independent Node child processes *after*
-  // module loading; do not prewarm the journal or alter the real write limit.
-  if (!gate) throw new Error("raw-cold-gated requires an isolated gate");
-  writeFileSync(gate + "/ready-" + process.pid, "");
-  while (!existsSync(gate + "/go")) wait(5);
-}
 if (mode === "raw" || mode === "raw-many" || mode === "raw-cold-gated") {
   const { withPinnedTargetStagingWrite } = await import("../../lib/target-staging-pinned-write.ts");
+  if (mode === "raw-cold-gated") {
+    // Wait only after loading the real writer and its dependencies. Both cold
+    // journal verifications start when the same private gate is released.
+    // Do not prewarm the journal or alter the real SQLite 200ms busy_timeout.
+    if (!gate) throw new Error("raw-cold-gated requires an isolated gate");
+    writeFileSync(gate + "/ready-" + process.pid, "");
+    while (!existsSync(gate + "/go")) wait(5);
+  }
   const counts = { ok: 0, failed: 0, denied: 0 };
   const attempts = mode === "raw-many" ? Number(rounds) : 1;
   for (let i = 0; i < attempts; i++) {
