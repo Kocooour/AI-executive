@@ -15,7 +15,8 @@
 .stagingGlobalScopes button[aria-pressed="true"]{
   background:var(--accent-soft,#eee7ff);border-color:var(--accent,#7b52a8)
 }
-.stagingGlobalIndex button:focus-visible{
+.stagingGlobalIndex button:focus-visible,
+.stagingGlobalIndex .stagingGlobalResultStatus:focus-visible{
   outline:3px solid var(--focus-ring,#6e4dc7);outline-offset:2px
 }
 .stagingGlobalError{padding:12px;border:1px solid var(--danger,#b33);border-radius:10px}
@@ -31,6 +32,7 @@
 .stagingGlobalGlyph[data-kind="note"]{border-radius:2px;border-width:1px;transform:rotate(-3deg)}
 .stagingGlobalItemTitle{flex:1;min-width:0;overflow-wrap:anywhere;font-weight:600}
 .stagingGlobalKind{color:var(--muted,#666);font-size:12px;white-space:nowrap}
+.stagingGlobalArea{font-size:12px;font-weight:600;white-space:nowrap;color:var(--text,#20242a)}
 .stagingGlobalPrivacy{font-size:13px;color:var(--muted,#666)}
 @media(max-width:550px){
   .stagingGlobalIndex{padding:18px 14px 86px}
