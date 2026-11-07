@@ -5,6 +5,7 @@
 //   crash-before-confirm  - SIGKILL after COMMIT, just before the confirm line is written
 //   raw                   - one pinned write with the DEFAULT 200 ms busy timeout (no hook); prints ok|denied|failed
 //   raw-cold-gated        - one equally cold 200ms write after an external start barrier
+//   raw-cold-gated-fail-before-ready - synthetic startup failure to test parent cleanup
 //   plain                 - no hook; `rounds` (argv[5]) sessions are issued back to back
 import fs, { existsSync, writeFileSync } from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
@@ -62,13 +63,20 @@ if (mode === "hold-sidecar" || mode === "hold-sidecar-long") {
   process.stdout.write("released");
   process.exit(0);
 }
-if (mode === "raw" || mode === "raw-many" || mode === "raw-cold-gated") {
+if (mode === "raw" || mode === "raw-many" || mode === "raw-cold-gated" ||
+    mode === "raw-cold-gated-fail-before-ready") {
   const { withPinnedTargetStagingWrite } = await import("../../lib/target-staging-pinned-write.ts");
-  if (mode === "raw-cold-gated") {
+  if (mode === "raw-cold-gated" || mode === "raw-cold-gated-fail-before-ready") {
     // Wait only after loading the real writer and its dependencies. Both cold
     // journal verifications start when the same private gate is released.
     // Do not prewarm the journal or alter the real SQLite 200ms busy_timeout.
     if (!gate) throw new Error("raw-cold-gated requires an isolated gate");
+    if (mode === "raw-cold-gated-fail-before-ready") {
+      // Test-only fault injection: verifies parent joins the other child before
+      // unwinding fixture cleanup, without changing the real writer behavior.
+      process.stderr.write("synthetic pre-ready child failure");
+      process.exit(42);
+    }
     writeFileSync(gate + "/ready-" + process.pid, "");
     while (!existsSync(gate + "/go")) wait(5);
   }
