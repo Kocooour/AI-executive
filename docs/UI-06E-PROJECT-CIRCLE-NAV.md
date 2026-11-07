@@ -6,7 +6,7 @@ Schválené vizuální pravidlo Lumi: **úkol = čtverec, projekt = kolečko**. 
 Pouze s explicitním vývojovým flagem `NEXT_PUBLIC_LUMI_DESIGN_V1_PREVIEW=1`:
 - Mobilní záložka **Projekty** a desktopová položka **Projekty** používají stejné obrysové kolečko.
 - Jednotlivé projekty v levém desktopovém sidebaru používají stejné kolečko místo staré ikony archivu.
-- Dokončené projekty v sidebaru mají utlumenou barvu symbolu a názvu, bez barevné výplně.
+- Sidebar zobrazuje jen aktivní projekty; dokončené jsou nadále spravovány v přehledu projektů. Tento PR nemění jejich zobrazení ani stav.
 - Kolečko v navigaci je **neinteraktivní, skryté pro čtečky a není checkbox**. Kliknutí na celý projekt v sidebaru dál otevírá projekt; dokončení projektu se mění jen existujícím skutečným ovládacím prvkem v přehledu projektů.
 - Produkční default-off UI si zachovává svou původní archivní ikonu v obou navigacích, bez přepisu původního `ProjectIcon` kontraktu.
 
