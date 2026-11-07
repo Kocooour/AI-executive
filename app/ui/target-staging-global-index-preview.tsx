@@ -10,6 +10,7 @@ import {
 import {
   consumeGlobalIndexWake,initialGlobalIndexWakeGate,invalidateGlobalIndexWakeGate,
 } from "../../lib/target-staging-global-index-lifecycle";
+import {stagingIndexDetailHref} from "../../lib/target-staging-index-detail-links";
 
 type ReadState={status:"loading"}|{status:"error";reason:GlobalIndexFailure}|
   {status:"ready";page:GlobalIndexPage};
@@ -29,7 +30,9 @@ const failures:Record<GlobalIndexFailure,string>={
   "aborted":"Načítání bylo přerušeno. Přehled je nutné znovu ověřit.",
 };
 
-export function TargetStagingGlobalIndexPreview(){
+export function TargetStagingGlobalIndexPreview({
+  projectDetailEnabled=false,noteDetailEnabled=false,
+}:{projectDetailEnabled?:boolean;noteDetailEnabled?:boolean}){
   const [scope,setScope]=useState<GlobalIndexScope>("all");
   const [refresh,setRefresh]=useState(0);
   const [state,setState]=useState<ReadState>({status:"loading"});
@@ -192,7 +195,17 @@ export function TargetStagingGlobalIndexPreview(){
             className="stagingGlobalItem" data-area-kind={entry.item.areaKind}>
             <span className="stagingGlobalGlyph" data-kind={entry.kind}
               aria-hidden="true"/>
-            <span className="stagingGlobalItemTitle">{entry.item.title}</span>
+            {stagingIndexDetailHref(entry.kind,entry.item.id,{
+              project:projectDetailEnabled,note:noteDetailEnabled,
+            }) ? <a className="stagingGlobalItemTitle stagingGlobalItemLink"
+              href={stagingIndexDetailHref(entry.kind,entry.item.id,{
+                project:projectDetailEnabled,note:noteDetailEnabled,
+              })!}
+              aria-label={entry.kind==="project"
+                ?"Otevřít projekt: "+entry.item.title
+                :"Otevřít poznámku: "+entry.item.title}>
+              {entry.item.title}
+            </a> : <span className="stagingGlobalItemTitle">{entry.item.title}</span>}
             <span className="stagingGlobalKind">{kindLabels[entry.kind]}</span>
             <span className="stagingGlobalArea">
               {entry.item.areaKind==="private"?"Osobní":"Sdílené"}
@@ -202,8 +215,9 @@ export function TargetStagingGlobalIndexPreview(){
       {ready.hasMore&&<button type="button" disabled={moreBusy}
         onClick={()=>{void loadMore();}}>Načíst další položky</button>}
       <p className="stagingGlobalPrivacy">Údaje se neukládají do offline cache.
-        Poznámky zobrazují jen název, nikoli obsah. Oprávnění se ověřují
-        na serveru při každém čtení; žádné zápisy zde nejsou dostupné.</p>
+        Poznámky zobrazují jen název, nikoli obsah. Případný odkaz
+        otevírá samostatný náhled, který obsah zobrazí až po dalším
+        výslovném serverově autorizovaném načtení. Žádné zápisy zde nejsou.</p>
     </section>}
   </main>;
 }
