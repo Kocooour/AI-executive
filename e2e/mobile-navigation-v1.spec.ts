@@ -13,7 +13,7 @@ test("Lumi Design v1 preview shows four phone tabs, a visible source notice and 
   await expect(tabs).toHaveText([/Můj plán|My Plan/, /Kalendář|Calendar/, /Projekty|Projects/, /Více|More/]);
   await expect(page.locator('[data-plan-source="legacy-today"]')).toBeVisible();
   await expect(page.locator(".pageTitleRow h1")).toHaveText(/Můj plán|My Plan/);
-  await expect(page.locator('[data-nav-tab="my-plan-preview"]')).toHaveAttribute("aria-current", "page");
+  await expect(page.locator('.mobileNav [data-nav-tab="my-plan-preview"]')).toHaveAttribute("aria-current", "page");
 
   await page.locator('.mobileNav button[data-nav-view="Calendar"]').click();
   await expect(page.locator('.mobileNav button[data-nav-view="Calendar"]')).toHaveAttribute("aria-current", "page");
@@ -31,7 +31,7 @@ test("Lumi Design v1 preview shows four phone tabs, a visible source notice and 
   await page.locator('.mobileMore button[data-nav-view="Today"]').click();
   await expect(page).toHaveURL(/[?]view=Today$/);
   await expect(page.locator(".pageTitleRow h1")).toHaveText(/Dnes|Today/);
-  await expect(page.locator('[data-nav-tab="my-plan-preview"]')).not.toHaveAttribute("aria-current", "page");
+  await expect(page.locator('.mobileNav [data-nav-tab="my-plan-preview"]')).not.toHaveAttribute("aria-current", "page");
   await expect(page.locator('.mobileNav button[data-nav-view="More"]')).toHaveAttribute("aria-current", "page");
   await expect(page.locator('[data-plan-source="legacy-today"]')).toHaveCount(0);
   await page.reload();
@@ -40,13 +40,13 @@ test("Lumi Design v1 preview shows four phone tabs, a visible source notice and 
   await expect(page.locator('.mobileNav button[data-nav-view="More"]')).toHaveAttribute("aria-current", "page");
 
   // The first tab uses a separately restorable, clearly preview-only route.
-  await page.locator('[data-nav-tab="my-plan-preview"]').click();
+  await page.locator('.mobileNav [data-nav-tab="my-plan-preview"]').click();
   await expect(page).toHaveURL(/[?]view=MyPlanPreview$/);
   await expect(page.locator('[data-plan-source="legacy-today"]')).toBeVisible();
   await page.reload();
   await waitUntilSynced(page);
   await expect(page).toHaveURL(/[?]view=MyPlanPreview$/);
-  await expect(page.locator('[data-nav-tab="my-plan-preview"]')).toHaveAttribute("aria-current", "page");
+  await expect(page.locator('.mobileNav [data-nav-tab="my-plan-preview"]')).toHaveAttribute("aria-current", "page");
   await expect(page.locator(".pageTitleRow h1")).toHaveText(/Můj plán|My Plan/);
   // Browser history also preserves which of the two Today-backed views was chosen.
   await page.goBack();
@@ -55,7 +55,7 @@ test("Lumi Design v1 preview shows four phone tabs, a visible source notice and 
   await expect(page.locator(".pageTitleRow h1")).toHaveText(/Dnes|Today/);
   await page.goForward();
   await expect(page).toHaveURL(/[?]view=MyPlanPreview$/);
-  await expect(page.locator('[data-nav-tab="my-plan-preview"]')).toHaveAttribute("aria-current", "page");
+  await expect(page.locator('.mobileNav [data-nav-tab="my-plan-preview"]')).toHaveAttribute("aria-current", "page");
 });
 
 test("an explicit Today URL never becomes the My Plan preview on initial load", async ({ page }) => {
@@ -64,7 +64,7 @@ test("an explicit Today URL never becomes the My Plan preview on initial load", 
   await page.goto("/?view=Today");
   await waitUntilSynced(page);
   await expect(page.locator(".pageTitleRow h1")).toHaveText(/Dnes|Today/);
-  await expect(page.locator('[data-nav-tab="my-plan-preview"]')).not.toHaveAttribute("aria-current", "page");
+  await expect(page.locator('.mobileNav [data-nav-tab="my-plan-preview"]')).not.toHaveAttribute("aria-current", "page");
   await expect(page.locator('.mobileNav button[data-nav-view="More"]')).toHaveAttribute("aria-current", "page");
   await expect(page).toHaveURL(/[?]view=Today$/);
 });
