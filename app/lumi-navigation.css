@@ -377,12 +377,6 @@
 .appShell > aside .sidebarProjects button.dropActive { background: var(--workspace-soft); }
 .appShell > aside .sidebarProjects button:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
 .appShell > aside .sidebarProjects button > span:first-child { display: inline-grid; place-items: center; flex: none; width: 18px; color: var(--icon-projects); }
-/* Completed project rows are quiet in the opt-in v1 sidebar. The circle is
-   navigational identity only, never a disguised completion checkbox. */
-.appShell[data-design-system="lumi-v1"] > aside .sidebarProjects button[data-project-completed="true"] > span:first-child,
-.appShell[data-design-system="lumi-v1"] > aside .sidebarProjects button[data-project-completed="true"] .sidebarProjectTitle {
-  color: var(--muted);
-}
 .appShell > aside .sidebarProjects .sidebarProjectTitle {
   min-width: 0;
   overflow: hidden;
