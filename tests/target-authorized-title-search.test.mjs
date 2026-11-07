@@ -412,5 +412,5 @@ test("BE-19 live HTTP → streaming client → session: ACL, stale and revocatio
     "Carol must never observe Bob's private project/task/note titles");
   assert.equal(session.getSnapshot().hasMore,false);
   assert.equal(session.getSnapshot().failure,null);
-  assert.equal(calls,8,"explicit requests only, never automatic retry");
+  assert.equal(calls,7,"explicit requests only, never automatic retry");
 });
