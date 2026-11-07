@@ -41,6 +41,8 @@ export function TargetStagingTitleSearchPreview(){
   if(session.current===null)session.current=createStagingTitleSearchSession();
   const epoch=useRef(0);
   const pageInFlight=useRef(false);
+  // Stable focus target while the sensitive result list is hidden for reauthorization.
+  const resultStatusRef=useRef<HTMLParagraphElement>(null);
   const [draft,setDraft]=useState("");
   const [scope,setScope]=useState<TitleSearchScope>("all");
   const [snapshot,setSnapshot]=useState<TitleSearchSessionSnapshot|null>(null);
@@ -120,6 +122,8 @@ export function TargetStagingTitleSearchPreview(){
       if(!navigator.onLine)invalidate("offline");
       return;
     }
+    // Move focus before unmounting the currently focused Load more button.
+    resultStatusRef.current?.focus();
     pageInFlight.current=true;
     const id=++epoch.current;
     const pending=session.current!.next();
@@ -157,10 +161,13 @@ export function TargetStagingTitleSearchPreview(){
       </div>
       <p className="stagingTitleSearchHint">2–80 znaků, nejvýše osm slov. Vyhledávání proběhne pouze po odeslání.</p>
     </form>
-    {busy&&<p role="status">Načítám autorizované výsledky…</p>}
+    <p role="status" tabIndex={-1} ref={resultStatusRef} className="stagingTitleSearchResultStatus">
+      {busy?"Načítám autorizované výsledky…":
+        ready?`Zobrazeno ${ready.items.length} autorizovaných názvů.`:
+        failure?"Výsledky nejsou dostupné.":""}
+    </p>
     {failure&&<p role="alert" className="stagingTitleSearchError">{failures[failure]}</p>}
     {ready&&<section aria-label="Autorizované výsledky vyhledávání">
-      <p role="status">Zobrazeno {ready.items.length} autorizovaných názvů.</p>
       {ready.items.length===0
         ?<p role="status">Pro dotaz nebyly nalezeny žádné dostupné názvy.</p>
         :<ul className="stagingTitleSearchItems">
