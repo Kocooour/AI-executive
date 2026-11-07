@@ -13,7 +13,7 @@
 .stagingNoteContent{padding:18px;border-radius:13px;background:var(--surface-subtle,#f7f8fa);
   border-inline-start:4px solid #29804b}
 .stagingNoteScope{color:var(--muted,#555);font-size:13px;margin:0 0 7px}
-.stagingNoteContent:has(.stagingNoteScope){} 
+.stagingNoteContent[data-area-kind="shared"]{border-inline-start-color:#2677b7}
 .stagingNoteContent h2{font-size:21px;line-height:1.35;overflow-wrap:anywhere;margin:0 0 12px}
 .stagingNoteBody{font:inherit;white-space:pre-wrap;overflow-wrap:anywhere;overflow-x:auto;
   margin:0;max-width:100%;tab-size:4}
