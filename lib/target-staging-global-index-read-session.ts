@@ -3,7 +3,8 @@
  * server actor/Area ACL or bind the production UI. Never persist this object. */
 import {
   advanceGlobalIndexPageChain,beginGlobalIndexPageChain,fetchGlobalIndexPage,
-  type GlobalIndexFailure,type GlobalIndexPage,type GlobalIndexPageChain,
+  type GlobalIndexFailure,type GlobalIndexItem,type GlobalIndexPage,
+  type GlobalIndexPageChain,
   type GlobalIndexScope,
 } from "./target-staging-global-index-client";
 
@@ -12,10 +13,15 @@ export type GlobalIndexReadSessionResult=
   |{ok:false;reason:GlobalIndexFailure|"superseded"|"busy"|"not-ready"};
 
 /** Never expose the internal chain's mutable row references. */
+function detachItem(entry:GlobalIndexItem):GlobalIndexItem{
+  if(entry.kind==="project")
+    return{kind:"project",item:{...entry.item}};
+  if(entry.kind==="task")
+    return{kind:"task",item:{...entry.item}};
+  return{kind:"note",item:{...entry.item}};
+}
 function detachPage(page:GlobalIndexPage):GlobalIndexPage{
-  return {...page,items:page.items.map(entry=>({
-    ...entry,item:{...entry.item},
-  }))};
+  return {...page,items:page.items.map(detachItem)};
 }
 
 export type GlobalIndexReadSessionSnapshot=
@@ -48,6 +54,9 @@ export function createGlobalIndexReadSession(
   const validParams=["all","personal","shared"].includes(params.scope)&&
     Number.isSafeInteger(limit)&&limit>=1&&limit<=100&&pinned!==null;
   let revision=0;
+  // An observed auth-generation mismatch is terminal even if a buggy
+  // caller later reuses the earlier value (A -> B -> A).
+  let invalidated=false;
   let active:AbortController|null=null;
   let chain:GlobalIndexPageChain|null=null;
   let status:"idle"|"loading"|"ready"|"failed"|"disposed"=
@@ -61,8 +70,9 @@ export function createGlobalIndexReadSession(
   };
   const guard=():boolean=>{
     if(status==="disposed")return false;
-    if(!validParams)return false;
+    if(!validParams||invalidated)return false;
     if(valid()!==pinned){
+      invalidated=true;
       revision++;
       clear();
       status="failed";
@@ -98,11 +108,11 @@ export function createGlobalIndexReadSession(
     );
     // Do not let a stale, aborted, or disposed request return another
     // generation's title list to the caller or overwrite current state.
-    if(ticket!==revision||status==="disposed")
+    if(ticket!==revision)
       return{ok:false,reason:"superseded"};
     if(!guard())return{ok:false,reason:"stale"};
     active=null;
-    if(!result.ok){
+    if(result.ok===false){
       status="failed";
       failure=result.reason;
       return result;
