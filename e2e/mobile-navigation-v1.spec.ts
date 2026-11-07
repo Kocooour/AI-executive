@@ -198,6 +198,8 @@ test("desktop v1 My Plan is a distinct, honest and restorable preview route", as
   const notice = page.locator('[data-plan-source="legacy-today"]');
   await expect(plan).toHaveCount(1);
   await expect(today).toHaveCount(1);
+  await expect(page.locator('aside nav button[data-nav-view="Today"]')).toHaveCount(1);
+  await expect(plan).toHaveAttribute("data-nav-view", "MyPlanPreview");
   await expect(plan).toContainText(/Můj plán|My Plan/);
   await expect(plan).toHaveAttribute("aria-label", /development preview|vývojový náhled/);
 
