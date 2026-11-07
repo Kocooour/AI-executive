@@ -82,7 +82,7 @@ export function MobileNav({ app }: { app: LumiApp }) {
                       setMoreOpen(false);
                     }}
                   >
-                    <span className="mobileMoreItemIcon" aria-hidden="true"><ViewIcon name={item} /></span>
+                    <span className="mobileMoreItemIcon" aria-hidden="true"><ViewIcon name={mobileDesignV1Preview && item === "Today" ? "TodayV1" : item} /></span>
                     <span>{tr(item)}</span>
                   </button>
                 ))}
