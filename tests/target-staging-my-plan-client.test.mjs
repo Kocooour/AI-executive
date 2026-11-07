@@ -157,3 +157,107 @@ test("preview stays server-gated and direct HTTP writes are isolated in the tran
   assert.doesNotMatch(ui,/method:\s*["'](?:PATCH|POST|PUT|DELETE)/);
   assert.doesNotMatch(ui,/indexedDB|localStorage|sessionStorage|serviceWorker/);
 });
+
+test("BE-14 accepts legitimate 200 heavily JSON-escaped task titles",async()=>{
+  const escaped="\u0001".repeat(4096);
+  const today=Array.from({length:100},(_,i)=>({
+    ...task("t"+String(i).padStart(3,"0"),date),title:escaped,
+  }));
+  const tomorrow=Array.from({length:100},(_,i)=>({
+    ...task("n"+String(i).padStart(3,"0"),"2026-11-06"),title:escaped,
+  }));
+  const body=page(today,tomorrow);
+  const encoded=new TextEncoder().encode(JSON.stringify(body));
+  assert.ok(encoded.byteLength>4*1024*1024,"large valid page");
+  const result=await fetchMyPlanSlice({...params,limit:100},
+    async()=>goodResponse(body));
+  assert.equal(result.ok,true);
+  assert.equal(result.page.today.tasks.length,100);
+  assert.equal(result.page.tomorrow.tasks.length,100);
+  assert.equal(result.page.today.tasks[0].title.length,4096);
+});
+
+test("BE-14 bounds actual received bytes, not understated Content-Length",async()=>{
+  let cancelled=false,pulls=0;
+  const stream=new ReadableStream({
+    pull(controller){
+      pulls++;
+      controller.enqueue(new Uint8Array(1024*1024).fill(32));
+    },
+    cancel(){cancelled=true;},
+  });
+  const result=await fetchMyPlanSlice(params,async()=>new Response(stream,{
+    headers:{"content-type":"application/json","cache-control":"no-store",
+      "content-length":"1"},
+  }));
+  assert.deepEqual(result,{ok:false,reason:"invalid-response"});
+  assert.equal(cancelled,true);
+  assert.ok(pulls<=12,"should not buffer unbounded response");
+});
+
+test("BE-14 rejects oversized or malformed Content-Length before reading",async()=>{
+  for(const length of [String(8*1024*1024+1),"999999999999999999999",
+    "1e7","-1","42,42","12x"]){
+    let cancelled=false;
+    const stream=new ReadableStream({cancel(){cancelled=true;}},{
+      highWaterMark:0,
+    });
+    const result=await fetchMyPlanSlice(params,async()=>new Response(stream,{
+      headers:{"content-type":"application/json","cache-control":"no-store",
+        "content-length":length},
+    }));
+    assert.deepEqual(result,{ok:false,reason:"invalid-response"},length);
+    assert.equal(cancelled,true,length);
+  }
+});
+
+test("BE-14 strict UTF-8 and reject spoofed cache/MIME metadata",async()=>{
+  const valid=JSON.stringify(current());
+  const bytes=new TextEncoder().encode(valid);
+  const marker=valid.indexOf('"title":"')+'"title":"'.length;
+  assert.ok(marker>8);
+  bytes[marker]=0xff;
+  assert.deepEqual(await fetchMyPlanSlice(params,async()=>new Response(bytes,{
+    headers:{"content-type":"application/json","cache-control":"no-store"},
+  })),{ok:false,reason:"invalid-response"});
+  for(const [cache,mime] of [
+    ["x-no-store","application/json"],
+    ['max-age=60, private="no-store"',"application/json"],
+    ["no-store","text/plain; charset=application/json"],
+  ]){
+    let cancelled=false;
+    const response=new Response(new ReadableStream({
+      cancel(){cancelled=true;},
+    },{highWaterMark:0}),{headers:{"cache-control":cache,
+      "content-type":mime}});
+    assert.deepEqual(await fetchMyPlanSlice(params,async()=>response),
+      {ok:false,reason:"invalid-response"});
+    assert.equal(cancelled,true);
+  }
+});
+
+test("BE-14 abort cancels a stalled My Plan response body",async()=>{
+  const controller=new AbortController();
+  let begun;
+  const started=new Promise(resolve=>{begun=resolve;});
+  let cancelled=false;
+  const stream=new ReadableStream({
+    pull(){
+      begun();
+      return new Promise(()=>{});
+    },
+    cancel(){cancelled=true;},
+  },{highWaterMark:0});
+  const pending=fetchMyPlanSlice({...params,signal:controller.signal},
+    async()=>new Response(stream,{headers:{
+      "content-type":"application/json","cache-control":"no-store",
+    }}));
+  await started;
+  controller.abort();
+  const result=await Promise.race([
+    pending,new Promise((_,reject)=>setTimeout(
+      ()=>reject(Error("stalled My Plan reader")),2000)),
+  ]);
+  assert.deepEqual(result,{ok:false,reason:"aborted"});
+  assert.equal(cancelled,true);
+});

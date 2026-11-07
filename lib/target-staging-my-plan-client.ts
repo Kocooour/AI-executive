@@ -1,4 +1,4 @@
-/** R3-slice/UI-01: read-only, browser-side staging My Plan transport.
+/** R3-slice/UI-01 and BE-14: read-only, browser-side staging My Plan transport.
  * The server remains the authority for identity, Area ACL, cursor and epochs.
  * No task data is cached, persisted, or projected into the legacy task store. */
 export type MyPlanSliceFilter="all"|"personal"|"shared";
@@ -135,6 +135,76 @@ export function appendMyPlanSlice(
     tomorrow:{tasks:mergedTomorrow,hasMore:next.tomorrow.hasMore}};
 }
 
+// R3-slice/BE-14. Two day buckets may each hold 100 title-rich tasks.
+// Eight MiB accommodates even JSON-escaped 4096-byte titles, yet bounds
+// hostile/corrupted responses before JSON.parse and the strict DTO allowlist.
+const MAX_MY_PLAN_RESPONSE_BYTES=8*1024*1024;
+class InvalidMyPlanBody extends Error {}
+
+function discardMyPlanBody(response:Response):void{
+  try{if(response.body)void response.body.cancel().catch(()=>{});}
+  catch{/* A synthetic or already-locked body is not safely cancellable. */}
+}
+
+function hasMyPlanNoStore(header:string|null):boolean{
+  if(header===null)return false;
+  let quoted=false,escaped=false,start=0;
+  const parts:string[]=[];
+  for(let i=0;i<header.length;i++){
+    const char=header[i];
+    if(escaped){escaped=false;continue;}
+    if(quoted&&char==="\\"){escaped=true;continue;}
+    if(char==='"'){quoted=!quoted;continue;}
+    if(char===","&&!quoted){
+      parts.push(header.slice(start,i).trim());start=i+1;
+    }
+  }
+  if(quoted||escaped)return false;
+  parts.push(header.slice(start).trim());
+  return parts.some(part=>/^no-store$/i.test(part));
+}
+
+function hasMyPlanJsonType(header:string|null):boolean{
+  return header!==null&&
+    header.split(";")[0].trim().toLowerCase()==="application/json";
+}
+
+async function readBoundedMyPlanJson(
+  response:Response,signal?:AbortSignal,
+):Promise<unknown>{
+  const length=response.headers.get("content-length");
+  if(length!==null&&(!/^(?:0|[1-9][0-9]*)$/.test(length)||
+    !Number.isSafeInteger(Number(length))||
+    Number(length)>MAX_MY_PLAN_RESPONSE_BYTES)){
+    discardMyPlanBody(response);
+    throw new InvalidMyPlanBody();
+  }
+  if(!response.body)throw new InvalidMyPlanBody();
+  const reader=response.body.getReader();
+  const decoder=new TextDecoder("utf-8",{fatal:true});
+  let received=0,text="",complete=false;
+  const onAbort=()=>{void reader.cancel().catch(()=>{});};
+  signal?.addEventListener("abort",onAbort,{once:true});
+  try{
+    for(;;){
+      if(signal?.aborted)throw new InvalidMyPlanBody();
+      const chunk=await reader.read();
+      if(signal?.aborted)throw new InvalidMyPlanBody();
+      if(chunk.done){complete=true;break;}
+      if(!(chunk.value instanceof Uint8Array))throw new InvalidMyPlanBody();
+      received+=chunk.value.byteLength;
+      if(received>MAX_MY_PLAN_RESPONSE_BYTES)throw new InvalidMyPlanBody();
+      text+=decoder.decode(chunk.value,{stream:true});
+    }
+    text+=decoder.decode();
+    return JSON.parse(text) as unknown;
+  }finally{
+    signal?.removeEventListener("abort",onAbort);
+    if(!complete)void reader.cancel().catch(()=>{});
+    reader.releaseLock();
+  }
+}
+
 export async function fetchMyPlanSlice(
   params:{evaluationDate:string;areaFilter?:MyPlanSliceFilter;
     limit?:number;cursor?:string;signal?:AbortSignal},
@@ -148,6 +218,7 @@ export async function fetchMyPlanSlice(
     (params.cursor!==undefined&&(params.cursor.length>4096||
       !cursorPattern.test(params.cursor))))
     return {ok:false,reason:"invalid-request"};
+  if(params.signal?.aborted)return {ok:false,reason:"aborted"};
   const query=new URLSearchParams({
     evaluationDate:params.evaluationDate,areaFilter,limit:String(limit),
   });
@@ -161,20 +232,30 @@ export async function fetchMyPlanSlice(
   }catch{
     return {ok:false,reason:params.signal?.aborted?"aborted":"offline"};
   }
-  if(params.signal?.aborted)return {ok:false,reason:"aborted"};
-  if(response.status===401||response.status===403)
-    return {ok:false,reason:"signed-out"};
-  if(response.status===409)return {ok:false,reason:"stale"};
-  if(response.status===400)return {ok:false,reason:"invalid-request"};
-  if(response.status!==200)return {ok:false,reason:"unavailable"};
+  if(params.signal?.aborted){
+    discardMyPlanBody(response);
+    return {ok:false,reason:"aborted"};
+  }
+  if(response.status!==200){
+    discardMyPlanBody(response);
+    if(response.status===401||response.status===403)
+      return {ok:false,reason:"signed-out"};
+    if(response.status===409)return {ok:false,reason:"stale"};
+    if(response.status===400)return {ok:false,reason:"invalid-request"};
+    return {ok:false,reason:"unavailable"};
+  }
   if(response.redirected||
-    !response.headers.get("cache-control")?.toLowerCase().includes("no-store")||
-    !response.headers.get("content-type")?.toLowerCase().includes("application/json"))
+    !hasMyPlanNoStore(response.headers.get("cache-control"))||
+    !hasMyPlanJsonType(response.headers.get("content-type"))){
+    discardMyPlanBody(response);
     return {ok:false,reason:"invalid-response"};
+  }
   try {
-    const page=parseMyPlanSlice(await response.json(),
+    const payload=await readBoundedMyPlanJson(response,params.signal);
+    if(params.signal?.aborted)return {ok:false,reason:"aborted"};
+    const parsed=parseMyPlanSlice(payload,
       {evaluationDate:params.evaluationDate,areaFilter,limit});
-    return page?{ok:true,page}:{ok:false,reason:"invalid-response"};
+    return parsed?{ok:true,page:parsed}:{ok:false,reason:"invalid-response"};
   }catch{
     return {ok:false,reason:params.signal?.aborted?"aborted":"invalid-response"};
   }
