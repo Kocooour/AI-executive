@@ -8,6 +8,7 @@ on:
       - "lib/target-staging-title-search-client.ts"
       - "lib/target-staging-title-search-session.ts"
       - "e2e/title-search-ui09b.spec.ts"
+      - "e2e/title-search-ui09b-default-off.spec.ts"
       - "playwright.config.ts"
       - ".github/workflows/title-search-preview-browser.yml"
 
@@ -28,6 +29,7 @@ jobs:
       NEXT_TELEMETRY_DISABLED: "1"
       LUMI_TITLE_SEARCH_PREVIEW_E2E: "true"
       E2E_PORT: "3101"
+      E2E_SKIP_BUILD: "1"
     steps:
       - name: Checkout PR integrated code
         uses: actions/checkout@v5
@@ -42,8 +44,25 @@ jobs:
           cache: pnpm
       - name: Install locked dependencies
         run: pnpm install --frozen-lockfile
+      - name: Build isolated staging preview
+        run: pnpm build
       - name: Install browser
         run: pnpm exec playwright install --with-deps chromium
-      # Only the named test file is allowed: the complete suite is the release gate.
-      - name: Run UI-09b targeted browser cases on synthetic local data
+      # An isolated server with all preview flags OFF must return HTTP 404.
+      - name: Assert default-off preview returns 404
+        env:
+          LUMI_TITLE_SEARCH_PREVIEW_E2E: "false"
+        run: pnpm exec playwright test e2e/title-search-ui09b-default-off.spec.ts --project=desktop
+      # Run only the named opt-in scenarios, never the complete release E2E suite.
+      - name: Test title-search DOM privacy and keyboard focus with synthetic data
         run: pnpm exec playwright test e2e/title-search-ui09b.spec.ts --project=desktop
+      - name: Upload failed browser traces
+        if: failure()
+        uses: actions/upload-artifact@v6
+        with:
+          name: lumi-title-search-preview-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            test-results/
+            playwright-report/
+          if-no-files-found: ignore
+          retention-days: 7
