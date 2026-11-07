@@ -1,6 +1,6 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
-import { mobileDesignV1Preview, primaryViews, secondaryViews } from "../navigation";
+import { desktopV1PrimaryViews, mobileDesignV1Preview, primaryViews, secondaryViews } from "../navigation";
 import { desktopSidebarCanFocusDestination } from "../../../lib/desktop-sidebar-focus";
 import { mobileMoreHeadingRevealDelta } from "../../../lib/mobile-more-focus";
 import type { LumiApp } from "../use-lumi-app";
@@ -36,15 +36,19 @@ export function Sidebar({ app }: { app: LumiApp }) {
   // "More views" opens a list in the scrolling area under the projects; its toggle stays in the footer.
   const [secondaryOpen, setSecondaryOpen] = useState(false);
   const secondaryRef = useRef<HTMLDivElement>(null);
-  const pendingDesktopNavigationRef = useRef<{ destination: string; opener: HTMLButtonElement } | null>(null);
+  const pendingDesktopNavigationRef = useRef<{ destination: string; opener: HTMLButtonElement; planPreview: boolean } | null>(null);
   const latestViewRef = useRef(view);
   latestViewRef.current = view;
 
-  function navigateToView(destination: string, opener: HTMLButtonElement) {
+  const navViews = mobileDesignV1Preview ? desktopV1PrimaryViews : primaryViews;
+
+  function navigateToView(destination: string, opener: HTMLButtonElement, planPreview = false) {
+    const routeChanged = destination !== view ||
+      (destination === "Today" && planPreview !== app.mobilePlanPreviewActive);
     pendingDesktopNavigationRef.current = mobileDesignV1Preview &&
-      window.matchMedia("(min-width: 701px)").matches && destination !== view
-      ? { destination, opener } : null;
-    setView(destination);
+      window.matchMedia("(min-width: 701px)").matches && routeChanged
+      ? { destination, opener, planPreview } : null;
+    setView(destination, planPreview ? { previewMyPlan: true } : undefined);
     closeDetail();
   }
 
@@ -53,7 +57,8 @@ export function Sidebar({ app }: { app: LumiApp }) {
   useEffect(() => {
     const intent = pendingDesktopNavigationRef.current;
     if (!intent) return;
-    if (intent.destination !== view) {
+    if (intent.destination !== view ||
+      (view === "Today" && intent.planPreview !== app.mobilePlanPreviewActive)) {
       pendingDesktopNavigationRef.current = null;
       return;
     }
@@ -76,7 +81,7 @@ export function Sidebar({ app }: { app: LumiApp }) {
       heading.focus({ preventScroll: true });
     });
     return () => window.cancelAnimationFrame(frame);
-  }, [view]);
+  }, [view, app.mobilePlanPreviewActive]);
   useEffect(() => {
     if (secondaryOpen) secondaryRef.current?.scrollIntoView({ block: "nearest" });
   }, [secondaryOpen]);
@@ -136,27 +141,34 @@ export function Sidebar({ app }: { app: LumiApp }) {
           )}
         </div>
         <nav aria-label={tr("mainNavigation")}>
-          {primaryViews.map((x) => (
+          {navViews.map((x) => {
+            const planPreview = mobileDesignV1Preview && x === "MyPlanPreview";
+            const destination = planPreview ? "Today" : x;
+            const active = planPreview ? view === "Today" && app.mobilePlanPreviewActive :
+              view === x && !(x === "Today" && app.mobilePlanPreviewActive);
+            const draggable = !planPreview && draggableSectionNames.includes(x);
+            return (
             <button
-              className={`${view === x ? "active" : ""} ${dragTarget === `section:${x}` ? "dropActive" : ""}`.trim()}
-              aria-current={view === x ? "page" : undefined}
-              data-nav-view={x}
-              data-drop-section={draggableSectionNames.includes(x) ? x : undefined}
-              onDragEnter={() => draggableSectionNames.includes(x) && setActiveDragTarget(`section:${x}`)}
+              className={`${active ? "active" : ""} ${dragTarget === `section:${x}` ? "dropActive" : ""}`.trim()}
+              aria-current={active ? "page" : undefined}
+              data-nav-view={destination}
+              data-nav-tab={planPreview ? "my-plan-preview" : undefined}
+              data-drop-section={draggable ? x : undefined}
+              onDragEnter={() => draggable && setActiveDragTarget(`section:${x}`)}
               onDragOver={(event) => {
-                if (!draggableSectionNames.includes(x)) return;
+                if (!draggable) return;
                 event.preventDefault();
                 event.dataTransfer.dropEffect = "move";
               }}
-              onDrop={(event) => acceptNativeDrop(event, `section:${x}`)}
+              onDrop={(event) => { if (draggable) acceptNativeDrop(event, `section:${x}`); }}
               onClick={(event) => {
                 // The Inbox entry always opens the task list, also while the mail tab is shown.
                 if (x === "Inbox") setInboxTab("tasks");
-                navigateToView(x, event.currentTarget);
+                navigateToView(destination, event.currentTarget, planPreview);
               }}
               key={x}
             >
-              <span className="navLabel"><span aria-hidden="true"><ViewIcon name={x} /></span>{tr(x)}</span>
+              <span className="navLabel"><span aria-hidden="true"><ViewIcon name={planPreview ? "MyPlanPreview" : mobileDesignV1Preview && x === "Today" ? "TodayV1" : x} /></span>{planPreview ? (language === "cs" ? "Můj plán" : "My Plan") : tr(x)}</span>
               {x === "Inbox" || x === "Today" ? (
                 <span className="navCount">{sidebarCounts[x]}</span>
               ) : null}
@@ -164,7 +176,7 @@ export function Sidebar({ app }: { app: LumiApp }) {
                 <><span className="navDot" data-nav-attention="Projects" aria-hidden="true" /><span className="srOnly">{tr("projectsNeedAttention")}</span></>
               ) : null}
             </button>
-          ))}
+          );})}
         </nav>
         {/* Legacy aggregate has no direct project list: this preview never infers target ACL or cross-workspace permissions. */}
         {/* In v1, direct destinations come BEFORE the unbounded projects so that
