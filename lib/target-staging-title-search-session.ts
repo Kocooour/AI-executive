@@ -80,7 +80,7 @@ export function createStagingTitleSearchSession(fetchImpl:typeof fetch=fetch){
     // An earlier in-flight response must never repopulate a reset or new query.
     if(id!==generation)return {ok:false,reason:"aborted"};
     running=null;
-    if(!response.ok){
+    if(response.ok===false){
       invalidate(response.reason);
       return {ok:false,reason:response.reason};
     }
