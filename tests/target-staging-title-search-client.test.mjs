@@ -329,3 +329,30 @@ test("BE-18 fails closed on invalid UTF-8 and mid-stream abort",async()=>{
   assert.deepEqual(aborted,{ok:false,reason:"aborted"});
   assert.equal(cancelled,true);
 });
+
+test("BE-19 abort wakes a stalled body read and cancels its stream",async()=>{
+  const controller=new AbortController();
+  let reading;
+  const started=new Promise(resolve=>{reading=resolve;});
+  let cancelled=false;
+  const stream=new ReadableStream({
+    pull(){
+      reading();
+      return new Promise(()=>{}); // producer never supplies a chunk
+    },
+    cancel(){cancelled=true;},
+  },{highWaterMark:0});
+  const pending=loadStagingTitleSearchPage({
+    query:"Shared project",scope:"shared",limit:2,signal:controller.signal,
+  },async()=>new Response(stream,{headers:{
+    "content-type":"application/json","cache-control":"no-store",
+  }}));
+  await started;
+  controller.abort();
+  const result=await Promise.race([
+    pending,
+    new Promise((_,reject)=>setTimeout(()=>reject(Error("abort left stalled reader")),2000)),
+  ]);
+  assert.deepEqual(result,{ok:false,reason:"aborted"});
+  assert.equal(cancelled,true);
+});
