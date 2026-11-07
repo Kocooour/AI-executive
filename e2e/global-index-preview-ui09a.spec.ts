@@ -120,7 +120,7 @@ test("UI-09a: hidden, BFCache pagehide and offline wipe real DOM, each resume re
 
   await online(page,false);
   await expect(page.getByText("Obnovená BFCache stránka")).toHaveCount(0);
-  await expect(page.getByRole("alert")).toContainText("Připojení selhalo");
+  await expect(page.locator(".stagingGlobalIndex .stagingGlobalError[role=alert]")).toContainText("Připojení selhalo");
   await online(page,true);
   await requests(page,4);
   await expect(page.getByText("Obnovená BFCache stránka")).toHaveCount(0);
@@ -139,7 +139,7 @@ test("UI-09a: 409 and 401 during cursor pagination erase previously visible priv
   await expect(page.getByText("Citlivý titul před 409")).toHaveCount(0);
   await expect(page.getByRole("status")).toContainText("Načítám");
   await send(page,2,{error:"Cursor stale"},409);
-  await expect(page.getByRole("alert")).toContainText("Obsah nebo oprávnění");
+  await expect(page.locator(".stagingGlobalIndex .stagingGlobalError[role=alert]")).toContainText("Obsah nebo oprávnění");
   await expect(page.getByText("Citlivý titul před 409")).toHaveCount(0);
 
   await page.getByRole("button",{name:"Znovu ověřit a načíst"}).click();
@@ -150,6 +150,6 @@ test("UI-09a: 409 and 401 during cursor pagination erase previously visible priv
   await requests(page,4);
   await expect(page.getByText("Citlivý titul před 401")).toHaveCount(0);
   await send(page,4,{error:"Unauthorized"},401);
-  await expect(page.getByRole("alert")).toContainText("Přihlášení nebo přístup zanikl");
+  await expect(page.locator(".stagingGlobalIndex .stagingGlobalError[role=alert]")).toContainText("Přihlášení nebo přístup zanikl");
   await expect(page.getByText("Citlivý titul před 401")).toHaveCount(0);
 });
