@@ -11,7 +11,7 @@ Pouze s explicitním vývojovým flagem `NEXT_PUBLIC_LUMI_DESIGN_V1_PREVIEW=1`:
 - Produkční default-off UI si zachovává svou původní archivní ikonu v obou navigacích, bez přepisu původního `ProjectIcon` kontraktu.
 
 ## Testovací brány
-- `tests/project-circle-navigation-ui06e.test.mjs` — obrysová vs původní varianta ikony, flag, ochrana navigačního významu, styly dokončení.
+- `tests/project-circle-navigation-ui06e.test.mjs` — obrysová vs. původní varianta ikony, omezení na vývojový náhled a zachování navigačního významu (nikoli ovládání dokončení).
 - `e2e/mobile-navigation-v1.spec.ts` — cílený Chromium test vykreslení mobilní záložky a desktopového sidebaru; ověření že kliknutí na konkrétní projekt pouze naviguje.
 - Standardní CI: typecheck, Node unit testy, produkční build; cílená flag-enabled Chromium workflow. Kompletní Browser E2E a WebKit patří do předprodukční validační brány.
 
