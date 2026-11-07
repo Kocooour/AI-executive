@@ -143,6 +143,14 @@ test("snooze validates exact server-time future and maximum 30 days",()=>{
     command("snooze",{untilMs:NOW+1+30*86_400_000}));
   assert.equal(exactly.ok,true);
   assert.equal(exactly.operation,"insert");
+  // v22 accepts a stored snooze through MAX_SAFE_INTEGER, even when no new
+  // server Date could legitimately schedule one that far away.
+  const far=snapshot({row:hidden("snoozed",Number.MAX_SAFE_INTEGER,0),attentionEpoch:1});
+  const farRecheck=plan(far,witness({attentionEpoch:1}),command("recheck",{
+    nowMs:NOW+100,expectedAttentionEpoch:1,expectedLifecycleRevision:0,
+  }));
+  assert.equal(farRecheck.operation,"none");
+  assert.equal(farRecheck.visible,false);
 });
 
 test("candidate source revision, attention epoch and row revision are ALL CAS conditions",()=>{
@@ -194,6 +202,8 @@ test("bad, extra or content-bearing snapshots, v22 rows, and witnesses are inval
     snapshot({attentionEpoch:-1}),snapshot({row:{state:"active",snoozedUntilMs:null,revision:0}}),
     snapshot({row:hidden("snoozed",null)}),
     snapshot({row:hidden("snoozed",-1)}),
+    snapshot({row:hidden("snoozed",Number.MAX_SAFE_INTEGER+1)}),
+    snapshot({row:hidden("dismissed",null,Number.MAX_SAFE_INTEGER)}),
     snapshot({row:{...hidden(),sourceRevision:3}}),
     snapshot({row:{...hidden(),changedAtMs:NOW}}),
     snapshot({row:hidden("dismissed",NOW+1)}),
