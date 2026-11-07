@@ -156,8 +156,9 @@ async function fetchSearchUntilAbort(
   });
   try{
     if(signal.aborted)return null;
-    const pending=Promise.resolve().then(()=>
-      signal.aborted?null:request());
+    // Dispatch the explicit GET synchronously: a newer first() may abort it
+    // immediately, but must not silently prevent the older fetch from starting.
+    const pending=Promise.resolve(request());
     const response=await Promise.race([pending,aborted]);
     if(response===null){
       // An adapter may ignore signal and resolve much later. Cancel its body,
