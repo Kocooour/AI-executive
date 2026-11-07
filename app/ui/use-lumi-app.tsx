@@ -41,6 +41,7 @@ import { findActiveProjectWithTitle } from "../../lib/project-title";
 import { type AIProposal, type AssistantMessage, type CalendarEvent, type CalendarSourceState, type CaptureProjectAction, type CaptureSuggestion, type ConfirmRequest, type ContextClaimItem, type ContextHistoryState, type ContextHistoryStep, type ContextInboxProposal, type ContextInboxTaskDraft, type DayPlanItem, type DurableContextItem, type Language, type NotificationState, type PACTAgentResult, type PACTAgentRunSummary, type PACTAgentSummary, type StandaloneSubjectItem, type ThemeMode } from "./types";
 import { copy } from "./copy";
 import { mobileDesignV1Preview, mobileV1IsPlanPreviewRoute, views } from "./navigation";
+import { mobileMoreExitFocus, mobileMoreHeadingRevealDelta } from "../../lib/mobile-more-focus";
 import { useAttention } from "./hooks/use-attention";
 import { eventTaskSpan } from "../../lib/calendar-decisions";
 import { restoreCalendarDecisions, useCalendarEvents, type CalendarDecisionUndo } from "./hooks/use-calendar-events";
@@ -399,6 +400,12 @@ export function useLumiApp() {
   }, [activeWorkspaceId, items, relations, startupView]);
   const moreTriggerRef = useRef<HTMLButtonElement>(null);
   const moreDialogRef = useRef<HTMLDivElement>(null);
+  const moreFocusDestinationRef = useRef<string | null>(null);
+  const currentViewForMoreFocusRef = useRef(view);
+  currentViewForMoreFocusRef.current = view;
+  function markMobileMoreNavigation(destination: string) {
+    if (mobileDesignV1Preview) moreFocusDestinationRef.current = destination;
+  }
   const contextClaimLoadVersion = useRef(0);
   const contextHistoryLoadVersion = useRef(0);
   // Keyboard shortcuts can arrive before React renders a committed history response.
@@ -1951,7 +1958,39 @@ export function useLumiApp() {
   useEffect(() => {
     if (!moreOpen) return;
     moreDialogRef.current?.querySelector<HTMLButtonElement>("button")?.focus();
-    return () => moreTriggerRef.current?.focus();
+    return () => {
+      const destination = moreFocusDestinationRef.current;
+      moreFocusDestinationRef.current = null;
+      if (!destination) {
+        moreTriggerRef.current?.focus();
+        return;
+      }
+      // The destination view commits together with closing the dialog. Delay
+      // focus until its heading exists, and reject a subsequent navigation.
+      window.requestAnimationFrame(() => {
+        if (mobileMoreExitFocus(destination, currentViewForMoreFocusRef.current,
+          Boolean(moreDialogRef.current), window.matchMedia("(max-width: 700px)").matches) !== "destination") return;
+        const heading = document.querySelector<HTMLElement>(".appPane .pageTitleRow h1");
+        // A subsequent pointer/keyboard action owns its new focus; do not
+        // steal it on the next animation frame after the sheet disappears.
+        const activeElement = document.activeElement;
+        if (activeElement instanceof HTMLElement && activeElement.isConnected &&
+            activeElement !== document.body && activeElement !== moreTriggerRef.current) return;
+        if (!heading?.isConnected || !heading.getClientRects().length) return;
+        // Opening More from a long, scrolled list can leave the destination
+        // heading behind the sticky toolbar or below the viewport. Reveal the
+        // heading *before* focusing it, accounting for both fixed UI bars.
+        const toolbarBottom = document.querySelector<HTMLElement>(".appPane .topbar")
+          ?.getBoundingClientRect().bottom ?? 0;
+        const navTop = document.querySelector<HTMLElement>(".mobileNav")
+          ?.getBoundingClientRect().top ?? window.innerHeight;
+        const rect = heading.getBoundingClientRect();
+        const delta = mobileMoreHeadingRevealDelta(rect.top, rect.bottom,
+          Math.max(0, toolbarBottom) + 12, Math.min(window.innerHeight - 12, navTop - 12));
+        if (delta !== 0) window.scrollBy({ top: delta, behavior: "instant" });
+        heading.focus({ preventScroll: true });
+      });
+    };
   }, [moreOpen]);
 
   useEffect(() => {
@@ -4743,6 +4782,7 @@ export function useLumiApp() {
     moreDialogRef,
     moreOpen,
     moreTriggerRef,
+    markMobileMoreNavigation,
     nearbyCalendarEvents,
     newSubjectTitle,
     newSubjectType,
