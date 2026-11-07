@@ -17,8 +17,12 @@ Request: `actorUserId`, `areaFilter all|personal|shared`,
 `evaluatedAtMs` (nezáporné bezpečné celé číslo), `timeZone` (IANA,
 1–64 znaků, přísný regex a akceptace `Intl.DateTimeFormat`),
 `limit` 1–100, `offset` 0–10 000, `restoreGeneration` (UUID).
-Neplatný vstup vrací `null`; jakákoli chyba nebo anomálie řádku
-vrací celý výsledek `null` (fail-closed).
+Neplatný vstup vrací `null`; jakákoli chyba nebo anomálie **vydávaného**
+řádku (typ, datum, Oblast mimo oprávněnou množinu, nesoulad pravidla a
+severity) vrací celý výsledek `null` (fail-closed). Řádek, který SQL
+nevybere žádným pravidlem, se nevydává ani nevaliduje — stejně jako u
+selektoru Mého plánu; databázové CHECK omezení takové poškození běžně
+nepřipustí.
 
 ## Populace
 
@@ -57,7 +61,11 @@ aktivity ani kalendář), proto **nic nevytvářejí**.
 Jediný SQL příkaz (CTE): `ORDER BY severity ASC, relevantOn BINARY ASC,
 taskId BINARY ASC LIMIT limit+1 OFFSET offset`. Uvnitř jedné severity
 je pořadí `relevantOn` shodné s pořadím `relevantAt`; `taskId` je
-deterministický tie-break, ze kterého je odvozen i klíč. `D` a `S` jsou
+deterministický tie-break, ze kterého je odvozen i klíč. **Odchylka od
+PRODUCT:** schéma v21 nemá prioritu úkolu, proto krok „explicitní
+priorita“ chybí, a místo `attentionKey` se jako poslední klíč používá
+`taskId` (každý úkol má nejvýš jednu položku, pořadí je stejně stabilní
+a SQL stránkování nemusí počítat hash). `D` a `S` jsou
 vázané parametry. Záměrně **není** vracen celkový počet (nebyla
 provedena revize úniku počtů), pouze `hasMore`.
 
@@ -86,7 +94,18 @@ epoch a policy/content/project-content epochy **všech** oprávněných
 Oblastí včetně prázdných. `privateEpoch`, `linearization` a
 `areaEpochs` jsou **jen interní — nikdy se neposílají klientům**;
 budoucí HTTP adaptér musí před vydáním ověřit LIVE session, Area
-policy a osobní epochu.
+policy a osobní epochu. Revize zahrnuje okamžik vyhodnocení, takže se
+mění s každým `evaluatedAtMs`; porovnání mezi dotazy musí okamžik
+připnout (množina kandidátů je pro stejný okamžik deterministická).
+
+## Poznámky pro navazující lifecycle (R2d.5b)
+
+- Klíč obsahuje `ruleId`: přechod `deadline_soon` → `deadline_overdue`
+  téhož termínu vytvoří nový klíč. Lifecycle musí výslovně rozhodnout,
+  zda dismiss „soon“ potlačí i „overdue“ (PRODUCT: urgentní výjimka
+  pro nově zpožděný termín).
+- Sdílená Oblast bez admina selže v preflightu (`shared_admin_missing`)
+  a celé čtení je fail-closed pro všechny aktéry; jde o invariant úložiště.
 
 ## Testy
 
