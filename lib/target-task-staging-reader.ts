@@ -41,6 +41,8 @@ import { readAuthorizedScopedHomeSummary, type AuthorizedScopedHomeSummary, type
 import { readAuthorizedTemporalTaskPage, readAuthorizedTemporalTaskDetail, readAuthorizedTemporalDueWindowPage, temporalCalendarOrdinal } from "./target-task-temporal-read-model";
 import { readAuthorizedPersonalWhenPage } from "./target-personal-when-read-model";
 import {readAuthorizedMyPlanDayTaskPage} from "./target-my-plan-day-task-read-model";
+import {readAuthorizedAttentionCandidatePage} from "./target-attention-read-model";
+import type {AttentionCandidatePage,AttentionAreaFilter} from "./target-attention-read-model";
 import {readAuthorizedGlobalTaskPage} from "./target-global-task-read-model";
 import type {TargetGlobalTaskPage,TargetGlobalTaskScope} from "./target-global-task-read-model";
 import {readAuthorizedGlobalProjectPage} from "./target-global-project-read-model";
@@ -448,6 +450,23 @@ export function readPreflightedMyPlanDayTaskPage(
       if(!preflight(db))return null;
       const actorUserId=verifiedActor(db,access);
       return actorUserId?readAuthorizedMyPlanDayTaskPage(db,{
+        ...request,actorUserId,restoreGeneration:store.expectedRestoreGeneration,
+      }):null;
+    },()=>null));
+}
+
+/** R2d.5a: staging-only Attention candidates for the verified actor, one
+ * pinned snapshot. A future HTTP adapter MUST verify session/Area/private epoch live. */
+export function readPreflightedAttentionCandidatePage(
+  store:TargetStagingReadStore,access:TargetStagingReadCredential,
+  request:{areaFilter:AttentionAreaFilter;evaluatedAtMs:number;timeZone:string;
+    limit:number;offset:number},
+):AttentionCandidatePage|null {
+  return withPreflightedStore(store,()=>null,(db,preflight)=>
+    inReadSnapshot(db,()=>{
+      if(!preflight(db))return null;
+      const actorUserId=verifiedActor(db,access);
+      return actorUserId?readAuthorizedAttentionCandidatePage(db,{
         ...request,actorUserId,restoreGeneration:store.expectedRestoreGeneration,
       }):null;
     },()=>null));
