@@ -15,7 +15,7 @@ test("UI-06e adds an unfilled decorative project circle without changing the leg
   assert.match(source, /case "ProjectsV1": return <ProjectIcon previewCircle \/>;/);
 });
 
-test("UI-06e restricts circle to preview navigation and dims completed projects", () => {
+test("UI-06e restricts circle to preview navigation", () => {
   const sidebar = read("../app/ui/views/sidebar.tsx");
   const phone = read("../app/ui/views/mobile-nav.tsx");
   const css = read("../app/lumi-navigation.css");
