@@ -31,7 +31,9 @@ test("UI-09b explicit search and pagination only, with no writes, cache or synth
   assert.ok(ui.includes('session.current!.first({query,scope,limit:25})'));
   assert.ok(ui.includes('session.current!.next()'));
   assert.ok(ui.includes('if(pageInFlight.current)return;'),"double next-page actions are ignored");
-  assert.ok(ui.includes('scope==="all"')===false);
+  assert.ok(ui.includes('Zobrazeno {ready.items.length} autorizovaných názvů.'));
+  assert.ok(ui.includes('item.areaKind==="shared"?"Sdílené":"Osobní"'));
+  assert.match(css,/stagingTitleSearchSrOnly/);
   assert.ok(ui.includes('all:"Vše",personal:"Osobní",shared:"Sdílené"'));
   assert.ok(ui.includes("Vše není Můj plán."));
   assert.ok(ui.includes('snapshot?.status==="ready"?snapshot:null'));
