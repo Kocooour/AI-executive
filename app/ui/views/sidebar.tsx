@@ -1,6 +1,8 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
 import { mobileDesignV1Preview, primaryViews, secondaryViews } from "../navigation";
+import { desktopSidebarCanFocusDestination } from "../../../lib/desktop-sidebar-focus";
+import { mobileMoreHeadingRevealDelta } from "../../../lib/mobile-more-focus";
 import type { LumiApp } from "../use-lumi-app";
 import { ProjectIcon, ViewIcon } from "./project-icon";
 import { WorkspaceTile, workspaceTone } from "../workspace-appearance";
@@ -34,6 +36,47 @@ export function Sidebar({ app }: { app: LumiApp }) {
   // "More views" opens a list in the scrolling area under the projects; its toggle stays in the footer.
   const [secondaryOpen, setSecondaryOpen] = useState(false);
   const secondaryRef = useRef<HTMLDivElement>(null);
+  const pendingDesktopNavigationRef = useRef<{ destination: string; opener: HTMLButtonElement } | null>(null);
+  const latestViewRef = useRef(view);
+  latestViewRef.current = view;
+
+  function navigateToView(destination: string, opener: HTMLButtonElement) {
+    pendingDesktopNavigationRef.current = mobileDesignV1Preview &&
+      window.matchMedia("(min-width: 701px)").matches && destination !== view
+      ? { destination, opener } : null;
+    setView(destination);
+    closeDetail();
+  }
+
+  // View commits before focus moves. Back/Forward, search focus and project
+  // inspection never record a sidebar focus intent.
+  useEffect(() => {
+    const intent = pendingDesktopNavigationRef.current;
+    if (!intent) return;
+    if (intent.destination !== view) {
+      pendingDesktopNavigationRef.current = null;
+      return;
+    }
+    const frame = window.requestAnimationFrame(() => {
+      if (pendingDesktopNavigationRef.current !== intent) return;
+      pendingDesktopNavigationRef.current = null;
+      const active = document.activeElement;
+      if (!desktopSidebarCanFocusDestination(intent.destination, latestViewRef.current,
+        mobileDesignV1Preview, window.matchMedia("(min-width: 701px)").matches,
+        active === intent.opener || active === document.body)) return;
+      const heading = document.querySelector<HTMLElement>(".appPane .pageTitleRow h1");
+      if (!heading?.isConnected || !heading.getClientRects().length) return;
+      // A long source view may leave the new heading behind the sticky topbar.
+      const toolbarBottom = document.querySelector<HTMLElement>(".appPane .topbar")
+        ?.getBoundingClientRect().bottom ?? 0;
+      const rect = heading.getBoundingClientRect();
+      const delta = mobileMoreHeadingRevealDelta(rect.top, rect.bottom,
+        Math.max(0, toolbarBottom) + 12, window.innerHeight - 12);
+      if (delta !== 0) window.scrollBy({ top: delta, behavior: "instant" });
+      heading.focus({ preventScroll: true });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [view]);
   useEffect(() => {
     if (secondaryOpen) secondaryRef.current?.scrollIntoView({ block: "nearest" });
   }, [secondaryOpen]);
@@ -106,11 +149,10 @@ export function Sidebar({ app }: { app: LumiApp }) {
                 event.dataTransfer.dropEffect = "move";
               }}
               onDrop={(event) => acceptNativeDrop(event, `section:${x}`)}
-              onClick={() => {
+              onClick={(event) => {
                 // The Inbox entry always opens the task list, also while the mail tab is shown.
                 if (x === "Inbox") setInboxTab("tasks");
-                setView(x);
-                closeDetail();
+                navigateToView(x, event.currentTarget);
               }}
               key={x}
             >
@@ -134,7 +176,7 @@ export function Sidebar({ app }: { app: LumiApp }) {
             aria-label={tr("moreViews")} data-desktop-v1-direct-views>
             {secondaryViews.map((x) => <button key={x} type="button" className={view === x ? "active" : ""}
               data-nav-view={x} aria-current={view === x ? "page" : undefined}
-              onClick={() => { setView(x); closeDetail(); }}>{tr(x)}</button>)}
+              onClick={(event) => navigateToView(x, event.currentTarget)}>{tr(x)}</button>)}
           </div>
         )}
         {sidebarProjects.length > 0 && (
@@ -193,10 +235,7 @@ export function Sidebar({ app }: { app: LumiApp }) {
           )}
           <button
             className={view === "Settings" ? "active" : ""}
-            onClick={() => {
-              setView("Settings");
-              closeDetail();
-            }}
+            onClick={(event) => navigateToView("Settings", event.currentTarget)}
           >
             ⚙ {tr("Settings")}
           </button>
