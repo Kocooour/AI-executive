@@ -240,7 +240,7 @@ test("BE-18 accepts a streamed UTF-8 JSON page across byte boundaries",async()=>
 });
 
 test("BE-18 retains legitimate 50-item pages with heavily escaped titles",async()=>{
-  const largeTitle="\\u0001".repeat(4096);
+  const largeTitle="\u0001".repeat(4096);
   const items=Array.from({length:50},(_,i)=>({
     ...item("project",String(i).padStart(3,"0")),title:largeTitle,
   }));
@@ -270,6 +270,7 @@ test("BE-18 rejects an over-limit stream without buffering its remainder",async(
     query:"Shared project",scope:"shared",limit:2,
   },async()=>new Response(stream,{headers:{
     "content-type":"application/json","cache-control":"no-store",
+    "content-length":"1", // deliberately understated: actual streamed bytes win
   }}));
   assert.deepEqual(result,{ok:false,reason:"invalid-response"});
   assert.equal(cancelled,true,"cancel surplus response data");
@@ -320,7 +321,7 @@ test("BE-18 fails closed on invalid UTF-8 and mid-stream abort",async()=>{
       controller.abort();
     },
     cancel(){cancelled=true;},
-  });
+  },{highWaterMark:0}); // only pull after client starts reading
   const aborted=await loadStagingTitleSearchPage({
     query:"Shared project",scope:"shared",limit:2,signal:controller.signal,
   },async()=>new Response(stream,{headers:{
