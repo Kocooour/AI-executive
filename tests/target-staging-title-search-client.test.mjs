@@ -356,3 +356,60 @@ test("BE-19 abort wakes a stalled body read and cancels its stream",async()=>{
   assert.deepEqual(result,{ok:false,reason:"aborted"});
   assert.equal(cancelled,true);
 });
+
+
+test("BE-20 abort finishes a fetch adapter that ignores its signal",async()=>{
+  const controller=new AbortController();
+  let release,notify;
+  const started=new Promise(resolve=>{notify=resolve;});
+  let count=0;
+  const pending=loadStagingTitleSearchPage({
+    query:"Shared project",scope:"shared",limit:2,signal:controller.signal,
+  },async()=>{
+    count++;
+    notify();
+    return new Promise(resolve=>{release=resolve;});
+  });
+  await started;
+  controller.abort();
+  const result=await Promise.race([
+    pending,
+    new Promise((_,reject)=>setTimeout(()=>reject(Error("fetch did not abort")),2000)),
+  ]);
+  assert.deepEqual(result,{ok:false,reason:"aborted"});
+  assert.equal(count,1);
+  let cancelled;
+  const didCancel=new Promise(resolve=>{cancelled=resolve;});
+  release(new Response(new ReadableStream({
+    cancel(){cancelled();},
+  },{highWaterMark:0}),{headers:{
+    "content-type":"application/json","cache-control":"no-store",
+  }}));
+  await Promise.race([
+    didCancel,
+    new Promise((_,reject)=>setTimeout(()=>reject(Error("late body not cancelled")),2000)),
+  ]);
+});
+
+test("BE-20 discards bodies for refused HTTP status and unsafe headers",async()=>{
+  for(const mode of ["status","mime","cache"]){
+    let cancelled=false,calls=0;
+    const stream=new ReadableStream({
+      cancel(){cancelled=true;},
+    },{highWaterMark:0});
+    const response=new Response(stream,{
+      status:mode==="status"?401:200,
+      headers:{
+        "content-type":mode==="mime"?"text/html":"application/json",
+        "cache-control":mode==="cache"?"private":"no-store",
+      },
+    });
+    const result=await loadStagingTitleSearchPage({
+      query:"Shared project",scope:"shared",limit:2,
+    },async()=>{calls++;return response;});
+    assert.deepEqual(result,{ok:false,
+      reason:mode==="status"?"signed-out":"invalid-response"},mode);
+    assert.equal(cancelled,true,mode);
+    assert.equal(calls,1,"no implicit retry");
+  }
+});
