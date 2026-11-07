@@ -12,6 +12,8 @@ on:
       - "lib/target-staging-global-index-client.ts"
       - "lib/target-staging-global-index-lifecycle.ts"
       - "e2e/global-index-preview-ui09a.spec.ts"
+      - "e2e/index-detail-ui09e*.spec.ts"
+      - "lib/target-staging-index-detail-links.ts"
       - "e2e/auth.setup.ts"
       - "playwright.config.ts"
   workflow_dispatch:
@@ -58,6 +60,12 @@ jobs:
         run: pnpm exec playwright install --with-deps chromium
       - name: Run only global index privacy DOM race scenarios
         run: pnpm exec playwright test e2e/global-index-preview-ui09a.spec.ts --project=desktop
+      - name: Default-off detail links and targets stay inaccessible
+        run: pnpm exec playwright test e2e/index-detail-ui09e-default-off.spec.ts --project=desktop
+      - name: Verify explicit cross-preview links and independent detail authorization
+        env:
+          LUMI_INDEX_DETAIL_PREVIEW_E2E: "true"
+        run: pnpm exec playwright test e2e/index-detail-ui09e.spec.ts --project=desktop
       - name: Upload failed browser traces
         if: failure()
         uses: actions/upload-artifact@v6
