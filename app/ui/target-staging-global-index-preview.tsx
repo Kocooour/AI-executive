@@ -37,6 +37,9 @@ export function TargetStagingGlobalIndexPreview(){
   const requestSequence=useRef(0);
   const current=useRef<AbortController|null>(null);
   const moreInFlight=useRef(false);
+  // Persistent keyboard / VoiceOver focus target while server reauthorizes
+  // each page. The result list and its Load more button are hidden until then.
+  const resultStatusRef=useRef<HTMLParagraphElement>(null);
   const wakeGate=useRef(initialGlobalIndexWakeGate());
 
   function invalidate(reason:GlobalIndexFailure,loading=false){
@@ -132,6 +135,9 @@ export function TargetStagingGlobalIndexPreview(){
       !state.page.hasMore||!state.page.nextCursor||
       moreInFlight.current||document.visibilityState==="hidden"||
       !navigator.onLine)return;
+    // The focused paging button will unmount when old private titles hide.
+    // Rehome focus before updating React state; do not abandon keyboard users.
+    resultStatusRef.current?.focus();
     moreInFlight.current=true;
     const previous=state.page;
     const id=++requestSequence.current;
@@ -169,7 +175,12 @@ export function TargetStagingGlobalIndexPreview(){
     <div className="stagingGlobalActions">
       <button type="button" onClick={reload}>Znovu ověřit a načíst</button>
     </div>
-    {state.status==="loading"&&<p role="status">Načítám autorizovaný přehled…</p>}
+    <p ref={resultStatusRef} role="status" tabIndex={-1}
+      className="stagingGlobalResultStatus">
+      {state.status==="loading"?"Načítám autorizovaný přehled…":
+        ready?`Zobrazeno ${ready.items.length} autorizovaných položek.`:
+        "Dřívější výsledky byly odstraněny."}
+    </p>
     {state.status==="error"&&<p role="alert" className="stagingGlobalError">
       {failures[state.reason]}</p>}
     {ready&&<section aria-label={"Položky rozsahu "+scopeLabels[scope]}>
@@ -183,6 +194,9 @@ export function TargetStagingGlobalIndexPreview(){
               aria-hidden="true"/>
             <span className="stagingGlobalItemTitle">{entry.item.title}</span>
             <span className="stagingGlobalKind">{kindLabels[entry.kind]}</span>
+            <span className="stagingGlobalArea">
+              {entry.item.areaKind==="private"?"Osobní":"Sdílené"}
+            </span>
           </li>)}
         </ul>}
       {ready.hasMore&&<button type="button" disabled={moreBusy}
