@@ -1,0 +1,57 @@
+name: Scoped UI-09c project task viewer browser
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/project-tasks-preview-browser.yml"
+      - "app/target-staging/projects/**"
+      - "app/ui/target-staging-project-tasks-preview.tsx"
+      - "lib/target-staging-project-tasks-client.ts"
+      - "e2e/project-tasks-ui09c.spec.ts"
+      - "e2e/project-tasks-ui09c-default-off.spec.ts"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ui09c-project-browser-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  chromium:
+    name: UI-09c isolated Chromium
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    env:
+      CI: "true"
+      NEXT_TELEMETRY_DISABLED: "1"
+      E2E_PORT: "3115"
+      E2E_SKIP_BUILD: "1"
+      LUMI_PROJECT_TASKS_PREVIEW_E2E: "true"
+      AI_EXECUTIVE_TARGET_STAGING_HTTP_ENABLED: "true"
+      AI_EXECUTIVE_TARGET_STAGING_PROJECT_TASKS_CLIENT_PREVIEW_ENABLED: "true"
+    steps:
+      - name: Checkout isolated PR
+        uses: actions/checkout@v5
+      - name: Install pnpm
+        uses: pnpm/action-setup@v5
+        with:
+          version: 10.20.0
+      - name: Set up Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+          cache: pnpm
+      - name: Install locked dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Build with isolated synthetic-preview flags
+        run: pnpm build
+      - name: Install Chromium
+        run: pnpm exec playwright install --with-deps chromium
+      - name: Check HTTP 404 with preview OFF
+        env:
+          AI_EXECUTIVE_TARGET_STAGING_PROJECT_TASKS_CLIENT_PREVIEW_ENABLED: "false"
+        run: pnpm exec playwright test e2e/project-tasks-ui09c-default-off.spec.ts --project=desktop
+      # Only these cases: full Browser E2E is reserved for release gate.
+      - name: Execute UI-09c focused DOM and privacy scenarios
+        run: pnpm exec playwright test e2e/project-tasks-ui09c.spec.ts --project=desktop

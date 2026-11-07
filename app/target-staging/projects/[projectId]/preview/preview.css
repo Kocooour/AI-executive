@@ -1,0 +1,17 @@
+.stagingProjectTasks{box-sizing:border-box;max-width:860px;margin:0 auto;padding:24px 20px 90px;font-family:ui-sans-serif,system-ui,-apple-system,sans-serif;line-height:1.5;color:var(--text,#20242a)}
+.stagingProjectTasks h1{font-size:clamp(24px,4vw,34px);margin:6px 0 10px}
+.stagingProjectTasks h2{font-size:clamp(20px,3vw,27px);overflow-wrap:anywhere}
+.stagingProjectTasks header p{max-width:65ch}
+.stagingProjectEyebrow{font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted,#666)}
+.stagingProjectActions{margin:20px 0}
+.stagingProjectTasks button{min-height:44px;padding:9px 14px;font:inherit;font-weight:600;color:inherit;background:var(--surface,#fff);border:1px solid var(--line,#c8cbd0);border-radius:10px;cursor:pointer}
+.stagingProjectTasks button:disabled{opacity:.6;cursor:wait}
+.stagingProjectTasks button:focus-visible,.stagingProjectTasks [tabindex="-1"]:focus-visible{outline:3px solid var(--focus-ring,#6e4dc7);outline-offset:2px}
+.stagingProjectError{padding:12px;border:1px solid var(--danger,#b33);border-radius:10px}
+.stagingProjectScope,.stagingProjectPrivacy{font-size:13px;color:var(--muted,#666)}
+.stagingProjectItems{list-style:none;display:grid;gap:8px;padding:0;margin:18px 0}
+.stagingProjectItem{display:flex;align-items:center;min-height:44px;gap:12px;padding:10px;border-radius:10px;background:var(--surface-subtle,#f7f7f9)}
+.stagingProjectSquare{flex:none;width:16px;height:16px;border:2px solid currentColor;border-radius:3px}
+.stagingProjectTaskTitle{min-width:0;flex:1;overflow-wrap:anywhere;font-weight:600}
+.stagingProjectMine{font-size:12px;color:var(--muted,#666);white-space:nowrap}
+@media(max-width:550px){.stagingProjectTasks{padding:18px 14px 86px}.stagingProjectItem{flex-wrap:wrap}.stagingProjectMine{margin-left:28px}}
