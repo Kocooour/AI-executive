@@ -94,7 +94,7 @@ const TZ="Europe/Prague";
 const ids=p=>p.items.map(i=>i.taskId);
 function page(f,actor="bob",filter="all",extra={}){
   return readAuthorizedAttentionCandidatePage(f.reader,{
-    actorUserId:actor,areaFilter:filter,evaluatedAtMs:NOON,timeZone:TZ,
+    actorUserId:actor,areaFilter:filter,view:"active",evaluatedAtMs:NOON,timeZone:TZ,
     limit:100,offset:0,restoreGeneration:f.stage.restoreGeneration,...extra,
   });
 }
@@ -237,6 +237,8 @@ test("invalid input returns null",()=>{
     {offset:-1},{offset:10_001},{restoreGeneration:"bad"},
   ])assert.equal(page(f,"bob","all",broken),null,JSON.stringify(broken));
   assert.equal(page(f,"nobody"),null);
+  for(const view of [undefined,"all","Active",1,null])
+    assert.equal(page(f,"bob","all",{view}),null,String(view));
 });
 
 test("pagination walks all items without duplicates",()=>{
@@ -254,10 +256,10 @@ test("pagination walks all items without duplicates",()=>{
 
 test("staging authority path: valid actor, revocation, close",()=>{
   const f=fixture();
-  const read=f.authority.readAttentionCandidatePage("bob","all",NOON,TZ,100,0);
+  const read=f.authority.readAttentionCandidatePage("bob","all","active",NOON,TZ,100,0);
   assert.deepEqual(ids(read),ids(page(f)));
-  assert.equal(f.authority.readAttentionCandidatePage("a client actor","all",NOON,TZ,100,0),null);
-  assert.equal(f.authority.readAttentionCandidatePage("bob","all",NOON,"Mars/Olympus",100,0),null);
+  assert.equal(f.authority.readAttentionCandidatePage("a client actor","all","active",NOON,TZ,100,0),null);
+  assert.equal(f.authority.readAttentionCandidatePage("bob","all","active",NOON,"Mars/Olympus",100,0),null);
   const issued=issueDurableTargetStagingSession(f.store,"bob",600);
   assert.equal(issued.ok,true);
   const tokenHash=hashTargetStagingSessionToken(issued.sessionToken);
@@ -267,20 +269,152 @@ test("staging authority path: valid actor, revocation, close",()=>{
   assert.deepEqual(check(read),{ok:true});
   assert.equal(revokeAllDurableTargetStagingSessionsForUser(f.store,"bob").ok,true);
   assert.notEqual(check(read).ok,true);
-  assert.ok(f.authority.readAttentionCandidatePage("carol","all",NOON,TZ,100,0));
+  assert.ok(f.authority.readAttentionCandidatePage("carol","all","active",NOON,TZ,100,0));
   f.authority.close();
-  assert.equal(f.authority.readAttentionCandidatePage("carol","all",NOON,TZ,100,0),null);
+  assert.equal(f.authority.readAttentionCandidatePage("carol","all","active",NOON,TZ,100,0),null);
 });
 
 test("output is a strict allowlist and leaks nothing foreign",()=>{
   const f=fixture();const p=page(f);
   const base=["attentionKey","subjectType","taskId","title","projectId","areaId","areaKind",
     "ruleId","ruleVersion","severity","reasonCode","relevantOn","relevantAt","dueOn","whenOn",
-    "thresholdHours","sourceRevision"];
+    "thresholdHours","sourceRevision","lifecycle","snoozedUntilMs","lifecycleRevision"];
   for(const i of p.items){
     const keys=Object.keys(i).sort();
     assert.deepEqual(keys,[...base,...(i.areaKind==="shared"?["assignedToMe"]:[])].sort());
   }
   const json=JSON.stringify(p.items);
   for(const who of ["alice","carol","erin"])assert.ok(!json.includes(who),who);
+});
+
+// ---- R2d.5b.1 lifecycle integration --------------------------------------
+const state=(f,who,task,rule,on,st,until=null)=>f.db.prepare(
+  "INSERT INTO personal_attention_states(user_id,task_id,rule_id,occurrence_on,state,snoozed_until_ms) VALUES (?,?,?,?,?,?)")
+  .run(who,task,rule,on,st,until);
+const hidden=(f,actor="bob",extra={})=>page(f,actor,"all",{view:"hidden",...extra});
+
+test("active view hides dismissed and unexpired snooze; expired snooze is active again",()=>{
+  const f=fixture();
+  const all=ids(page(f));
+  state(f,"bob","b-over","deadline_overdue","2026-11-03","dismissed");
+  state(f,"bob","b-today","deadline_soon","2026-11-04","snoozed",NOON+1);
+  state(f,"bob","b-tom","deadline_soon","2026-11-05","snoozed",NOON);
+  state(f,"bob","s-mine","deadline_overdue","2026-11-02","snoozed",NOON-1);
+  const p=page(f);
+  assert.deepEqual(ids(p),all.filter(i=>i!=="b-over"&&i!=="b-today"));
+  for(const id of ["b-tom","s-mine"]){
+    const i=p.items.find(x=>x.taskId===id);
+    assert.deepEqual([i.lifecycle,i.snoozedUntilMs,i.lifecycleRevision],["active",null,null],id);
+  }
+  for(const i of page(f).items)assert.equal(i.lifecycle,"active");
+});
+
+test("hidden view lists dismissed and unexpired snoozed with lifecycle fields",()=>{
+  const f=fixture();
+  state(f,"bob","b-over","deadline_overdue","2026-11-03","dismissed");
+  state(f,"bob","b-today","deadline_soon","2026-11-04","snoozed",NOON+1);
+  state(f,"bob","b-tom","deadline_soon","2026-11-05","snoozed",NOON);
+  f.db.prepare("UPDATE personal_attention_states SET snoozed_until_ms=? WHERE task_id='b-today'").run(NOON+5);
+  const h=hidden(f);
+  assert.equal(h.view,"hidden");
+  assert.deepEqual(ids(h),["b-over","b-today"]);
+  const [over,today]=h.items;
+  assert.deepEqual([over.lifecycle,over.snoozedUntilMs,over.lifecycleRevision],["dismissed",null,0]);
+  assert.deepEqual([today.lifecycle,today.snoozedUntilMs,today.lifecycleRevision],["snoozed",NOON+5,1]);
+  assert.equal(page(f).view,"active");
+  // At a later instant the snooze has expired: hidden is empty of it.
+  const later=hidden(f,"bob",{evaluatedAtMs:NOON+10});
+  assert.deepEqual(ids(later),["b-over"]);
+});
+
+test("paging and hasMore in active view never count hidden items",()=>{
+  const f=fixture();
+  const all=ids(page(f));
+  state(f,"bob","b-over","deadline_overdue","2026-11-03","dismissed");
+  state(f,"bob","b-supp","deadline_soon","2026-11-05","snoozed",NOON+1000);
+  state(f,"bob","b-far","planned_date_passed","2026-11-02","dismissed");
+  const expect=all.filter(i=>!["b-over","b-supp","b-far"].includes(i));
+  const walked=[];
+  for(let offset=0;;offset++){
+    const p=page(f,"bob","all",{limit:1,offset});
+    walked.push(...ids(p));
+    if(!p.hasMore)break;
+    assert.ok(offset<50);
+  }
+  assert.deepEqual(walked,expect);
+  const last=page(f,"bob","all",{limit:expect.length,offset:0});
+  assert.equal(last.hasMore,false);
+  assert.equal(page(f,"bob","all",{limit:expect.length-1,offset:0}).hasMore,true);
+  const h=hidden(f,"bob",{limit:1});
+  assert.equal(h.hasMore,true);
+  assert.deepEqual(ids(hidden(f,"bob",{limit:1,offset:2})),["b-far"]);
+  assert.equal(hidden(f,"bob",{limit:1,offset:2}).hasMore,false);
+});
+
+test("another user's state never affects the actor; revision follows own state only",()=>{
+  const f=fixture();
+  const bobBefore=page(f),erinBefore=page(f,"erin");
+  const aliceBefore=page(f,"alice");
+  state(f,"erin","erin-private","deadline_overdue","2026-11-01","dismissed");
+  assert.deepEqual(page(f),bobBefore);
+  assert.equal(page(f,"bob").revision,bobBefore.revision);
+  assert.notEqual(page(f,"erin").revision,erinBefore.revision);
+  assert.equal(page(f,"alice").revision,aliceBefore.revision);
+  assert.deepEqual(ids(page(f,"erin")),["hidden"]);
+  assert.deepEqual(ids(hidden(f,"erin")),["erin-private"]);
+  assert.deepEqual(ids(hidden(f,"bob")),[]);
+  // Bob's own change moves his revision and epoch only.
+  state(f,"bob","b-over","deadline_overdue","2026-11-03","dismissed");
+  const b1=page(f);
+  assert.notEqual(b1.revision,bobBefore.revision);
+  assert.equal(b1.attentionEpoch,bobBefore.attentionEpoch+1);
+  f.db.prepare("DELETE FROM personal_attention_states WHERE user_id='bob'").run();
+  const b2=page(f);
+  assert.notEqual(b2.revision,b1.revision);
+  assert.notEqual(b2.revision,bobBefore.revision,"ABA: restore cannot reuse the original revision");
+  assert.notEqual(page(f).revision,hidden(f).revision,"view is part of the revision");
+});
+
+test("a new deadline is a new occurrence and a dismissed item reappears",()=>{
+  const f=fixture();
+  state(f,"bob","b-over","deadline_overdue","2026-11-03","dismissed");
+  assert.ok(!ids(page(f)).includes("b-over"));
+  f.db.prepare("UPDATE tasks SET due_on='2026-11-02' WHERE id='b-over'").run();
+  const p=page(f);
+  const i=p.items.find(x=>x.taskId==="b-over");
+  assert.ok(i);
+  assert.equal(i.lifecycle,"active");
+  assert.deepEqual(ids(hidden(f)),[]);
+});
+
+test("dismissing deadline_soon does not hide the later deadline_overdue",()=>{
+  const f=fixture();
+  state(f,"bob","b-today","deadline_soon","2026-11-04","dismissed");
+  assert.ok(!ids(page(f)).includes("b-today"));
+  assert.deepEqual(ids(hidden(f)),["b-today"]);
+  const later=page(f,"bob","all",{evaluatedAtMs:Date.parse("2026-11-04T23:30:00Z")});
+  const i=later.items.find(x=>x.taskId==="b-today");
+  assert.equal(i.ruleId,"deadline_overdue");
+  assert.equal(i.lifecycle,"active");
+  assert.deepEqual(ids(hidden(f,"bob",{evaluatedAtMs:Date.parse("2026-11-04T23:30:00Z")})),[]);
+});
+
+test("a snooze whose condition ended does not reactivate anything",()=>{
+  const f=fixture();
+  state(f,"bob","b-today","deadline_soon","2026-11-04","snoozed",NOON+1000);
+  f.db.prepare("UPDATE tasks SET status='completed',completed_at_ms=1793800000000 WHERE id='b-today'").run();
+  assert.equal(f.db.prepare("SELECT COUNT(*) AS n FROM personal_attention_states").get().n,0);
+  assert.ok(!ids(page(f,"bob","all",{evaluatedAtMs:NOON+5000})).includes("b-today"));
+  assert.deepEqual(ids(hidden(f)),[]);
+});
+
+test("fail closed on a corrupt lifecycle row",()=>{
+  const f=fixture();
+  state(f,"bob","b-over","deadline_overdue","2026-11-03","dismissed");
+  f.db.exec("PRAGMA ignore_check_constraints=ON");
+  f.db.exec("DROP TRIGGER personal_attention_state_update_guard");
+  f.db.exec("DROP TRIGGER personal_attention_state_revision_guard");
+  f.db.prepare("UPDATE personal_attention_states SET snoozed_until_ms=5 WHERE task_id='b-over'").run();
+  assert.equal(hidden(f),null);
+  assert.equal(page(f),null,"any malformed own lifecycle row fails every view closed");
 });
