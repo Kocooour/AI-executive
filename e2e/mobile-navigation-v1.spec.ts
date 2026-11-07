@@ -68,3 +68,23 @@ test("an explicit Today URL never becomes the My Plan preview on initial load", 
   await expect(page.locator('.mobileNav button[data-nav-view="More"]')).toHaveAttribute("aria-current", "page");
   await expect(page).toHaveURL(/[?]view=Today$/);
 });
+
+test("mobile v1 More focuses the selected destination instead of its closed trigger", async ({ page }) => {
+  test.skip(process.env.NEXT_PUBLIC_LUMI_DESIGN_V1_PREVIEW !== "1", "UI v1 preview is disabled by default");
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/?view=Projects");
+  await waitUntilSynced(page);
+  const trigger = page.locator('.mobileNav button[data-nav-view="More"]');
+  await trigger.click();
+  const more = page.getByRole("dialog", { name: /Více|More/ });
+  await expect(more.getByRole("button", { name: /Zavřít nabídku|Close menu/ })).toBeFocused();
+  await more.locator('[data-nav-view="Settings"]').click();
+  await expect(more).toHaveCount(0);
+  await expect(page.locator(".pageTitleRow h1")).toBeFocused();
+  await expect(trigger).not.toBeFocused();
+
+  await trigger.click();
+  await page.keyboard.press("Escape");
+  await expect(more).toHaveCount(0);
+  await expect(trigger).toBeFocused();
+});
