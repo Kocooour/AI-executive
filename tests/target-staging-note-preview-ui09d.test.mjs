@@ -61,7 +61,7 @@ test("UI-09d denied or changed notes never reveal existence or stale content",as
 });
 test("UI-09d strict response boundaries reject wrong MIME, cache, size and payload",async()=>{
   for(const res of [
-    response({note},{status:200}),
+    response({note,linearization:"secret"}),
     response({note},200,{"cache-control":"private"}),
     response({note},200,{"content-type":"text/html"}),
     response({note},200,{"content-length":"1048577"}),
