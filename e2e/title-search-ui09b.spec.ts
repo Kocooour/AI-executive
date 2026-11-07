@@ -102,7 +102,7 @@ for(const code of [401,409]){
     await button.press("Enter");
     await expect(page.locator(rows)).toHaveCount(0);
     await expect(page.locator(status)).toBeFocused();
-    await expect(page.getByRole("alert")).toContainText(
+    await expect(page.locator(".stagingTitleSearchError[role=alert]")).toContainText(
       code===401?"Přihlášení nebo přístup zanikl":"neaktuální",
     );
     await expect(page.locator(status)).toBeFocused();
