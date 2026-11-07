@@ -185,3 +185,60 @@ test("desktop v1 sidebar focuses selected view titles and preserves search focus
     return title.top >= (toolbar?.bottom ?? 0) + 8 && title.bottom <= window.innerHeight - 8;
   })).toBe(true);
 });
+
+test("desktop v1 My Plan is a distinct, honest and restorable preview route", async ({ page }) => {
+  test.skip(process.env.NEXT_PUBLIC_LUMI_DESIGN_V1_PREVIEW !== "1", "UI v1 preview is disabled by default");
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await page.goto("/");
+  await waitUntilSynced(page);
+
+  const plan = page.locator('aside nav [data-nav-tab="my-plan-preview"]');
+  const today = page.locator('aside nav button[data-nav-view="Today"]:not([data-nav-tab])');
+  const heading = page.locator(".appPane .pageTitleRow h1");
+  const notice = page.locator('[data-plan-source="legacy-today"]');
+  await expect(plan).toHaveCount(1);
+  await expect(today).toHaveCount(1);
+  await expect(plan).toContainText(/Můj plán|My Plan/);
+  await expect(plan).toHaveAttribute("aria-label", /development preview|vývojový náhled/);
+
+  await plan.click();
+  await expect(page).toHaveURL(/[?]view=MyPlanPreview$/);
+  await expect(heading).toHaveText(/Můj plán|My Plan/);
+  await expect(heading).toBeFocused();
+  await expect(notice).toBeVisible();
+  await expect(plan).toHaveAttribute("aria-current", "page");
+  await expect(today).not.toHaveAttribute("aria-current", "page");
+
+  // The desktop URL must restore the plan, not silently become legacy Today.
+  await page.reload();
+  await waitUntilSynced(page);
+  await expect(page).toHaveURL(/[?]view=MyPlanPreview$/);
+  await expect(heading).toHaveText(/Můj plán|My Plan/);
+  await expect(notice).toBeVisible();
+  await expect(plan).toHaveAttribute("aria-current", "page");
+
+  // Both tabs share today's legacy data but are different presentation routes.
+  await today.click();
+  await expect(page).toHaveURL(/[?]view=Today$/);
+  await expect(heading).toHaveText(/Dnes|Today/);
+  await expect(heading).toBeFocused();
+  await expect(notice).toHaveCount(0);
+  await expect(today).toHaveAttribute("aria-current", "page");
+  await expect(plan).not.toHaveAttribute("aria-current", "page");
+
+  await page.goBack();
+  await expect(page).toHaveURL(/[?]view=MyPlanPreview$/);
+  await expect(heading).toHaveText(/Můj plán|My Plan/);
+  await expect(notice).toBeVisible();
+  await expect(plan).toHaveAttribute("aria-current", "page");
+  await page.goForward();
+  await expect(page).toHaveURL(/[?]view=Today$/);
+  await expect(heading).toHaveText(/Dnes|Today/);
+  await expect(today).toHaveAttribute("aria-current", "page");
+
+  // Today → My Plan changes the route even though both share view=Today.
+  await plan.click();
+  await expect(page).toHaveURL(/[?]view=MyPlanPreview$/);
+  await expect(heading).toBeFocused();
+  await expect(plan).toHaveAttribute("aria-current", "page");
+});
