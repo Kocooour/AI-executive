@@ -172,7 +172,7 @@ test("fresh material occurrence makes a new key instead of reusing a dismissal",
     {kind:"recheck",nowMs:NOW+1000}),{ok:false,reason:"unavailable"});
 });
 
-test("no networking, persistence or legacy Attention mutator is imported",()=>{
+test("no networking, persistence or legacy Attention mutator is imported",async()=>{
   const {readFileSync}=await import("node:fs");
   const {fileURLToPath}=await import("node:url");
   const {dirname,join}=await import("node:path");
