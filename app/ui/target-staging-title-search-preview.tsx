@@ -157,6 +157,7 @@ export function TargetStagingTitleSearchPreview(){
     {busy&&<p role="status">Načítám autorizované výsledky…</p>}
     {failure&&<p role="alert" className="stagingTitleSearchError">{failures[failure]}</p>}
     {ready&&<section aria-label="Autorizované výsledky vyhledávání">
+      <p role="status">Zobrazeno {ready.items.length} autorizovaných názvů.</p>
       {ready.items.length===0
         ?<p role="status">Pro dotaz nebyly nalezeny žádné dostupné názvy.</p>
         :<ul className="stagingTitleSearchItems">
@@ -165,6 +166,7 @@ export function TargetStagingTitleSearchPreview(){
             <span aria-hidden="true" className="stagingTitleSearchGlyph" data-kind={item.kind}/>
             <span className="stagingTitleSearchTitle">{item.title}</span>
             <span className="stagingTitleSearchKind">{kinds[item.kind]}</span>
+            <span className="stagingTitleSearchSrOnly">{item.areaKind==="shared"?"Sdílené":"Osobní"}</span>
           </li>)}
         </ul>}
       {ready.hasMore&&<button type="button" onClick={()=>{void loadMore();}}>
