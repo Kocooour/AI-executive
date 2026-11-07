@@ -86,6 +86,6 @@ test("R3 UI-09a hides prior rows while scope changes or another page revalidates
   assert.ok(ui.includes('setState({status:"loading"});\n    const result=await fetchGlobalIndexPage'));
   assert.ok(ui.includes('const combined=appendGlobalIndexPage(previous,result.page);'));
   assert.ok(ui.includes('moreInFlight.current'));
-  assert.match(ui,/if\(!result\.ok\)\{setState\(\{status:"error",reason:result\.reason\}\);return;\}/);
+  assert.match(ui,/if\(result\.ok===false\)\{setState\(\{status:"error",reason:result\.reason\}\);return;\}/);
   assert.doesNotMatch(ui,/method:\s*["'](?:PATCH|POST|PUT|DELETE)/);
 });
