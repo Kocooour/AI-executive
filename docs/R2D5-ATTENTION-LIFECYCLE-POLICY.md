@@ -1,29 +1,41 @@
-# R2d.5b.0 — čistá politika životního cyklu Attention (staging)
+# R2d.5b.0 — čistá politika životního cyklu Attention podle schématu v22
 
-**Status:** samostatný interní podřez R2d.5b navazující na sloučené R2d.5a / PR #315. Nemění schéma v21, neprovádí zápisy, neposkytuje HTTP, scheduler ani push, neaktivuje produkční UI. Stávající legacy modul lib/attention-lifecycle.ts zůstává beze změny.
+**Stav:** interní staging-only podřez navazující na R2d.5a (#315) a již sloučené schéma R2d.5b.1 (#319). Nemění databázové schéma, neprovádí zápis, nevystavuje HTTP, scheduler ani push a nezapíná produkční UI. Legacy modul Attention zůstává beze změny.
 
-## Proč nejdřív čistá politika
+## Přesná reprezentace v22
 
-Snooze/dismiss musí být atomicky svázán s aktérem, generací obnovy úložiště, čerstvě autorizovaným kandidátem a očekávanou revizí. Funkce **planTargetAttentionLifecycle(record, witness, action)** vrací pouze plán, nikoli zápis či oprávnění.
+Funkce **`planTargetAttentionLifecycle(snapshot, witness, action)`** je čistý plán pro budoucí pinned writer, nikoli oprávnění ani hotový příkaz.
 
-Volající jí **nesmí** předat identitu, aktuální stav kandidáta ani čas z neověřeného HTTP vstupu. Budoucí pinned writer (R2d.5b.2) musí uvnitř atomické transakce znovu ověřit live session, Area ACL, osobní epochu, stav zdroje a CAS/receipt, teprve poté commitnout změnu s auditní událostí. Čistý výsledek se nesmí automaticky serializovat klientovi.
+- **`snapshot.row === null` je jediná reprezentace `active`.** V tabulce `personal_attention_states` žádný aktivní řádek neexistuje. Skrytý řádek obsahuje výhradně `state: snoozed|dismissed`, `snoozedUntilMs` a celočíselnou `revision`. Nevymýšlíme persistovaný `changedAtMs` ani `sourceRevision`.
+- Snapshot nese identitu aktéra, generaci obnovy, `attentionKey`, klíč úkolu/pravidla/výskytu, aktuální per-user `attentionEpoch` a surový stavový řádek (nebo null). Svědectví nese znovu ověřenou identitu/generaci/epochu a **aktuálního způsobilého kandidáta** včetně jeho `sourceRevision` z úkolu. Obě klíčové vazby musí odpovídat znovu vypočtenému `attentionKey`.
+- **Pozor na vypršení odkladu:** autorizovaný čtecí selektor může hlásit `lifecycle=active` a `lifecycleRevision=null` i při existujícím *již expirovaném* `snoozed` řádku. Pinned writer proto musí číst **surový DB řádek**, nikoli odvozovat jeho existenci z veřejného `lifecycle` ve výsledcích.
+- Každá akce nese očekávanou `expectedSourceRevision`, `expectedAttentionEpoch` a nullable `expectedLifecycleRevision`. Planner porovnává i epochu svědectví. **Budoucí writer musí porovnat stejnou CAS trojici znovu uvnitř atomické transakce** společně s aktuální session, Area ACL, osobní epochou, restore generation a identitou výskytu.
+- **ABA:** revize nově vloženého řádku začíná znovu na 0. Proto samotná revize řádku není dostatečná; monotónní `personal_attention_epochs.revision` roste při INSERT, UPDATE i DELETE a rozlišuje i smazání a opětovné vložení.
 
-## Přesný kontrakt
+## Přechody
 
-- Záznam nese pouze actorUserId, restoreGeneration, attentionKey, taskId, ruleId, relevantOn, sourceRevision, state, snoozeUntilMs a changedAtMs. **Žádný název úkolu, obsah poznámky, Area ID ani token.**
-- Svědectví nese aktuálně ověřeného aktéra, restore generation a pět přesných polí kandidáta. attentionKey se vždy znovu vypočítá z pravidla, úkolu a data podle R2d.5a. Jiný aktér, restore generation, pravidlo nebo výskyt vrací nerozlišitelné **unavailable** bez záznamu; neplatné struktury jsou **invalid**.
-- **snooze** a **dismiss** jsou povoleny jen ze stavu active, s očekávanou revizí zdroje a changedAtMs (příprava na CAS). Snooze musí končit v budoucnu, nejvýše za 30 dní podle serverového času. Dismiss nikdy nemění stav úkolu. Stale nebo opakovaný příkaz nepřipraví audit.
-- **recheck** vyžaduje výslovně nově ověřeného stále způsobilého kandidáta. Před vypršením snooze ponechá položku skrytou; při vypršení ji může obnovit s auditním kódem snooze_expired. Dismiss zůstává skrytý i po běžné revizi stejného výskytu, například přejmenování úkolu.
-- Úspěšný výsledek je obsahově neutrální: další stav, příznak viditelnosti, indikace změny a nejvýš jedna beztextová auditní událost. Žádný síťový požadavek ani persistence.
+| Akce | Výchozí stav | Plán v22 | Viditelnost a audit |
+| --- | --- | --- | --- |
+| `snooze` | bez řádku = active | **INSERT**, `revision=0`, `snoozed_until_ms` v budoucnu, max. 30 dní | skryto, `user_snoozed` |
+| `dismiss` | bez řádku = active | **INSERT**, `revision=0`, `snoozed_until_ms=NULL` | skryto, `user_dismissed`; úkol se nedokončuje |
+| `restore` (Undo) | existující skrytý řádek | **DELETE** s CAS řádku + epochu | znovu aktivní, `user_restored` |
+| `recheck` před expirací | stále skrytý řádek | žádná změna | skryto, bez auditu |
+| `recheck` po expiraci odkladu | expirovaný `snoozed` řádek + znovu autorizovaný kandidát | **DELETE** s CAS řádku + epochu | znovu aktivní, `snooze_expired` |
+| `recheck` po běžné změně názvu | `dismissed` | žádná změna | zůstává skryto |
+| `recheck` bez řádku | active | žádná změna | aktivní, bez auditu |
 
-## Výslovná omezení
+Výstup obsahuje pouze `operation: none|insert|delete`, následující skrytý řádek (nebo null), viditelnost, CAS podmínky a nanejvýš jeden obsahově neutrální auditní plán. Nemůže přenášet název, obsah poznámky, Area ID, token ani cizí data. Starý/stale příkaz nemá auditní ani DB efekt. Jiné identity, generace obnovy a výskyty vracejí nerozlišitelné `unavailable`.
 
-Tento díl **neimplementuje resolved ani superseded**: nepřítomnost na stránce či ve filtrovaných kandidátech může znamenat revokaci oprávnění, nikoli ukončení podmínky. K tomu bude nutný zdrojově ověřený stav a kompletní autorizovaný snapshot. Přechod deadline_soon na deadline_overdue vytváří nový key, takže dřívější dismiss se automaticky nepřenáší; naléhavost a notifikace vyřeší další podřez.
+## Bezpečnostní hranice budoucího zapisovače R2d.5b.2
 
-Navazuje R2d.5b.1 (sloučeno #319): schéma v22 s per-user content-free lifecycle, preflightem a reconcile triggery (resolved/superseded mazáním řádku při konkrétní zdrojové změně, nikoli z pouhé nepřítomnosti kandidáta); R2d.5b.2: interní pinned writer s CAS, receipts a auditem podle této politiky (navíc `restore` pro Undo); R2d.5c: default-off HTTP s live guardem a příkazy. Produkční cutover ani migrace nejsou povolené.
+Čistý reducer **neumí autentizovat klienta**, odhalit revokaci, ověřit úplnost kandidátů ani zapisovat receipty či skutečný audit. Volající nesmí převzít aktéra, čas, snapshot ani kandidáta z klientského JSON. Všechny údaje musí získat z důvěryhodného serverového/pinned čtení.
 
-## Testy
+V jedné transakci musí writer znovu ověřit živou relaci, Area a soukromou epochu, restore generation, otevřený oprávněný úkol, současnou způsobilost pravidla/výskytu, revizi zdroje, per-user Attention epochu, existenci a revizi stavového řádku, idempotentní receipt a audit. SQL stav odvozený z `operation` se nesmí aplikovat bez opětovné kontroly. Expirace a restore **mažou** skrytý řádek, nevkládají aktivní záznam. Reconcile resolved/superseded řeší konkrétní zdrojové změny a triggery v22; nepřítomnost kandidáta ve stránkovaném seznamu není důkaz vyřešení.
 
-Spuštění: **node --experimental-loader ./tests/ts-loader.mjs --test tests/target-attention-lifecycle-policy.test.mjs**.
+## Integrační ověření
 
-Prověřuje cizí identity/generace/výskyty, revize a CAS, limity odkladu, expiraci, stale retry, trvání dismiss, odmítání nadbytečných nebo poškozených polí a nepřítomnost síťových/databázových závislostí. Full Browser E2E zůstává preproduction release gate.
+- `tests/target-attention-lifecycle-policy.test.mjs` — čistá politika, validace struktur, vazba aktéra/generace/výskytu, přesná CAS trojice, 30 dní, restore/expirace, neplatné vstupy, žádné DB/network závislosti.
+- `tests/target-attention-lifecycle-v22-integration.test.mjs` — **reálné schéma v22 a skutečný autorizovaný Attention selector** na zcela izolované syntetické databázi; ověřuje aktivní stav bez řádku, skutečný INSERT revize 0, expiraci a DELETE, obnovení, trvání dismiss přes změnu názvu, stale retry/ABA přes epochu a ztrátu aktuální zdrojové revize. Testovací transakční adaptér je pouze důkaz kompatibility CAS se schématem, není produkční writer ani substitut auth.
+- `tests/target-attention-lifecycle-schema.test.mjs` (#319) — triggery v22, epochy, revize, ACL a reconcile.
+
+Testy používat na PR včetně `PR Checks`. Produkční databáze, migrace a plná Browser E2E se nemění; E2E patří do předprodukční release brány.
