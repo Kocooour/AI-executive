@@ -920,7 +920,7 @@ R2c.5 se dodává ve dvou PR. **R2c.5a** (tento krok) je knihovna `lib/target-sy
 
 ## HumanWiki ingestion a learning — cílová architektura (2026-11-08)
 
-[Produktová definice](PRODUCT.md#humanwiki-a-context-bootstrap--continuous-learning--cílový-požadavek-lumi-fr-014-2026-11-08) · [rozhodnutí a hrozby](decisions/2026-11-08-humanwiki-knowledge-bootstrap.md) · [plán](ROADMAP.md#humanwiki--context-bootstrap--continuous-learning-pridano-2026-11-08). **Status: návrh, ne dodaná schopnost.** Nenahrazuje Context Graph v2 ani variantu C sémantické paměti.
+[Produktová definice](PRODUCT.md#humanwiki-a-context-bootstrap--continuous-learning--cílový-požadavek-lumi-fr-014-2026-11-08) · [rozhodnutí a hrozby](decisions/2026-11-08-humanwiki-knowledge-bootstrap.md) · [plán](ROADMAP.md#humanwiki--context-bootstrap--continuous-learning-přidáno-2026-11-08). **Status: návrh, ne dodaná schopnost.** Nenahrazuje Context Graph v2 ani variantu C sémantické paměti.
 
 ### Import pipeline a hranice důvěry
 

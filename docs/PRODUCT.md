@@ -194,7 +194,7 @@ Nezavádíme PostgreSQL, pgvector ani paralelní nasazení HumanAgentWiki. Tato 
 
 ## HumanWiki a Context Bootstrap & Continuous Learning — cílový požadavek (LUMI-FR-014, 2026-11-08)
 
-**Rozhodnutí:** Lumi postupně vytváří jednotnou, člověkem čitelnou a editovatelnou osobní wiki z vlastních kanonických záznamů, uživatelem importovaných historických rozhovorů ChatGPT/Claude a explicitně povolené osobní pošty. Je to **pohled nad Context Graph v2**, ne paralelní databáze ani automaticky ověřený profil. Kompletní kontrakt a akceptace jsou v [rozhodnutí HumanWiki](decisions/2026-11-08-humanwiki-knowledge-bootstrap.md), implementační pořadí v [roadmapě](ROADMAP.md#humanwiki--context-bootstrap--continuous-learning-pridano-2026-11-08).
+**Rozhodnutí:** Lumi postupně vytváří jednotnou, člověkem čitelnou a editovatelnou osobní wiki z vlastních kanonických záznamů, uživatelem importovaných historických rozhovorů ChatGPT/Claude a explicitně povolené osobní pošty. Je to **pohled nad Context Graph v2**, ne paralelní databáze ani automaticky ověřený profil. Kompletní kontrakt a akceptace jsou v [rozhodnutí HumanWiki](decisions/2026-11-08-humanwiki-knowledge-bootstrap.md), implementační pořadí v [roadmapě](ROADMAP.md#humanwiki--context-bootstrap--continuous-learning-přidáno-2026-11-08).
 
 - **Import minulosti:** nejprve ručně dodané exporty ChatGPT a Claude; API modelů neposkytuje samo automatický přístup k historii externích chatů. Import je reprodukovatelný, resumable, idempotentní, soukromý a transparentní v pokrytí.
 - **Obsahová pošta:** budoucí výslovně povolená Gmail/IMAP ingestace a pozdější inkrementální učení z vybraných účtů, složek a období. Dnešní Gmail v4 je pouze metadata-only, na těla zpráv ani automatické AI zpracování se jeho souhlas nevztahuje.
