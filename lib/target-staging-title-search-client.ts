@@ -4,6 +4,7 @@
  * response is display data, never proof of ACL. No UI imports this yet.
  * R2d.4f / BE-18 bounds the parsed response body and rejects malformed UTF-8.
  * R2d.4g / BE-19 wakes stalled reads on abort; no auto-refetch or UI use.
+ * R2d.4h / BE-20 also wakes pending fetch and discards late responses.
  */
 export type TitleSearchScope="all"|"personal"|"shared";
 export type TitleSearchKind="project"|"task"|"note";
@@ -129,6 +130,47 @@ const MAX_SEARCH_RESPONSE_BYTES=2*1024*1024;
 /** Private sentinel: callers only receive typed invalid-response/aborted reasons. */
 class InvalidSearchBody extends Error {}
 
+/** Never retain or drain a response that cannot be shown to this actor. */
+function discardSearchBody(response:Response):void{
+  try{
+    if(response.body)void response.body.cancel().catch(()=>{});
+  }catch{
+    // An already-locked or synthetic body cannot safely be cancelled here.
+  }
+}
+
+/**
+ * Waiting for headers must also be abortable even if a custom fetch adapter
+ * fails to settle on AbortSignal. A response arriving after abort is discarded.
+ * This does not retry, detach authorization, or issue any extra request.
+ */
+async function fetchSearchUntilAbort(
+  request:()=>Promise<Response>,signal?:AbortSignal,
+):Promise<Response|null>{
+  if(!signal)return request();
+  if(signal.aborted)return null;
+  let onAbort=()=>{};
+  const aborted=new Promise<null>(resolve=>{
+    onAbort=()=>resolve(null);
+    signal.addEventListener("abort",onAbort,{once:true});
+  });
+  try{
+    if(signal.aborted)return null;
+    // Dispatch the explicit GET synchronously: a newer first() may abort it
+    // immediately, but must not silently prevent the older fetch from starting.
+    const pending=Promise.resolve(request());
+    const response=await Promise.race([pending,aborted]);
+    if(response===null){
+      // An adapter may ignore signal and resolve much later. Cancel its body,
+      // without letting any late payload mutate the already-aborted session.
+      void pending.then(late=>{if(late)discardSearchBody(late);},()=>{});
+    }
+    return response;
+  }finally{
+    signal.removeEventListener("abort",onAbort);
+  }
+}
+
 /** Reject oversized or malformed responses before materializing unbounded JSON. */
 async function readBoundedSearchJson(
   response:Response,signal?:AbortSignal,
@@ -137,7 +179,7 @@ async function readBoundedSearchJson(
   if(header!==null&&(!/^(?:0|[1-9][0-9]*)$/.test(header)||
     !Number.isSafeInteger(Number(header))||
     Number(header)>MAX_SEARCH_RESPONSE_BYTES)){
-    if(response.body)void response.body.cancel().catch(()=>{});
+    discardSearchBody(response);
     throw new InvalidSearchBody();
   }
   if(!response.body)throw new InvalidSearchBody();
@@ -198,18 +240,31 @@ export async function loadStagingTitleSearchPage(
   if(options.cursor!==undefined)params.set("cursor",options.cursor);
   let response:Response;
   try{
-    response=await fetchImpl(endpoint+"?"+params.toString(),{
+    const url=endpoint+"?"+params.toString();
+    const init:RequestInit={
       method:"GET",credentials:"same-origin",cache:"no-store",
       redirect:"error",headers:{accept:"application/json"},
       signal:options.signal,
-    });
+    };
+    const incoming=await fetchSearchUntilAbort(
+      ()=>fetchImpl(url,init),options.signal);
+    if(incoming===null)return {ok:false,reason:"aborted"};
+    response=incoming;
   }catch{return {ok:false,reason:options.signal?.aborted?"aborted":"offline"};}
-  if(options.signal?.aborted)return {ok:false,reason:"aborted"};
-  if(response.status!==200)return {ok:false,reason:reasonForStatus(response.status)};
+  if(options.signal?.aborted){
+    discardSearchBody(response);
+    return {ok:false,reason:"aborted"};
+  }
+  if(response.status!==200){
+    discardSearchBody(response);
+    return {ok:false,reason:reasonForStatus(response.status)};
+  }
   if(response.redirected||
     !hasNoStoreDirective(response.headers.get("cache-control"))||
-    !isJsonContentType(response.headers.get("content-type")))
+    !isJsonContentType(response.headers.get("content-type"))){
+    discardSearchBody(response);
     return {ok:false,reason:"invalid-response"};
+  }
   try{
     const payload:unknown=await readBoundedSearchJson(response,options.signal);
     if(options.signal?.aborted)return {ok:false,reason:"aborted"};

@@ -292,3 +292,40 @@ test("BE-19 session reset wakes stalled continuation and clears old titles",asyn
   assert.equal(snapshot.status,"idle");
   assert.equal(calls,2);
 });
+
+
+test("BE-20 reset settles a pending fetch that ignores AbortSignal",async()=>{
+  let calls=0,release,notify;
+  const started=new Promise(resolve=>{notify=resolve;});
+  const session=createStagingTitleSearchSession(async()=>{
+    calls++;
+    if(calls===1)return json(page([one("project","a")],true,cursorA));
+    notify();
+    return new Promise(resolve=>{release=resolve;});
+  });
+  assert.deepEqual(await session.first(options),{ok:true});
+  const pending=session.next();
+  await started;
+  session.reset();
+  assert.deepEqual(await Promise.race([
+    pending,
+    new Promise((_,reject)=>setTimeout(()=>reject(Error("reset blocked")),2000)),
+  ]),{ok:false,reason:"aborted"});
+  assert.equal(session.getSnapshot().status,"idle");
+  assert.deepEqual(session.getSnapshot().items,[]);
+  assert.equal(session.getSnapshot().nextCursor,null);
+  let cancelled;
+  const done=new Promise(resolve=>{cancelled=resolve;});
+  release(new Response(new ReadableStream({
+    cancel(){cancelled();},
+  },{highWaterMark:0}),{headers:{
+    "content-type":"application/json","cache-control":"no-store",
+  }}));
+  await Promise.race([
+    done,
+    new Promise((_,reject)=>setTimeout(()=>reject(Error("late response retained")),2000)),
+  ]);
+  assert.equal(calls,2);
+  assert.deepEqual(session.getSnapshot().items,[]);
+  assert.equal(session.getSnapshot().status,"idle");
+});
