@@ -58,9 +58,7 @@ export function TargetStagingTitleSearchPreview(){
     const offline=()=>conceal("offline");
     const pageshow=(event:PageTransitionEvent)=>{if(event.persisted)conceal();};
     document.addEventListener("visibilitychange",visibility);
-    window.addEventListener("pagehide",()=>{}); // replaced below by the named handler
     const pagehide=()=>conceal();
-    window.removeEventListener("pagehide",()=>{});
     window.addEventListener("pagehide",pagehide);
     window.addEventListener("pageshow",pageshow);
     window.addEventListener("blur",pagehide);
