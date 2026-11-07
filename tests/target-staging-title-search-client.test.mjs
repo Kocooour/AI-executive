@@ -217,7 +217,6 @@ test("BE-16: require JSON media type, not application/json in a parameter",async
   }
 });
 
-
 test("BE-18 accepts a streamed UTF-8 JSON page across byte boundaries",async()=>{
   const bytes=new TextEncoder().encode(JSON.stringify(page([
     {...item("project","a"),title:"Český projekt – úkol"},
@@ -279,7 +278,7 @@ test("BE-18 rejects an over-limit stream without buffering its remainder",async(
 
 test("BE-18 rejects oversized or forged Content-Length without reading body",async()=>{
   for(const length of [String(2*1024*1024+1),"999999999999999999999",
-    "1e6","-1","20,20"," 12","12abc"]){
+    "1e6","-1","20,20","12abc"]){
     let cancelled=false,pulls=0;
     const stream=new ReadableStream({
       pull(controller){

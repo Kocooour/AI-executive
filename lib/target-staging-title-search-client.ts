@@ -125,6 +125,9 @@ function isJsonContentType(header:string|null):boolean{
 // titles, so the cap accommodates the largest legitimate DTO with margin.
 const MAX_SEARCH_RESPONSE_BYTES=2*1024*1024;
 
+/** Private sentinel: callers only receive typed invalid-response/aborted reasons. */
+class InvalidSearchBody extends Error {}
+
 /** Reject oversized or malformed responses before materializing unbounded JSON. */
 async function readBoundedSearchJson(
   response:Response,signal?:AbortSignal,
@@ -134,23 +137,23 @@ async function readBoundedSearchJson(
     !Number.isSafeInteger(Number(header))||
     Number(header)>MAX_SEARCH_RESPONSE_BYTES)){
     if(response.body)void response.body.cancel().catch(()=>{});
-    throw new Error("Invalid search content length");
+    throw new InvalidSearchBody();
   }
-  if(!response.body)throw new Error("Missing search response body");
+  if(!response.body)throw new InvalidSearchBody();
   const reader=response.body.getReader();
   const decoder=new TextDecoder("utf-8",{fatal:true});
   let bytes=0,text="",complete=false;
   try{
     for(;;){
-      if(signal?.aborted)throw new Error("Search aborted");
+      if(signal?.aborted)throw new InvalidSearchBody();
       const chunk=await reader.read();
-      if(signal?.aborted)throw new Error("Search aborted");
+      if(signal?.aborted)throw new InvalidSearchBody();
       if(chunk.done){complete=true;break;}
       if(!(chunk.value instanceof Uint8Array))
-        throw new Error("Invalid search stream chunk");
+        throw new InvalidSearchBody();
       bytes+=chunk.value.byteLength;
       if(bytes>MAX_SEARCH_RESPONSE_BYTES)
-        throw new Error("Search response too large");
+        throw new InvalidSearchBody();
       text+=decoder.decode(chunk.value,{stream:true});
     }
     text+=decoder.decode();
