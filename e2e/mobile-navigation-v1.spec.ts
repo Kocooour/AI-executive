@@ -107,3 +107,43 @@ test("mobile v1 More focuses the selected destination instead of its closed trig
   })).toBe(true);
 
 });
+
+test("mobile calendar date strip offers one Tab stop with day/week arrow navigation", async ({ page }) => {
+  test.skip(process.env.NEXT_PUBLIC_LUMI_DESIGN_V1_PREVIEW !== "1", "UI v1 preview is disabled by default");
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/?view=Calendar");
+  await waitUntilSynced(page);
+  const dates = page.locator(".mobileCalendarDateStrip");
+  const chosen = dates.locator('.mobileCalendarDateBubble[aria-pressed="true"]');
+  await expect(chosen).toHaveCount(1);
+  await expect(dates.locator('.mobileCalendarDateBubble[tabindex="0"]')).toHaveCount(1);
+  await chosen.focus();
+  await expect(chosen).toBeFocused();
+
+  const initialDay = await chosen.getAttribute("data-date");
+  expect(initialDay).toMatch(/^\\d{4}-\\d{2}-\\d{2}$/);
+  const move = (day: string, offset: number) => {
+    const d = new Date(`${day}T12:00:00Z`);
+    d.setUTCDate(d.getUTCDate() + offset);
+    return d.toISOString().slice(0, 10);
+  };
+
+  await page.keyboard.press("ArrowRight");
+  const nextDay = move(initialDay!, 1);
+  const next = dates.locator(`[data-date="${nextDay}"]`);
+  await expect(next).toBeFocused();
+  await expect(next).toHaveAttribute("aria-pressed", "true");
+  await expect(dates.locator('.mobileCalendarDateBubble[tabindex="0"]')).toHaveCount(1);
+
+  await page.keyboard.press("PageDown");
+  const nextWeek = move(nextDay, 7);
+  const week = dates.locator(`[data-date="${nextWeek}"]`);
+  await expect(week).toBeFocused();
+  await expect(week).toHaveAttribute("aria-pressed", "true");
+
+  await page.keyboard.press("ArrowLeft");
+  const yesterday = dates.locator(`[data-date="${move(nextWeek, -1)}"]`);
+  await expect(yesterday).toBeFocused();
+  await page.keyboard.press("Tab");
+  await expect(dates.locator(".mobileCalendarDateBubble:focus")).toHaveCount(0);
+});
