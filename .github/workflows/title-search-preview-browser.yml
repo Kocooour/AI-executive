@@ -1,0 +1,77 @@
+name: Scoped UI-09b browser regression
+
+on:
+  pull_request:
+    paths:
+      - "app/target-staging/title-search/preview/**"
+      - "app/ui/target-staging-title-search-preview.tsx"
+      - "lib/target-staging-title-search-client.ts"
+      - "lib/target-staging-title-search-session.ts"
+      - "e2e/title-search-ui09b.spec.ts"
+      - "e2e/title-search-ui09b-default-off.spec.ts"
+      - "playwright.config.ts"
+      - ".github/workflows/title-search-preview-browser.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ui09b-browser-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  scoped-browser:
+    name: Scoped title-search Chromium
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    env:
+      CI: "true"
+      NEXT_TELEMETRY_DISABLED: "1"
+      LUMI_TITLE_SEARCH_PREVIEW_E2E: "true"
+      E2E_PORT: "3101"
+      E2E_SKIP_BUILD: "1"
+    steps:
+      - name: Checkout PR integrated code
+        uses: actions/checkout@v5
+      - name: Install pnpm
+        uses: pnpm/action-setup@v5
+        with:
+          version: 10.20.0
+      - name: Set up Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+          cache: pnpm
+      - name: Install locked dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Build isolated staging preview
+        run: pnpm build
+      - name: Install browser
+        run: pnpm exec playwright install --with-deps chromium
+      # An isolated server with all preview flags OFF must return HTTP 404.
+      - name: Assert default-off preview returns 404
+        env:
+          LUMI_TITLE_SEARCH_PREVIEW_E2E: "false"
+        run: pnpm exec playwright test e2e/title-search-ui09b-default-off.spec.ts --project=desktop
+      # Independently enabled UI-09a/global-index transport must survive the
+      # title-search preview's explicit OFF state (503, not forced-off 404).
+      - name: Verify shared staging HTTP is preserved for other preview jobs
+        env:
+          LUMI_TITLE_SEARCH_PREVIEW_E2E: "false"
+          LUMI_EXPECT_SHARED_STAGING_HTTP: "true"
+          AI_EXECUTIVE_TARGET_STAGING_HTTP_ENABLED: "true"
+          AI_EXECUTIVE_TARGET_STAGING_HTTP_GLOBAL_COMBINED_ENABLED: "true"
+        run: pnpm exec playwright test e2e/title-search-ui09b-default-off.spec.ts --project=desktop
+      # Run only the named opt-in scenarios, never the complete release E2E suite.
+      - name: Test title-search DOM privacy and keyboard focus with synthetic data
+        run: pnpm exec playwright test e2e/title-search-ui09b.spec.ts --project=desktop
+      - name: Upload failed browser traces
+        if: failure()
+        uses: actions/upload-artifact@v6
+        with:
+          name: lumi-title-search-preview-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            test-results/
+            playwright-report/
+          if-no-files-found: ignore
+          retention-days: 7
