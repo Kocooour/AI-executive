@@ -694,3 +694,25 @@ test("review #331: stale in-flight reserved device is abandoned, not duplicate-s
   await run(fx,s,NOW+HOUR);assert.equal(s.calls.length,0);
   ok(fx);
 });
+
+test("review #331: dismiss during a delivery does not revive reserved targets after restore",async()=>{
+  const fx=fixture();
+  task(fx,"alice","baseline");register(fx,"alice","d1");register(fx,"alice","d2");
+  enable(fx,"alice");await run(fx,sender());
+  const id=task(fx,"alice","no later backlog after dismiss","2026-11-02");
+  const first=sender((_,target,payload,n)=>{
+    if(n===1)fx.db.prepare(`INSERT INTO personal_attention_states
+      (user_id,task_id,rule_id,occurrence_on,state)
+      VALUES ('alice',?,'deadline_overdue','2026-11-02','dismissed')`).run(id);
+    return "sent";
+  });
+  await run(fx,first);
+  assert.equal(first.calls.length,1);
+  assert.equal(rows(fx,"alice").find(r=>r.task_id===id).status,"sent",
+    "dismissal is final even if an original target is still reserved");
+  fx.db.prepare(`DELETE FROM personal_attention_states WHERE user_id='alice'
+    AND task_id=? AND rule_id='deadline_overdue' AND occurrence_on='2026-11-02'`).run(id);
+  const resumed=sender();await run(fx,resumed,NOW+HOUR);
+  assert.equal(resumed.calls.length,0,"restore must not replay this already settled delivery");
+  ok(fx);
+});
