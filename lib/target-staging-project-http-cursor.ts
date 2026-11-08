@@ -29,10 +29,12 @@ type Claims = {
   offset: number;
   iat: number;
   exp: number;
+  /** Optional signed evaluation instant (R2d.5c.1 Attention); absent otherwise. */
+  at?: number;
 };
 
 export type VerifiedStagingProjectHttpCursor =
-  | { ok: true; offset: number; revision: string; expiresAt: number }
+  | { ok: true; offset: number; revision: string; expiresAt: number; instantMs?: number }
   | { ok: false; reason: "invalid" | "expired" };
 
 function safeContext(context: StagingProjectHttpCursorContext): boolean {
@@ -65,16 +67,18 @@ function sign(payload: string, secret: string): Buffer {
 /** Return a signed position without revealing actor, paths or the cookie. */
 export function signStagingProjectHttpCursor(
   context: StagingProjectHttpCursorContext, revision: string, offset: number,
-  expiresAt?: number, now = Math.floor(Date.now() / 1000),
+  expiresAt?: number, now = Math.floor(Date.now() / 1000), instantMs?: number,
 ): string | null {
   if (!safeContext(context) || !SHA256.test(revision) ||
       !Number.isSafeInteger(offset) || offset < 1 ||
       offset > MAX_STAGING_PAGE_OFFSET || !Number.isSafeInteger(now)) return null;
   const exp = expiresAt ?? now + MAX_AGE_SECONDS;
   if (!Number.isSafeInteger(exp) || exp <= now || exp > now + MAX_AGE_SECONDS) return null;
+  if (instantMs !== undefined && (!Number.isSafeInteger(instantMs) || instantMs < 0)) return null;
   const claims: Claims = {
     v: 1, scope: "private-projects", binding: bindingDigest(context),
     rev: revision, offset, iat: now, exp,
+    ...(instantMs === undefined ? {} : { at: instantMs }),
   };
   const payload = Buffer.from(JSON.stringify(claims), "utf8").toString("base64url");
   const token = payload + "." + sign(payload, context.sessionSecret).toString("base64url");
@@ -83,7 +87,7 @@ export function signStagingProjectHttpCursor(
 
 export function verifyStagingProjectHttpCursor(
   context: StagingProjectHttpCursorContext, cursor: string,
-  now = Math.floor(Date.now() / 1000),
+  now = Math.floor(Date.now() / 1000), expectInstant = false,
 ): VerifiedStagingProjectHttpCursor {
   const invalid = (): VerifiedStagingProjectHttpCursor => ({ ok: false, reason: "invalid" });
   if (!safeContext(context) || typeof cursor !== "string" ||
@@ -99,7 +103,9 @@ export function verifyStagingProjectHttpCursor(
     if (actual.length !== expected.length || !timingSafeEqual(actual, expected)) return invalid();
     const claims: Claims = JSON.parse(payload.toString("utf8"));
     if (!claims || typeof claims !== "object" || Array.isArray(claims) ||
-        Object.keys(claims).sort().join(",") !== "binding,exp,iat,offset,rev,scope,v" ||
+        Object.keys(claims).sort().join(",") !==
+          (expectInstant ? "at,binding,exp,iat,offset,rev,scope,v" : "binding,exp,iat,offset,rev,scope,v") ||
+        (expectInstant && (!Number.isSafeInteger(claims.at) || (claims.at as number) < 0)) ||
         claims.v !== 1 || claims.scope !== "private-projects" ||
         claims.binding !== bindingDigest(context) ||
         typeof claims.rev !== "string" || !SHA256.test(claims.rev) ||
@@ -109,7 +115,8 @@ export function verifyStagingProjectHttpCursor(
         claims.iat > now || claims.exp <= claims.iat ||
         claims.exp - claims.iat > MAX_AGE_SECONDS) return invalid();
     if (claims.exp <= now) return { ok: false, reason: "expired" };
-    return { ok: true, offset: claims.offset, revision: claims.rev, expiresAt: claims.exp };
+    return { ok: true, offset: claims.offset, revision: claims.rev, expiresAt: claims.exp,
+      ...(expectInstant ? { instantMs: claims.at as number } : {}) };
   } catch {
     return invalid();
   }

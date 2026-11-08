@@ -9,6 +9,8 @@ import type {
 import { temporalCalendarOrdinal } from "./target-task-temporal-read-model";
 import type {PersonalWhenWindow,PersonalWhenPage,PersonalWhenItem} from "./target-personal-when-read-model";
 import type {MyPlanTaskDayWindow,MyPlanTaskAreaFilter,MyPlanDayTask,MyPlanDayTaskPage} from "./target-my-plan-day-task-read-model";
+import {attentionEvaluationWindow,attentionKey,currentAttentionRule,type AttentionCandidate,type AttentionCandidatePage,type AttentionAreaFilter,type AttentionView} from "./target-attention-read-model";
+import {endOfLocalDate} from "./attention";
 import type {TargetGlobalTaskPage,TargetGlobalTask,TargetGlobalTaskScope} from "./target-global-task-read-model";
 import type {TargetGlobalProjectPage,TargetGlobalProject} from "./target-global-project-read-model";
 import type {TargetGlobalNotePage,TargetGlobalNote,GlobalNoteAreaEpoch} from "./target-global-note-read-model";
@@ -87,6 +89,8 @@ export function createStagingReadRunner(
           process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_PERSONAL_WHEN_ENABLED || "",
         AI_EXECUTIVE_TARGET_STAGING_HTTP_MY_PLAN_DAY_ENABLED:
           process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_MY_PLAN_DAY_ENABLED || "",
+        AI_EXECUTIVE_TARGET_STAGING_HTTP_ATTENTION_ENABLED:
+          process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_ATTENTION_ENABLED || "",
         AI_EXECUTIVE_TARGET_STAGING_HTTP_MY_PLAN_SLICE_ENABLED:
           process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_MY_PLAN_SLICE_ENABLED || "",
         AI_EXECUTIVE_TARGET_STAGING_HTTP_GLOBAL_TASKS_ENABLED:
@@ -1369,6 +1373,134 @@ export async function readStagingMyPlanDayInChild(
   const parsed=parseStagingMyPlanDayPage(payload,areaFilter,window,
     evaluationDate,throughDate,limit);
   if(payload!==null&&!parsed)logStagingFailure("my_plan_day","invalid_child_dto");
+  return parsed;
+}
+
+/** R2d.5c.1: strict, bounded Attention DTO. Every item field is validated
+ * exactly; areaEpochs/privateEpoch/attentionEpoch/linearization stay
+ * server-side for the live release guard (attentionEpoch is also exposed by
+ * the route as the lifecycle CAS input, never the others). */
+export function parseStagingAttentionPage(
+  value:unknown,areaFilter:AttentionAreaFilter,view:AttentionView,
+  evaluatedAtMs:number,timeZone:string,limit:number,
+):AttentionCandidatePage|null {
+  if(!value||typeof value!=="object"||Array.isArray(value)||
+    !["all","personal","shared"].includes(areaFilter)||
+    (view!=="active"&&view!=="hidden")||
+    !Number.isSafeInteger(evaluatedAtMs)||evaluatedAtMs<0||
+    !Number.isSafeInteger(limit)||limit<1||limit>100)return null;
+  const window=attentionEvaluationWindow(evaluatedAtMs,timeZone);
+  if(!window)return null;
+  const data=value as Record<string,unknown>;
+  if(Object.keys(data).sort().join(",")!==
+    "areaEpochs,areaFilter,attentionEpoch,evaluatedAtMs,evaluationDate,hasMore,items,linearization,ok,privateEpoch,revision,soonThroughDate,timeZone,view"||
+    data.ok!==true||data.areaFilter!==areaFilter||data.view!==view||
+    data.evaluatedAtMs!==evaluatedAtMs||data.timeZone!==timeZone||
+    data.evaluationDate!==window.evaluationDate||
+    data.soonThroughDate!==window.soonThroughDate||
+    typeof data.revision!=="string"||!REVISION.test(data.revision)||
+    !Number.isSafeInteger(data.privateEpoch)||(data.privateEpoch as number)<0||
+    !Number.isSafeInteger(data.attentionEpoch)||(data.attentionEpoch as number)<0||
+    typeof data.hasMore!=="boolean"||!Array.isArray(data.items)||
+    data.items.length>limit||(data.hasMore&&data.items.length!==limit)||
+    !Array.isArray(data.areaEpochs))return null;
+  const SEVERITY:Record<string,number>={deadline_overdue:1,deadline_soon:2,planned_date_passed:5};
+  const rowAreas=new Map<string,"private"|"shared">();
+  const items:AttentionCandidate[]=[];
+  const seen=new Set<string>();
+  const iso=(d:unknown):d is string=>typeof d==="string"&&temporalCalendarOrdinal(d)!==null;
+  const nonNeg=(n:unknown):n is number=>typeof n==="number"&&Number.isSafeInteger(n)&&n>=0;
+  for(const incoming of data.items){
+    if(!incoming||typeof incoming!=="object"||Array.isArray(incoming))return null;
+    const t=incoming as Record<string,unknown>;
+    const shared=t.areaKind==="shared";
+    const keys="areaId,areaKind,attentionKey,dueOn,lifecycle,lifecycleRevision,projectId,reasonCode,relevantAt,relevantOn,ruleId,ruleVersion,severity,snoozedUntilMs,sourceRevision,subjectType,taskId,thresholdHours,title,whenOn"+
+      (shared?",assignedToMe":"");
+    if(Object.keys(t).sort().join(",")!==keys.split(",").sort().join(",")||
+      t.subjectType!=="task"||typeof t.taskId!=="string"||!t.taskId||
+      typeof t.title!=="string"||typeof t.areaId!=="string"||!t.areaId||
+      (t.projectId!==null&&typeof t.projectId!=="string")||
+      (t.areaKind!=="private"&&t.areaKind!=="shared")||
+      (shared&&t.assignedToMe!==true)||
+      (areaFilter==="personal"&&shared)||(areaFilter==="shared"&&!shared)||
+      (t.dueOn!==null&&!iso(t.dueOn))||(t.whenOn!==null&&!iso(t.whenOn))||
+      typeof t.ruleId!=="string"||!(t.ruleId in SEVERITY)||
+      t.reasonCode!==t.ruleId||t.ruleVersion!==1||t.severity!==SEVERITY[t.ruleId]||
+      currentAttentionRule(t.dueOn as string|null,t.whenOn as string|null,window)!==t.ruleId||
+      !iso(t.relevantOn)||
+      t.relevantOn!==(t.ruleId==="planned_date_passed"?t.whenOn:t.dueOn)||
+      t.relevantAt!==endOfLocalDate(t.relevantOn,timeZone)||
+      t.thresholdHours!==(t.ruleId==="deadline_soon"?48:0)||
+      !nonNeg(t.sourceRevision)||
+      t.attentionKey!==attentionKey(t.ruleId,t.taskId,t.relevantOn)||
+      seen.has(t.taskId+"\0"+t.ruleId))return null;
+    // Lifecycle must agree with the requested view at the pinned instant.
+    if(view==="active"){
+      if(t.lifecycle!=="active"||t.snoozedUntilMs!==null||
+        (t.lifecycleRevision!==null&&!nonNeg(t.lifecycleRevision)))return null;
+    }else if(t.lifecycle==="dismissed"){
+      if(t.snoozedUntilMs!==null||!nonNeg(t.lifecycleRevision))return null;
+    }else if(t.lifecycle==="snoozed"){
+      if(!nonNeg(t.snoozedUntilMs)||t.snoozedUntilMs<=evaluatedAtMs||
+        !nonNeg(t.lifecycleRevision))return null;
+    }else return null;
+    const prev=items[items.length-1];
+    if(prev&&(t.severity<prev.severity||
+      (t.severity===prev.severity&&(t.relevantOn<prev.relevantOn||
+        (t.relevantOn===prev.relevantOn&&
+          Buffer.compare(Buffer.from(t.taskId),Buffer.from(prev.taskId))<=0)))))return null;
+    seen.add(t.taskId+"\0"+t.ruleId);
+    if(rowAreas.has(t.areaId)&&rowAreas.get(t.areaId)!==t.areaKind)return null;
+    rowAreas.set(t.areaId,t.areaKind as "private"|"shared");
+    items.push({
+      attentionKey:t.attentionKey as string,subjectType:"task",taskId:t.taskId,
+      title:t.title,projectId:t.projectId as string|null,areaId:t.areaId,
+      areaKind:t.areaKind as "private"|"shared",
+      ...(shared?{assignedToMe:true as const}:{}),
+      ruleId:t.ruleId as AttentionCandidate["ruleId"],ruleVersion:1,
+      severity:t.severity as 1|2|5,reasonCode:t.ruleId as AttentionCandidate["ruleId"],
+      relevantOn:t.relevantOn,relevantAt:t.relevantAt as number,
+      dueOn:t.dueOn as string|null,whenOn:t.whenOn as string|null,
+      thresholdHours:t.thresholdHours as 0|48,sourceRevision:t.sourceRevision as number,
+      lifecycle:t.lifecycle as AttentionCandidate["lifecycle"],
+      snoozedUntilMs:t.snoozedUntilMs as number|null,
+      lifecycleRevision:t.lifecycleRevision as number|null,
+    });
+  }
+  const linearization=parseLinearization(data.linearization,rowAreas);
+  if(!linearization||linearization.areas.some(a=>
+      a.areaKind==="shared"&&a.access!=="editor"&&a.access!=="admin")||
+    data.areaEpochs.length!==linearization.areas.length)return null;
+  const areaEpochs:HomeSummaryAreaEpoch[]=[];
+  for(let i=0;i<data.areaEpochs.length;i++){
+    const v=data.areaEpochs[i];
+    if(!v||typeof v!=="object"||Array.isArray(v))return null;
+    const a=v as Record<string,unknown>,w=linearization.areas[i];
+    if(Object.keys(a).sort().join(",")!==
+      "access,areaId,areaKind,contentRevision,policyRevision,projectContentRevision"||
+      a.areaId!==w?.areaId||a.areaKind!==w.areaKind||
+      a.access!==w.access||a.policyRevision!==w.policyRevision||
+      !nonNeg(a.contentRevision)||!nonNeg(a.projectContentRevision))return null;
+    areaEpochs.push({areaId:w.areaId,areaKind:w.areaKind,access:w.access,
+      policyRevision:w.policyRevision,contentRevision:a.contentRevision,
+      projectContentRevision:a.projectContentRevision});
+  }
+  return {items,hasMore:data.hasMore as boolean,revision:data.revision,
+    evaluatedAtMs,timeZone,evaluationDate:window.evaluationDate,
+    soonThroughDate:window.soonThroughDate,areaFilter,view,
+    attentionEpoch:data.attentionEpoch as number,linearization,areaEpochs,
+    privateEpoch:data.privateEpoch as number};
+}
+export async function readStagingAttentionInChild(
+  config:StagingPersonalReadConfig,areaFilter:AttentionAreaFilter,view:AttentionView,
+  evaluatedAtMs:number,timeZone:string,limit:number,offset:number,
+):Promise<AttentionCandidatePage|null>{
+  const payload=await runChild(config,"target-staging-attention-child.mjs",[
+    areaFilter,view,String(evaluatedAtMs),timeZone,String(limit),String(offset),
+  ]);
+  const parsed=parseStagingAttentionPage(payload,areaFilter,view,
+    evaluatedAtMs,timeZone,limit);
+  if(payload!==null&&!parsed)logStagingFailure("attention","invalid_child_dto");
   return parsed;
 }
 

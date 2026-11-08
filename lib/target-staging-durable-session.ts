@@ -444,10 +444,14 @@ export function verifyTargetStagingReadLive(
   temporalTaskGuard?: TargetTemporalTaskLiveGuard,
   /** R2d.3k.2: server-only actor-private planned-day epoch. */
   personalPlanGuard?: { privateEpoch: number },
+  /** R2d.5c.1: server-only actor attention epoch (lifecycle CAS witness). */
+  personalAttentionGuard?: { attentionEpoch: number },
 ): TargetStagingReadLive {
   const unavailable: TargetStagingReadLive = { ok: false, reason: "unavailable" };
   if (personalPlanGuard && (!Number.isSafeInteger(personalPlanGuard.privateEpoch) ||
       personalPlanGuard.privateEpoch < 0)) return unavailable;
+  if (personalAttentionGuard && (!Number.isSafeInteger(personalAttentionGuard.attentionEpoch) ||
+      personalAttentionGuard.attentionEpoch < 0)) return unavailable;
   if (!observed || typeof observed.actorUserId !== "string" || !USER_ID.test(observed.actorUserId) ||
       !Array.isArray(observed.areas) || observed.areas.length > MAX_SCOPED_READ_AREAS) return unavailable;
   if (projectGuard && (typeof projectGuard.projectId !== "string" || !projectGuard.projectId ||
@@ -579,6 +583,13 @@ export function verifyTargetStagingReadLive(
       const row = db.prepare("SELECT revision FROM personal_plan_epochs WHERE user_id=?")
         .get(actorUserId) as {revision:number}|undefined;
       if (!row || row.revision !== personalPlanGuard.privateEpoch)
+        return {ok:false,reason:"stale"};
+    }
+    // Same live transaction as session/ACL: a lifecycle write moves this epoch.
+    if (personalAttentionGuard) {
+      const row = db.prepare("SELECT revision FROM personal_attention_epochs WHERE user_id=?")
+        .get(actorUserId) as {revision:number}|undefined;
+      if (!row || row.revision !== personalAttentionGuard.attentionEpoch)
         return {ok:false,reason:"stale"};
     }
     if (noteSyncGuard) {
