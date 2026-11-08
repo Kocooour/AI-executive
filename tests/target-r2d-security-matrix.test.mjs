@@ -215,32 +215,39 @@ const FULL=fx=>({scopes:ALL_SCOPES,tasks:probeTasks(fx),projects:PROBE_PROJECTS,
   temporal:true});
 const LITE=(fx,extra={})=>({scopes:["all"],tasks:extra.tasks??[],projects:extra.projects??[],
   notes:extra.notes??[],areas:extra.areas??["a_s1"],queries:["SNT"],mpFilters:["all"],
-  bundles:[["what_matters","my-plan"],["find","all"],["find","shared"]],temporal:false});
+  bundles:[["what_matters","my-plan"],["find","all"],["find","shared"]],temporal:true});
 const bundleReq=(purpose,scope)=>({purpose,scope,query:purpose==="find"?"SNT":null,
   nowMs:NOW,timeZone:TZ,maxItems:50});
 /** Loop over probe ids; the id itself must not leak into the output, so keep only the results. */
 const probe=(list,fn)=>list.map(fn).filter(x=>x!==null&&x!==undefined);
 const keyed=(list,fn)=>Object.fromEntries(list.map((k,i)=>[i,fn(k)]));
-/** channel -> (fx, actor, ctx) => JSON-serializable value. null/undefined = refused. */
+/** The (actor, channel) being captured: lets a null page name the broken invariant instead of a bare TypeError. */
+const CUR={u:"?",ch:"?"};
+/** Page-like reads must ALWAYS answer for a legitimate identity (empty is fine, null is a defect or a harness bug). */
+const must=(v,what="")=>{
+  assert.ok(v!==null&&v!==undefined,`${CUR.u} x ${CUR.ch}${what?" / "+what:""} returned null (the channel refused a legitimate identity)`);
+  return v;
+};
+/** channel -> (fx, actor, ctx) => JSON-serializable value. null/undefined = refused (probe channels only). */
 const CHANNELS={
-  "personal/task-page":(fx,u)=>fx.authority.readPersonalOffsetPage(u,100,0),
+  "personal/task-page":(fx,u)=>must(fx.authority.readPersonalOffsetPage(u,100,0)),
   "personal/task-detail":(fx,u,c)=>probe(c.tasks,id=>fx.authority.readPersonalTaskDetail(u,id)),
-  "personal/project-page":(fx,u)=>fx.authority.readPrivateProjectOffsetPage(u,100,0),
+  "personal/project-page":(fx,u)=>must(fx.authority.readPrivateProjectOffsetPage(u,100,0)),
   "personal/project-detail":(fx,u,c)=>probe(c.projects,id=>fx.authority.readPrivateProjectDetail(u,id)),
-  "scoped/shared+my-plan":(fx,u)=>({shared:fx.authority.readScopedOffsetPage(u,"shared",100,0),
-    myPlan:fx.authority.readScopedOffsetPage(u,"my-plan",100,0)}),
+  "scoped/shared+my-plan":(fx,u)=>({shared:must(fx.authority.readScopedOffsetPage(u,"shared",100,0),"shared"),
+    myPlan:must(fx.authority.readScopedOffsetPage(u,"my-plan",100,0),"my-plan")}),
   "temporal/status":(fx,u,c)=>!c.temporal?null:Object.fromEntries(["personal","shared","my-plan"].flatMap(s=>
-    ["all","open","completed"].map(st=>[s+"/"+st,fx.authority.readTemporalTaskPage(u,s,st,100,0)]))),
+    ["all","open","completed"].map(st=>[s+"/"+st,must(fx.authority.readTemporalTaskPage(u,s,st,100,0),s+"/"+st)]))),
   "temporal/due-window":(fx,u,c)=>!c.temporal?null:Object.fromEntries(["personal","shared","my-plan"].flatMap(s=>
     ["overdue","due-today","upcoming"].map(w=>[s+"/"+w,
-      fx.authority.readTemporalDueWindowPage(u,s,w,TODAY,w==="upcoming"?DAYS_AHEAD:null,100,0)]))),
+      must(fx.authority.readTemporalDueWindowPage(u,s,w,TODAY,w==="upcoming"?DAYS_AHEAD:null,100,0),s+"/"+w)]))),
   "temporal/task-detail":(fx,u,c)=>probe(c.tasks,id=>fx.authority.readTemporalTaskDetail(u,id)),
   "shared/task-detail":(fx,u,c)=>probe(c.tasks,id=>fx.authority.readSharedTaskDetail(u,id)),
-  "personal-when":(fx,u)=>({all:fx.authority.readPersonalWhenPage(u,"all",null,null,100,0),
-    day:fx.authority.readPersonalWhenPage(u,"on-day",TODAY,null,100,0),
-    upcoming:fx.authority.readPersonalWhenPage(u,"upcoming",TODAY,DAYS_AHEAD,100,0)}),
+  "personal-when":(fx,u)=>({all:must(fx.authority.readPersonalWhenPage(u,"all",null,null,100,0),"all"),
+    day:must(fx.authority.readPersonalWhenPage(u,"on-day",TODAY,null,100,0),"on-day"),
+    upcoming:must(fx.authority.readPersonalWhenPage(u,"upcoming",TODAY,DAYS_AHEAD,100,0),"upcoming")}),
   "project/index":(fx,u)=>Object.fromEntries(["personal","shared","my-plan"].map(s=>
-    [s,fx.authority.readAuthorizedProjectIndex(u,s,100,0)])),
+    [s,must(fx.authority.readAuthorizedProjectIndex(u,s,100,0),s)])),
   "project/detail+tasks":(fx,u,c)=>probe(c.projects,id=>fx.authority.readAuthorizedProjectTasks(u,id,100,0)),
   "relations/project":(fx,u,c)=>probe(c.projects,id=>fx.authority.readAuthorizedProjectStructuralRelations(u,id,50,0)),
   "relations/backlinks":(fx,u,c)=>[
@@ -249,28 +256,28 @@ const CHANNELS={
   "note/read":(fx,u,c)=>probe(c.notes,id=>fx.authority.readAuthorizedNote(u,id)),
   "note-sync/bootstrap":(fx,u,c)=>probe(c.areas,a=>fx.authority.readAuthorizedNoteSync(u,
     {areaId:a,limit:100,secret:SECRET})),
-  "global/task":(fx,u,c)=>keyed(c.scopes,s=>fx.authority.readGlobalTaskPage(u,s,100,0)),
-  "global/project":(fx,u,c)=>keyed(c.scopes,s=>fx.authority.readGlobalProjectPage(u,s,100,0)),
-  "global/note":(fx,u,c)=>keyed(c.scopes,s=>fx.authority.readGlobalNotePage(u,s,100,0)),
+  "global/task":(fx,u,c)=>keyed(c.scopes,s=>must(fx.authority.readGlobalTaskPage(u,s,100,0),s)),
+  "global/project":(fx,u,c)=>keyed(c.scopes,s=>must(fx.authority.readGlobalProjectPage(u,s,100,0),s)),
+  "global/note":(fx,u,c)=>keyed(c.scopes,s=>must(fx.authority.readGlobalNotePage(u,s,100,0),s)),
   "global/combined":(fx,u,c)=>keyed(c.scopes,s=>
-    fx.authority.readGlobalCombinedPage(u,s,100,{projects:0,tasks:0,notes:0})),
-  "search/title":(fx,u,c)=>c.scopes.flatMap(s=>c.queries.map(q=>fx.authority.readAuthorizedTitleSearchPage(u,s,q,50,0))),
+    must(fx.authority.readGlobalCombinedPage(u,s,100,{projects:0,tasks:0,notes:0}),s)),
+  "search/title":(fx,u,c)=>c.scopes.flatMap(s=>c.queries.map(q=>must(fx.authority.readAuthorizedTitleSearchPage(u,s,q,50,0),s+"/"+q))),
   "my-plan/day":(fx,u,c)=>c.mpFilters.flatMap(f=>[
-    fx.authority.readMyPlanDayTaskPage(u,f,"today",TODAY,null,100,0),
-    fx.authority.readMyPlanDayTaskPage(u,f,"upcoming",TODAY,DAYS_AHEAD,100,0),
-    fx.authority.readMyPlanTwoDayTaskPage(u,f,TODAY,TOMORROW,100,0,0)]),
-  "home/summaries":(fx,u,c)=>({myPlan:fx.authority.readMyPlanHomeSummary(u),
-    ...(c.temporal?{personal:fx.authority.readScopedHomeSummary(u,"personal"),
-      shared:fx.authority.readScopedHomeSummary(u,"shared"),
-      scopedMyPlan:fx.authority.readScopedHomeSummary(u,"my-plan")}:{})}),
+    must(fx.authority.readMyPlanDayTaskPage(u,f,"today",TODAY,null,100,0),f+"/today"),
+    must(fx.authority.readMyPlanDayTaskPage(u,f,"upcoming",TODAY,DAYS_AHEAD,100,0),f+"/upcoming"),
+    must(fx.authority.readMyPlanTwoDayTaskPage(u,f,TODAY,TOMORROW,100,0,0),f+"/two-day")]),
+  "home/summaries":(fx,u,c)=>({myPlan:must(fx.authority.readMyPlanHomeSummary(u),"my-plan"),
+    ...(c.temporal?{personal:must(fx.authority.readScopedHomeSummary(u,"personal"),"personal"),
+      shared:must(fx.authority.readScopedHomeSummary(u,"shared"),"shared"),
+      scopedMyPlan:must(fx.authority.readScopedHomeSummary(u,"my-plan"),"scoped my-plan")}:{})}),
   "attention/list":(fx,u,c)=>c.mpFilters.flatMap(f=>["active","hidden"].map(v=>
-    fx.authority.readAttentionCandidatePage(u,f,v,NOW,TZ,100,0))),
+    must(fx.authority.readAttentionCandidatePage(u,f,v,NOW,TZ,100,0),f+"/"+v))),
   "attention/command-preview":(fx,u,c)=>probe(c.tasks,id=>
     fx.authority.previewAttentionCommand(u,id,"deadline_overdue",OVERDUE,NOW)),
-  "notifications/settings":(fx,u)=>fx.authority.readNotificationSettings(u),
+  "notifications/settings":(fx,u)=>must(fx.authority.readNotificationSettings(u)),
   "ai/context-bundle":(fx,u,c)=>c.bundles.map(([p,s])=>{
-    const b=fx.authority.resolveContextBundle(u,bundleReq(p,s));
-    return b&&{provider:JSON.parse(serializeTargetContextBundleForProvider(b)),revision:b.revision};
+    const b=must(fx.authority.resolveContextBundle(u,bundleReq(p,s)),p+"/"+s);
+    return {provider:JSON.parse(serializeTargetContextBundleForProvider(b)),revision:b.revision};
   }),
 };
 const CHANNEL_NAMES=Object.keys(CHANNELS);
@@ -280,7 +287,7 @@ const mask=json=>json.replace(/"cursor":"[A-Za-z0-9_-]{100,}"/g,'"cursor":"<seal
 function capture(fx,u,ctx,only=CHANNEL_NAMES){
   const out={};
   for(const name of only){
-    let value;
+    let value;CUR.u=u;CUR.ch=name;
     try{value=CHANNELS[name](fx,u,ctx);}catch(error){value={THROWN:String(error)};}
     out[name]=mask(JSON.stringify(value??null));
   }
@@ -458,14 +465,20 @@ test("3. My Plan = own private + assigned-to-me shared (editor/admin); Vše = ev
 // ===================== Invariant 4: cross-channel consistency, paging, no duplicates =====================
 const PROJ_RE=/p_(?:pr_(?:ow|ed|vw|st)|s[123])_\d\d/g;
 const projectIdsIn=json=>[...new Set(json.match(PROJ_RE)??[])].sort();
-/** Every array of identified rows must be duplicate-free (also across nested pages). */
+/** Every array of rows must be duplicate-free (also across nested pages). A row WITHOUT an identity is itself a
+ * failure (it would otherwise silently escape the duplicate check). Plain scalar arrays are compared as values. */
 function duplicates(value,at="$",out=[]){
   if(Array.isArray(value)){
-    const keys=value.map(v=>v&&typeof v==="object"?(v.kind&&v.item?v.kind+":"+v.item.id:(v.taskId??v.id??null)):null);
-    if(keys.every(k=>typeof k==="string")){
-      const seen=new Set();
-      for(const k of keys){if(seen.has(k))out.push(at+" "+k);seen.add(k);}
-    }
+    const keys=value.map(v=>{
+      if(v===null||typeof v!=="object")return typeof v==="string"||typeof v==="number"?String(v):null;
+      const k=v.kind&&v.item?v.kind+":"+v.item.id:(v.taskId??v.id??v.attentionKey??v.areaId??v.targetId??null);
+      return typeof k==="string"?k:null;
+    });
+    const seen=new Set();
+    keys.forEach((k,i)=>{
+      if(k===null){out.push(at+"["+i+"] row without an identity");return;}
+      if(seen.has(k))out.push(at+" "+k);seen.add(k);
+    });
     value.forEach((v,i)=>duplicates(v,at+"["+i+"]",out));
   }else if(value&&typeof value==="object")for(const [k,v] of Object.entries(value))duplicates(v,at+"."+k,out);
   return out;
@@ -494,20 +507,20 @@ test("4. cross-channel consistency per actor: Vše = search = combined, My Plan 
       const t=readable.filter(e=>e.kind==="task"&&kind(e.area)).map(rid).sort();
       const p=readable.filter(e=>e.kind==="project"&&kind(e.area)).map(rid).sort();
       const n=readable.filter(e=>e.kind==="note"&&kind(e.area)).map(rid).sort();
-      const comb=JSON.stringify(A.readGlobalCombinedPage(u,scope,100,{projects:0,tasks:0,notes:0}).items);
+      const comb=JSON.stringify(must(A.readGlobalCombinedPage(u,scope,100,{projects:0,tasks:0,notes:0}),`${u}/${scope} combined`).items);
       assert.deepEqual(idsOf(A.readGlobalTaskPage(u,scope,100,0)),t,`${u}/${scope}: global tasks`);
       assert.deepEqual(projectIdsIn(JSON.stringify(A.readGlobalProjectPage(u,scope,100,0))),p,`${u}/${scope}: global projects`);
       assert.deepEqual(noteIdsIn(JSON.stringify(A.readGlobalNotePage(u,scope,100,0))),n,`${u}/${scope}: global notes`);
       assert.deepEqual([taskIdsIn(comb),projectIdsIn(comb),noteIdsIn(comb)],[t,p,n],`${u}/${scope}: combined = task+project+note indexes`);
-      const found=JSON.stringify(A.readAuthorizedTitleSearchPage(u,scope,"SNT",50,0).items);
+      const found=JSON.stringify(must(A.readAuthorizedTitleSearchPage(u,scope,"SNT",50,0),`${u}/${scope} search`).items);
       assert.deepEqual([taskIdsIn(found),projectIdsIn(found),noteIdsIn(found)],[t,p,n],`${u}/${scope}: title search "SNT" = Vše/Osobní/Sdílené`);
-      assert.deepEqual(idsOf(A.readAuthorizedTitleSearchPage(u,scope,"SNT task",50,0).items),t,`${u}/${scope}: narrower query`);
+      assert.deepEqual(idsOf(must(A.readAuthorizedTitleSearchPage(u,scope,"SNT task",50,0),`${u}/${scope} narrow search`).items),t,`${u}/${scope}: narrower query`);
       for(const part of [A.readGlobalTaskPage(u,scope,100,0),A.readGlobalCombinedPage(u,scope,100,{projects:0,tasks:0,notes:0}),
         A.readAuthorizedTitleSearchPage(u,scope,"SNT",50,0)])
         assert.deepEqual(duplicates(part),[],`${u}/${scope}: duplicate rows`);
     }
     // counts agree with the lists they summarize
-    const home=A.readMyPlanHomeSummary(u).counts,shared=A.readScopedHomeSummary(u,"shared").counts,pers=A.readScopedHomeSummary(u,"personal").counts;
+    const home=must(A.readMyPlanHomeSummary(u),`${u} my-plan home`).counts,shared=must(A.readScopedHomeSummary(u,"shared"),`${u} shared home`).counts,pers=must(A.readScopedHomeSummary(u,"personal"),`${u} personal home`).counts;
     const priv=e=>m.kinds.get(e.area).kind==="private";
     assert.deepEqual([home.privateTasks,home.assignedSharedTasks],
       [m.mine(u).filter(priv).length,m.mine(u).filter(t=>!priv(t)).length],`${u}: My Plan home counts`);
@@ -515,21 +528,21 @@ test("4. cross-channel consistency per actor: Vše = search = combined, My Plan 
       [readable.filter(e=>e.kind==="task"&&!priv(e)).length,readable.filter(e=>e.kind==="project"&&!priv(e)).length,
        readable.filter(e=>e.kind==="task"&&priv(e)).length,readable.filter(e=>e.kind==="project"&&priv(e)).length],`${u}: scoped home counts`);
     // paging with a tiny page yields exactly the single-page result (counts/hasMore consistent)
-    if([EDITOR,STRANGER].includes(u)){ // tiny-page walks are the expensive part: two identities suffice
+    { // tiny-page walks for ALL four identities
       assert.deepEqual(walk((l,o)=>A.readGlobalTaskPage(u,"all",l,o),pg=>pg.tasks.map(rid),3),
-        idsOfOrdered(A.readGlobalTaskPage(u,"all",100,0).tasks),`${u}: global task paging`);
+        idsOfOrdered(must(A.readGlobalTaskPage(u,"all",100,0),`${u} global tasks`).tasks),`${u}: global task paging`);
       assert.deepEqual(walk((l,o)=>A.readAuthorizedTitleSearchPage(u,"all","SNT",l,o),pg=>pg.items.map(x=>x.kind+":"+x.id),7),
-        A.readAuthorizedTitleSearchPage(u,"all","SNT",50,0).items.map(x=>x.kind+":"+x.id),`${u}: search paging`);
+        must(A.readAuthorizedTitleSearchPage(u,"all","SNT",50,0),`${u} search`).items.map(x=>x.kind+":"+x.id),`${u}: search paging`);
       assert.deepEqual(walk((l,o)=>A.readAttentionCandidatePage(u,"all","active",NOW,TZ,l,o),pg=>pg.items.map(x=>x.attentionKey),2),
-        A.readAttentionCandidatePage(u,"all","active",NOW,TZ,100,0).items.map(x=>x.attentionKey),`${u}: attention paging`);
+        must(A.readAttentionCandidatePage(u,"all","active",NOW,TZ,100,0),`${u} attention`).items.map(x=>x.attentionKey),`${u}: attention paging`);
       {
         const seen=[];let pos={projects:0,tasks:0,notes:0};
         for(let g=0;g<80;g++){
-          const pg=A.readGlobalCombinedPage(u,"all",5,pos);
+          const pg=must(A.readGlobalCombinedPage(u,"all",5,pos),`${u} combined paging`);
           seen.push(...pg.items.map(x=>x.kind+":"+x.item.id));
           if(!pg.hasMore)break;pos=pg.nextPositions;
         }
-        assert.deepEqual(seen,A.readGlobalCombinedPage(u,"all",100,{projects:0,tasks:0,notes:0}).items.map(x=>x.kind+":"+x.item.id),`${u}: combined paging`);
+        assert.deepEqual(seen,must(A.readGlobalCombinedPage(u,"all",100,{projects:0,tasks:0,notes:0}),`${u} combined`).items.map(x=>x.kind+":"+x.item.id),`${u}: combined paging`);
       }
     }
     // My Plan >= Attention (active+hidden) >= push recipients
@@ -552,6 +565,14 @@ test("4. cross-channel consistency per actor: Vše = search = combined, My Plan 
     for(const s of ["personal","shared"]){
       const allowedForScope=new Set(m.mine(u).map(rid));
       for(const id of b("what_matters",s))assert.ok(allowedForScope.has(id),`${u}: what_matters/${s} contains ${id}, not my work`);
+      // plan_today/personal|shared is a subset of my work of exactly that kind (no private in shared, no shared in personal)
+      const planned=must(A.resolveContextBundle(u,bundleReq("plan_today",s)),`${u} plan_today/${s}`);
+      for(const item of planned.items){
+        assert.ok(allowedForScope.has(item.id),`${u}: plan_today/${s} contains ${item.id}, not my work`);
+        assert.equal(item.areaKind,s==="personal"?"private":"shared",`${u}: plan_today/${s} item ${item.id} has the wrong area kind`);
+      }
+      const myPlanPlanned=new Set(idsOf(must(A.resolveContextBundle(u,bundleReq("plan_today","my-plan")),`${u} plan_today/my-plan`)));
+      for(const item of planned.items)assert.ok(myPlanPlanned.has(item.id),`${u}: plan_today/${s} item ${item.id} is missing from plan_today/my-plan`);
     }
     for(const part of [A.readAttentionCandidatePage(u,"all","active",NOW,TZ,100,0),A.readMyPlanDayTaskPage(u,"all","today",TODAY,null,100,0),
       A.resolveContextBundle(u,bundleReq("what_matters","my-plan")),A.resolveContextBundle(u,bundleReq("plan_today","my-plan"))])
@@ -559,6 +580,63 @@ test("4. cross-channel consistency per actor: Vše = search = combined, My Plan 
   }
 });
 const idsOfOrdered=rows=>rows.map(rid);
+
+// ============================ AI bundle contract: purposes, scopes, provider key set ============================
+const VALID_BUNDLES=[["what_matters","my-plan"],["what_matters","personal"],["what_matters","shared"],
+  ["plan_today","my-plan"],["plan_today","personal"],["plan_today","shared"],
+  ["find","all"],["find","personal"],["find","shared"]];
+const INVALID_BUNDLES=[["what_matters","all"],["plan_today","all"],["find","my-plan"],
+  ["what_matters","bogus"],["bogus","all"]];
+const PROVIDER_TOP_KEYS=["bundleVersion","evaluationDate","generatedAtMs","items","purpose","revision","scope","timeZone","truncated"];
+const PROVIDER_ITEM_KEYS=["areaKind","assignedToMe","attention","dueOn","id","kind","provenance","title","whenOn"];
+const PROVIDER_ATTENTION_KEYS=["lifecycle","relevantOn","ruleId","severity"];
+const PROVIDER_PROVENANCE_KEYS=["revision","source"];
+const FORBIDDEN_PROVIDER_KEYS=["witness","linearization","areaEpochs","noteAreaEpochs","areaId","projectId","parentId",
+  "assignee","assigneeUserId","userId","actorUserId","ownerUserId","body","snoozedUntilMs","lifecycleRevision","attentionKey"];
+const keysOf=(value,out=new Set())=>{
+  if(Array.isArray(value))value.forEach(v=>keysOf(v,out));
+  else if(value&&typeof value==="object")for(const [k,v] of Object.entries(value)){out.add(k);keysOf(v,out);}
+  return out;
+};
+test("9. AI bundle: every valid purpose x scope answers, invalid combinations are refused, and the provider payload has an exact key set",async()=>{
+  const fx=await getBase(),A=fx.authority;
+  let sawAttention=false,sawAssigned=false,sawWhen=false,rawBundles=0;
+  for(const u of ACTORS){
+    for(const [p,sc] of VALID_BUNDLES){
+      const bundle=A.resolveContextBundle(u,bundleReq(p,sc));
+      assert.ok(bundle,`${u} x ${p}/${sc} returned null (a valid purpose x scope combination was refused)`);
+      assert.ok(bundle.witness&&typeof bundle.witness==="object","the internal bundle keeps its witness (positive control for the strip)");
+      const json=serializeTargetContextBundleForProvider(bundle);
+      assert.ok(json,`${u} x ${p}/${sc}: the provider serialization returned null`);
+      const parsed=JSON.parse(json);
+      assert.deepEqual(Object.keys(parsed).sort(),PROVIDER_TOP_KEYS,`${u} x ${p}/${sc}: provider payload top-level keys`);
+      for(const item of parsed.items){
+        const extra=Object.keys(item).filter(k=>!PROVIDER_ITEM_KEYS.includes(k));
+        assert.deepEqual(extra,[],`${u} x ${p}/${sc}: provider item ${item.id} carries keys outside the allowed set`);
+        for(const k of ["areaKind","id","kind","provenance","title"])assert.ok(k in item,`${u} x ${p}/${sc}: item ${item.id} lacks ${k}`);
+        assert.deepEqual(Object.keys(item.provenance).sort(),PROVIDER_PROVENANCE_KEYS);
+        if(item.attention){sawAttention=true;assert.deepEqual(Object.keys(item.attention).sort(),PROVIDER_ATTENTION_KEYS);}
+        if(item.assignedToMe!==undefined){sawAssigned=true;assert.equal(item.assignedToMe,true);}
+        if(item.whenOn!==undefined)sawWhen=true;
+      }
+      const present=keysOf(parsed);
+      assert.deepEqual(FORBIDDEN_PROVIDER_KEYS.filter(k=>present.has(k)),[],`${u} x ${p}/${sc}: forbidden key reaches the provider`);
+      for(const word of ["witness","linearization","areaEpochs","noteAreaEpochs"])
+        assert.ok(!json.includes(word),`${u} x ${p}/${sc}: "${word}" appears in the provider JSON`);
+      assert.ok(!json.includes("BODY-SENTINEL"));
+      rawBundles++;
+    }
+    for(const [p,sc] of INVALID_BUNDLES)
+      assert.equal(A.resolveContextBundle(u,bundleReq(p,sc)),null,`${u} x ${p}/${sc}: an invalid purpose x scope combination was answered`);
+    // malformed requests are refused as well: unknown key, missing query for find, query on a non-find purpose, maxItems range
+    for(const bad of [{...bundleReq("find","all"),query:null},{...bundleReq("what_matters","my-plan"),query:"SNT"},
+      {...bundleReq("find","all"),maxItems:0},{...bundleReq("find","all"),maxItems:51},{...bundleReq("find","all"),extra:1},
+      {...bundleReq("find","all"),timeZone:"Not/AZone"}])
+      assert.equal(A.resolveContextBundle(u,bad),null,`${u}: malformed bundle request ${JSON.stringify(bad)} was answered`);
+  }
+  assert.equal(rawBundles,ACTORS.length*VALID_BUNDLES.length);
+  assert.ok(sawAttention&&sawAssigned&&sawWhen,"the key-set check really exercised attention, assignedToMe and whenOn items");
+});
 
 // ------------------------------------- write helpers -------------------------------------
 const {previewTargetNoteWrite}=await import("../lib/target-note-write-contract.ts");
@@ -606,15 +684,21 @@ function writerSet(fx,by,previewer,victim){
       expectedPolicyRevision:fx.db.prepare("SELECT policy_revision AS r FROM areas WHERE id=?").get(victim.area).r}),
   };
 }
-const TABLES=["tasks","projects","notes","area_members","areas","personal_task_plans","personal_attention_states",
-  "personal_notification_settings","personal_push_targets","change_log","note_change_journal","note_tombstones","metadata"];
-/** Order-stable fingerprint of every table a writer could touch. */
-function fingerprint(fx,tables=TABLES){
+/** Order-stable fingerprint of EVERY table of the store, discovered from sqlite_master (so a table added by a
+ * later schema version is covered automatically): all domain tables, identities/workspaces, epochs, audits,
+ * receipts, delivery tables, tombstones/journals and all metadata (receipt) rows. Nothing is excluded: no
+ * table has a volatile session-touch column (staging_sessions only carries created/expires/revoked), and the
+ * in-memory authority tokens never touch the file. Rows are sorted in JS because most tables are WITHOUT ROWID
+ * (the previous `ORDER BY rowid` threw on them and silently compared the constant "missing"). */
+const FINGERPRINT_EXCLUDED=Object.freeze([]);
+function fingerprint(fx){
   const h=createHash("sha256");
-  for(const t of tables){
-    let rows;
-    try{rows=fx.db.prepare(`SELECT * FROM ${t} ORDER BY rowid`).all();}catch{rows=["missing"];}
-    h.update(t+JSON.stringify(rows));
+  const names=fx.db.prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name").all()
+    .map(r=>r.name).filter(n=>!FINGERPRINT_EXCLUDED.includes(n));
+  assert.ok(names.length>=30,"fingerprint must see the whole schema, saw "+names.length);
+  for(const t of names){
+    const rows=fx.db.prepare(`SELECT * FROM "${t}"`).all().map(r=>JSON.stringify(r)).sort();
+    h.update(t+"\0"+rows.length+"\0"+rows.join("\n"));
   }
   return h.digest("hex");
 }
@@ -643,7 +727,7 @@ test("2a. viewer reads shared content but is absent from My Plan, Attention, pus
   assert.deepEqual(pushedTasks(fx.sender)[VIEWER],["t_pr_vw_90"],"the viewer is pushed only its own private work");
   // The attention preview of a shared task is refused for a viewer (no lifecycle control on others' work)
   assert.equal(A.previewAttentionCommand(VIEWER,"t_s1_03","deadline_overdue",OVERDUE,NOW),null);
-  assert.equal(A.previewPersonalWhen(VIEWER,"t_s1_03")?.ok??null,null);
+  assert.deepEqual(A.previewPersonalWhen(VIEWER,"t_s1_03"),null,"a viewer gets no planned-date CAS input for shared work");
 });
 
 test("2b. every writer refuses the viewer and every cross-Area attacker; legitimate writers still succeed (controls)",async()=>{
@@ -684,6 +768,17 @@ test("2b. every writer refuses the viewer and every cross-Area attacker; legitim
     }
   }
   assert.equal(fingerprint(fx),before,"refused writes changed the store");
+  // A member WITHOUT the assignment: the personal-per-assignee writers (Attention lifecycle, planned date) refuse
+  // an editor on work assigned to the admin (t_s1_02) and on unassigned / project work, although the editor
+  // legitimately edits such titles. The shape is the one the legitimate assignee uses (CAS minted by the admin).
+  for(const [taskId,assignee] of [["t_s1_02",OWNER],["t_s1_03",null],["t_s1_08",null],["t_s1_09",OWNER]]){
+    const w=writerSet(fx,EDITOR,assignee??OWNER,{taskId,noteId:"n_s1_02",area:"a_s1"});
+    for(const name of ["attention","whenOn"]){
+      const res=w[name]();
+      assert.equal(res.ok,false,`member-non-assignee EDITOR x ${name} on ${taskId} (assignee ${assignee}) was NOT refused: ${JSON.stringify(res)}`);
+    }
+  }
+  assert.equal(fingerprint(fx),before,"member-non-assignee lifecycle attempts changed the store");
   // settings / push targets of ANOTHER identity: the commands carry no target identity at all
   const forged=[{...settingsCommand(fx,OWNER),actorUserId:OWNER},{...settingsCommand(fx,OWNER),userId:OWNER},
     {...settingsCommand(fx,OWNER),targetUserId:OWNER}];
@@ -764,7 +859,7 @@ const ORACLE=(fx,tags)=>{
   return {scopes:ALL_SCOPES,tasks:["t_s2_01",...f.map(x=>x.tasks[0])],
     projects:f.map(x=>x.projects[0]),
     notes:["n_s2_01",...f.map(x=>x.notes[0])],areas:areaIds(fx),
-    queries:["SNT"],mpFilters:["all"],temporal:false,
+    queries:["SNT"],mpFilters:["all"],temporal:true,
     bundles:[["what_matters","my-plan"],["plan_today","my-plan"],["find","all"]]};
 };
 /** Documented channel revisions that legitimately move with FOREIGN activity (none expected; see docs). */
@@ -839,8 +934,17 @@ test("6. revocation transitions in sequence: every channel is re-checked after e
   recheck(fx,"initial",[EDITOR,VIEWER]);
 
   // --- step 1: reassign a pending task away from the editor ---
+  // Raw SQL on purpose: there is no assignee-change command in the target model yet (the only production writer of
+  // assignee_user_id is the membership writer, exercised in steps 4/5); the BEFORE UPDATE trigger still guards it.
   fx.db.prepare("UPDATE tasks SET assignee_user_id=? WHERE id='t_s1_91'").run(OWNER);
   recheck(fx,"reassigned away",[EDITOR],{tasks:["t_s1_91"]});
+  for(const f of ALL_SCOPES)for(const v of ["active","hidden"]){
+    assert.ok(!idsOf(must(A.readAttentionCandidatePage(EDITOR,f,v,NOW,TZ,100,0),`editor attention ${f}/${v}`)).includes("t_s1_91"),`reassigned task still in the former assignee's Attention ${f}/${v}`);
+  }
+  assert.ok(idsOf(must(A.readAttentionCandidatePage(OWNER,"all","active",NOW,TZ,100,0),"owner attention")).includes("t_s1_91"),"the new assignee's Attention gains the task");
+  assert.ok(A.readAuthorizedNote(EDITOR,"n_s1_02"),"note detail still readable after the reassignment (membership unchanged)");
+  assert.ok(A.readAuthorizedProjectTasks(EDITOR,"p_s1_01",100,0)?.ok!==false,"project detail still readable after the reassignment");
+  assert.equal(A.previewAttentionCommand(EDITOR,"t_s1_91","deadline_overdue",FRESH,NOW),null,"no Attention CAS input for work reassigned away");
   assert.ok(!idsOf(A.readScopedOffsetPage(EDITOR,"my-plan",100,0)).includes("t_s1_91"));
   assert.ok(idsOf(A.readGlobalTaskPage(EDITOR,"shared",100,0)).includes("t_s1_91"),"still readable in Sdílené (membership unchanged)");
   assert.ok(!idsOf(A.resolveContextBundle(EDITOR,bundleReq("what_matters","my-plan"))).includes("t_s1_91"));
@@ -872,16 +976,35 @@ test("6. revocation transitions in sequence: every channel is re-checked after e
   assert.equal(viewerSync.ok,true,JSON.stringify(viewerSync).slice(0,200));
   assert.ok(viewerSync.page.changes.some(c=>c.kind==="delete"&&c.noteId==="n_s1_01"),"deletion reaches the feed");
   assert.ok(!JSON.stringify(viewerSync.page).includes("BODY-SENTINEL"));
+  assert.ok(!JSON.stringify(viewerSync.page).includes("SNT note n_s1_01"),"a tombstone must not carry the deleted note's title");
+  const tomb=viewerSync.page.changes.find(c=>c.kind==="delete"&&c.noteId==="n_s1_01");
+  assert.deepEqual(Object.keys(tomb).filter(k=>/title|body|text|content/i.test(k)),[],"tombstone has no title/body field");
   cursors[VIEWER]=viewerSync.page.cursor;
 
   // --- step 4: downgrade editor -> viewer (the writer unassigns their work) ---
+  const heldByEditor=fx.db.prepare(`SELECT id,status FROM tasks WHERE assignee_user_id=? ORDER BY id`).all(EDITOR);
+  // Documented writer behaviour (lib/target-staging-membership-command.ts header): EVERY task assigned to the demoted
+  // user in the Area is unassigned, completed ones included (completion attribution is deferred).
+  const openHeld=heldByEditor.map(t=>t.id);
+  assert.deepEqual(openHeld,["t_s1_01","t_s1_04","t_s1_05","t_s1_07","t_s1_94","t_s1_95","t_s1_96","t_s1_97"],"precondition: the editor's S1 assignments (open and completed)");
+  assert.deepEqual(heldByEditor.filter(t=>t.status==="completed").map(t=>t.id),["t_s1_05","t_s1_94"]);
   const downgrade=membership(fx,OWNER,"set_role",EDITOR,"viewer");
   assert.equal(downgrade.ok,true,JSON.stringify(downgrade));
-  assert.ok(downgrade.unassignedTasks>0,"the membership writer must unassign the demoted editor's work itself");
+  assert.equal(downgrade.unassignedTasks,openHeld.length,"the membership writer unassigns exactly the demoted editor's assignments");
   assert.equal(fx.db.prepare("SELECT COUNT(*) AS n FROM tasks WHERE assignee_user_id=?").get(EDITOR).n,0);
+  assert.deepEqual(fx.db.prepare(`SELECT id FROM tasks WHERE id IN (${openHeld.map(()=>"?").join(",")}) AND assignee_user_id IS NULL ORDER BY id`).all(...openHeld).map(r=>r.id),openHeld,
+    "every unassigned task becomes Nepřiděleno (not reassigned to somebody else)");
   recheck(fx,"downgraded",[EDITOR],{tasks:["t_s1_95","t_s1_96"]});
   assert.deepEqual(idsOf(A.readScopedOffsetPage(EDITOR,"my-plan",100,0)).filter(id=>id.startsWith("t_s1")),[]);
   assert.ok(idsOf(A.readGlobalTaskPage(EDITOR,"shared",100,0)).includes("t_s1_03"),"a viewer still reads shared work");
+  for(const f of ALL_SCOPES)for(const v of ["active","hidden"])
+    assert.deepEqual(idsOf(must(A.readAttentionCandidatePage(EDITOR,f,v,NOW,TZ,100,0),`downgraded attention ${f}/${v}`)).filter(id=>id.startsWith("t_s1")),[],`downgraded editor keeps S1 work in Attention ${f}/${v}`);
+  for(const [p,sc] of VALID_BUNDLES.filter(([p])=>p!=="find"))
+    assert.deepEqual(idsOf(must(A.resolveContextBundle(EDITOR,bundleReq(p,sc)),`downgraded AI ${p}/${sc}`)).filter(id=>id.startsWith("t_s1")),[],`downgraded editor keeps S1 work in AI ${p}/${sc}`);
+  // detail channels follow the NEW (read-only) role: the viewer still reads the note, the project and its tasks
+  assert.ok(A.readAuthorizedNote(EDITOR,"n_s1_02"),"downgraded member still reads the shared note");
+  assert.ok(A.readAuthorizedProjectTasks(EDITOR,"p_s1_01",100,0)?.ok!==false,"downgraded member still reads the shared project");
+  assert.equal(A.previewAttentionCommand(EDITOR,"t_s1_07","deadline_overdue",OVERDUE,NOW),null,"no Attention CAS input after the downgrade");
   const asViewer=writerSet(fx,EDITOR,OWNER,{taskId:"t_s1_03",noteId:"n_s1_02",area:"a_s1"});
   for(const [name,run] of Object.entries(asViewer))assert.equal(run().ok,false,`downgraded editor still performs ${name}`);
   pushed=await deliver(fx,"downgraded");
@@ -902,6 +1025,10 @@ test("6. revocation transitions in sequence: every channel is re-checked after e
   const asRemoved=writerSet(fx,EDITOR,OWNER,{taskId:"t_s1_03",noteId:"n_s1_02",area:"a_s1"});
   for(const [name,run] of Object.entries(asRemoved))assert.equal(run().ok,false,`removed member still performs ${name}`);
   assert.deepEqual(A.readAuthorizedProjectTasks(EDITOR,"p_s1_01",100,0)?.ok??null,false);
+  assert.equal(A.readAuthorizedNote(EDITOR,"n_s1_02"),null,"removed member reads no note");
+  assert.deepEqual(A.readSharedTaskDetail(EDITOR,"t_s1_03"),{ok:false,reason:"unavailable"},"removed member reads no shared task");
+  for(const f of ALL_SCOPES)for(const v of ["active","hidden"])
+    assert.deepEqual(idsOf(must(A.readAttentionCandidatePage(EDITOR,f,v,NOW,TZ,100,0),`removed attention ${f}/${v}`)).filter(id=>id.startsWith("t_s1")),[],`removed member keeps S1 work in Attention ${f}/${v}`);
   pushed=await deliver(fx,"member removed");
   assert.deepEqual((pushed[EDITOR]??[]).filter(t=>t.startsWith("t_s1")),[]);
 
@@ -950,6 +1077,17 @@ const http=async(handler,pathAndQuery,cookie)=>{
   const text=await response.text();
   return {status:response.status,cache:response.headers.get("cache-control"),text,body:(()=>{try{return JSON.parse(text);}catch{return null;}})()};
 };
+const HTTP="AI_EXECUTIVE_TARGET_STAGING_HTTP_";
+const HTTP_FAMILIES=[[GLOBAL_INDEX,"/api/target-staging/global-index?scope=all"],
+  [ATTENTION,"/api/target-staging/attention?timeZone=UTC"],[NOTIFICATIONS,"/api/target-staging/notifications/settings"],
+  [NOTE_SYNC,"/api/target-staging/note-sync?areaId=a_s1&limit=100"],
+  [ATTENTION_PREVIEW,"/api/target-staging/attention/command?taskId=t_s1_07&ruleId=deadline_overdue&occurrenceOn="+OVERDUE]];
+const FLAG_FAMILIES=[
+  [GLOBAL_INDEX,HTTP_FAMILIES[0][1],[HTTP+"ENABLED",HTTP+"GLOBAL_COMBINED_ENABLED"]],
+  [ATTENTION,HTTP_FAMILIES[1][1],[HTTP+"ENABLED",HTTP+"ATTENTION_ENABLED"]],
+  [NOTIFICATIONS,HTTP_FAMILIES[2][1],[HTTP+"ENABLED",HTTP+"NOTIFICATIONS_ENABLED"]],
+  [NOTE_SYNC,HTTP_FAMILIES[3][1],[HTTP+"ENABLED",HTTP+"NOTES_ENABLED",HTTP+"NOTE_SYNC_ENABLED"]],
+  [ATTENTION_PREVIEW,HTTP_FAMILIES[4][1],[HTTP+"ENABLED",HTTP+"WRITE_ENABLED",HTTP+"ATTENTION_ENABLED",HTTP+"ATTENTION_WRITE_ENABLED"]]];
 test("8. HTTP spot checks: global index, attention, command preview, notifications and note-sync agree with the internal channels",async()=>{
   const fx=fixture();await armPush(fx);useStore(fx);
   const A=fx.authority,sessions=Object.fromEntries(ACTORS.map(u=>[u,session(fx,u)]));
@@ -1021,9 +1159,33 @@ test("8. HTTP spot checks: global index, attention, command preview, notificatio
   }
   // --- a missing / forged cookie and a disabled flag answer nothing either ---
   assert.equal((await http(GLOBAL_INDEX,"/api/target-staging/global-index?scope=all","session=forged")).status,401);
-  process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_GLOBAL_COMBINED_ENABLED="false";
-  try{assert.equal((await http(GLOBAL_INDEX,"/api/target-staging/global-index?scope=all",sessions[EDITOR].cookie)).status,404);}
-  finally{process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_GLOBAL_COMBINED_ENABLED="true";}
+  // the REAL cookie names, pinned as literals: renaming a cookie must not silently turn this into a no-cookie test
+  assert.equal(sessionCookieName,"ai_executive_session");
+  assert.equal(durable.TARGET_STAGING_SESSION_COOKIE,"lumi_target_staging_session");
+  const goodDurable=sessions[EDITOR].cookie.split("=")[1];
+  const forgedValues=["forged","x".repeat(64),"A".repeat(43),goodDurable.slice(0,-3)+"AAA","Zm9yZ2Vk.Zm9yZ2Vk",""];
+  for(const cookieName of ["ai_executive_session","lumi_target_staging_session"])
+    for(const value of forgedValues)
+      for(const [handler,url] of HTTP_FAMILIES){
+        const r=await http(handler,url,cookieName+"="+value);
+        assert.equal(r.status,401,`forged ${cookieName}=${value.slice(0,12)}... on ${url} answered ${r.status}`);
+        assert.deepEqual(foundTokens(fx,r.text),[],`forged cookie on ${url} carries content`);
+      }
+  // a durable cookie value presented under the OTHER cookie name authenticates nothing either
+  for(const [handler,url] of HTTP_FAMILIES)
+    assert.equal((await http(handler,url,"ai_executive_session="+goodDurable)).status,401,`durable token under the owner cookie name on ${url}`);
+  // every family answers one uniform 404 per flag that gates it (the master HTTP flag included), with a VALID session
+  for(const [handler,url,flags] of FLAG_FAMILIES)
+    for(const flag of flags){
+      const saved=process.env[flag];process.env[flag]="false";
+      try{
+        const r=await http(handler,url,sessions[EDITOR].cookie);
+        assert.equal(r.status,404,`${url}: flag ${flag}=false still answered ${r.status}`);
+        assert.deepEqual(foundTokens(fx,r.text),[],`${url}: disabled family carries content`);
+      }finally{process.env[flag]=saved;}
+    }
+  for(const [handler,url] of HTTP_FAMILIES)
+    assert.equal((await http(handler,url,sessions[EDITOR].cookie)).status,200,`${url}: flags restored, the family answers again`);
 });
 
 // ------------------------------------------ cleanup ------------------------------------------
