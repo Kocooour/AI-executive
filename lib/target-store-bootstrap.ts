@@ -749,12 +749,12 @@ CREATE TABLE personal_attention_device_deliveries (
   target_id TEXT NOT NULL,
   status TEXT NOT NULL CHECK(status IN ('reserved','unknown','sent','failed','gone')),
   attempts INTEGER NOT NULL CHECK(typeof(attempts)='integer' AND attempts BETWEEN 0 AND 3),
-  CHECK((status IN ('reserved','unknown')) = (attempts=0)),
   last_attempt_at_ms INTEGER NOT NULL CHECK(typeof(last_attempt_at_ms)='integer'
     AND last_attempt_at_ms > 0 AND last_attempt_at_ms <= 9007199254740991),
   PRIMARY KEY(user_id,delivery_key,target_id),
   FOREIGN KEY(user_id,delivery_key) REFERENCES personal_attention_deliveries(user_id,delivery_key) ON DELETE CASCADE,
-  FOREIGN KEY(user_id,target_id) REFERENCES personal_push_targets(user_id,target_id)
+  FOREIGN KEY(user_id,target_id) REFERENCES personal_push_targets(user_id,target_id),
+  CHECK((status IN ('reserved','unknown')) = (attempts=0))
 ) WITHOUT ROWID;
 CREATE TRIGGER personal_attention_device_insert_guard BEFORE INSERT ON personal_attention_device_deliveries
 WHEN EXISTS(SELECT 1 FROM personal_attention_device_deliveries WHERE user_id=NEW.user_id
