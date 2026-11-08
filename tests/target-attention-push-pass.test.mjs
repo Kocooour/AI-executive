@@ -103,7 +103,7 @@ function sender(behave=()=> "sent"){
     return behave(userId,targetId,payload,calls.length);
   }};
 }
-const run=(fx,s,nowMs=NOW)=>fx.authority.runAttentionPushPass(nowMs,s);
+const run=(fx,s,nowMs=NOW,clock)=>fx.authority.runAttentionPushPass(nowMs,s,clock);
 const ownerOfTarget=(fx,id)=>fx.db.prepare(
   "SELECT user_id FROM personal_push_targets WHERE target_id=?").get(id)?.user_id;
 const ok=fx=>assert.deepEqual(preflight(fx),{ok:true,mode:"r2-model",issues:[]});
@@ -531,4 +531,77 @@ test("review fixes: identities beyond the per-pass cap rotate instead of starvin
   await run(fx,sender(),NOW+60_000);
   for(const who of ids)if(key(who))served.add(who);
   assert.equal(served.size,ids.length,"after two rotated passes all identities were baselined");
+});
+
+test("issue #326: recovering a committed sent device preserves the 24-hour limit",async()=>{
+  const fx=fixture();
+  task(fx,"alice","baseline");const target=register(fx,"alice","d");
+  enable(fx,"alice",{dailyLimit:1});await run(fx,sender());
+  const interrupted=task(fx,"alice","crashed delivery","2026-11-02");
+  const key=targetAttentionDeliveryKey("deadline_overdue",interrupted,"2026-11-02");
+  const attempted=NOW-19*60_000;
+  fx.db.prepare(`INSERT INTO personal_attention_deliveries
+    (user_id,delivery_key,task_id,rule_id,occurrence_on,status,attempts,last_attempt_at_ms)
+    VALUES ('alice',?,?,'deadline_overdue','2026-11-02','pending',1,?)`)
+    .run(key,interrupted,NOW-20*60_000);
+  fx.db.prepare(`INSERT INTO personal_attention_device_deliveries
+    (user_id,delivery_key,target_id,status,attempts,last_attempt_at_ms)
+    VALUES ('alice',?,?,'sent',1,?)`).run(key,target,attempted);
+  task(fx,"alice","fresh but capped","2026-11-02");
+  const s=sender();const result=await run(fx,s);
+  assert.equal(s.calls.length,0,"already delivered notification consumes daily limit");
+  assert.equal(result.held.daily_limit,1);
+  const recovered=rows(fx,"alice").find(r=>r.task_id===interrupted);
+  assert.equal(recovered.status,"sent");
+  assert.equal(recovered.sent_at_ms,attempted,"use durable send time, not recovery time");
+  await run(fx,s,NOW+HOUR);
+  assert.equal(s.calls.length,0,"recovery must not duplicate the successful device");
+  ok(fx);
+});
+
+test("issue #326: quiet-hour boundary defers remaining device without re-sending first",async()=>{
+  const fx=fixture();
+  task(fx,"alice","baseline");
+  const d1=register(fx,"alice","d1"),d2=register(fx,"alice","d2");
+  enable(fx,"alice",{timeZone:"Europe/Prague"});
+  const justBefore=Q-2_000;
+  await run(fx,sender(),justBefore);
+  const id=task(fx,"alice","split delivery","2026-11-02");
+  let current=justBefore;
+  const first=sender(()=>{current=Q+1_000;return "sent";});
+  await run(fx,first,justBefore,()=>current);
+  assert.equal(first.calls.length,1,"second device cannot start inside quiet hours");
+  assert.equal(rows(fx,"alice").find(r=>r.task_id===id).status,"partial");
+  const firstTarget=first.calls[0].targetId;
+  const morning=Date.UTC(2026,10,6,7,30);
+  const retry=sender();await run(fx,retry,morning,()=>morning);
+  assert.deepEqual(retry.calls.map(c=>c.targetId),
+    [[d1,d2].find(d=>d!==firstTarget)],"only the missed device is retried");
+  assert.equal(rows(fx,"alice").find(r=>r.task_id===id).status,"sent");
+  assert.deepEqual(devices(fx,"alice").map(r=>r.status),["sent","sent"]);
+  ok(fx);
+});
+
+test("issue #326: snoozing after claim but before first send releases the occurrence",async()=>{
+  const fx=fixture();
+  task(fx,"alice","baseline");register(fx,"alice","d");enable(fx,"alice");
+  await run(fx,sender());
+  task(fx,"alice","first","2026-11-01");
+  const snoozed=task(fx,"alice","snoozed before send","2026-11-02");
+  const s=sender((user,target,payload,n)=>{
+    if(n===1)fx.db.prepare(`INSERT INTO personal_attention_states
+      (user_id,task_id,rule_id,occurrence_on,state,snoozed_until_ms)
+      VALUES ('alice',?,'deadline_overdue','2026-11-02','snoozed',?)`)
+      .run(snoozed,NOW+HOUR);
+    return "sent";
+  });
+  await run(fx,s);
+  assert.equal(s.calls.length,1,"no push during snooze");
+  assert.equal(rows(fx,"alice").some(r=>r.task_id===snoozed),false,
+    "unsent claim is released instead of becoming permanently undelivered");
+  const after=sender();await run(fx,after,NOW+2*HOUR);
+  assert.deepEqual(after.calls.map(c=>c.payload.title),["snoozed before send"]);
+  assert.equal(rows(fx,"alice").find(r=>r.task_id===snoozed).status,"sent");
+  assert.equal(s.calls.length,1,"previously sent occurrence is not duplicated");
+  ok(fx);
 });
