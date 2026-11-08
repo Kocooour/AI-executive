@@ -371,3 +371,27 @@ test("write/receipt bodies are bounded",async()=>{
     ruleId:"deadline_overdue",occurrenceOn:"2026-11-01"},recorder(big)),
     {status:"invalid_response"});
 });
+
+test("PR #328: accept all backend-valid nonempty IDs in a bounded Attention read",async()=>{
+  const longId="task-"+"ž".repeat(600);
+  const longArea="area-"+"x".repeat(900);
+  const longProject="project-"+"y".repeat(900);
+  const row=item(longId,{
+    attentionKey:KEY,title:"Valid long ID task",
+    areaId:longArea,projectId:longProject,
+  });
+  const data=pageBody([row]);
+  const parsed=parseAttentionPage(data,params);
+  assert.ok(parsed,"the server accepts these nonempty ID strings");
+  assert.equal(parsed.items[0].taskId,longId);
+  assert.equal(parsed.items[0].areaId,longArea);
+  assert.equal(parsed.items[0].projectId,longProject);
+  const fetcher=recorder(()=>json(data));
+  assert.equal((await fetchAttentionPage(params,fetcher)).status,"ok");
+  // The server's read contract also permits nonempty IDs containing control
+  // characters. The reader must not substitute the stricter mutation policy.
+  assert.ok(parseAttentionPage(pageBody([item("a\\nb",{
+    attentionKey:KEY,areaId:"area\\nwith-linebreak",projectId:"project\\twith-tab",
+  })]),params));
+  assert.equal(parseAttentionPage(pageBody([item("",{attentionKey:KEY})]),params),null);
+});

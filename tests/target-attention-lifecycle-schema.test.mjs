@@ -76,7 +76,7 @@ const planEpoch=(db,who)=>db.prepare(
 const OVER="deadline_overdue",SOON="deadline_soon",PLAN="planned_date_passed";
 
 test("v23 is fresh-only (v22 attention schema retained); every identity gets an independent attention epoch",()=>{
-  assert.equal(TARGET_STORE_SCHEMA_VERSION,24);
+  assert.equal(TARGET_STORE_SCHEMA_VERSION,25);
   assert.equal(TARGET_STAGING_MAX_ATTENTION_STATES,4096);
   assert.ok(TARGET_SCHEMA_SQL.includes("personal_attention_state_capacity"));
   assert.ok(TARGET_SCHEMA_SQL.includes("(SELECT COUNT(*) FROM personal_attention_states) >= 4096"));

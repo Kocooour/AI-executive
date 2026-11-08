@@ -9,7 +9,7 @@ osobního plánu ([R2D-TASK-PERSONAL-WHEN-WRITER.md](R2D-TASK-PERSONAL-WHEN-WRIT
 `TargetStagingSessionAuthority.changeAttentionLifecycle(writeSession, command,
 durableSessionTokenHash?)` provádí jeden atomický `snooze | dismiss | restore`
 pouze pro **aktuálně ověřeného aktéra**; aktér se v těle nezadává.
-Přesně jedenáct údajů:
+Přesně dvanáct údajů:
 
 - `commandId` (UUID v1–v8), `taskId`,
 - `ruleId` (`deadline_overdue | deadline_soon | planned_date_passed`),
