@@ -143,9 +143,35 @@ function phase1(store:TargetStagingReadStore,user:string,view:TargetNotification
       .get(user) as {revision:number}|undefined;
     if(!att||att.revision!==attentionEpoch)return {kind:"skip"};
     let changes=0;
-    changes+=Number(db.prepare(`UPDATE personal_attention_deliveries SET status='undelivered'
+    // Recover each interrupted claim from durable per-device results. A committed
+    // "sent" must remain in the rolling 24 h budget even if finalisation crashed.
+    // An untouched pending claim cannot be safely retried (the sender may have
+    // accepted it just before the process died), so it remains undelivered.
+    const stale=db.prepare(`SELECT delivery_key AS k FROM personal_attention_deliveries
       WHERE user_id=? AND status='pending' AND last_attempt_at_ms<?`)
-      .run(user,nowMs-TARGET_PUSH_PASS_STALE_PENDING_MS).changes);
+      .all(user,nowMs-TARGET_PUSH_PASS_STALE_PENDING_MS) as {k:string}[];
+    for(const {k} of stale){
+      const sent=db.prepare(`SELECT MIN(last_attempt_at_ms) AS at
+        FROM personal_attention_device_deliveries
+        WHERE user_id=? AND delivery_key=? AND status='sent'`)
+        .get(user,k) as {at:number|null};
+      let result:string;
+      if(sent.at!==null){
+        const unfinished=db.prepare(`SELECT 1 FROM personal_push_targets t
+          LEFT JOIN personal_attention_device_deliveries x ON
+            x.user_id=t.user_id AND x.target_id=t.target_id AND x.delivery_key=?
+          WHERE t.user_id=? AND t.revoked_at_ms IS NULL
+            AND (x.target_id IS NULL OR (x.status='failed' AND x.attempts<?))
+          LIMIT 1`).get(k,user,MAX);
+        result=unfinished?"partial":"sent";
+      }else result="undelivered";
+      const change=db.prepare(`UPDATE personal_attention_deliveries SET status=?,
+        sent_at_ms=?,last_attempt_at_ms=max(last_attempt_at_ms,?)
+        WHERE user_id=? AND delivery_key=? AND status='pending'`)
+        .run(result,sent.at,nowMs,user,k).changes;
+      if(change!==1)return null;
+      changes++;
+    }
     const announceable=items.filter(announceableTargetAttentionCandidate);
     const keyOf=(c:AttentionCandidate)=>targetAttentionDeliveryKey(c.ruleId,c.taskId,c.relevantOn);
     const insert=(c:AttentionCandidate,status:"baseline"|"pending")=>{
@@ -230,9 +256,9 @@ function phase1(store:TargetStagingReadStore,user:string,view:TargetNotification
 }
 
 interface DeliveryState{
-  status:string;sentAt:number|null;settingsOn:boolean;
+  status:string;sentAt:number|null;settingsOn:boolean;quiet:boolean;
   /** The actor snoozed (unexpired) or dismissed this occurrence meanwhile. */
-  hidden:boolean;
+  hidden:"snoozed"|"dismissed"|null;
   targets:string[];devices:Map<string,{status:string;attempts:number}>;
 }
 /** Short snapshot read: delivery row, own live targets, own device rows, settings still on. */
@@ -245,10 +271,12 @@ function readDeliveryState(store:TargetStagingReadStore,user:string,key:string,
         taskId:string;ruleId:string;occurrenceOn:string}|undefined;
     if(!d)return null;
     // A snooze/dismiss made during the pass must stop further devices too.
-    const hidden=!!db.prepare(`SELECT 1 FROM personal_attention_states WHERE user_id=?
+    const hiddenRow=db.prepare(`SELECT state FROM personal_attention_states WHERE user_id=?
       AND task_id=? AND rule_id=? AND occurrence_on=? AND
       (state='dismissed' OR (state='snoozed' AND snoozed_until_ms > ?))`)
-      .get(user,d.taskId,d.ruleId,d.occurrenceOn,nowMs);
+      .get(user,d.taskId,d.ruleId,d.occurrenceOn,nowMs) as
+        {state:"snoozed"|"dismissed"}|undefined;
+    const hidden=hiddenRow?.state??null;
     const s=readNotificationSettingsInSnapshot(db,user);
     const targets=(db.prepare(`SELECT target_id AS id FROM personal_push_targets
       WHERE user_id=? AND revoked_at_ms IS NULL ORDER BY created_at_ms,target_id`)
@@ -257,8 +285,12 @@ function readDeliveryState(store:TargetStagingReadStore,user:string,key:string,
       FROM personal_attention_device_deliveries WHERE user_id=? AND delivery_key=?`)
       .all(user,key) as {id:string;status:string;attempts:number}[])
       .map(r=>[r.id,{status:r.status,attempts:r.attempts}]));
-    return {status:d.status,sentAt:d.sentAt,settingsOn:!!s&&s.attentionPush&&!s.paused,hidden,
-      targets,devices};
+    // Always use the latest stored zone/window, never only the pass-start check.
+    let quiet=true;
+    try{if(s)quiet=inTargetQuietHours(nowMs,s.timeZone,s.quietStart,s.quietEnd);}
+    catch{quiet=true;}
+    return {status:d.status,sentAt:d.sentAt,settingsOn:!!s&&s.attentionPush&&!s.paused,
+      quiet,hidden,targets,devices};
   });
 }
 
@@ -291,8 +323,27 @@ function recordDevice(store:TargetStagingReadStore,user:string,key:string,target
   })===true;
 }
 
-/** Legacy-style finalisation; returns true when this call delivered the item to its FIRST device. */
-function finalize(store:TargetStagingReadStore,user:string,work:Work,nowMs:number):boolean {
+/** A known-unsent claim can be released for a quiet window or snooze without
+ * consuming the occurrence. Never release a row after ANY device attempt. */
+function releaseUnsentClaim(store:TargetStagingReadStore,user:string,work:Work):boolean {
+  if(work.mode!=="claimed")return false;
+  return writeTxn<boolean>(store,ctx=>{
+    const {db}=ctx;
+    const removed=db.prepare(`DELETE FROM personal_attention_deliveries
+      WHERE user_id=? AND delivery_key=? AND status='pending'
+        AND NOT EXISTS(SELECT 1 FROM personal_attention_device_deliveries
+          WHERE user_id=? AND delivery_key=?)`)
+      .run(user,work.key,user,work.key).changes;
+    if(removed!==1)return false;
+    journal(ctx,db,user,OP_FINAL,1);
+    return true;
+  })===true;
+}
+
+/** Finalisation preserves a partially sent delivery if a quiet-hour boundary
+ * left a live device unattempted. Ordinary completions do not create backlog. */
+function finalize(store:TargetStagingReadStore,user:string,work:Work,nowMs:number,
+  allowMissing=false):boolean {
   return writeTxn<boolean>(store,ctx=>{
     const {db}=ctx;
     const d=db.prepare(`SELECT status,sent_at_ms AS sentAt FROM personal_attention_deliveries
@@ -306,7 +357,12 @@ function finalize(store:TargetStagingReadStore,user:string,work:Work,nowMs:numbe
       WHERE x.user_id=? AND x.delivery_key=?`).all(user,work.key) as
       {status:string;attempts:number;live:number}[];
     const delivered=devices.some(r=>r.status==="sent");
-    const retryable=devices.some(r=>r.status==="failed"&&r.attempts<MAX&&r.live===1);
+    const missing=allowMissing&&!!db.prepare(`SELECT 1 FROM personal_push_targets t
+      LEFT JOIN personal_attention_device_deliveries x ON x.user_id=t.user_id
+        AND x.target_id=t.target_id AND x.delivery_key=?
+      WHERE t.user_id=? AND t.revoked_at_ms IS NULL AND x.target_id IS NULL LIMIT 1`)
+      .get(work.key,user);
+    const retryable=missing||devices.some(r=>r.status==="failed"&&r.attempts<MAX&&r.live===1);
     let sql:string;let args:unknown[];
     if(delivered){
       sql=`UPDATE personal_attention_deliveries SET status=?,sent_at_ms=COALESCE(sent_at_ms,?),
@@ -330,21 +386,33 @@ function finalize(store:TargetStagingReadStore,user:string,work:Work,nowMs:numbe
 }
 
 async function deliver(store:TargetStagingReadStore,sender:TargetPushSender,user:string,
-  work:Work,nowMs:number):Promise<boolean> {
-  const first=readDeliveryState(store,user,work.key,nowMs);
+  work:Work,clock:()=>number):Promise<boolean> {
+  const at=()=>{const n=clock();return Number.isSafeInteger(n)&&n>0?n:null;};
+  const initial=at();
+  if(initial===null)return false;
+  const first=readDeliveryState(store,user,work.key,initial);
   const expected=work.mode==="claimed"?"pending":"partial";
   if(!first||first.status!==expected)return false;
-  if(first.hidden)return finalize(store,user,work,nowMs);
+  const stop=(state:DeliveryState,nowMs:number):boolean=>{
+    if((state.hidden==="snoozed"||state.quiet)&&state.devices.size===0&&
+      releaseUnsentClaim(store,user,work))return false;
+    // Dismissed means finished; a quiet boundary means the unsent devices
+    // remain eligible after the window. No already-sent device is retried.
+    return finalize(store,user,work,nowMs,state.quiet&&state.hidden===null&&state.settingsOn);
+  };
+  if(first.hidden||first.quiet||!first.settingsOn)return stop(first,initial);
   const payload=targetAttentionPushPayload(work.candidate);
   if(!payload)return false;
   for(const target of first.targets){
     const known=first.devices.get(target);
-    if(known?(known.status!=="failed"||known.attempts>=MAX):work.mode==="retry")continue;
-    // Pre-send re-check: reconcile deletes the row when access was lost, the task
-    // was completed or its deadline changed; settings must still allow push.
-    const state=readDeliveryState(store,user,work.key,nowMs);
-    if(!state||state.status!==expected||!state.settingsOn||state.hidden)
-      return finalize(store,user,work,nowMs);
+    if(known&&(known.status!=="failed"||known.attempts>=MAX))continue;
+    // Pre-send live check after *every* previous sender: identity, target,
+    // lifecycle and quiet window all use a fresh snapshot and a fresh clock.
+    const current=at();
+    if(current===null)return false;
+    const state=readDeliveryState(store,user,work.key,current);
+    if(!state||state.status!==expected)return false;
+    if(!state.settingsOn||state.hidden||state.quiet)return stop(state,current);
     if(!state.targets.includes(target))continue;
     const device=state.devices.get(target);
     if(device&&(device.status!=="failed"||device.attempts>=MAX))continue;
@@ -354,9 +422,11 @@ async function deliver(store:TargetStagingReadStore,sender:TargetPushSender,user
       const r=await withTimeout(sender.sendTo(user,target,{...payload}),TARGET_PUSH_SEND_TIMEOUT_MS);
       result=r==="sent"||r==="gone"?r:"failed";
     }catch{result="failed";}
-    recordDevice(store,user,work.key,target,result,nowMs);
+    const finished=at();
+    if(finished===null||!recordDevice(store,user,work.key,target,result,finished))return false;
   }
-  return finalize(store,user,work,nowMs);
+  const completed=at();
+  return completed===null?false:finalize(store,user,work,completed);
 }
 
 /**
@@ -368,6 +438,8 @@ export async function runTargetAttentionPushPass(
   store:TargetStagingReadStore,input:{
     nowMs:number;sender:TargetPushSender;
     credentialFor:(userId:string)=>TargetStagingReadCredential|null;
+    /** Injectable monotonic pass clock for deterministic boundary tests. */
+    clock?:()=>number;
   },
 ):Promise<TargetAttentionPushPassSummary> {
   const summary:TargetAttentionPushPassSummary={users:0,sent:0,
@@ -376,6 +448,10 @@ export async function runTargetAttentionPushPass(
   passRunning=true;
   try{
     const {nowMs,sender}=input;
+    const started=Date.now();
+    // Anchor elapsed wall-clock time to the injected pass instant. Existing
+    // callers can still use a simulated nowMs; real passes track elapsed time.
+    const clock=input.clock??(()=>nowMs+Math.floor(Math.max(0,Date.now()-started)/1000)*1000);
     if(!Number.isSafeInteger(nowMs)||nowMs<=0||!sender||
         typeof sender.sendTo!=="function")return summary;
     const listing=readPreflightedStoreSnapshot<{views:[string,TargetNotificationSettingsView][];off:number;deferred:number}>(
@@ -411,7 +487,7 @@ export async function runTargetAttentionPushPass(
         if(plan.kind==="baseline")continue;
         if(plan.held)summary.held[plan.held]++;
         for(const work of plan.work){
-          if(await deliver(store,sender,user,work,nowMs))summary.sent++;
+          if(await deliver(store,sender,user,work,clock))summary.sent++;
         }
       }catch{/* one identity never stops the others; nothing is leaked */}
     }
