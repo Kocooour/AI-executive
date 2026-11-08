@@ -722,9 +722,11 @@ export function inspectIsolatedTargetStore(
           LEFT JOIN personal_attention_deliveries d ON d.user_id=x.user_id AND d.delivery_key=x.delivery_key
           LEFT JOIN personal_push_targets t ON t.user_id=x.user_id AND t.target_id=x.target_id
           WHERE d.user_id IS NULL OR t.user_id IS NULL OR
-            x.status NOT IN ('reserved','unknown','sent','failed','gone') OR
+            x.status NOT IN ('reserved','inflight','unknown','sent','failed','gone') OR
             typeof(x.attempts)<>'integer' OR x.attempts < 0 OR x.attempts > 3 OR
-            ((x.status IN ('reserved','unknown')) <> (x.attempts=0)) OR
+            NOT ((x.status='reserved' AND x.attempts=0) OR
+              (x.status IN ('inflight','unknown') AND x.attempts BETWEEN 0 AND 2) OR
+              (x.status IN ('sent','failed','gone') AND x.attempts BETWEEN 1 AND 3)) OR
             typeof(x.last_attempt_at_ms)<>'integer' OR x.last_attempt_at_ms <= 0`) !== 0;
       if (!bad) {
         // The key must be the deterministic hash of its own rule/task/occurrence.
