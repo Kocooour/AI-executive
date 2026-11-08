@@ -57,18 +57,43 @@ interface RateWindow {
 
 const rateWindows = new Map<string, RateWindow>();
 
+const UNKNOWN_CLIENT = "proxy-unknown";
+const IPV4 = /^(?:(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.){3}(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)$/;
+
+function canonicalIp(value: string) {
+  const candidate = value.trim().toLowerCase();
+  if (!candidate || candidate.length > 64) return null;
+  if (IPV4.test(candidate)) return candidate;
+  if (!candidate.includes(":") || !/^[0-9a-f:.]+$/.test(candidate)) return null;
+  try {
+    // WHATWG URL parsing canonicalizes IPv6 text, so equivalent spellings of
+    // one address cannot occupy different buckets.
+    const host = new URL(`http://[${candidate}]/`).hostname.slice(1, -1);
+    const mapped = /^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/.exec(host);
+    if (mapped) {
+      const high = parseInt(mapped[1], 16);
+      const low = parseInt(mapped[2], 16);
+      return `${high >> 8}.${high & 255}.${low >> 8}.${low & 255}`;
+    }
+    return host;
+  } catch {
+    return null;
+  }
+}
+
 export function trustedClientIdentity(request: Request) {
-  // The application listens on loopback and is reached through Tailscale
-  // Serve, which owns the forwarding headers. Never use user-agent or an
-  // arbitrary header value as a rate-limit key.
-  const candidate = (
-    request.headers.get("x-forwarded-for")?.split(",", 1)[0] ||
-    request.headers.get("x-real-ip") ||
-    "proxy-unknown"
-  ).trim();
-  return candidate.length <= 64 && /^[0-9a-f:.]+$/i.test(candidate)
-    ? candidate.toLowerCase()
-    : "proxy-unknown";
+  // Production listens on 127.0.0.1 and is reached only through Tailscale
+  // Serve. Serve *replaces* X-Forwarded-For with the tailnet source address
+  // (ipn/ipnlocal/serve.go: Header.Set("X-Forwarded-For", SrcAddr)), and
+  // `next start` fills the header from the socket only when it is absent.
+  // Proxies that append instead of replacing put the address they observed
+  // last, so only the LAST hop is proxy-controlled: earlier entries (and
+  // X-Real-IP, which Serve never sets) are client-supplied and must not
+  // select a rate-limit bucket. Anything unparsable shares one bucket.
+  const forwarded = request.headers.get("x-forwarded-for");
+  if (!forwarded) return UNKNOWN_CLIENT;
+  const hops = forwarded.split(",");
+  return canonicalIp(hops[hops.length - 1]) ?? UNKNOWN_CLIENT;
 }
 
 export function enforceRateLimit(
