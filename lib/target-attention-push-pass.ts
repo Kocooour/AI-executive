@@ -334,7 +334,13 @@ function markDeviceInflight(store:TargetStagingReadStore,user:string,key:string,
         WHERE t.user_id=? AND t.target_id=? AND t.revoked_at_ms IS NULL)`)
       .run(nowMs,user,key,target,MAX,user,key,expected,user,target).changes;
     if(changed!==1)return false;
-    journal(ctx,db,user,OP_DEVICE,1);
+    // The parent timeout measures lack of progress, not time since the initial
+    // cohort reservation: a pass with many devices can exceed 15 minutes.
+    if(db.prepare(`UPDATE personal_attention_deliveries SET
+      last_attempt_at_ms=max(last_attempt_at_ms,?)
+      WHERE user_id=? AND delivery_key=? AND status=?`)
+      .run(nowMs,user,key,expected).changes!==1)return false;
+    journal(ctx,db,user,OP_DEVICE,2);
     return true;
   })===true;
 }
@@ -400,6 +406,9 @@ function finalize(store:TargetStagingReadStore,user:string,work:Work,nowMs:numbe
       JOIN personal_push_targets t ON t.user_id=x.user_id AND t.target_id=x.target_id
       WHERE x.user_id=? AND x.delivery_key=?`).all(user,work.key) as
       {status:string;attempts:number;live:number}[];
+    // Another pass/process may still have an active send for this occurrence.
+    // Never finalise it as failed/sent while that device is in flight.
+    if(devices.some(r=>r.status==="inflight"))return false;
     const delivered=devices.some(r=>r.status==="sent");
     // A user-hidden occurrence is settled, not queued again after restore.
     const retryable=!hidden&&devices.some(r=>r.live===1&&(r.status==="reserved"||
