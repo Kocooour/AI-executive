@@ -81,9 +81,10 @@ function exact(x:Record<string,unknown>,expected:readonly string[]):boolean{
 const epoch=(x:unknown):x is number=>
   typeof x==="number"&&Number.isSafeInteger(x)&&x>=0;
 const optionalEpoch=(x:unknown):x is number|null=>x===null||epoch(x);
-function opaqueId(x:unknown):x is string{
-  return typeof x==="string"&&x.length>0&&x!=="."&&x!==".."&&
-    encoder.encode(x).byteLength<=512&&!/[\u0000-\u001f\u007f]/.test(x);
+/** Read DTO identifiers mirror server's nonempty-string checks. Unlike PATCH,
+ * this is not an input size policy: the entire response is already byte-bounded. */
+function serverId(x:unknown):x is string{
+  return typeof x==="string"&&x.length>0;
 }
 /** Same domain as the server's task id check (bounded, no NUL, well-formed). */
 export function validAttentionTaskId(x:unknown):x is string{
@@ -139,8 +140,8 @@ function parseItem(
   const shared=raw.areaKind==="shared";
   if(!exact(raw,(ITEM_KEYS+(shared?",assignedToMe":"")).split(",")))return null;
   const t=raw;
-  if(t.subjectType!=="task"||!opaqueId(t.taskId)||typeof t.title!=="string"||
-    !opaqueId(t.areaId)||!(t.projectId===null||opaqueId(t.projectId))||
+  if(t.subjectType!=="task"||!serverId(t.taskId)||typeof t.title!=="string"||
+    !serverId(t.areaId)||!(t.projectId===null||serverId(t.projectId))||
     (t.areaKind!=="private"&&t.areaKind!=="shared")||
     (shared&&t.assignedToMe!==true)||
     (p.areaFilter==="personal"&&shared)||(p.areaFilter==="shared"&&!shared)||
