@@ -79,8 +79,11 @@ neexportovaným klíčem. Jeden průchod najednou na proces (druhý vrací
    `gone` revokuje právě tento cíl guardovaným UPDATE. Pád před `inflight`
    ponechá `reserved` a dovolí pozdější doručení; pád během `inflight`
    může znamenat skutečně odeslanou zprávu, proto se stav uzavře jako
-   `unknown` bez opakování (prevence duplicit).
-5. **Dokončení** jako legacy: doručeno a zbývá opakovatelné zařízení → `partial`,
+   `unknown` bez opakování (prevence duplicit). Při zápisu `inflight` se
+   také obnoví čas poslední aktivity parent doručení, takže délka průchodu přes
+   mnoho zařízení sama nezpůsobí falešné zotavení jako po pádu.
+5. **Dokončení** nikdy neuzavře výskyt, který má ještě zařízení `inflight`
+   (může jít o současně běžící jiný proces). Jinak jako legacy: doručeno a zbývá opakovatelné zařízení → `partial`,
    doručeno → `sent` (`sent_at` se zapíše jednou), žádné zařízení → `undelivered`
    (zařízení přidané později nedostane backlog), nikdo nedostal → `failed`
    (attempts; po vyčerpání pokusů se vzdá). Respektují se v23 guardy
