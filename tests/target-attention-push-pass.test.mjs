@@ -794,3 +794,33 @@ test("review #331: lowering daily limit during pass drops unsent claims without 
     .map(d=>d.status).sort(),["sent","sent"]);
   ok(fx);
 });
+
+
+test("review #331: another in-flight device keeps parent pending until its outcome is known",async()=>{
+  const fx=fixture();
+  task(fx,"alice","baseline");
+  const d1=register(fx,"alice","d1"),d2=register(fx,"alice","d2");
+  enable(fx,"alice");await run(fx,sender());
+  const id=task(fx,"alice","cross-worker active device","2026-11-02");
+  const key=targetAttentionDeliveryKey("deadline_overdue",id,"2026-11-02");
+  const s=sender((user,target,payload,n)=>{
+    if(n===1){
+      const other=target===d1?d2:d1;
+      // Model a second worker that already began an external send.
+      fx.db.prepare(`UPDATE personal_attention_device_deliveries
+        SET status='inflight' WHERE user_id='alice' AND delivery_key=?
+        AND target_id=? AND status='reserved'`).run(key,other);
+    }
+    return "sent";
+  });
+  await run(fx,s);
+  assert.equal(s.calls.length,1);
+  assert.equal(rows(fx,"alice").find(r=>r.task_id===id).status,"pending",
+    "an active peer cannot be prematurely marked sent or failed");
+  assert.deepEqual(devices(fx,"alice").map(d=>d.status).sort(),["inflight","sent"]);
+  const resumed=sender();await run(fx,resumed,NOW+HOUR);
+  assert.equal(resumed.calls.length,0,"unknown in-flight outcome is not sent again");
+  assert.equal(rows(fx,"alice").find(r=>r.task_id===id).status,"sent");
+  assert.deepEqual(devices(fx,"alice").map(d=>d.status).sort(),["sent","unknown"]);
+  ok(fx);
+});
