@@ -199,7 +199,7 @@ function phase1(store:TargetStagingReadStore,user:string,view:TargetNotification
       const run=()=>db.prepare(`INSERT INTO personal_attention_deliveries
         (user_id,delivery_key,task_id,rule_id,occurrence_on,status,attempts,last_attempt_at_ms)
         VALUES (?,?,?,?,?,?,?,?)`).run(user,keyOf(c),c.taskId,c.ruleId,c.relevantOn,
-        status,status==="pending"?1:0,nowMs).changes===1;
+        status,0,nowMs).changes===1;
       try{return run();}
       catch(error){
         // A candidate that lost access (or its deadline) between read and claim is
@@ -227,10 +227,19 @@ function phase1(store:TargetStagingReadStore,user:string,view:TargetNotification
       return {kind:"baseline"};
     }
     if(marker.value!==targetPushBaselineValue(user))return null; // corrupt marker: fail closed (preflight rejects it too)
-    const rows=db.prepare(
-      "SELECT delivery_key AS k,status,attempts FROM personal_attention_deliveries WHERE user_id=?"
-    ).all(user) as {k:string;status:string;attempts:number}[];
-    const handled=new Set(rows.filter(r=>!(r.status==="failed"&&r.attempts<MAX)).map(r=>r.k));
+    // A failed parent is retryable as long as an ORIGINAL live target has an
+    // untouched reservation or has fewer than MAX actual device attempts.
+    // Parent attempts are diagnostic; never discard reserved devices because
+    // other targets exhausted their individual retry budgets.
+    const rows=db.prepare(`SELECT d.delivery_key AS k,d.status,d.attempts,
+      EXISTS(SELECT 1 FROM personal_attention_device_deliveries x
+        JOIN personal_push_targets t ON t.user_id=x.user_id AND t.target_id=x.target_id
+        WHERE x.user_id=d.user_id AND x.delivery_key=d.delivery_key
+          AND t.revoked_at_ms IS NULL AND
+          (x.status='reserved' OR (x.status='failed' AND x.attempts<?))) AS retryable
+      FROM personal_attention_deliveries d WHERE d.user_id=?`
+    ).all(MAX,user) as {k:string;status:string;attempts:number;retryable:number}[];
+    const handled=new Set(rows.filter(r=>!(r.status==="failed"&&r.retryable===1)).map(r=>r.k));
     const partial=new Set(rows.filter(r=>r.status==="partial").map(r=>r.k));
     const since=targetAttentionWindowStartMs(nowMs);
     const sent=db.prepare(`SELECT COUNT(*) AS n FROM personal_attention_deliveries
@@ -248,11 +257,16 @@ function phase1(store:TargetStagingReadStore,user:string,view:TargetNotification
       if(!c||!eligible(db,user,c,nowMs,view.timeZone))continue;
       const prior=rows.find(r=>r.k===planned.deliveryKey);
       if(prior){
-        // failed (attempts < 3) -> pending again, attempts + 1
+        // Re-claiming a failed parent is not a send. Keep its attempt count;
+        // only markDeviceInflight increments it when a real send can begin.
         const upd=db.prepare(`UPDATE personal_attention_deliveries SET status='pending',
-          attempts=attempts+1,last_attempt_at_ms=max(last_attempt_at_ms,?)
-          WHERE user_id=? AND delivery_key=? AND status='failed' AND attempts<?`)
-          .run(nowMs,user,planned.deliveryKey,MAX).changes;
+          last_attempt_at_ms=max(last_attempt_at_ms,?)
+          WHERE user_id=? AND delivery_key=? AND status='failed' AND EXISTS (
+            SELECT 1 FROM personal_attention_device_deliveries x
+            JOIN personal_push_targets t ON t.user_id=x.user_id AND t.target_id=x.target_id
+            WHERE x.user_id=? AND x.delivery_key=? AND t.revoked_at_ms IS NULL
+              AND (x.status='reserved' OR (x.status='failed' AND x.attempts<?)))`)
+          .run(nowMs,user,planned.deliveryKey,user,planned.deliveryKey,MAX).changes;
         if(upd!==1)continue;
         changes++;
       }else{
@@ -334,12 +348,17 @@ function markDeviceInflight(store:TargetStagingReadStore,user:string,key:string,
         WHERE t.user_id=? AND t.target_id=? AND t.revoked_at_ms IS NULL)`)
       .run(nowMs,user,key,target,MAX,user,key,expected,user,target).changes;
     if(changed!==1)return false;
-    // The parent timeout measures lack of progress, not time since the initial
-    // cohort reservation: a pass with many devices can exceed 15 minutes.
+    const device=db.prepare(`SELECT attempts FROM personal_attention_device_deliveries
+      WHERE user_id=? AND delivery_key=? AND target_id=? AND status='inflight'`)
+      .get(user,key,target) as {attempts:number}|undefined;
+    if(!device)return false;
+    // Count only started sends, not claims or crash-recovery passes. The
+    // highest device attempt is a bounded diagnostic parent attempt counter.
+    // Refresh the parent heartbeat so a long multi-device pass is not stale.
     if(db.prepare(`UPDATE personal_attention_deliveries SET
-      last_attempt_at_ms=max(last_attempt_at_ms,?)
+      attempts=max(attempts,?),last_attempt_at_ms=max(last_attempt_at_ms,?)
       WHERE user_id=? AND delivery_key=? AND status=?`)
-      .run(nowMs,user,key,expected).changes!==1)return false;
+      .run(device.attempts+1,nowMs,user,key,expected).changes!==1)return false;
     journal(ctx,db,user,OP_DEVICE,2);
     return true;
   })===true;
