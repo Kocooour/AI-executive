@@ -50,7 +50,11 @@ import { bootstrapTargetStagingWitness } from "./target-staging-anchor-witness";
 // v23 (R2d.5d.1) adds identity-bound push foundation: per-user notification
 // settings (zone, quiet window, default-OFF), hashed device targets and a
 // per-user announcement ledger. No sender; older stores are rejected.
-export const TARGET_STORE_SCHEMA_VERSION = 24;
+// v25 reserves the original per-delivery target cohort atomically with a claim.
+// A reserved target is unattempted (attempts=0); a stale in-flight reservation
+// becomes unknown after a crash and MUST NOT be retried to avoid duplicates.
+// As with other schema revisions, old staging stores are intentionally rejected.
+export const TARGET_STORE_SCHEMA_VERSION = 25;
 /** Capacities of the v23 push foundation in a fresh isolated store. */
 export const TARGET_STAGING_MAX_PUSH_TARGETS = 4096;
 export const TARGET_STAGING_MAX_PUSH_TARGETS_PER_USER = 64;
@@ -743,8 +747,9 @@ CREATE TABLE personal_attention_device_deliveries (
   user_id TEXT NOT NULL,
   delivery_key TEXT NOT NULL,
   target_id TEXT NOT NULL,
-  status TEXT NOT NULL CHECK(status IN ('sent','failed','gone')),
-  attempts INTEGER NOT NULL CHECK(typeof(attempts)='integer' AND attempts BETWEEN 1 AND 3),
+  status TEXT NOT NULL CHECK(status IN ('reserved','unknown','sent','failed','gone')),
+  attempts INTEGER NOT NULL CHECK(typeof(attempts)='integer' AND attempts BETWEEN 0 AND 3),
+  CHECK((status IN ('reserved','unknown')) = (attempts=0)),
   last_attempt_at_ms INTEGER NOT NULL CHECK(typeof(last_attempt_at_ms)='integer'
     AND last_attempt_at_ms > 0 AND last_attempt_at_ms <= 9007199254740991),
   PRIMARY KEY(user_id,delivery_key,target_id),
@@ -761,7 +766,12 @@ WHEN EXISTS(SELECT 1 FROM personal_attention_device_deliveries WHERE user_id=NEW
 BEGIN SELECT RAISE(ABORT,'attention device delivery requires own delivery and live target'); END;
 CREATE TRIGGER personal_attention_device_update_guard BEFORE UPDATE ON personal_attention_device_deliveries
 WHEN NEW.user_id IS NOT OLD.user_id OR NEW.delivery_key IS NOT OLD.delivery_key
-  OR NEW.target_id IS NOT OLD.target_id OR OLD.status IN ('sent','gone')
+  OR NEW.target_id IS NOT OLD.target_id OR OLD.status IN ('sent','gone','unknown')
+  OR (OLD.status='reserved' AND NEW.status NOT IN ('sent','failed','gone','unknown'))
+  OR (OLD.status='failed' AND NEW.status NOT IN ('sent','failed','gone'))
+  OR (OLD.status='reserved' AND NEW.status='unknown' AND NEW.attempts<>0)
+  OR (OLD.status='reserved' AND NEW.status IN ('sent','failed','gone') AND NEW.attempts<>1)
+  OR (OLD.status='failed' AND NEW.attempts<>OLD.attempts+1)
   OR NEW.attempts < OLD.attempts OR NEW.last_attempt_at_ms < OLD.last_attempt_at_ms
 BEGIN SELECT RAISE(ABORT,'attention device delivery identity or transition invalid'); END;
 
