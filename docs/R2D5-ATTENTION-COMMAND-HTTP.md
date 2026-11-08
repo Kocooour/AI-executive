@@ -37,7 +37,9 @@ systémové soukromé Oblasti může obsahovat ID **vlastního** uživatele
 `replayed:true` z PATCH chápat jen jako potvrzení dřívějšího provedení
 příkazu, nikoli jako aktuální stav (po Undo může být položka znovu aktivní);
 409 `Revision conflict` záměrně nerozlišuje stale CAS, `not_active`,
-`unchanged` a konflikt idempotence — klient vždy načte nový preview.
+`unchanged` a konflikt idempotence — klient vždy načte nový preview. Odpověď 503
+na PATCH je **nejistá** (např. příznak vypnut až po commitu v childu):
+klient výsledek ověří přes `POST …/receipt` se stejným příkazem.
 Před odpovědí proběhne živá release bariéra:
 session, Area/policy, revize úkolu a `personalAttentionGuard` (epocha attention); stale je 404.
 
