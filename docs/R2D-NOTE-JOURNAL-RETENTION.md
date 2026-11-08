@@ -68,3 +68,12 @@ což stávající cesta mapuje na 409 `{"code":"resync_required"}`. Cursor přes
 `tests/target-note-journal-retention.test.mjs`: pravidla triggerů, podlaha per Oblast, nezávislé
 Oblasti, nepoužití `seq` znovu po úplné kompaci, uvolněná kapacita, cursor pod/na/nad podlahou přes
 HTTP, preflight a zfalšované podlahy, CLI (argumenty, horký journal, špatná generace).
+
+## Živá kontrola napříč kompakcí
+
+Živý `noteSyncGuard` (epoch, `contentRevision`, hlava) pořízený před kompakcí zůstává po ní
+platný, protože kompakce nemění obsah, `contentRevision` ani hlavu (hlava nikdy neklesne).
+Mění se jen to, které staré události jsou ještě k dispozici; klient pod podlahou na to narazí
+při dalším čtení (`409 resync_required`). Každá skutečná změna obsahu guard zneplatní.
+Padělané řádky žurnálu triggery samy nezastaví, ale preflight je na každém čtení odhalí
+(`note_sync_journal_invalid`).
