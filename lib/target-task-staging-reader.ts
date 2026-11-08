@@ -60,6 +60,11 @@ import {personalWhenReceiptKey,personalWhenReceiptDigest,
   validTargetStagingPersonalWhenCommand,type TargetStagingPersonalWhenCommand,
 } from "./target-personal-when-writer";
 import type { PersonalWhenPage, PersonalWhenWindow } from "./target-personal-when-read-model";
+import {readAuthorizedAttentionCommandPreview,attentionReceiptInSnapshot,
+  type AttentionCommandPreview,type AttentionReceiptResult} from "./target-attention-command-read";
+import {validTargetStagingAttentionLifecycleCommand,
+  type TargetStagingAttentionLifecycleCommand,type TargetAttentionLifecycleRuleId}
+  from "./target-attention-lifecycle-writer";
 import type { TemporalScope, TemporalStatus, TemporalTaskPage, TemporalTaskDetail, TemporalDueWindow, TemporalDueWindowPage } from "./target-task-temporal-read-model";
 import { readAuthorizedTargetNote } from "./target-note-access";
 import { readAuthorizedTargetNoteSyncPage, type TargetNoteSyncPage } from "./target-note-sync-read-model";
@@ -589,6 +594,47 @@ export function readPreflightedPersonalWhenReceipt(
       if(!actor)return denied();
       return personalWhenReceiptInSnapshot(
         db,actor,command,store.expectedRestoreGeneration);
+    },denied));
+}
+
+/** R2d.5c.2: actor-bound Attention lifecycle preview. One pinned snapshot holds
+ * the task policy witness, attention epoch, task revision and the raw state row. */
+export function readPreflightedAttentionCommandPreview(
+  store:TargetStagingReadStore,access:TargetStagingReadCredential,taskId:string,
+  ruleId:TargetAttentionLifecycleRuleId,occurrenceOn:string,nowMs:number,
+):AttentionCommandPreview|null {
+  return withPreflightedStore(store,()=>null,(db,preflight)=>
+    inReadSnapshot(db,()=>{
+      if(!preflight(db))return null;
+      const actor=verifiedActor(db,access);
+      return actor?readAuthorizedAttentionCommandPreview(
+        db,actor,taskId,ruleId,occurrenceOn,store.expectedRestoreGeneration,nowMs):null;
+    },()=>null));
+}
+
+/** Receipt of an exact previous Attention command plus the live-release witness,
+ * from one pinned snapshot; write ACL is checked BEFORE the receipt lookup. */
+export type TargetAttentionReceiptSnapshot=
+  | {ok:true;preview:AttentionCommandPreview;receipt:AttentionReceiptResult}
+  | {ok:false;reason:"inaccessible"};
+export function readPreflightedAttentionReceiptSnapshot(
+  store:TargetStagingReadStore,access:TargetStagingReadCredential,
+  command:TargetStagingAttentionLifecycleCommand,nowMs:number,
+):TargetAttentionReceiptSnapshot {
+  const denied=():TargetAttentionReceiptSnapshot=>({ok:false,reason:"inaccessible"});
+  if(!validTargetStagingAttentionLifecycleCommand(command))return denied();
+  return withPreflightedStore<TargetAttentionReceiptSnapshot>(store,denied,
+    (db,preflight)=>inReadSnapshot(db,()=>{
+      if(!preflight(db))return denied();
+      const actor=verifiedActor(db,access,true);
+      if(!actor)return denied();
+      const preview=readAuthorizedAttentionCommandPreview(
+        db,actor,command.taskId,command.ruleId,command.occurrenceOn,
+        store.expectedRestoreGeneration,nowMs);
+      if(!preview)return denied();
+      const receipt=attentionReceiptInSnapshot(
+        db,actor,command,store.expectedRestoreGeneration,nowMs,preview);
+      return {ok:true,preview,receipt};
     },denied));
 }
 

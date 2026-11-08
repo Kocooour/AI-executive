@@ -59,6 +59,8 @@ import {
   readPreflightedAuthorizedTitleSearchPage,
   readPreflightedPersonalWhenCommandPreview,readPreflightedPersonalWhenReceipt,
   readPreflightedPersonalWhenReceiptSnapshot,
+  readPreflightedAttentionCommandPreview,readPreflightedAttentionReceiptSnapshot,
+  type TargetAttentionReceiptSnapshot,
   readPreflightedTemporalStatusReceipt,readPreflightedTemporalStatusReceiptSnapshot,
   readPreflightedTemporalDueOnReceipt,
   readPreflightedTemporalDueOnReceiptSnapshot,
@@ -97,6 +99,8 @@ import {
 import {writePreflightedPersonalWhen,validTargetStagingPersonalWhenCommand,
   type TargetStagingPersonalWhenCommand,type TargetStagingPersonalWhenResult,
 } from "./target-personal-when-writer";
+import type {AttentionCommandPreview} from "./target-attention-command-read";
+import type {TargetAttentionLifecycleRuleId} from "./target-attention-lifecycle-writer";
 import {writePreflightedAttentionLifecycle,validTargetStagingAttentionLifecycleCommand,
   type TargetStagingAttentionLifecycleCommand,type TargetStagingAttentionLifecycleResult,
 } from "./target-attention-lifecycle-writer";
@@ -1040,6 +1044,29 @@ export class TargetStagingSessionAuthority {
       return {ok:false,reason:"invalid_request"};
     return writePreflightedAttentionLifecycle(
       this.#store,credential,command,durableSessionTokenHash);
+  }
+
+  /** R2d.5c.2: one pinned snapshot with the actor's Attention CAS inputs. */
+  previewAttentionCommand(
+    actorUserId:string,taskId:string,ruleId:TargetAttentionLifecycleRuleId,
+    occurrenceOn:string,nowMs:number,
+  ):AttentionCommandPreview|null {
+    if(this.#closed)return null;
+    try {
+      const credential=this.#oneShotReadCredential(actorUserId);
+      return credential?readPreflightedAttentionCommandPreview(
+        this.#store,credential,taskId,ruleId,occurrenceOn,nowMs):null;
+    }catch{return null;}
+  }
+
+  /** R2d.5c.2: read-only Attention receipt (WRITE credential, ACL first) and
+   * live-release witness from one pinned snapshot. */
+  attentionReceiptSnapshot(
+    sessionToken:string,command:TargetStagingAttentionLifecycleCommand,nowMs:number,
+  ):TargetAttentionReceiptSnapshot {
+    const credential=this.#credential(sessionToken,true);
+    if(!credential)return {ok:false,reason:"inaccessible"};
+    return readPreflightedAttentionReceiptSnapshot(this.#store,credential,command,nowMs);
   }
 
   /** BE-07: current actor's pinned dueOn receipt and live-release witness. */
