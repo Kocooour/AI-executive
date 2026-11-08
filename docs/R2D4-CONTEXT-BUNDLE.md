@@ -66,7 +66,7 @@ Oblasti, projektu, přiřazené osoby ani jiných uživatelů.
   [záznam](decisions/2026-11-08-ai-telo-poznamek-a-retence.md)):** jen u položek
   `kind:"note"` ve `find`, **výhradně** z `readAuthorizedTargetNote(db,{actorUserId,noteId})`
   uvnitř téhož připnutého snapshotu jako hledání. Vrátí-li čtení `null`, nebo se
-  liší `areaKind`, název či rodičovský projekt oproti řádku hledání, je celý
+  liší přesné `areaId`, `areaKind`, název či rodičovský projekt oproti řádku hledání, je celý
   balík `null` (fail-closed). Tělo je omezeno na `MAX_CONTEXT_NOTE_BODY_BYTES`
   = 4096 bajtů UTF-8, řez na hranici kódového bodu; při zkrácení je
   `bodyTruncated:true` (jinak klíč chybí). Provenance revize u poznámky je

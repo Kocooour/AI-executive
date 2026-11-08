@@ -444,12 +444,17 @@ test("32 KiB cap with many large bodies drops items from the end",()=>{
 
 test("fail closed when the authorized read disagrees with the search row",()=>{
   // Unit: comparison helper
-  const row={id:"n",title:"T",areaKind:"private",projectId:null};
-  const read=(o={})=>({note:{id:"n",title:"T",body:"b",areaKind:"private",projectId:null,revision:1,...o}});
+  const row={id:"n",title:"T",areaId:"area-1",areaKind:"private",projectId:null};
+  const read=(o={})=>({note:{id:"n",title:"T",body:"b",areaId:"area-1",areaKind:"private",projectId:null,revision:1,...o}});
   assert.equal(authorizedNoteAgrees(row,read()),true);
   assert.equal(authorizedNoteAgrees(row,null),false);
   assert.equal(authorizedNoteAgrees(row,read({title:"U"})),false);
   assert.equal(authorizedNoteAgrees(row,read({areaKind:"shared"})),false);
+  assert.equal(authorizedNoteAgrees(row,read({areaId:"area-2"})),false,
+    "same Area kind but different exact Area must fail closed");
+  assert.equal(authorizedNoteAgrees({...row,areaKind:"shared"},
+    read({areaKind:"shared",areaId:"area-2"})),false,
+    "different shared Areas must fail closed");
   assert.equal(authorizedNoteAgrees(row,read({projectId:"p"})),false);
   assert.equal(authorizedNoteAgrees({...row,projectId:"p"},read()),false);
   assert.equal(authorizedNoteAgrees(row,read({id:"x"})),false);

@@ -138,12 +138,13 @@ export function truncateUtf8(text:string,maxBytes:number):{text:string;truncated
 
 /** The authorized read must describe exactly the note the search returned. */
 export function authorizedNoteAgrees(
-  row:{id:string;title:string;areaKind:string;projectId?:string|null},
-  read:{note:{id:string;title:string;body:string;areaKind:string;projectId:string|null;revision:number}}|null,
+  row:{id:string;title:string;areaId:string;areaKind:string;projectId?:string|null},
+  read:{note:{id:string;title:string;body:string;areaId:string;areaKind:string;projectId:string|null;revision:number}}|null,
 ):boolean {
   if(!read||typeof read.note.body!=="string")return false;
   const n=read.note;
-  return n.id===row.id&&n.title===row.title&&n.areaKind===row.areaKind&&
+  return n.id===row.id&&n.title===row.title&&n.areaId===row.areaId&&
+    n.areaKind===row.areaKind&&
     n.projectId===(row.projectId??null)&&Number.isSafeInteger(n.revision);
 }
 
@@ -235,8 +236,7 @@ export function resolveAuthorizedTargetContextBundle(
         if(i.kind==="note"){
           // Same pinned snapshot as the search; any disagreement => no bundle.
           const read=readAuthorizedTargetNote(db,{actorUserId,noteId:i.id});
-          if(!authorizedNoteAgrees(i as {id:string;title:string;areaKind:string;
-            projectId?:string|null},read))return null;
+          if(!authorizedNoteAgrees(i,read))return null;
           const {note,guard}=read as NonNullable<typeof read>;
           const cut=truncateUtf8(note.body,MAX_CONTEXT_NOTE_BODY_BYTES);
           noteGuards.set(i.id,{noteId:guard.noteId,noteRevision:guard.noteRevision,
