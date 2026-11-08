@@ -26,6 +26,8 @@ import type {TargetGlobalProjectPage} from "./target-global-project-read-model";
 import type {TargetGlobalNotePage} from "./target-global-note-read-model";
 import type {TargetGlobalCombinedPage,GlobalCombinedPositions} from "./target-global-combined-read-model";
 import type {AuthorizedSearchPage} from "./target-authorized-title-search";
+import {readPreflightedTargetContextBundle} from "./target-context-bundle";
+import type {ContextBundleRequest,TargetContextBundle} from "./target-context-bundle";
 import type {PersonalWhenCommandPreview} from "./target-personal-when-command-read";
 import type {TargetPersonalWhenReceiptResult,TargetPersonalWhenReceiptSnapshot}
   from "./target-task-staging-reader";
@@ -455,6 +457,19 @@ export class TargetStagingSessionAuthority {
       return credential?readPreflightedPersonalWhenPage(this.#store,credential,{
         window,evaluationDate,throughDate,limit,offset,
       }):null;
+    }catch{return null;}
+  }
+
+  /** R2d.4i: internal, title-only authorized Context Resolver bundle (one
+   * pinned snapshot). No provider call, HTTP route or client-supplied identity. */
+  resolveContextBundle(
+    actorUserId:string,request:ContextBundleRequest,
+  ):TargetContextBundle|null{
+    if(this.#closed)return null;
+    try{
+      const credential=this.#oneShotReadCredential(actorUserId);
+      return credential?readPreflightedTargetContextBundle(
+        this.#store,credential,request):null;
     }catch{return null;}
   }
 
