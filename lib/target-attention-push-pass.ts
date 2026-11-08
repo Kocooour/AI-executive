@@ -451,7 +451,7 @@ export async function runTargetAttentionPushPass(
     const started=Date.now();
     // Anchor elapsed wall-clock time to the injected pass instant. Existing
     // callers can still use a simulated nowMs; real passes track elapsed time.
-    const clock=input.clock??(()=>nowMs+Math.floor(Math.max(0,Date.now()-started)/1000)*1000);
+    const clock=input.clock??(()=>nowMs+Math.max(0,Date.now()-started));
     if(!Number.isSafeInteger(nowMs)||nowMs<=0||!sender||
         typeof sender.sendTo!=="function")return summary;
     const listing=readPreflightedStoreSnapshot<{views:[string,TargetNotificationSettingsView][];off:number;deferred:number}>(
