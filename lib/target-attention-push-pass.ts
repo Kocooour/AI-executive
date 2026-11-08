@@ -186,7 +186,7 @@ function phase1(store:TargetStagingReadStore,user:string,view:TargetNotification
         (user_id,delivery_key,target_id,status,attempts,last_attempt_at_ms)
         VALUES (?,?,?,'reserved',0,?)`);
       for(const {id} of ids)if(stmt.run(user,key,id,nowMs).changes!==1)
-        throw new Error("device reservation failed");
+        throw new Error();
       return ids.length;
     };
     const insert=(c:AttentionCandidate,status:"baseline"|"pending")=>{
