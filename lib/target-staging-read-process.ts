@@ -109,6 +109,10 @@ export function createStagingReadRunner(
           process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_PERSONAL_WHEN_WRITE_ENABLED || "",
         AI_EXECUTIVE_TARGET_STAGING_HTTP_ATTENTION_WRITE_ENABLED:
           process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_ATTENTION_WRITE_ENABLED || "",
+        AI_EXECUTIVE_TARGET_STAGING_HTTP_NOTIFICATIONS_ENABLED:
+          process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_NOTIFICATIONS_ENABLED || "",
+        AI_EXECUTIVE_TARGET_STAGING_HTTP_NOTIFICATIONS_WRITE_ENABLED:
+          process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_NOTIFICATIONS_WRITE_ENABLED || "",
         AI_EXECUTIVE_TARGET_STAGING_DIRECTORY: config.stagingDirectory,
         AI_EXECUTIVE_TARGET_STAGING_RESTORE_GENERATION: config.expectedRestoreGeneration,
         AI_EXECUTIVE_TARGET_STAGING_OWNER_USER_ID: config.ownerUserId,
@@ -1664,6 +1668,54 @@ export async function readStagingAttentionCommandPreviewInChild(
     [taskId,ruleId,occurrenceOn]);
   const result=parseStagingAttentionCommandPreview(payload,taskId);
   if(payload!==null&&!result)logStagingFailure("attention_command_preview","invalid_child_dto");
+  return result;
+}
+
+/** R2d.5d.3: the actor's OWN notification settings from one pinned snapshot.
+ * `actorUserId` only feeds the server-side live guard and is never released. */
+export interface StagingNotificationSettings {
+  actorUserId:string;timeZone:string;attentionPush:boolean;quietStart:string;
+  quietEnd:string;dailyLimit:number;paused:boolean;settingsRevision:number;
+  notificationEpoch:number;targetIds:string[];
+}
+export type StagingNotificationSettingsResult=
+  | {ok:true;settings:StagingNotificationSettings}
+  | {ok:false;reason:"inaccessible"};
+export function parseStagingNotificationSettings(
+  value:unknown,
+):StagingNotificationSettingsResult|null {
+  if(!value||typeof value!=="object"||Array.isArray(value))return null;
+  const v=value as Record<string,unknown>;
+  const keys=Object.keys(v).sort().join(",");
+  if(keys==="ok,reason"&&v.ok===false&&v.reason==="inaccessible")
+    return {ok:false,reason:"inaccessible"};
+  const hhmm=(x:unknown)=>typeof x==="string"&&/^([01]\d|2[0-3]):[0-5]\d$/.test(x);
+  const rev=(x:unknown)=>Number.isSafeInteger(x)&&(x as number)>=0;
+  if(v.ok!==true||keys!==
+    "actorUserId,attentionPush,dailyLimit,notificationEpoch,ok,paused,quietEnd,quietStart,settingsRevision,targetIds,timeZone"||
+    typeof v.actorUserId!=="string"||!ACTOR_ID.test(v.actorUserId)||
+    typeof v.timeZone!=="string"||attentionEvaluationWindow(0,v.timeZone)===null||
+    typeof v.attentionPush!=="boolean"||typeof v.paused!=="boolean"||
+    !hhmm(v.quietStart)||!hhmm(v.quietEnd)||
+    !Number.isInteger(v.dailyLimit)||(v.dailyLimit as number)<0||(v.dailyLimit as number)>10||
+    !rev(v.settingsRevision)||!rev(v.notificationEpoch)||
+    !Array.isArray(v.targetIds)||v.targetIds.length>64||
+    v.targetIds.some(id=>typeof id!=="string"||!/^pt_[0-9a-f]{32}$/.test(id))||
+    new Set(v.targetIds as string[]).size!==v.targetIds.length)return null;
+  return {ok:true,settings:{
+    actorUserId:v.actorUserId,timeZone:v.timeZone,attentionPush:v.attentionPush,
+    quietStart:v.quietStart as string,quietEnd:v.quietEnd as string,
+    dailyLimit:v.dailyLimit as number,paused:v.paused,
+    settingsRevision:v.settingsRevision as number,
+    notificationEpoch:v.notificationEpoch as number,targetIds:v.targetIds as string[],
+  }};
+}
+export async function readStagingNotificationSettingsInChild(
+  config:StagingPersonalReadConfig,
+):Promise<StagingNotificationSettingsResult|null> {
+  const payload=await runChild(config,"target-staging-notification-settings-child.mjs",[]);
+  const result=parseStagingNotificationSettings(payload);
+  if(payload!==null&&!result)logStagingFailure("notification_settings","invalid_child_dto");
   return result;
 }
 

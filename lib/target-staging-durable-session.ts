@@ -446,12 +446,16 @@ export function verifyTargetStagingReadLive(
   personalPlanGuard?: { privateEpoch: number },
   /** R2d.5c.1: server-only actor attention epoch (lifecycle CAS witness). */
   personalAttentionGuard?: { attentionEpoch: number },
+  /** R2d.5d.3: server-only actor notification epoch (settings/target CAS witness). */
+  personalNotificationGuard?: { notificationEpoch: number },
 ): TargetStagingReadLive {
   const unavailable: TargetStagingReadLive = { ok: false, reason: "unavailable" };
   if (personalPlanGuard && (!Number.isSafeInteger(personalPlanGuard.privateEpoch) ||
       personalPlanGuard.privateEpoch < 0)) return unavailable;
   if (personalAttentionGuard && (!Number.isSafeInteger(personalAttentionGuard.attentionEpoch) ||
       personalAttentionGuard.attentionEpoch < 0)) return unavailable;
+  if (personalNotificationGuard && (!Number.isSafeInteger(personalNotificationGuard.notificationEpoch) ||
+      personalNotificationGuard.notificationEpoch < 0)) return unavailable;
   if (!observed || typeof observed.actorUserId !== "string" || !USER_ID.test(observed.actorUserId) ||
       !Array.isArray(observed.areas) || observed.areas.length > MAX_SCOPED_READ_AREAS) return unavailable;
   if (projectGuard && (typeof projectGuard.projectId !== "string" || !projectGuard.projectId ||
@@ -590,6 +594,13 @@ export function verifyTargetStagingReadLive(
       const row = db.prepare("SELECT revision FROM personal_attention_epochs WHERE user_id=?")
         .get(actorUserId) as {revision:number}|undefined;
       if (!row || row.revision !== personalAttentionGuard.attentionEpoch)
+        return {ok:false,reason:"stale"};
+    }
+    // Same live transaction: a settings or push-target write moves this epoch.
+    if (personalNotificationGuard) {
+      const row = db.prepare("SELECT revision FROM personal_notification_epochs WHERE user_id=?")
+        .get(actorUserId) as {revision:number}|undefined;
+      if (!row || row.revision !== personalNotificationGuard.notificationEpoch)
         return {ok:false,reason:"stale"};
     }
     if (noteSyncGuard) {
