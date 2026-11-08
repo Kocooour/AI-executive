@@ -39,7 +39,12 @@ Cache API; veškerý stav žije jen v paměti objektu relace.
 - Explicitní `loadFirst()` / `loadMore()` / `reload()` (= `loadFirst`), nic se
   nenačítá samo ani předem. `getSnapshot()` vrací kopie; položky existují jen ve
   stavu `ready`. Stavy: `idle|loading|acting|ready|failed|suspended|invalidated|disposed`.
-- `contextVersion` (BE-18): změna je terminální včetně A→B→A.
+- `contextVersion` (BE-18): **pozorovaná** změna je terminální včetně A→B→A.
+  Generace se vzorkuje při volání a při dokončení požadavku; změna A→B→A, která
+  celá proběhne mezi dvěma vzorky (uvnitř jednoho čtení nebo mezi voláními),
+  pozorovaná není. Aplikace proto při změně relace instanci **vždy** zahodí
+  (`dispose()`); server každý požadavek autorizuje sám a kurzor je vázán na
+  konkrétní session cookie (rotace cookie mezi stránkami → `failed`).
 - `suspend()` / `resume()` (BE-19): smaže obsah a zruší běžící čtení; `resume()`
   nikdy sám nic nenačte.
 - `dispose()` ruší rozpracovanou práci a zablokuje vše další.
@@ -49,10 +54,15 @@ Cache API; veškerý stav žije jen v paměti objektu relace.
 ### Invalidace cache (jádro R2d.5e)
 
 `act(item, action, snoozedUntilMs?)` provede preview → jedno PATCH → (jen při
-`uncertain` jedno receipt) a **vždy** končí stavem `invalidated`
+`uncertain` jedno receipt) a jakmile tok začne, **vždy** končí stavem `invalidated`
 (`{status:"invalidated"}`), bez ohledu na výsledek (`committed`, `replayed`,
 `conflict`, `not_found`, `invalid`, `unauthorized`, chyba preview, nejistota).
 
+- Lokální odmítnutí **před začátkem toku** (neplatný vstup, neznámá položka,
+  `busy`, stav není `ready`) nic neodešle a cache ponechá.
+- `loadMore` po zápisu z jiné záložky dostane od serveru 409 `Cursor stale` nebo
+  rozdílnou epochu; v obou případech se data zahodí (stav `failed`, resp.
+  `invalidated`).
 - Načtené stránky i kurzory se zahodí **při startu** `act` (stav `acting`), ne až
   po odpovědi: během neznámého výsledku nesmí být vidět zastaralý seznam a
   souběžné `loadMore`/`loadFirst`/`act` vrací `busy`.
