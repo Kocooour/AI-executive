@@ -45,6 +45,10 @@ Cache API; veškerý stav žije jen v paměti objektu relace.
   pozorovaná není. Aplikace proto při změně relace instanci **vždy** zahodí
   (`dispose()`); server každý požadavek autorizuje sám a kurzor je vázán na
   konkrétní session cookie (rotace cookie mezi stránkami → `failed`).
+- Titulky jsou uživatelská data (mohou obsahovat HTML či řídicí znaky); UI je
+  musí vždy vykreslit escapované.
+- Bez `crypto.randomUUID` (nezabezpečený kontext) `act` skončí
+  `rejected/unavailable` a stavem `invalidated`, nic neodešle a session nezasekne.
 - `suspend()` / `resume()` (BE-19): smaže obsah a zruší běžící čtení; `resume()`
   nikdy sám nic nenačte.
 - `dispose()` ruší rozpracovanou práci a zablokuje vše další.

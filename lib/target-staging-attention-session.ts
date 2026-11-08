@@ -237,8 +237,14 @@ export function createAttentionSession(
       return finish({outcome:"rejected",reason:"stale"});
     if((action==="restore")===(p.lifecycle==="active"))
       return finish({outcome:"rejected",reason:"conflict"});
+    // Without a secure-context UUID source no command can be built: end the
+    // flow cleanly (invalidated) instead of wedging the session in "acting".
+    let commandId:string;
+    try{commandId=globalThis.crypto.randomUUID();}
+    catch{return finish({outcome:"rejected",reason:"unavailable"});}
+    if(typeof commandId!=="string")return finish({outcome:"rejected",reason:"unavailable"});
     const command:AttentionCommand={
-      commandId:crypto.randomUUID(),taskId:own.taskId,ruleId:own.ruleId,
+      commandId,taskId:own.taskId,ruleId:own.ruleId,
       occurrenceOn:own.relevantOn,action,
       snoozedUntilMs:action==="snooze"?snoozedUntilMs as number:null,
       expectedRevision:p.expectedRevision,

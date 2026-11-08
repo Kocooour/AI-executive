@@ -457,3 +457,14 @@ test("a failed network read never leaves old items behind",async()=>{
   assert.deepEqual(s.getSnapshot(),{status:"failed",reason:"unavailable"});
   assert.deepEqual(await s.loadMore(),{ok:false,reason:"not-ready"});
 });
+
+test("act without a secure-context UUID source ends invalidated, never wedges, sends no PATCH",async(t)=>{
+  const f=happy();
+  const s=await ready(f);
+  t.mock.method(globalThis.crypto,"randomUUID",()=>{throw new TypeError("not available");});
+  assert.deepEqual(await s.act(item(1),"dismiss"),{ok:true,outcome:"rejected",reason:"unavailable"});
+  assert.equal(f.count(PATCH),0);
+  assert.deepEqual(s.getSnapshot(),{status:"invalidated"});
+  t.mock.restoreAll();
+  assert.equal((await s.loadFirst()).ok,true,"session is usable again after an explicit reload");
+});
