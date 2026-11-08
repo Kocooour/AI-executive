@@ -173,10 +173,9 @@ function phase1(store:TargetStagingReadStore,user:string,view:TargetNotification
       const result=sentAt!==null?(retryable?"partial":"sent"):
         (retryable||attempted)?"failed":"undelivered";
       const change=db.prepare(`UPDATE personal_attention_deliveries SET status=?,
-        sent_at_ms=?,attempts=CASE WHEN ?='failed' AND ?=0 THEN ? ELSE attempts END,
-        last_attempt_at_ms=max(last_attempt_at_ms,?)
+        sent_at_ms=?,last_attempt_at_ms=max(last_attempt_at_ms,?)
         WHERE user_id=? AND delivery_key=? AND status='pending'`)
-        .run(result,sentAt,result,retryable?1:0,MAX,nowMs,user,k).changes;
+        .run(result,sentAt,nowMs,user,k).changes;
       if(change!==1)return null;
       changes++;
     }
@@ -444,9 +443,9 @@ function finalize(store:TargetStagingReadStore,user:string,work:Work,nowMs:numbe
       args=[nowMs,user,work.key,expected];
     }else{
       sql=`UPDATE personal_attention_deliveries SET status='failed',
-        attempts=max(attempts,?),last_attempt_at_ms=max(last_attempt_at_ms,?)
+        last_attempt_at_ms=max(last_attempt_at_ms,?)
         WHERE user_id=? AND delivery_key=? AND status=?`;
-      args=[retryable?0:MAX,nowMs,user,work.key,expected];
+      args=[nowMs,user,work.key,expected];
     }
     if(db.prepare(sql).run(...(args as never[])).changes!==1)return false;
     journal(ctx,db,user,OP_FINAL,1);
