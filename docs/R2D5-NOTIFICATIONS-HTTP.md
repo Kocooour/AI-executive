@@ -102,8 +102,9 @@ Ostatní kontroly a mapování stavů jako u `PATCH`.
   portem, IP literál i host s tečkou na konci. V tomto řezu žádné odesílání není;
   před napojením reálného web-push (R4) je nutná allowlist politika push služeb
   (ochrana před SSRF).
-- Per-client rate limit používá sdílený `enforceRateLimit`; jeho identita klienta
-  z `X-Forwarded-For` je samostatný (dřívější) problém mimo tento řez — globální
-  limit zůstává. Globální staging kapacity (receipty, 4096 zařízení) jsou sdílené.
+- Per-client rate limit používá sdílený `enforceRateLimit`; identita klienta je
+  nově **poslední** hop `X-Forwarded-For` (Tailscale Serve hlavičku nahrazuje),
+  takže podvržené první hodnoty limit neobejdou (viz docs/ARCHITECTURE.md);
+  globální limit zůstává. Globální staging kapacity (receipty, 4096 zařízení) jsou sdílené.
 - `held.disabled` v souhrnu průchodu počítá uživatele (vypnuté/pozastavené), ne
   zařízení.
