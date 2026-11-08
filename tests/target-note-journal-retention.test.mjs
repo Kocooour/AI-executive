@@ -109,7 +109,7 @@ async function populate(fx) {
 }
 
 test('schema v24: one floor per Area (also for later Areas), guarded delete, floor trigger rules', async () => {
-  assert.equal(TARGET_STORE_SCHEMA_VERSION, 24);
+  assert.equal(TARGET_STORE_SCHEMA_VERSION, 25);
   const fx = fixture();
   const db = open(fx);
   assert.deepEqual(floors(db), { 'area:unassigned:alice': [0, 0], 'private-bob': [0, 0], 'private-carol': [0, 0], 'team-area': [0, 0] });

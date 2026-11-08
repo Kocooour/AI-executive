@@ -1112,11 +1112,11 @@ export class TargetStagingSessionAuthority {
    * Identities come from the verified store, never from a caller. No timer, no
    * network: a scheduler/real web-push is wired only at the R4 cutover. */
   runAttentionPushPass(
-    nowMs:number,sender:TargetPushSender,
+    nowMs:number,sender:TargetPushSender,clock?:()=>number,
   ):Promise<TargetAttentionPushPassSummary> {
     if(this.#closed)return Promise.resolve({users:0,sent:0,
       held:{quiet_hours:0,daily_limit:0,disabled:0}});
-    return runTargetAttentionPushPass(this.#store,{nowMs,sender,
+    return runTargetAttentionPushPass(this.#store,{nowMs,sender,clock,
       credentialFor:userId=>{
         try{return this.#oneShotReadCredential(userId);}catch{return null;}
       }});

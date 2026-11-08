@@ -1,6 +1,6 @@
 # R2d.5d.2 — zapisovače nastavení/zařízení a identitně vázaný push průchod
 
-**Rozsah:** pouze izolované staging SQLite (schéma v23) a knihovny
+**Rozsah:** pouze izolované staging SQLite (schéma v25, bez migrace starších staging úložišť) a knihovny
 `lib/target-notification-writer.ts` a `lib/target-attention-push-pass.ts`.
 **Bez skutečného web-push, bez sítě, bez časovače/plánovače, bez HTTP, UI,
 migrace a produkční aktivace.** Odesílač (`sender`) je vždy injektovaný.
@@ -55,13 +55,13 @@ neexportovaným klíčem. Jeden průchod najednou na proces (druhý vrací
    500; změna epochy/revize mezi stránkami uživatele pro tento průchod vynechá).
 2. **Jedna pinned write transakce na uživatele:** znovu ověří, že se nastavení
    (pásmo, okno, limit, revize, epoch) ani attention epoch od čtení nezměnily;
-   uzavře `pending` starší než 15 min jako `undelivered`; pak
+   obnoví osiřelé `pending` starší než 15 min podle trvalých výsledků zařízení: již odeslané označí `sent` nebo `partial` s původním časem odeslání; potvrzeně neúspěšné výsledky zachovají retry do 3 pokusů jako `failed`. Pouze cíle se zapsaným začátkem odesílání (`inflight`), jejichž výsledek pád přerušil, přejdou do `unknown`; dosud neoslovené `reserved` cíle zůstávají bezpečně opakovatelné. Bez potvrzeného výsledku a bez opakovatelného cíle je doručení `undelivered`; pak
    - **baseline** (chybí značka): všichni aktuální oznámitelní kandidáti se zapíšou
      jako `baseline`, zapíše se značka, nic se neodešle;
-   - jinak `handled` (vše kromě `failed` s attempts < 3), `sentInLast24h`
+   - jinak `handled` (vše kromě `failed` s alespoň jedním původním živým `reserved` cílem nebo `failed` cílem s méně než 3 skutečnými pokusy), `sentInLast24h`
      (sent/partial s `sent_at` mladším než 24 h + pending mladší než 24 h), `planTargetAttentionPushes`
-     a **claim** každého naplánovaného jako `pending` (insert, nebo `failed→pending`
-     s attempts+1). Před claimem se v transakci znovu ověří ACL, otevřený stav,
+     a **claim** každého naplánovaného jako `pending` (parent `attempts=0`) s atomickou rezervací právě aktuálních živých cílů (`reserved`, attempts=0; bez nové registrace při retry), nebo `failed→pending`
+     **bez změny počtu pokusů**. Před claimem se v transakci znovu ověří ACL, otevřený stav,
      aktuální termín a pravidlo, snooze/dismiss; kandidát, který přístup ztratil
      mezi čtením a claimem, se prostě nezabere (insert guard je druhá pojistka).
 3. **Mimo transakci** pro každý claim a každý živý cíl uživatele (přeskočí se
@@ -69,19 +69,31 @@ neexportovaným klíčem. Jeden průchod najednou na proces (druhý vrací
    (`targetAttentionPushPayload`, jen vlastní titulek). **Bezprostředně před
    každým odesláním** krátké čtení: řádek doručení stále existuje ve
    očekávaném stavu (`pending`/`partial`), nastavení je stále zapnuté a
-   nepozastavené a cíl je živý. Reconcile smaže řádek při ztrátě přístupu,
+   nepozastavené, **revize nastavení se od plánu nezměnila** (jinak se dosud
+   neodeslaný claim uvolní a musí se naplánovat podle nového denního limitu),
+   **aktuálně mimo tiché hodiny** ve stále platném pásmu uživatele a cíl je živý. Čas se znovu zjišťuje před každým zařízením (testy používají injektovaný clock). Reconcile smaže řádek při ztrátě přístupu,
    dokončení úkolu nebo změně termínu → nic se neodešle („bez upozornění
    odebraným členům“).
-4. Výsledek každého zařízení se **hned** commitne (pád po odeslání nezapomene
-   `sent`); `gone` zapíše device řádek a revokuje právě tento cíl guardovaným
-   UPDATE.
-5. **Dokončení** jako legacy: doručeno a zbývá opakovatelné zařízení → `partial`,
+4. **Před** předáním zařízení odesílači se commitne jeho stav `inflight` a
+   parent `attempts` se zvýší pouze podle skutečně zahájeného pokusu zařízení
+   (nejvýše 3); opakované `reserved → failed → pending` při pádech před
+   odesláním žádný pokus nespotřebuje.
+   Výsledek se pak **hned** commitne jako `sent` / `failed` / `gone`;
+   `gone` revokuje právě tento cíl guardovaným UPDATE. Pád před `inflight`
+   ponechá `reserved` a dovolí pozdější doručení; pád během `inflight`
+   může znamenat skutečně odeslanou zprávu, proto se stav uzavře jako
+   `unknown` bez opakování (prevence duplicit). Při zápisu `inflight` se
+   také obnoví čas poslední aktivity parent doručení, takže délka průchodu přes
+   mnoho zařízení sama nezpůsobí falešné zotavení jako po pádu.
+5. **Dokončení** nikdy neuzavře výskyt, který má ještě zařízení `inflight`
+   (může jít o současně běžící jiný proces). Jinak jako legacy: doručeno a zbývá opakovatelné zařízení → `partial`,
    doručeno → `sent` (`sent_at` se zapíše jednou), žádné zařízení → `undelivered`
    (zařízení přidané později nedostane backlog), nikdo nedostal → `failed`
-   (attempts; po vyčerpání pokusů se vzdá). Respektují se v23 guardy
+   (limity jsou po jednotlivých zařízeních, nikoli podle počtu obnovených
+   parent claimů). Respektují se v23 guardy
    (partial jen na partial/sent, `sent_at` write-once).
-6. **Opakování partial:** jen neúspěšná zařízení (nikdy zařízení bez řádku), nikdy
-   v tichém okně uživatele, bez započtení do denního limitu.
+6. **Opakování partial:** jen původně rezervované a potvrzeně neúspěšné cíle; zařízení `sent`/`gone`/`unknown` nikdy znovu. `reserved` po bezpečně dokončeném quiet-hour přerušení lze odeslat později, zatímco `reserved` přeživší **pád** bez zahájeného odesílání zůstává opakovatelné. Pouze `inflight` bez zapsaného výsledku přejde do `unknown` a nebude duplicitně odesláno. Nově zaregistrované zařízení nemá rezervaci, proto nedostane zpětně staré oznámení. Opakování je mimo tiché hodiny a bez dalšího započtení do denního limitu.
+7. **Snooze před prvním odesláním:** `pending` se samými nedotčenými rezervacemi `reserved` se transakčně uvolní, takže po vypršení snooze může být stejný výskyt znovu naplánován. `dismissed` zůstává potlačeno.
 
 Souhrn: `{users, sent, held:{quiet_hours, daily_limit, disabled}}` (a `busy`),
 bez titulků a ID.
@@ -94,8 +106,7 @@ bez titulků a ID.
   dva uživatelé ve stejném okamžiku se mohou lišit.
 - Push nikdy nejde viewerovi, nepřiřazenému, jinému řešiteli ani odebranému
   členovi; snooze/dismiss nikdy nepošle.
-- Restart: osiřelý `pending` (>15 min) se uzavře jako `undelivered` a znovu se
-  neodesílá; čerstvý `pending` se počítá jako rozpracovaný.
+- Restart: osiřelý `pending` (>15 min) se zapsaným `sent` přejde na `sent`/`partial` se skutečným časem odeslání (24h limit). Potvrzené `failed` cíle zůstávají opakovatelné (max. 3 skutečně zahájené pokusy na zařízení); `inflight` cíle bez zapsaného výsledku přejdou do `unknown` a neopakují se; `reserved` cíle se mohou po restartu dokončit **i po více než třech pádech před prvním odesláním**. Parent `attempts` sleduje nejvyšší počet skutečně zahájených pokusů zařízení, nikoli počet claimů. Parent je `undelivered` jen bez doručení a bez opakovatelného cíle. Čerstvý `pending` zůstává rozpracovaný.
 - Výjimka jednoho uživatele ani sender, který vyhodí chybu (= `failed`),
   neukončí průchod ostatních.
 
@@ -104,9 +115,13 @@ bez titulků a ID.
 - Mezi pre-send kontrolou a skutečným odesláním je neodstranitelné okno
   (odeslání je síťová operace mimo transakci); kontrola ho zužuje na jedno
   zařízení.
-- Pokud uživatel mezi claimem a odesláním push vypne/pozastaví, claim zůstane
-  `pending` (nebo se dokončí podle již zapsaných zařízení) a po 15 min se uzavře
-  jako `undelivered`.
+- Změna revize nastavení (včetně snížení denního limitu) ruší dosud
+  neodeslané nové claimy před dalším odesláním; při novém průchodu se
+  vyhodnotí aktuální limit. Doručení, které již dosáhlo některého zařízení,
+  se dokončuje podle trvale zapsaných výsledků.
+- Pokud uživatel mezi claimem a odesláním push vypne nebo pozastaví, již
+  částečně doručený výskyt se dokončí podle zapsaných výsledků; dosud
+  nedoručený claim může být uvolněn nebo uzavřen dle stavu zařízení.
 - Staré `failed` řádky s attempts < 3 přežijí vypnutí/zapnutí (guard nedovolí
   přepsat je na `baseline`) a mohou se po opětovném zapnutí zopakovat.
 - Zápis průchodu používá journal (anchor), proto každá změna stavu zapisuje
