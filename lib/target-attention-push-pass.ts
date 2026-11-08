@@ -143,37 +143,52 @@ function phase1(store:TargetStagingReadStore,user:string,view:TargetNotification
       .get(user) as {revision:number}|undefined;
     if(!att||att.revision!==attentionEpoch)return {kind:"skip"};
     let changes=0;
-    // Recover each interrupted claim from durable per-device results. A committed
-    // "sent" must remain in the rolling 24 h budget even if finalisation crashed.
-    // An untouched pending claim cannot be safely retried (the sender may have
-    // accepted it just before the process died), so it remains undelivered.
+    // Only durable failed sends are safe to retry after a crash. A reserved
+    // target may have been in flight and is therefore abandoned on recovery;
+    // committed sent timestamps still count against the rolling 24h limit.
     const stale=db.prepare(`SELECT delivery_key AS k FROM personal_attention_deliveries
       WHERE user_id=? AND status='pending' AND last_attempt_at_ms<?`)
       .all(user,nowMs-TARGET_PUSH_PASS_STALE_PENDING_MS) as {k:string}[];
     for(const {k} of stale){
-      const sent=db.prepare(`SELECT MIN(last_attempt_at_ms) AS at
-        FROM personal_attention_device_deliveries
-        WHERE user_id=? AND delivery_key=? AND status='sent'`)
-        .get(user,k) as {at:number|null};
-      let result:string;
-      if(sent.at!==null){
-        const unfinished=db.prepare(`SELECT 1 FROM personal_push_targets t
-          LEFT JOIN personal_attention_device_deliveries x ON
-            x.user_id=t.user_id AND x.target_id=t.target_id AND x.delivery_key=?
-          WHERE t.user_id=? AND t.revoked_at_ms IS NULL
-            AND (x.target_id IS NULL OR (x.status='failed' AND x.attempts<?))
-          LIMIT 1`).get(k,user,MAX);
-        result=unfinished?"partial":"sent";
-      }else result="undelivered";
+      const devices=db.prepare(`SELECT x.status,x.attempts,
+        x.last_attempt_at_ms AS at,(t.revoked_at_ms IS NULL) AS live
+        FROM personal_attention_device_deliveries x JOIN personal_push_targets t
+        ON t.user_id=x.user_id AND t.target_id=x.target_id
+        WHERE x.user_id=? AND x.delivery_key=?`)
+        .all(user,k) as {status:string;attempts:number;at:number;live:number}[];
+      const sentAt=devices.filter(d=>d.status==="sent")
+        .reduce<number|null>((at,d)=>at===null?d.at:Math.min(at,d.at),null);
+      const retryable=devices.some(d=>d.live===1&&d.status==="failed"&&d.attempts<MAX);
+      const attempted=devices.some(d=>d.status==="failed"||d.status==="gone");
+      // An unrecorded send could have succeeded immediately before the crash.
+      changes+=Number(db.prepare(`UPDATE personal_attention_device_deliveries
+        SET status='unknown' WHERE user_id=? AND delivery_key=? AND status='reserved'`)
+        .run(user,k).changes);
+      const result=sentAt!==null?(retryable?"partial":"sent"):
+        attempted?"failed":"undelivered";
       const change=db.prepare(`UPDATE personal_attention_deliveries SET status=?,
-        sent_at_ms=?,last_attempt_at_ms=max(last_attempt_at_ms,?)
+        sent_at_ms=?,attempts=CASE WHEN ?='failed' AND ?=0 THEN ? ELSE attempts END,
+        last_attempt_at_ms=max(last_attempt_at_ms,?)
         WHERE user_id=? AND delivery_key=? AND status='pending'`)
-        .run(result,sent.at,nowMs,user,k).changes;
+        .run(result,sentAt,result,retryable?1:0,MAX,nowMs,user,k).changes;
       if(change!==1)return null;
       changes++;
     }
     const announceable=items.filter(announceableTargetAttentionCandidate);
     const keyOf=(c:AttentionCandidate)=>targetAttentionDeliveryKey(c.ruleId,c.taskId,c.relevantOn);
+    // Pin the live target cohort atomically with its parent claim. Targets
+    // registered later have no row and never receive a historical retry.
+    const reserveTargets=(key:string):number=>{
+      const ids=db.prepare(`SELECT target_id AS id FROM personal_push_targets
+        WHERE user_id=? AND revoked_at_ms IS NULL ORDER BY created_at_ms,target_id`)
+        .all(user) as {id:string}[];
+      const stmt=db.prepare(`INSERT INTO personal_attention_device_deliveries
+        (user_id,delivery_key,target_id,status,attempts,last_attempt_at_ms)
+        VALUES (?,?,?,'reserved',0,?)`);
+      for(const {id} of ids)if(stmt.run(user,key,id,nowMs).changes!==1)
+        throw new Error("device reservation failed");
+      return ids.length;
+    };
     const insert=(c:AttentionCandidate,status:"baseline"|"pending")=>{
       const run=()=>db.prepare(`INSERT INTO personal_attention_deliveries
         (user_id,delivery_key,task_id,rule_id,occurrence_on,status,attempts,last_attempt_at_ms)
@@ -237,6 +252,7 @@ function phase1(store:TargetStagingReadStore,user:string,view:TargetNotification
       }else{
         if(!insert(c,"pending"))continue;
         changes++;
+        changes+=reserveTargets(planned.deliveryKey);
       }
       work.push({key:planned.deliveryKey,candidate:c,mode:"claimed"});
     }
@@ -301,14 +317,12 @@ function recordDevice(store:TargetStagingReadStore,user:string,key:string,target
     const row=db.prepare(`SELECT status,attempts FROM personal_attention_device_deliveries
       WHERE user_id=? AND delivery_key=? AND target_id=?`)
       .get(user,key,target) as {status:string;attempts:number}|undefined;
-    if(row){
-      if(row.status!=="failed"||row.attempts>=MAX)return false;
-      if(db.prepare(`UPDATE personal_attention_device_deliveries SET status=?,attempts=attempts+1,
-        last_attempt_at_ms=max(last_attempt_at_ms,?) WHERE user_id=? AND delivery_key=? AND target_id=?
-        AND status='failed'`).run(result,nowMs,user,key,target).changes!==1)return false;
-    }else if(db.prepare(`INSERT INTO personal_attention_device_deliveries
-      (user_id,delivery_key,target_id,status,attempts,last_attempt_at_ms) VALUES (?,?,?,?,1,?)`)
-      .run(user,key,target,result,nowMs).changes!==1)return false;
+    if(!row||!(row.status==="reserved"||row.status==="failed")||row.attempts>=MAX)
+      return false;
+    if(db.prepare(`UPDATE personal_attention_device_deliveries SET status=?,attempts=attempts+1,
+      last_attempt_at_ms=max(last_attempt_at_ms,?) WHERE user_id=? AND delivery_key=? AND target_id=?
+      AND status IN ('reserved','failed')`).run(result,nowMs,user,key,target).changes!==1)
+      return false;
     let n=1;
     if(result==="gone"){
       // Endpoint expired: revoke exactly this target through the guarded UPDATE.
@@ -323,27 +337,28 @@ function recordDevice(store:TargetStagingReadStore,user:string,key:string,target
   })===true;
 }
 
-/** A known-unsent claim can be released for a quiet window or snooze without
- * consuming the occurrence. Never release a row after ANY device attempt. */
+/** Release only a claim whose original targets are all still unattempted.
+ * Parent deletion atomically cascades the reserved rows. */
 function releaseUnsentClaim(store:TargetStagingReadStore,user:string,work:Work):boolean {
   if(work.mode!=="claimed")return false;
   return writeTxn<boolean>(store,ctx=>{
     const {db}=ctx;
     const removed=db.prepare(`DELETE FROM personal_attention_deliveries
       WHERE user_id=? AND delivery_key=? AND status='pending'
+        AND EXISTS(SELECT 1 FROM personal_attention_device_deliveries
+          WHERE user_id=? AND delivery_key=? AND status='reserved')
         AND NOT EXISTS(SELECT 1 FROM personal_attention_device_deliveries
-          WHERE user_id=? AND delivery_key=?)`)
-      .run(user,work.key,user,work.key).changes;
+          WHERE user_id=? AND delivery_key=? AND status<>'reserved')`)
+      .run(user,work.key,user,work.key,user,work.key).changes;
     if(removed!==1)return false;
     journal(ctx,db,user,OP_FINAL,1);
     return true;
   })===true;
 }
 
-/** Finalisation preserves a partially sent delivery if a quiet-hour boundary
- * left a live device unattempted. Ordinary completions do not create backlog. */
-function finalize(store:TargetStagingReadStore,user:string,work:Work,nowMs:number,
-  allowMissing=false):boolean {
+/** Finalisation preserves the originally reserved targets until the quiet
+ * window ends. Later registrations have no reserved row. */
+function finalize(store:TargetStagingReadStore,user:string,work:Work,nowMs:number):boolean {
   return writeTxn<boolean>(store,ctx=>{
     const {db}=ctx;
     const d=db.prepare(`SELECT status,sent_at_ms AS sentAt FROM personal_attention_deliveries
@@ -357,12 +372,8 @@ function finalize(store:TargetStagingReadStore,user:string,work:Work,nowMs:numbe
       WHERE x.user_id=? AND x.delivery_key=?`).all(user,work.key) as
       {status:string;attempts:number;live:number}[];
     const delivered=devices.some(r=>r.status==="sent");
-    const missing=allowMissing&&!!db.prepare(`SELECT 1 FROM personal_push_targets t
-      LEFT JOIN personal_attention_device_deliveries x ON x.user_id=t.user_id
-        AND x.target_id=t.target_id AND x.delivery_key=?
-      WHERE t.user_id=? AND t.revoked_at_ms IS NULL AND x.target_id IS NULL LIMIT 1`)
-      .get(work.key,user);
-    const retryable=missing||devices.some(r=>r.status==="failed"&&r.attempts<MAX&&r.live===1);
+    const retryable=devices.some(r=>r.live===1&&(r.status==="reserved"||
+      (r.status==="failed"&&r.attempts<MAX)));
     let sql:string;let args:unknown[];
     if(delivered){
       sql=`UPDATE personal_attention_deliveries SET status=?,sent_at_ms=COALESCE(sent_at_ms,?),
@@ -394,18 +405,19 @@ async function deliver(store:TargetStagingReadStore,sender:TargetPushSender,user
   const expected=work.mode==="claimed"?"pending":"partial";
   if(!first||first.status!==expected)return false;
   const stop=(state:DeliveryState,nowMs:number):boolean=>{
-    if((state.hidden==="snoozed"||state.quiet)&&state.devices.size===0&&
+    if((state.hidden==="snoozed"||state.quiet)&&
       releaseUnsentClaim(store,user,work))return false;
     // Dismissed means finished; a quiet boundary means the unsent devices
     // remain eligible after the window. No already-sent device is retried.
-    return finalize(store,user,work,nowMs,state.quiet&&state.hidden===null&&state.settingsOn);
+    return finalize(store,user,work,nowMs);
   };
   if(first.hidden||first.quiet||!first.settingsOn)return stop(first,initial);
   const payload=targetAttentionPushPayload(work.candidate);
   if(!payload)return false;
   for(const target of first.targets){
     const known=first.devices.get(target);
-    if(known&&(known.status!=="failed"||known.attempts>=MAX))continue;
+    if(!known||(known.status!=="reserved"&&
+      (known.status!=="failed"||known.attempts>=MAX)))continue;
     // Pre-send live check after *every* previous sender: identity, target,
     // lifecycle and quiet window all use a fresh snapshot and a fresh clock.
     const current=at();
@@ -415,7 +427,8 @@ async function deliver(store:TargetStagingReadStore,sender:TargetPushSender,user
     if(!state.settingsOn||state.hidden||state.quiet)return stop(state,current);
     if(!state.targets.includes(target))continue;
     const device=state.devices.get(target);
-    if(device&&(device.status!=="failed"||device.attempts>=MAX))continue;
+    if(!device||(device.status!=="reserved"&&
+      (device.status!=="failed"||device.attempts>=MAX)))continue;
     let result:TargetPushSendResult;
     try{
       // A hung push service must not wedge the single-flight pass forever.
