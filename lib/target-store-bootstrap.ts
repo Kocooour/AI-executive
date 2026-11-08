@@ -47,7 +47,15 @@ import { bootstrapTargetStagingWitness } from "./target-staging-anchor-witness";
 // Older staging stores are rejected, not silently migrated; no activation.
 // v22 (R2d.5b.1) adds actor-private Attention lifecycle state (snooze/dismiss)
 // with its own per-user epoch. Older staging stores are rejected, not migrated.
-export const TARGET_STORE_SCHEMA_VERSION = 22;
+// v23 (R2d.5d.1) adds identity-bound push foundation: per-user notification
+// settings (zone, quiet window, default-OFF), hashed device targets and a
+// per-user announcement ledger. No sender; older stores are rejected.
+export const TARGET_STORE_SCHEMA_VERSION = 23;
+/** Capacities of the v23 push foundation in a fresh isolated store. */
+export const TARGET_STAGING_MAX_PUSH_TARGETS = 4096;
+export const TARGET_STAGING_MAX_PUSH_TARGETS_PER_USER = 64;
+export const TARGET_STAGING_MAX_ATTENTION_DELIVERIES = 8192;
+export const TARGET_STAGING_MAX_DEVICE_DELIVERIES = 32768;
 /** Maximum active actor-private planned-day rows in a fresh isolated store. */
 export const TARGET_STAGING_MAX_PERSONAL_PLANS = 4096;
 /** Maximum actor-private Attention lifecycle rows in a fresh isolated store. */
@@ -569,6 +577,225 @@ BEGIN
        WHERE a.id=NEW.area_id AND
          ((a.kind='private' AND a.owner_user_id=personal_attention_states.user_id)
          OR (a.kind='shared' AND t.assignee_user_id=personal_attention_states.user_id
+             AND m.role IN ('editor','admin')))
+    ));
+END;
+
+-- v23 (R2d.5d.1): identity-bound push foundation. Staging only: no sender, no
+-- raw subscription payload (endpoint hash only), no HTTP. Everything is keyed
+-- by user_id and never part of shared task/Area epochs or the change log.
+CREATE TABLE personal_notification_epochs (
+  user_id TEXT PRIMARY KEY REFERENCES identities(id),
+  revision INTEGER NOT NULL DEFAULT 0
+    CHECK(typeof(revision)='integer' AND revision >= 0 AND revision < 9007199254740991)
+) WITHOUT ROWID;
+CREATE TRIGGER personal_notification_epoch_immutable BEFORE UPDATE OF user_id ON personal_notification_epochs
+BEGIN SELECT RAISE(ABORT,'notification epoch user immutable'); END;
+CREATE TRIGGER personal_notification_epoch_monotonic BEFORE UPDATE OF revision ON personal_notification_epochs
+WHEN NEW.revision <> OLD.revision+1
+BEGIN SELECT RAISE(ABORT,'notification epoch must increment by one'); END;
+CREATE TRIGGER personal_notification_epoch_no_replace BEFORE INSERT ON personal_notification_epochs
+WHEN EXISTS(SELECT 1 FROM personal_notification_epochs WHERE user_id=NEW.user_id)
+BEGIN SELECT RAISE(ABORT,'notification epoch replacement forbidden'); END;
+CREATE TRIGGER personal_notification_epoch_no_delete BEFORE DELETE ON personal_notification_epochs
+BEGIN SELECT RAISE(ABORT,'notification epoch deletion forbidden'); END;
+
+-- One settings row per identity, default OFF. time_zone is the zone used for
+-- this user's quiet hours; IANA validity is enforced by the writer/preflight.
+CREATE TABLE personal_notification_settings (
+  user_id TEXT PRIMARY KEY REFERENCES identities(id),
+  time_zone TEXT NOT NULL CHECK(typeof(time_zone)='text' AND length(time_zone) BETWEEN 1 AND 64),
+  attention_push INTEGER NOT NULL DEFAULT 0 CHECK(typeof(attention_push)='integer' AND attention_push IN (0,1)),
+  quiet_start TEXT NOT NULL DEFAULT '22:00' CHECK(typeof(quiet_start)='text' AND length(quiet_start)=5
+    AND quiet_start GLOB '[0-2][0-9]:[0-5][0-9]' AND substr(quiet_start,1,2) <= '23'),
+  quiet_end TEXT NOT NULL DEFAULT '08:00' CHECK(typeof(quiet_end)='text' AND length(quiet_end)=5
+    AND quiet_end GLOB '[0-2][0-9]:[0-5][0-9]' AND substr(quiet_end,1,2) <= '23'),
+  daily_limit INTEGER NOT NULL DEFAULT 3 CHECK(typeof(daily_limit)='integer' AND daily_limit BETWEEN 0 AND 10),
+  paused INTEGER NOT NULL DEFAULT 0 CHECK(typeof(paused)='integer' AND paused IN (0,1)),
+  revision INTEGER NOT NULL DEFAULT 0
+    CHECK(typeof(revision)='integer' AND revision >= 0 AND revision < 9007199254740991)
+) WITHOUT ROWID;
+CREATE TRIGGER personal_notification_on_identity AFTER INSERT ON identities BEGIN
+  INSERT INTO personal_notification_epochs(user_id) VALUES (NEW.id);
+  INSERT INTO personal_notification_settings(user_id,time_zone) VALUES (NEW.id,'UTC');
+END;
+CREATE TRIGGER personal_notification_settings_insert_guard BEFORE INSERT ON personal_notification_settings
+WHEN NEW.revision IS NOT 0 OR EXISTS(SELECT 1 FROM personal_notification_settings WHERE user_id=NEW.user_id)
+BEGIN SELECT RAISE(ABORT,'notification settings replacement forbidden'); END;
+CREATE TRIGGER personal_notification_settings_user_immutable BEFORE UPDATE OF user_id ON personal_notification_settings
+BEGIN SELECT RAISE(ABORT,'notification settings user immutable'); END;
+CREATE TRIGGER personal_notification_settings_revision_guard BEFORE UPDATE OF revision ON personal_notification_settings
+WHEN NEW.revision <> OLD.revision+1
+BEGIN SELECT RAISE(ABORT,'notification settings revision must increment by one'); END;
+CREATE TRIGGER personal_notification_settings_no_delete BEFORE DELETE ON personal_notification_settings
+BEGIN SELECT RAISE(ABORT,'notification settings deletion forbidden'); END;
+CREATE TRIGGER personal_notification_settings_update_epoch
+AFTER UPDATE OF time_zone,attention_push,quiet_start,quiet_end,daily_limit,paused ON personal_notification_settings
+WHEN NEW.time_zone IS NOT OLD.time_zone OR NEW.attention_push IS NOT OLD.attention_push OR
+  NEW.quiet_start IS NOT OLD.quiet_start OR NEW.quiet_end IS NOT OLD.quiet_end OR
+  NEW.daily_limit IS NOT OLD.daily_limit OR NEW.paused IS NOT OLD.paused
+BEGIN
+  UPDATE personal_notification_settings SET revision=OLD.revision+1 WHERE user_id=NEW.user_id;
+  UPDATE personal_notification_epochs SET revision=revision+1 WHERE user_id=NEW.user_id;
+END;
+
+-- Device endpoints. Only a SHA-256 hash of the endpoint is kept in staging
+-- (no raw subscription, no keys). One endpoint belongs to exactly one identity.
+-- No delete: revoking sets revoked_at_ms once. Revoked rows keep counting
+-- towards capacity (64 per user, 4096 total).
+CREATE TABLE personal_push_targets (
+  user_id TEXT NOT NULL REFERENCES identities(id),
+  target_id TEXT NOT NULL CHECK(typeof(target_id)='text' AND length(target_id)=35
+    AND substr(target_id,1,3)='pt_' AND substr(target_id,4) NOT GLOB '*[^0-9a-f]*'),
+  endpoint_hash TEXT NOT NULL UNIQUE CHECK(typeof(endpoint_hash)='text' AND length(endpoint_hash)=64
+    AND endpoint_hash NOT GLOB '*[^0-9a-f]*'),
+  created_at_ms INTEGER NOT NULL CHECK(typeof(created_at_ms)='integer' AND created_at_ms > 0
+    AND created_at_ms <= 9007199254740991),
+  revoked_at_ms INTEGER CHECK(revoked_at_ms IS NULL OR (typeof(revoked_at_ms)='integer'
+    AND revoked_at_ms >= created_at_ms AND revoked_at_ms <= 9007199254740991)),
+  PRIMARY KEY(user_id,target_id)
+) WITHOUT ROWID;
+CREATE TRIGGER personal_push_target_insert_guard BEFORE INSERT ON personal_push_targets
+WHEN NEW.revoked_at_ms IS NOT NULL
+  OR EXISTS(SELECT 1 FROM personal_push_targets WHERE endpoint_hash=NEW.endpoint_hash
+    OR (user_id=NEW.user_id AND target_id=NEW.target_id))
+BEGIN SELECT RAISE(ABORT,'push target must be new and unrevoked'); END;
+CREATE TRIGGER personal_push_target_capacity BEFORE INSERT ON personal_push_targets
+WHEN (SELECT COUNT(*) FROM personal_push_targets WHERE user_id=NEW.user_id) >= 64
+  OR (SELECT COUNT(*) FROM personal_push_targets) >= 4096
+BEGIN SELECT RAISE(ABORT,'push target capacity reached'); END;
+CREATE TRIGGER personal_push_target_update_guard BEFORE UPDATE ON personal_push_targets
+WHEN NEW.user_id IS NOT OLD.user_id OR NEW.target_id IS NOT OLD.target_id
+  OR NEW.endpoint_hash IS NOT OLD.endpoint_hash OR NEW.created_at_ms IS NOT OLD.created_at_ms
+  OR OLD.revoked_at_ms IS NOT NULL OR NEW.revoked_at_ms IS NULL
+BEGIN SELECT RAISE(ABORT,'push target may only be revoked once'); END;
+CREATE TRIGGER personal_push_target_no_delete BEFORE DELETE ON personal_push_targets
+BEGIN SELECT RAISE(ABORT,'push target deletion forbidden'); END;
+CREATE TRIGGER personal_push_target_insert_epoch AFTER INSERT ON personal_push_targets BEGIN
+  UPDATE personal_notification_epochs SET revision=revision+1 WHERE user_id=NEW.user_id;
+END;
+CREATE TRIGGER personal_push_target_revoke_epoch AFTER UPDATE OF revoked_at_ms ON personal_push_targets BEGIN
+  UPDATE personal_notification_epochs SET revision=revision+1 WHERE user_id=NEW.user_id;
+END;
+
+-- Announcement ledger per user and deterministic delivery key
+-- ('tad1:' + sha256 of [ruleId, taskId, occurrenceOn]). Only tasks the user
+-- can currently act on may have a row; access loss deletes it (reconcile below).
+CREATE TABLE personal_attention_deliveries (
+  user_id TEXT NOT NULL REFERENCES identities(id),
+  delivery_key TEXT NOT NULL CHECK(typeof(delivery_key)='text' AND length(delivery_key)=69
+    AND substr(delivery_key,1,5)='tad1:' AND substr(delivery_key,6) NOT GLOB '*[^0-9a-f]*'),
+  task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+  rule_id TEXT NOT NULL CHECK(rule_id IN ('deadline_overdue','deadline_soon')),
+  occurrence_on TEXT NOT NULL CHECK(
+    typeof(occurrence_on)='text' AND length(occurrence_on)=10 AND
+    occurrence_on GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]' AND
+    CAST(substr(occurrence_on,1,4) AS INTEGER) BETWEEN 1 AND 9999 AND
+    COALESCE(date(occurrence_on,'+0 days')=occurrence_on,0)),
+  status TEXT NOT NULL CHECK(status IN ('baseline','pending','sent','partial','failed','undelivered')),
+  attempts INTEGER NOT NULL DEFAULT 0 CHECK(typeof(attempts)='integer' AND attempts BETWEEN 0 AND 3),
+  last_attempt_at_ms INTEGER NOT NULL CHECK(typeof(last_attempt_at_ms)='integer'
+    AND last_attempt_at_ms > 0 AND last_attempt_at_ms <= 9007199254740991),
+  sent_at_ms INTEGER CHECK(sent_at_ms IS NULL OR (typeof(sent_at_ms)='integer'
+    AND sent_at_ms > 0 AND sent_at_ms <= 9007199254740991)),
+  PRIMARY KEY(user_id,delivery_key),
+  CHECK((status IN ('sent','partial')) = (sent_at_ms IS NOT NULL))
+) WITHOUT ROWID;
+CREATE INDEX personal_attention_deliveries_by_task ON personal_attention_deliveries(user_id,task_id);
+CREATE TRIGGER personal_attention_delivery_insert_guard BEFORE INSERT ON personal_attention_deliveries
+WHEN EXISTS(SELECT 1 FROM personal_attention_deliveries WHERE user_id=NEW.user_id AND delivery_key=NEW.delivery_key)
+  OR NOT EXISTS (
+  SELECT 1 FROM tasks t LEFT JOIN projects p ON p.id=t.project_id
+    JOIN areas a ON a.id=COALESCE(t.area_id,p.area_id)
+    LEFT JOIN area_members m ON m.area_id=a.id AND m.user_id=NEW.user_id
+   WHERE t.id=NEW.task_id AND t.status='open' AND t.due_on = NEW.occurrence_on AND
+    ((a.kind='private' AND a.owner_user_id=NEW.user_id) OR
+     (a.kind='shared' AND t.assignee_user_id=NEW.user_id AND m.role IN ('editor','admin'))))
+BEGIN SELECT RAISE(ABORT,'attention delivery requires eligible task occurrence'); END;
+CREATE TRIGGER personal_attention_delivery_capacity BEFORE INSERT ON personal_attention_deliveries
+WHEN (SELECT COUNT(*) FROM personal_attention_deliveries) >= 8192
+BEGIN SELECT RAISE(ABORT,'attention delivery capacity reached'); END;
+CREATE TRIGGER personal_attention_delivery_update_guard BEFORE UPDATE ON personal_attention_deliveries
+WHEN NEW.user_id IS NOT OLD.user_id OR NEW.delivery_key IS NOT OLD.delivery_key
+  OR NEW.task_id IS NOT OLD.task_id OR NEW.rule_id IS NOT OLD.rule_id
+  OR NEW.occurrence_on IS NOT OLD.occurrence_on
+  OR OLD.status IN ('baseline','sent','undelivered')
+  OR NEW.attempts < OLD.attempts OR NEW.last_attempt_at_ms < OLD.last_attempt_at_ms
+BEGIN SELECT RAISE(ABORT,'attention delivery identity or transition invalid'); END;
+CREATE TRIGGER personal_attention_delivery_delete_children AFTER DELETE ON personal_attention_deliveries BEGIN
+  DELETE FROM personal_attention_device_deliveries WHERE user_id=OLD.user_id AND delivery_key=OLD.delivery_key;
+END;
+
+CREATE TABLE personal_attention_device_deliveries (
+  user_id TEXT NOT NULL,
+  delivery_key TEXT NOT NULL,
+  target_id TEXT NOT NULL,
+  status TEXT NOT NULL CHECK(status IN ('sent','failed','gone')),
+  attempts INTEGER NOT NULL CHECK(typeof(attempts)='integer' AND attempts BETWEEN 1 AND 3),
+  last_attempt_at_ms INTEGER NOT NULL CHECK(typeof(last_attempt_at_ms)='integer'
+    AND last_attempt_at_ms > 0 AND last_attempt_at_ms <= 9007199254740991),
+  PRIMARY KEY(user_id,delivery_key,target_id),
+  FOREIGN KEY(user_id,delivery_key) REFERENCES personal_attention_deliveries(user_id,delivery_key) ON DELETE CASCADE,
+  FOREIGN KEY(user_id,target_id) REFERENCES personal_push_targets(user_id,target_id)
+) WITHOUT ROWID;
+CREATE TRIGGER personal_attention_device_insert_guard BEFORE INSERT ON personal_attention_device_deliveries
+WHEN EXISTS(SELECT 1 FROM personal_attention_device_deliveries WHERE user_id=NEW.user_id
+    AND delivery_key=NEW.delivery_key AND target_id=NEW.target_id)
+  OR (SELECT COUNT(*) FROM personal_attention_device_deliveries) >= 32768
+  OR NOT EXISTS(SELECT 1 FROM personal_attention_deliveries WHERE user_id=NEW.user_id AND delivery_key=NEW.delivery_key)
+  OR NOT EXISTS(SELECT 1 FROM personal_push_targets WHERE user_id=NEW.user_id AND target_id=NEW.target_id)
+BEGIN SELECT RAISE(ABORT,'attention device delivery requires own delivery and target'); END;
+CREATE TRIGGER personal_attention_device_update_guard BEFORE UPDATE ON personal_attention_device_deliveries
+WHEN NEW.user_id IS NOT OLD.user_id OR NEW.delivery_key IS NOT OLD.delivery_key
+  OR NEW.target_id IS NOT OLD.target_id OR OLD.status IN ('sent','gone')
+  OR NEW.attempts < OLD.attempts OR NEW.last_attempt_at_ms < OLD.last_attempt_at_ms
+BEGIN SELECT RAISE(ABORT,'attention device delivery identity or transition invalid'); END;
+
+-- Reconcile: a user who loses access to a task (unassign, membership removal or
+-- downgrade, project move, completion) or whose occurrence is superseded keeps
+-- no delivery rows for it; other users' rows are untouched.
+CREATE TRIGGER personal_attention_delivery_task_reconcile AFTER UPDATE OF
+  assignee_user_id,status,project_id,area_id ON tasks
+BEGIN
+  DELETE FROM personal_attention_deliveries WHERE task_id=NEW.id AND
+    (NEW.status<>'open' OR NOT EXISTS (
+      SELECT 1 FROM areas a LEFT JOIN area_members m
+        ON m.area_id=a.id AND m.user_id=personal_attention_deliveries.user_id
+       WHERE a.id=COALESCE(NEW.area_id,
+         (SELECT area_id FROM projects WHERE id=NEW.project_id))
+         AND ((a.kind='private' AND a.owner_user_id=personal_attention_deliveries.user_id)
+           OR (a.kind='shared' AND NEW.assignee_user_id=personal_attention_deliveries.user_id
+               AND m.role IN ('editor','admin')))
+    ));
+END;
+CREATE TRIGGER personal_attention_delivery_due_reconcile AFTER UPDATE OF due_on ON tasks
+WHEN NEW.due_on IS NOT OLD.due_on
+BEGIN
+  DELETE FROM personal_attention_deliveries WHERE task_id=NEW.id
+    AND occurrence_on IS NOT NEW.due_on;
+END;
+CREATE TRIGGER personal_attention_delivery_membership_delete AFTER DELETE ON area_members BEGIN
+  DELETE FROM personal_attention_deliveries WHERE user_id=OLD.user_id
+    AND task_id IN (SELECT task_id FROM task_effective_areas
+      WHERE effective_area_id=OLD.area_id);
+END;
+CREATE TRIGGER personal_attention_delivery_membership_downgrade AFTER UPDATE OF role ON area_members
+WHEN NEW.role='viewer' AND OLD.role IN ('editor','admin')
+BEGIN
+  DELETE FROM personal_attention_deliveries WHERE user_id=NEW.user_id
+    AND task_id IN (SELECT task_id FROM task_effective_areas
+      WHERE effective_area_id=NEW.area_id);
+END;
+CREATE TRIGGER personal_attention_delivery_project_move AFTER UPDATE OF area_id ON projects
+WHEN NEW.area_id IS NOT OLD.area_id
+BEGIN
+  DELETE FROM personal_attention_deliveries WHERE task_id IN (
+    SELECT t.id FROM tasks t WHERE t.project_id=NEW.id AND NOT EXISTS (
+      SELECT 1 FROM areas a LEFT JOIN area_members m
+        ON m.area_id=a.id AND m.user_id=personal_attention_deliveries.user_id
+       WHERE a.id=NEW.area_id AND
+         ((a.kind='private' AND a.owner_user_id=personal_attention_deliveries.user_id)
+         OR (a.kind='shared' AND t.assignee_user_id=personal_attention_deliveries.user_id
              AND m.role IN ('editor','admin')))
     ));
 END;

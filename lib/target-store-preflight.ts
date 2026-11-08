@@ -2,6 +2,7 @@
 import { closeSync, constants, fstatSync, lstatSync, openSync, readSync, statSync } from "node:fs";
 import { verifyTargetNoteLifecycleJournal } from "./target-note-lifecycle-preflight";
 import path from "node:path";
+import { createHash } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import {
   TARGET_SCHEMA_SQL, TARGET_STORE_FILENAME, TARGET_STORE_SCHEMA_VERSION,
@@ -15,6 +16,8 @@ import {
   TARGET_STAGING_MAX_TOMBSTONES, TARGET_STAGING_NOTE_CHANGE_MAX_EVENTS, TARGET_STAGING_RESTORE_HISTORY_MAX,
   TARGET_STAGING_SUPERSEDED_SESSIONS_MAX, TARGET_STAGING_MAX_NOTES,
   TARGET_STAGING_MAX_PERSONAL_PLANS, TARGET_STAGING_MAX_ATTENTION_STATES, verifyExistingTargetStagingPath,
+  TARGET_STAGING_MAX_PUSH_TARGETS, TARGET_STAGING_MAX_PUSH_TARGETS_PER_USER,
+  TARGET_STAGING_MAX_ATTENTION_DELIVERIES, TARGET_STAGING_MAX_DEVICE_DELIVERIES,
 } from "./target-store-bootstrap";
 
 export type TargetPreflightMode = "stage" | "r2-model";
@@ -28,7 +31,8 @@ export type TargetPreflightCode =
   | "assignee_invalid" | "shared_mapping_invalid" | "shared_admin_missing"
   | "restore_history_invalid" | "note_invalid" | "note_sync_journal_invalid"
   | "personal_plan_invalid"
-  | "personal_attention_invalid";
+  | "personal_attention_invalid"
+  | "personal_notification_invalid";
 
 export interface TargetPreflightOptions {
   stagingDirectory: string;
@@ -588,7 +592,7 @@ export function inspectIsolatedTargetStore(
             LEFT JOIN area_members m ON m.area_id=a.id AND m.user_id=plan.user_id
             WHERE t.id IS NULL OR t.status<>'open' OR a.id IS NULL OR
               NOT ((a.kind='private' AND a.owner_user_id=plan.user_id) OR
-                (a.kind='shared' AND t.assignee_user_id=plan.user_id
+                (a.kind='shared' AND t.assignee_user_id IS plan.user_id
                   AND COALESCE(m.role,'') IN ('editor','admin')))`) !== 0)
         fail("personal_plan_invalid");
     } catch { fail("personal_plan_invalid"); }
@@ -608,7 +612,7 @@ export function inspectIsolatedTargetStore(
             LEFT JOIN area_members m ON m.area_id=a.id AND m.user_id=s.user_id
             WHERE t.id IS NULL OR t.status<>'open' OR a.id IS NULL OR
               NOT ((a.kind='private' AND a.owner_user_id=s.user_id) OR
-                (a.kind='shared' AND t.assignee_user_id=s.user_id
+                (a.kind='shared' AND t.assignee_user_id IS s.user_id
                   AND COALESCE(m.role,'') IN ('editor','admin'))) OR
               typeof(s.revision)<>'integer' OR s.revision < 0 OR
                 s.revision >= 9007199254740991 OR
@@ -623,6 +627,71 @@ export function inspectIsolatedTargetStore(
                    (s.state='dismissed' AND s.snoozed_until_ms IS NULL))`) !== 0)
         fail("personal_attention_invalid");
     } catch { fail("personal_attention_invalid"); }
+
+    // v23: push foundation. Settings/epoch per identity, valid zone and quiet
+    // window, hashed targets bound to one identity, deliveries only for tasks
+    // the owner can still act on, device rows referencing the owner's targets.
+    try {
+      const validZone = (zone: unknown) => {
+        if (typeof zone !== "string" || zone.length < 1 || zone.length > 64) return false;
+        try { new Intl.DateTimeFormat("en-US", { timeZone: zone }); return true; } catch { return false; }
+      };
+      const hhmm = (v: unknown) => typeof v === "string" && /^([01][0-9]|2[0-3]):[0-5][0-9]$/.test(v);
+      const safeRev = (v: unknown) => typeof v === "number" && Number.isSafeInteger(v) && v >= 0 && v < 9007199254740991;
+      const settings = all("SELECT user_id,time_zone,attention_push,quiet_start,quiet_end,daily_limit,paused,revision FROM personal_notification_settings") as Array<Record<string, unknown>>;
+      let bad = settings.some(r => !validZone(r.time_zone) || !hhmm(r.quiet_start) || !hhmm(r.quiet_end) ||
+        (r.attention_push !== 0 && r.attention_push !== 1) || (r.paused !== 0 && r.paused !== 1) ||
+        !Number.isInteger(r.daily_limit) || (r.daily_limit as number) < 0 || (r.daily_limit as number) > 10 ||
+        !safeRev(r.revision));
+      bad = bad ||
+        count("SELECT COUNT(*) AS n FROM identities i LEFT JOIN personal_notification_settings s ON s.user_id=i.id WHERE s.user_id IS NULL") !== 0 ||
+        count("SELECT COUNT(*) AS n FROM personal_notification_settings s LEFT JOIN identities i ON i.id=s.user_id WHERE i.id IS NULL") !== 0 ||
+        count("SELECT COUNT(*) AS n FROM identities i LEFT JOIN personal_notification_epochs e ON e.user_id=i.id WHERE e.user_id IS NULL") !== 0 ||
+        count("SELECT COUNT(*) AS n FROM personal_notification_epochs e LEFT JOIN identities i ON i.id=e.user_id WHERE i.id IS NULL") !== 0 ||
+        count("SELECT COUNT(*) AS n FROM personal_notification_epochs WHERE typeof(revision)<>'integer' OR revision < 0 OR revision >= 9007199254740991") !== 0 ||
+        count("SELECT COUNT(*) AS n FROM personal_push_targets") > TARGET_STAGING_MAX_PUSH_TARGETS ||
+        count("SELECT COALESCE(MAX(c),0) AS n FROM (SELECT COUNT(*) AS c FROM personal_push_targets GROUP BY user_id)") > TARGET_STAGING_MAX_PUSH_TARGETS_PER_USER ||
+        count(`SELECT COUNT(*) AS n FROM personal_push_targets t LEFT JOIN identities i ON i.id=t.user_id
+          WHERE i.id IS NULL OR typeof(t.target_id)<>'text' OR length(t.target_id)<>35
+            OR substr(t.target_id,1,3)<>'pt_' OR substr(t.target_id,4) GLOB '*[^0-9a-f]*'
+            OR typeof(t.endpoint_hash)<>'text' OR length(t.endpoint_hash)<>64 OR t.endpoint_hash GLOB '*[^0-9a-f]*'
+            OR typeof(t.created_at_ms)<>'integer' OR t.created_at_ms <= 0
+            OR (t.revoked_at_ms IS NOT NULL AND (typeof(t.revoked_at_ms)<>'integer' OR t.revoked_at_ms < t.created_at_ms))`) !== 0 ||
+        count("SELECT COUNT(*) AS n FROM (SELECT endpoint_hash FROM personal_push_targets GROUP BY endpoint_hash HAVING COUNT(*) > 1)") !== 0 ||
+        count("SELECT COUNT(*) AS n FROM personal_attention_deliveries") > TARGET_STAGING_MAX_ATTENTION_DELIVERIES ||
+        count("SELECT COUNT(*) AS n FROM personal_attention_device_deliveries") > TARGET_STAGING_MAX_DEVICE_DELIVERIES ||
+        count(`SELECT COUNT(*) AS n FROM personal_attention_deliveries d
+          LEFT JOIN identities i ON i.id=d.user_id
+          LEFT JOIN tasks t ON t.id=d.task_id
+          LEFT JOIN projects p ON p.id=t.project_id
+          LEFT JOIN areas a ON a.id=COALESCE(t.area_id,p.area_id)
+          LEFT JOIN area_members m ON m.area_id=a.id AND m.user_id=d.user_id
+          WHERE i.id IS NULL OR t.id IS NULL OR t.status<>'open' OR a.id IS NULL OR
+            NOT ((a.kind='private' AND a.owner_user_id=d.user_id) OR
+              (a.kind='shared' AND t.assignee_user_id IS d.user_id
+                AND COALESCE(m.role,'') IN ('editor','admin'))) OR
+            d.rule_id NOT IN ('deadline_overdue','deadline_soon') OR
+            t.due_on IS NOT d.occurrence_on OR
+            d.status NOT IN ('baseline','pending','sent','partial','failed','undelivered') OR
+            typeof(d.attempts)<>'integer' OR d.attempts < 0 OR d.attempts > 3 OR
+            typeof(d.last_attempt_at_ms)<>'integer' OR d.last_attempt_at_ms <= 0 OR
+            ((d.status IN ('sent','partial')) <> (d.sent_at_ms IS NOT NULL)) OR
+            (d.sent_at_ms IS NOT NULL AND typeof(d.sent_at_ms)<>'integer')`) !== 0 ||
+        count(`SELECT COUNT(*) AS n FROM personal_attention_device_deliveries x
+          LEFT JOIN personal_attention_deliveries d ON d.user_id=x.user_id AND d.delivery_key=x.delivery_key
+          LEFT JOIN personal_push_targets t ON t.user_id=x.user_id AND t.target_id=x.target_id
+          WHERE d.user_id IS NULL OR t.user_id IS NULL OR x.status NOT IN ('sent','failed','gone') OR
+            typeof(x.attempts)<>'integer' OR x.attempts < 1 OR x.attempts > 3 OR
+            typeof(x.last_attempt_at_ms)<>'integer' OR x.last_attempt_at_ms <= 0`) !== 0;
+      if (!bad) {
+        // The key must be the deterministic hash of its own rule/task/occurrence.
+        const keys = all("SELECT delivery_key,rule_id,task_id,occurrence_on FROM personal_attention_deliveries") as Array<Record<string, string>>;
+        bad = keys.some(r => r.delivery_key !== "tad1:" + createHash("sha256")
+          .update("lumi:r2d5:attention-delivery:v1\0")
+          .update(JSON.stringify([r.rule_id, r.task_id, r.occurrence_on])).digest("hex"));
+      }
+      if (bad) fail("personal_notification_invalid");
+    } catch { fail("personal_notification_invalid"); }
 
     if (mode === "r2-model") {
       try {
