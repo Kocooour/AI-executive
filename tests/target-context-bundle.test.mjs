@@ -316,3 +316,21 @@ test("authority: closed, unknown or malformed actor return null",()=>{
   f.authority.close();
   assert.equal(f.authority.resolveContextBundle("carol",req("find","all")),null);
 });
+
+test("fail closed (never partial) on a corrupt own plan row or a blank emitted title",()=>{
+  for(const bad of ["garbage","2026-13-40"]){
+    const f=fixture();
+    assert.ok(bundle(f,"bob","plan_today","my-plan"));
+    f.db.exec("PRAGMA ignore_check_constraints=ON");
+    f.db.prepare("UPDATE personal_task_plans SET when_on=? WHERE user_id='bob' AND task_id='b-passed'").run(bad);
+    f.db.exec("PRAGMA ignore_check_constraints=OFF");
+    for(const p of [["what_matters","my-plan"],["plan_today","my-plan"],["find","all"]])
+      assert.equal(bundle(f,"bob",...p),null,bad+" "+p.join("/"));
+    assert.ok(bundle(f,"alice","what_matters","my-plan"),"another user's bundle is unaffected");
+  }
+  const f=fixture();
+  f.db.exec("PRAGMA ignore_check_constraints=ON");
+  f.db.prepare("UPDATE tasks SET title='   ' WHERE id='b-over'").run();
+  f.db.exec("PRAGMA ignore_check_constraints=OFF");
+  assert.equal(bundle(f,"bob","what_matters","my-plan"),null);
+});

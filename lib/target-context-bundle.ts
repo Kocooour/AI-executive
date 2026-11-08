@@ -167,6 +167,12 @@ export function resolveAuthorizedTargetContextBundle(
     // A source returning an empty page for a non-existent identity would be
     // indistinguishable from "nothing authorized": fail closed instead.
     if(!db.prepare("SELECT 1 FROM identities WHERE id=?").get(actorUserId))return null;
+    // Fail closed on corrupt actor-private plan rows: a malformed when_on would
+    // otherwise match no date window and silently drop a task (partial bundle).
+    const badPlans=db.prepare(`SELECT COUNT(*) AS n FROM personal_task_plans
+      WHERE user_id=? AND (typeof(when_on)<>'text' OR length(when_on)<>10 OR
+        date(when_on,'+0 days') IS NOT when_on)`).get(actorUserId) as {n:number}|undefined;
+    if(!badPlans||badPlans.n!==0)return null;
     const evaluationDate=validRequest(bare);
     if(!evaluationDate)return null;
     const {purpose,scope,nowMs,timeZone,maxItems}=bare;
@@ -259,6 +265,8 @@ export function resolveAuthorizedTargetContextBundle(
         attentionEpoch:att.attentionEpoch,sourceRevisions:srcRev};
     }
 
+    // An emitted item must carry a real title (CHECK bypass would yield blanks).
+    if(drafts.some(d=>typeof d.title!=="string"||d.title.trim().length===0))return null;
     // Item cap, then byte cap by dropping the lowest-priority (last) items.
     let items=drafts.slice(0,maxItems) as ContextBundleItem[];
     let truncated=more||drafts.length>maxItems;

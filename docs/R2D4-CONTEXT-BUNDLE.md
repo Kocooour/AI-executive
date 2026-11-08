@@ -84,3 +84,24 @@ klientovi; veřejná serializace jej neobsahuje.
 pořadí, matice soukromí (bob editor, carol viewer, erin cizí), odvolání /
 přeřazení / dokončení / dismiss / snooze mění bundle i revizi, validace, strop
 bajtů a determinismus, autorita (zavřená, neznámý aktér).
+
+## Hranice zjištěné nezávislým testem
+
+- **Fail-closed na poškozená data aktéra:** poškozený vlastní `when_on` (obejití
+  CHECK) nebo prázdný titulek vydávané položky vrací celý balík `null`, nikdy
+  částečný výsledek. Dokončený úkol s chybějícím `completed_at_ms` se do balíku
+  nedostane (vybírají se jen otevřené úkoly); takové poškození odhalí preflight.
+- **Pozornost nad 100 řádků:** zdroje se čtou s limitem 100; v `plan_today` může
+  úkol z Mého plánu přijít bez připojené pozornosti, pokud je jeho pozornost až
+  za první stránkou. Signalizuje to `truncated:true`; asistent má v tom případě
+  považovat seznam za neúplný.
+- **`find`** řadí podle ID (pořadí titulkového hledání), nikoli podle relevance, a
+  obsahuje i dokončené úkoly (titulkové hledání nefiltruje stav) — **k potvrzení
+  vlastníkem**, zda je to pro AI žádoucí.
+- `id` položky je ID vlastní entity (úkolu, projektu, poznámky) — nikdy ID
+  Oblasti, rodičovského projektu, řešitele ani jiného uživatele.
+- `revision` zahrnuje `nowMs`; dva balíky ze stejných dat v různý okamžik mají
+  jinou revizi (nevhodné jako klíč cache).
+- Nízkoúrovňový `resolveAuthorizedTargetContextBundle` věří předané
+  `restoreGeneration`; vynucená cesta je `readPreflightedTargetContextBundle` /
+  autorita (preflight + ověřený aktér).
