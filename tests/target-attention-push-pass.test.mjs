@@ -790,6 +790,7 @@ test("review #331: lowering daily limit during pass drops unsent claims without 
   configure(fx,"alice",{dailyLimit:2});
   await run(fx,after,NOW+2*HOUR);
   assert.equal(after.calls.length,1,"remaining current occurrence is eligible after raising limit");
-  assert.equal(rows(fx,"alice").filter(d=>d.task_id===first||d.task_id===second&&d.status==="sent").length>=1,true);
+  assert.deepEqual(rows(fx,"alice").filter(d=>d.task_id===first||d.task_id===second)
+    .map(d=>d.status).sort(),["sent","sent"]);
   ok(fx);
 });
