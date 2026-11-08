@@ -605,3 +605,92 @@ test("issue #326: snoozing after claim but before first send releases the occurr
   assert.equal(s.calls.length,1,"previously sent occurrence is not duplicated");
   ok(fx);
 });
+
+test("review #331: crash after failed device outcome preserves the remaining attempts",async()=>{
+  const fx=fixture();
+  task(fx,"alice","baseline");const target=register(fx,"alice","device");
+  enable(fx,"alice");await run(fx,sender());
+  const id=task(fx,"alice","retry after crash","2026-11-02");
+  const key=targetAttentionDeliveryKey("deadline_overdue",id,"2026-11-02");
+  fx.db.prepare(`INSERT INTO personal_attention_deliveries
+    (user_id,delivery_key,task_id,rule_id,occurrence_on,status,attempts,last_attempt_at_ms)
+    VALUES ('alice',?,?,'deadline_overdue','2026-11-02','pending',1,?)`)
+    .run(key,id,NOW-20*60_000);
+  fx.db.prepare(`INSERT INTO personal_attention_device_deliveries
+    (user_id,delivery_key,target_id,status,attempts,last_attempt_at_ms)
+    VALUES ('alice',?,?,'failed',1,?)`).run(key,target,NOW-19*60_000);
+  const s=sender();await run(fx,s,NOW);
+  assert.deepEqual(s.calls.map(c=>c.targetId),[target],"confirmed failure is retryable");
+  assert.equal(rows(fx,"alice").find(r=>r.task_id===id).status,"sent");
+  assert.deepEqual(devices(fx,"alice").map(d=>[d.status,d.attempts]),[["sent",2]]);
+  await run(fx,s,NOW+HOUR);assert.equal(s.calls.length,1,"no duplicate after success");
+  ok(fx);
+});
+
+test("review #331: partial retry never delivers to a device registered afterward",async()=>{
+  const fx=fixture();
+  task(fx,"alice","baseline");
+  const d1=register(fx,"alice","d1"),d2=register(fx,"alice","d2");
+  enable(fx,"alice");await run(fx,sender());
+  const id=task(fx,"alice","partial before registration","2026-11-02");
+  const first=sender((_,target)=>target===d2?"failed":"sent");
+  await run(fx,first);
+  assert.equal(first.calls.length,2);
+  assert.equal(rows(fx,"alice").find(r=>r.task_id===id).status,"partial");
+  const late=register(fx,"alice","late");
+  const next=sender();await run(fx,next,NOW+HOUR);
+  assert.deepEqual(next.calls.map(c=>c.targetId),[d2]);
+  assert.equal(next.calls.some(c=>c.targetId===late),false);
+  assert.deepEqual(devices(fx,"alice").map(d=>d.target_id).sort(),[d1,d2].sort(),
+    "new target has no reservation in the old delivery");
+  assert.equal(rows(fx,"alice").find(r=>r.task_id===id).status,"sent");
+  ok(fx);
+});
+
+test("review #331: a quiet-hour reservation excludes newly registered devices",async()=>{
+  const fx=fixture();
+  task(fx,"alice","baseline");const d1=register(fx,"alice","d1");
+  const d2=register(fx,"alice","d2");
+  enable(fx,"alice",{timeZone:"Europe/Prague"});
+  await run(fx,sender(),Q-2_000);
+  const id=task(fx,"alice","reserved across quiet hours","2026-11-02");
+  let current=Q-2_000;
+  const first=sender(()=>{current=Q+2_000;return "sent";});
+  await run(fx,first,current,()=>current);
+  assert.equal(first.calls.length,1);
+  assert.equal(rows(fx,"alice").find(r=>r.task_id===id).status,"partial");
+  assert.deepEqual(devices(fx,"alice").map(d=>d.status).sort(),["reserved","sent"]);
+  const late=register(fx,"alice","d3");
+  const morning=Date.UTC(2026,10,6,7,30);
+  const next=sender();await run(fx,next,morning,()=>morning);
+  assert.deepEqual(next.calls.map(c=>c.targetId),
+    [[d1,d2].find(d=>d!==first.calls[0].targetId)]);
+  assert.equal(next.calls.some(c=>c.targetId===late),false);
+  assert.equal(rows(fx,"alice").find(r=>r.task_id===id).status,"sent");
+  ok(fx);
+});
+
+test("review #331: stale in-flight reserved device is abandoned, not duplicate-sent",async()=>{
+  const fx=fixture();
+  task(fx,"alice","baseline");
+  const d1=register(fx,"alice","d1"),d2=register(fx,"alice","d2");
+  enable(fx,"alice");await run(fx,sender());
+  const id=task(fx,"alice","crash in flight","2026-11-02");
+  const key=targetAttentionDeliveryKey("deadline_overdue",id,"2026-11-02");
+  fx.db.prepare(`INSERT INTO personal_attention_deliveries
+    (user_id,delivery_key,task_id,rule_id,occurrence_on,status,attempts,last_attempt_at_ms)
+    VALUES ('alice',?,?,'deadline_overdue','2026-11-02','pending',1,?)`)
+    .run(key,id,NOW-20*60_000);
+  fx.db.prepare(`INSERT INTO personal_attention_device_deliveries
+    (user_id,delivery_key,target_id,status,attempts,last_attempt_at_ms)
+    VALUES ('alice',?,?,'sent',1,?)`).run(key,d1,NOW-19*60_000);
+  fx.db.prepare(`INSERT INTO personal_attention_device_deliveries
+    (user_id,delivery_key,target_id,status,attempts,last_attempt_at_ms)
+    VALUES ('alice',?,?,'reserved',0,?)`).run(key,d2,NOW-20*60_000);
+  const s=sender();await run(fx,s);
+  assert.equal(s.calls.length,0,"unknown in-flight delivery must not be duplicated");
+  assert.equal(rows(fx,"alice").find(r=>r.task_id===id).status,"sent");
+  assert.deepEqual(devices(fx,"alice").map(r=>r.status).sort(),["sent","unknown"]);
+  await run(fx,s,NOW+HOUR);assert.equal(s.calls.length,0);
+  ok(fx);
+});
