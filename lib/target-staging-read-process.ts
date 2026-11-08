@@ -224,14 +224,23 @@ export function parseStagingNoteSyncResult(value: unknown, areaId: string, limit
   for (const input of page.changes) {
     if (!input || typeof input !== "object" || Array.isArray(input)) return null;
     const row = input as Record<string, unknown>;
-    if (!exact(row, "kind,noteId,projectId,revision,seq") ||
-        (row.kind !== "edit" && row.kind !== "delete") || !noteSyncId(row.noteId) ||
+    // Mirrors the reader: edit/delete/leave carry no parent revision and a
+    // positive revision; a lifecycle upsert (create/move) carries the parent
+    // revision of its project (null for an Area note) and may be revision 0.
+    const upsert = row.kind === "upsert";
+    if (!exact(row, upsert ? "kind,noteId,parentRevision,projectId,revision,seq"
+          : "kind,noteId,projectId,revision,seq") ||
+        !["edit", "delete", "upsert", "leave"].includes(row.kind as string) ||
+        !noteSyncId(row.noteId) ||
         (row.projectId !== null && !noteSyncId(row.projectId)) ||
-        !noteSyncInt(row.revision) || row.revision < 1 ||
+        !noteSyncInt(row.revision) || (!upsert && row.revision < 1) ||
+        (upsert && (row.projectId === null ? row.parentRevision !== null
+          : !noteSyncInt(row.parentRevision))) ||
         !noteSyncInt(row.seq) || row.seq < 1 || row.seq > stamp.head ||
         (changes.length > 0 && row.seq !== changes[changes.length - 1].seq + 1)) return null;
-    changes.push({ seq: row.seq, kind: row.kind, noteId: row.noteId,
-      projectId: row.projectId as string | null, revision: row.revision });
+    changes.push({ seq: row.seq, kind: row.kind as "edit" | "delete" | "upsert" | "leave",
+      noteId: row.noteId, projectId: row.projectId as string | null, revision: row.revision,
+      ...(upsert ? { parentRevision: row.parentRevision as number | null } : {}) });
   }
   if (page.more && (page.phase === "bootstrap" ? entries.length : changes.length) !== limit)
     return null;

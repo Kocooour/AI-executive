@@ -15,6 +15,10 @@ Vzorem je komprese změnového záznamu úkolů (R2c.2b, [ARCHITECTURE.md](ARCHI
 - Nové `seq` = `MAX(nejvyšší živé seq, floor_seq) + 1` pro Oblast, takže plně zkomprimovaná Oblast
   nikdy nepoužije číslo znovu; vložení řádku s `seq <= floor_seq` je odmítnuto.
 - Kapacita `TARGET_STAGING_NOTE_CHANGE_MAX_EVENTS` počítá jen živé řádky; komprese ji uvolní.
+  **Pozor:** trvalé auditní tabulky poznámek (edit/delete/lifecycle) mají vlastní strop
+  `TARGET_STAGING_AUDIT_MAX_EVENTS` (4096 na tabulku) a kompakce je nemaže; zápis se tedy
+  zastaví na auditním stropu dřív než na stropu žurnálu. Retence auditu (export/archivace)
+  je samostatné rozhodnutí pro R4, nikoli součást této kompakce.
 - Auditní řádky Oblasti s podlahou > 0 zůstávají trvalé (spojení audit -> žurnál se po kompaci už
   nedá ověřit řádkem, proto se ověřuje počtem, viz níže).
 - „Hlava“ Oblasti (stamp svědka, bootstrap, live guardy) je `MAX(živé seq, floor_seq)`.
@@ -37,6 +41,9 @@ transakce, omezený jediný retry jen při přechodném odmítnutí před tělem
 `journal_present` při horkém `lumi-target.sqlite-journal` (přerušený zápis/obnova; postup viz
 ARCHITECTURE R2c.2b). Pro každou Oblast: nová podlaha = `MIN(seq s committed_at_ms >= now − retence) − 1`,
 jinak `MAX(seq)`, nikdy ne pod současnou; poté se smažou všechny řádky `seq <= podlaha` po dávkách.
+Cursor přesně **na** podlaze se dál obsluhuje (všechny `seq > floor` existují); jen cursor
+pod podlahou dostane `409 resync_required`.
+
 Výsledek bez obsahu: `{ ok, areas, deleted }` (`areas` = Oblasti se zvýšenou podlahou).
 Výchozí retence 30 dní, minimum 7 (návrh, rozhoduje vlastník). Do anchor žurnálu se zapíše
 `compaction` intent s payloadem `{scope:"note_journal", areas, deleted}`.
@@ -44,7 +51,7 @@ Výchozí retence 30 dní, minimum 7 (návrh, rozhoduje vlastník). Do anchor ž
 ## Proč nezůstává „poslední řádek poznámky“
 
 U změnového záznamu úkolů zůstává poslední řádek každého klíče, protože feed a členství z něj
-rekonstruují stav. Note sync takovou potřebu nemá: klient s cursorem na/za podlahou musí stejně
+rekonstruují stav. Note sync takovou potřebu nemá: klient s cursorem **pod** podlahou musí stejně
 znovu provést úplný bootstrap Oblasti ze živých poznámek (viz [R2D-NOTE-SYNC.md](R2D-NOTE-SYNC.md)),
 a klient nad podlahou dostává všechny události `seq > cursor`, které všechny zůstávají. Proto se
 mažou všechny řádky `seq <= podlaha`.
