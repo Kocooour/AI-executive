@@ -256,10 +256,14 @@ test("pagination walks all items without duplicates",()=>{
 
 test("staging authority path: valid actor, revocation, close",()=>{
   const f=fixture();
-  const read=f.authority.readAttentionCandidatePage("bob","all","active",NOON,TZ,100,0);
+  // R2d.4k: the authority evaluates in the actor's server-side PROFILE zone.
+  for(const who of ["bob","carol"])f.db.prepare(
+    "UPDATE personal_notification_settings SET time_zone=? WHERE user_id=?").run(TZ,who);
+  const read=f.authority.readAttentionCandidatePage("bob","all","active",NOON,100,0);
   assert.deepEqual(ids(read),ids(page(f)));
-  assert.equal(f.authority.readAttentionCandidatePage("a client actor","all","active",NOON,TZ,100,0),null);
-  assert.equal(f.authority.readAttentionCandidatePage("bob","all","active",NOON,"Mars/Olympus",100,0),null);
+  assert.equal(read.timeZone,TZ);
+  assert.equal(typeof read.notificationEpoch,"number");
+  assert.equal(f.authority.readAttentionCandidatePage("a client actor","all","active",NOON,100,0),null);
   const issued=issueDurableTargetStagingSession(f.store,"bob",600);
   assert.equal(issued.ok,true);
   const tokenHash=hashTargetStagingSessionToken(issued.sessionToken);
@@ -269,9 +273,9 @@ test("staging authority path: valid actor, revocation, close",()=>{
   assert.deepEqual(check(read),{ok:true});
   assert.equal(revokeAllDurableTargetStagingSessionsForUser(f.store,"bob").ok,true);
   assert.notEqual(check(read).ok,true);
-  assert.ok(f.authority.readAttentionCandidatePage("carol","all","active",NOON,TZ,100,0));
+  assert.ok(f.authority.readAttentionCandidatePage("carol","all","active",NOON,100,0));
   f.authority.close();
-  assert.equal(f.authority.readAttentionCandidatePage("carol","all","active",NOON,TZ,100,0),null);
+  assert.equal(f.authority.readAttentionCandidatePage("carol","all","active",NOON,100,0),null);
 });
 
 test("output is a strict allowlist and leaks nothing foreign",()=>{
@@ -419,4 +423,55 @@ test("fail closed on a corrupt lifecycle row",()=>{
   f.db.prepare("UPDATE personal_attention_states SET snoozed_until_ms=5 WHERE task_id='b-over'").run();
   assert.equal(hidden(f),null);
   assert.equal(page(f),null,"any malformed own lifecycle row fails every view closed");
+});
+
+// ---- R2d.4k: the evaluation zone is the server-side profile zone ----------
+const setProfileZone=(f,who,zone)=>f.db.prepare(
+  "UPDATE personal_notification_settings SET time_zone=? WHERE user_id=?").run(zone,who);
+
+test("R2d.4k: same instant, two profile zones -> different evaluationDate and rules",()=>{
+  const f=fixture();
+  f.db.prepare("INSERT INTO tasks(id,area_id,project_id,title,assignee_user_id,due_on) VALUES ('c-today','carol-private',NULL,'Carol due',NULL,'2026-11-04')").run();
+  f.db.prepare("INSERT INTO tasks(id,area_id,project_id,title,assignee_user_id,due_on) VALUES ('b2-today','bob-private',NULL,'Bob due',NULL,'2026-11-04')").run();
+  setProfileZone(f,"bob","Pacific/Kiritimati");   // 2026-11-05 01:00 local
+  setProfileZone(f,"carol","Etc/GMT+12");         // 2026-11-03 23:00 local
+  const bob=f.authority.readAttentionCandidatePage("bob","all","active",NOON,100,0);
+  const carol=f.authority.readAttentionCandidatePage("carol","all","active",NOON,100,0);
+  assert.equal(bob.timeZone,"Pacific/Kiritimati");assert.equal(bob.evaluationDate,"2026-11-05");
+  assert.equal(carol.timeZone,"Etc/GMT+12");assert.equal(carol.evaluationDate,"2026-11-03");
+  assert.equal(bob.items.find(i=>i.taskId==="b2-today").ruleId,"deadline_overdue");
+  assert.equal(carol.items.find(i=>i.taskId==="c-today").ruleId,"deadline_soon");
+  // The default (UTC) differs from both again.
+  setProfileZone(f,"bob","UTC");
+  const utc=f.authority.readAttentionCandidatePage("bob","all","active",NOON,100,0);
+  assert.equal(utc.evaluationDate,"2026-11-04");
+  assert.equal(utc.items.find(i=>i.taskId==="b2-today").ruleId,"deadline_soon");
+});
+
+test("R2d.4k: a profile zone change moves revision and notification epoch",()=>{
+  const f=fixture();
+  const before=f.authority.readAttentionCandidatePage("bob","all","active",NOON,100,0);
+  assert.equal(before.timeZone,"UTC");
+  setProfileZone(f,"bob",TZ);
+  const after=f.authority.readAttentionCandidatePage("bob","all","active",NOON,100,0);
+  assert.equal(after.timeZone,TZ);
+  assert.notEqual(after.revision,before.revision);
+  assert.equal(after.notificationEpoch,before.notificationEpoch+1);
+  // Another identity's zone never affects bob.
+  setProfileZone(f,"carol","Asia/Tokyo");
+  const again=f.authority.readAttentionCandidatePage("bob","all","active",NOON,100,0);
+  assert.equal(again.revision,after.revision);
+});
+
+test("R2d.4k: missing or invalid profile zone fails closed",()=>{
+  const f=fixture();
+  setProfileZone(f,"bob","Mars/Olympus"); // CHECK only bounds the length
+  // Store preflight (IANA validity) and the zone reader both refuse.
+  assert.equal(f.authority.readAttentionCandidatePage("bob","all","active",NOON,100,0),null);
+  setProfileZone(f,"bob","UTC");
+  assert.ok(f.authority.readAttentionCandidatePage("bob","all","active",NOON,100,0));
+  // No settings row (deletion is trigger-guarded; drop the guard in the fixture).
+  f.db.exec("DROP TRIGGER personal_notification_settings_no_delete");
+  f.db.prepare("DELETE FROM personal_notification_settings WHERE user_id='bob'").run();
+  assert.equal(f.authority.readAttentionCandidatePage("bob","all","active",NOON,100,0),null);
 });

@@ -54,6 +54,8 @@ function store({users=[EDITOR,VIEWER]}={}){
   db.prepare("INSERT INTO area_members(area_id,user_id,role) VALUES ('a_s1',?,'admin')").run(OWNER);
   if(users.includes(EDITOR))db.prepare("INSERT INTO area_members(area_id,user_id,role) VALUES ('a_s1',?,'editor')").run(EDITOR);
   if(users.includes(VIEWER))db.prepare("INSERT INTO area_members(area_id,user_id,role) VALUES ('a_s1',?,'viewer')").run(VIEWER);
+  // R2d.4k: Attention/AI evaluate in the actor's server-side profile zone.
+  db.prepare("UPDATE personal_notification_settings SET time_zone=?").run(TZ);
   fx.authority=new TargetStagingSessionAuthority(fx.store);
   fixtures.push(fx);
   return fx;
@@ -83,7 +85,7 @@ const dayPages=(fx,u,filter)=>["today","upcoming"].map(window=>readAuthorizedMyP
   actorUserId:u,areaFilter:filter,window,evaluationDate:TODAY,throughDate:window==="today"?null:AHEAD,
   limit:100,offset:0,restoreGeneration:fx.stage.restoreGeneration}));
 const bundle=(fx,u,purpose,scope)=>resolveAuthorizedTargetContextBundle(fx.db,{purpose,scope,
-  query:purpose==="find"?"SNT":null,nowMs:NOW,timeZone:TZ,maxItems:50,actorUserId:u,restoreGeneration:fx.stage.restoreGeneration});
+  query:purpose==="find"?"SNT":null,nowMs:NOW,maxItems:50,actorUserId:u,restoreGeneration:fx.stage.restoreGeneration});
 const must=(v,label)=>{assert.ok(v,label+" returned null");return v;};
 
 // ======= guard 1: the Attention lifecycle join is scoped to the ACTOR (foreign lifecycle rows never apply) =======
@@ -106,7 +108,7 @@ test("G1. a foreign user's lifecycle row on my task never reaches my Attention (
   // canonical preflight rejects the corrupt rows: every authority-level read must fail closed, never answer
   for(const u of [OWNER,EDITOR])
     for(const view of ["active","hidden"])
-      assert.equal(fx.authority.readAttentionCandidatePage(u,"all",view,NOW,TZ,100,0),null,`${u}/${view}: the authority fails closed on the corrupt store`);
+      assert.equal(fx.authority.readAttentionCandidatePage(u,"all",view,NOW,100,0),null,`${u}/${view}: the authority fails closed on the corrupt store`);
   // db-level read model: the join is on the ACTOR's rows only
   const ownerActive=must(attention(fx,OWNER,"all","active"),"owner active"),ownerHidden=must(attention(fx,OWNER,"all","hidden"),"owner hidden");
   assert.deepEqual(ids(ownerActive),["t_g_sh"],"the owner's active list: the shared task (only a FOREIGN row exists) and not the snoozed private one");
@@ -178,7 +180,7 @@ test("G2. a change during the pass (access lost, completed, dismissed, push disa
       assert.ok(pv,"preview for the dismissal");
       const res=A.changeAttentionLifecycle(token(fx,VIEWER),{...taskBase(fx,VIEWER,"t_g_scn_vw",privArea(fx,VIEWER)),
         ruleId:"deadline_overdue",occurrenceOn:FRESH,action:"dismiss",snoozedUntilMs:null,
-        expectedAttentionEpoch:pv.expectedAttentionEpoch,expectedStateRevision:pv.expectedStateRevision,timeZone:TZ});
+        expectedAttentionEpoch:pv.expectedAttentionEpoch,expectedStateRevision:pv.expectedStateRevision});
       assert.equal(res.ok,true,JSON.stringify(res));
     },
     t_g_scn_st:()=>{
@@ -247,9 +249,9 @@ test("G3. a task assigned to a shared-Area viewer is absent from My Plan, Attent
   // authority level: the canonical preflight rejects the store (assignee_invalid) -> every personal channel fails closed
   const A=fx.authority;
   for(const out of [A.readScopedOffsetPage(VIEWER,"my-plan",100,0),A.readMyPlanDayTaskPage(VIEWER,"all","today",TODAY,null,100,0),
-    A.readAttentionCandidatePage(VIEWER,"all","active",NOW,TZ,100,0),A.readMyPlanHomeSummary(VIEWER),
-    A.resolveContextBundle(VIEWER,{purpose:"what_matters",scope:"my-plan",query:null,nowMs:NOW,timeZone:TZ,maxItems:50}),
-    A.resolveContextBundle(VIEWER,{purpose:"plan_today",scope:"my-plan",query:null,nowMs:NOW,timeZone:TZ,maxItems:50})])
+    A.readAttentionCandidatePage(VIEWER,"all","active",NOW,100,0),A.readMyPlanHomeSummary(VIEWER),
+    A.resolveContextBundle(VIEWER,{purpose:"what_matters",scope:"my-plan",query:null,nowMs:NOW,maxItems:50}),
+    A.resolveContextBundle(VIEWER,{purpose:"plan_today",scope:"my-plan",query:null,nowMs:NOW,maxItems:50})])
     assert.ok(out===null||!mine.test(JSON.stringify(out)),"an authority channel exposes the viewer-assigned task");
   // push: the corrupt store cannot even mint a writable token (settings cannot be enabled), and two passes send nothing
   assert.equal(A.issueWritable(VIEWER),null,"the corrupt store issues no writable session");

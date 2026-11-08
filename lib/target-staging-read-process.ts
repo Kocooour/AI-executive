@@ -9,7 +9,7 @@ import type {
 import { temporalCalendarOrdinal } from "./target-task-temporal-read-model";
 import type {PersonalWhenWindow,PersonalWhenPage,PersonalWhenItem} from "./target-personal-when-read-model";
 import type {MyPlanTaskDayWindow,MyPlanTaskAreaFilter,MyPlanDayTask,MyPlanDayTaskPage} from "./target-my-plan-day-task-read-model";
-import {attentionEvaluationWindow,attentionKey,currentAttentionRule,type AttentionCandidate,type AttentionCandidatePage,type AttentionAreaFilter,type AttentionView} from "./target-attention-read-model";
+import {attentionEvaluationWindow,attentionKey,currentAttentionRule,type AttentionCandidate,type AttentionAreaFilter,type AttentionView} from "./target-attention-read-model";
 import {endOfLocalDate} from "./attention";
 import type {TargetGlobalTaskPage,TargetGlobalTask,TargetGlobalTaskScope} from "./target-global-task-read-model";
 import type {TargetGlobalProjectPage,TargetGlobalProject} from "./target-global-project-read-model";
@@ -19,6 +19,7 @@ import type {AuthorizedSearchPage,AuthorizedSearchItem} from "./target-authorize
 import {validCombinedPositions} from "./target-staging-global-combined-http-cursor";
 import type {PersonalWhenCommandPreview} from "./target-personal-when-command-read";
 import type {AttentionCommandPreview} from "./target-attention-command-read";
+import type {TargetAttentionProfilePage} from "./target-task-staging-reader";
 import type { TemporalScope, TemporalStatus, TemporalTask, TemporalTaskPage, TemporalTaskDetail, TargetTemporalTaskLiveGuard, TemporalDueWindow, TemporalDueWindowPage } from "./target-task-temporal-read-model";
 import type { TargetPrivateProjectPage, TargetReadableProject } from "./target-project-read-model";
 import type { TargetAuthorizedProjectTasksPage } from "./target-project-task-read-model";
@@ -1395,29 +1396,35 @@ export async function readStagingMyPlanDayInChild(
 
 /** R2d.5c.1: strict, bounded Attention DTO. Every item field is validated
  * exactly; areaEpochs/privateEpoch/attentionEpoch/linearization stay
- * server-side for the live release guard (attentionEpoch is also exposed by
+ * server-side for the live release guard (notificationEpoch likewise; attentionEpoch is also exposed by
  * the route as the lifecycle CAS input, never the others). */
 export function parseStagingAttentionPage(
   value:unknown,areaFilter:AttentionAreaFilter,view:AttentionView,
-  evaluatedAtMs:number,timeZone:string,limit:number,
-):AttentionCandidatePage|null {
+  evaluatedAtMs:number,limit:number,
+):TargetAttentionProfilePage|null {
   if(!value||typeof value!=="object"||Array.isArray(value)||
     !["all","personal","shared"].includes(areaFilter)||
     (view!=="active"&&view!=="hidden")||
     !Number.isSafeInteger(evaluatedAtMs)||evaluatedAtMs<0||
     !Number.isSafeInteger(limit)||limit<1||limit>100)return null;
+  const data=value as Record<string,unknown>;
+  // R2d.4k: the zone is the child's server-side PROFILE zone; the parent has no
+  // expectation of its own, so it only accepts a valid zone and checks the DTO
+  // is internally consistent with it.
+  const timeZone=data.timeZone;
+  if(typeof timeZone!=="string")return null;
   const window=attentionEvaluationWindow(evaluatedAtMs,timeZone);
   if(!window)return null;
-  const data=value as Record<string,unknown>;
   if(Object.keys(data).sort().join(",")!==
-    "areaEpochs,areaFilter,attentionEpoch,evaluatedAtMs,evaluationDate,hasMore,items,linearization,ok,privateEpoch,revision,soonThroughDate,timeZone,view"||
+    "areaEpochs,areaFilter,attentionEpoch,evaluatedAtMs,evaluationDate,hasMore,items,linearization,notificationEpoch,ok,privateEpoch,revision,soonThroughDate,timeZone,view"||
     data.ok!==true||data.areaFilter!==areaFilter||data.view!==view||
-    data.evaluatedAtMs!==evaluatedAtMs||data.timeZone!==timeZone||
+    data.evaluatedAtMs!==evaluatedAtMs||
     data.evaluationDate!==window.evaluationDate||
     data.soonThroughDate!==window.soonThroughDate||
     typeof data.revision!=="string"||!REVISION.test(data.revision)||
     !Number.isSafeInteger(data.privateEpoch)||(data.privateEpoch as number)<0||
     !Number.isSafeInteger(data.attentionEpoch)||(data.attentionEpoch as number)<0||
+    !Number.isSafeInteger(data.notificationEpoch)||(data.notificationEpoch as number)<0||
     typeof data.hasMore!=="boolean"||!Array.isArray(data.items)||
     data.items.length>limit||(data.hasMore&&data.items.length!==limit)||
     !Array.isArray(data.areaEpochs))return null;
@@ -1506,17 +1513,18 @@ export function parseStagingAttentionPage(
     evaluatedAtMs,timeZone,evaluationDate:window.evaluationDate,
     soonThroughDate:window.soonThroughDate,areaFilter,view,
     attentionEpoch:data.attentionEpoch as number,linearization,areaEpochs,
-    privateEpoch:data.privateEpoch as number};
+    privateEpoch:data.privateEpoch as number,
+    notificationEpoch:data.notificationEpoch as number};
 }
 export async function readStagingAttentionInChild(
   config:StagingPersonalReadConfig,areaFilter:AttentionAreaFilter,view:AttentionView,
-  evaluatedAtMs:number,timeZone:string,limit:number,offset:number,
-):Promise<AttentionCandidatePage|null>{
+  evaluatedAtMs:number,limit:number,offset:number,
+):Promise<TargetAttentionProfilePage|null>{
   const payload=await runChild(config,"target-staging-attention-child.mjs",[
-    areaFilter,view,String(evaluatedAtMs),timeZone,String(limit),String(offset),
+    areaFilter,view,String(evaluatedAtMs),String(limit),String(offset),
   ]);
   const parsed=parseStagingAttentionPage(payload,areaFilter,view,
-    evaluatedAtMs,timeZone,limit);
+    evaluatedAtMs,limit);
   if(payload!==null&&!parsed)logStagingFailure("attention","invalid_child_dto");
   return parsed;
 }

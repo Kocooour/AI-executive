@@ -10,7 +10,7 @@ const KEY="tatt1:"+"a".repeat(64);
 const REV="b".repeat(64);
 const GEN="123e4567-e89b-42d3-a456-426614174000";
 const CMD_ID="223e4567-e89b-42d3-a456-426614174001";
-const params={areaFilter:"all",view:"active",timeZone:"Europe/Prague",limit:2};
+const params={areaFilter:"all",view:"active",limit:2};
 const item=(taskId="t1",over={})=>({
   attentionKey:KEY.slice(0,-1)+taskId.slice(-1),subjectType:"task",taskId,
   title:"Secret "+taskId,projectId:null,areaId:"area-private",areaKind:"private",
@@ -30,7 +30,7 @@ const command=(over={})=>({
   commandId:CMD_ID,taskId:"t1",ruleId:"deadline_overdue",occurrenceOn:"2026-11-01",
   action:"dismiss",snoozedUntilMs:null,expectedRevision:REV,expectedAttentionEpoch:4,
   expectedStateRevision:null,writeAreaId:"area-private",restoreGeneration:GEN,
-  timeZone:"Europe/Prague",...over,
+  ...over,
 });
 const previewBody=(over={})=>({
   expectedRevision:REV,expectedAttentionEpoch:4,expectedStateRevision:null,
@@ -51,8 +51,9 @@ test("page transport: same-origin no-store GET with exact query and no extra hea
   const u=new URL(url,"http://x");
   assert.equal(u.pathname,"/api/target-staging/attention");
   assert.deepEqual([...u.searchParams.keys()].sort(),
-    ["areaFilter","cursor","limit","timeZone","view"]);
-  assert.equal(u.searchParams.get("timeZone"),"Europe/Prague");
+    ["areaFilter","cursor","limit","view"]);
+  // R2d.4k: the zone is the server-side profile zone, never a query key.
+  assert.equal(u.searchParams.has("timeZone"),false);
   assert.equal(init.method,"GET");assert.equal(init.credentials,"same-origin");
   assert.equal(init.cache,"no-store");assert.equal(init.redirect,"error");
   assert.deepEqual(init.headers,{accept:"application/json"});
@@ -61,8 +62,7 @@ test("page transport: same-origin no-store GET with exact query and no extra hea
 
 test("page transport refuses invalid requests without any network call",async()=>{
   const f=recorder(()=>json(pageBody()));
-  for(const bad of [{areaFilter:"mine"},{view:"x"},{timeZone:"../etc"},
-    {timeZone:"Nope/Zone"},{limit:0},{limit:101},{limit:1.5},{cursor:"bad cursor"},
+  for(const bad of [{areaFilter:"mine"},{view:"x"},{limit:0},{limit:101},{limit:1.5},{cursor:"bad cursor"},
     {cursor:"a.b".padEnd(5000,"a")}])
     assert.deepEqual(await fetchAttentionPage({...params,...bad},f),{status:"invalid"});
   assert.equal(f.calls.length,0);
@@ -111,7 +111,10 @@ test("page DTO strict rejection matrix",()=>{
   for(const extra of ["privateEpoch","linearization","areaEpochs","revision","actorUserId","ok"])
     reject({...pageBody(),[extra]:1});
   reject(pageBody([],{areaFilter:"personal"}));reject(pageBody([],{view:"hidden"}));
-  reject(pageBody([],{timeZone:"UTC"}));
+  // The page zone is display-only (server profile) but must still be a valid zone.
+  reject(pageBody([],{timeZone:"Nope/Zone"}));reject(pageBody([],{timeZone:"../etc"}));
+  reject(pageBody([],{timeZone:5}));
+  assert.equal(parseAttentionPage(pageBody([],{timeZone:"UTC"}),params).timeZone,"UTC");
   reject(pageBody([item(),item("t2"),item("t3")]));//over limit
   reject(pageBody([item()],{hasMore:true,nextCursor:"a.b"}));//short page
   reject(pageBody([item(),item("t2")],{hasMore:true,nextCursor:null}));
@@ -177,7 +180,8 @@ test("appendAttentionPage keeps the pinned instant, epoch and strict order",()=>
   const next=over=>parseAttentionPage(pageBody([item("t3")],over),params);
   assert.equal(appendAttentionPage(first,next({})).items.length,3);
   for(const over of [{evaluatedAtMs:1794000000001},{attentionEpoch:5},
-    {evaluationDate:"2026-11-09"},{soonThroughDate:null}])
+    {evaluationDate:"2026-11-09"},{soonThroughDate:null},
+    {timeZone:"UTC"}/* profile zone changed between pages (R2d.4k) */])
     assert.equal(appendAttentionPage(first,next(over)),null);
   const again=parseAttentionPage(pageBody([item("t3")],
     {hasMore:true,nextCursor:"a.b",items:undefined}),params);
@@ -254,17 +258,19 @@ test("preview refuses bad input locally and maps statuses",async()=>{
       recorder(()=>json({error:"x"},code))),{status});
 });
 
-test("command validator is exactly the writer's twelve fields",()=>{
+test("command validator is exactly the writer's eleven fields",()=>{
   assert.equal(validAttentionCommand(command()),true);
   assert.equal(validAttentionCommand(command({action:"snooze",snoozedUntilMs:5})),true);
   assert.equal(validAttentionCommand(command({action:"restore",expectedStateRevision:0})),true);
   assert.equal(validAttentionCommand({...command(),actor:"u"}),false);
-  const m=command();delete m.timeZone;assert.equal(validAttentionCommand(m),false);
+  // R2d.4k: a client time zone is an unknown key, valid or not.
+  assert.equal(validAttentionCommand({...command(),timeZone:"Europe/Prague"}),false);
+  assert.equal(validAttentionCommand({...command(),timeZone:"UTC"}),false);
+  const m=command();delete m.writeAreaId;assert.equal(validAttentionCommand(m),false);
   for(const over of [{commandId:"x"},{taskId:""},{ruleId:"x"},{occurrenceOn:null},
     {action:"x"},{action:"snooze"},{action:"snooze",snoozedUntilMs:0},
     {snoozedUntilMs:5},{expectedRevision:"short"},{expectedAttentionEpoch:-1},
-    {expectedStateRevision:-1},{writeAreaId:""},{restoreGeneration:"x"},
-    {timeZone:"Nope/Zone"}])
+    {expectedStateRevision:-1},{writeAreaId:""},{restoreGeneration:"x"}])
     assert.equal(validAttentionCommand(command(over)),false,JSON.stringify(over));
   assert.equal(validAttentionCommand(null),false);
   assert.equal(validAttentionCommand([]),false);
@@ -281,7 +287,7 @@ test("PATCH sends protocol header, exact body, same-origin, once",async()=>{
   assert.equal(init.headers["x-lumi-target-protocol"],"1");
   assert.equal(init.headers["content-type"],"application/json");
   assert.deepEqual(JSON.parse(init.body),command());
-  assert.equal(Object.keys(JSON.parse(init.body)).length,12);
+  assert.equal(Object.keys(JSON.parse(init.body)).length,11);
   assert.deepEqual(await sendAttentionCommand(command(),undefined,
     recorder(()=>json({ok:true,replayed:true}))),{status:"ok",replayed:true});
 });

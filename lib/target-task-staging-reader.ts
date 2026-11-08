@@ -42,6 +42,7 @@ import { readAuthorizedTemporalTaskPage, readAuthorizedTemporalTaskDetail, readA
 import { readAuthorizedPersonalWhenPage } from "./target-personal-when-read-model";
 import {readAuthorizedMyPlanDayTaskPage} from "./target-my-plan-day-task-read-model";
 import {readAuthorizedAttentionCandidatePage} from "./target-attention-read-model";
+import {readTargetAttentionProfileZone} from "./target-attention-profile-zone";
 import type {AttentionCandidatePage,AttentionAreaFilter,AttentionView} from "./target-attention-read-model";
 import {readAuthorizedGlobalTaskPage} from "./target-global-task-read-model";
 import type {TargetGlobalTaskPage,TargetGlobalTaskScope} from "./target-global-task-read-model";
@@ -461,19 +462,28 @@ export function readPreflightedMyPlanDayTaskPage(
 }
 
 /** R2d.5a: staging-only Attention candidates for the verified actor, one
- * pinned snapshot. A future HTTP adapter MUST verify session/Area/private epoch live. */
+ * pinned snapshot. R2d.4k: the evaluation zone is the actor's server-side
+ * profile zone read in the SAME snapshot (fail closed); `notificationEpoch` is
+ * the internal live-guard witness of that read. A future HTTP adapter MUST
+ * verify session/Area/private epoch live. */
+export type TargetAttentionProfilePage=AttentionCandidatePage&{notificationEpoch:number};
 export function readPreflightedAttentionCandidatePage(
   store:TargetStagingReadStore,access:TargetStagingReadCredential,
-  request:{areaFilter:AttentionAreaFilter;view:AttentionView;evaluatedAtMs:number;timeZone:string;
+  request:{areaFilter:AttentionAreaFilter;view:AttentionView;evaluatedAtMs:number;
     limit:number;offset:number},
-):AttentionCandidatePage|null {
+):TargetAttentionProfilePage|null {
   return withPreflightedStore(store,()=>null,(db,preflight)=>
     inReadSnapshot(db,()=>{
       if(!preflight(db))return null;
       const actorUserId=verifiedActor(db,access);
-      return actorUserId?readAuthorizedAttentionCandidatePage(db,{
-        ...request,actorUserId,restoreGeneration:store.expectedRestoreGeneration,
-      }):null;
+      if(!actorUserId)return null;
+      const zone=readTargetAttentionProfileZone(db,actorUserId);
+      if(!zone)return null;
+      const page=readAuthorizedAttentionCandidatePage(db,{
+        ...request,timeZone:zone.timeZone,actorUserId,
+        restoreGeneration:store.expectedRestoreGeneration,
+      });
+      return page?{...page,notificationEpoch:zone.notificationEpoch}:null;
     },()=>null));
 }
 

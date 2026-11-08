@@ -20,11 +20,15 @@ a autorizace proběhne před serializací.
   (bez `witness`, ID Oblastí a cizích ID uživatelů; těla jen autorizovaných
   poznámek ve `find`); `null`, pokud by přesáhl strop.
 
-## Požadavek (přesně 6 klíčů, jinak `null`)
+## Požadavek (přesně 5 klíčů, jinak `null`)
 
 `purpose`, `scope`, `query`, `nowMs` (nezáporné bezpečné celé číslo — serverové
-hodiny dodává volající autority), `timeZone` (validuje
-`attentionEvaluationWindow`), `maxItems` 1–50.
+hodiny dodává volající autority), `maxItems` 1–50. **R2d.4k:** bez `timeZone` (klíč je
+neznámý → `null`). Pásmo je serverový profil aktéra
+(`personal_notification_settings.time_zone`), čtený ve stejném snapshotu a validovaný
+`attentionEvaluationWindow`; chybějící/neplatné pásmo → celý balík `null` (u všech
+účelů, včetně `find`). Balík pásmo vrací jako `timeZone`; interní `witness` nese
+`notificationEpoch` pro budoucí živou bariéru.
 
 | purpose | povolené scope | query |
 |---|---|---|

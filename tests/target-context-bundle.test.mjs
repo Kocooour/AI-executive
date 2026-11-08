@@ -74,6 +74,8 @@ function fixture(){
   note.run("n-bob","bob-private",null,"Bob private note secret","BODY-SENTINEL-BOB");
   note.run("n-erin","erin-private",null,"Erin private note secret","BODY-SENTINEL-ERIN");
   note.run("n-alice",stage.unassignedAreaId,null,"Alice private note secret","BODY-SENTINEL-ALICE");
+  // R2d.4k: the bundle evaluates in the actor's server-side PROFILE zone.
+  db.prepare("UPDATE personal_notification_settings SET time_zone=?").run(TZ);
   const reader=new DatabaseSync(stage.databasePath,{readOnly:true});
   const store={stagingDirectory:stage.directory,expectedRestoreGeneration:stage.restoreGeneration};
   const authority=new TargetStagingSessionAuthority(store);
@@ -90,7 +92,7 @@ after(()=>{
 const NOON=Date.parse("2026-11-04T11:00:00Z");
 const TZ="Europe/Prague";
 const req=(purpose,scope,extra={})=>({purpose,scope,
-  query:purpose==="find"?"secret":null,nowMs:NOON,timeZone:TZ,maxItems:50,...extra});
+  query:purpose==="find"?"secret":null,nowMs:NOON,maxItems:50,...extra});
 const bundle=(f,actor,purpose,scope,extra)=>f.authority.resolveContextBundle(actor,req(purpose,scope,extra));
 const ids=b=>b.items.map(i=>i.id);
 const gen=f=>f.stage.restoreGeneration;
@@ -266,8 +268,10 @@ test("validation: purpose/scope combos, query, bounds, zone, clock, keys",()=>{
     req("find","all",{maxItems:0}),req("find","all",{maxItems:51}),
     req("find","all",{maxItems:1.5}),req("find","all",{maxItems:"3"}),
     req("find","all",{maxItems:null}),
+    // R2d.4k: a client time zone is an unknown key, valid or not.
     req("find","all",{timeZone:"Mars/Olympus"}),req("find","all",{timeZone:""}),
-    req("find","all",{timeZone:5}),
+    req("find","all",{timeZone:5}),req("find","all",{timeZone:TZ}),
+    req("what_matters","my-plan",{timeZone:"UTC"}),req("plan_today","my-plan",{timeZone:TZ}),
     req("find","all",{nowMs:-1}),req("find","all",{nowMs:1.5}),
     req("find","all",{nowMs:Number.MAX_SAFE_INTEGER+2}),req("find","all",{nowMs:"1"}),
     req("find","all",{nowMs:NaN}),
@@ -477,4 +481,55 @@ test("truncateUtf8 never returns uncapped text for an invalid cap",async()=>{
   for(const cap of [NaN,Infinity,-1,2.9,-Infinity])
     assert.deepEqual(truncateUtf8("é😀a",cap),{text:"",truncated:true},String(cap));
   assert.deepEqual(truncateUtf8("",NaN),{text:"",truncated:false});
+});
+
+// ---- R2d.4k: profile zone ------------------------------------------------
+const setZone=(f,who,zone)=>f.db.prepare(
+  "UPDATE personal_notification_settings SET time_zone=? WHERE user_id=?").run(zone,who);
+
+test("R2d.4k: the bundle uses the actor's profile zone (same instant, different zones)",()=>{
+  const f=fixture();
+  // NOON = 2026-11-04T11:00Z: 2026-11-05 01:00 in Kiritimati, 2026-11-03 23:00 in GMT+12-.
+  setZone(f,"bob","Pacific/Kiritimati");setZone(f,"carol","Etc/GMT+12");
+  const east=bundle(f,"bob","what_matters","my-plan");
+  assert.equal(east.timeZone,"Pacific/Kiritimati");assert.equal(east.evaluationDate,"2026-11-05");
+  const eastToday=east.items.find(i=>i.id==="b-today");
+  assert.equal(eastToday.attention.ruleId,"deadline_overdue");
+  assert.equal(east.items.find(i=>i.id==="b-over").attention.ruleId,"deadline_overdue");
+  const west=bundle(f,"carol","what_matters","my-plan");
+  assert.equal(west.timeZone,"Etc/GMT+12");assert.equal(west.evaluationDate,"2026-11-03");
+  setZone(f,"bob",TZ);
+  const prague=bundle(f,"bob","what_matters","my-plan");
+  assert.equal(prague.timeZone,TZ);assert.equal(prague.evaluationDate,"2026-11-04");
+  assert.equal(prague.items.find(i=>i.id==="b-today").attention.ruleId,"deadline_soon");
+  assert.notEqual(prague.revision,east.revision);
+  // The provider payload echoes the profile zone and nothing else about it.
+  assert.equal(JSON.parse(serializeTargetContextBundleForProvider(prague)).timeZone,TZ);
+  // find also reports the profile zone (one rule for every purpose).
+  assert.equal(bundle(f,"bob","find","all").timeZone,TZ);
+  // The internal witness carries the notification epoch of the same snapshot.
+  assert.equal(typeof prague.witness.notificationEpoch,"number");
+  const before=prague.witness.notificationEpoch;
+  setZone(f,"bob","Asia/Tokyo");
+  assert.equal(bundle(f,"bob","what_matters","my-plan").witness.notificationEpoch,before+1);
+});
+
+test("R2d.4k: missing or invalid profile zone yields no bundle (fail closed)",()=>{
+  const f=fixture();
+  for(const purpose of ["what_matters","plan_today","find"])
+    assert.ok(bundle(f,"bob",purpose,purpose==="find"?"all":"my-plan"),purpose);
+  setZone(f,"bob","Mars/Olympus"); // CHECK only bounds the length
+  const direct=(actor,purpose,scope)=>resolveAuthorizedTargetContextBundle(f.reader,
+    {...req(purpose,scope),actorUserId:actor,restoreGeneration:gen(f)});
+  for(const purpose of ["what_matters","plan_today","find"]){
+    const scope=purpose==="find"?"all":"my-plan";
+    assert.equal(direct("bob",purpose,scope),null,"db-level "+purpose);
+    assert.equal(bundle(f,"bob",purpose,scope),null,"authority "+purpose);
+  }
+  assert.ok(direct("carol","what_matters","my-plan"),"another actor is unaffected");
+  setZone(f,"bob","UTC");
+  f.db.exec("DROP TRIGGER personal_notification_settings_no_delete");
+  f.db.prepare("DELETE FROM personal_notification_settings WHERE user_id='bob'").run();
+  for(const purpose of ["what_matters","find"])
+    assert.equal(direct("bob",purpose,purpose==="find"?"all":"my-plan"),null,"missing row "+purpose);
 });

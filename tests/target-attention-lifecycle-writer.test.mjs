@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import {randomUUID} from "node:crypto";
+import {createHash,randomUUID} from "node:crypto";
 import {mkdtempSync,mkdirSync,rmSync,readFileSync,writeFileSync} from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -91,7 +91,7 @@ function command(fx,token,who,taskId,action,extra={}){
     expectedRevision:preview.snapshotRevision,
     expectedAttentionEpoch:epoch(fx,who),
     expectedStateRevision:rowOf(fx,who,taskId,ruleId,occurrenceOn)?.revision??null,
-    writeAreaId:area,restoreGeneration:fx.stage.restoreGeneration,timeZone:"UTC",...extra};
+    writeAreaId:area,restoreGeneration:fx.stage.restoreGeneration,...extra};
 }
 const change=(fx,token,c,hash)=>fx.authority.changeAttentionLifecycle(token,c,hash);
 const preflight=fx=>inspectIsolatedTargetStore({
@@ -108,7 +108,7 @@ test("strict command: exact keys, enums, strict date, snooze/until pairing",()=>
     {snoozedUntilMs:null},{snoozedUntilMs:0},{snoozedUntilMs:1.5},{snoozedUntilMs:Number.MAX_SAFE_INTEGER+1},
     {expectedAttentionEpoch:-1},{expectedStateRevision:"0"},{commandId:"x"},{expectedRevision:"abc"}])
     assert.equal(validTargetStagingAttentionLifecycleCommand({...c,...bad}),false,JSON.stringify(bad));
-  for(const extra of [{actorUserId:"alice"},{timezone:"Europe/Prague"}])
+  for(const extra of [{actorUserId:"alice"},{timezone:"Europe/Prague"},{timeZone:"UTC"},{timeZone:"Europe/Prague"}])
     assert.equal(validTargetStagingAttentionLifecycleCommand({...c,...extra}),false);
   for(const action of ["dismiss","restore"])
     assert.equal(validTargetStagingAttentionLifecycleCommand({...c,action,snoozedUntilMs:Date.now()+DAY}),false);
@@ -341,21 +341,84 @@ test("snooze/dismiss require the rule to fire now in the actor's zone; restore d
   assert.deepEqual(change(fx,token,command(fx,token,"alice","p-alice","snooze",
     {ruleId:"deadline_soon",occurrenceOn:day(1)})),{ok:true});
   assert.equal(epoch(fx,"alice"),1);
-  // Zone matters: an unknown zone is rejected by validation.
+  // R2d.4k: a client-supplied zone (even a valid one) makes the command invalid.
   assert.deepEqual(change(fx,token,command(fx,token,"alice","p-alice","dismiss",
-    {ruleId:"deadline_soon",occurrenceOn:day(1),timeZone:"Mars/Olympus"})),
+    {ruleId:"deadline_soon",occurrenceOn:day(1),timeZone:"UTC"})),
     denied("invalid_request"));
   // Undo works even after the occurrence is no longer a current candidate.
   setDue(day(1));
   fx.db.prepare("UPDATE tasks SET title='renamed' WHERE id='p-alice'").run();
   assert.deepEqual(change(fx,token,command(fx,token,"alice","p-alice","restore",
-    {ruleId:"deadline_soon",occurrenceOn:day(1),timeZone:"Pacific/Kiritimati"})),{ok:true});
+    {ruleId:"deadline_soon",occurrenceOn:day(1)})),{ok:true});
+});
+
+const setZone=(fx,who,zone)=>fx.db.prepare(
+  "UPDATE personal_notification_settings SET time_zone=? WHERE user_id=?").run(zone,who);
+const localDate=(zone)=>
+  new Intl.DateTimeFormat("en-CA",{timeZone:zone,year:"numeric",month:"2-digit",day:"2-digit"})
+    .format(new Date());
+
+test("R2d.4k: the current-rule check uses the PROFILE zone, re-read inside the write transaction",()=>{
+  const fx=fixture(),token=fx.authority.issueWritable("alice").sessionToken;
+  const west="Etc/GMT+12",east="Pacific/Kiritimati";
+  const dWest=localDate(west),dEast=localDate(east);
+  assert.ok(dEast>dWest,"fixture needs two different local dates");
+  fx.db.prepare("UPDATE tasks SET due_on=? WHERE id IN ('p-alice','p-alice2')").run(dWest);
+  fx.db.prepare("DELETE FROM personal_task_plans").run();
+  // West profile: dWest is TODAY there -> soon is current, overdue is not.
+  setZone(fx,"alice",west);
+  assert.deepEqual(change(fx,token,command(fx,token,"alice","p-alice","dismiss",
+    {ruleId:"deadline_overdue",occurrenceOn:dWest})),denied("unavailable"));
+  assert.equal(rowCount(fx),0);
+  assert.deepEqual(change(fx,token,command(fx,token,"alice","p-alice","snooze",
+    {ruleId:"deadline_soon",occurrenceOn:dWest})),{ok:true});
+  // The profile moves AFTER the command was built (settings write between
+  // preview and PATCH): the writer honours the zone it reads in its own tx.
+  const stale=command(fx,token,"alice","p-alice2","dismiss",
+    {ruleId:"deadline_soon",occurrenceOn:dWest});
+  setZone(fx,"alice",east);
+  assert.deepEqual(change(fx,token,stale),denied("unavailable"));
+  assert.equal(rowOf(fx,"alice","p-alice2","deadline_soon",dWest),undefined);
+  assert.deepEqual(change(fx,token,command(fx,token,"alice","p-alice2","dismiss",
+    {ruleId:"deadline_overdue",occurrenceOn:dWest})),{ok:true});
+  assert.equal(rowOf(fx,"alice","p-alice2","deadline_overdue",dWest).state,"dismissed");
+});
+
+test("R2d.4k: missing or invalid profile zone fails closed without mutation",()=>{
+  const fx=fixture(),token=fx.authority.issueWritable("alice").sessionToken;
+  const built=["dismiss","snooze","restore"].map(a=>command(fx,token,"alice","p-alice",a));
+  // CHECK only bounds the length, so an unknown IANA name can be stored directly;
+  // store preflight AND the writer both refuse to evaluate Attention with it.
+  setZone(fx,"alice","Mars/Olympus");
+  const before=shared(fx);
+  for(const c of built)assert.deepEqual(change(fx,token,c),denied("unauthorized"),c.action);
+  assert.equal(rowCount(fx),0);assert.equal(receipts(fx).length,0);
+  assert.equal(shared(fx),before);
+  // No settings row at all (deletion is trigger-guarded; drop the guard in the fixture).
+  setZone(fx,"alice","UTC");
+  fx.db.exec("DROP TRIGGER personal_notification_settings_no_delete");
+  fx.db.prepare("DELETE FROM personal_notification_settings WHERE user_id='alice'").run();
+  for(const c of built)assert.deepEqual(change(fx,token,c),denied("unauthorized"),c.action);
+  assert.equal(rowCount(fx),0);assert.equal(receipts(fx).length,0);
+  assert.equal(fx.authority.readAttentionCandidatePage("alice","all","active",Date.now(),50,0),null);
+});
+
+test("R2d.4k: receipt digest domain is v2 and no longer covers a zone",()=>{
+  const fx=fixture(),token=fx.authority.issueWritable("alice").sessionToken;
+  const c=command(fx,token,"alice","p-alice","dismiss");
+    const expected=createHash("sha256").update(JSON.stringify([
+    "personal-attention-v2",c.taskId,c.ruleId,c.occurrenceOn,c.action,c.snoozedUntilMs,
+    c.expectedRevision,c.expectedAttentionEpoch,c.expectedStateRevision,c.writeAreaId,
+    c.restoreGeneration.toLowerCase()])).digest("hex");
+  assert.equal(attentionLifecycleReceiptDigest(c),expected);
+  assert.deepEqual(change(fx,token,c),{ok:true});
+  assert.deepEqual(receipts(fx).map(r=>r.value),[expected]);
 });
 
 test("end to end with the selector: dismiss hides, restore re-activates",()=>{
   const fx=fixture(),token=fx.authority.issueWritable("alice").sessionToken;
   const now=Date.now();
-  const read=view=>fx.authority.readAttentionCandidatePage("alice","all",view,now,"Europe/Prague",100,0);
+  const read=view=>fx.authority.readAttentionCandidatePage("alice","all",view,now,100,0);
   const has=p=>p.items.some(i=>i.taskId==="p-alice"&&i.ruleId==="deadline_overdue");
   assert.ok(read("active"));assert.equal(has(read("active")),true);assert.equal(has(read("hidden")),false);
   assert.deepEqual(change(fx,token,command(fx,token,"alice","p-alice","dismiss")),{ok:true});

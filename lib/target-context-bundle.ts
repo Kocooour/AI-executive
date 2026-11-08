@@ -33,13 +33,17 @@ import type {TargetStagingReadStore} from "./target-task-staging-reader";
 import {verifiedActor} from "./target-task-authenticated-read";
 import type {TargetStagingReadCredential} from "./target-task-authenticated-read";
 import {readAuthorizedTargetNote} from "./target-note-access";
+import {readTargetAttentionProfileZone} from "./target-attention-profile-zone";
 import {temporalCalendarOrdinal} from "./target-task-temporal-read-model";
 
 export type ContextBundlePurpose="what_matters"|"plan_today"|"find";
 export type ContextBundleScope="my-plan"|"all"|"personal"|"shared";
 export type ContextBundleRequest={
   purpose:ContextBundlePurpose;scope:ContextBundleScope;query:string|null;
-  nowMs:number;timeZone:string;maxItems:number;
+  nowMs:number;maxItems:number;
+  // R2d.4k: no client time zone. The evaluation zone is the actor's SERVER-SIDE
+  // profile zone (personal_notification_settings.time_zone), read in the same
+  // pinned snapshot; the bundle echoes it as `timeZone` (fail closed if unset).
 };
 export type ContextBundleSource="attention"|"my_plan"|"global_index"|"title_search";
 export type ContextBundleItem={
@@ -54,6 +58,8 @@ export type ContextBundleWitness={
   linearization:TargetReadLinearization;areaEpochs:HomeSummaryAreaEpoch[];
   noteAreaEpochs:GlobalNoteAreaEpoch[];
   privateEpoch:number|null;attentionEpoch:number|null;
+  /** Actor's notification epoch of the profile-zone read (future live guard). */
+  notificationEpoch:number;
   /** Authorized note guard data of the emitted notes (future live guard). */
   noteGuards:{noteId:string;noteRevision:number;parentRevision:number|null}[];
   sourceRevisions:{attention:string|null;myPlanToday:string|null;
@@ -74,7 +80,7 @@ export const MAX_CONTEXT_NOTE_BODY_BYTES=4096;
 const ACTOR=/^[A-Za-z0-9_.:@-]{1,120}$/;
 const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const PURPOSES=["what_matters","plan_today","find"];
-const REQUEST_KEYS="maxItems,nowMs,purpose,query,scope,timeZone";
+const REQUEST_KEYS="maxItems,nowMs,purpose,query,scope";
 const SOURCE_LIMIT=100;
 const ZERO_REVISION="0".repeat(64);
 
@@ -86,21 +92,20 @@ const plain=(x:unknown):x is Record<string,unknown>=>{
 const addDays=(date:string,n:number)=>
   new Date(Date.parse(date+"T00:00:00Z")+n*86_400_000).toISOString().slice(0,10);
 
-/** Strict request validation shared by every layer. Returns the evaluation
- * date or null. Purpose/scope combinations are part of the contract. */
-function validRequest(r:unknown):string|null {
-  if(!plain(r)||Object.keys(r).sort().join(",")!==REQUEST_KEYS)return null;
+/** Strict request-shape validation shared by every layer (a `timeZone` key is
+ * unknown and refused). Purpose/scope combinations are part of the contract. */
+function validRequest(r:unknown):r is ContextBundleRequest {
+  if(!plain(r)||Object.keys(r).sort().join(",")!==REQUEST_KEYS)return false;
   const q=r as unknown as ContextBundleRequest;
-  if(!PURPOSES.includes(q.purpose))return null;
+  if(!PURPOSES.includes(q.purpose))return false;
   if(q.purpose==="find"){
     if(!["all","personal","shared"].includes(q.scope)||
-      !validAuthorizedTitleQuery(q.query))return null;
+      !validAuthorizedTitleQuery(q.query))return false;
   }else if(!["my-plan","personal","shared"].includes(q.scope)||q.query!==null)
-    return null;
-  if(typeof q.maxItems!=="number"||!Number.isSafeInteger(q.maxItems)||
-    q.maxItems<1||q.maxItems>50)return null;
-  const w=attentionEvaluationWindow(q.nowMs,q.timeZone);
-  return w?w.evaluationDate:null;
+    return false;
+  return typeof q.maxItems==="number"&&Number.isSafeInteger(q.maxItems)&&
+    q.maxItems>=1&&q.maxItems<=50&&
+    typeof q.nowMs==="number"&&Number.isSafeInteger(q.nowMs)&&q.nowMs>=0;
 }
 
 const sameJson=(a:unknown,b:unknown)=>JSON.stringify(a)===JSON.stringify(b);
@@ -211,9 +216,13 @@ export function resolveAuthorizedTargetContextBundle(
       WHERE user_id=? AND (typeof(when_on)<>'text' OR length(when_on)<>10 OR
         date(when_on,'+0 days') IS NOT when_on)`).get(actorUserId) as {n:number}|undefined;
     if(!badPlans||badPlans.n!==0)return null;
-    const evaluationDate=validRequest(bare);
-    if(!evaluationDate)return null;
-    const {purpose,scope,nowMs,timeZone,maxItems}=bare;
+    if(!validRequest(bare))return null;
+    // R2d.4k: profile zone from the same snapshot; missing/invalid => no bundle.
+    const zone=readTargetAttentionProfileZone(db,actorUserId);
+    const window=zone?attentionEvaluationWindow(bare.nowMs,zone.timeZone):null;
+    if(!zone||!window)return null;
+    const evaluationDate=window.evaluationDate,timeZone=zone.timeZone;
+    const {purpose,scope,nowMs,maxItems}=bare;
     let drafts:Draft[]|ContextBundleItem[]=[];
     let more=false;
     const noteGuards=new Map<string,ContextBundleWitness["noteGuards"][number]>();
@@ -250,7 +259,7 @@ export function resolveAuthorizedTargetContextBundle(
       drafts=items;more=sp.hasMore;srcRev.titleSearch=sp.revision;
       witness={linearization:sp.linearization,areaEpochs:sp.areaEpochs,
         noteAreaEpochs:sp.noteAreaEpochs,privateEpoch:null,attentionEpoch:null,
-        noteGuards:[],sourceRevisions:srcRev};
+        notificationEpoch:zone.notificationEpoch,noteGuards:[],sourceRevisions:srcRev};
     }else{
       const filter:AttentionAreaFilter=scope==="my-plan"?"all"
         :scope as "personal"|"shared";
@@ -312,7 +321,8 @@ export function resolveAuthorizedTargetContextBundle(
       srcRev.myPlanUpcoming=upcoming?upcoming.revision:null;
       witness={linearization:att.linearization,areaEpochs:att.areaEpochs,
         noteAreaEpochs:[],privateEpoch:att.privateEpoch,
-        attentionEpoch:att.attentionEpoch,noteGuards:[],sourceRevisions:srcRev};
+        attentionEpoch:att.attentionEpoch,
+        notificationEpoch:zone.notificationEpoch,noteGuards:[],sourceRevisions:srcRev};
     }
 
     // An emitted item must carry a real title (CHECK bypass would yield blanks).
@@ -352,7 +362,7 @@ export function readPreflightedTargetContextBundle(
       const actorUserId=verifiedActor(db,access);
       return actorUserId?resolveAuthorizedTargetContextBundle(db,{
         purpose:request.purpose,scope:request.scope,query:request.query,
-        nowMs:request.nowMs,timeZone:request.timeZone,maxItems:request.maxItems,
+        nowMs:request.nowMs,maxItems:request.maxItems,
         actorUserId,restoreGeneration:store.expectedRestoreGeneration,
       }):null;
     });

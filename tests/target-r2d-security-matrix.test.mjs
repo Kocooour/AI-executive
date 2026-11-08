@@ -141,6 +141,8 @@ function fixture({push=false}={}){
   ls.run(EDITOR,"t_s1_01","deadline_overdue",OVERDUE,"dismissed",null);
   ls.run(OWNER,"t_pr_ow_01","deadline_overdue",OVERDUE,"snoozed",NOW+24*3_600_000);
   ls.run(VIEWER,"t_pr_vw_01","deadline_overdue",OVERDUE,"dismissed",null);
+  // R2d.4k: Attention/AI evaluate in the actor's server-side profile zone.
+  db.prepare("UPDATE personal_notification_settings SET time_zone=?").run(TZ);
   fx.authority=new TargetStagingSessionAuthority(fx.store);
   fx.reader=new DatabaseSync(stage.databasePath,{readOnly:true});
   fixtures.push(fx);
@@ -217,7 +219,7 @@ const LITE=(fx,extra={})=>({scopes:["all"],tasks:extra.tasks??[],projects:extra.
   notes:extra.notes??[],areas:extra.areas??["a_s1"],queries:["SNT"],mpFilters:["all"],
   bundles:[["what_matters","my-plan"],["find","all"],["find","shared"]],temporal:true});
 const bundleReq=(purpose,scope)=>({purpose,scope,query:purpose==="find"?"SNT":null,
-  nowMs:NOW,timeZone:TZ,maxItems:50});
+  nowMs:NOW,maxItems:50});
 /** Loop over probe ids; the id itself must not leak into the output, so keep only the results. */
 const probe=(list,fn)=>list.map(fn).filter(x=>x!==null&&x!==undefined);
 const keyed=(list,fn)=>Object.fromEntries(list.map((k,i)=>[i,fn(k)]));
@@ -271,7 +273,7 @@ const CHANNELS={
       shared:must(fx.authority.readScopedHomeSummary(u,"shared"),"shared"),
       scopedMyPlan:must(fx.authority.readScopedHomeSummary(u,"my-plan"),"scoped my-plan")}:{})}),
   "attention/list":(fx,u,c)=>c.mpFilters.flatMap(f=>["active","hidden"].map(v=>
-    must(fx.authority.readAttentionCandidatePage(u,f,v,NOW,TZ,100,0),f+"/"+v))),
+    must(fx.authority.readAttentionCandidatePage(u,f,v,NOW,100,0),f+"/"+v))),
   "attention/command-preview":(fx,u,c)=>probe(c.tasks,id=>
     fx.authority.previewAttentionCommand(u,id,"deadline_overdue",OVERDUE,NOW)),
   "notifications/settings":(fx,u)=>must(fx.authority.readNotificationSettings(u)),
@@ -533,8 +535,8 @@ test("4. cross-channel consistency per actor: Vše = search = combined, My Plan 
         idsOfOrdered(must(A.readGlobalTaskPage(u,"all",100,0),`${u} global tasks`).tasks),`${u}: global task paging`);
       assert.deepEqual(walk((l,o)=>A.readAuthorizedTitleSearchPage(u,"all","SNT",l,o),pg=>pg.items.map(x=>x.kind+":"+x.id),7),
         must(A.readAuthorizedTitleSearchPage(u,"all","SNT",50,0),`${u} search`).items.map(x=>x.kind+":"+x.id),`${u}: search paging`);
-      assert.deepEqual(walk((l,o)=>A.readAttentionCandidatePage(u,"all","active",NOW,TZ,l,o),pg=>pg.items.map(x=>x.attentionKey),2),
-        must(A.readAttentionCandidatePage(u,"all","active",NOW,TZ,100,0),`${u} attention`).items.map(x=>x.attentionKey),`${u}: attention paging`);
+      assert.deepEqual(walk((l,o)=>A.readAttentionCandidatePage(u,"all","active",NOW,l,o),pg=>pg.items.map(x=>x.attentionKey),2),
+        must(A.readAttentionCandidatePage(u,"all","active",NOW,100,0),`${u} attention`).items.map(x=>x.attentionKey),`${u}: attention paging`);
       {
         const seen=[];let pos={projects:0,tasks:0,notes:0};
         for(let g=0;g<80;g++){
@@ -546,8 +548,8 @@ test("4. cross-channel consistency per actor: Vše = search = combined, My Plan 
       }
     }
     // My Plan >= Attention (active+hidden) >= push recipients
-    const attActive=idsOf(A.readAttentionCandidatePage(u,"all","active",NOW,TZ,100,0));
-    const attHidden=idsOf(A.readAttentionCandidatePage(u,"all","hidden",NOW,TZ,100,0));
+    const attActive=idsOf(A.readAttentionCandidatePage(u,"all","active",NOW,100,0));
+    const attHidden=idsOf(A.readAttentionCandidatePage(u,"all","hidden",NOW,100,0));
     const today=idsOf(A.readMyPlanDayTaskPage(u,"all","today",TODAY,null,100,0)),upcoming=idsOf(A.readMyPlanDayTaskPage(u,"all","upcoming",TODAY,DAYS_AHEAD,100,0));
     for(const id of [...attActive,...attHidden])assert.ok(mineOpen.includes(id),`${u}: Attention item ${id} is not my open work`);
     for(const id of attActive)assert.ok([...today,...upcoming].includes(id),`${u}: Attention item ${id} is missing from My Plan`);
@@ -574,7 +576,7 @@ test("4. cross-channel consistency per actor: Vše = search = combined, My Plan 
       const myPlanPlanned=new Set(idsOf(must(A.resolveContextBundle(u,bundleReq("plan_today","my-plan")),`${u} plan_today/my-plan`)));
       for(const item of planned.items)assert.ok(myPlanPlanned.has(item.id),`${u}: plan_today/${s} item ${item.id} is missing from plan_today/my-plan`);
     }
-    for(const part of [A.readAttentionCandidatePage(u,"all","active",NOW,TZ,100,0),A.readMyPlanDayTaskPage(u,"all","today",TODAY,null,100,0),
+    for(const part of [A.readAttentionCandidatePage(u,"all","active",NOW,100,0),A.readMyPlanDayTaskPage(u,"all","today",TODAY,null,100,0),
       A.resolveContextBundle(u,bundleReq("what_matters","my-plan")),A.resolveContextBundle(u,bundleReq("plan_today","my-plan"))])
       assert.deepEqual(duplicates(part),[],`${u}: duplicate rows in My Plan/Attention/AI`);
   }
@@ -686,7 +688,7 @@ function writerSet(fx,by,previewer,victim){
       expectedPlanRevision:planRev(fx,by,victim.taskId)}),
     attention:()=>A.changeAttentionLifecycle(tok,{...b(),ruleId:"deadline_overdue",occurrenceOn:OVERDUE,
       action:"dismiss",snoozedUntilMs:null,expectedAttentionEpoch:attEpoch(fx,by),
-      expectedStateRevision:stateRev(fx,by,victim.taskId,"deadline_overdue",OVERDUE),timeZone:TZ}),
+      expectedStateRevision:stateRev(fx,by,victim.taskId,"deadline_overdue",OVERDUE)}),
     taskDelete:()=>A.deleteTask(tok,b()),
     noteEdit:()=>A.updateNote(tok,{...note(),noteId:victim.noteId,title:"HACKED",body:"HACKED",commandId:randomUUID()}),
     noteDelete:()=>A.deleteNote(tok,{...note(),noteId:victim.noteId,commandId:randomUUID()}),
@@ -732,7 +734,7 @@ test("2a. viewer reads shared content but is absent from My Plan, Attention, pus
   const s1=/t_s1_/;
   assert.ok(!s1.test(JSON.stringify(A.readScopedOffsetPage(VIEWER,"my-plan",100,0))));
   for(const f of ALL_SCOPES)for(const v of ["active","hidden"])
-    assert.deepEqual(idsOf(A.readAttentionCandidatePage(VIEWER,f,v,NOW,TZ,100,0)).filter(id=>s1.test(id)),[],`attention ${f}/${v}`);
+    assert.deepEqual(idsOf(A.readAttentionCandidatePage(VIEWER,f,v,NOW,100,0)).filter(id=>s1.test(id)),[],`attention ${f}/${v}`);
   for(const [p,s] of [["what_matters","my-plan"],["what_matters","personal"],["what_matters","shared"],
     ["plan_today","my-plan"],["plan_today","personal"],["plan_today","shared"]])
     assert.deepEqual(idsOf(A.resolveContextBundle(VIEWER,bundleReq(p,s))).filter(id=>s1.test(id)),[],`AI ${p}/${s}`);
@@ -952,9 +954,9 @@ test("6. revocation transitions in sequence: every channel is re-checked after e
   fx.db.prepare("UPDATE tasks SET assignee_user_id=? WHERE id='t_s1_91'").run(OWNER);
   recheck(fx,"reassigned away",[EDITOR],{tasks:["t_s1_91"]});
   for(const f of ALL_SCOPES)for(const v of ["active","hidden"]){
-    assert.ok(!idsOf(must(A.readAttentionCandidatePage(EDITOR,f,v,NOW,TZ,100,0),`editor attention ${f}/${v}`)).includes("t_s1_91"),`reassigned task still in the former assignee's Attention ${f}/${v}`);
+    assert.ok(!idsOf(must(A.readAttentionCandidatePage(EDITOR,f,v,NOW,100,0),`editor attention ${f}/${v}`)).includes("t_s1_91"),`reassigned task still in the former assignee's Attention ${f}/${v}`);
   }
-  assert.ok(idsOf(must(A.readAttentionCandidatePage(OWNER,"all","active",NOW,TZ,100,0),"owner attention")).includes("t_s1_91"),"the new assignee's Attention gains the task");
+  assert.ok(idsOf(must(A.readAttentionCandidatePage(OWNER,"all","active",NOW,100,0),"owner attention")).includes("t_s1_91"),"the new assignee's Attention gains the task");
   assert.ok(A.readAuthorizedNote(EDITOR,"n_s1_02"),"note detail still readable after the reassignment (membership unchanged)");
   assert.ok(A.readAuthorizedProjectTasks(EDITOR,"p_s1_01",100,0)?.ok!==false,"project detail still readable after the reassignment");
   assert.equal(A.previewAttentionCommand(EDITOR,"t_s1_91","deadline_overdue",FRESH,NOW),null,"no Attention CAS input for work reassigned away");
@@ -969,7 +971,7 @@ test("6. revocation transitions in sequence: every channel is re-checked after e
   assert.equal(A.changeTemporalTaskStatus(token(fx,EDITOR),{...taskBase(fx,EDITOR,"t_s1_94"),status:"completed"}).ok,true);
   recheck(fx,"completed",[EDITOR]);
   assert.ok(!idsOf(A.readMyPlanDayTaskPage(EDITOR,"all","today",TODAY,null,100,0)).includes("t_s1_94"));
-  assert.ok(!idsOf(A.readAttentionCandidatePage(EDITOR,"all","active",NOW,TZ,100,0)).includes("t_s1_94"));
+  assert.ok(!idsOf(A.readAttentionCandidatePage(EDITOR,"all","active",NOW,100,0)).includes("t_s1_94"));
   pushed=await deliver(fx,"completed");
   assert.ok(!(pushed[EDITOR]??[]).includes("t_s1_94"),"completed work was announced");
 
@@ -1011,7 +1013,7 @@ test("6. revocation transitions in sequence: every channel is re-checked after e
   assert.deepEqual(idsOf(A.readScopedOffsetPage(EDITOR,"my-plan",100,0)).filter(id=>id.startsWith("t_s1")),[]);
   assert.ok(idsOf(A.readGlobalTaskPage(EDITOR,"shared",100,0)).includes("t_s1_03"),"a viewer still reads shared work");
   for(const f of ALL_SCOPES)for(const v of ["active","hidden"])
-    assert.deepEqual(idsOf(must(A.readAttentionCandidatePage(EDITOR,f,v,NOW,TZ,100,0),`downgraded attention ${f}/${v}`)).filter(id=>id.startsWith("t_s1")),[],`downgraded editor keeps S1 work in Attention ${f}/${v}`);
+    assert.deepEqual(idsOf(must(A.readAttentionCandidatePage(EDITOR,f,v,NOW,100,0),`downgraded attention ${f}/${v}`)).filter(id=>id.startsWith("t_s1")),[],`downgraded editor keeps S1 work in Attention ${f}/${v}`);
   for(const [p,sc] of VALID_BUNDLES.filter(([p])=>p!=="find"))
     assert.deepEqual(idsOf(must(A.resolveContextBundle(EDITOR,bundleReq(p,sc)),`downgraded AI ${p}/${sc}`)).filter(id=>id.startsWith("t_s1")),[],`downgraded editor keeps S1 work in AI ${p}/${sc}`);
   // detail channels follow the NEW (read-only) role: the viewer still reads the note, the project and its tasks
@@ -1041,7 +1043,7 @@ test("6. revocation transitions in sequence: every channel is re-checked after e
   assert.equal(A.readAuthorizedNote(EDITOR,"n_s1_02"),null,"removed member reads no note");
   assert.deepEqual(A.readSharedTaskDetail(EDITOR,"t_s1_03"),{ok:false,reason:"unavailable"},"removed member reads no shared task");
   for(const f of ALL_SCOPES)for(const v of ["active","hidden"])
-    assert.deepEqual(idsOf(must(A.readAttentionCandidatePage(EDITOR,f,v,NOW,TZ,100,0),`removed attention ${f}/${v}`)).filter(id=>id.startsWith("t_s1")),[],`removed member keeps S1 work in Attention ${f}/${v}`);
+    assert.deepEqual(idsOf(must(A.readAttentionCandidatePage(EDITOR,f,v,NOW,100,0),`removed attention ${f}/${v}`)).filter(id=>id.startsWith("t_s1")),[],`removed member keeps S1 work in Attention ${f}/${v}`);
   pushed=await deliver(fx,"member removed");
   assert.deepEqual((pushed[EDITOR]??[]).filter(t=>t.startsWith("t_s1")),[]);
 
@@ -1092,7 +1094,7 @@ const http=async(handler,pathAndQuery,cookie)=>{
 };
 const HTTP="AI_EXECUTIVE_TARGET_STAGING_HTTP_";
 const HTTP_FAMILIES=[[GLOBAL_INDEX,"/api/target-staging/global-index?scope=all"],
-  [ATTENTION,"/api/target-staging/attention?timeZone=UTC"],[NOTIFICATIONS,"/api/target-staging/notifications/settings"],
+  [ATTENTION,"/api/target-staging/attention"],[NOTIFICATIONS,"/api/target-staging/notifications/settings"],
   [NOTE_SYNC,"/api/target-staging/note-sync?areaId=a_s1&limit=100"],
   [ATTENTION_PREVIEW,"/api/target-staging/attention/command?taskId=t_s1_07&ruleId=deadline_overdue&occurrenceOn="+OVERDUE]];
 const FLAG_FAMILIES=[
@@ -1116,9 +1118,9 @@ test("8. HTTP spot checks: global index, attention, command preview, notificatio
     assert.deepEqual(foundTokens(fx,gi.text).filter(t=>!allowed.has(t)),[],`${u}: HTTP global-index leaks`);
     assert.ok(!gi.text.includes("BODY-SENTINEL"));
     // --- attention list ---
-    const at=await http(ATTENTION,"/api/target-staging/attention?timeZone="+encodeURIComponent(TZ),sessions[u].cookie);
+    const at=await http(ATTENTION,"/api/target-staging/attention",sessions[u].cookie);
     assert.equal(at.status,200,`${u}: attention ${at.text.slice(0,120)}`);
-    const internal=A.readAttentionCandidatePage(u,"all","active",at.body.evaluatedAtMs,TZ,100,0);
+    const internal=A.readAttentionCandidatePage(u,"all","active",at.body.evaluatedAtMs,100,0);
     assert.deepEqual(at.body.items.map(x=>x.taskId),internal.items.map(x=>x.taskId),`${u}: HTTP attention != internal attention`);
     assert.deepEqual(foundTokens(fx,at.text).filter(t=>!allowed.has(t)),[],`${u}: HTTP attention leaks`);
     assert.ok(at.body.items.every(x=>m.mine(u).some(t=>t.id===x.taskId)),`${u}: HTTP attention has work that is not mine`);
@@ -1163,7 +1165,7 @@ test("8. HTTP spot checks: global index, attention, command preview, notificatio
   assert.equal((await http(GLOBAL_INDEX,"/api/target-staging/global-index?scope=all",viewer.cookie)).status,200);
   assert.equal(durable.revokeDurableTargetStagingSession(fx.store,viewer.sessionId).ok,true);
   for(const [handler,url] of [[GLOBAL_INDEX,"/api/target-staging/global-index?scope=all"],
-    [ATTENTION,"/api/target-staging/attention?timeZone=UTC"],[NOTIFICATIONS,"/api/target-staging/notifications/settings"],
+    [ATTENTION,"/api/target-staging/attention"],[NOTIFICATIONS,"/api/target-staging/notifications/settings"],
     [NOTE_SYNC,"/api/target-staging/note-sync?areaId=a_s1&limit=100"],
     [ATTENTION_PREVIEW,"/api/target-staging/attention/command?taskId=t_pr_vw_01&ruleId=deadline_overdue&occurrenceOn="+OVERDUE]]){
     const r=await http(handler,url,viewer.cookie);

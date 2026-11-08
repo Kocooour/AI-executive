@@ -35,7 +35,7 @@ export type AttentionCommand={
   commandId:string;taskId:string;ruleId:AttentionRuleId;occurrenceOn:string;
   action:AttentionAction;snoozedUntilMs:number|null;expectedRevision:string;
   expectedAttentionEpoch:number;expectedStateRevision:number|null;
-  writeAreaId:string;restoreGeneration:string;timeZone:string;
+  writeAreaId:string;restoreGeneration:string;
 };
 /** Content-free failure vocabulary. "uncertain" only exists for PATCH. */
 export type AttentionFailure="unauthorized"|"stale"|"conflict"|"not_found"|
@@ -185,14 +185,15 @@ function parseItem(
  * and everything that disagrees with the request the page was fetched for. */
 export function parseAttentionPage(
   raw:unknown,params:{areaFilter:AttentionAreaFilter;view:AttentionView;
-    timeZone:string;limit:number},
+    limit:number},
 ):AttentionPage|null{
   if(!FILTERS.includes(params.areaFilter)||!VIEWS.includes(params.view)||
-    !validAttentionTimeZone(params.timeZone)||!validLimit(params.limit))return null;
+    !validLimit(params.limit))return null;
   if(!obj(raw)||!exact(raw,["items","hasMore","nextCursor","areaFilter","view",
     "timeZone","evaluationDate","soonThroughDate","evaluatedAtMs","attentionEpoch"])||
     raw.areaFilter!==params.areaFilter||raw.view!==params.view||
-    raw.timeZone!==params.timeZone||!Array.isArray(raw.items)||
+    // R2d.4k: the zone is the server-side PROFILE zone, display-only here.
+    !validAttentionTimeZone(raw.timeZone)||!Array.isArray(raw.items)||
     raw.items.length>params.limit||typeof raw.hasMore!=="boolean"||
     (raw.hasMore&&(raw.items.length!==params.limit||!validCursor(raw.nextCursor)))||
     (!raw.hasMore&&raw.nextCursor!==null)||
@@ -214,7 +215,7 @@ export function parseAttentionPage(
     items.push(item);
   }
   return {items,hasMore:raw.hasMore,nextCursor:raw.nextCursor as string|null,
-    areaFilter:params.areaFilter,view:params.view,timeZone:params.timeZone,
+    areaFilter:params.areaFilter,view:params.view,timeZone:raw.timeZone as string,
     evaluationDate,soonThroughDate,
     evaluatedAtMs:raw.evaluatedAtMs,attentionEpoch:raw.attentionEpoch};
 }
@@ -261,8 +262,8 @@ export function parseAttentionPreview(raw:unknown):AttentionPreview|null{
 }
 const COMMAND_FIELDS=["commandId","taskId","ruleId","occurrenceOn","action",
   "snoozedUntilMs","expectedRevision","expectedAttentionEpoch",
-  "expectedStateRevision","writeAreaId","restoreGeneration","timeZone"];
-/** Exactly the server writer's twelve-field command. */
+  "expectedStateRevision","writeAreaId","restoreGeneration"];
+/** Exactly the server writer's eleven-field command (no client time zone). */
 export function validAttentionCommand(x:unknown):x is AttentionCommand{
   if(!obj(x)||!exact(x,COMMAND_FIELDS))return false;
   return typeof x.commandId==="string"&&uuid.test(x.commandId)&&
@@ -277,8 +278,7 @@ export function validAttentionCommand(x:unknown):x is AttentionCommand{
     typeof x.expectedRevision==="string"&&revisionPattern.test(x.expectedRevision)&&
     epoch(x.expectedAttentionEpoch)&&optionalEpoch(x.expectedStateRevision)&&
     typeof x.writeAreaId==="string"&&areaPattern.test(x.writeAreaId)&&
-    typeof x.restoreGeneration==="string"&&uuid.test(x.restoreGeneration)&&
-    validAttentionTimeZone(x.timeZone);
+    typeof x.restoreGeneration==="string"&&uuid.test(x.restoreGeneration);
 }
 
 function discard(response:Response):void{
@@ -370,24 +370,25 @@ const writeInit=(command:AttentionCommand,method:"PATCH"|"POST",
   method,credentials:"same-origin",cache:"no-store",redirect:"error",
   headers:{accept:"application/json","content-type":"application/json",
     "x-lumi-target-protocol":"1"},
-  // Rebuilt field by field: nothing but the twelve allowlisted keys is sent.
+  // Rebuilt field by field: nothing but the eleven allowlisted keys is sent.
   body:JSON.stringify(Object.fromEntries(COMMAND_FIELDS.map(
     k=>[k,(command as unknown as Record<string,unknown>)[k]]))),
   signal,
 });
 
-/** GET only. The evaluation instant, actor and ACL are never client inputs. */
+/** GET only. The evaluation instant, time zone (server profile), actor and ACL
+ * are never client inputs. */
 export async function fetchAttentionPage(
-  params:{areaFilter:AttentionAreaFilter;view:AttentionView;timeZone:string;
+  params:{areaFilter:AttentionAreaFilter;view:AttentionView;
     limit:number;cursor?:string;signal?:AbortSignal},
   fetchImpl:typeof fetch=fetch,
 ):Promise<AttentionPageResult>{
-  const {areaFilter,view,timeZone,limit,cursor,signal}=params;
+  const {areaFilter,view,limit,cursor,signal}=params;
   if(!FILTERS.includes(areaFilter)||!VIEWS.includes(view)||
-    !validAttentionTimeZone(timeZone)||!validLimit(limit)||
+    !validLimit(limit)||
     (cursor!==undefined&&!validCursor(cursor)))return {status:"invalid"};
   if(signal?.aborted)return {status:"aborted"};
-  const query=new URLSearchParams({areaFilter,view,timeZone,limit:String(limit)});
+  const query=new URLSearchParams({areaFilter,view,limit:String(limit)});
   if(cursor!==undefined)query.set("cursor",cursor);
   let response:Response;
   try{
@@ -406,7 +407,7 @@ export async function fetchAttentionPage(
   try{
     const raw=await boundedJson(response,MAX_PAGE_BYTES,signal);
     if(signal?.aborted)return {status:"aborted"};
-    const page=parseAttentionPage(raw,{areaFilter,view,timeZone,limit});
+    const page=parseAttentionPage(raw,{areaFilter,view,limit});
     return page?{status:"ok",page}:{status:"invalid_response"};
   }catch{return {status:signal?.aborted?"aborted":"invalid_response"};}
 }

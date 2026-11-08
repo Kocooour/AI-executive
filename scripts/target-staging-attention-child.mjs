@@ -1,11 +1,10 @@
 /** R2d.5c.1: isolated, actor-bound Attention candidate read. No listeners/writes. */
 import path from "node:path";
 import {TargetStagingSessionAuthority} from "../lib/target-staging-session-authority.ts";
-import {attentionEvaluationWindow} from "../lib/target-attention-read-model.ts";
 import {resolveChildActor} from "./target-staging-child-actor.mjs";
 
 try {
-  const [areaFilter,view,rawInstant,timeZone,rawLimit,rawOffset,extra]=
+  const [areaFilter,view,rawInstant,rawLimit,rawOffset,extra]=
     process.argv.slice(2);
   const stagingDirectory=process.env.AI_EXECUTIVE_TARGET_STAGING_DIRECTORY;
   const expectedRestoreGeneration=process.env.AI_EXECUTIVE_TARGET_STAGING_RESTORE_GENERATION;
@@ -15,7 +14,6 @@ try {
     !["active","hidden"].includes(view)||
     !/^(?:0|[1-9][0-9]{0,15})$/.test(rawInstant||"")||
     !Number.isSafeInteger(Number(rawInstant))||
-    attentionEvaluationWindow(Number(rawInstant),timeZone)===null||
     !/^(?:[1-9]|[1-9][0-9]|100)$/.test(rawLimit||"")||
     !/^(?:0|[1-9][0-9]{0,6})$/.test(rawOffset||"")||
     Number(rawOffset)>1_000_000||
@@ -33,7 +31,7 @@ try {
         stagingDirectory,expectedRestoreGeneration,ownerUserId,
       });
       const page=actor&&authority.readAttentionCandidatePage(
-        actor.actor,areaFilter,view,Number(rawInstant),timeZone,
+        actor.actor,areaFilter,view,Number(rawInstant),
         Number(rawLimit),Number(rawOffset));
       if(!page)process.exitCode=1;
       else process.stdout.write(JSON.stringify({ok:true,...page}));

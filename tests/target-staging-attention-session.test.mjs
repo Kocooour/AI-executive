@@ -45,7 +45,7 @@ const PREVIEW="GET /api/target-staging/attention/command";
 const PATCH="PATCH /api/target-staging/attention/command";
 const RECEIPT="POST /api/target-staging/attention/command/receipt";
 const make=(f,ctx=()=>"auth-1",over={})=>createAttentionSession({
-  areaFilter:"all",view:"active",timeZone:"Europe/Prague",limit:2,
+  areaFilter:"all",view:"active",limit:2,
   contextVersion:ctx,fetch:f,...over});
 const ready=async(f,ctx)=>{const s=make(f,ctx);assert.equal((await s.loadFirst()).ok,true);return s;};
 
@@ -139,7 +139,7 @@ test("context change while loading discards the late response",async()=>{
 });
 
 test("invalid config and throwing contextVersion fail closed",async()=>{
-  for(const over of [{areaFilter:"x"},{view:"x"},{timeZone:"Nope/Zone"},{limit:0},
+  for(const over of [{areaFilter:"x"},{view:"x"},{limit:0},
     {limit:101},{contextVersion:()=>""},{contextVersion:()=>{throw Error("x");}}]){
     const f=server({[PAGE]:FIRST});
     const s=make(f,()=>"A",over);
@@ -223,10 +223,12 @@ test("act: preview then PATCH built only from server data, then invalidated",asy
   const sent=JSON.parse(f.calls.find(c=>c.key===PATCH).init.body);
   assert.deepEqual(Object.keys(sent).sort(),["action","commandId","expectedAttentionEpoch",
     "expectedRevision","expectedStateRevision","occurrenceOn","restoreGeneration","ruleId",
-    "snoozedUntilMs","taskId","timeZone","writeAreaId"]);
+    "snoozedUntilMs","taskId","writeAreaId"]);
+  // R2d.4k: neither the page request nor the command carries a client zone.
+  assert.equal(new URL(f.calls.find(c=>c.key===PAGE).url,"http://x").searchParams.has("timeZone"),false);
   assert.equal(sent.taskId,"task-1");assert.equal(sent.ruleId,"deadline_overdue");
   assert.equal(sent.expectedRevision,REV);assert.equal(sent.writeAreaId,"area-private");
-  assert.equal(sent.restoreGeneration,GEN);assert.equal(sent.timeZone,"Europe/Prague");
+  assert.equal(sent.restoreGeneration,GEN);assert.equal("timeZone" in sent,false);
   assert.equal(sent.snoozedUntilMs,1794003600000);assert.equal(sent.action,"snooze");
   assert.match(sent.commandId,UUID);
   assert.deepEqual(s.getSnapshot(),{status:"invalidated"});

@@ -12,13 +12,14 @@ Cache API; veškerý stav žije jen v paměti objektu relace.
 - `fetchAttentionPage`, `fetchAttentionCommandPreview`, `sendAttentionCommand`
   (PATCH), `fetchAttentionCommandReceipt` (POST). Vše `same-origin`,
   `credentials:"same-origin"`, `cache:"no-store"`, `redirect:"error"`.
-  PATCH/POST posílají `x-lumi-target-protocol: 1` a přesně dvanáctipolní příkaz
-  (pole se znovu skládají jednotlivě, nic navíc neodejde). `Origin` doplní prohlížeč.
+  PATCH/POST posílají `x-lumi-target-protocol: 1` a přesně jedenáctipolní příkaz
+  bez `timeZone` (R2d.4k; pole se znovu skládají jednotlivě, nic navíc neodejde).
+  Dotaz stránky `GET` neobsahuje `timeZone` (R2d.4k): pásmo je serverový profil. `Origin` doplní prohlížeč.
 - Tělo odpovědi je omezené (stránka 2 MiB, ostatní 16 KiB), vyžaduje `no-store`,
   `application/json`, žádné přesměrování a striktní UTF-8/JSON.
 - **Striktní DTO** zrcadlí serverové allowlisty: žádné cizí klíče (`privateEpoch`,
   `linearization`, `areaEpochs`, `revision`, identita aktéra), přesné typy, shoda s
-  požadavkem (`areaFilter`, `view`, `timeZone`), pravidlo musí odpovídat okénku
+  požadavkem (`areaFilter`, `view`); `timeZone` odpovědi je serverové profilové pásmo (jen platná IANA zóna, ke zobrazení; změna pásma mezi stránkami řetězec odmítne), pravidlo musí odpovídat okénku
   vydanému serverem, řazení (závažnost, `relevantOn`, bajty `taskId`), žádné
   duplicity, lifecycle shodný s `view`, `hasMore ⇒ plná stránka + kurzor`.
   Vydaný `attentionEpoch` je jediná povolená epocha.
@@ -34,7 +35,7 @@ Cache API; veškerý stav žije jen v paměti objektu relace.
 
 ## Relace — `lib/target-staging-attention-session.ts`
 
-`createAttentionSession({areaFilter,view,timeZone,limit,contextVersion,fetch?})`
+`createAttentionSession({areaFilter,view,limit,contextVersion,fetch?})` (R2d.4k: bez `timeZone`)
 
 - Explicitní `loadFirst()` / `loadMore()` / `reload()` (= `loadFirst`), nic se
   nenačítá samo ani předem. `getSnapshot()` vrací kopie; položky existují jen ve
@@ -74,7 +75,7 @@ Cache API; veškerý stav žije jen v paměti objektu relace.
   `loadFirst()`/`reload()`, který data znovu autorizuje server.
 - Příkaz se skládá výhradně ze serverového preview, vlastní kopie načtené položky
   (hledá se podle `attentionKey`, ostatní pole od volajícího se ignorují),
-  `timeZone` relace a čerstvého `crypto.randomUUID()`. Volající nezadává ani
+  a čerstvého `crypto.randomUUID()` (bez pásma, to dodá server z profilu). Volající nezadává ani
   aktéra, ani Oblast, ani revize.
 - Lokální pojistka: pokud preview ukáže jinou `attentionEpoch`, jiný lifecycle
   nebo revizi řádku než načtená položka (jiná karta/zařízení už jednalo), PATCH se

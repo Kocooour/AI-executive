@@ -1,4 +1,5 @@
-/** R2d.5c.1: isolated default-off Attention candidates GET (read-only). */
+/** R2d.5c.1: isolated default-off Attention candidates GET (read-only).
+ * R2d.4k: no `timeZone` query key; the zone is the actor's server-side profile zone. */
 import {createHash} from "node:crypto";
 import path from "node:path";
 import {authenticationBinding} from "../../../../lib/auth";
@@ -9,7 +10,6 @@ import {
   stagingChildSessionConfig,stagingCursorIdentity,admitStagingIdentity,
   stagingIdentityRefusal,verifyStagingIdentityBeforeRelease,verifyStagingReadBeforeRelease,
 } from "../../../../lib/target-staging-http-identity";
-import {attentionEvaluationWindow} from "../../../../lib/target-attention-read-model";
 import type {AttentionAreaFilter,AttentionView}
   from "../../../../lib/target-attention-read-model";
 import {readStagingAttentionInChild} from "../../../../lib/target-staging-read-process";
@@ -31,10 +31,10 @@ const enabled=()=>process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_ENABLED==="true"&
  * claim of the cursor itself (see signStagingProjectHttpCursor `instantMs`). */
 function attentionCursorBinding(
   binding:string,areaFilter:AttentionAreaFilter,view:AttentionView,
-  timeZone:string,limit:number,
+  limit:number,
 ):string {
-  return createHash("sha256").update("lumi:r2d5:attention-http-cursor:v1\0")
-    .update(JSON.stringify([binding,areaFilter,view,timeZone,limit]))
+  return createHash("sha256").update("lumi:r2d5:attention-http-cursor:v2\0")
+    .update(JSON.stringify([binding,areaFilter,view,limit]))
     .digest("base64url");
 }
 
@@ -57,15 +57,13 @@ export async function GET(request:Request):Promise<Response>{
 
   try {
     const params=new URL(request.url).searchParams;
-    const keys=["areaFilter","view","timeZone","limit","cursor"];
+    const keys=["areaFilter","view","limit","cursor"];
     if([...params.keys()].some(k=>!keys.includes(k))||
       keys.some(k=>params.getAll(k).length>1))return answer(400,"Invalid request");
     const areaFilter=params.get("areaFilter")??"all";
     const view=params.get("view")??"active";
-    const timeZone=params.get("timeZone");
     if(!["all","personal","shared"].includes(areaFilter)||
-      !["active","hidden"].includes(view)||
-      timeZone===null||attentionEvaluationWindow(0,timeZone)===null)
+      !["active","hidden"].includes(view))
       return answer(400,"Invalid request");
     const rawLimit=params.get("limit");
     if(rawLimit!==null&&!/^(?:[1-9]|[1-9][0-9]|100)$/.test(rawLimit))
@@ -85,7 +83,7 @@ export async function GET(request:Request):Promise<Response>{
     const context={
       ...identityBinding,
       authenticationBinding:attentionCursorBinding(identityBinding.authenticationBinding,
-        filter,selected,timeZone,limit),
+        filter,selected,limit),
       stagingDirectory,restoreGeneration:expectedRestoreGeneration,
       sessionSecret:process.env.AI_EXECUTIVE_SESSION_SECRET||"",
     };
@@ -97,12 +95,12 @@ export async function GET(request:Request):Promise<Response>{
     const offset=previous?.ok===true?previous.offset:0;
     // Server clock only; later pages reuse the instant signed into the cursor.
     const evaluatedAtMs=previous?.ok===true?previous.instantMs as number:Date.now();
-    if(attentionEvaluationWindow(evaluatedAtMs,timeZone)===null)
+    if(!Number.isSafeInteger(evaluatedAtMs)||evaluatedAtMs<0)
       return answer(400,"Invalid cursor");
     const page=await readStagingAttentionInChild({
       stagingDirectory,expectedRestoreGeneration,ownerUserId,
       ...stagingChildSessionConfig(identity),
-    },filter,selected,evaluatedAtMs,timeZone,limit,offset);
+    },filter,selected,evaluatedAtMs,limit,offset);
     // One live transaction: session, Area/content epochs, private plan epoch
     // and attention epoch (a lifecycle write moves it) before any release.
     const release=page?verifyStagingReadBeforeRelease(
@@ -110,7 +108,10 @@ export async function GET(request:Request):Promise<Response>{
       undefined,undefined,undefined,undefined,undefined,
       {areas:page.areaEpochs,scope:"my-plan"},undefined,
       {privateEpoch:page.privateEpoch},
-      {attentionEpoch:page.attentionEpoch}
+      {attentionEpoch:page.attentionEpoch},
+      // R2d.4k: the profile zone is part of the evaluation; a settings write
+      // between read and release moves this epoch and yields 409.
+      {notificationEpoch:page.notificationEpoch}
     ):verifyStagingIdentityBeforeRelease(request,identity,store);
     if(release!=="ok"&&release!=="stale")return stagingIdentityRefusal(release);
     if(!enabled()||
