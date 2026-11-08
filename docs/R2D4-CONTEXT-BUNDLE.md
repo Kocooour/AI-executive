@@ -115,3 +115,9 @@ bajtů a determinismus, autorita (zavřená, neznámý aktér).
 - Nízkoúrovňový `resolveAuthorizedTargetContextBundle` věří předané
   `restoreGeneration`; vynucená cesta je `readPreflightedTargetContextBundle` /
   autorita (preflight + ověřený aktér).
+
+- Znak NUL (U+0000) v těle poznámky odmítají všechny zápisové cesty (úprava i vytvoření
+  poznámky). Řádek vložený přímo SQL by `node:sqlite` při čtení ořízl na prvním NUL — to platí
+  stejně pro detail poznámky i pro AI balík; jde o hranici přímé manipulace s DB, ne o běžnou cestu.
+- Ořez na 4096 bajtů respektuje hranice kódových bodů, nikoli grafémů: kombinující znak na samém
+  konci limitu může odpadnout (např. přízvuk od základního písmene).
