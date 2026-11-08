@@ -45,7 +45,7 @@ session, Area/policy, revize úkolu a `personalAttentionGuard` (epocha attention
 
 ## `PATCH /api/target-staging/attention/command`
 
-Tělo je přesně příkaz writeru (12 klíčů včetně `timeZone`). Stejné kontroly jako
+Tělo je přesně příkaz writeru (**11 klíčů**; od R2d.4k bez `timeZone`, klíč `timeZone` je neznámý a dává 400 i u `POST …/receipt`; pásmo čte writer z profilu aktéra uvnitř své transakce, změna nastavení mezi preview a PATCH se proto uplatní bez CAS na pásmu; receipt digest má doménu `personal-attention-v2`, starší v1 receipty se tak nepletou). Stejné kontroly jako
 personal-when: Origin shodný s URL, hlavička protokolu, žádný query string, limit 32 KiB,
 rate limit 30 / 600 s, identita, konfigurace. Hash durable relace předá rodič dítěti
 a ověří se znovu uvnitř `BEGIN IMMEDIATE`. Odpověď je jen `{ok:true}`,

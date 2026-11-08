@@ -12,7 +12,7 @@
 
 ### Další rozhodnutí (Q1–Q5, docs-only, bez změny kódu v R2d.4j)
 
-- **Q1 — OK:** časové pásmo pro čtení Attention a lifecycle příkazy se bude brát ze **serverového profilu uživatele** (`personal_notification_settings.time_zone`), nikoli od klienta. Implementace až v **dalším řezu R2d.4k**; do té doby zůstává pásmo dodávané klientem.
+- **Q1 — OK:** časové pásmo pro čtení Attention a lifecycle příkazy se bude brát ze **serverového profilu uživatele** (`personal_notification_settings.time_zone`), nikoli od klienta. **Implementováno v R2d.4k** (čtení Attention, lifecycle příkazy, AI balík; klient pásmo neposílá, odpověď ho jen vrací).
 - **Q2 — OK:** zamítnutá (dismissed) položka `planned_date_passed` zůstává zamítnutá i po doplnění termínu (současné chování se zachovává).
 - **Q3 — OK:** položky, které vzniknou během pozastaveného push, se po obnovení ohlásí, pokud stále platí (současné chování se zachovává).
 - **Q4 — OK:** odezva registrace zařízení smí odlišit neznámý endpoint od endpointu patřícího jinému uživateli (přijaté riziko; zneužití vyžaduje znalost přesné adresy endpointu).

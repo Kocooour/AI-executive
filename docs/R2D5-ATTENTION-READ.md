@@ -15,7 +15,7 @@ a `TargetStagingSessionAuthority.readAttentionCandidatePage` vytváří
 podepsanou interní čtecí identitu (zavřená autorita nebo chyba → `null`).
 
 Request: `actorUserId`, `areaFilter all|personal|shared`,
-`view` (`active` | `hidden`, povinné), `evaluatedAtMs` (nezáporné bezpečné celé číslo), `timeZone` (IANA,
+`view` (`active` | `hidden`, povinné), `evaluatedAtMs` (nezáporné bezpečné celé číslo), `timeZone` (čistý selektor ho dostává jako parametr; staging cesty ho od R2d.4k předávají z profilu aktéra, viz níže; IANA,
 1–64 znaků, přísný regex a akceptace `Intl.DateTimeFormat`),
 `limit` 1–100, `offset` 0–10 000, `restoreGeneration` (UUID).
 Neplatný vstup vrací `null`; jakákoli chyba nebo anomálie **vydávaného**

@@ -52,7 +52,6 @@ after(()=>{
   assert.equal(readFileSync(path.join(legacy,"sentinel"),"utf8"),"unchanged");
   rmSync(root,{recursive:true,force:true});
 });
-const TZ="Europe/Prague";
 function fixture(){
   const stage=bootstrapIsolatedTargetStore({
     stagingDirectory:path.join(root,"stage-"+(++count)),ownerUserId:"alice",
@@ -101,17 +100,18 @@ function login(fx,who){
 const origin="http://localhost:3001";
 const base=origin+"/api/target-staging/attention/command";
 const OCC="2020-01-01";
+let clientIp="10.52.21.3"; // per-test override keeps rate-limit buckets apart
 function query(taskId,rule="deadline_overdue",on=OCC,cookie=owner(),extra=""){
   return GET(new Request(base+"?taskId="+encodeURIComponent(taskId)+
     "&ruleId="+rule+"&occurrenceOn="+on+extra,{
-    headers:{cookie,"x-forwarded-for":"10.52.21.3"},
+    headers:{cookie,"x-forwarded-for":clientIp},
   }));
 }
 function call(method,command,cookie=owner(),options={}){
   const url=base+(method==="POST"?"/receipt":"")+(options.query||"");
   return (method==="PATCH"?PATCH:POST)(new Request(url,{
     method,headers:{
-      cookie,"content-type":"application/json","x-forwarded-for":"10.52.21.3",
+      cookie,"content-type":"application/json","x-forwarded-for":clientIp,
       ...(options.origin===null?{}:{origin:options.origin||origin}),
       ...(options.protocol===null?{}:{"x-lumi-target-protocol":options.protocol||"1"}),
     },body:typeof command==="string"?command:JSON.stringify(command),
@@ -132,7 +132,7 @@ async function command(taskId,action,cookie=owner(),
   {rule="deadline_overdue",on=OCC,until=null}={}){
   const {lifecycle,snoozedUntilMs,...cas}=await preview(taskId,rule,on,cookie);
   return {...cas,commandId:randomUUID(),taskId,ruleId:rule,occurrenceOn:on,action,
-    snoozedUntilMs:action==="snooze"?(until??Date.now()+3_600_000):null,timeZone:TZ};
+    snoozedUntilMs:action==="snooze"?(until??Date.now()+3_600_000):null};
 }
 const read=(fx,sql,...params)=>{
   const db=new DatabaseSync(fx.stage.databasePath);
@@ -149,8 +149,7 @@ const mutable=fx=>JSON.stringify([
   read(fx,"SELECT COALESCE(SUM(revision),0) AS n FROM personal_attention_epochs"),
   receiptCount(fx),read(fx,"SELECT COUNT(*) AS n FROM tasks WHERE revision<>0")]);
 const listAttention=async(view,cookie=owner())=>{
-  const res=await LIST(new Request(origin+"/api/target-staging/attention?view="+view+
-    "&timeZone="+TZ,{headers:{cookie,"x-forwarded-for":"10.52.21.3"}}));
+  const res=await LIST(new Request(origin+"/api/target-staging/attention?view="+view,{headers:{cookie,"x-forwarded-for":"10.52.21.3"}}));
   const body=await res.json();assert.equal(res.status,200,JSON.stringify(body));
   return body;
 };
@@ -246,7 +245,7 @@ test("UI flow: attention item -> preview -> dismiss -> hidden -> restore -> acti
   assert.equal(c.expectedAttentionEpoch,list.attentionEpoch);
   assert.deepEqual(Object.keys(c).sort(),[
     "action","commandId","expectedAttentionEpoch","expectedRevision","expectedStateRevision",
-    "occurrenceOn","restoreGeneration","ruleId","snoozedUntilMs","taskId","timeZone","writeAreaId"]);
+    "occurrenceOn","restoreGeneration","ruleId","snoozedUntilMs","taskId","writeAreaId"]);
   const before=mutable(fx);
   const status=await call("POST",c,cookie);
   assert.deepEqual(await status.json(),{status:"not_recorded"});
@@ -334,9 +333,14 @@ test("CSRF, exact fields, protocol, size, query and cross-Area commands fail clo
   assert.equal((await call("PATCH",c,cookie,{query:"?x=1"})).status,400);
   assert.equal((await call("PATCH",{...c,actorUserId:"alice"},cookie)).status,400);
   assert.equal((await call("POST",{...c,actorUserId:"alice"},cookie)).status,400);
-  const {timeZone,...missing}=c;
+  const {writeAreaId:_omitted,...missing}=c;
   assert.equal((await call("PATCH",missing,cookie)).status,400);
-  assert.equal((await call("PATCH",{...c,timeZone:"Not/AZone"},cookie)).status,400);
+  // R2d.4k: the zone is the server-side profile zone; a client one is refused
+  // (valid or not) on the write AND on the receipt.
+  for(const timeZone of ["Not/AZone","UTC","Europe/Prague"]){
+    assert.equal((await call("PATCH",{...c,timeZone},cookie)).status,400,timeZone);
+    assert.equal((await call("POST",{...c,timeZone},cookie)).status,400,timeZone);
+  }
   assert.equal((await call("PATCH",{...c,occurrenceOn:"2026-02-29"},cookie)).status,400);
   assert.equal((await call("PATCH",{...c,expectedAttentionEpoch:-1},cookie)).status,400);
   assert.equal((await call("PATCH",{...c,action:"snooze"},cookie)).status,400);
@@ -470,4 +474,34 @@ test("preview child and DTO parsers reject injected data and invalid witnesses",
     {...snap,preview:{...snap.preview,expectedAttentionEpoch:-1}},
     {ok:true,receipt:snap.receipt},
   ])assert.equal(parseAttentionCommandReceiptSnapshotReply(invalid,c.taskId),null);
+});
+
+test("R2d.4k: the PATCH current-rule check uses the server-side profile zone",async()=>{
+  const fx=fixture(),cookie=owner();
+  clientIp="10.52.21.77";
+  const localDate=zone=>new Intl.DateTimeFormat("en-CA",{timeZone:zone,year:"numeric",
+    month:"2-digit",day:"2-digit"}).format(new Date());
+  const west="Etc/GMT+12",east="Pacific/Kiritimati",dWest=localDate(west);
+  assert.ok(localDate(east)>dWest);
+  const db=new DatabaseSync(fx.stage.databasePath);
+  const setZone=zone=>db.prepare(
+    "UPDATE personal_notification_settings SET time_zone=? WHERE user_id='alice'").run(zone);
+  for(const id of ["z-soon","z-over"])
+    db.prepare("INSERT INTO tasks(id,area_id,title,due_on,assignee_user_id,status) VALUES (?,?,?,?,NULL,'open')")
+      .run(id,fx.stage.unassignedAreaId,"Zone "+id,dWest);
+  try{
+    setZone(west);  // dWest is TODAY in the profile zone: soon fires, overdue does not.
+    const asOverdue=await command("z-soon","dismiss",cookie,{rule:"deadline_overdue",on:dWest});
+    assert.equal((await call("PATCH",asOverdue,cookie)).status,404);
+    assert.equal(state(fx,"alice","z-soon","deadline_overdue",dWest),undefined);
+    const asSoon=await command("z-soon","dismiss",cookie,{rule:"deadline_soon",on:dWest});
+    // The profile moves between the preview and the PATCH: re-read in the write tx.
+    setZone(east);
+    assert.equal((await call("PATCH",asSoon,cookie)).status,404);
+    assert.equal(state(fx,"alice","z-soon","deadline_soon",dWest),undefined);
+    const nowOverdue=await command("z-over","dismiss",cookie,{rule:"deadline_overdue",on:dWest});
+    assert.deepEqual(await (await call("PATCH",nowOverdue,cookie)).json(),{ok:true});
+    assert.equal(state(fx,"alice","z-over","deadline_overdue",dWest).state,"dismissed");
+    assert.equal(state(fx,"alice","z-over","deadline_soon",dWest),undefined);
+  }finally{db.close();clientIp="10.52.21.3";}
 });

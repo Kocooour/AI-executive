@@ -12,7 +12,7 @@
  * received whenever the snapshot is not `ready`. */
 import {
   appendAttentionPage,fetchAttentionCommandPreview,fetchAttentionCommandReceipt,
-  fetchAttentionPage,sendAttentionCommand,validAttentionTimeZone,
+  fetchAttentionPage,sendAttentionCommand,
   type AttentionAction,type AttentionAreaFilter,type AttentionCommand,
   type AttentionFailure,type AttentionItem,type AttentionPage,type AttentionView,
 } from "./target-staging-attention-client";
@@ -53,11 +53,11 @@ function detach(page:AttentionPage):AttentionSessionPage{
 /** contextVersion is a NON-SECRET auth-generation (login/logout/account swap).
  * It is only a client response-lifecycle guard; the server authorizes every call. */
 export function createAttentionSession(
-  config:{areaFilter:AttentionAreaFilter;view:AttentionView;timeZone:string;
+  config:{areaFilter:AttentionAreaFilter;view:AttentionView;
     limit:number;contextVersion:()=>string;fetch?:typeof fetch},
 ){
   const fetchImpl:typeof fetch=config.fetch??((input,init)=>fetch(input,init));
-  const {areaFilter,view,timeZone,limit}=config;
+  const {areaFilter,view,limit}=config;
   const valid=()=>{
     try{
       const value=config.contextVersion();
@@ -66,7 +66,7 @@ export function createAttentionSession(
   };
   const pinned=valid();
   const validParams=["all","personal","shared"].includes(areaFilter)&&
-    ["active","hidden"].includes(view)&&validAttentionTimeZone(timeZone)&&
+    ["active","hidden"].includes(view)&&
     Number.isSafeInteger(limit)&&limit>=1&&limit<=100&&pinned!==null;
   let revision=0;
   // Observed auth-generation mismatch is terminal, even for A -> B -> A.
@@ -117,7 +117,7 @@ export function createAttentionSession(
     active=controller;
     status="loading";
     const result=await fetchAttentionPage({
-      areaFilter,view,timeZone,limit,
+      areaFilter,view,limit,
       ...(cursor===undefined?{}:{cursor}),signal:controller.signal,
     },fetchImpl);
     if(ticket!==revision)return {ok:false,reason:"superseded"};
@@ -179,7 +179,7 @@ export function createAttentionSession(
   /** preview -> single PATCH -> (receipt if uncertain). The command is built
    * ONLY from the server preview, this session's own copy of the loaded item
    * (looked up by attentionKey; caller fields are ignored), the session
-   * timeZone and a fresh commandId. All loaded data is dropped before the first
+   * and a fresh commandId. All loaded data is dropped before the first
    * request, so no stale list is visible while the outcome is unknown. */
   const act=async(
     item:Pick<AttentionItem,"attentionKey">,action:AttentionAction,
@@ -250,7 +250,7 @@ export function createAttentionSession(
       expectedRevision:p.expectedRevision,
       expectedAttentionEpoch:p.expectedAttentionEpoch,
       expectedStateRevision:p.expectedStateRevision,
-      writeAreaId:p.writeAreaId,restoreGeneration:p.restoreGeneration,timeZone,
+      writeAreaId:p.writeAreaId,restoreGeneration:p.restoreGeneration,
     };
     sent=true;
     const sentResult=await sendAttentionCommand(command,controller.signal,fetchImpl);

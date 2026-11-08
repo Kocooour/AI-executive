@@ -17,6 +17,7 @@ import {fingerprint} from "./target-task-staging-writer";
 import {validTargetDueOn} from "./target-task-temporal-due-on-writer";
 import {attentionEvaluationWindow,attentionKey,currentAttentionRule}
   from "./target-attention-read-model";
+import {readTargetAttentionProfileZone} from "./target-attention-profile-zone";
 import {planTargetAttentionLifecycle,type TargetAttentionLifecycleOutcome,
   type TargetAttentionLifecycleRow} from "./target-attention-lifecycle-policy";
 import {checkTargetTaskWriteContract,targetTaskWriteRevision,
@@ -52,8 +53,8 @@ export interface TargetStagingAttentionLifecycleCommand {
   readonly expectedStateRevision:number|null;
   readonly writeAreaId:string;
   readonly restoreGeneration:string;
-  /** Actor's IANA zone: snooze/dismiss require the rule to fire NOW there. */
-  readonly timeZone:string;
+  // R2d.4k: no client time zone. Snooze/dismiss require the rule to fire NOW in
+  // the actor's SERVER-SIDE profile zone, re-read inside the write transaction.
 }
 export type TargetStagingAttentionLifecycleResult =
   | {ok:true;replayed?:true}
@@ -70,8 +71,7 @@ export function validTargetStagingAttentionLifecycleCommand(
   if(!input||typeof input!=="object"||Array.isArray(input))return false;
   const x=input as Record<string,unknown>;
   return Object.keys(x).sort().join(",")===
-      "action,commandId,expectedAttentionEpoch,expectedRevision,expectedStateRevision,occurrenceOn,restoreGeneration,ruleId,snoozedUntilMs,taskId,timeZone,writeAreaId" &&
-    typeof x.timeZone==="string"&&attentionEvaluationWindow(0,x.timeZone)!==null&&
+      "action,commandId,expectedAttentionEpoch,expectedRevision,expectedStateRevision,occurrenceOn,restoreGeneration,ruleId,snoozedUntilMs,taskId,writeAreaId" &&
     typeof x.commandId==="string"&&UUID.test(x.commandId)&&
     typeof x.expectedRevision==="string"&&/^[a-f0-9]{64}$/.test(x.expectedRevision)&&
     RULES.has(x.ruleId)&&ACTIONS.has(x.action)&&
@@ -92,17 +92,17 @@ export function attentionLifecycleReceiptKey(
   actor:string,taskId:string,commandId:string,
 ):string {
   return TARGET_STAGING_PERSONAL_ATTENTION_RECEIPT_PREFIX+createHash("sha256")
-    .update(JSON.stringify(["personal-attention-v1",actor,taskId,commandId.toLowerCase()]))
+    .update(JSON.stringify(["personal-attention-v2",actor,taskId,commandId.toLowerCase()]))
     .digest("hex");
 }
 export function attentionLifecycleReceiptDigest(
   command:TargetStagingAttentionLifecycleCommand,
 ):string {
   return createHash("sha256").update(JSON.stringify([
-    "personal-attention-v1",command.taskId,command.ruleId,command.occurrenceOn,
+    "personal-attention-v2",command.taskId,command.ruleId,command.occurrenceOn,
     command.action,command.snoozedUntilMs,command.expectedRevision,
     command.expectedAttentionEpoch,command.expectedStateRevision,
-    command.writeAreaId,command.restoreGeneration.toLowerCase(),command.timeZone,
+    command.writeAreaId,command.restoreGeneration.toLowerCase(),
   ])).digest("hex");
 }
 
@@ -182,8 +182,11 @@ export function writePreflightedAttentionLifecycle(
       // the selector, server clock, actor zone): no pre-dismissal of a future
       // deadline or of a soon item outside 48 h. Restore (Undo) needs no window.
       if(command.action!=="restore"){
-        const window=attentionEvaluationWindow(now,command.timeZone);
-        if(!window)return {ok:false,reason:"invalid_request"};
+        // Profile zone read in THIS transaction: a settings change between a
+        // preview and this write is honoured (no CAS on the zone is needed).
+        const zone=readTargetAttentionProfileZone(db,actor);
+        const window=zone?attentionEvaluationWindow(now,zone.timeZone):null;
+        if(!window)return failed();
         if(currentAttentionRule(task.dueOn,plan?.whenOn??null,window)!==command.ruleId)
           return {ok:false,reason:"unavailable"};
       }

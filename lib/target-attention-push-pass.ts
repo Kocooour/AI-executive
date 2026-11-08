@@ -117,9 +117,11 @@ function readCandidates(store:TargetStagingReadStore,cred:TargetStagingReadCrede
   let epoch:number|null=null,revision:string|null=null,offset=0;
   for(;;){
     const page=readPreflightedAttentionCandidatePage(store,cred,{
-      areaFilter:"all",view:"active",evaluatedAtMs:nowMs,timeZone:view.timeZone,
+      areaFilter:"all",view:"active",evaluatedAtMs:nowMs,
       limit:PAGE,offset});
-    if(!page)return null;
+    // R2d.4k: the page is evaluated in the profile zone of ITS snapshot; a
+    // settings change since `view` was read abandons this user for this pass.
+    if(!page||page.timeZone!==view.timeZone)return null;
     // A change between pages (epoch/revision) abandons this user for this pass.
     if(epoch===null){epoch=page.attentionEpoch;revision=page.revision;}
     else if(page.attentionEpoch!==epoch||page.revision!==revision)return null;

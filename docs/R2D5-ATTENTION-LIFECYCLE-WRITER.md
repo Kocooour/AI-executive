@@ -20,7 +20,7 @@ Přesně jedenáct údajů:
   (epocha `personal_attention_epochs` aktéra), `expectedStateRevision`
   (revize řádku nebo `null`, pokud řádek neexistuje),
 - `writeAreaId`, `restoreGeneration`,
-- `timeZone` (IANA pásmo aktéra; stejná validace jako u selektoru).
+- **žádné `timeZone`** (R2d.4k, 11 klíčů): pásmo aktéra čte writer z `personal_notification_settings.time_zone` uvnitř své `BEGIN IMMEDIATE` transakce (stejná validace jako u selektoru; chybějící/neplatné pásmo = `write_failed`, bez změny). Změna pásma mezi preview a PATCH se tak uplatní bez CAS na pásmu.
 
 Výsledek je `{ok:true}`, `{ok:true,replayed:true}` nebo obsahem nesdělující
 kód (`invalid_request`, `not_active`, `unauthorized`, `unavailable`, `stale_revision`,
@@ -40,7 +40,7 @@ kód (`invalid_request`, `not_active`, `unauthorized`, `unavailable`, `stale_rev
 5. CAS: revize úkolu, attention epocha, revize stavového řádku; jinak
    `stale_revision`.
 6. Aktuální kandidát: pro `snooze`/`dismiss` musí podle serverového času
-   a `timeZone` právě platit **stejné** pravidlo jako v selektoru
+   a **profilovém pásmu** (`personal_notification_settings.time_zone`) právě platit **stejné** pravidlo jako v selektoru
    (`currentAttentionRule` nad `attentionEvaluationWindow`); jinak
    `unavailable`. Nelze tedy předem skrýt budoucí termín, „soon“ mimo 48 h
    ani „soon“ výskytu, který je už po termínu. `restore` (Undo) okno
@@ -86,7 +86,7 @@ nedotknou.
 ## Receipt a journal
 
 Prefix `r2:task-personal-attention-receipt-v1:` (doména
-`personal-attention-v1`) má vlastní kapacitu `TARGET_STAGING_MAX_RECEIPTS`
+`personal-attention-v2` od R2d.4k, digest už nezahrnuje pásmo) má vlastní kapacitu `TARGET_STAGING_MAX_RECEIPTS`
 a je validován v preflightu jako prefix osobního plánu. Journal intent
 `personal_attention` nese pouze `{receiptHash, epoch, action}`
 (`snooze=0`, `dismiss=1`, `restore=2`) — žádného aktéra, úkol, pravidlo ani

@@ -92,7 +92,8 @@ function fixture(){
   const fx={db,store,stage};fixtures.push(fx);return fx;
 }
 const base="http://localhost:3001/api/target-staging/attention";
-const TZ="Europe/Prague";
+const TZ="UTC"; // R2d.4k: default profile zone (never a client input)
+const PRAGUE="Europe/Prague";
 const owner=()=>sessionCookieName+"="+createSessionToken();
 function login(f,who){
   const session=durable.issueDurableTargetStagingSession(f.store,who,900);
@@ -100,7 +101,7 @@ function login(f,who){
   return durable.TARGET_STAGING_SESSION_COOKIE+"="+session.sessionToken;
 }
 function q(o={}){
-  const p=new URLSearchParams({timeZone:TZ,...o});
+  const p=new URLSearchParams({...o});
   for(const [k,v] of Object.entries(p))if(v===null)p.delete(k);
   return "?"+p.toString();
 }
@@ -153,8 +154,10 @@ test("two explicit default-off staging gates and authenticated owner",async()=>{
 test("strict query allowlist, duplicates and bounds",async()=>{
   fixture();
   const bad=[
-    "","?areaFilter=all","?timeZone=Not/AZone","?timeZone=",
-    "?timeZone=../../etc","?timeZone="+"A".repeat(65),
+    // R2d.4k: `timeZone` is an unknown key whatever its value.
+    "?timeZone=UTC","?timeZone=Europe/Prague","?timeZone=Not/AZone","?timeZone=",
+    "?timeZone=../../etc","?timeZone="+"A".repeat(65),q({timeZone:"UTC"}),
+    q({areaFilter:"all",timeZone:"Europe/Prague"}),
     q({areaFilter:"none"}),q({view:"all"}),q({view:"snoozed"}),
     q()+"&timeZone=UTC",q()+"&view=active&view=active",
     q()+"&areaFilter=all&areaFilter=all",q()+"&limit=1&limit=2",
@@ -164,6 +167,8 @@ test("strict query allowlist, duplicates and bounds",async()=>{
     q()+"&cursor="+"a".repeat(4097),
   ];
   for(const query of bad)assert.equal((await get(query)).status,400,query);
+  // The empty query and the bare filter are valid now (default filter/view/limit).
+  for(const query of ["","?areaFilter=all"])assert.equal((await get(query)).status,200,query);
 });
 
 test("owner and session actors see only their own candidates; viewer sees none",async()=>{
@@ -239,7 +244,7 @@ test("paging binds the server evaluation instant in the signed cursor",async()=>
   assert.equal(typeof instant,"number");
 });
 
-test("cursor is bound to actor, areaFilter, view, timeZone and limit",async()=>{
+test("cursor is bound to actor, areaFilter, view and limit",async()=>{
   const f=fixture(),bob=login(f,"bob"),carol=login(f,"carol");
   const query=q({limit:1});
   const first=await ok(get(query,bob));
@@ -247,7 +252,7 @@ test("cursor is bound to actor, areaFilter, view, timeZone and limit",async()=>{
   assert.equal((await get(query+part,bob)).status,200);
   for(const alternate of [
     q({limit:1,areaFilter:"personal"}),q({limit:1,view:"hidden"}),
-    q({limit:1,timeZone:"UTC"}),q({limit:2}),q({}),
+    q({limit:2}),q({}),
   ])assert.equal((await get(alternate+part,bob)).status,400,alternate);
   assert.equal((await get(query+part,carol)).status,400);
   assert.equal((await get(query+part,owner())).status,400);
@@ -271,13 +276,14 @@ test("live guard rejects a lifecycle write between child read and release",async
   const read=()=>readStagingAttentionInChild({
     stagingDirectory:f.stage.directory,expectedRestoreGeneration:f.stage.restoreGeneration,
     ownerUserId:"alice",sessionTokenHash:hash,
-  },"all","active",at,TZ,100,0);
+  },"all","active",at,100,0);
   const page=await read();assert.ok(page);
   const verify=(pg,planGuard=true)=>verifyStagingReadBeforeRelease(req(q(),bob),
     {kind:"session",tokenHash:hash},f.store,"alice",pg.linearization,
     undefined,undefined,undefined,undefined,undefined,
     {areas:pg.areaEpochs,scope:"my-plan"},undefined,
-    {privateEpoch:pg.privateEpoch},{attentionEpoch:pg.attentionEpoch});
+    {privateEpoch:pg.privateEpoch},{attentionEpoch:pg.attentionEpoch},
+    {notificationEpoch:pg.notificationEpoch});
   assert.equal(verify(page),"ok");
   dismiss(f,"bob","p-bob1");
   assert.equal(verify(page),"stale");
@@ -323,16 +329,15 @@ test("child actor selector rejects bad input and flag-off child",async()=>{
     stagingDirectory:f.stage.directory,expectedRestoreGeneration:f.stage.restoreGeneration,
   });
   try {
-    assert.equal(authority.readAttentionCandidatePage("bob","all","active",Date.now(),
-      "Not/AZone",10,0),null);
     assert.equal(authority.readAttentionCandidatePage("bob","all","nope",Date.now(),
-      TZ,10,0),null);
+      10,0),null);
+    assert.ok(authority.readAttentionCandidatePage("bob","all","active",Date.now(),10,0));
   }finally{authority.close();}
 });
 
 test("strict child DTO rejects injected metadata, forgery, ordering and lifecycle drift",()=>{
   const at=Date.UTC(2026,10,10,12);
-  const w=attentionEvaluationWindow(at,TZ);
+  const w=attentionEvaluationWindow(at,PRAGUE);
   const item={attentionKey:attentionKey("deadline_overdue","a","2020-01-01"),
     subjectType:"task",taskId:"a",title:"A",projectId:null,areaId:"bob-private",
     areaKind:"private",ruleId:"deadline_overdue",ruleVersion:1,severity:1,
@@ -341,10 +346,10 @@ test("strict child DTO rejects injected metadata, forgery, ordering and lifecycl
     thresholdHours:0,sourceRevision:1,lifecycle:"active",snoozedUntilMs:null,
     lifecycleRevision:null};
   return import("../lib/attention.ts").then(({endOfLocalDate})=>{
-    item.relevantAt=endOfLocalDate("2020-01-01",TZ);
+    item.relevantAt=endOfLocalDate("2020-01-01",PRAGUE);
     const second={...item,taskId:"b",attentionKey:attentionKey("deadline_overdue","b","2020-01-01"),
       areaId:"family-area",areaKind:"shared",assignedToMe:true};
-    const frame={ok:true,areaFilter:"all",view:"active",evaluatedAtMs:at,timeZone:TZ,
+    const frame={ok:true,areaFilter:"all",view:"active",evaluatedAtMs:at,timeZone:PRAGUE,notificationEpoch:1,
       evaluationDate:w.evaluationDate,soonThroughDate:w.soonThroughDate,
       items:[item,second],hasMore:false,revision:"0".repeat(64),
       privateEpoch:2,attentionEpoch:3,linearization:{actorUserId:"bob",areas:[
@@ -355,11 +360,14 @@ test("strict child DTO rejects injected metadata, forgery, ordering and lifecycl
           policyRevision:0,contentRevision:2,projectContentRevision:0},
         {areaId:"family-area",areaKind:"shared",access:"editor",
           policyRevision:0,contentRevision:3,projectContentRevision:0}]};
-    const parse=(x,view="active")=>parseStagingAttentionPage(x,"all",view,at,TZ,2);
+    const parse=(x,view="active")=>parseStagingAttentionPage(x,"all",view,at,2);
     assert.deepEqual(ids({items:parse(frame).items}),["a","b"]);
     const bad=[
       {...frame,secret:1},{...frame,attentionEpoch:-1},{...frame,privateEpoch:"1"},
       {...frame,evaluatedAtMs:at+1},{...frame,timeZone:"UTC"},
+      {...frame,timeZone:"Mars/Olympus"},{...frame,timeZone:5},{...frame,timeZone:undefined},
+      {...frame,notificationEpoch:-1},{...frame,notificationEpoch:"1"},
+      (({notificationEpoch,...rest})=>rest)(frame),
       {...frame,evaluationDate:"2020-01-01"},{...frame,view:"hidden"},
       {...frame,items:[second,item]},{...frame,items:[item,{...second,taskId:"a"}]},
       {...frame,items:[{...item,severity:2},second]},
@@ -392,7 +400,7 @@ test("read child refuses when the parent master staging HTTP flag is off",async(
   const f=fixture();
   const config={stagingDirectory:f.stage.directory,
     expectedRestoreGeneration:f.stage.restoreGeneration,ownerUserId:"alice"};
-  const read=()=>readStagingAttentionInChild(config,"all","active",Date.now(),TZ,100,0);
+  const read=()=>readStagingAttentionInChild(config,"all","active",Date.now(),100,0);
   const previous=process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_ENABLED;
   try{
     process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_ENABLED="false";
@@ -406,4 +414,81 @@ test("read child refuses when the parent master staging HTTP flag is off",async(
   const page=await read();
   assert.ok(page,"enabled parent flag still reads");
   assert.deepEqual(ids(page),["p-alice","s-alice"]);
+});
+
+// ---- R2d.4k: the profile zone, changed through the real settings writer ----
+function setProfileZone(f,who,timeZone){
+  const authority=new TargetStagingSessionAuthority(f.store);
+  try{
+    const token=authority.issueWritable(who).sessionToken;
+    const cur=f.db.prepare("SELECT time_zone,attention_push,quiet_start,quiet_end,daily_limit,paused,revision FROM personal_notification_settings WHERE user_id=?").get(who);
+    const epoch=f.db.prepare("SELECT revision FROM personal_notification_epochs WHERE user_id=?").get(who).revision;
+    const res=authority.changeNotificationSettings(token,{
+      commandId:crypto.randomUUID(),timeZone,attentionPush:cur.attention_push===1,
+      quietStart:cur.quiet_start,quietEnd:cur.quiet_end,dailyLimit:cur.daily_limit,
+      paused:cur.paused===1,expectedSettingsRevision:cur.revision,
+      expectedNotificationEpoch:epoch,restoreGeneration:f.stage.restoreGeneration,
+    });
+    assert.equal(res.ok,true,JSON.stringify(res));
+  }finally{authority.close();}
+}
+const localDate=zone=>new Intl.DateTimeFormat("en-CA",{timeZone:zone,year:"numeric",
+  month:"2-digit",day:"2-digit"}).format(new Date());
+
+test("R2d.4k: the profile zone, not the client, evaluates; each actor has their own",async()=>{
+  const f=fixture(),bob=login(f,"bob"),erin=login(f,"erin");
+  assert.equal((await ok(get(q(),bob))).timeZone,"UTC");
+  setProfileZone(f,"bob","Pacific/Kiritimati");
+  setProfileZone(f,"erin","Etc/GMT+12");
+  const east=await ok(get(q(),bob)),west=await ok(get(q(),erin));
+  assert.equal(east.timeZone,"Pacific/Kiritimati");
+  assert.equal(west.timeZone,"Etc/GMT+12");
+  assert.equal(east.evaluationDate,localDate("Pacific/Kiritimati"));
+  assert.equal(west.evaluationDate,localDate("Etc/GMT+12"));
+  assert.notEqual(east.evaluationDate,west.evaluationDate);
+  // The same unknown key stays refused after a profile change.
+  assert.equal((await get(q({timeZone:"Pacific/Kiritimati"}),bob)).status,400);
+});
+
+test("R2d.4k: a profile zone change invalidates an attention cursor and a pending release",async()=>{
+  const f=fixture(),bob=login(f,"bob");
+  const query=q({limit:1});
+  const first=await ok(get(query,bob));
+  const part="&cursor="+encodeURIComponent(first.nextCursor);
+  assert.equal((await get(query+part,bob)).status,200);
+  setProfileZone(f,"bob","Pacific/Kiritimati");
+  const res=await get(query+part,bob);
+  assert.equal(res.status,409);
+  assert.deepEqual(await res.json(),{error:"Cursor stale"});
+  // A fresh first page works and carries the new zone.
+  assert.equal((await ok(get(query,bob))).timeZone,"Pacific/Kiritimati");
+
+  // Live release guard: a zone change between the child read and release is stale.
+  const hash=durable.hashTargetStagingSessionToken(bob.split("=")[1]);
+  const read=()=>readStagingAttentionInChild({
+    stagingDirectory:f.stage.directory,expectedRestoreGeneration:f.stage.restoreGeneration,
+    ownerUserId:"alice",sessionTokenHash:hash,
+  },"all","active",Date.now(),100,0);
+  const page=await read();assert.ok(page);
+  assert.equal(page.timeZone,"Pacific/Kiritimati");
+  const verify=pg=>verifyStagingReadBeforeRelease(req(q(),bob),
+    {kind:"session",tokenHash:hash},f.store,"alice",pg.linearization,
+    undefined,undefined,undefined,undefined,undefined,
+    {areas:pg.areaEpochs,scope:"my-plan"},undefined,
+    {privateEpoch:pg.privateEpoch},{attentionEpoch:pg.attentionEpoch},
+    {notificationEpoch:pg.notificationEpoch});
+  assert.equal(verify(page),"ok");
+  setProfileZone(f,"bob","Etc/GMT+12");
+  assert.equal(verify(page),"stale");
+  const fresh=await read();assert.ok(fresh);
+  assert.equal(fresh.timeZone,"Etc/GMT+12");
+  assert.equal(verify(fresh),"ok");
+});
+
+test("R2d.4k: missing or invalid profile zone fails closed over HTTP",async()=>{
+  const f=fixture(),bob=login(f,"bob");
+  f.db.prepare("UPDATE personal_notification_settings SET time_zone='Mars/Olympus' WHERE user_id='bob'").run();
+  const res=await get(q(),bob);
+  assert.equal(res.status,503);
+  assert.ok(!(await res.text()).includes("Bob one"));
 });
