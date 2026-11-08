@@ -1,0 +1,420 @@
+/**
+ * R2d.5d.2: identity-bound Attention push pass (staging only).
+ *
+ * Library only: NO web-push client, network, timer/scheduler or HTTP route. The
+ * sender is injected. Identities come exclusively from the verified store (the
+ * session authority passes a credential minter bound to its private key); no
+ * client input selects a user or a target. Algorithm (docs/R2D5-PUSH-PASS.md):
+ *  1. per enabled, unpaused identity read its ACTIVE candidates with the
+ *     actor-bound preflighted selector in the identity's STORED time zone;
+ *  2. ONE pinned write transaction re-verifies settings/epoch, closes stale
+ *     `pending`, records the baseline on first enable (send nothing) or plans
+ *     and claims deliveries as `pending` (the insert guard plus an explicit SQL
+ *     re-check cover ACL, open status, current deadline and snooze/dismiss);
+ *  3. outside any transaction each claimed delivery goes to the user's own live
+ *     devices; immediately before EVERY send a short read confirms the delivery
+ *     row still exists in the expected state and the target is still live;
+ *  4. each device result is committed at once (a crash cannot forget a sent
+ *     device); `gone` revokes that target; the delivery is finalised like legacy.
+ */
+import type {AttentionCandidate} from "./target-attention-read-model";
+import {attentionEvaluationWindow,currentAttentionRule}
+  from "./target-attention-read-model";
+import {announceableTargetAttentionCandidate,inTargetQuietHours,
+  planTargetAttentionPushes,targetAttentionDeliveryKey,
+  targetAttentionPushPayload,targetAttentionWindowStartMs,
+  TARGET_ATTENTION_PUSH_MAX_ATTEMPTS} from "./target-attention-push-planner";
+import {withPinnedTargetStagingWrite} from "./target-staging-pinned-write";
+import type {TargetStagingPinnedWriteContext} from "./target-staging-pinned-write";
+import type {TargetStagingReadCredential} from "./target-task-authenticated-read";
+import {readPreflightedAttentionCandidatePage,readPreflightedStoreSnapshot}
+  from "./target-task-staging-reader";
+import type {TargetStagingReadStore} from "./target-task-staging-reader";
+import {readNotificationSettingsInSnapshot,targetPushBaselineKey,
+  targetPushBaselineValue} from "./target-notification-writer";
+import type {TargetNotificationSettingsView} from "./target-notification-writer";
+
+export type TargetPushSendResult="sent"|"failed"|"gone";
+export interface TargetPushPayload{title:string;body:string;url:string;tag:string}
+/** Injected transport. Called only for the recipient's own live target. */
+export interface TargetPushSender{
+  sendTo(userId:string,targetId:string,payload:TargetPushPayload):Promise<TargetPushSendResult>;
+}
+export interface TargetAttentionPushPassSummary{
+  users:number;sent:number;
+  held:{quiet_hours:number;daily_limit:number;disabled:number};
+  /** Enabled identities left for later passes because of the per-pass cap. */
+  deferred?:number;
+  /** True when another pass was already running in this process (nothing done). */
+  busy?:true;
+}
+
+export const TARGET_PUSH_PASS_STALE_PENDING_MS=15*60_000;
+export const TARGET_PUSH_PASS_MAX_USERS=256;
+/** A send that does not settle in time counts as failed (retried later, at most 3x). */
+export const TARGET_PUSH_SEND_TIMEOUT_MS=30_000;
+function withTimeout<T>(promise:Promise<T>,ms:number):Promise<T|"timeout"> {
+  let timer:ReturnType<typeof setTimeout>|undefined;
+  const timeout=new Promise<"timeout">(resolve=>{timer=setTimeout(()=>resolve("timeout"),ms);});
+  return Promise.race([Promise.resolve(promise),timeout]).finally(()=>{if(timer)clearTimeout(timer);});
+}
+export const TARGET_PUSH_PASS_MAX_CANDIDATES=500;
+const PAGE=100;
+const DAY=24*3_600_000;
+const MAX=TARGET_ATTENTION_PUSH_MAX_ATTEMPTS;
+const OP_PASS=3,OP_DEVICE=4,OP_FINAL=5;
+
+let passRunning=false;
+
+type Ctx=TargetStagingPinnedWriteContext;
+/** Pinned write transaction; null when denied/failed. Body commits only if it changed something. */
+function writeTxn<T>(store:TargetStagingReadStore,body:(ctx:Ctx)=>T):T|null {
+  return withPinnedTargetStagingWrite<T|null>(store,ctx=>{
+    try{return body(ctx);}catch{return null;}
+  },()=>null,()=>null);
+}
+const journal=(ctx:Ctx,db:Ctx["db"],user:string,op:number,n:number)=>{
+  const e=db.prepare("SELECT revision FROM personal_notification_epochs WHERE user_id=?")
+    .get(user) as {revision:number};
+  // Content-free: no user, task, key, target or time.
+  ctx.commit({kind:"personal_notification",payload:{epoch:e.revision,op,n}});
+};
+
+const sameSettings=(a:TargetNotificationSettingsView,b:TargetNotificationSettingsView)=>
+  a.timeZone===b.timeZone&&a.attentionPush===b.attentionPush&&a.paused===b.paused&&
+  a.quietStart===b.quietStart&&a.quietEnd===b.quietEnd&&a.dailyLimit===b.dailyLimit&&
+  a.settingsRevision===b.settingsRevision&&a.notificationEpoch===b.notificationEpoch;
+
+/** Same eligibility as the delivery insert guard plus the current rule and the actor's lifecycle. */
+function eligible(db:Ctx["db"],user:string,c:AttentionCandidate,nowMs:number,tz:string):boolean {
+  const row=db.prepare(`SELECT t.due_on AS dueOn FROM tasks t
+    LEFT JOIN projects p ON p.id=t.project_id
+    JOIN areas a ON a.id=COALESCE(t.area_id,p.area_id)
+    LEFT JOIN area_members m ON m.area_id=a.id AND m.user_id=?
+    WHERE t.id=? AND t.status='open' AND t.due_on=? AND
+      ((a.kind='private' AND a.owner_user_id=?) OR
+       (a.kind='shared' AND t.assignee_user_id=? AND m.role IN ('editor','admin')))`)
+    .get(user,c.taskId,c.relevantOn,user,user) as {dueOn:string}|undefined;
+  if(!row)return false;
+  const hidden=db.prepare(`SELECT 1 FROM personal_attention_states WHERE user_id=? AND task_id=?
+    AND rule_id=? AND occurrence_on=? AND (state='dismissed' OR
+      (state='snoozed' AND snoozed_until_ms>?))`)
+    .get(user,c.taskId,c.ruleId,c.relevantOn,nowMs);
+  if(hidden)return false;
+  const window=attentionEvaluationWindow(nowMs,tz);
+  return !!window&&currentAttentionRule(row.dueOn,null,window)===c.ruleId;
+}
+
+interface Work{key:string;candidate:AttentionCandidate;mode:"claimed"|"retry"}
+type Phase1=
+  | {kind:"skip"}
+  | {kind:"baseline"}
+  | {kind:"plan";work:Work[];held:"quiet_hours"|"daily_limit"|"disabled"|null};
+
+function readCandidates(store:TargetStagingReadStore,cred:TargetStagingReadCredential,
+  view:TargetNotificationSettingsView,nowMs:number):{items:AttentionCandidate[];attentionEpoch:number}|null {
+  const items:AttentionCandidate[]=[];
+  let epoch:number|null=null,revision:string|null=null,offset=0;
+  for(;;){
+    const page=readPreflightedAttentionCandidatePage(store,cred,{
+      areaFilter:"all",view:"active",evaluatedAtMs:nowMs,timeZone:view.timeZone,
+      limit:PAGE,offset});
+    if(!page)return null;
+    // A change between pages (epoch/revision) abandons this user for this pass.
+    if(epoch===null){epoch=page.attentionEpoch;revision=page.revision;}
+    else if(page.attentionEpoch!==epoch||page.revision!==revision)return null;
+    items.push(...page.items);
+    if(items.length>TARGET_PUSH_PASS_MAX_CANDIDATES)return null;
+    if(!page.hasMore)break;
+    if(page.items.length===0)return null;
+    offset+=page.items.length;
+  }
+  return {items,attentionEpoch:epoch as number};
+}
+
+function phase1(store:TargetStagingReadStore,user:string,view:TargetNotificationSettingsView,
+  items:AttentionCandidate[],attentionEpoch:number,nowMs:number):Phase1|null {
+  return writeTxn<Phase1>(store,ctx=>{
+    const {db}=ctx;
+    const current=readNotificationSettingsInSnapshot(db,user);
+    if(!current||!sameSettings(current,view)||!current.attentionPush||current.paused)
+      return {kind:"skip"};
+    const att=db.prepare("SELECT revision FROM personal_attention_epochs WHERE user_id=?")
+      .get(user) as {revision:number}|undefined;
+    if(!att||att.revision!==attentionEpoch)return {kind:"skip"};
+    let changes=0;
+    changes+=Number(db.prepare(`UPDATE personal_attention_deliveries SET status='undelivered'
+      WHERE user_id=? AND status='pending' AND last_attempt_at_ms<?`)
+      .run(user,nowMs-TARGET_PUSH_PASS_STALE_PENDING_MS).changes);
+    const announceable=items.filter(announceableTargetAttentionCandidate);
+    const keyOf=(c:AttentionCandidate)=>targetAttentionDeliveryKey(c.ruleId,c.taskId,c.relevantOn);
+    const insert=(c:AttentionCandidate,status:"baseline"|"pending")=>{
+      const run=()=>db.prepare(`INSERT INTO personal_attention_deliveries
+        (user_id,delivery_key,task_id,rule_id,occurrence_on,status,attempts,last_attempt_at_ms)
+        VALUES (?,?,?,?,?,?,?,?)`).run(user,keyOf(c),c.taskId,c.ruleId,c.relevantOn,
+        status,status==="pending"?1:0,nowMs).changes===1;
+      try{return run();}
+      catch(error){
+        // A candidate that lost access (or its deadline) between read and claim is
+        // simply not claimed; any other failure aborts the whole user.
+        if(!eligible(db,user,c,nowMs,view.timeZone))return false;
+        throw error;
+      }
+    };
+    const marker=db.prepare("SELECT value FROM metadata WHERE key=?")
+      .get(targetPushBaselineKey(user)) as {value:string}|undefined;
+    if(!marker){
+      // First enable: everything already announceable is known; nothing is sent.
+      const known=new Set((db.prepare(
+        "SELECT delivery_key AS k FROM personal_attention_deliveries WHERE user_id=?"
+      ).all(user) as {k:string}[]).map(r=>r.k));
+      for(const c of announceable){
+        if(known.has(keyOf(c)))continue;
+        known.add(keyOf(c));
+        if(insert(c,"baseline"))changes++;
+      }
+      db.prepare("INSERT INTO metadata(key,value) VALUES (?,?)")
+        .run(targetPushBaselineKey(user),targetPushBaselineValue(user));
+      changes++;
+      journal(ctx,db,user,OP_PASS,changes);
+      return {kind:"baseline"};
+    }
+    if(marker.value!==targetPushBaselineValue(user))return null; // corrupt marker: fail closed (preflight rejects it too)
+    const rows=db.prepare(
+      "SELECT delivery_key AS k,status,attempts FROM personal_attention_deliveries WHERE user_id=?"
+    ).all(user) as {k:string;status:string;attempts:number}[];
+    const handled=new Set(rows.filter(r=>!(r.status==="failed"&&r.attempts<MAX)).map(r=>r.k));
+    const partial=new Set(rows.filter(r=>r.status==="partial").map(r=>r.k));
+    const since=targetAttentionWindowStartMs(nowMs);
+    const sent=db.prepare(`SELECT COUNT(*) AS n FROM personal_attention_deliveries
+      WHERE user_id=? AND ((status IN ('sent','partial') AND sent_at_ms>?) OR
+        (status='pending' AND last_attempt_at_ms>?))`).get(user,since,since) as {n:number};
+    const decision=planTargetAttentionPushes({candidates:items,
+      settings:{timeZone:current.timeZone,attentionPush:current.attentionPush,
+        quietStart:current.quietStart,quietEnd:current.quietEnd,
+        dailyLimit:current.dailyLimit,paused:current.paused},
+      handled,sentInLast24h:sent.n,nowMs});
+    const byKey=new Map(announceable.map(c=>[keyOf(c),c]));
+    const work:Work[]=[];
+    for(const planned of decision.send){
+      const c=byKey.get(planned.deliveryKey);
+      if(!c||!eligible(db,user,c,nowMs,view.timeZone))continue;
+      const prior=rows.find(r=>r.k===planned.deliveryKey);
+      if(prior){
+        // failed (attempts < 3) -> pending again, attempts + 1
+        const upd=db.prepare(`UPDATE personal_attention_deliveries SET status='pending',
+          attempts=attempts+1,last_attempt_at_ms=max(last_attempt_at_ms,?)
+          WHERE user_id=? AND delivery_key=? AND status='failed' AND attempts<?`)
+          .run(nowMs,user,planned.deliveryKey,MAX).changes;
+        if(upd!==1)continue;
+        changes++;
+      }else{
+        if(!insert(c,"pending"))continue;
+        changes++;
+      }
+      work.push({key:planned.deliveryKey,candidate:c,mode:"claimed"});
+    }
+    // Finishing a partial delivery is no new announcement: no daily limit, but
+    // never in the user's quiet hours.
+    let quiet=true;
+    try{quiet=inTargetQuietHours(nowMs,current.timeZone,current.quietStart,current.quietEnd);}
+    catch{quiet=true;}
+    if(!quiet)for(const c of announceable){
+      const key=keyOf(c);
+      if(partial.has(key)&&eligible(db,user,c,nowMs,view.timeZone))
+        work.push({key,candidate:c,mode:"retry"});
+    }
+    if(changes>0)journal(ctx,db,user,OP_PASS,changes);
+    return {kind:"plan",work,held:decision.held};
+  });
+}
+
+interface DeliveryState{
+  status:string;sentAt:number|null;settingsOn:boolean;
+  /** The actor snoozed (unexpired) or dismissed this occurrence meanwhile. */
+  hidden:boolean;
+  targets:string[];devices:Map<string,{status:string;attempts:number}>;
+}
+/** Short snapshot read: delivery row, own live targets, own device rows, settings still on. */
+function readDeliveryState(store:TargetStagingReadStore,user:string,key:string,
+  nowMs:number):DeliveryState|null {
+  return readPreflightedStoreSnapshot<DeliveryState|null>(store,db=>{
+    const d=db.prepare(`SELECT status,sent_at_ms AS sentAt,task_id AS taskId,rule_id AS ruleId,
+      occurrence_on AS occurrenceOn FROM personal_attention_deliveries
+      WHERE user_id=? AND delivery_key=?`).get(user,key) as {status:string;sentAt:number|null;
+        taskId:string;ruleId:string;occurrenceOn:string}|undefined;
+    if(!d)return null;
+    // A snooze/dismiss made during the pass must stop further devices too.
+    const hidden=!!db.prepare(`SELECT 1 FROM personal_attention_states WHERE user_id=?
+      AND task_id=? AND rule_id=? AND occurrence_on=? AND
+      (state='dismissed' OR (state='snoozed' AND snoozed_until_ms > ?))`)
+      .get(user,d.taskId,d.ruleId,d.occurrenceOn,nowMs);
+    const s=readNotificationSettingsInSnapshot(db,user);
+    const targets=(db.prepare(`SELECT target_id AS id FROM personal_push_targets
+      WHERE user_id=? AND revoked_at_ms IS NULL ORDER BY created_at_ms,target_id`)
+      .all(user) as {id:string}[]).map(r=>r.id);
+    const devices=new Map((db.prepare(`SELECT target_id AS id,status,attempts
+      FROM personal_attention_device_deliveries WHERE user_id=? AND delivery_key=?`)
+      .all(user,key) as {id:string;status:string;attempts:number}[])
+      .map(r=>[r.id,{status:r.status,attempts:r.attempts}]));
+    return {status:d.status,sentAt:d.sentAt,settingsOn:!!s&&s.attentionPush&&!s.paused,hidden,
+      targets,devices};
+  });
+}
+
+function recordDevice(store:TargetStagingReadStore,user:string,key:string,target:string,
+  result:TargetPushSendResult,nowMs:number):boolean {
+  return writeTxn<boolean>(store,ctx=>{
+    const {db}=ctx;
+    const row=db.prepare(`SELECT status,attempts FROM personal_attention_device_deliveries
+      WHERE user_id=? AND delivery_key=? AND target_id=?`)
+      .get(user,key,target) as {status:string;attempts:number}|undefined;
+    if(row){
+      if(row.status!=="failed"||row.attempts>=MAX)return false;
+      if(db.prepare(`UPDATE personal_attention_device_deliveries SET status=?,attempts=attempts+1,
+        last_attempt_at_ms=max(last_attempt_at_ms,?) WHERE user_id=? AND delivery_key=? AND target_id=?
+        AND status='failed'`).run(result,nowMs,user,key,target).changes!==1)return false;
+    }else if(db.prepare(`INSERT INTO personal_attention_device_deliveries
+      (user_id,delivery_key,target_id,status,attempts,last_attempt_at_ms) VALUES (?,?,?,?,1,?)`)
+      .run(user,key,target,result,nowMs).changes!==1)return false;
+    let n=1;
+    if(result==="gone"){
+      // Endpoint expired: revoke exactly this target through the guarded UPDATE.
+      const t=db.prepare(`SELECT created_at_ms AS c FROM personal_push_targets
+        WHERE user_id=? AND target_id=? AND revoked_at_ms IS NULL`)
+        .get(user,target) as {c:number}|undefined;
+      if(t&&db.prepare(`UPDATE personal_push_targets SET revoked_at_ms=? WHERE user_id=? AND
+        target_id=? AND revoked_at_ms IS NULL`).run(Math.max(nowMs,t.c),user,target).changes===1)n++;
+    }
+    journal(ctx,db,user,OP_DEVICE,n);
+    return true;
+  })===true;
+}
+
+/** Legacy-style finalisation; returns true when this call delivered the item to its FIRST device. */
+function finalize(store:TargetStagingReadStore,user:string,work:Work,nowMs:number):boolean {
+  return writeTxn<boolean>(store,ctx=>{
+    const {db}=ctx;
+    const d=db.prepare(`SELECT status,sent_at_ms AS sentAt FROM personal_attention_deliveries
+      WHERE user_id=? AND delivery_key=?`).get(user,work.key) as
+      {status:string;sentAt:number|null}|undefined;
+    const expected=work.mode==="claimed"?"pending":"partial";
+    if(!d||d.status!==expected)return false;
+    const devices=db.prepare(`SELECT x.status AS status,x.attempts AS attempts,
+      (t.revoked_at_ms IS NULL) AS live FROM personal_attention_device_deliveries x
+      JOIN personal_push_targets t ON t.user_id=x.user_id AND t.target_id=x.target_id
+      WHERE x.user_id=? AND x.delivery_key=?`).all(user,work.key) as
+      {status:string;attempts:number;live:number}[];
+    const delivered=devices.some(r=>r.status==="sent");
+    const retryable=devices.some(r=>r.status==="failed"&&r.attempts<MAX&&r.live===1);
+    let sql:string;let args:unknown[];
+    if(delivered){
+      sql=`UPDATE personal_attention_deliveries SET status=?,sent_at_ms=COALESCE(sent_at_ms,?),
+        last_attempt_at_ms=max(last_attempt_at_ms,?) WHERE user_id=? AND delivery_key=? AND status=?`;
+      args=[retryable?"partial":"sent",nowMs,nowMs,user,work.key,expected];
+    }else if(devices.length===0){
+      // No subscribed device: not delivered and never retried (no backlog for later devices).
+      sql=`UPDATE personal_attention_deliveries SET status='undelivered',
+        last_attempt_at_ms=max(last_attempt_at_ms,?) WHERE user_id=? AND delivery_key=? AND status=?`;
+      args=[nowMs,user,work.key,expected];
+    }else{
+      sql=`UPDATE personal_attention_deliveries SET status='failed',
+        attempts=max(attempts,?),last_attempt_at_ms=max(last_attempt_at_ms,?)
+        WHERE user_id=? AND delivery_key=? AND status=?`;
+      args=[retryable?0:MAX,nowMs,user,work.key,expected];
+    }
+    if(db.prepare(sql).run(...(args as never[])).changes!==1)return false;
+    journal(ctx,db,user,OP_FINAL,1);
+    return delivered&&d.sentAt===null;
+  })===true;
+}
+
+async function deliver(store:TargetStagingReadStore,sender:TargetPushSender,user:string,
+  work:Work,nowMs:number):Promise<boolean> {
+  const first=readDeliveryState(store,user,work.key,nowMs);
+  const expected=work.mode==="claimed"?"pending":"partial";
+  if(!first||first.status!==expected)return false;
+  if(first.hidden)return finalize(store,user,work,nowMs);
+  const payload=targetAttentionPushPayload(work.candidate);
+  if(!payload)return false;
+  for(const target of first.targets){
+    const known=first.devices.get(target);
+    if(known?(known.status!=="failed"||known.attempts>=MAX):work.mode==="retry")continue;
+    // Pre-send re-check: reconcile deletes the row when access was lost, the task
+    // was completed or its deadline changed; settings must still allow push.
+    const state=readDeliveryState(store,user,work.key,nowMs);
+    if(!state||state.status!==expected||!state.settingsOn||state.hidden)
+      return finalize(store,user,work,nowMs);
+    if(!state.targets.includes(target))continue;
+    const device=state.devices.get(target);
+    if(device&&(device.status!=="failed"||device.attempts>=MAX))continue;
+    let result:TargetPushSendResult;
+    try{
+      // A hung push service must not wedge the single-flight pass forever.
+      const r=await withTimeout(sender.sendTo(user,target,{...payload}),TARGET_PUSH_SEND_TIMEOUT_MS);
+      result=r==="sent"||r==="gone"?r:"failed";
+    }catch{result="failed";}
+    recordDevice(store,user,work.key,target,result,nowMs);
+  }
+  return finalize(store,user,work,nowMs);
+}
+
+/**
+ * One pass over all enabled, unpaused identities. `credentialFor` mints a
+ * server-side read credential for an identity of the VERIFIED store (the
+ * session authority provides it; clients never do). Single-flight per process.
+ */
+export async function runTargetAttentionPushPass(
+  store:TargetStagingReadStore,input:{
+    nowMs:number;sender:TargetPushSender;
+    credentialFor:(userId:string)=>TargetStagingReadCredential|null;
+  },
+):Promise<TargetAttentionPushPassSummary> {
+  const summary:TargetAttentionPushPassSummary={users:0,sent:0,
+    held:{quiet_hours:0,daily_limit:0,disabled:0}};
+  if(passRunning)return {...summary,busy:true};
+  passRunning=true;
+  try{
+    const {nowMs,sender}=input;
+    if(!Number.isSafeInteger(nowMs)||nowMs<=0||!sender||
+        typeof sender.sendTo!=="function")return summary;
+    const listing=readPreflightedStoreSnapshot<{views:[string,TargetNotificationSettingsView][];off:number;deferred:number}>(
+      store,db=>{
+        const ids=(db.prepare("SELECT user_id AS id FROM personal_notification_settings ORDER BY user_id COLLATE BINARY")
+          .all() as {id:string}[]).map(r=>r.id);
+        const enabled:[string,TargetNotificationSettingsView][]=[];
+        let off=0;
+        for(const id of ids){
+          const v=readNotificationSettingsInSnapshot(db,id);
+          if(v&&v.attentionPush&&!v.paused)enabled.push([id,v]);
+          else off++;
+        }
+        // Bounded work per pass with a rotating start (one step per minute),
+        // so identities beyond the cap are served on later passes, never starved.
+        const n=enabled.length,cap=Math.min(n,TARGET_PUSH_PASS_MAX_USERS);
+        const start=n===0?0:Math.floor(nowMs/60_000)%n;
+        const views=Array.from({length:cap},(_,i)=>enabled[(start+i)%n]);
+        return {views,off,deferred:n-cap};
+      });
+    if(!listing)return summary;
+    summary.held.disabled+=listing.off;
+    if(listing.deferred)summary.deferred=listing.deferred;
+    for(const [user,view] of listing.views){
+      summary.users++;
+      try{
+        const cred=input.credentialFor(user);
+        if(!cred){summary.held.disabled++;continue;}
+        const read=readCandidates(store,cred,view,nowMs);
+        if(!read)continue;
+        const plan=phase1(store,user,view,read.items,read.attentionEpoch,nowMs);
+        if(!plan||plan.kind==="skip")continue;
+        if(plan.kind==="baseline")continue;
+        if(plan.held)summary.held[plan.held]++;
+        for(const work of plan.work){
+          if(await deliver(store,sender,user,work,nowMs))summary.sent++;
+        }
+      }catch{/* one identity never stops the others; nothing is leaked */}
+    }
+    return summary;
+  }finally{passRunning=false;}
+}

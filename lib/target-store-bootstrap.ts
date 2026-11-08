@@ -87,6 +87,12 @@ export const TARGET_STAGING_TEMPORAL_DUE_ON_RECEIPT_PREFIX = "r2:task-temporal-d
 export const TARGET_STAGING_PERSONAL_WHEN_RECEIPT_PREFIX = "r2:task-personal-when-receipt-v1:";
 /** Actor-private Attention snooze/dismiss/restore receipts; capped independently. */
 export const TARGET_STAGING_PERSONAL_ATTENTION_RECEIPT_PREFIX = "r2:task-personal-attention-receipt-v1:";
+/** R2d.5d.2 personal notification settings receipts (actor-private, content-free hashes). */
+export const TARGET_STAGING_PERSONAL_NOTIFICATION_RECEIPT_PREFIX = "r2:personal-notification-settings-receipt-v1:";
+/** R2d.5d.2 push target register/revoke receipts (actor-private, content-free hashes). */
+export const TARGET_STAGING_PERSONAL_PUSH_TARGET_RECEIPT_PREFIX = "r2:personal-push-target-receipt-v1:";
+/** R2d.5d.2 per-identity push baseline marker: key suffix = sha256(user id), at most one per identity. */
+export const TARGET_STAGING_PUSH_BASELINE_PREFIX = "r2:push-baseline:";
 /** Actor/note/command-scoped staging note edit confirmations; never note content. */
 export const TARGET_STAGING_NOTE_RECEIPT_PREFIX = "r2:note-edit-receipt-v1:";
 /** Isolated actor/note/command receipts for the irreversible note deletion. */

@@ -13,7 +13,7 @@
  */
 import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import {
-  TARGET_STAGING_TASK_READ_AUDIENCE, TARGET_STAGING_TASK_WRITE_AUDIENCE,
+  TARGET_STAGING_TASK_READ_AUDIENCE, TARGET_STAGING_TASK_WRITE_AUDIENCE, verifiedActor,
 } from "./target-task-authenticated-read";
 import { MAX_STAGING_PAGE_OFFSET } from "./target-task-read-model";
 import type { TargetScopedOffsetPage } from "./target-task-read-model";
@@ -50,7 +50,7 @@ import {
   readPreflightedTemporalDueOnPreview, readPreflightedTemporalDueWindowPage,
   readPreflightedPersonalWhenPage,
   readPreflightedMyPlanDayTaskPage,
-  readPreflightedAttentionCandidatePage,
+  readPreflightedAttentionCandidatePage,readPreflightedStoreSnapshot,
   readPreflightedMyPlanTwoDayTaskPage,
   readPreflightedGlobalTaskPage,
   readPreflightedGlobalProjectPage,
@@ -104,6 +104,16 @@ import type {TargetAttentionLifecycleRuleId} from "./target-attention-lifecycle-
 import {writePreflightedAttentionLifecycle,validTargetStagingAttentionLifecycleCommand,
   type TargetStagingAttentionLifecycleCommand,type TargetStagingAttentionLifecycleResult,
 } from "./target-attention-lifecycle-writer";
+import {writePreflightedNotificationSettings,validTargetStagingNotificationSettingsCommand,
+  writePreflightedPushTarget,validTargetStagingPushTargetCommand,
+  readNotificationSettingsInSnapshot,
+  type TargetStagingNotificationSettingsCommand,type TargetStagingNotificationSettingsResult,
+  type TargetStagingPushTargetCommand,type TargetStagingPushTargetResult,
+  type TargetNotificationSettingsView,
+} from "./target-notification-writer";
+import {runTargetAttentionPushPass,
+  type TargetAttentionPushPassSummary,type TargetPushSender,
+} from "./target-attention-push-pass";
 import { editPreflightedTargetNote, validTargetStagingNoteEditRequest } from "./target-note-staging-writer";
 import type { TargetStagingNoteEditRequest, TargetStagingNoteEditResult } from "./target-note-staging-writer";
 import { deletePreflightedTargetNote, validTargetStagingNoteDeleteRequest } from "./target-note-delete-writer";
@@ -1044,6 +1054,57 @@ export class TargetStagingSessionAuthority {
       return {ok:false,reason:"invalid_request"};
     return writePreflightedAttentionLifecycle(
       this.#store,credential,command,durableSessionTokenHash);
+  }
+
+  /** R2d.5d.2: actor-private notification settings CAS, isolated staging only. */
+  changeNotificationSettings(
+    sessionToken:string,command:TargetStagingNotificationSettingsCommand,
+    durableSessionTokenHash?:string,
+  ):TargetStagingNotificationSettingsResult {
+    const credential=this.#credential(sessionToken,true);
+    if(!credential)return {ok:false,reason:"unauthorized"};
+    if(!validTargetStagingNotificationSettingsCommand(command))
+      return {ok:false,reason:"invalid_request"};
+    return writePreflightedNotificationSettings(
+      this.#store,credential,command,durableSessionTokenHash);
+  }
+
+  /** R2d.5d.2: register/revoke the actor's OWN push target (endpoint hash only). */
+  changePushTarget(
+    sessionToken:string,command:TargetStagingPushTargetCommand,
+    durableSessionTokenHash?:string,
+  ):TargetStagingPushTargetResult {
+    const credential=this.#credential(sessionToken,true);
+    if(!credential)return {ok:false,reason:"unauthorized"};
+    if(!validTargetStagingPushTargetCommand(command))
+      return {ok:false,reason:"invalid_request"};
+    return writePreflightedPushTarget(
+      this.#store,credential,command,durableSessionTokenHash);
+  }
+
+  /** R2d.5d.2: the actor's own settings, epoch and live target IDs (no hashes). */
+  readNotificationSettings(actorUserId:string):TargetNotificationSettingsView|null {
+    if(this.#closed)return null;
+    try {
+      const credential=this.#oneShotReadCredential(actorUserId);
+      return credential?readPreflightedStoreSnapshot(this.#store,db=>
+        verifiedActor(db,credential)===actorUserId
+          ? readNotificationSettingsInSnapshot(db,actorUserId):null):null;
+    }catch{return null;}
+  }
+
+  /** R2d.5d.2: one identity-bound Attention push pass with an INJECTED sender.
+   * Identities come from the verified store, never from a caller. No timer, no
+   * network: a scheduler/real web-push is wired only at the R4 cutover. */
+  runAttentionPushPass(
+    nowMs:number,sender:TargetPushSender,
+  ):Promise<TargetAttentionPushPassSummary> {
+    if(this.#closed)return Promise.resolve({users:0,sent:0,
+      held:{quiet_hours:0,daily_limit:0,disabled:0}});
+    return runTargetAttentionPushPass(this.#store,{nowMs,sender,
+      credentialFor:userId=>{
+        try{return this.#oneShotReadCredential(userId);}catch{return null;}
+      }});
   }
 
   /** R2d.5c.2: one pinned snapshot with the actor's Attention CAS inputs. */

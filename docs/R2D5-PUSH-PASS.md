@@ -1,0 +1,139 @@
+# R2d.5d.2 — zapisovače nastavení/zařízení a identitně vázaný push průchod
+
+**Rozsah:** pouze izolované staging SQLite (schéma v23) a knihovny
+`lib/target-notification-writer.ts` a `lib/target-attention-push-pass.ts`.
+**Bez skutečného web-push, bez sítě, bez časovače/plánovače, bez HTTP, UI,
+migrace a produkční aktivace.** Odesílač (`sender`) je vždy injektovaný.
+
+## Zapisovače (jediná veřejná zápisová cesta)
+
+Stejná struktura jako zapisovač Attention lifecycle: pinned write transakce
+(`BEGIN IMMEDIATE`), ověřený aktér ze serverem vydaného WRITE credentialu,
+volitelně živá durable session, kontrola `restoreGeneration`, idempotentní
+receipt v `metadata`, obsahu prostý záznam v append-only journalu (druh
+`personal_notification`). Příkaz nikdy nevybírá aktéra.
+
+- **`changeNotificationSettings`** — příkaz `{commandId, timeZone, attentionPush,
+  quietStart, quietEnd, dailyLimit 0–10, paused, expectedSettingsRevision,
+  expectedNotificationEpoch, restoreGeneration}`. Mění jen řádek aktéra, CAS na
+  revizi řádku i epochu, `unchanged` při shodných hodnotách, replay vrací
+  `replayed`, stejné UUID s jiným obsahem `idempotency_conflict`. Receipt
+  `r2:personal-notification-settings-receipt-v1:`. Zapnutí push **nic neodešle**;
+  jen umožní průchodu zapsat baseline. **Vypnutí** (1→0) smaže baseline značku
+  uživatele (jako legacy), takže nové zapnutí začne čistým baseline; pauza ji
+  zachová.
+- **`changePushTarget`** — `register {commandId, action, endpointHash (64 hex),
+  expectedNotificationEpoch, restoreGeneration}` a `revoke {…, targetId}`. Server
+  generuje neprůhledné `pt_` + 32 hex. Endpoint se nikdy neukládá ani nepřijímá,
+  jen jeho SHA-256 spočtený volajícím. Endpoint, který patří jiné identitě
+  (i revokovaný), vrací `unavailable` a nic nezapíše; vlastní živý cíl vrací
+  `unchanged` s jeho ID; vlastní revokovaný endpoint znovu registrovat nelze
+  (schéma: jeden řádek na endpoint). Revokace jen vlastního živého cíle. Receipt
+  `r2:personal-push-target-receipt-v1:`. Replay registrace vrací ID jen z vlastních
+  řádků.
+- **`readNotificationSettings(actor)`** — vlastní nastavení, epoch a ID vlastních
+  živých cílů (nikdy hashe).
+- Journal: `{receiptHash, epoch, op}` (op 0 nastavení, 1 registrace, 2 revokace);
+  průchod zapisuje `{epoch, op, n}` (op 3 baseline/claim, 4 výsledek zařízení,
+  5 dokončení doručení). Žádný uživatel, úkol, klíč, cíl, čas ani titulek.
+- Preflight přijímá jen oba nové prefixy receiptů (limit 4096 každý) a
+  značku `r2:push-baseline:<sha256(user)>`; ta musí patřit existující identitě a
+  mít pevnou hodnotu `sha256(["push-baseline-v1", user])` (max. jedna na
+  identitu).
+
+## Algoritmus průchodu
+
+`TargetStagingSessionAuthority.runAttentionPushPass(nowMs, sender)` →
+`runTargetAttentionPushPass`. Identity se berou jen z ověřeného úložiště (řádky
+`personal_notification_settings` s `attention_push=1` a `paused=0`, deterministické
+pořadí, max. 256 za průchod); credential pro čtení vydává autorita svým
+neexportovaným klíčem. Jeden průchod najednou na proces (druhý vrací
+`busy:true`).
+
+1. **Čtení** aktivních kandidátů aktéra preflightovaným selektorem v **uloženém
+   pásmu** uživatele (`areaFilter=all`, `view=active`, stránkování po 100, max.
+   500; změna epochy/revize mezi stránkami uživatele pro tento průchod vynechá).
+2. **Jedna pinned write transakce na uživatele:** znovu ověří, že se nastavení
+   (pásmo, okno, limit, revize, epoch) ani attention epoch od čtení nezměnily;
+   uzavře `pending` starší než 15 min jako `undelivered`; pak
+   - **baseline** (chybí značka): všichni aktuální oznámitelní kandidáti se zapíšou
+     jako `baseline`, zapíše se značka, nic se neodešle;
+   - jinak `handled` (vše kromě `failed` s attempts < 3), `sentInLast24h`
+     (sent/partial s `sent_at` mladším než 24 h + pending mladší než 24 h), `planTargetAttentionPushes`
+     a **claim** každého naplánovaného jako `pending` (insert, nebo `failed→pending`
+     s attempts+1). Před claimem se v transakci znovu ověří ACL, otevřený stav,
+     aktuální termín a pravidlo, snooze/dismiss; kandidát, který přístup ztratil
+     mezi čtením a claimem, se prostě nezabere (insert guard je druhá pojistka).
+3. **Mimo transakci** pro každý claim a každý živý cíl uživatele (přeskočí se
+   `sent`/`gone` a `failed` s 3 pokusy): payload z kandidáta
+   (`targetAttentionPushPayload`, jen vlastní titulek). **Bezprostředně před
+   každým odesláním** krátké čtení: řádek doručení stále existuje ve
+   očekávaném stavu (`pending`/`partial`), nastavení je stále zapnuté a
+   nepozastavené a cíl je živý. Reconcile smaže řádek při ztrátě přístupu,
+   dokončení úkolu nebo změně termínu → nic se neodešle („bez upozornění
+   odebraným členům“).
+4. Výsledek každého zařízení se **hned** commitne (pád po odeslání nezapomene
+   `sent`); `gone` zapíše device řádek a revokuje právě tento cíl guardovaným
+   UPDATE.
+5. **Dokončení** jako legacy: doručeno a zbývá opakovatelné zařízení → `partial`,
+   doručeno → `sent` (`sent_at` se zapíše jednou), žádné zařízení → `undelivered`
+   (zařízení přidané později nedostane backlog), nikdo nedostal → `failed`
+   (attempts; po vyčerpání pokusů se vzdá). Respektují se v23 guardy
+   (partial jen na partial/sent, `sent_at` write-once).
+6. **Opakování partial:** jen neúspěšná zařízení (nikdy zařízení bez řádku), nikdy
+   v tichém okně uživatele, bez započtení do denního limitu.
+
+Souhrn: `{users, sent, held:{quiet_hours, daily_limit, disabled}}` (a `busy`),
+bez titulků a ID.
+
+## Záruky
+
+- Žádný vstup klienta nevybírá uživatele ani cíl; sender dostane jen
+  `(userId, targetId, payload)` vlastníka cíle.
+- Tiché hodiny a vyhodnocení termínu se řídí uloženým pásmem každého uživatele;
+  dva uživatelé ve stejném okamžiku se mohou lišit.
+- Push nikdy nejde viewerovi, nepřiřazenému, jinému řešiteli ani odebranému
+  členovi; snooze/dismiss nikdy nepošle.
+- Restart: osiřelý `pending` (>15 min) se uzavře jako `undelivered` a znovu se
+  neodesílá; čerstvý `pending` se počítá jako rozpracovaný.
+- Výjimka jednoho uživatele ani sender, který vyhodí chybu (= `failed`),
+  neukončí průchod ostatních.
+
+## Známá omezení / rozhodnutí
+
+- Mezi pre-send kontrolou a skutečným odesláním je neodstranitelné okno
+  (odeslání je síťová operace mimo transakci); kontrola ho zužuje na jedno
+  zařízení.
+- Pokud uživatel mezi claimem a odesláním push vypne/pozastaví, claim zůstane
+  `pending` (nebo se dokončí podle již zapsaných zařízení) a po 15 min se uzavře
+  jako `undelivered`.
+- Staré `failed` řádky s attempts < 3 přežijí vypnutí/zapnutí (guard nedovolí
+  přepsat je na `baseline`) a mohou se po opětovném zapnutí zopakovat.
+- Zápis průchodu používá journal (anchor), proto každá změna stavu zapisuje
+  krátký obsahu prostý záznam; pro staging je to přijatelné.
+
+### Doplněno po nezávislém testu (review)
+
+- Kontrola těsně před **každým** odesláním nově čte i lifecycle stav aktéra:
+  `dismissed` nebo platný `snoozed` výskyt zastaví další zařízení téže zprávy.
+- Odeslání, které se nevyřídí do `TARGET_PUSH_SEND_TIMEOUT_MS` (30 s), se počítá
+  jako `failed` (později max. 3 pokusy) a neblokuje jednovláknový průchod.
+  Pokud služba zprávu po timeoutu přece doručí, může opakovaný pokus vést k
+  duplicitě na tomtéž zařízení — přijatá hranice místo trvalého zablokování.
+- Strop 256 identit na průchod má rotující začátek (krok za minutu), takže
+  identity nad strop přijdou na řadu v dalších průchodech; souhrn vrací
+  `deferred`.
+- Poškozený baseline marker nebo pásmo v DB (obejití CHECK) způsobí selhání
+  preflightu celého staging úložiště — průchod nic nepošle nikomu
+  (fail-closed celého úložiště, nikoli jen jednoho uživatele).
+- Odezva registrace zařízení odliší „nový“ od „patří jinému“ (`unavailable`);
+  zneužití vyžaduje znalost přesné adresy endpointu cizího zařízení.
+- Položka vzniklá během pauzy se po jejím zrušení ohlásí, pokud stále platí
+  (pauza potlačuje odesílání, nikoli vyhodnocení) — **k potvrzení vlastníkem**.
+- Jediné zařízení se stavem `gone` uzavře doručení jako `failed` (3 pokusy),
+  nikoli `undelivered`; znovu se neodesílá.
+
+## Co zbývá
+
+- **R2d.5d.3:** HTTP pro nastavení a cíle (ve výchozím stavu vypnuté).
+- Skutečný web-push klient, import subscription a plánovač až při R4 cutoveru.

@@ -477,6 +477,17 @@ export function readPreflightedAttentionCandidatePage(
     },()=>null));
 }
 
+/** R2d.5d.2: one preflighted, pinned read snapshot for staging-internal
+ * notification work. The callback receives only the pinned snapshot handle; it
+ * is responsible for binding any query to a server-verified identity (it never
+ * receives client input). Returns null when the store is untrusted. */
+export function readPreflightedStoreSnapshot<T>(
+  store:TargetStagingReadStore,read:(db:DatabaseSync)=>T|null,
+):T|null {
+  return withPreflightedStore<T|null>(store,()=>null,(db,preflight)=>
+    inReadSnapshot<T|null>(db,()=>preflight(db)?read(db):null,()=>null));
+}
+
 /** R3-slice/BE-02: both days from the SAME actor-bound, preflighted SQLite
  * read transaction. No independent snapshots can be accidentally composed. */
 export function readPreflightedMyPlanTwoDayTaskPage(
