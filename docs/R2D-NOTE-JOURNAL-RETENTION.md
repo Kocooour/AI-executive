@@ -45,7 +45,7 @@ Cursor přesně **na** podlaze se dál obsluhuje (všechny `seq > floor` existuj
 pod podlahou dostane `409 resync_required`.
 
 Výsledek bez obsahu: `{ ok, areas, deleted }` (`areas` = Oblasti se zvýšenou podlahou).
-Výchozí retence 30 dní, minimum 7 (návrh, rozhoduje vlastník). Do anchor žurnálu se zapíše
+Výchozí retence 30 dní, minimum 7 (**potvrzeno vlastníkem 2026-11-08**, [záznam](decisions/2026-11-08-ai-telo-poznamek-a-retence.md); retence auditu je odložena na R4). Do anchor žurnálu se zapíše
 `compaction` intent s payloadem `{scope:"note_journal", areas, deleted}`.
 
 ## Proč nezůstává „poslední řádek poznámky“
