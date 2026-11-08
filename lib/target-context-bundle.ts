@@ -124,11 +124,13 @@ const publicPart=(b:Omit<TargetContextBundle,"witness">)=>({
 /** Longest prefix of `text` within `maxBytes` UTF-8 bytes, cut only between
  * code points. */
 export function truncateUtf8(text:string,maxBytes:number):{text:string;truncated:boolean}{
-  if(Buffer.byteLength(text,"utf8")<=maxBytes)return {text,truncated:false};
+  // A non-integer or negative cap (NaN, Infinity, -1) is a caller bug: emit nothing.
+  const cap=Number.isSafeInteger(maxBytes)&&maxBytes>=0?maxBytes:0;
+  if(Buffer.byteLength(text,"utf8")<=cap)return {text,truncated:false};
   let used=0,end=0;
   for(const ch of text){
     const n=Buffer.byteLength(ch,"utf8");
-    if(used+n>maxBytes)break;
+    if(used+n>cap)break;
     used+=n;end+=ch.length;
   }
   return {text:text.slice(0,end),truncated:true};

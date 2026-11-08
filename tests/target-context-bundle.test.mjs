@@ -466,3 +466,10 @@ test("fail closed when the authorized read disagrees with the search row",()=>{
   assert.ok(direct("carol","find","shared"),"actor/scope that does not list the note is unaffected");
   assert.ok(direct("bob","what_matters","my-plan"),"task-only purposes are unaffected");
 });
+
+test("truncateUtf8 never returns uncapped text for an invalid cap",async()=>{
+  const {truncateUtf8}=await import("../lib/target-context-bundle.ts");
+  for(const cap of [NaN,Infinity,-1,2.9,-Infinity])
+    assert.deepEqual(truncateUtf8("é😀a",cap),{text:"",truncated:true},String(cap));
+  assert.deepEqual(truncateUtf8("",NaN),{text:"",truncated:false});
+});
