@@ -43,12 +43,21 @@ export interface TargetPushSender{
 export interface TargetAttentionPushPassSummary{
   users:number;sent:number;
   held:{quiet_hours:number;daily_limit:number;disabled:number};
+  /** Enabled identities left for later passes because of the per-pass cap. */
+  deferred?:number;
   /** True when another pass was already running in this process (nothing done). */
   busy?:true;
 }
 
 export const TARGET_PUSH_PASS_STALE_PENDING_MS=15*60_000;
 export const TARGET_PUSH_PASS_MAX_USERS=256;
+/** A send that does not settle in time counts as failed (retried later, at most 3x). */
+export const TARGET_PUSH_SEND_TIMEOUT_MS=30_000;
+function withTimeout<T>(promise:Promise<T>,ms:number):Promise<T|"timeout"> {
+  let timer:ReturnType<typeof setTimeout>|undefined;
+  const timeout=new Promise<"timeout">(resolve=>{timer=setTimeout(()=>resolve("timeout"),ms);});
+  return Promise.race([Promise.resolve(promise),timeout]).finally(()=>{if(timer)clearTimeout(timer);});
+}
 export const TARGET_PUSH_PASS_MAX_CANDIDATES=500;
 const PAGE=100;
 const DAY=24*3_600_000;
@@ -222,14 +231,24 @@ function phase1(store:TargetStagingReadStore,user:string,view:TargetNotification
 
 interface DeliveryState{
   status:string;sentAt:number|null;settingsOn:boolean;
+  /** The actor snoozed (unexpired) or dismissed this occurrence meanwhile. */
+  hidden:boolean;
   targets:string[];devices:Map<string,{status:string;attempts:number}>;
 }
 /** Short snapshot read: delivery row, own live targets, own device rows, settings still on. */
-function readDeliveryState(store:TargetStagingReadStore,user:string,key:string):DeliveryState|null {
+function readDeliveryState(store:TargetStagingReadStore,user:string,key:string,
+  nowMs:number):DeliveryState|null {
   return readPreflightedStoreSnapshot<DeliveryState|null>(store,db=>{
-    const d=db.prepare(`SELECT status,sent_at_ms AS sentAt FROM personal_attention_deliveries
-      WHERE user_id=? AND delivery_key=?`).get(user,key) as {status:string;sentAt:number|null}|undefined;
+    const d=db.prepare(`SELECT status,sent_at_ms AS sentAt,task_id AS taskId,rule_id AS ruleId,
+      occurrence_on AS occurrenceOn FROM personal_attention_deliveries
+      WHERE user_id=? AND delivery_key=?`).get(user,key) as {status:string;sentAt:number|null;
+        taskId:string;ruleId:string;occurrenceOn:string}|undefined;
     if(!d)return null;
+    // A snooze/dismiss made during the pass must stop further devices too.
+    const hidden=!!db.prepare(`SELECT 1 FROM personal_attention_states WHERE user_id=?
+      AND task_id=? AND rule_id=? AND occurrence_on=? AND
+      (state='dismissed' OR (state='snoozed' AND snoozed_until_ms > ?))`)
+      .get(user,d.taskId,d.ruleId,d.occurrenceOn,nowMs);
     const s=readNotificationSettingsInSnapshot(db,user);
     const targets=(db.prepare(`SELECT target_id AS id FROM personal_push_targets
       WHERE user_id=? AND revoked_at_ms IS NULL ORDER BY created_at_ms,target_id`)
@@ -238,7 +257,7 @@ function readDeliveryState(store:TargetStagingReadStore,user:string,key:string):
       FROM personal_attention_device_deliveries WHERE user_id=? AND delivery_key=?`)
       .all(user,key) as {id:string;status:string;attempts:number}[])
       .map(r=>[r.id,{status:r.status,attempts:r.attempts}]));
-    return {status:d.status,sentAt:d.sentAt,settingsOn:!!s&&s.attentionPush&&!s.paused,
+    return {status:d.status,sentAt:d.sentAt,settingsOn:!!s&&s.attentionPush&&!s.paused,hidden,
       targets,devices};
   });
 }
@@ -312,9 +331,10 @@ function finalize(store:TargetStagingReadStore,user:string,work:Work,nowMs:numbe
 
 async function deliver(store:TargetStagingReadStore,sender:TargetPushSender,user:string,
   work:Work,nowMs:number):Promise<boolean> {
-  const first=readDeliveryState(store,user,work.key);
+  const first=readDeliveryState(store,user,work.key,nowMs);
   const expected=work.mode==="claimed"?"pending":"partial";
   if(!first||first.status!==expected)return false;
+  if(first.hidden)return finalize(store,user,work,nowMs);
   const payload=targetAttentionPushPayload(work.candidate);
   if(!payload)return false;
   for(const target of first.targets){
@@ -322,15 +342,16 @@ async function deliver(store:TargetStagingReadStore,sender:TargetPushSender,user
     if(known?(known.status!=="failed"||known.attempts>=MAX):work.mode==="retry")continue;
     // Pre-send re-check: reconcile deletes the row when access was lost, the task
     // was completed or its deadline changed; settings must still allow push.
-    const state=readDeliveryState(store,user,work.key);
-    if(!state||state.status!==expected||!state.settingsOn)
+    const state=readDeliveryState(store,user,work.key,nowMs);
+    if(!state||state.status!==expected||!state.settingsOn||state.hidden)
       return finalize(store,user,work,nowMs);
     if(!state.targets.includes(target))continue;
     const device=state.devices.get(target);
     if(device&&(device.status!=="failed"||device.attempts>=MAX))continue;
     let result:TargetPushSendResult;
     try{
-      const r=await sender.sendTo(user,target,{...payload});
+      // A hung push service must not wedge the single-flight pass forever.
+      const r=await withTimeout(sender.sendTo(user,target,{...payload}),TARGET_PUSH_SEND_TIMEOUT_MS);
       result=r==="sent"||r==="gone"?r:"failed";
     }catch{result="failed";}
     recordDevice(store,user,work.key,target,result,nowMs);
@@ -357,21 +378,27 @@ export async function runTargetAttentionPushPass(
     const {nowMs,sender}=input;
     if(!Number.isSafeInteger(nowMs)||nowMs<=0||!sender||
         typeof sender.sendTo!=="function")return summary;
-    const listing=readPreflightedStoreSnapshot<{views:[string,TargetNotificationSettingsView][];off:number}>(
+    const listing=readPreflightedStoreSnapshot<{views:[string,TargetNotificationSettingsView][];off:number;deferred:number}>(
       store,db=>{
         const ids=(db.prepare("SELECT user_id AS id FROM personal_notification_settings ORDER BY user_id COLLATE BINARY")
           .all() as {id:string}[]).map(r=>r.id);
-        const views:[string,TargetNotificationSettingsView][]=[];
+        const enabled:[string,TargetNotificationSettingsView][]=[];
         let off=0;
         for(const id of ids){
           const v=readNotificationSettingsInSnapshot(db,id);
-          if(v&&v.attentionPush&&!v.paused&&views.length<TARGET_PUSH_PASS_MAX_USERS)views.push([id,v]);
-          else if(!v||!v.attentionPush||v.paused)off++;
+          if(v&&v.attentionPush&&!v.paused)enabled.push([id,v]);
+          else off++;
         }
-        return {views,off};
+        // Bounded work per pass with a rotating start (one step per minute),
+        // so identities beyond the cap are served on later passes, never starved.
+        const n=enabled.length,cap=Math.min(n,TARGET_PUSH_PASS_MAX_USERS);
+        const start=n===0?0:Math.floor(nowMs/60_000)%n;
+        const views=Array.from({length:cap},(_,i)=>enabled[(start+i)%n]);
+        return {views,off,deferred:n-cap};
       });
     if(!listing)return summary;
     summary.held.disabled+=listing.off;
+    if(listing.deferred)summary.deferred=listing.deferred;
     for(const [user,view] of listing.views){
       summary.users++;
       try{

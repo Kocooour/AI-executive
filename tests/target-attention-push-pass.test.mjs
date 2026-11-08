@@ -475,3 +475,60 @@ test("invalid input or direct call without an authority-bound credential sends n
   fx.authority.close();
   assert.deepEqual(await run(fx,s),{users:0,sent:0,held:{quiet_hours:0,daily_limit:0,disabled:0}});
 });
+
+test("review fixes: dismiss/snooze during a send stops further devices",async()=>{
+  for(const mode of ["dismissed","snoozed"]){
+    const fx=fixture();
+    register(fx,"alice","d1");register(fx,"alice","d2");
+    enable(fx,"alice");await run(fx,sender());
+    const id=task(fx,"alice","Hide me","2026-11-02");
+    const s=sender((userId,targetId,payload,n)=>{
+      if(n===1)fx.db.prepare(`INSERT INTO personal_attention_states(user_id,task_id,rule_id,occurrence_on,state,snoozed_until_ms)
+        VALUES ('alice',?,'deadline_overdue','2026-11-02',?,?)`).run(id,mode,mode==="snoozed"?NOW+DAY:null);
+      return "sent";
+    });
+    await run(fx,s);
+    assert.equal(s.calls.length,1,mode+": second device must not be reached");
+    ok(fx);
+  }
+});
+
+test("review fixes: a hung sender times out instead of wedging the pass",async(t)=>{
+  t.mock.timers.enable({apis:["setTimeout"]});
+  const fx=fixture();
+  register(fx,"alice","d1");enable(fx,"alice");await run(fx,sender());
+  task(fx,"alice","Hang","2026-11-02");
+  const hung={calls:0,sendTo(){this.calls++;return new Promise(()=>{});}};
+  const pending=run(fx,hung);
+  // let the pass reach the send, then fire the timeout
+  for(let i=0;i<50&&hung.calls===0;i++)await new Promise(r=>setImmediate(r));
+  t.mock.timers.tick(30_000);
+  const summary=await pending;
+  assert.equal(summary.sent,0);
+  assert.notEqual(summary.busy,true);
+  assert.deepEqual(devices(fx,"alice").map(d=>d.status),["failed"]);
+  assert.notEqual((await run(fx,sender(),NOW+1)).busy,true,"next pass is not blocked");
+});
+
+test("review fixes: identities beyond the per-pass cap rotate instead of starving",async()=>{
+  const {TARGET_PUSH_PASS_MAX_USERS:CAP}=await import("../lib/target-attention-push-pass.ts");
+  const fx=fixture();
+  const ids=[];
+  for(let i=0;i<CAP+1;i++){
+    const who="u"+String(i).padStart(3,"0");ids.push(who);
+    fx.db.prepare("INSERT INTO identities(id) VALUES (?)").run(who);
+    fx.db.prepare("INSERT INTO workspaces(id,kind,owner_user_id) VALUES (?,'personal',?)").run(who+"-ws",who);
+    fx.db.prepare("INSERT INTO areas(id,title,kind,workspace_id,owner_user_id,system_key) VALUES (?,?,'private',?,?,'unassigned')")
+      .run(who+"-area",who,who+"-ws",who);
+    fx.db.prepare("UPDATE personal_notification_settings SET attention_push=1 WHERE user_id=?").run(who);
+  }
+  const first=await run(fx,sender(),NOW);
+  assert.equal(first.deferred,ids.length-CAP,"one enabled identity deferred");
+  // Across consecutive minutes every identity gets a turn.
+  const served=new Set();
+  const key=who=>fx.db.prepare("SELECT 1 FROM metadata WHERE key LIKE ? AND value=?")
+    .get(BASELINE_PREFIX+"%",sha(JSON.stringify(["push-baseline-v1",who])));
+  await run(fx,sender(),NOW+60_000);
+  for(const who of ids)if(key(who))served.add(who);
+  assert.equal(served.size,ids.length,"after two rotated passes all identities were baselined");
+});

@@ -112,6 +112,27 @@ bez titulků a ID.
 - Zápis průchodu používá journal (anchor), proto každá změna stavu zapisuje
   krátký obsahu prostý záznam; pro staging je to přijatelné.
 
+### Doplněno po nezávislém testu (review)
+
+- Kontrola těsně před **každým** odesláním nově čte i lifecycle stav aktéra:
+  `dismissed` nebo platný `snoozed` výskyt zastaví další zařízení téže zprávy.
+- Odeslání, které se nevyřídí do `TARGET_PUSH_SEND_TIMEOUT_MS` (30 s), se počítá
+  jako `failed` (později max. 3 pokusy) a neblokuje jednovláknový průchod.
+  Pokud služba zprávu po timeoutu přece doručí, může opakovaný pokus vést k
+  duplicitě na tomtéž zařízení — přijatá hranice místo trvalého zablokování.
+- Strop 256 identit na průchod má rotující začátek (krok za minutu), takže
+  identity nad strop přijdou na řadu v dalších průchodech; souhrn vrací
+  `deferred`.
+- Poškozený baseline marker nebo pásmo v DB (obejití CHECK) způsobí selhání
+  preflightu celého staging úložiště — průchod nic nepošle nikomu
+  (fail-closed celého úložiště, nikoli jen jednoho uživatele).
+- Odezva registrace zařízení odliší „nový“ od „patří jinému“ (`unavailable`);
+  zneužití vyžaduje znalost přesné adresy endpointu cizího zařízení.
+- Položka vzniklá během pauzy se po jejím zrušení ohlásí, pokud stále platí
+  (pauza potlačuje odesílání, nikoli vyhodnocení) — **k potvrzení vlastníkem**.
+- Jediné zařízení se stavem `gone` uzavře doručení jako `failed` (3 pokusy),
+  nikoli `undelivered`; znovu se neodesílá.
+
 ## Co zbývá
 
 - **R2d.5d.3:** HTTP pro nastavení a cíle (ve výchozím stavu vypnuté).
