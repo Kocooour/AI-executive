@@ -55,7 +55,7 @@ neexportovaným klíčem. Jeden průchod najednou na proces (druhý vrací
    500; změna epochy/revize mezi stránkami uživatele pro tento průchod vynechá).
 2. **Jedna pinned write transakce na uživatele:** znovu ověří, že se nastavení
    (pásmo, okno, limit, revize, epoch) ani attention epoch od čtení nezměnily;
-   uzavře `pending` starší než 15 min jako `undelivered`; pak
+   obnoví osiřelé `pending` starší než 15 min podle trvalých výsledků zařízení: již odeslané označí `sent` nebo `partial` s původním časem odeslání; bez potvrzeného doručení `undelivered`; pak
    - **baseline** (chybí značka): všichni aktuální oznámitelní kandidáti se zapíšou
      jako `baseline`, zapíše se značka, nic se neodešle;
    - jinak `handled` (vše kromě `failed` s attempts < 3), `sentInLast24h`
@@ -69,7 +69,7 @@ neexportovaným klíčem. Jeden průchod najednou na proces (druhý vrací
    (`targetAttentionPushPayload`, jen vlastní titulek). **Bezprostředně před
    každým odesláním** krátké čtení: řádek doručení stále existuje ve
    očekávaném stavu (`pending`/`partial`), nastavení je stále zapnuté a
-   nepozastavené a cíl je živý. Reconcile smaže řádek při ztrátě přístupu,
+   nepozastavené, **aktuálně mimo tiché hodiny** ve stále platném pásmu uživatele a cíl je živý. Čas se znovu zjišťuje před každým zařízením (testy používají injektovaný clock). Reconcile smaže řádek při ztrátě přístupu,
    dokončení úkolu nebo změně termínu → nic se neodešle („bez upozornění
    odebraným členům“).
 4. Výsledek každého zařízení se **hned** commitne (pád po odeslání nezapomene
@@ -80,8 +80,8 @@ neexportovaným klíčem. Jeden průchod najednou na proces (druhý vrací
    (zařízení přidané později nedostane backlog), nikdo nedostal → `failed`
    (attempts; po vyčerpání pokusů se vzdá). Respektují se v23 guardy
    (partial jen na partial/sent, `sent_at` write-once).
-6. **Opakování partial:** jen neúspěšná zařízení (nikdy zařízení bez řádku), nikdy
-   v tichém okně uživatele, bez započtení do denního limitu.
+6. **Opakování partial:** zařízení již označené `sent`/`gone` nikdy znovu; neúspěšná zařízení a dosud neoslovená živá zařízení při přerušení tichými hodinami nebo pádu mohou být dokončena později. Běžná dokončená zpráva novým zařízení backlog nevytváří. Opakování je mimo tiché hodiny, bez dalšího započtení do denního limitu.
+7. **Snooze před prvním odesláním:** `pending` bez jakéhokoli výsledku zařízení se transakčně uvolní, takže po vypršení snooze může být stejný výskyt znovu naplánován. `dismissed` zůstává potlačeno.
 
 Souhrn: `{users, sent, held:{quiet_hours, daily_limit, disabled}}` (a `busy`),
 bez titulků a ID.
@@ -94,13 +94,13 @@ bez titulků a ID.
   dva uživatelé ve stejném okamžiku se mohou lišit.
 - Push nikdy nejde viewerovi, nepřiřazenému, jinému řešiteli ani odebranému
   členovi; snooze/dismiss nikdy nepošle.
-- Restart: osiřelý `pending` (>15 min) se uzavře jako `undelivered` a znovu se
-  neodesílá; čerstvý `pending` se počítá jako rozpracovaný.
+- Restart: osiřelý `pending` (>15 min) se **zachovaným potvrzeným `sent`** převede na `sent`/`partial` se skutečným zapsaným časem doručení a nadále se počítá do 24h limitu. Bez potvrzeného doručení se uzavře jako `undelivered` bez rizika opakovaného odeslání; čerstvý `pending` zůstává rozpracovaný.
 - Výjimka jednoho uživatele ani sender, který vyhodí chybu (= `failed`),
   neukončí průchod ostatních.
 
 ## Známá omezení / rozhodnutí
 
+- Doručování novým zařízením během obnoveného `partial` se aktuálně řídí živými cíli; před aktivací R4 je vhodné pinovat původní cíle k doručení, aby nová registrace nedostala rozpracovaný backlog.
 - Mezi pre-send kontrolou a skutečným odesláním je neodstranitelné okno
   (odeslání je síťová operace mimo transakci); kontrola ho zužuje na jedno
   zařízení.
