@@ -30,7 +30,15 @@ aktuálně odložené položky. Preview se vydá jen pro otevřený úkol, kter�
 (soukromý) nebo má přiřazený (sdílený, editor/admin), a jen pro výskyt, který je stále
 datem úkolu (`dueOn`, u `planned_date_passed` vlastní plán aktéra). Jinak nerozlišitelné
 **404** (viewer, nepřiřazený, cizí, dokončený, neexistující, neplatný výskyt). Neobsahuje
-titul, data, aktéra ani vnitřní svědky. Před odpovědí proběhne živá release bariéra:
+titul, data, pole s identitou aktéra ani vnitřní svědky. Pozor: `writeAreaId`
+je skutečné ID Oblasti úkolu (stejně jako u preview osobního `when`) a u
+systémové soukromé Oblasti může obsahovat ID **vlastního** uživatele
+(např. `area:unassigned:<já>`); nikdy ID jiného uživatele. Klient musí
+`replayed:true` z PATCH chápat jen jako potvrzení dřívějšího provedení
+příkazu, nikoli jako aktuální stav (po Undo může být položka znovu aktivní);
+409 `Revision conflict` záměrně nerozlišuje stale CAS, `not_active`,
+`unchanged` a konflikt idempotence — klient vždy načte nový preview.
+Před odpovědí proběhne živá release bariéra:
 session, Area/policy, revize úkolu a `personalAttentionGuard` (epocha attention); stale je 404.
 
 ## `PATCH /api/target-staging/attention/command`
