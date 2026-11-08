@@ -77,3 +77,19 @@ stránkování s neměnným `evaluatedAtMs`, podvržený kurzor, vazba kurzoru n
 filtr/view/limit/aktéra, odmítnutí klientského `timeZone` a změnu profilového pásma, 409 při změně epochy mezi stránkami i mezi
 čtením a uvolněním, revokace session, vypnutí flagu za běhu a negativní DTO.
 Zařazeno do R2d cíleného CI. Browser E2E až před produkčním nasazením.
+
+## Hranice R2d.4k zjištěné nezávislým testem
+
+- Parser odpovědi child procesu neověřuje `linearization.actorUserId` proti očekávanému
+  aktérovi (rodič ho nezná). Podvržený aktér z kompromitovaného lokálního child procesu by však
+  neprošel živou release bariérou: `verifyTargetStagingReadLive` odmítne linearizaci, jejíž
+  aktér se liší od aktéra relace. Zóna, kterou child konzistentně odvodí, se dál bere jako
+  důvěryhodný výstup lokálního procesu.
+- Změna domény receiptů na `personal-attention-v2` znamená, že potvrzení příkazů zapsaná dříve
+  (v1, staging, výchozí vypnuto) receipt endpoint nerozpozná (`not_recorded`); opakovaný příkaz
+  se znovu neprovede (`stale_revision`), integrita zůstává. Staré v1 receipty dál zabírají
+  kapacitu.
+- Neplatná zóna v profilu (jen přímou manipulací s DB; zápis ji validuje) shodí preflight
+  celého staging úložiště — fail-closed pro všechny, nikoli jen pro jednoho uživatele.
+- Změna zóny může u téže položky přepnout pravidlo („termín se blíží“ → „po termínu“) a vyvolat
+  novou push notifikaci; jde o dvě různá upozornění stejně jako dosud.
