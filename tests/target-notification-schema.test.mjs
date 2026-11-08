@@ -77,7 +77,7 @@ const nepoch=(db,who)=>db.prepare("SELECT revision AS n FROM personal_notificati
 const dcount=(db,who)=>db.prepare("SELECT COUNT(*) AS n FROM personal_attention_deliveries"+(who?" WHERE user_id=?":"")).get(...(who?[who]:[])).n;
 
 test("v23 is fresh-only; every identity gets default-OFF UTC settings and an independent epoch",()=>{
-  assert.equal(TARGET_STORE_SCHEMA_VERSION,24);
+  assert.equal(TARGET_STORE_SCHEMA_VERSION,25);
   assert.ok(TARGET_SCHEMA_SQL.includes("personal_push_target_capacity"));
   const {db,stage}=setup();
   for(const who of ["alice","bob","carol","erin"]){
@@ -222,6 +222,9 @@ test("delivery and device-row transitions are guarded; device rows only for own 
   assert.throws(()=>dev("bob",key,tid("a"),"sent",0),/CHECK constraint failed/);
   dev("bob",key,tid("a"));
   assert.throws(()=>dev("bob",key,tid("a")),guard,"no replace");
+  // A failed delivery must first become an in-flight attempt; direct failed -> sent is forbidden.
+  assert.throws(()=>db.prepare("UPDATE personal_attention_device_deliveries SET status='sent',attempts=2,last_attempt_at_ms=7000").run(),/transition invalid/);
+  db.prepare("UPDATE personal_attention_device_deliveries SET status='inflight',last_attempt_at_ms=6500").run();
   db.prepare("UPDATE personal_attention_device_deliveries SET status='sent',attempts=2,last_attempt_at_ms=7000").run();
   assert.throws(()=>db.prepare("UPDATE personal_attention_device_deliveries SET status='failed'").run(),/transition invalid/,"sent is terminal");
   assert.throws(()=>db.prepare("UPDATE personal_attention_device_deliveries SET target_id=?").run(tid("b")),/transition invalid/);
