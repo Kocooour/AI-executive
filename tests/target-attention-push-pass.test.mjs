@@ -824,3 +824,58 @@ test("review #331: another in-flight device keeps parent pending until its outco
   assert.deepEqual(devices(fx,"alice").map(d=>d.status).sort(),["sent","unknown"]);
   ok(fx);
 });
+
+
+test("review #331: repeated pre-send crashes never exhaust device attempts",async()=>{
+  const fx=fixture();
+  task(fx,"alice","baseline");const target=register(fx,"alice","d");
+  enable(fx,"alice");await run(fx,sender());
+  const id=task(fx,"alice","reserved through many crashes","2026-11-02");
+  const skipped=sender();
+  for(const minutes of [0,20,40,60,80]){
+    // An invalid injected delivery clock models a process abort immediately
+    // after phase1 commits its claim, before any sender starts.
+    await run(fx,skipped,NOW+minutes*60_000,()=>NaN);
+    const parent=rows(fx,"alice").find(r=>r.task_id===id);
+    assert.equal(parent.status,"pending","still available for future recovery");
+    assert.equal(parent.attempts,0,"no device send ever started");
+    assert.deepEqual(devices(fx,"alice").map(d=>[d.status,d.attempts]),
+      [["reserved",0]]);
+  }
+  assert.equal(skipped.calls.length,0);
+  ok(fx);
+  const sent=sender();
+  await run(fx,sent,NOW+100*60_000,()=>NOW+100*60_000);
+  assert.deepEqual(sent.calls.map(c=>c.targetId),[target]);
+  const final=rows(fx,"alice").find(r=>r.task_id===id);
+  assert.equal(final.status,"sent");assert.equal(final.attempts,1,
+    "first real send, not the sixth claim, consumes attempt one");
+  await run(fx,sent,NOW+2*HOUR);assert.equal(sent.calls.length,1);
+  ok(fx);
+});
+
+test("review #331: exhausted device cannot block another originally reserved target",async()=>{
+  const fx=fixture();
+  task(fx,"alice","baseline");
+  const d1=register(fx,"alice","exhausted"),d2=register(fx,"alice","untouched");
+  enable(fx,"alice");await run(fx,sender());
+  const id=task(fx,"alice","one exhausted one untouched","2026-11-02");
+  const key=targetAttentionDeliveryKey("deadline_overdue",id,"2026-11-02");
+  fx.db.prepare(`INSERT INTO personal_attention_deliveries
+    (user_id,delivery_key,task_id,rule_id,occurrence_on,status,attempts,last_attempt_at_ms)
+    VALUES ('alice',?,?,'deadline_overdue','2026-11-02','failed',3,?)`)
+    .run(key,id,NOW-20*60_000);
+  fx.db.prepare(`INSERT INTO personal_attention_device_deliveries
+    (user_id,delivery_key,target_id,status,attempts,last_attempt_at_ms)
+    VALUES ('alice',?,?,'failed',3,?)`).run(key,d1,NOW-20*60_000);
+  fx.db.prepare(`INSERT INTO personal_attention_device_deliveries
+    (user_id,delivery_key,target_id,status,attempts,last_attempt_at_ms)
+    VALUES ('alice',?,?,'reserved',0,?)`).run(key,d2,NOW-20*60_000);
+  ok(fx);
+  const s=sender();await run(fx,s,NOW);
+  assert.deepEqual(s.calls.map(c=>c.targetId),[d2]);
+  assert.equal(rows(fx,"alice").find(r=>r.task_id===id).status,"sent");
+  assert.deepEqual(devices(fx,"alice").map(d=>[d.status,d.attempts]).sort(),
+    [["failed",3],["sent",1]].sort());
+  ok(fx);
+});
