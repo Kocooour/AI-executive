@@ -18,6 +18,7 @@ import type {TargetGlobalCombinedPage,GlobalCombinedItem,GlobalCombinedPositions
 import type {AuthorizedSearchPage,AuthorizedSearchItem} from "./target-authorized-title-search";
 import {validCombinedPositions} from "./target-staging-global-combined-http-cursor";
 import type {PersonalWhenCommandPreview} from "./target-personal-when-command-read";
+import type {AttentionCommandPreview} from "./target-attention-command-read";
 import type { TemporalScope, TemporalStatus, TemporalTask, TemporalTaskPage, TemporalTaskDetail, TargetTemporalTaskLiveGuard, TemporalDueWindow, TemporalDueWindowPage } from "./target-task-temporal-read-model";
 import type { TargetPrivateProjectPage, TargetReadableProject } from "./target-project-read-model";
 import type { TargetAuthorizedProjectTasksPage } from "./target-project-task-read-model";
@@ -105,6 +106,8 @@ export function createStagingReadRunner(
           process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_TITLE_SEARCH_ENABLED || "",
         AI_EXECUTIVE_TARGET_STAGING_HTTP_PERSONAL_WHEN_WRITE_ENABLED:
           process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_PERSONAL_WHEN_WRITE_ENABLED || "",
+        AI_EXECUTIVE_TARGET_STAGING_HTTP_ATTENTION_WRITE_ENABLED:
+          process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_ATTENTION_WRITE_ENABLED || "",
         AI_EXECUTIVE_TARGET_STAGING_DIRECTORY: config.stagingDirectory,
         AI_EXECUTIVE_TARGET_STAGING_RESTORE_GENERATION: config.expectedRestoreGeneration,
         AI_EXECUTIVE_TARGET_STAGING_OWNER_USER_ID: config.ownerUserId,
@@ -1592,6 +1595,74 @@ export async function readStagingPersonalWhenPreviewInChild(
   const payload=await runChild(config,"target-staging-personal-when-preview-child.mjs",[taskId]);
   const result=parseStagingPersonalWhenPreview(payload,taskId);
   if(payload!==null&&!result)logStagingFailure("personal_when_preview","invalid_child_dto");
+  return result;
+}
+
+/** R2d.5c.2: an Attention command preview transports no title, date or foreign
+ * data; its Area+task+attention-epoch witnesses remain internal to the server. */
+export type StagingAttentionCommandPreviewResult=
+  | {ok:true;preview:AttentionCommandPreview}
+  | {ok:false;reason:"inaccessible"};
+export function parseStagingAttentionCommandPreview(
+  value:unknown,taskId:string,
+):StagingAttentionCommandPreviewResult|null {
+  if(typeof taskId!=="string"||!value||typeof value!=="object"||Array.isArray(value))
+    return null;
+  const v=value as Record<string,unknown>;
+  if(Object.keys(v).sort().join(",")==="ok,reason"&&v.ok===false&&v.reason==="inaccessible")
+    return {ok:false,reason:"inaccessible"};
+  if(v.ok!==true||Object.keys(v).sort().join(",")!==
+    "expectedAttentionEpoch,expectedRevision,expectedStateRevision,guard,lifecycle,linearization,ok,snoozedUntilMs,writeAreaId"||
+    typeof v.expectedRevision!=="string"||!REVISION.test(v.expectedRevision)||
+    !Number.isSafeInteger(v.expectedAttentionEpoch)||(v.expectedAttentionEpoch as number)<0||
+    !(v.expectedStateRevision===null||
+      (Number.isSafeInteger(v.expectedStateRevision)&&(v.expectedStateRevision as number)>=0))||
+    (v.lifecycle!=="active"&&v.lifecycle!=="snoozed"&&v.lifecycle!=="dismissed")||
+    // active may keep a row revision (expired snooze); hidden states always have a row.
+    (v.lifecycle!=="active"&&v.expectedStateRevision===null)||
+    !(v.lifecycle==="snoozed"
+      ?Number.isSafeInteger(v.snoozedUntilMs)&&(v.snoozedUntilMs as number)>0
+      :v.snoozedUntilMs===null)||
+    typeof v.writeAreaId!=="string"||!v.writeAreaId||!v.guard||
+    typeof v.guard!=="object"||Array.isArray(v.guard)||!v.linearization||
+    typeof v.linearization!=="object"||Array.isArray(v.linearization))return null;
+  const lin=v.linearization as Record<string,unknown>;
+  if(!Array.isArray(lin.areas)||lin.areas.length!==1)return null;
+  const a=lin.areas[0] as Record<string,unknown>|null;
+  if(!a||typeof a!=="object"||a.areaId!==v.writeAreaId||
+      (a.areaKind!=="private"&&a.areaKind!=="shared"))return null;
+  const linearization=parseLinearization(v.linearization,
+    new Map([[v.writeAreaId,a.areaKind]]));
+  if(!linearization||linearization.areas.length!==1)return null;
+  const access=linearization.areas[0].access;
+  if(access!=="private-owner"&&access!=="editor"&&access!=="admin")return null;
+  const g=v.guard as Record<string,unknown>;
+  if(Object.keys(g).sort().join(",")!=="areaId,parentRevision,projectId,taskId,taskRevision"||
+    g.taskId!==taskId||g.areaId!==v.writeAreaId||
+    (g.projectId!==null&&typeof g.projectId!=="string")||
+    !Number.isSafeInteger(g.taskRevision)||(g.taskRevision as number)<0||
+    (g.projectId===null?g.parentRevision!==null:
+      !Number.isSafeInteger(g.parentRevision)||(g.parentRevision as number)<0))return null;
+  return {ok:true,preview:{
+    expectedRevision:v.expectedRevision,
+    expectedAttentionEpoch:v.expectedAttentionEpoch as number,
+    expectedStateRevision:v.expectedStateRevision as number|null,
+    writeAreaId:v.writeAreaId,lifecycle:v.lifecycle,
+    snoozedUntilMs:v.snoozedUntilMs as number|null,
+    linearization,guard:{
+      taskId,projectId:g.projectId as string|null,areaId:v.writeAreaId,
+      taskRevision:g.taskRevision as number,
+      parentRevision:g.parentRevision as number|null,
+    },
+  }};
+}
+export async function readStagingAttentionCommandPreviewInChild(
+  config:StagingPersonalReadConfig,taskId:string,ruleId:string,occurrenceOn:string,
+):Promise<StagingAttentionCommandPreviewResult|null> {
+  const payload=await runChild(config,"target-staging-attention-command-preview-child.mjs",
+    [taskId,ruleId,occurrenceOn]);
+  const result=parseStagingAttentionCommandPreview(payload,taskId);
+  if(payload!==null&&!result)logStagingFailure("attention_command_preview","invalid_child_dto");
   return result;
 }
 
