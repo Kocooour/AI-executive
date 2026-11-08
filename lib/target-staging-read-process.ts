@@ -75,7 +75,8 @@ export function createStagingReadRunner(
       const environment = {
         NODE_ENV: process.env.NODE_ENV || "production",
         AI_EXECUTIVE_DATA_DIR: process.env.AI_EXECUTIVE_DATA_DIR || "",
-        AI_EXECUTIVE_TARGET_STAGING_HTTP_ENABLED: "true",
+        AI_EXECUTIVE_TARGET_STAGING_HTTP_ENABLED:
+          process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_ENABLED || "",
         AI_EXECUTIVE_TARGET_STAGING_HTTP_WRITE_ENABLED:
           process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_WRITE_ENABLED || "",
         AI_EXECUTIVE_TARGET_STAGING_HTTP_TEMPORAL_ENABLED:
