@@ -75,8 +75,8 @@ const planEpoch=(db,who)=>db.prepare(
   "SELECT revision AS n FROM personal_plan_epochs WHERE user_id=?").get(who)?.n;
 const OVER="deadline_overdue",SOON="deadline_soon",PLAN="planned_date_passed";
 
-test("v22 is fresh-only; every identity gets an independent attention epoch",()=>{
-  assert.equal(TARGET_STORE_SCHEMA_VERSION,22);
+test("v23 is fresh-only (v22 attention schema retained); every identity gets an independent attention epoch",()=>{
+  assert.equal(TARGET_STORE_SCHEMA_VERSION,23);
   assert.equal(TARGET_STAGING_MAX_ATTENTION_STATES,4096);
   assert.ok(TARGET_SCHEMA_SQL.includes("personal_attention_state_capacity"));
   assert.ok(TARGET_SCHEMA_SQL.includes("(SELECT COUNT(*) FROM personal_attention_states) >= 4096"));
@@ -385,4 +385,16 @@ test("review fixes: new rows start at revision 0; selector and preflight fail cl
     db.prepare("UPDATE personal_attention_epochs SET revision=-3 WHERE user_id='erin'").run();
     assert.ok(inspect(stage).issues.includes("personal_attention_invalid"));
   }
+});
+
+test("preflight sees stale plan/state rows of a now-unassigned shared task (NULL-safe assignee)",()=>{
+  const {db,stage}=setup();
+  put(db,"bob","shared-bob",OVER,"2026-11-01");
+  plan(db,"bob","shared-bob","2026-11-01");
+  for(const t of ["personal_attention_state_task_reconcile","personal_task_plan_task_reconcile"])
+    db.exec(`DROP TRIGGER ${t}`);
+  db.prepare("UPDATE tasks SET assignee_user_id=NULL WHERE id='shared-bob'").run();
+  const issues=inspect(stage).issues;
+  assert.ok(issues.includes("personal_attention_invalid"),issues.join());
+  assert.ok(issues.includes("personal_plan_invalid"),issues.join());
 });

@@ -31,7 +31,7 @@ function withStore(check){
     db.exec("PRAGMA foreign_keys=ON");
     db.prepare("INSERT INTO tasks(id,area_id,project_id,title,assignee_user_id,due_on) VALUES (?,?,NULL,?,NULL,?)")
       .run(TASK,stage.unassignedAreaId,"Synthetic title",DATE);
-    assert.equal(TARGET_STORE_SCHEMA_VERSION,22);
+    assert.equal(TARGET_STORE_SCHEMA_VERSION,23);
     return check(db,stage);
   }finally{
     db?.close();

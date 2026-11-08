@@ -71,7 +71,7 @@ const areaRevision=(db,area)=>db.prepare(
   "SELECT content_revision FROM areas WHERE id=?").get(area).content_revision;
 
 test("v21+ is fresh-only and private plan epochs exist for each identity",()=>{
-  assert.equal(TARGET_STORE_SCHEMA_VERSION,22);
+  assert.equal(TARGET_STORE_SCHEMA_VERSION,23);
   assert.equal(TARGET_STAGING_MAX_PERSONAL_PLANS,4096);
   const {db,stage}=setup();
   assert.deepEqual(db.prepare("SELECT user_id,revision FROM personal_plan_epochs ORDER BY user_id").all()
