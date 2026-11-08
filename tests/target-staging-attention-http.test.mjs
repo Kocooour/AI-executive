@@ -399,7 +399,10 @@ test("read child refuses when the parent master staging HTTP flag is off",async(
     assert.equal(await read(),null,"false");
     delete process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_ENABLED;
     assert.equal(await read(),null,"unset");
-  }finally{process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_ENABLED=previous;}
+  }finally{
+    if(previous===undefined)delete process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_ENABLED;
+    else process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_ENABLED=previous;
+  }
   const page=await read();
   assert.ok(page,"enabled parent flag still reads");
   assert.deepEqual(ids(page),["p-alice","s-alice"]);
