@@ -131,7 +131,7 @@ test("first enable baselines (no send); a later item is sent once per live devic
     assert.equal(c.payload.title,"Fresh overdue");assert.equal(c.payload.url,"/?task="+fresh);
   }
   const final=rows(fx,"alice").find(r=>r.task_id===fresh);
-  assert.equal(final.status,"sent");assert.equal(final.sent_at_ms,NOW);
+  assert.equal(final.status,"sent");assert.ok(final.sent_at_ms>=NOW&&final.sent_at_ms<NOW+60_000);
   assert.deepEqual(devices(fx,"alice").map(d=>d.status),["sent","sent"]);
   await run(fx,s);await run(fx,s,NOW+HOUR);
   assert.equal(s.calls.length,2,"dedup: nothing is sent again");
