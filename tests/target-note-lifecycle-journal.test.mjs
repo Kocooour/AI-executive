@@ -226,5 +226,5 @@ test("raw create/move leaves a witness gap; failed journal/audit and rejected wr
   assert.throws(()=>db.prepare("UPDATE note_lifecycle_audit SET note_id='tampered'").run(),
     /immutable/);
   assert.throws(()=>db.prepare("DELETE FROM note_lifecycle_audit").run(),/permanent/);
-  assert.throws(()=>db.prepare("DELETE FROM note_change_journal").run(),/permanent/);
+  assert.throws(()=>db.prepare("DELETE FROM note_change_journal").run(),/compacted at or below the floor/);
 });

@@ -50,7 +50,7 @@ import { bootstrapTargetStagingWitness } from "./target-staging-anchor-witness";
 // v23 (R2d.5d.1) adds identity-bound push foundation: per-user notification
 // settings (zone, quiet window, default-OFF), hashed device targets and a
 // per-user announcement ledger. No sender; older stores are rejected.
-export const TARGET_STORE_SCHEMA_VERSION = 23;
+export const TARGET_STORE_SCHEMA_VERSION = 24;
 /** Capacities of the v23 push foundation in a fresh isolated store. */
 export const TARGET_STAGING_MAX_PUSH_TARGETS = 4096;
 export const TARGET_STAGING_MAX_PUSH_TARGETS_PER_USER = 64;
@@ -1380,6 +1380,27 @@ BEGIN SELECT RAISE(ABORT, 'note lifecycle audit does not match live note'); END;
 -- the authenticated write, never by a separate best-effort sync process.
 -- The journal is not a client feed: no HTTP or authorization to enumerate it.
 -- The bootstrap manifest must precede a future cursor-consuming client.
+-- R2d.2c.2g.2b.5: per-Area compaction floor of the note change journal. One row per
+-- Area, created by trigger (floor 0). The floor only increases, never above the newest
+-- live sequence, and the row is never deleted or replaced. Journal rows may be deleted
+-- only at or below it (note_change_journal_guarded_delete); new sequences continue after
+-- max(newest live sequence, floor), so a fully compacted Area never reuses a number.
+CREATE TABLE note_journal_floors (
+  area_id TEXT PRIMARY KEY REFERENCES areas(id),
+  floor_seq INTEGER NOT NULL CHECK(typeof(floor_seq)='integer' AND floor_seq>=0 AND floor_seq<9007199254740991),
+  revision INTEGER NOT NULL CHECK(typeof(revision)='integer' AND revision>=0 AND revision<9007199254740991)
+) WITHOUT ROWID;
+CREATE TRIGGER note_journal_floors_on_area AFTER INSERT ON areas
+BEGIN INSERT INTO note_journal_floors(area_id,floor_seq,revision) VALUES (NEW.id,0,0); END;
+CREATE TRIGGER note_journal_floors_insert BEFORE INSERT ON note_journal_floors
+WHEN NEW.floor_seq<>0 OR NEW.revision<>0 OR EXISTS(SELECT 1 FROM note_journal_floors WHERE area_id=NEW.area_id)
+BEGIN SELECT RAISE(ABORT, 'note journal floor cannot be created or replaced'); END;
+CREATE TRIGGER note_journal_floors_update BEFORE UPDATE ON note_journal_floors
+WHEN NEW.area_id<>OLD.area_id OR NEW.floor_seq<=OLD.floor_seq OR NEW.revision<>OLD.revision+1
+  OR NEW.floor_seq>COALESCE((SELECT MAX(seq) FROM note_change_journal WHERE area_id=OLD.area_id),OLD.floor_seq)
+BEGIN SELECT RAISE(ABORT, 'note journal floor may only increase up to the newest sequence'); END;
+CREATE TRIGGER note_journal_floors_no_delete BEFORE DELETE ON note_journal_floors
+BEGIN SELECT RAISE(ABORT, 'note journal floor cannot be deleted'); END;
 CREATE TABLE note_change_journal (
   area_id TEXT NOT NULL REFERENCES areas(id),
   seq INTEGER NOT NULL CHECK(typeof(seq)='integer' AND seq>0 AND seq<9007199254740991),
@@ -1399,8 +1420,16 @@ WHEN (SELECT COUNT(*) FROM note_change_journal)>=${TARGET_STAGING_NOTE_CHANGE_MA
 BEGIN SELECT RAISE(ABORT, 'note change journal capacity reached'); END;
 CREATE TRIGGER note_change_journal_no_update BEFORE UPDATE ON note_change_journal
 BEGIN SELECT RAISE(ABORT, 'note change journal immutable'); END;
-CREATE TRIGGER note_change_journal_no_delete BEFORE DELETE ON note_change_journal
-BEGIN SELECT RAISE(ABORT, 'note change journal permanent'); END;
+-- Compaction (R2d.2c.2g.2b.5): a row may go only at or below its Area's floor. There is no
+-- per-note "keep the last row" rule: a note sync client behind the floor must rebootstrap
+-- the whole Area (the cursor is refused with resync_required), so no row below the floor
+-- is ever needed to serve a client.
+CREATE TRIGGER note_change_journal_guarded_delete BEFORE DELETE ON note_change_journal
+WHEN OLD.seq>COALESCE((SELECT floor_seq FROM note_journal_floors WHERE area_id=OLD.area_id),-1)
+BEGIN SELECT RAISE(ABORT, 'note change journal rows may only be compacted at or below the floor'); END;
+CREATE TRIGGER note_change_journal_above_floor BEFORE INSERT ON note_change_journal
+WHEN NEW.seq<=COALESCE((SELECT floor_seq FROM note_journal_floors WHERE area_id=NEW.area_id),9007199254740991)
+BEGIN SELECT RAISE(ABORT, 'note change journal sequence must follow the floor'); END;
 CREATE TRIGGER note_change_journal_no_replace BEFORE INSERT ON note_change_journal
 WHEN EXISTS(SELECT 1 FROM note_change_journal
   WHERE (area_id=NEW.area_id AND seq=NEW.seq) OR receipt_key=NEW.receipt_key)
@@ -1410,7 +1439,7 @@ BEGIN
   INSERT INTO note_change_journal(
     area_id,seq,kind,receipt_key,actor_user_id,note_id,project_id,policy_revision,
     revision,committed_at_ms)
-  SELECT NEW.area_id,COALESCE(MAX(seq),0)+1,'edit',NEW.receipt_key,NEW.actor_user_id,
+  SELECT NEW.area_id,MAX(COALESCE(MAX(seq),0),COALESCE((SELECT floor_seq FROM note_journal_floors WHERE area_id=NEW.area_id),0))+1,'edit',NEW.receipt_key,NEW.actor_user_id,
     NEW.note_id,NEW.project_id,NEW.policy_revision,NEW.revision_after,NEW.committed_at_ms
   FROM note_change_journal WHERE area_id=NEW.area_id;
 END;
@@ -1419,7 +1448,7 @@ BEGIN
   INSERT INTO note_change_journal(
     area_id,seq,kind,receipt_key,actor_user_id,note_id,project_id,policy_revision,
     revision,committed_at_ms)
-  SELECT NEW.area_id,COALESCE(MAX(seq),0)+1,'delete',NEW.receipt_key,NEW.actor_user_id,
+  SELECT NEW.area_id,MAX(COALESCE(MAX(seq),0),COALESCE((SELECT floor_seq FROM note_journal_floors WHERE area_id=NEW.area_id),0))+1,'delete',NEW.receipt_key,NEW.actor_user_id,
     NEW.note_id,NEW.project_id,NEW.policy_revision,NEW.tombstone_revision,NEW.committed_at_ms
   FROM note_change_journal WHERE area_id=NEW.area_id;
 END;
@@ -1431,23 +1460,26 @@ BEGIN
   INSERT INTO note_change_journal(area_id,seq,kind,receipt_key,actor_user_id,
     note_id,project_id,parent_revision,policy_revision,revision,committed_at_ms)
   SELECT NEW.old_area_id,
-    COALESCE((SELECT MAX(seq) FROM note_change_journal WHERE area_id=NEW.old_area_id),0)+1,
+    MAX(COALESCE((SELECT MAX(seq) FROM note_change_journal WHERE area_id=NEW.old_area_id),0),
+      COALESCE((SELECT floor_seq FROM note_journal_floors WHERE area_id=NEW.old_area_id),0))+1,
     'leave',NEW.receipt_key||':leave',NEW.actor_user_id,NEW.note_id,
     NEW.old_project_id,NULL,NEW.old_policy_revision,NEW.revision_after,NEW.committed_at_ms
   WHERE NEW.kind='move' AND NEW.old_area_id<>NEW.area_id;
   INSERT INTO note_change_journal(area_id,seq,kind,receipt_key,actor_user_id,
     note_id,project_id,parent_revision,policy_revision,revision,committed_at_ms)
   VALUES (NEW.area_id,
-    COALESCE((SELECT MAX(seq) FROM note_change_journal WHERE area_id=NEW.area_id),0)+1,
+    MAX(COALESCE((SELECT MAX(seq) FROM note_change_journal WHERE area_id=NEW.area_id),0),
+      COALESCE((SELECT floor_seq FROM note_journal_floors WHERE area_id=NEW.area_id),0))+1,
     'upsert',NEW.receipt_key,NEW.actor_user_id,NEW.note_id,
     NEW.project_id,NEW.parent_revision,NEW.policy_revision,NEW.revision_after,NEW.committed_at_ms);
 END;
 -- Retain audit provenance for every journal event. Existing note edit audit
 -- retention cannot silently remove the only authenticated source of an event.
--- Until bounded compaction is designed, exhaustion fails the write closed.
+-- The audit of a compacted Area stays permanent too (preflight reconciles audits with floor + live rows).
 CREATE TRIGGER note_change_journal_edit_audit_no_delete
 BEFORE DELETE ON note_edit_audit
 WHEN EXISTS(SELECT 1 FROM note_change_journal WHERE receipt_key=OLD.receipt_key)
+  OR COALESCE((SELECT floor_seq FROM note_journal_floors WHERE area_id=OLD.area_id),0)>0
 BEGIN SELECT RAISE(ABORT, 'journal-backed note audit is permanent'); END;
 
 CREATE VIEW task_effective_areas AS

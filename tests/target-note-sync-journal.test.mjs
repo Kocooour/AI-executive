@@ -53,7 +53,7 @@ test("staging v19+ retains monotonic content-free edit and delete events", () =>
     for (const secret of ["Classified", "Top secret", "Revised secret"])
       assert.equal(JSON.stringify(events).includes(secret), false);
     assert.throws(() => db.prepare("DELETE FROM note_change_journal WHERE seq=1").run(),
-      /note change journal permanent/);
+      /note change journal rows may only be compacted at or below the floor/);
     assert.throws(() => db.prepare("UPDATE note_change_journal SET revision=99 WHERE seq=1").run(),
       /note change journal immutable/);
     assert.throws(() => db.prepare("INSERT OR REPLACE INTO note_change_journal SELECT * FROM note_change_journal WHERE seq=1").run());
