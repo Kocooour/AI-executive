@@ -510,3 +510,19 @@ test("rate limits answer 429 with retry-after before any write",async()=>{
   assert.equal(limited.status,429);
   assert.equal(mutable(fx),before);
 });
+
+test("spoofed X-Forwarded-For prefixes cannot escape the per-client PATCH limit",async()=>{
+  const fx=fixture();
+  const c=await settingsCommand();
+  const before=mutable(fx);
+  const statuses=[];
+  for(let i=0;i<40;i++){
+    statuses.push((await patch({...c,dailyLimit:11},owner(),
+      {ip:"198.18.7."+i+", 10.99.0.3"})).status);
+  }
+  assert.ok(statuses.slice(30).every(s=>s===429),statuses.join(","));
+  assert.equal(statuses.filter(s=>s===429).length,10);
+  // A different proxied client is still served independently.
+  assert.notEqual((await getSettings(owner(),"",{ip:"10.99.0.4"})).status,429);
+  assert.equal(mutable(fx),before);
+});

@@ -81,7 +81,7 @@ výskyt a starý stav je smazán.
 - Skrytý `planned_date_passed` přežije doplnění termínu; po jeho
   odstranění se tentýž plánovaný den vrátí stále skrytý. Odpovídá pravidlu
   „dismiss potlačí tentýž výskyt“; zda je doplnění termínu podstatnou
-  změnou, rozhodne vlastník produktu.
+  změnou, **rozhodl vlastník 2026-11-08: zůstává skrytý** ([rozhodnutí 2026-11-08](decisions/2026-11-08-ai-telo-poznamek-a-retence.md), Q2). Časové pásmo se bude brát ze serverového profilu v R2d.4k (Q1); do té doby ho dodává klient.
 - Stav `deadline_soon` po přechodu na `deadline_overdue` smaže příkaz nad
   `deadline_overdue` téhož (úkol, výskyt) uživatele (R2d.5b.2,
   [zapisovač](R2D5-ATTENTION-LIFECYCLE-WRITER.md)). Řádek, který nikdo

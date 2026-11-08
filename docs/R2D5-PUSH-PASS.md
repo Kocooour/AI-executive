@@ -142,9 +142,9 @@ bez titulků a ID.
   preflightu celého staging úložiště — průchod nic nepošle nikomu
   (fail-closed celého úložiště, nikoli jen jednoho uživatele).
 - Odezva registrace zařízení odliší „nový“ od „patří jinému“ (`unavailable`);
-  zneužití vyžaduje znalost přesné adresy endpointu cizího zařízení.
+  zneužití vyžaduje znalost přesné adresy endpointu cizího zařízení (přijaté riziko, [rozhodnutí 2026-11-08](decisions/2026-11-08-ai-telo-poznamek-a-retence.md), Q4).
 - Položka vzniklá během pauzy se po jejím zrušení ohlásí, pokud stále platí
-  (pauza potlačuje odesílání, nikoli vyhodnocení) — **k potvrzení vlastníkem**.
+  (pauza potlačuje odesílání, nikoli vyhodnocení) — **potvrzeno vlastníkem 2026-11-08** ([rozhodnutí 2026-11-08](decisions/2026-11-08-ai-telo-poznamek-a-retence.md), Q3).
 - Jediné zařízení se stavem `gone` uzavře doručení jako `failed` (3 pokusy),
   nikoli `undelivered`; znovu se neodesílá.
 

@@ -1,4 +1,4 @@
-# R2d.4i — autorizovaný Context Resolver bundle pro AI (staging, interní)
+# R2d.4i/4j — autorizovaný Context Resolver bundle pro AI (staging, interní)
 
 Minimální kontext pro **budoucí** volání poskytovatele AI. Slice je čistě
 serverový, **staging-only, interní a jen čtecí**: žádné volání modelu či sítě,
@@ -17,8 +17,8 @@ a autorizace proběhne před serializací.
 - `TargetStagingSessionAuthority.resolveContextBundle(actorUserId, request)` —
   zavřená autorita, neplatný nebo neexistující aktér → `null`.
 - `serializeTargetContextBundleForProvider(bundle)` — JSON jen veřejné části
-  (bez `witness`, ID Oblastí, cizích ID uživatelů a těl poznámek); `null`, pokud
-  by přesáhl strop.
+  (bez `witness`, ID Oblastí a cizích ID uživatelů; těla jen autorizovaných
+  poznámek ve `find`); `null`, pokud by přesáhl strop.
 
 ## Požadavek (přesně 6 klíčů, jinak `null`)
 
@@ -44,7 +44,8 @@ nikoli 1–120 — jedna validace pro jedno hledání.
   plánu na dnes; nejprve Attention (závažnost, datum, ID), pak zbylé úkoly dne.
 - `plan_today`: Můj plán dnes + následující den (dvě disjunktní okna) s
   informací Attention připojenou k úkolu.
-- `find`: autorizované titulkové hledání (`title_search`), `maxItems`.
+- `find`: autorizované titulkové hledání (`title_search`), `maxItems`; každá
+  položka `kind:"note"` navíc nese `body` (viz níže).
 
 Odložené/zamítnuté Attention se nezahrnuje (úkol zůstane v plánu bez
 `attention`). Stejná entita se **sloučí**; zdroj je `attention`, má-li úkol
@@ -58,23 +59,32 @@ zdroje → celý výsledek `null` (fail-closed).
 `bundleVersion:1, purpose, scope, generatedAtMs, timeZone, evaluationDate,
 items[], truncated, revision`. Položka: `kind, id, title, areaKind,
 assignedToMe?, dueOn?, whenOn?, attention?{ruleId,severity,relevantOn,lifecycle},
-provenance{source,revision}`. `whenOn` je jen osobní den aktéra. Nikdy ID
+body?, bodyTruncated?, provenance{source,revision}`. `whenOn` je jen osobní den aktéra. Nikdy ID
 Oblasti, projektu, přiřazené osoby ani jiných uživatelů.
 
-- **Žádná těla poznámek** — jen názvy. Zahrnutí těl vyžaduje výslovné
-  rozhodnutí vlastníka a samostatný autorizovaný čtecí nástroj poznámky.
+- **Těla poznámek (R2d.4j, rozhodnutí vlastníka 2026-11-08,
+  [záznam](decisions/2026-11-08-ai-telo-poznamek-a-retence.md)):** jen u položek
+  `kind:"note"` ve `find`, **výhradně** z `readAuthorizedTargetNote(db,{actorUserId,noteId})`
+  uvnitř téhož připnutého snapshotu jako hledání. Vrátí-li čtení `null`, nebo se
+  liší přesné `areaId`, `areaKind`, název či rodičovský projekt oproti řádku hledání, je celý
+  balík `null` (fail-closed). Tělo je omezeno na `MAX_CONTEXT_NOTE_BODY_BYTES`
+  = 4096 bajtů UTF-8, řez na hranici kódového bodu; při zkrácení je
+  `bodyTruncated:true` (jinak klíč chybí). Provenance revize u poznámky je
+  revize z autorizovaného čtení. Úkoly a projekty tělo nemají; `what_matters` /
+  `plan_today` zůstávají jen úkolové. Viewer sdílené Oblasti dostane těla jen
+  poznámek, které smí číst; cizí těla se nikdy nevydají.
 - `truncated` odráží pouze výsledky autorizované pro aktéra (limit položek,
   `hasMore` zdrojů, strop bajtů); nikdy počty neautorizovaných položek. Je
   konzervativní: `true` může znamenat „možná víc“.
 - Strop veřejného JSON je 32 KiB; odstraňují se položky s nejnižší prioritou
   (od konce) a nastaví se `truncated`.
 - `revision` = SHA-256 s doménou `lumi:r2d4:context-bundle:v1\0` přes vstupy,
-  revize všech zdrojových stránek a finální položky.
+  revize všech zdrojových stránek a finální položky včetně vydaných těl (úprava těla mění revizi; cizí aktivita revizi aktéra nemění).
 
 ## Interní `witness`
 
 `{linearization, areaEpochs, noteAreaEpochs, privateEpoch, attentionEpoch,
-sourceRevisions}` je jen pro budoucí **živou release bariéru** (ověření
+sourceRevisions, noteGuards[{noteId,noteRevision,parentRevision}]}` je jen pro budoucí **živou release bariéru** (ověření
 session, členství v Oblastech, epoch). Nikdy se neposílá poskytovateli ani
 klientovi; veřejná serializace jej neobsahuje.
 
@@ -96,8 +106,8 @@ bajtů a determinismus, autorita (zavřená, neznámý aktér).
   za první stránkou. Signalizuje to `truncated:true`; asistent má v tom případě
   považovat seznam za neúplný.
 - **`find`** řadí podle ID (pořadí titulkového hledání), nikoli podle relevance, a
-  obsahuje i dokončené úkoly (titulkové hledání nefiltruje stav) — **k potvrzení
-  vlastníkem**, zda je to pro AI žádoucí.
+  obsahuje i dokončené úkoly (titulkové hledání nefiltruje stav) — **vlastník
+  2026-11-08 potvrdil, že je to žádoucí** (zaznamenáno v rozhodnutí výše).
 - `id` položky je ID vlastní entity (úkolu, projektu, poznámky) — nikdy ID
   Oblasti, rodičovského projektu, řešitele ani jiného uživatele.
 - `revision` zahrnuje `nowMs`; dva balíky ze stejných dat v různý okamžik mají
@@ -105,3 +115,9 @@ bajtů a determinismus, autorita (zavřená, neznámý aktér).
 - Nízkoúrovňový `resolveAuthorizedTargetContextBundle` věří předané
   `restoreGeneration`; vynucená cesta je `readPreflightedTargetContextBundle` /
   autorita (preflight + ověřený aktér).
+
+- Znak NUL (U+0000) v těle poznámky odmítají všechny zápisové cesty (úprava i vytvoření
+  poznámky). Řádek vložený přímo SQL by `node:sqlite` při čtení ořízl na prvním NUL — to platí
+  stejně pro detail poznámky i pro AI balík; jde o hranici přímé manipulace s DB, ne o běžnou cestu.
+- Ořez na 4096 bajtů respektuje hranice kódových bodů, nikoli grafémů: kombinující znak na samém
+  konci limitu může odpadnout (např. přízvuk od základního písmene).

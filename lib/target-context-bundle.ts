@@ -1,11 +1,13 @@
 /**
- * R2d.4i — authorized target Context Resolver bundle for AI (staging, internal).
+ * R2d.4i/4j — authorized target Context Resolver bundle for AI (staging, internal).
  *
- * Minimum, title-only context for a FUTURE provider call. This module makes no
+ * Minimum context for a FUTURE provider call: titles, plus (R2d.4j, owner
+ * decision 2026-11-08) a capped body excerpt of `find` note items. This module makes no
  * provider/network call, adds no HTTP route, UI or schema. Every source row is
  * produced by an already actor-bound selector inside ONE pinned read snapshot,
  * so the bundle is never wider than the actor's own authorized reads, and
- * nothing is serialized before authorization. Note BODIES are never included.
+ * nothing is serialized before authorization. A note body comes ONLY from
+ * readAuthorizedTargetNote (same snapshot); any disagreement fails closed.
  *
  * Purposes and scopes (any other combination is rejected with null):
  *  - what_matters / plan_today: scope my-plan | personal | shared (the My Plan
@@ -30,6 +32,7 @@ import {readPreflightedStoreSnapshot} from "./target-task-staging-reader";
 import type {TargetStagingReadStore} from "./target-task-staging-reader";
 import {verifiedActor} from "./target-task-authenticated-read";
 import type {TargetStagingReadCredential} from "./target-task-authenticated-read";
+import {readAuthorizedTargetNote} from "./target-note-access";
 import {temporalCalendarOrdinal} from "./target-task-temporal-read-model";
 
 export type ContextBundlePurpose="what_matters"|"plan_today"|"find";
@@ -43,12 +46,16 @@ export type ContextBundleItem={
   kind:"task"|"project"|"note";id:string;title:string;areaKind:"private"|"shared";
   assignedToMe?:true;dueOn?:string|null;whenOn?:string|null;
   attention?:{ruleId:string;severity:number;relevantOn:string;lifecycle:"active"};
+  /** Notes only (find): authorized body, capped; `bodyTruncated` only when cut. */
+  body?:string;bodyTruncated?:true;
   provenance:{source:ContextBundleSource;revision:number|null};
 };
 export type ContextBundleWitness={
   linearization:TargetReadLinearization;areaEpochs:HomeSummaryAreaEpoch[];
   noteAreaEpochs:GlobalNoteAreaEpoch[];
   privateEpoch:number|null;attentionEpoch:number|null;
+  /** Authorized note guard data of the emitted notes (future live guard). */
+  noteGuards:{noteId:string;noteRevision:number;parentRevision:number|null}[];
   sourceRevisions:{attention:string|null;myPlanToday:string|null;
     myPlanUpcoming:string|null;titleSearch:string|null};
 };
@@ -62,6 +69,8 @@ export type TargetContextBundle={
 
 /** Cap of the serialized provider payload (public part only). */
 export const MAX_CONTEXT_BUNDLE_BYTES=32*1024;
+/** Per-note body excerpt cap in UTF-8 bytes (cut on a code-point boundary). */
+export const MAX_CONTEXT_NOTE_BODY_BYTES=4096;
 const ACTOR=/^[A-Za-z0-9_.:@-]{1,120}$/;
 const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const PURPOSES=["what_matters","plan_today","find"];
@@ -103,6 +112,8 @@ const publicPart=(b:Omit<TargetContextBundle,"witness">)=>({
     ...(i.assignedToMe===true?{assignedToMe:true as const}:{}),
     ...(i.dueOn!==undefined?{dueOn:i.dueOn}:{}),
     ...(i.whenOn!==undefined?{whenOn:i.whenOn}:{}),
+    ...(i.kind==="note"&&typeof i.body==="string"?{body:i.body,
+      ...(i.bodyTruncated===true?{bodyTruncated:true as const}:{})}:{}),
     ...(i.attention?{attention:{ruleId:i.attention.ruleId,severity:i.attention.severity,
       relevantOn:i.attention.relevantOn,lifecycle:i.attention.lifecycle}}:{}),
     provenance:{source:i.provenance.source,revision:i.provenance.revision},
@@ -110,8 +121,35 @@ const publicPart=(b:Omit<TargetContextBundle,"witness">)=>({
   truncated:b.truncated,revision:b.revision,
 });
 
-/** Public JSON for a provider: no witness, Area/other-user IDs or note bodies
- * (none are held by the public shape). Null if it cannot fit the byte cap. */
+/** Longest prefix of `text` within `maxBytes` UTF-8 bytes, cut only between
+ * code points. */
+export function truncateUtf8(text:string,maxBytes:number):{text:string;truncated:boolean}{
+  // A non-integer or negative cap (NaN, Infinity, -1) is a caller bug: emit nothing.
+  const cap=Number.isSafeInteger(maxBytes)&&maxBytes>=0?maxBytes:0;
+  if(Buffer.byteLength(text,"utf8")<=cap)return {text,truncated:false};
+  let used=0,end=0;
+  for(const ch of text){
+    const n=Buffer.byteLength(ch,"utf8");
+    if(used+n>cap)break;
+    used+=n;end+=ch.length;
+  }
+  return {text:text.slice(0,end),truncated:true};
+}
+
+/** The authorized read must describe exactly the note the search returned. */
+export function authorizedNoteAgrees(
+  row:{id:string;title:string;areaId:string;areaKind:string;projectId?:string|null},
+  read:{note:{id:string;title:string;body:string;areaId:string;areaKind:string;projectId:string|null;revision:number}}|null,
+):boolean {
+  if(!read||typeof read.note.body!=="string")return false;
+  const n=read.note;
+  return n.id===row.id&&n.title===row.title&&n.areaId===row.areaId&&
+    n.areaKind===row.areaKind&&
+    n.projectId===(row.projectId??null)&&Number.isSafeInteger(n.revision);
+}
+
+/** Public JSON for a provider: no witness or Area/other-user IDs; note bodies
+ * only as the capped, already-authorized excerpt held by the item. Null if it cannot fit the byte cap. */
 export function serializeTargetContextBundleForProvider(
   bundle:TargetContextBundle,
 ):string|null {
@@ -178,6 +216,7 @@ export function resolveAuthorizedTargetContextBundle(
     const {purpose,scope,nowMs,timeZone,maxItems}=bare;
     let drafts:Draft[]|ContextBundleItem[]=[];
     let more=false;
+    const noteGuards=new Map<string,ContextBundleWitness["noteGuards"][number]>();
     let witness:ContextBundleWitness;
     const srcRev={attention:null,myPlanToday:null,myPlanUpcoming:null,
       titleSearch:null} as ContextBundleWitness["sourceRevisions"];
@@ -194,13 +233,24 @@ export function resolveAuthorizedTargetContextBundle(
         const key=i.kind+"\0"+i.id;
         if(seen.has(key))continue;
         seen.add(key);
-        items.push({kind:i.kind,id:i.id,title:i.title,areaKind:i.areaKind,
+        if(i.kind==="note"){
+          // Same pinned snapshot as the search; any disagreement => no bundle.
+          const read=readAuthorizedTargetNote(db,{actorUserId,noteId:i.id});
+          if(!authorizedNoteAgrees(i,read))return null;
+          const {note,guard}=read as NonNullable<typeof read>;
+          const cut=truncateUtf8(note.body,MAX_CONTEXT_NOTE_BODY_BYTES);
+          noteGuards.set(i.id,{noteId:guard.noteId,noteRevision:guard.noteRevision,
+            parentRevision:guard.parentRevision});
+          items.push({kind:"note",id:i.id,title:i.title,areaKind:i.areaKind,
+            body:cut.text,...(cut.truncated?{bodyTruncated:true as const}:{}),
+            provenance:{source:"title_search",revision:note.revision}});
+        }else items.push({kind:i.kind,id:i.id,title:i.title,areaKind:i.areaKind,
           provenance:{source:"title_search",revision:null}});
       }
       drafts=items;more=sp.hasMore;srcRev.titleSearch=sp.revision;
       witness={linearization:sp.linearization,areaEpochs:sp.areaEpochs,
         noteAreaEpochs:sp.noteAreaEpochs,privateEpoch:null,attentionEpoch:null,
-        sourceRevisions:srcRev};
+        noteGuards:[],sourceRevisions:srcRev};
     }else{
       const filter:AttentionAreaFilter=scope==="my-plan"?"all"
         :scope as "personal"|"shared";
@@ -262,7 +312,7 @@ export function resolveAuthorizedTargetContextBundle(
       srcRev.myPlanUpcoming=upcoming?upcoming.revision:null;
       witness={linearization:att.linearization,areaEpochs:att.areaEpochs,
         noteAreaEpochs:[],privateEpoch:att.privateEpoch,
-        attentionEpoch:att.attentionEpoch,sourceRevisions:srcRev};
+        attentionEpoch:att.attentionEpoch,noteGuards:[],sourceRevisions:srcRev};
     }
 
     // An emitted item must carry a real title (CHECK bypass would yield blanks).
@@ -278,6 +328,8 @@ export function resolveAuthorizedTargetContextBundle(
       items=items.slice(0,-1);truncated=true;
     }
     if(size()>MAX_CONTEXT_BUNDLE_BYTES)return null;
+    witness.noteGuards=items.filter(i=>i.kind==="note")
+      .map(i=>noteGuards.get(i.id) as ContextBundleWitness["noteGuards"][number]);
     const hash=createHash("sha256").update("lumi:r2d4:context-bundle:v1\0")
       .update(JSON.stringify([
         1,restoreGeneration,actorUserId,purpose,scope,bare.query,nowMs,timeZone,
