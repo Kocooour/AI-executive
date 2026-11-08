@@ -658,8 +658,11 @@ CREATE TABLE personal_push_targets (
 CREATE TRIGGER personal_push_target_insert_guard BEFORE INSERT ON personal_push_targets
 WHEN NEW.revoked_at_ms IS NOT NULL
   OR EXISTS(SELECT 1 FROM personal_push_targets WHERE endpoint_hash=NEW.endpoint_hash
-    OR (user_id=NEW.user_id AND target_id=NEW.target_id))
+    OR target_id=NEW.target_id)
 BEGIN SELECT RAISE(ABORT,'push target must be new and unrevoked'); END;
+-- Opaque target IDs are globally unique, so no writer can address another
+-- user's device by target_id alone.
+CREATE UNIQUE INDEX personal_push_targets_by_target ON personal_push_targets(target_id);
 CREATE TRIGGER personal_push_target_capacity BEFORE INSERT ON personal_push_targets
 WHEN (SELECT COUNT(*) FROM personal_push_targets WHERE user_id=NEW.user_id) >= 64
   OR (SELECT COUNT(*) FROM personal_push_targets) >= 4096
@@ -720,6 +723,10 @@ WHEN NEW.user_id IS NOT OLD.user_id OR NEW.delivery_key IS NOT OLD.delivery_key
   OR NEW.task_id IS NOT OLD.task_id OR NEW.rule_id IS NOT OLD.rule_id
   OR NEW.occurrence_on IS NOT OLD.occurrence_on
   OR OLD.status IN ('baseline','sent','undelivered')
+  -- baseline only on first enable; a reached device is never "un-sent".
+  OR (NEW.status='baseline' AND OLD.status IS NOT 'baseline')
+  OR (OLD.status='partial' AND NEW.status NOT IN ('partial','sent'))
+  OR (OLD.sent_at_ms IS NOT NULL AND NEW.sent_at_ms IS NOT OLD.sent_at_ms)
   OR NEW.attempts < OLD.attempts OR NEW.last_attempt_at_ms < OLD.last_attempt_at_ms
 BEGIN SELECT RAISE(ABORT,'attention delivery identity or transition invalid'); END;
 CREATE TRIGGER personal_attention_delivery_delete_children AFTER DELETE ON personal_attention_deliveries BEGIN
@@ -743,8 +750,9 @@ WHEN EXISTS(SELECT 1 FROM personal_attention_device_deliveries WHERE user_id=NEW
     AND delivery_key=NEW.delivery_key AND target_id=NEW.target_id)
   OR (SELECT COUNT(*) FROM personal_attention_device_deliveries) >= 32768
   OR NOT EXISTS(SELECT 1 FROM personal_attention_deliveries WHERE user_id=NEW.user_id AND delivery_key=NEW.delivery_key)
-  OR NOT EXISTS(SELECT 1 FROM personal_push_targets WHERE user_id=NEW.user_id AND target_id=NEW.target_id)
-BEGIN SELECT RAISE(ABORT,'attention device delivery requires own delivery and target'); END;
+  OR NOT EXISTS(SELECT 1 FROM personal_push_targets WHERE user_id=NEW.user_id
+    AND target_id=NEW.target_id AND revoked_at_ms IS NULL)
+BEGIN SELECT RAISE(ABORT,'attention device delivery requires own delivery and live target'); END;
 CREATE TRIGGER personal_attention_device_update_guard BEFORE UPDATE ON personal_attention_device_deliveries
 WHEN NEW.user_id IS NOT OLD.user_id OR NEW.delivery_key IS NOT OLD.delivery_key
   OR NEW.target_id IS NOT OLD.target_id OR OLD.status IN ('sent','gone')

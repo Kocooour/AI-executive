@@ -44,6 +44,23 @@ delivery jen na existující identitu a dosud přístupný úkol, klíč je
 přepočítatelný z vlastního pravidla/úkolu/výskytu, device řádky odkazují na
 vlastní targety.
 
+## Neměnná historie doručení (review)
+
+- `baseline` vzniká jen při prvním zapnutí; `pending` se na něj vrátit nesmí
+  (tichým potlačením by zmizel splatný push).
+- `partial` smí přejít jen na `partial`/`sent`; `sent_at_ms` je po prvním
+  zápisu neměnný — zařízení, které zprávu dostalo, se nikdy „neodešle zpět“
+  a opakování neduplikuje push.
+- Řádek doručení na zařízení vyžaduje **vlastní a neodvolaný** cíl;
+  `target_id` je globálně unikátní, takže žádný zápis nemůže adresovat cizí
+  zařízení jen podle ID.
+- Samotné navýšení `revision` nastavení bez změny hodnoty raw SQL nezablokuje
+  (stejně jako u `personal_task_plans` a lifecycle stavů — právě tak revizi
+  navyšuje vnitřní AFTER trigger); veřejný zápis přijde jen přes příkaz
+  R2d.5d.2. Smazání řádků zařízení zůstává možné kvůli reconcile kaskádě.
+- Padělaný `delivery_key` SQL nepozná (SQLite nemá sha256); odhalí jej
+  preflight a jedinou zápisovou cestou bude writer R2d.5d.2.
+
 ## Čistý plánovač
 
 `planTargetAttentionPushes({candidates, settings, handled, sentInLast24h, nowMs})`

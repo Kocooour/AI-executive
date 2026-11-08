@@ -215,7 +215,7 @@ test("delivery and device-row transitions are guarded; device rows only for own 
   const dev=(who,k,t,status="failed",attempts=1,at=6000)=>db.prepare(
     "INSERT INTO personal_attention_device_deliveries(user_id,delivery_key,target_id,status,attempts,last_attempt_at_ms) VALUES (?,?,?,?,?,?)")
     .run(who,k,t,status,attempts,at);
-  const guard=/requires own delivery and target/;
+  const guard=/requires own delivery and live target/;
   assert.throws(()=>dev("bob",key,tid("b")),guard,"another user's target");
   assert.throws(()=>dev("carol",key,tid("b")),guard,"another user's delivery");
   assert.throws(()=>dev("bob",key,tid("z")),guard,"unknown target");
@@ -300,4 +300,32 @@ test("preflight: valid ok; tampering is personal_notification_invalid",()=>{
     assert.equal(result.ok,false,name);
     assert.ok(result.issues.includes("personal_notification_invalid"),name+" "+JSON.stringify(result));
   }
+});
+
+test("review fixes: delivery history cannot be rewritten; device rows need a live own target; target ids are global",()=>{
+  const {db,stage}=setup();
+  const upd=(key,sql,...args)=>db.prepare(`UPDATE personal_attention_deliveries SET ${sql} WHERE user_id='bob' AND delivery_key=?`).run(...args,key);
+  // partial cannot fall back to pending, and sent_at is write-once.
+  const k=deliver(db,"bob","bob-private",OVER,"2026-11-01","pending",1,5000);
+  upd(k,"status='partial',sent_at_ms=7000,attempts=1,last_attempt_at_ms=7000");
+  assert.throws(()=>upd(k,"status='pending',sent_at_ms=NULL"),/transition invalid/);
+  assert.throws(()=>upd(k,"status='failed'"),/transition invalid/);
+  assert.throws(()=>upd(k,"sent_at_ms=99999"),/transition invalid/);
+  upd(k,"status='sent',attempts=2,last_attempt_at_ms=8000");
+  // pending cannot become baseline (would silently suppress a due push).
+  const k2=deliver(db,"bob","shared-bob",OVER,"2026-11-01","pending",1,5000);
+  assert.throws(()=>upd(k2,"status='baseline'"),/transition invalid/);
+  // Device rows only for the user's own, unrevoked target.
+  target(db,"bob",tid("a"),ehash("bob-phone"));
+  target(db,"bob",tid("b"),ehash("bob-old"));
+  db.prepare("UPDATE personal_push_targets SET revoked_at_ms=2000 WHERE user_id='bob' AND target_id=?").run(tid("b"));
+  const dev=(t)=>db.prepare("INSERT INTO personal_attention_device_deliveries(user_id,delivery_key,target_id,status,attempts,last_attempt_at_ms) VALUES ('bob',?,?,'failed',1,6000)").run(k2,t);
+  assert.throws(()=>dev(tid("b")),/live target/);
+  dev(tid("a"));
+  // The same opaque target id can never exist for two users.
+  assert.throws(()=>target(db,"carol",tid("a"),ehash("carol-phone")),/new and unrevoked|UNIQUE/);
+  assert.throws(()=>db.prepare("INSERT OR REPLACE INTO personal_push_targets(user_id,target_id,endpoint_hash,created_at_ms) VALUES ('carol',?,?,1000)")
+    .run(tid("a"),ehash("carol-phone")),/new and unrevoked|UNIQUE/);
+  assert.equal(db.prepare("SELECT user_id FROM personal_push_targets WHERE target_id=?").get(tid("a")).user_id,"bob");
+  assert.deepEqual(inspect(stage),OK);
 });
