@@ -358,7 +358,8 @@ function releaseUnsentClaim(store:TargetStagingReadStore,user:string,work:Work):
 
 /** Finalisation preserves the originally reserved targets until the quiet
  * window ends. Later registrations have no reserved row. */
-function finalize(store:TargetStagingReadStore,user:string,work:Work,nowMs:number):boolean {
+function finalize(store:TargetStagingReadStore,user:string,work:Work,nowMs:number,
+  hidden=false):boolean {
   return writeTxn<boolean>(store,ctx=>{
     const {db}=ctx;
     const d=db.prepare(`SELECT status,sent_at_ms AS sentAt FROM personal_attention_deliveries
@@ -372,14 +373,15 @@ function finalize(store:TargetStagingReadStore,user:string,work:Work,nowMs:numbe
       WHERE x.user_id=? AND x.delivery_key=?`).all(user,work.key) as
       {status:string;attempts:number;live:number}[];
     const delivered=devices.some(r=>r.status==="sent");
-    const retryable=devices.some(r=>r.live===1&&(r.status==="reserved"||
+    // A user-hidden occurrence is settled, not queued again after restore.
+    const retryable=!hidden&&devices.some(r=>r.live===1&&(r.status==="reserved"||
       (r.status==="failed"&&r.attempts<MAX)));
     let sql:string;let args:unknown[];
     if(delivered){
       sql=`UPDATE personal_attention_deliveries SET status=?,sent_at_ms=COALESCE(sent_at_ms,?),
         last_attempt_at_ms=max(last_attempt_at_ms,?) WHERE user_id=? AND delivery_key=? AND status=?`;
       args=[retryable?"partial":"sent",nowMs,nowMs,user,work.key,expected];
-    }else if(devices.length===0){
+    }else if(hidden||devices.length===0){
       // No subscribed device: not delivered and never retried (no backlog for later devices).
       sql=`UPDATE personal_attention_deliveries SET status='undelivered',
         last_attempt_at_ms=max(last_attempt_at_ms,?) WHERE user_id=? AND delivery_key=? AND status=?`;
@@ -409,7 +411,7 @@ async function deliver(store:TargetStagingReadStore,sender:TargetPushSender,user
       releaseUnsentClaim(store,user,work))return false;
     // Dismissed means finished; a quiet boundary means the unsent devices
     // remain eligible after the window. No already-sent device is retried.
-    return finalize(store,user,work,nowMs);
+    return finalize(store,user,work,nowMs,state.hidden!==null);
   };
   if(first.hidden||first.quiet||!first.settingsOn)return stop(first,initial);
   const payload=targetAttentionPushPayload(work.candidate);
