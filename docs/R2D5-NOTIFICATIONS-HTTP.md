@@ -94,14 +94,14 @@ Ostatní kontroly a mapování stavů jako u `PATCH`.
 
 - **Odezva registrace odliší neznámý endpoint (200 + nové ID) od cizího (404).**
   Zneužití vyžaduje znalost přesné adresy cizího zařízení; vlastní zrušený i
-  cizí endpoint jsou nerozlišitelné. K rozhodnutí vlastníka před R4.
+  cizí endpoint jsou nerozlišitelné. **Přijaté riziko, vlastník OK 2026-11-08** ([rozhodnutí 2026-11-08](decisions/2026-11-08-ai-telo-poznamek-a-retence.md), Q4).
 - **Replay registrace po zrušení zařízení** vrátí `{ok:true,replayed:true,targetId}`
   s již zrušeným ID (potvrzení dřívějšího příkazu, nikoli aktuálního stavu); GET
   jej nevypisuje a průchod jej nepoužije.
 - **Politika hostitelů pro skutečný sender:** validace přijme `https` s jiným
   portem, IP literál i host s tečkou na konci. V tomto řezu žádné odesílání není;
   před napojením reálného web-push (R4) je nutná allowlist politika push služeb
-  (ochrana před SSRF).
+  (ochrana před SSRF) — **povinná brána R4** podle [rozhodnutí 2026-11-08](decisions/2026-11-08-ai-telo-poznamek-a-retence.md) (Q5): allowlist hostů Apple/Google/Mozilla push služeb.
 - Per-client rate limit používá sdílený `enforceRateLimit`; jeho identita klienta
   z `X-Forwarded-For` je samostatný (dřívější) problém mimo tento řez — globální
   limit zůstává. Globální staging kapacity (receipty, 4096 zařízení) jsou sdílené.

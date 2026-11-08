@@ -372,8 +372,8 @@ test("1. no foreign private data in any channel for any actor (actor x channel t
     assert.ok(!json.includes("THROWN"),`${u} x ${ch} threw: ${json.slice(0,200)}`);
     const leaked=foundTokens(fx,json).filter(t=>!allowed.has(t));
     assert.deepEqual(leaked,[],`${u} x ${ch} exposes entities outside its authorization`);
-    // Note bodies are released by exactly one channel (the authorized note read), to its readers only.
-    if(ch!=="note/read")assert.ok(!json.includes("BODY-SENTINEL"),`${u} x ${ch} releases a note body`);
+    // Note bodies are released only by the authorized note read and the AI find bundle (R2d.4j), to the notes' readers only.
+    if(ch!=="note/read"&&ch!=="ai/context-bundle")assert.ok(!json.includes("BODY-SENTINEL"),`${u} x ${ch} releases a note body`);
     else for(const n of noteIdsIn(json.replaceAll(/BODY-SENTINEL (n_\w+)/g,"$1")))
       assert.ok(allowed.has(n),`${u} x ${ch} releases the body of ${n}`);
   });
@@ -588,11 +588,11 @@ const VALID_BUNDLES=[["what_matters","my-plan"],["what_matters","personal"],["wh
 const INVALID_BUNDLES=[["what_matters","all"],["plan_today","all"],["find","my-plan"],
   ["what_matters","bogus"],["bogus","all"]];
 const PROVIDER_TOP_KEYS=["bundleVersion","evaluationDate","generatedAtMs","items","purpose","revision","scope","timeZone","truncated"];
-const PROVIDER_ITEM_KEYS=["areaKind","assignedToMe","attention","dueOn","id","kind","provenance","title","whenOn"];
+const PROVIDER_ITEM_KEYS=["areaKind","assignedToMe","attention","body","bodyTruncated","dueOn","id","kind","provenance","title","whenOn"];
 const PROVIDER_ATTENTION_KEYS=["lifecycle","relevantOn","ruleId","severity"];
 const PROVIDER_PROVENANCE_KEYS=["revision","source"];
 const FORBIDDEN_PROVIDER_KEYS=["witness","linearization","areaEpochs","noteAreaEpochs","areaId","projectId","parentId",
-  "assignee","assigneeUserId","userId","actorUserId","ownerUserId","body","snoozedUntilMs","lifecycleRevision","attentionKey"];
+  "assignee","assigneeUserId","userId","actorUserId","ownerUserId","noteGuards","snoozedUntilMs","lifecycleRevision","attentionKey"];
 const keysOf=(value,out=new Set())=>{
   if(Array.isArray(value))value.forEach(v=>keysOf(v,out));
   else if(value&&typeof value==="object")for(const [k,v] of Object.entries(value)){out.add(k);keysOf(v,out);}
@@ -600,7 +600,7 @@ const keysOf=(value,out=new Set())=>{
 };
 test("9. AI bundle: every valid purpose x scope answers, invalid combinations are refused, and the provider payload has an exact key set",async()=>{
   const fx=await getBase(),A=fx.authority;
-  let sawAttention=false,sawAssigned=false,sawWhen=false,rawBundles=0;
+  let sawAttention=false,sawAssigned=false,sawWhen=false,sawBody=false,rawBundles=0;
   for(const u of ACTORS){
     for(const [p,sc] of VALID_BUNDLES){
       const bundle=A.resolveContextBundle(u,bundleReq(p,sc));
@@ -623,7 +623,19 @@ test("9. AI bundle: every valid purpose x scope answers, invalid combinations ar
       assert.deepEqual(FORBIDDEN_PROVIDER_KEYS.filter(k=>present.has(k)),[],`${u} x ${p}/${sc}: forbidden key reaches the provider`);
       for(const word of ["witness","linearization","areaEpochs","noteAreaEpochs"])
         assert.ok(!json.includes(word),`${u} x ${p}/${sc}: "${word}" appears in the provider JSON`);
-      assert.ok(!json.includes("BODY-SENTINEL"));
+      // R2d.4j: bodies only for note items of find, each one the actor can read via the authorized note read
+      if(p!=="find")assert.ok(!json.includes("BODY-SENTINEL"),`${u} x ${p}/${sc}: task-only purpose carries a body`);
+      for(const item of parsed.items){
+        if(item.kind!=="note")assert.ok(!("body" in item)&&!("bodyTruncated" in item),`${u} x ${p}/${sc}: non-note ${item.id} carries a body`);
+        else{
+          const r=A.readAuthorizedNote(u,item.id);
+          assert.ok(r,`${u} x ${p}/${sc}: bundle lists note ${item.id} the actor cannot read`);
+          assert.equal(item.body,r.note?.body??r.body,`${u} x ${p}/${sc}: body of ${item.id} differs from the authorized read`);
+        }
+      }
+      for(const n of noteIdsIn(json.replaceAll(/BODY-SENTINEL (n_\w+)/g,"$1")))
+        assert.ok(A.readAuthorizedNote(u,n),`${u} x ${p}/${sc}: payload mentions unreadable note ${n}`);
+      if(p==="find")sawBody||=json.includes("BODY-SENTINEL");
       rawBundles++;
     }
     for(const [p,sc] of INVALID_BUNDLES)
@@ -635,6 +647,7 @@ test("9. AI bundle: every valid purpose x scope answers, invalid combinations ar
       assert.equal(A.resolveContextBundle(u,bad),null,`${u}: malformed bundle request ${JSON.stringify(bad)} was answered`);
   }
   assert.equal(rawBundles,ACTORS.length*VALID_BUNDLES.length);
+  assert.ok(sawBody,"find bundles really carried authorized note bodies");
   assert.ok(sawAttention&&sawAssigned&&sawWhen,"the key-set check really exercised attention, assignedToMe and whenOn items");
 });
 
@@ -902,7 +915,7 @@ function recheck(fx,label,actors,gone={}){
     for(const ch of CHANNEL_NAMES){
       assert.ok(!cap[ch].includes("THROWN"),`[${label}] ${u} x ${ch} threw`);
       assert.deepEqual(foundTokens(fx,cap[ch]).filter(t=>!allowed.has(t)),[],`[${label}] ${u} x ${ch} still exposes revoked/foreign content`);
-      assert.ok(!cap[ch].includes("BODY-SENTINEL")||ch==="note/read",`[${label}] ${u} x ${ch} releases a body`);
+      assert.ok(!cap[ch].includes("BODY-SENTINEL")||ch==="note/read"||ch==="ai/context-bundle",`[${label}] ${u} x ${ch} releases a body`);
     }
     for(const t of gone.tasks??[])if(!allowed.has(t))for(const ch of CHANNEL_NAMES)
       assert.ok(!cap[ch].includes(t),`[${label}] ${u} x ${ch} still shows ${t}`);

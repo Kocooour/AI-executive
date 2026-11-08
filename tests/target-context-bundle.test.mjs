@@ -14,9 +14,11 @@ const {bootstrapIsolatedTargetStore}=await import("../lib/target-store-bootstrap
 const {readAuthorizedAttentionCandidatePage}=await import("../lib/target-attention-read-model.ts");
 const {readAuthorizedMyPlanDayTaskPage}=await import("../lib/target-my-plan-day-task-read-model.ts");
 const {readAuthorizedTitleSearchPage}=await import("../lib/target-authorized-title-search.ts");
+const {readAuthorizedTargetNote}=await import("../lib/target-note-access.ts");
 const {TargetStagingSessionAuthority}=await import("../lib/target-staging-session-authority.ts");
 const {serializeTargetContextBundleForProvider,MAX_CONTEXT_BUNDLE_BYTES,
-  resolveAuthorizedTargetContextBundle}=await import("../lib/target-context-bundle.ts");
+  resolveAuthorizedTargetContextBundle,MAX_CONTEXT_NOTE_BODY_BYTES,truncateUtf8,
+  authorizedNoteAgrees}=await import("../lib/target-context-bundle.ts");
 
 let count=0;const fixtures=[];
 function fixture(){
@@ -145,7 +147,7 @@ test("plan_today equals today + next day with attention attached",()=>{
   assert.deepEqual(b,bundle(f,"bob","plan_today","my-plan"));
 });
 
-test("find equals authorized title search, titles only",()=>{
+test("find equals authorized title search (non-note items stay title-only)",()=>{
   const f=fixture();
   for(const scope of ["all","personal","shared"]){
     const b=bundle(f,"bob","find",scope);
@@ -185,13 +187,15 @@ test("privacy matrix: no foreign titles, ids, Areas, bodies or witness leak",()=
       const parsed=JSON.parse(json);
       assert.deepEqual(Object.keys(parsed),["bundleVersion","purpose","scope","generatedAtMs",
         "timeZone","evaluationDate","items","truncated","revision"]);
-      for(const i of parsed.items)for(const k of Object.keys(i))
+      for(const i of parsed.items)for(const k of Object.keys(i)){
         assert.ok(["kind","id","title","areaKind","assignedToMe","dueOn","whenOn","attention",
-          "provenance"].includes(k),k);
+          "provenance","body","bodyTruncated"].includes(k),k);
+        if(k==="body"||k==="bodyTruncated")assert.equal(i.kind,"note");
+      }
       for(const s of FORBIDDEN_FOR[actor])assert.ok(!json.includes(s),`${actor} ${purpose}/${scope} leaks ${s}`);
       for(const o of OTHERS[actor])assert.ok(!json.includes(`"${o}"`)&&!json.includes(o+"-"),`${actor} sees id ${o}`);
       for(const a of areaIds.filter(x=>x!==actor+"-private"&&!(actor==="erin"&&x.startsWith("hidden"))))assert.ok(!json.includes(`"${a}"`),`${actor} sees area ${a}`);
-      assert.ok(!json.includes("BODY-SENTINEL"),"no note bodies");
+      if(purpose!=="find")assert.ok(!json.includes("BODY-SENTINEL"),"task-only purposes carry no bodies");
       for(const w of ["witness","linearization","areaEpochs","areaId","assignee"])
         assert.ok(!json.includes(w),w);
       if(purpose!=="find"){
@@ -333,4 +337,132 @@ test("fail closed (never partial) on a corrupt own plan row or a blank emitted t
   f.db.prepare("UPDATE tasks SET title='   ' WHERE id='b-over'").run();
   f.db.exec("PRAGMA ignore_check_constraints=OFF");
   assert.equal(bundle(f,"bob","what_matters","my-plan"),null);
+});
+
+const noteOf=(f,actor,id)=>readAuthorizedTargetNote(f.reader,{actorUserId:actor,noteId:id});
+const withCheckBypass=(f,fn)=>{
+  f.db.exec("PRAGMA ignore_check_constraints=ON");
+  try{fn();}finally{f.db.exec("PRAGMA ignore_check_constraints=OFF");}
+};
+
+test("find: note items carry exactly the authorized body, others never",()=>{
+  const f=fixture();
+  f.db.prepare("INSERT INTO notes(id,area_id,project_id,title,body) VALUES ('n-proj',NULL,'project','Project note secret','BODY-SENTINEL-PROJECT')").run();
+  const b=bundle(f,"bob","find","all");
+  const notes=b.items.filter(i=>i.kind==="note");
+  assert.deepEqual(notes.map(i=>i.id).sort(),["n-bob","n-family","n-proj"]);
+  for(const n of notes){
+    const r=noteOf(f,"bob",n.id);
+    assert.equal(n.body,r.note.body);
+    assert.equal(n.bodyTruncated,undefined);
+    assert.equal("bodyTruncated" in n,false);
+    assert.equal(n.provenance.revision,r.note.revision);
+    assert.equal(n.provenance.source,"title_search");
+  }
+  for(const i of b.items.filter(i=>i.kind!=="note"))
+    assert.ok(!("body" in i)&&!("bodyTruncated" in i));
+  const json=serializeTargetContextBundleForProvider(b);
+  assert.ok(json.includes("BODY-SENTINEL-FAMILY")&&json.includes("BODY-SENTINEL-BOB")&&json.includes("BODY-SENTINEL-PROJECT"));
+  assert.ok(!json.includes("BODY-SENTINEL-ALICE")&&!json.includes("BODY-SENTINEL-ERIN"));
+  // witness holds guard data for a future live guard, never serialized
+  assert.deepEqual(b.witness.noteGuards.map(g=>g.noteId),notes.map(i=>i.id));
+  const g=b.witness.noteGuards.find(x=>x.noteId==="n-proj");
+  assert.equal(g.noteRevision,noteOf(f,"bob","n-proj").guard.noteRevision);
+  assert.equal(g.parentRevision,noteOf(f,"bob","n-proj").guard.parentRevision);
+  assert.ok(!json.includes("noteGuards")&&!json.includes("parentRevision"));
+  // viewer carol: only the shared notes she can read; stranger gets no foreign bodies
+  const cj=serializeTargetContextBundleForProvider(bundle(f,"carol","find","all"));
+  assert.ok(cj.includes("BODY-SENTINEL-FAMILY")&&cj.includes("BODY-SENTINEL-PROJECT"));
+  assert.ok(!cj.includes("BODY-SENTINEL-BOB")&&!cj.includes("BODY-SENTINEL-ALICE")&&!cj.includes("BODY-SENTINEL-ERIN"));
+  const ej=serializeTargetContextBundleForProvider(bundle(f,"erin","find","all"));
+  assert.ok(ej.includes("BODY-SENTINEL-ERIN")&&!ej.includes("BODY-SENTINEL-FAMILY")&&!ej.includes("BODY-SENTINEL-PROJECT"));
+  // task-only purposes never get bodies
+  for(const p of ["what_matters","plan_today"])
+    assert.ok(!serializeTargetContextBundleForProvider(bundle(f,"bob",p,"my-plan")).includes("BODY-SENTINEL"));
+});
+
+test("a body edit changes the revision; foreign activity does not",()=>{
+  const f=fixture();
+  const before=bundle(f,"bob","find","all");
+  f.db.prepare("UPDATE notes SET body='BODY-SENTINEL-FAMILY edited' WHERE id='n-family'").run();
+  const after_=bundle(f,"bob","find","all");
+  assert.notEqual(after_.revision,before.revision);
+  assert.equal(after_.items.find(i=>i.id==="n-family").body,"BODY-SENTINEL-FAMILY edited");
+  // a foreign private note edit (not readable by bob) changes nothing for bob
+  const stable=bundle(f,"bob","find","all");
+  f.db.prepare("UPDATE notes SET body='BODY-SENTINEL-ERIN changed' WHERE id='n-erin'").run();
+  assert.deepEqual(bundle(f,"bob","find","all"),stable);
+});
+
+test("body excerpt is capped on a UTF-8 code-point boundary and flagged",()=>{
+  const f=fixture();
+  const cases={
+    "n-ascii":"a".repeat(MAX_CONTEXT_NOTE_BODY_BYTES+500),
+    "n-multi":"ě".repeat(MAX_CONTEXT_NOTE_BODY_BYTES), // 2 bytes each => 8192 bytes
+    "n-emoji":"x"+"😀".repeat(2000), // 4-byte code points, cap lands mid-character
+    "n-exact":"b".repeat(MAX_CONTEXT_NOTE_BODY_BYTES),
+  };
+  for(const [id,body] of Object.entries(cases))
+    f.db.prepare("INSERT INTO notes(id,area_id,title,body) VALUES (?,'bob-private',?,?)").run(id,"Bob cap secret "+id,body);
+  const b=bundle(f,"bob","find","all");
+  for(const [id,body] of Object.entries(cases)){
+    const it=b.items.find(i=>i.id===id);
+    const bytes=Buffer.byteLength(it.body,"utf8");
+    assert.ok(bytes<=MAX_CONTEXT_NOTE_BODY_BYTES,id);
+    assert.ok(body.startsWith(it.body),id+" is a prefix");
+    assert.ok(!/[\ud800-\udfff]/.test(it.body.replaceAll(/[\ud800-\udbff][\udc00-\udfff]/g,"")),id+" has no lone surrogate");
+    assert.ok(!it.body.includes("\ufffd"));
+    if(Buffer.byteLength(body,"utf8")>MAX_CONTEXT_NOTE_BODY_BYTES){
+      assert.equal(it.bodyTruncated,true,id);
+      // maximal: the next code point would not fit
+      const next=[...body.slice(it.body.length)][0];
+      assert.ok(bytes+Buffer.byteLength(next,"utf8")>MAX_CONTEXT_NOTE_BODY_BYTES,id+" maximal");
+    }else{assert.equal(it.body,body);assert.equal("bodyTruncated" in it,false);}
+  }
+  assert.equal(b.items.find(i=>i.id==="n-emoji").body,"x"+"😀".repeat(1023));
+  assert.deepEqual(truncateUtf8("a😀b",4),{text:"a😀".slice(0,0)+"a",truncated:true});
+  assert.deepEqual(truncateUtf8("a😀b",5),{text:"a😀",truncated:true});
+  assert.deepEqual(truncateUtf8("abc",3),{text:"abc",truncated:false});
+  const json=serializeTargetContextBundleForProvider(b);
+  assert.ok(json===null||Buffer.byteLength(json)<=MAX_CONTEXT_BUNDLE_BYTES);
+});
+
+test("32 KiB cap with many large bodies drops items from the end",()=>{
+  const f=fixture();
+  for(let n=0;n<15;n++)f.db.prepare("INSERT INTO notes(id,area_id,title,body) VALUES (?,'bob-private',?,?)")
+    .run("big-"+String(n).padStart(2,"0"),"Bob big secret "+String(n).padStart(2,"0"),"y".repeat(20000));
+  const b=bundle(f,"bob","find","all",{maxItems:50});
+  const json=serializeTargetContextBundleForProvider(b);
+  assert.ok(json&&Buffer.byteLength(json)<=MAX_CONTEXT_BUNDLE_BYTES);
+  assert.equal(b.truncated,true);
+  const uncapped=search(f,"bob","all");
+  assert.ok(b.items.length<uncapped.items.length);
+  assert.deepEqual(b.items.map(i=>i.id),uncapped.items.slice(0,b.items.length).map(i=>i.id));
+  assert.deepEqual(b.witness.noteGuards.map(g=>g.noteId),b.items.filter(i=>i.kind==="note").map(i=>i.id));
+  assert.deepEqual(bundle(f,"bob","find","all",{maxItems:50}),b);
+});
+
+test("fail closed when the authorized read disagrees with the search row",()=>{
+  // Unit: comparison helper
+  const row={id:"n",title:"T",areaKind:"private",projectId:null};
+  const read=(o={})=>({note:{id:"n",title:"T",body:"b",areaKind:"private",projectId:null,revision:1,...o}});
+  assert.equal(authorizedNoteAgrees(row,read()),true);
+  assert.equal(authorizedNoteAgrees(row,null),false);
+  assert.equal(authorizedNoteAgrees(row,read({title:"U"})),false);
+  assert.equal(authorizedNoteAgrees(row,read({areaKind:"shared"})),false);
+  assert.equal(authorizedNoteAgrees(row,read({projectId:"p"})),false);
+  assert.equal(authorizedNoteAgrees({...row,projectId:"p"},read()),false);
+  assert.equal(authorizedNoteAgrees(row,read({id:"x"})),false);
+  assert.equal(authorizedNoteAgrees(row,read({body:5})),false);
+  // Integration: an oversize body (CHECK bypass) is searchable but unreadable => whole bundle null
+  const f=fixture();
+  assert.ok(bundle(f,"bob","find","all"));
+  withCheckBypass(f,()=>f.db.prepare("UPDATE notes SET body=? WHERE id='n-bob'").run("z".repeat(129*1024)));
+  assert.equal(noteOf(f,"bob","n-bob"),null);
+  // the store preflight already refuses the corrupt store; also check the db-level resolver directly
+  const direct=(actor,purpose,scope)=>resolveAuthorizedTargetContextBundle(f.reader,
+    {...req(purpose,scope),actorUserId:actor,restoreGeneration:gen(f)});
+  assert.equal(direct("bob","find","all"),null,"never a partial bundle");
+  assert.ok(direct("carol","find","shared"),"actor/scope that does not list the note is unaffected");
+  assert.ok(direct("bob","what_matters","my-plan"),"task-only purposes are unaffected");
 });
