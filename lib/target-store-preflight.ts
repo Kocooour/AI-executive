@@ -11,6 +11,8 @@ import {
   TARGET_STAGING_TEMPORAL_STATUS_RECEIPT_PREFIX, TARGET_STAGING_TEMPORAL_DUE_ON_RECEIPT_PREFIX,
   TARGET_STAGING_PERSONAL_WHEN_RECEIPT_PREFIX,
   TARGET_STAGING_PERSONAL_ATTENTION_RECEIPT_PREFIX,
+  TARGET_STAGING_PERSONAL_NOTIFICATION_RECEIPT_PREFIX, TARGET_STAGING_PERSONAL_PUSH_TARGET_RECEIPT_PREFIX,
+  TARGET_STAGING_PUSH_BASELINE_PREFIX,
   TARGET_STAGING_NOTE_RECEIPT_PREFIX, TARGET_STAGING_NOTE_DELETE_RECEIPT_PREFIX,
   TARGET_STAGING_NOTE_LIFECYCLE_RECEIPT_PREFIX,
   TARGET_STAGING_MAX_TOMBSTONES, TARGET_STAGING_NOTE_CHANGE_MAX_EVENTS, TARGET_STAGING_RESTORE_HISTORY_MAX,
@@ -238,6 +240,20 @@ export function inspectIsolatedTargetStore(
         row.key.startsWith(TARGET_STAGING_PERSONAL_WHEN_RECEIPT_PREFIX));
       const attentionReceipts = rows.filter(row => typeof row.key === "string" &&
         row.key.startsWith(TARGET_STAGING_PERSONAL_ATTENTION_RECEIPT_PREFIX));
+      const notificationReceipts = rows.filter(row => typeof row.key === "string" &&
+        row.key.startsWith(TARGET_STAGING_PERSONAL_NOTIFICATION_RECEIPT_PREFIX));
+      const pushTargetReceipts = rows.filter(row => typeof row.key === "string" &&
+        row.key.startsWith(TARGET_STAGING_PERSONAL_PUSH_TARGET_RECEIPT_PREFIX));
+      // Baseline marker: one per identity at most; the key suffix must be the
+      // sha256 of an existing identity id and the value its own fixed digest.
+      const baselineMarkers = rows.filter(row => typeof row.key === "string" &&
+        row.key.startsWith(TARGET_STAGING_PUSH_BASELINE_PREFIX));
+      const baselineDigest = (id: string) => createHash("sha256")
+        .update(JSON.stringify(["push-baseline-v1", id])).digest("hex");
+      const identityHashes = new Map((all("SELECT id FROM identities") as { id: string }[]).map(
+        r => [createHash("sha256").update(r.id).digest("hex"), baselineDigest(r.id)]));
+      const baselinesValid = baselineMarkers.every(row => typeof row.key === "string" &&
+        identityHashes.get(row.key.slice(TARGET_STAGING_PUSH_BASELINE_PREFIX.length)) === row.value);
       const noteReceipts = rows.filter(row => typeof row.key === "string" &&
         row.key.startsWith(TARGET_STAGING_NOTE_RECEIPT_PREFIX));
       const noteDeleteReceipts = rows.filter(row => typeof row.key === "string" &&
@@ -253,6 +269,7 @@ export function inspectIsolatedTargetStore(
         sha256Hex.test(row.key.slice(prefix.length)) &&
         typeof row.value === "string" && sha256Hex.test(row.value));
       if (rows.length !== 6 + receipts.length + deleteReceipts.length + temporalReceipts.length + dueOnReceipts.length + privateWhenReceipts.length + attentionReceipts.length + noteReceipts.length +
+            notificationReceipts.length + pushTargetReceipts.length + baselineMarkers.length +
             noteDeleteReceipts.length + lifecycleReceipts.length ||
           receipts.length > TARGET_STAGING_MAX_RECEIPTS ||
           deleteReceipts.length > TARGET_STAGING_MAX_RECEIPTS ||
@@ -260,6 +277,11 @@ export function inspectIsolatedTargetStore(
           dueOnReceipts.length > TARGET_STAGING_MAX_RECEIPTS ||
           privateWhenReceipts.length > TARGET_STAGING_MAX_RECEIPTS ||
           attentionReceipts.length > TARGET_STAGING_MAX_RECEIPTS ||
+          notificationReceipts.length > TARGET_STAGING_MAX_RECEIPTS ||
+          pushTargetReceipts.length > TARGET_STAGING_MAX_RECEIPTS ||
+          !baselinesValid ||
+          !receiptValid(notificationReceipts, TARGET_STAGING_PERSONAL_NOTIFICATION_RECEIPT_PREFIX) ||
+          !receiptValid(pushTargetReceipts, TARGET_STAGING_PERSONAL_PUSH_TARGET_RECEIPT_PREFIX) ||
           noteReceipts.length > TARGET_STAGING_MAX_RECEIPTS ||
           noteDeleteReceipts.length > TARGET_STAGING_MAX_RECEIPTS ||
           lifecycleReceipts.length > TARGET_STAGING_MAX_RECEIPTS ||
@@ -281,6 +303,9 @@ export function inspectIsolatedTargetStore(
               row.key.startsWith(TARGET_STAGING_TEMPORAL_DUE_ON_RECEIPT_PREFIX) ||
               row.key.startsWith(TARGET_STAGING_PERSONAL_WHEN_RECEIPT_PREFIX) ||
               row.key.startsWith(TARGET_STAGING_PERSONAL_ATTENTION_RECEIPT_PREFIX) ||
+              row.key.startsWith(TARGET_STAGING_PERSONAL_NOTIFICATION_RECEIPT_PREFIX) ||
+              row.key.startsWith(TARGET_STAGING_PERSONAL_PUSH_TARGET_RECEIPT_PREFIX) ||
+              row.key.startsWith(TARGET_STAGING_PUSH_BASELINE_PREFIX) ||
               row.key.startsWith(TARGET_STAGING_NOTE_RECEIPT_PREFIX) ||
               row.key.startsWith(TARGET_STAGING_NOTE_DELETE_RECEIPT_PREFIX) ||
               row.key.startsWith(TARGET_STAGING_NOTE_LIFECYCLE_RECEIPT_PREFIX))) ||

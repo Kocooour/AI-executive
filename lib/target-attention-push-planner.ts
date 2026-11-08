@@ -82,6 +82,7 @@ export function inTargetQuietHours(nowMs: number, timeZone: string, start: strin
 }
 
 const flag = (v: unknown) => v === true || v === 1;
+export const announceableTargetAttentionCandidate = (c: AttentionCandidate): boolean => announceable(c);
 const announceable = (c: AttentionCandidate) =>
   !!c && c.subjectType === "task" && c.lifecycle === "active" &&
   (TARGET_ATTENTION_PUSH_RULES as readonly string[]).includes(c.ruleId) &&
