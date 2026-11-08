@@ -154,3 +154,26 @@ test("child error, timeout, output limit and nonzero exit log distinct sanitized
     "[target-staging] stage=read_child reason=timeout error_code=none",
   ]);
 });
+
+test("master staging HTTP flag is forwarded from the parent, never forced on", async () => {
+  const key = "AI_EXECUTIVE_TARGET_STAGING_HTTP_ENABLED";
+  const previous = process.env[key];
+  const seen = [];
+  const run = createStagingReadRunner((_command, _args, options) => {
+    seen.push(Object.hasOwn(options.env, key) ? options.env[key] : "<missing>");
+    const child = fakeChild();
+    queueMicrotask(() => child.finish({ ok: true }));
+    return child;
+  }, 1_000);
+  try {
+    for (const value of [undefined, "false", "true"]) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+      assert.deepEqual(await run(config, "target-staging-attention-child.mjs", []), { ok: true });
+    }
+  } finally {
+    if (previous === undefined) delete process.env[key];
+    else process.env[key] = previous;
+  }
+  assert.deepEqual(seen, ["", "false", "true"]);
+});

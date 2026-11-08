@@ -385,3 +385,22 @@ test("strict child DTO rejects injected metadata, forgery, ordering and lifecycl
       snoozedUntilMs:at+1,lifecycleRevision:1}]},"hidden"));
   });
 });
+
+test("read child refuses when the parent master staging HTTP flag is off",async()=>{
+  // Regression: the read runner used to hard-code the master flag to "true",
+  // so this child-side re-check could never refuse.
+  const f=fixture();
+  const config={stagingDirectory:f.stage.directory,
+    expectedRestoreGeneration:f.stage.restoreGeneration,ownerUserId:"alice"};
+  const read=()=>readStagingAttentionInChild(config,"all","active",Date.now(),TZ,100,0);
+  const previous=process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_ENABLED;
+  try{
+    process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_ENABLED="false";
+    assert.equal(await read(),null,"false");
+    delete process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_ENABLED;
+    assert.equal(await read(),null,"unset");
+  }finally{process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_ENABLED=previous;}
+  const page=await read();
+  assert.ok(page,"enabled parent flag still reads");
+  assert.deepEqual(ids(page),["p-alice","s-alice"]);
+});
