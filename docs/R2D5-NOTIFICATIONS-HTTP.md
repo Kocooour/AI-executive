@@ -89,3 +89,21 @@ Ostatní kontroly a mapování stavů jako u `PATCH`.
 - Child `GET` vrací `actorUserId` jen rodiči pro živou guard; route jej nikdy nevydá.
 - Testy: `tests/target-staging-notifications-http.test.mjs`; restore-fence inventář obsahuje
   obě mutující routy.
+
+## Hranice zjištěné nezávislým testem (P3, bez změny kódu)
+
+- **Odezva registrace odliší neznámý endpoint (200 + nové ID) od cizího (404).**
+  Zneužití vyžaduje znalost přesné adresy cizího zařízení; vlastní zrušený i
+  cizí endpoint jsou nerozlišitelné. K rozhodnutí vlastníka před R4.
+- **Replay registrace po zrušení zařízení** vrátí `{ok:true,replayed:true,targetId}`
+  s již zrušeným ID (potvrzení dřívějšího příkazu, nikoli aktuálního stavu); GET
+  jej nevypisuje a průchod jej nepoužije.
+- **Politika hostitelů pro skutečný sender:** validace přijme `https` s jiným
+  portem, IP literál i host s tečkou na konci. V tomto řezu žádné odesílání není;
+  před napojením reálného web-push (R4) je nutná allowlist politika push služeb
+  (ochrana před SSRF).
+- Per-client rate limit používá sdílený `enforceRateLimit`; jeho identita klienta
+  z `X-Forwarded-For` je samostatný (dřívější) problém mimo tento řez — globální
+  limit zůstává. Globální staging kapacity (receipty, 4096 zařízení) jsou sdílené.
+- `held.disabled` v souhrnu průchodu počítá uživatele (vypnuté/pozastavené), ne
+  zařízení.
