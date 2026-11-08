@@ -58,10 +58,10 @@ neexportovaným klíčem. Jeden průchod najednou na proces (druhý vrací
    obnoví osiřelé `pending` starší než 15 min podle trvalých výsledků zařízení: již odeslané označí `sent` nebo `partial` s původním časem odeslání; potvrzeně neúspěšné výsledky zachovají retry do 3 pokusů jako `failed`. Pouze cíle se zapsaným začátkem odesílání (`inflight`), jejichž výsledek pád přerušil, přejdou do `unknown`; dosud neoslovené `reserved` cíle zůstávají bezpečně opakovatelné. Bez potvrzeného výsledku a bez opakovatelného cíle je doručení `undelivered`; pak
    - **baseline** (chybí značka): všichni aktuální oznámitelní kandidáti se zapíšou
      jako `baseline`, zapíše se značka, nic se neodešle;
-   - jinak `handled` (vše kromě `failed` s attempts < 3), `sentInLast24h`
+   - jinak `handled` (vše kromě `failed` s alespoň jedním původním živým `reserved` cílem nebo `failed` cílem s méně než 3 skutečnými pokusy), `sentInLast24h`
      (sent/partial s `sent_at` mladším než 24 h + pending mladší než 24 h), `planTargetAttentionPushes`
-     a **claim** každého naplánovaného jako `pending` s atomickou rezervací právě aktuálních živých cílů (`reserved`, attempts=0; bez nové registrace při retry), nebo `failed→pending`
-     s attempts+1). Před claimem se v transakci znovu ověří ACL, otevřený stav,
+     a **claim** každého naplánovaného jako `pending` (parent `attempts=0`) s atomickou rezervací právě aktuálních živých cílů (`reserved`, attempts=0; bez nové registrace při retry), nebo `failed→pending`
+     **bez změny počtu pokusů**. Před claimem se v transakci znovu ověří ACL, otevřený stav,
      aktuální termín a pravidlo, snooze/dismiss; kandidát, který přístup ztratil
      mezi čtením a claimem, se prostě nezabere (insert guard je druhá pojistka).
 3. **Mimo transakci** pro každý claim a každý živý cíl uživatele (přeskočí se
@@ -74,7 +74,10 @@ neexportovaným klíčem. Jeden průchod najednou na proces (druhý vrací
    **aktuálně mimo tiché hodiny** ve stále platném pásmu uživatele a cíl je živý. Čas se znovu zjišťuje před každým zařízením (testy používají injektovaný clock). Reconcile smaže řádek při ztrátě přístupu,
    dokončení úkolu nebo změně termínu → nic se neodešle („bez upozornění
    odebraným členům“).
-4. **Před** předáním zařízení odesílači se commitne jeho stav `inflight`.
+4. **Před** předáním zařízení odesílači se commitne jeho stav `inflight` a
+   parent `attempts` se zvýší pouze podle skutečně zahájeného pokusu zařízení
+   (nejvýše 3); opakované `reserved → failed → pending` při pádech před
+   odesláním žádný pokus nespotřebuje.
    Výsledek se pak **hned** commitne jako `sent` / `failed` / `gone`;
    `gone` revokuje právě tento cíl guardovaným UPDATE. Pád před `inflight`
    ponechá `reserved` a dovolí pozdější doručení; pád během `inflight`
@@ -86,7 +89,8 @@ neexportovaným klíčem. Jeden průchod najednou na proces (druhý vrací
    (může jít o současně běžící jiný proces). Jinak jako legacy: doručeno a zbývá opakovatelné zařízení → `partial`,
    doručeno → `sent` (`sent_at` se zapíše jednou), žádné zařízení → `undelivered`
    (zařízení přidané později nedostane backlog), nikdo nedostal → `failed`
-   (attempts; po vyčerpání pokusů se vzdá). Respektují se v23 guardy
+   (limity jsou po jednotlivých zařízeních, nikoli podle počtu obnovených
+   parent claimů). Respektují se v23 guardy
    (partial jen na partial/sent, `sent_at` write-once).
 6. **Opakování partial:** jen původně rezervované a potvrzeně neúspěšné cíle; zařízení `sent`/`gone`/`unknown` nikdy znovu. `reserved` po bezpečně dokončeném quiet-hour přerušení lze odeslat později, zatímco `reserved` přeživší **pád** bez zahájeného odesílání zůstává opakovatelné. Pouze `inflight` bez zapsaného výsledku přejde do `unknown` a nebude duplicitně odesláno. Nově zaregistrované zařízení nemá rezervaci, proto nedostane zpětně staré oznámení. Opakování je mimo tiché hodiny a bez dalšího započtení do denního limitu.
 7. **Snooze před prvním odesláním:** `pending` se samými nedotčenými rezervacemi `reserved` se transakčně uvolní, takže po vypršení snooze může být stejný výskyt znovu naplánován. `dismissed` zůstává potlačeno.
@@ -102,7 +106,7 @@ bez titulků a ID.
   dva uživatelé ve stejném okamžiku se mohou lišit.
 - Push nikdy nejde viewerovi, nepřiřazenému, jinému řešiteli ani odebranému
   členovi; snooze/dismiss nikdy nepošle.
-- Restart: osiřelý `pending` (>15 min) se zapsaným `sent` přejde na `sent`/`partial` se skutečným časem odeslání (24h limit). Potvrzené `failed` cíle zůstávají opakovatelné (max. 3 pokusy); `inflight` cíle bez zapsaného výsledku přejdou do `unknown` a neopakují se; `reserved` cíle se mohou po restartu dokončit. Parent je `undelivered` jen bez doručení a bez opakovatelného cíle. Čerstvý `pending` zůstává rozpracovaný.
+- Restart: osiřelý `pending` (>15 min) se zapsaným `sent` přejde na `sent`/`partial` se skutečným časem odeslání (24h limit). Potvrzené `failed` cíle zůstávají opakovatelné (max. 3 skutečně zahájené pokusy na zařízení); `inflight` cíle bez zapsaného výsledku přejdou do `unknown` a neopakují se; `reserved` cíle se mohou po restartu dokončit **i po více než třech pádech před prvním odesláním**. Parent `attempts` sleduje nejvyšší počet skutečně zahájených pokusů zařízení, nikoli počet claimů. Parent je `undelivered` jen bez doručení a bez opakovatelného cíle. Čerstvý `pending` zůstává rozpracovaný.
 - Výjimka jednoho uživatele ani sender, který vyhodí chybu (= `failed`),
   neukončí průchod ostatních.
 
