@@ -47,24 +47,28 @@ kód (`invalid_request`, `not_active`, `unauthorized`, `unavailable`, `stale_rev
    nepotřebuje.
 7. Mez snoozu: `now < snoozedUntilMs <= now + 30 dní` (jediné `now`
    uvnitř transakce), jinak `invalid_request`.
-8. Přechody: `snooze` a `dismiss` jen z efektivně aktivního stavu (bez
-   řádku, nebo `snoozed` řádek s `snoozed_until_ms <= now`, který se
-   `UPDATE`uje); z platného snoozu či dismissu `not_active` a nic se nezapíše.
-   `restore` (Undo) je možný z `snoozed` (i vypršelého) a `dismissed`;
-   bez řádku `unchanged`.
+8. Přechody počítá **sloučená čistá politika** `planTargetAttentionLifecycle`
+   (R2d.5b.0, #317) nad *surovým* řádkem v této transakci (CAS: epocha,
+   revize řádku, revize úkolu): `snooze`/`dismiss` jen bez řádku
+   (= active); vypršelý `snoozed` řádek se nejdřív smaže politikou
+   `recheck` (`snooze_expired`) a teprve pak se vloží nový. Z platného
+   snoozu či dismissu `not_active`. `restore` (Undo) maže `snoozed`
+   (i vypršelý) či `dismissed` řádek; bez řádku `unchanged`.
 9. Pinned/sidecar kontroly a kapacita receiptů.
 10. Zápis pouze vlastního řádku: restore = `DELETE`, snooze/dismiss =
-   `INSERT` (revize 0) nebo `UPDATE`. Ověří se, že epocha vzrostla přesně o
+   `INSERT` (vždy revize 0; u vypršelého snoozu předchází `DELETE`, epocha +2). Ověří se, že epocha vzrostla přesně o
    počet změn řádků a revize řádku odpovídá; jinak `write_failed`.
 11. Receipt, znovu session/pinned, journal intent.
 
 ## Politika
 
-Sémantika následuje R2d.5b.0 / PR #317 (strop snoozu 30 dní, přechody
-pouze z aktivního stavu, dismiss nikdy nedokončí úkol, klíče vázané na
-pravidlo) s vědomým doplněním `restore` pro Undo. Vypršení snoozu je
-implicitní při čtení (`until <= now`), nikoli explicitní recheck záznam,
-protože schéma v22 neukládá sloupce `changedAt` ani zdrojovou revizi.
+Přechody nepočítá writer sám: volá sloučenou politiku R2d.5b.0
+(`lib/target-attention-lifecycle-policy.ts`, #317) — strop snoozu 30 dní,
+přechody pouze z aktivního stavu (bez řádku), INSERT revize 0, restore a
+expirace = DELETE, dismiss nikdy nedokončí úkol, klíče vázané na pravidlo.
+Selektor zobrazuje vypršelý snooze jako aktivní už při čtení
+(`until <= now`); fyzicky se řádek smaže při příštím příkazu nad výskytem
+(politika `recheck`).
 Selektor proto vrací `lifecycleRevision` i u vypršelého snoozu (řádek
 stále existuje), aby klient sestavil platné `expectedStateRevision` bez
 dalšího čtení. `replayed:true` potvrzuje jen dřívější provedení příkazu,

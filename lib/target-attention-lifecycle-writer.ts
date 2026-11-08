@@ -15,8 +15,10 @@ import type {TargetStagingReadCredential} from "./target-task-authenticated-read
 import type {TargetStagingReadStore} from "./target-task-staging-reader";
 import {fingerprint} from "./target-task-staging-writer";
 import {validTargetDueOn} from "./target-task-temporal-due-on-writer";
-import {attentionEvaluationWindow,currentAttentionRule}
+import {attentionEvaluationWindow,attentionKey,currentAttentionRule}
   from "./target-attention-read-model";
+import {planTargetAttentionLifecycle,type TargetAttentionLifecycleOutcome,
+  type TargetAttentionLifecycleRow} from "./target-attention-lifecycle-policy";
 import {checkTargetTaskWriteContract,targetTaskWriteRevision,
   validTargetTaskTitleEditPreviewRequest} from "./target-task-write-preflight";
 
@@ -190,13 +192,50 @@ export function writePreflightedAttentionLifecycle(
         if(!(now<until&&until<=now+TARGET_ATTENTION_MAX_SNOOZE_MS))
           return {ok:false,reason:"invalid_request"};
       }
-      // Snooze/dismiss only from the effectively active state: no row, or a
-      // snoozed row that has already expired (expiry is implicit: until<=now).
-      // Restore (Undo) works from any existing row, including an expired one.
-      if(command.action==="restore"){
-        if(!row)return {ok:false,reason:"unchanged"};
-      }else if(row&&!(row.state==="snoozed"&&row.until!==null&&row.until<=now))
-        return {ok:false,reason:"not_active"};
+      // Transitions come from the merged R2d.5b.0 policy (#317), evaluated on
+      // the RAW row inside this transaction: active = no row; snooze/dismiss =
+      // INSERT revision 0; restore = DELETE. An expired snooze row is first
+      // deleted by a policy "recheck" (snooze_expired) and only then may a new
+      // snooze/dismiss be inserted, exactly as the policy prescribes.
+      const taskRow=db.prepare("SELECT revision FROM tasks WHERE id=?")
+        .get(command.taskId) as {revision:number}|undefined;
+      if(!taskRow||!epoch(taskRow.revision))return failed();
+      const occurrence={attentionKey:attentionKey(command.ruleId,command.taskId,command.occurrenceOn),
+        taskId:command.taskId,ruleId:command.ruleId,relevantOn:command.occurrenceOn};
+      const planStep=(stored:TargetAttentionLifecycleRow|null,attentionEpoch:number,
+        kind:"snooze"|"dismiss"|"restore"|"recheck"):TargetAttentionLifecycleOutcome=>{
+        const expected={nowMs:now,expectedSourceRevision:taskRow.revision,
+          expectedAttentionEpoch:attentionEpoch,
+          expectedLifecycleRevision:stored?.revision??null};
+        return planTargetAttentionLifecycle(
+          {actorUserId:actor,restoreGeneration:command.restoreGeneration,
+            ...occurrence,attentionEpoch,row:stored},
+          {actorUserId:actor,restoreGeneration:command.restoreGeneration,attentionEpoch,
+            candidate:{...occurrence,sourceRevision:taskRow.revision}},
+          kind==="snooze"?{kind,...expected,untilMs:command.snoozedUntilMs as number}
+            :{kind,...expected});
+      };
+      const stored:TargetAttentionLifecycleRow|null=row?{
+        state:row.state as "snoozed"|"dismissed",snoozedUntilMs:row.until,revision:row.revision,
+      }:null;
+      const steps:TargetAttentionLifecycleOutcome[]=[];
+      let observedRow=stored,observedEpoch=epochRow.revision;
+      if(command.action!=="restore"&&stored?.state==="snoozed"&&
+          stored.snoozedUntilMs!==null&&stored.snoozedUntilMs<=now){
+        const expiry=planStep(stored,observedEpoch,"recheck");
+        if(!expiry.ok||expiry.operation!=="delete")return failed();
+        steps.push(expiry);observedRow=null;observedEpoch++;
+      }
+      const main=planStep(observedRow,observedEpoch,command.action);
+      if(main.ok===false){
+        if(main.reason==="invalid")return {ok:false,reason:"invalid_request"};
+        if(main.reason==="stale")return {ok:false,reason:"stale_revision"};
+        if(main.reason==="not-active")
+          return {ok:false,reason:command.action==="restore"?"unchanged":"not_active"};
+        return failed();
+      }
+      if(main.operation==="none")return failed();
+      steps.push(main);
       if(!context.stillPinned()||!context.noSidecars())return denied();
       const existing=db.prepare("SELECT COUNT(*) AS n FROM metadata WHERE key LIKE ?")
         .get(TARGET_STAGING_PERSONAL_ATTENTION_RECEIPT_PREFIX+"%") as {n:number};
@@ -204,22 +243,18 @@ export function writePreflightedAttentionLifecycle(
 
       let changes=0;
       const key=[actor,command.taskId,command.ruleId,command.occurrenceOn] as const;
-      if(command.action==="restore"){
-        if(db.prepare(
-          "DELETE FROM personal_attention_states WHERE user_id=? AND task_id=? AND rule_id=? AND occurrence_on=?"
-        ).run(...key).changes!==1)return failed();
-        changes++;
-      }else{
-        const stateName=command.action==="snooze"?"snoozed":"dismissed";
-        if(row){
+      for(const step of steps){
+        if(!step.ok)return failed();
+        if(step.operation==="delete"){
           if(db.prepare(
-            "UPDATE personal_attention_states SET state=?,snoozed_until_ms=?"+
-            " WHERE user_id=? AND task_id=? AND rule_id=? AND occurrence_on=?"
-          ).run(stateName,command.snoozedUntilMs,...key).changes!==1)return failed();
-        }else if(db.prepare(
-          "INSERT INTO personal_attention_states(user_id,task_id,rule_id,occurrence_on,state,snoozed_until_ms)"+
-          " VALUES (?,?,?,?,?,?)"
-        ).run(...key,stateName,command.snoozedUntilMs).changes!==1)return failed();
+            "DELETE FROM personal_attention_states WHERE user_id=? AND task_id=? AND rule_id=? AND occurrence_on=?"
+          ).run(...key).changes!==1)return failed();
+        }else if(step.operation==="insert"&&step.row){
+          if(db.prepare(
+            "INSERT INTO personal_attention_states(user_id,task_id,rule_id,occurrence_on,state,snoozed_until_ms)"+
+            " VALUES (?,?,?,?,?,?)"
+          ).run(...key,step.row.state,step.row.snoozedUntilMs).changes!==1)return failed();
+        }else return failed();
         changes++;
       }
       // Hygiene: once an occurrence is overdue its "soon" condition can never
@@ -239,7 +274,7 @@ export function writePreflightedAttentionLifecycle(
         "SELECT revision FROM personal_attention_states WHERE user_id=? AND task_id=? AND rule_id=? AND occurrence_on=?"
       ).get(...key) as {revision:number}|undefined;
       if(command.action==="restore"?updated!==undefined:
-          !updated||updated.revision!==(row?row.revision+1:0))return failed();
+          !updated||updated.revision!==0)return failed();
       db.prepare("INSERT INTO metadata(key,value) VALUES (?,?)").run(receipt,digest);
       if(!sessionLive()||!context.stillPinned())
         return {ok:false,reason:"session_revoked"};

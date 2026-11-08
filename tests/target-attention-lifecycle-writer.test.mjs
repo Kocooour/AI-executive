@@ -284,9 +284,12 @@ test("restore without a row is unchanged; snooze/dismiss only from active, expir
   assert.equal(epoch(fx,"alice"),3);assert.equal(receipts(fx).length,3);
   // Expire the snooze: the state is effectively active again.
   fx.db.prepare("UPDATE personal_attention_states SET snoozed_until_ms=? WHERE task_id='p-alice'").run(Date.now()-1000);
-  const rev=rowOf(fx,"alice","p-alice").revision;
+  // Policy (#317): the expired row is deleted (snooze_expired), then a fresh
+  // hidden row is inserted at revision 0 — one transaction, epoch +2.
+  const e1=epoch(fx,"alice");
   assert.deepEqual(change(fx,token,command(fx,token,"alice","p-alice","dismiss")),{ok:true});
-  assert.deepEqual({...rowOf(fx,"alice","p-alice")},{state:"dismissed",until:null,revision:rev+1});
+  assert.deepEqual({...rowOf(fx,"alice","p-alice")},{state:"dismissed",until:null,revision:0});
+  assert.equal(epoch(fx,"alice"),e1+2);
   assert.deepEqual(change(fx,token,command(fx,token,"alice","p-alice","restore")),{ok:true});
   assert.deepEqual(change(fx,token,command(fx,token,"alice","p-alice","snooze")),{ok:true});
   fx.db.prepare("UPDATE personal_attention_states SET snoozed_until_ms=? WHERE task_id='p-alice'").run(Date.now()-1000);

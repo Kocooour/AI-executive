@@ -27,6 +27,7 @@
 | **LUMI-FR-011** | Ochrana hranic Oblastí / interních workspaces, zdrojů, citlivosti a oprávnění | Existující základ a rozšiřující cílové kontrakty | Všechny |
 | **LUMI-FR-012** | Hlas, nové konektory a budoucí řízené akce | Cíl; není plně dodáno | Voice, Calendar, Search |
 | **LUMI-FR-013** | Můj plán, dva prostory, Oblasti určující oprávnění a bezpečná víceuživatelská spolupráce | Schválený cíl 2026-10-23; víceuživatelské sdílení dosud nedodáno | Home, Inbox, Today, Projects, scope switcher |
+| **LUMI-FR-014** | HumanWiki: soukromý bootstrap znalostí, provenance, review, průběžné učení a právo opravy/odstranění | Cílový požadavek 2026-11-08; import a obsahová synchronizace nejsou implementované | Kontext, Global search, Chat, Import/review |
 
 ## Záměr, uživatel a hranice produktu
 
@@ -190,3 +191,18 @@ Nezavádíme PostgreSQL, pgvector ani paralelní nasazení HumanAgentWiki. Tato 
 3. Změna, archivace, smazání, změna citlivosti nebo oprávnění zneplatní indexové položky; po reindexaci odpovídají výsledky kanonickým revizím.
 4. Vypnutý/nenainstalovaný serverový model nebo neúspěšná indexace vrátí transparentně omezené serverové výsledky s přesným hledáním. Offline PWA hledá lexikálně jen v uložených kanonických datech, zachová jejich dosavadní čtení a viditelně přizná neúplnost; sémantické výsledky ani závěry nevymýšlí.
 5. Export, záloha a obnova uchovají kanonická data a jejich provenance; index lze po obnově ověřit a znovu vytvořit, aniž by se změnil obsah či review stav.
+
+<a id="lumi-fr-014"></a>
+
+## HumanWiki a Context Bootstrap & Continuous Learning — cílový požadavek (LUMI-FR-014, 2026-11-08)
+
+**Rozhodnutí:** Lumi postupně vytváří jednotnou, člověkem čitelnou a editovatelnou osobní wiki z vlastních kanonických záznamů, uživatelem importovaných historických rozhovorů ChatGPT/Claude a explicitně povolené osobní pošty. Je to **pohled nad Context Graph v2**, ne paralelní databáze ani automaticky ověřený profil. Kompletní kontrakt a akceptace jsou v [rozhodnutí HumanWiki](decisions/2026-11-08-humanwiki-knowledge-bootstrap.md), implementační pořadí v [roadmapě](ROADMAP.md#humanwiki--context-bootstrap--continuous-learning-přidáno-2026-11-08).
+
+- **Import minulosti:** nejprve ručně dodané exporty ChatGPT a Claude; API modelů neposkytuje samo automatický přístup k historii externích chatů. Import je reprodukovatelný, resumable, idempotentní, soukromý a transparentní v pokrytí.
+- **Obsahová pošta:** budoucí Gmail/IMAP ingestace je **podmíněný cíl**: kromě opt-in vyžaduje samostatné rozhodnutí vlastníka, zda a jak změnit dosavadní zákaz ukládání těl, úryvků a citované evidence i background analýzy z 2026-10-22. Do té doby stále platí metadata-only Gmail v4 a žádné učení z poštovního obsahu.
+- **Co se učí:** osoby a organizace, projekty, témata a preference, události, závazky, rozhodnutí, platnost v čase a doložené vztahy. U chatových importů se ukládá provenance role `owner_statement / assistant_generated / quoted_third_party / unknown`; výrok AI není důkazem o uživateli. Každý claim má nezávislé `review`, `freshness` a informaci o konfliktu, zdroj/locator, sensitivity a historii; více zmínek nevytváří potvrzení.
+- **Důvěra a kontrola:** modely OpenAI a Anthropic mohou na základě zvláštního souhlasu provést extrakci či nezávislou kontrolu, ale nejsou kanonickými správci znalostí. Za lokální se považuje jen ověřené zpracování bez externího egressu (samotný server/proxy nestačí); cloudový přenos osobního obsahu je **ve výchozím stavu vypnutý** a vyžaduje zvláštní souhlas, citlivost a třetí osoby se posuzují konzervativně; připomínky a opravy uživatele mění kanonický Context Resolver i wiki.
+- **Bezpečnost a mazání:** osobní Nezařazeno jako výchozí Oblast, žádné implicitní sdílení, externí zápisy ani vytváření úkolů; rozlišit pozastavení synchronizace, odpojení zdroje, odvolání AI souhlasu a výslovný výmaz včetně schválených claims. Při restore se tombstony/revokace aplikují **před** zpřístupněním staré zálohy; pravidla v rozhodnutí jsou závazná. Práva se vynucují při vyhledání i vydání výsledku.
+- **UX:** Kontext přes Více a hledání; na desktopu přes sidebar/inspektor. Články mají souhrn, „Co platí“, vztahy, časové změny a „Proč to vím?“ s dostupnou citací. **Můj plán** a čtyři spodní mobilní položky zůstávají beze změny.
+
+**Status 2026-11-08:** schválená specifikace a plán, **nikoli implementovaný import, HumanWiki UI, e-mailová obsahová synchronizace nebo autonomní učení**. Syntetický H1-synthetic smí vznikat paralelně s R2d/R3 bez osobních dat; H1-real s osobními exporty vyžaduje autorizované R2d/R3 rozhraní a vědomý souhlas. Produkční aktivace nad cílovými daty podléhá samostatné R4 bráně. Přesné akceptační scénáře v rozhodnutí jsou součástí LUMI-FR-014.
