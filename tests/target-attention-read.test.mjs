@@ -304,9 +304,11 @@ test("active view hides dismissed and unexpired snooze; expired snooze is active
   assert.deepEqual(ids(p),all.filter(i=>i!=="b-over"&&i!=="b-today"));
   for(const id of ["b-tom","s-mine"]){
     const i=p.items.find(x=>x.taskId===id);
-    assert.deepEqual([i.lifecycle,i.snoozedUntilMs,i.lifecycleRevision],["active",null,null],id);
+    // Expired snooze: active, but its existing row revision is the writer's CAS input.
+    assert.deepEqual([i.lifecycle,i.snoozedUntilMs,i.lifecycleRevision],["active",null,0],id);
   }
   for(const i of page(f).items)assert.equal(i.lifecycle,"active");
+  assert.equal(p.items.find(x=>x.taskId==="s-child").lifecycleRevision,null,"no row → null");
 });
 
 test("hidden view lists dismissed and unexpired snoozed with lifecycle fields",()=>{
