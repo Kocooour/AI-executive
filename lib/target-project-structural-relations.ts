@@ -66,7 +66,8 @@ export function readAuthorizedProjectStructuralRelations(
       a.content_revision AS taskRevision, a.project_content_revision AS projectContentRevision,
       a.policy_revision AS policyRevision,
       a.note_sync_revision AS noteRevision,
-      COALESCE((SELECT MAX(j.seq) FROM note_change_journal j WHERE j.area_id=a.id),0) AS head,
+      MAX(COALESCE((SELECT MAX(j.seq) FROM note_change_journal j WHERE j.area_id=a.id),0),
+        (SELECT f.floor_seq FROM note_journal_floors f WHERE f.area_id=a.id)) AS head,
       i.revocation_epoch AS epoch
       FROM projects p JOIN areas a ON a.id=p.area_id
       JOIN identities i ON i.id=? WHERE p.id=? AND a.id=? LIMIT 1`)

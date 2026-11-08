@@ -1357,7 +1357,8 @@ export function readPreflightedAuthorizedNoteSync(
       if (!page) return request.cursor === undefined ? unavailable()
         : { ok: false as const, reason: "resync_required" as const };
       const stamp = db.prepare(`SELECT a.note_sync_revision AS contentRevision,
-        COALESCE((SELECT MAX(j.seq) FROM note_change_journal j WHERE j.area_id=a.id),0) AS head
+        MAX(COALESCE((SELECT MAX(j.seq) FROM note_change_journal j WHERE j.area_id=a.id),0),
+        (SELECT f.floor_seq FROM note_journal_floors f WHERE f.area_id=a.id)) AS head
         FROM areas a WHERE a.id=?`).get(request.areaId) as
         { contentRevision: number; head: number } | undefined;
       if (!stamp || !Number.isSafeInteger(stamp.contentRevision) ||

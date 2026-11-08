@@ -430,8 +430,9 @@ export function inspectIsolatedTargetStore(
             LEFT JOIN note_delete_audit d ON j.kind='delete' AND d.receipt_key=j.receipt_key
             WHERE typeof(j.seq)<>'integer' OR j.seq<=0 OR j.seq>=9007199254740991
               OR j.kind NOT IN ('edit','delete','upsert','leave')
+              OR j.seq<=COALESCE((SELECT f.floor_seq FROM note_journal_floors f WHERE f.area_id=j.area_id),9007199254740991)
               OR (SELECT COUNT(*) FROM note_change_journal x
-                WHERE x.area_id=j.area_id AND x.seq<=j.seq)<>j.seq OR j.revision<0
+                WHERE x.area_id=j.area_id AND x.seq<=j.seq)<>j.seq-(SELECT f.floor_seq FROM note_journal_floors f WHERE f.area_id=j.area_id) OR j.revision<0
               OR typeof(j.committed_at_ms)<>'integer' OR j.committed_at_ms<=0
               OR (j.kind='edit' AND
                 (e.id IS NULL OR j.note_id IS NOT e.note_id
@@ -450,11 +451,26 @@ export function inspectIsolatedTargetStore(
           count(`SELECT COUNT(*) AS n FROM note_edit_audit e
             LEFT JOIN note_change_journal j
               ON j.receipt_key=e.receipt_key AND j.kind='edit'
-            WHERE j.seq IS NULL`) !== 0 ||
+            WHERE j.seq IS NULL AND (SELECT f.floor_seq FROM note_journal_floors f WHERE f.area_id=e.area_id)=0`) !== 0 ||
           count(`SELECT COUNT(*) AS n FROM note_delete_audit d
             LEFT JOIN note_change_journal j
               ON j.receipt_key=d.receipt_key AND j.kind='delete'
-            WHERE j.seq IS NULL`) !== 0) fail("note_sync_journal_invalid");
+            WHERE j.seq IS NULL AND (SELECT f.floor_seq FROM note_journal_floors f WHERE f.area_id=d.area_id)=0`) !== 0 ||
+          // R2d.2c.2g.2b.5 floors: exactly one canonical floor per Area, revision between
+          // 1-if-raised and floor (each raise adds at least one), and the audit-derived
+          // events of the Area (edits, deletes, upserts, leaves) are exactly the compacted
+          // prefix (floor) plus the live rows: nothing missing, nothing extra.
+          count(`SELECT COUNT(*) AS n FROM areas a LEFT JOIN note_journal_floors f ON f.area_id=a.id
+            WHERE f.area_id IS NULL OR typeof(f.floor_seq)<>'integer' OR f.floor_seq<0
+              OR typeof(f.revision)<>'integer' OR f.revision<0 OR f.revision>f.floor_seq
+              OR (f.floor_seq>0 AND f.revision<1)
+              OR (SELECT COUNT(*) FROM note_edit_audit WHERE area_id=a.id)
+               + (SELECT COUNT(*) FROM note_delete_audit WHERE area_id=a.id)
+               + (SELECT COUNT(*) FROM note_lifecycle_audit WHERE area_id=a.id)
+               + (SELECT COUNT(*) FROM note_lifecycle_audit
+                   WHERE old_area_id=a.id AND kind='move' AND old_area_id<>area_id)
+               <> f.floor_seq + (SELECT COUNT(*) FROM note_change_journal WHERE area_id=a.id)`) !== 0 ||
+          count("SELECT COUNT(*) AS n FROM note_journal_floors f LEFT JOIN areas a ON a.id=f.area_id WHERE a.id IS NULL") !== 0) fail("note_sync_journal_invalid");
     } catch { fail("note_sync_journal_invalid"); }
     try {
       // R2c.1 tombstones and change log. Every check is a primary-key or

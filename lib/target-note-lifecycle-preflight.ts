@@ -80,15 +80,19 @@ export function verifyTargetNoteLifecycleJournal(db: DatabaseSync): boolean {
       " OR j.project_id IS NOT a.old_project_id OR j.parent_revision IS NOT NULL",
       " OR j.policy_revision IS NOT a.old_policy_revision)))",
     ].join(" ");
+    // A journal row absent for an audit is legitimate only when its Area's journal was
+    // compacted (floor > 0); the main preflight reconciles the exact count with the floor.
+    const floorOf = (area: string) =>
+      `COALESCE((SELECT f.floor_seq FROM note_journal_floors f WHERE f.area_id=${area}),0)`;
     const missingJournal = [
       "SELECT COUNT(*) AS n FROM note_lifecycle_audit a",
       "LEFT JOIN note_change_journal up ON up.kind='upsert'",
       " AND up.receipt_key=a.receipt_key",
       "LEFT JOIN note_change_journal lv ON lv.kind='leave'",
       " AND lv.receipt_key=a.receipt_key||':leave'",
-      "WHERE up.seq IS NULL OR up.area_id<>a.area_id",
+      `WHERE (up.seq IS NULL AND ${floorOf("a.area_id")}=0) OR up.area_id<>a.area_id`,
       "OR (a.kind='move' AND a.old_area_id<>a.area_id",
-      " AND (lv.seq IS NULL OR lv.area_id<>a.old_area_id))",
+      ` AND ((lv.seq IS NULL AND ${floorOf("a.old_area_id")}=0) OR lv.area_id<>a.old_area_id))`,
       "OR ((a.kind='create' OR a.old_area_id=a.area_id) AND lv.seq IS NOT NULL)",
     ].join(" ");
     return counts(invalidJournal) === 0 && counts(missingJournal) === 0;

@@ -180,5 +180,7 @@ return existing 401 codes, malformed query is 400, and store/child failure is
 503. All responses are `no-store`.
 
 Raw creates and moves still force rebootstrap. The journal remains immutable at
-its cap: this step adds no compaction or retention redesign. No offline client,
+its cap until the operator-only compaction of R2d.2c.2g.2b.5 runs (schema v24,
+see [R2D-NOTE-JOURNAL-RETENTION.md](R2D-NOTE-JOURNAL-RETENTION.md)); a cursor at
+or behind an Area's floor then gets 409 `resync_required`. No offline client,
 UI, production activation, schema migration or deployment is included.
