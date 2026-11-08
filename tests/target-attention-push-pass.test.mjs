@@ -670,7 +670,7 @@ test("review #331: a quiet-hour reservation excludes newly registered devices",a
   ok(fx);
 });
 
-test("review #331: stale in-flight reserved device is abandoned, not duplicate-sent",async()=>{
+test("review #331: stale in-flight device is abandoned, not duplicate-sent",async()=>{
   const fx=fixture();
   task(fx,"alice","baseline");
   const d1=register(fx,"alice","d1"),d2=register(fx,"alice","d2");
@@ -686,7 +686,7 @@ test("review #331: stale in-flight reserved device is abandoned, not duplicate-s
     VALUES ('alice',?,?,'sent',1,?)`).run(key,d1,NOW-19*60_000);
   fx.db.prepare(`INSERT INTO personal_attention_device_deliveries
     (user_id,delivery_key,target_id,status,attempts,last_attempt_at_ms)
-    VALUES ('alice',?,?,'reserved',0,?)`).run(key,d2,NOW-20*60_000);
+    VALUES ('alice',?,?,'inflight',0,?)`).run(key,d2,NOW-20*60_000);
   const s=sender();await run(fx,s);
   assert.equal(s.calls.length,0,"unknown in-flight delivery must not be duplicated");
   assert.equal(rows(fx,"alice").find(r=>r.task_id===id).status,"sent");
@@ -714,5 +714,82 @@ test("review #331: dismiss during a delivery does not revive reserved targets af
     AND task_id=? AND rule_id='deadline_overdue' AND occurrence_on='2026-11-02'`).run(id);
   const resumed=sender();await run(fx,resumed,NOW+HOUR);
   assert.equal(resumed.calls.length,0,"restore must not replay this already settled delivery");
+  ok(fx);
+});
+
+
+test("review #331: crash before first send resumes untouched reserved device",async()=>{
+  const fx=fixture();
+  task(fx,"alice","baseline");const d1=register(fx,"alice","d1");
+  enable(fx,"alice");await run(fx,sender());
+  const id=task(fx,"alice","claimed but never started","2026-11-02");
+  const key=targetAttentionDeliveryKey("deadline_overdue",id,"2026-11-02");
+  fx.db.prepare(`INSERT INTO personal_attention_deliveries
+    (user_id,delivery_key,task_id,rule_id,occurrence_on,status,attempts,last_attempt_at_ms)
+    VALUES ('alice',?,?,'deadline_overdue','2026-11-02','pending',1,?)`)
+    .run(key,id,NOW-20*60_000);
+  fx.db.prepare(`INSERT INTO personal_attention_device_deliveries
+    (user_id,delivery_key,target_id,status,attempts,last_attempt_at_ms)
+    VALUES ('alice',?,?,'reserved',0,?)`).run(key,d1,NOW-20*60_000);
+  ok(fx);
+  const s=sender();await run(fx,s,NOW);
+  assert.deepEqual(s.calls.map(c=>c.targetId),[d1],"untouched reservation must resume");
+  assert.equal(rows(fx,"alice").find(r=>r.task_id===id).status,"sent");
+  assert.deepEqual(devices(fx,"alice").map(d=>[d.status,d.attempts]),[["sent",1]]);
+  await run(fx,s,NOW+HOUR);
+  assert.equal(s.calls.length,1,"recovery must not duplicate successful delivery");
+  ok(fx);
+});
+
+test("review #331: after one sent device, crash before the next send resumes only untouched target",async()=>{
+  const fx=fixture();
+  task(fx,"alice","baseline");
+  const d1=register(fx,"alice","d1"),d2=register(fx,"alice","d2");
+  enable(fx,"alice");await run(fx,sender());
+  const id=task(fx,"alice","one sent one untouched","2026-11-02");
+  const key=targetAttentionDeliveryKey("deadline_overdue",id,"2026-11-02");
+  const alreadySent=NOW-19*60_000;
+  fx.db.prepare(`INSERT INTO personal_attention_deliveries
+    (user_id,delivery_key,task_id,rule_id,occurrence_on,status,attempts,last_attempt_at_ms)
+    VALUES ('alice',?,?,'deadline_overdue','2026-11-02','pending',1,?)`)
+    .run(key,id,NOW-20*60_000);
+  fx.db.prepare(`INSERT INTO personal_attention_device_deliveries
+    (user_id,delivery_key,target_id,status,attempts,last_attempt_at_ms)
+    VALUES ('alice',?,?,'sent',1,?)`).run(key,d1,alreadySent);
+  fx.db.prepare(`INSERT INTO personal_attention_device_deliveries
+    (user_id,delivery_key,target_id,status,attempts,last_attempt_at_ms)
+    VALUES ('alice',?,?,'reserved',0,?)`).run(key,d2,NOW-20*60_000);
+  ok(fx);
+  const s=sender();await run(fx,s,NOW);
+  assert.deepEqual(s.calls.map(c=>c.targetId),[d2],"already-sent device must never repeat");
+  const parent=rows(fx,"alice").find(r=>r.task_id===id);
+  assert.equal(parent.status,"sent");
+  assert.equal(parent.sent_at_ms,alreadySent,"count from original successful send time");
+  assert.deepEqual(devices(fx,"alice").map(d=>d.status),["sent","sent"]);
+  await run(fx,s,NOW+HOUR);assert.equal(s.calls.length,1);
+  ok(fx);
+});
+
+test("review #331: lowering daily limit during pass drops unsent claims without delivery",async()=>{
+  const fx=fixture();
+  task(fx,"alice","baseline");register(fx,"alice","d");
+  enable(fx,"alice",{dailyLimit:2});await run(fx,sender());
+  const first=task(fx,"alice","first claim","2026-11-02");
+  const second=task(fx,"alice","second claim","2026-11-02");
+  const s=sender((_,target,payload,n)=>{
+    if(n===1)configure(fx,"alice",{dailyLimit:0});
+    return "sent";
+  });
+  await run(fx,s,NOW);
+  assert.equal(s.calls.length,1,"no second notification after daily limit changed to zero");
+  const r=rows(fx,"alice").filter(d=>d.task_id===first||d.task_id===second);
+  assert.equal(r.length,1,"other unsent claim is released for re-planning");
+  assert.equal(r[0].status,"sent");
+  const after=sender();await run(fx,after,NOW+HOUR);
+  assert.equal(after.calls.length,0,"zero limit remains effective on later passes");
+  configure(fx,"alice",{dailyLimit:2});
+  await run(fx,after,NOW+2*HOUR);
+  assert.equal(after.calls.length,1,"remaining current occurrence is eligible after raising limit");
+  assert.equal(rows(fx,"alice").filter(d=>d.task_id===first||d.task_id===second&&d.status==="sent").length>=1,true);
   ok(fx);
 });
