@@ -9,7 +9,9 @@
 3. Název a text lze změnit jako čistý text; obsah se nepersistuje lokálně, nepřechází přes legacy store ani browser storage. Validují se limity serverového writeru.
 4. Uložení použije jeden `commandId` UUID a přesně token z posledního schváleného preflightu. Server pod zámkem znovu ověří identitu, Area práva, revizi a restore generation.
 5. Po úspěchu se detail znovu načte přes autorizované serverové čtení. Konflikt 409 zachová viditelný koncept bez přepsání; uživatel může koncept zahodit a načíst aktuální data. Nejednoznačný výsledek (síťový výpadek, 5xx nebo nevalidní odpověď) **nikdy není prezentován jako úspěch**; jediná dostupná opakovaná akce používá nezměněný přesný příkaz a UUID.
-6. Po odebrání přístupu/změně identity, skrytí stránky nebo offline se panel řídí existujícím R3-FE-4a suspend/revoke protokolem; nezachovává draft ani token mezi relacemi.
+6. Při zavření detailu, přechodu jinam nebo skrytí stránky **nezanikne už odeslaný příkaz**. Klientský koordinátor jej uchovává pouze v paměti běžícího runtime, včetně původního UUID a CAS tokenu. Po návratu se nejprve znovu ověří přístup přes GET /edit; teprve poté lze koncept zobrazit a stejný příkaz zopakovat. Do konce probíhajícího požadavku nelze zahájit druhý zápis pro stejnou poznámku. Při změně identity/generace se paměť původní relace vyčistí.
+7. Při odmítnutí GET /edit nebo PATCH se okamžitě skryje **celý dříve načtený detail**, nikoli pouze editor. Následuje nové serverové čtení; pokud se uživatel pouze změnil na viewer, může se mu poznámka znovu zobrazit v read-only režimu.
+8. Po ztracené odpovědi a pasivním refetchi může být revize poznámky vyšší. To nesmí zabránit opakování **již odeslaného** commandId; lokální kontrola staré revize blokuje jen nový zápis.
 
 ## Brány
 
@@ -27,8 +29,8 @@ Navíc musí být dostupný autorizovaný cílový seznam poznámek a samotný d
 
 ## Není součástí
 
-Quick Capture ani vytváření úkolů/projektů, změny termínů a dokončení projektů, offline write queue, Undo úprav poznámky, editace jiné entity, automatické sloučení souběžných změn nebo nasazení. UI nemá trvalou frontu a po ztrátě záložky nedokáže obnovit nejistý příkaz — tento limit je explicitní a musí se uzavřít před R3 release. Vytvoření soukromé poznámky řeší samostatně draft backend PR #361; tento UI PR na něm nezávisí.
+Quick Capture ani vytváření úkolů/projektů, změny termínů a dokončení projektů, offline write queue, Undo úprav poznámky, editace jiné entity, automatické sloučení souběžných změn nebo nasazení. UI nemá trvalou frontu. Recovery funguje pouze přes navigaci uvnitř právě běžící aplikace (včetně hide/wake); po zavření celé záložky nebo reloadu procesu nelze nejistý příkaz obnovit — tento limit zůstává explicitní release gate pro R3. Vytvoření soukromé poznámky řeší samostatně draft backend PR #361; tento UI PR na něm nezávisí.
 
 ## Validace
 
-`tests/target-note-edit-ui.test.mjs`: default-off matice všech 7 bran, přísná kontrola serverového CAS preflightu a command DTO, odmítnutí cizích polí, hranice Unicode a velikosti, GET/PATCH request kontrakt, idempotentní replay a nulové falešné úspěchy při timeoutu či odmítnutí. PR CI zahrnuje typecheck, scoped testy a build; plná Browser E2E až před nasazením přesného release SHA.
+`tests/target-note-edit-ui.test.mjs`: default-off matice všech 7 bran, přísná kontrola serverového CAS preflightu a command DTO, odmítnutí cizích polí, hranice Unicode a velikosti, GET/PATCH request kontrakt, idempotentní replay, runtime-scoped command recovery při zavření detailu a ztracené odpovědi, odmítnutí nového UUID dokud není starý příkaz vyřešen, okamžitou redakci při revokaci a nulové falešné úspěchy při timeoutu či odmítnutí. Doplňková sada: `tests/target-note-edit-recovery.test.mjs`. PR CI zahrnuje typecheck, scoped testy a build; plná Browser E2E až před nasazením přesného release SHA.
