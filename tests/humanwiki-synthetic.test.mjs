@@ -155,3 +155,44 @@ test("failed checkpoint write or rename removes only its owned temporary file", 
     assert.deepEqual(readdirSync(root), ["checkpoint.json"]);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
+
+
+test("timestamp validation rejects zone-less, impossible and invalid-offset times", () => {
+  for (const provider of ["chatgpt", "claude"]) {
+    for (const invalid of [
+      "2026-01-01T10:00:00", "2026-02-31T10:00:00Z", "2025-02-29T10:00:00Z",
+      "2026-13-01T10:00:00Z", "2026-01-01T24:00:00Z",
+      "2026-01-01T10:00:60Z", "2026-01-01T10:00:00+14:30",
+      "2026-01-01T10:00:00+01:60", "2026-01-01T10:00:00Z\\n",
+    ]) {
+      const bundle = fixture(provider);
+      const message = provider === "chatgpt" ?
+        bundle.conversations[0].mapping.a.message : bundle.conversations[0].chat_messages[0];
+      if (provider === "chatgpt") message.create_time = invalid;
+      else message.created_at = invalid;
+      assert.throws(() => parseSyntheticBundle(bundle), /invalid message time/, invalid);
+    }
+  }
+});
+
+test("timestamp validation normalizes valid zoned times and leap days to UTC", () => {
+  for (const provider of ["chatgpt", "claude"]) {
+    for (const [timestamp, expected] of [
+      ["2024-02-29T12:34:56.123456789+03:30", "2024-02-29T09:04:56.123Z"],
+      ["2026-01-01T10:00:00+01:00", "2026-01-01T09:00:00.000Z"],
+      ["2026-01-01T00:30:00-03:30", "2026-01-01T04:00:00.000Z"],
+      ["2026-01-01T10:00:00Z", "2026-01-01T10:00:00.000Z"],
+    ]) {
+      const bundle = fixture(provider);
+      const message = provider === "chatgpt" ?
+        bundle.conversations[0].mapping.a.message : bundle.conversations[0].chat_messages[0];
+      if (provider === "chatgpt") message.create_time = timestamp;
+      else message.created_at = timestamp;
+      const parsed = parseSyntheticBundle(bundle);
+      const staged = advanceSyntheticImport(parsed, undefined, 1);
+      assert.equal(parsed.messages[0].observed_at, expected, timestamp);
+      assert.equal(staged.records[0].observed_at, expected, timestamp);
+      assert.deepEqual(advanceSyntheticImport(parsed, staged), advanceSyntheticImport(parsed));
+    }
+  }
+});
