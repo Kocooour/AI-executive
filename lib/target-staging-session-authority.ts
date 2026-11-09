@@ -1219,20 +1219,21 @@ export class TargetStagingSessionAuthority {
   }
 
   /** v19 staging-only authenticated note creation or movement.
-   * No HTTP route exists for this method. All ACL and session checks are
+   * HTTP may use the privateCreateOnly restriction. All ACL and session checks are
    * independently repeated under the pinned BEGIN IMMEDIATE writer lock.
    */
   changeNoteLifecycle(
     sessionToken: string,
     request: TargetStagingNoteLifecycleRequest,
     durableSessionTokenHash?: string,
+    privateCreateOnly = false,
   ): TargetStagingNoteLifecycleResult {
     const credential = this.#credential(sessionToken, true);
     if (!credential) return { ok:false, reason:"unauthorized" };
     if (!validTargetStagingNoteLifecycleRequest(request))
       return {ok:false, reason:"invalid_request"};
     return changePreflightedTargetNoteLifecycle(
-      this.#store,credential,request,durableSessionTokenHash);
+      this.#store,credential,request,durableSessionTokenHash,privateCreateOnly);
   }
 
   /** Read-only status of the exact note edit for its current authorized writer. */

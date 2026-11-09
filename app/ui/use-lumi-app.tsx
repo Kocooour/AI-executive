@@ -2884,7 +2884,7 @@ export function useLumiApp(options: { targetDetails?: boolean; targetUnified?: b
   }
 
   function openCapture(type: "task" | "note" = "task", projectId = "") {
-    // R3-FE-4a: no target create endpoint exists yet; legacy capture must not write legacy data in target mode.
+    // R3-4b: private note-create exists only behind a default-off staging flag, not in Quick Capture; block legacy writes in target mode.
     if (blockLegacyWrite()) return;
     captureOpener.current = document.activeElement as HTMLElement | null;
     const projectWorkspaceId = (projectId && items.find((item) => item.id === projectId && item.type === "project")?.workspaceId) || "";
