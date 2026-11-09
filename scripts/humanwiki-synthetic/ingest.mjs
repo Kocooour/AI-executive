@@ -4,7 +4,10 @@ import { createHash } from "node:crypto";
 const sha = value => createHash("sha256").update(value).digest("hex");
 const fail = message => { throw new Error(`Synthetic import: ${message}`); };
 const object = value => value !== null && typeof value === "object" && !Array.isArray(value);
+const plainObject = value => object(value) &&
+  (Object.getPrototypeOf(value) === Object.prototype || Object.getPrototypeOf(value) === null);
 const nonempty = value => typeof value === "string" && value.length > 0 && value.length <= 200;
+const compareIds = (a, b) => a < b ? -1 : a > b ? 1 : 0;
 
 function messageText(content, format) {
   if (format === "chatgpt-mapping-v1") {
@@ -78,22 +81,23 @@ export function parseSyntheticBundle(bundle) {
       if (messages.length > 1000) fail("message limit exceeded");
     }
   }
-  messages.sort((a, b) => a.conversation_id.localeCompare(b.conversation_id) || a.message_id.localeCompare(b.message_id));
+  messages.sort((a, b) => compareIds(a.conversation_id, b.conversation_id) || compareIds(a.message_id, b.message_id));
   const digest = sha(JSON.stringify(bundle));
   return { source_id: bundle.source_id, format: bundle.format, digest, messages };
 }
 
-export function advanceSyntheticImport(parsed, prior = null, maxMessages = Infinity) {
+export function advanceSyntheticImport(parsed, prior = undefined, maxMessages = Infinity) {
   if (!parsed || !nonempty(parsed.source_id) || !Array.isArray(parsed.messages) ||
     !(maxMessages === Infinity || (Number.isSafeInteger(maxMessages) && maxMessages >= 0))) fail("invalid run input");
-  const state = prior ? structuredClone(prior) : { schema: 2, source_id: parsed.source_id,
+  if (prior !== undefined && !plainObject(prior)) fail("invalid checkpoint object");
+  const state = prior !== undefined ? structuredClone(prior) : { schema: 2, source_id: parsed.source_id,
     bundle_digest: parsed.digest, next_message: 0, records: [] };
   if (state.schema !== 2 || state.source_id !== parsed.source_id || state.bundle_digest !== parsed.digest ||
     !Number.isSafeInteger(state.next_message) || state.next_message < 0 ||
     state.next_message > parsed.messages.length || !Array.isArray(state.records)) fail("checkpoint mismatch");
   // A cursor from a truncated or edited checkpoint must never skip records on resume.
-  if (prior) {
-    const expected = advanceSyntheticImport(parsed, null, state.next_message);
+  if (prior !== undefined) {
+    const expected = advanceSyntheticImport(parsed, undefined, state.next_message);
     if (JSON.stringify(state) !== JSON.stringify(expected)) fail("checkpoint records do not match cursor");
   }
   const ids = new Set(state.records.map(record => record.id));
