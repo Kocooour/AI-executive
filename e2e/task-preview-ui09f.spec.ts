@@ -117,3 +117,30 @@ test('a task linked from the index still requires server permission',async({page
   await expect(page.locator('.stagingTaskContent')).toHaveCount(0);
   expect(detailGets).toBe(1);
 });
+
+test.describe('task preview on narrow mobile Chromium viewport',()=>{
+  test.use({viewport:{width:375,height:812},isMobile:true,hasTouch:true});
+  test('touch navigation and manual read remain accessible without overflow',async({page})=>{
+    const title='Bezpečný úkol '+ 'W'.repeat(250);
+    let detailGets=0;
+    await page.route(indexEndpoint,route=>fulfill(route,indexTaskPage));
+    await page.route(endpoint,route=>{
+      detailGets++;return fulfill(route,{task:{...dto.task,title}});
+    });
+    await page.goto(indexUrl);
+    const link=page.getByRole('link',{name:'Otevřít úkol: Ověřený úkol'});
+    await expect(link).toBeVisible();
+    expect((await link.boundingBox())?.height??0).toBeGreaterThanOrEqual(44);
+    await link.tap();
+    await expect(page.getByRole('heading',{name:'Detail úkolu'})).toBeVisible();
+    expect(detailGets).toBe(0);
+    const button=page.getByRole('button',{name:'Načíst úkol'});
+    expect((await button.boundingBox())?.height??0).toBeGreaterThanOrEqual(44);
+    await button.tap();
+    await expect(page.locator('.stagingTaskContent h2')).toHaveText(title);
+    expect(detailGets).toBe(1);
+    expect(await page.evaluate(()=>
+      document.documentElement.scrollWidth<=document.documentElement.clientWidth+1
+    )).toBe(true);
+  });
+});
