@@ -155,6 +155,7 @@ on:
       - "app/ui/navigation.ts"
       - "lib/target-scopes-copy.ts"
       - "lib/target-scope-rows.ts"
+      - "lib/target-staging-kind-index-client.ts"
       - "app/ui/target-scope-state.ts"
       - "app/ui/target-scope-switcher.tsx"
       - "app/ui/target-scope-lists.tsx"

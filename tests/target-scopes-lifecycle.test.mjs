@@ -4,6 +4,7 @@ import path from "node:path";
 import {test} from "node:test";
 import {createTargetClientRuntime} from "../lib/target-client-runtime.ts";
 import {createGlobalIndexReadSession} from "../lib/target-staging-global-index-read-session.ts";
+import {createKindIndexReadSession,kindIndexFetch} from "../lib/target-staging-kind-index-client.ts";
 import {groupIndexRowsByArea} from "../lib/target-scope-rows.ts";
 import {createRefusalBudget,targetMyPlanGate} from "../lib/target-my-plan-embed.ts";
 
@@ -87,10 +88,11 @@ test("server rows are rendered as returned: grouping never drops, adds or reorde
   assert.ok(flat.every(item=>rows.includes(item)));
 });
 
-test("the list component selects one kind from the server page but applies no other filter",()=>{
+test("the list component applies no client-side filter at all (no kind picking either)",()=>{
   const source=read("app/ui/target-scope-lists.tsx");
-  const filters=source.match(/\.filter\([^)]*\)/g)??[];
-  assert.deepEqual(filters,[".filter(entry=>entry.kind===kind)"]);
+  assert.deepEqual(source.match(/\.filter\([^)]*\)/g)??[],[]);
+  assert.doesNotMatch(source,/entry\.kind===kind|createGlobalIndexReadSession/);
+  assert.match(source,/createKindIndexReadSession\(kind,\{scope,contextVersion\}\),\[kind,scope\]/);
   assert.doesNotMatch(source,/\.sort\(|\.slice\(|\.length\s*[+\-*]/);
   assert.doesNotMatch(source,/areaKind\s*===\s*scope|areaKind\s*!==\s*scope/);
 });
@@ -215,7 +217,8 @@ test("wiring: flags off -> legacy tree, lazy chunks only, no eager import, no re
   assert.match(root_,/dynamic\(\(\) => import\("\.\/target-scope-lists"\), \{ ssr: false \}\)/);
   assert.doesNotMatch(root_,/^import .*target-scope/m);
   assert.match(root_,/const scopesOn = Boolean\(targetScopes\?\.enabled\)/);
-  assert.match(root_,/const scopeList = scopesOn && \(view === "Projects" \|\| view === "Notes"\)/);
+  assert.match(root_,/scopeList = scopesOn && view === "Projects" && targetScopes\?\.projects \? "project"/);
+  assert.match(root_,/scopesOn && view === "Notes" && targetScopes\?\.notes \? "note" : null/);
   assert.match(root_,/\{scopeSwitcher && <TargetScopeSwitcher language=\{language\} \/>\}/);
   // Legacy lists stay the fallback for every other case.
   assert.match(root_,/: <EntityList app=\{app\} \/>/);
@@ -223,7 +226,7 @@ test("wiring: flags off -> legacy tree, lazy chunks only, no eager import, no re
   assert.match(page,/targetScopes=\{config\?\.scopes\}/);
   assert.match(page,/: <LumiAppRoot \/>/);
   assert.doesNotMatch(page,/target-scope|fetch\(|api\/target-staging/);
-  assert.doesNotMatch(root_,/api\/target-staging|fetch\(|useTargetScope|createGlobalIndexReadSession/);
+  assert.doesNotMatch(root_,/api\/target-staging|fetch\(|useTargetScope|IndexReadSession/);
 });
 
 test("wiring: the switcher is a real radio group with arrows, aria-checked and roving focus",()=>{
@@ -250,7 +253,7 @@ test("wiring: scope screens persist and log nothing, show no counts or Area head
   const lists=read("app/ui/target-scope-lists.tsx");
   assert.doesNotMatch(lists,/<h[1-6]/);
   assert.doesNotMatch(lists,/items\.length|rows\.length\s*\}/);
-  assert.match(lists,/useTargetSession\(contextVersion=>createGlobalIndexReadSession\(\{scope,contextVersion\}\),\[scope\]\)/);
+  assert.match(lists,/useTargetSession\(contextVersion=>createKindIndexReadSession\(kind,\{scope,contextVersion\}\),\[kind,scope\]\)/);
   assert.match(lists,/state\.session===session&&state\.page\.scope===scope/);
   assert.match(lists,/visibilitychange/);assert.match(lists,/pagehide/);assert.match(lists,/"offline"/);
   assert.match(lists,/refusalRef\.current\(\)/);
@@ -264,4 +267,81 @@ test("wiring: My Plan follows the global scope and hides its own filter only in 
   assert.match(preview,/\{controlledFilter===undefined&&<label>\{copy\.toolbarWork\}/);
   // The standalone staging page passes no controlled filter, so it keeps its toolbar.
   assert.doesNotMatch(read("app/target-staging/my-plan/preview/page.tsx"),/areaFilter/);
+});
+
+const projectRow=(id,areaKind="private")=>({id,title:"P "+id,areaId:areaKind+"-a",areaKind});
+const noteRow=(id,areaKind="private")=>({id,title:"N "+id,projectId:null,areaId:areaKind+"-a",areaKind,revision:1});
+
+test("endpoint mapping: Projects -> project-index/global, Notes -> note-index/global, per scope",async()=>{
+  for(const [kind,path,key,row] of [
+    ["project","/api/target-staging/project-index/global","projects",projectRow],
+    ["note","/api/target-staging/note-index/global","notes",noteRow],
+  ])for(const scope of ["all","personal","shared"]){
+    const seen=[];
+    const fetchFake=async url=>{
+      const u=new URL(String(url),"https://lumi.test");
+      seen.push(u.pathname);
+      assert.equal(u.searchParams.get("scope"),scope);
+      assert.deepEqual([...u.searchParams.keys()].sort(),["limit","scope"]);
+      return json({[key]:[row("a1",scope==="shared"?"shared":"private")],scope,hasMore:false,nextCursor:null});
+    };
+    const session=createKindIndexReadSession(kind,{scope,contextVersion:()=>GEN_A},fetchFake);
+    const result=await session.loadFirst();
+    assert.equal(result.ok,true,kind+scope);
+    assert.deepEqual(seen,[path]);
+    assert.ok(result.page.items.every(entry=>entry.kind===kind),"server rows only, no kind picking");
+    assert.equal(result.page.items.length,1);
+  }
+});
+
+test("kind index: strict DTO parsing refuses off-contract bodies, wrong scope and extra metadata",async()=>{
+  const bodies=[
+    {projects:[projectRow("a")],scope:"all",hasMore:false,nextCursor:null,revision:"x"},
+    {projects:[{...projectRow("a"),members:["bob"]}],scope:"all",hasMore:false,nextCursor:null},
+    {projects:[projectRow("a","shared")],scope:"personal",hasMore:false,nextCursor:null},
+    {projects:[projectRow("a")],scope:"shared",hasMore:false,nextCursor:null},
+    {projects:[projectRow("b"),projectRow("a")],scope:"all",hasMore:false,nextCursor:null},
+    {projects:[projectRow("a")],scope:"all",hasMore:true,nextCursor:null},
+    {notes:[noteRow("a")],scope:"all",hasMore:false,nextCursor:null}, // wrong envelope key for projects
+    {items:[projectRow("a")],scope:"all",hasMore:false,nextCursor:null},
+    [],"text",null,
+  ];
+  for(const body of bodies){
+    const session=createKindIndexReadSession("project",{scope:body?.scope==="personal"||body?.scope==="shared"?body.scope:"all",contextVersion:()=>GEN_A},
+      async()=>json(body));
+    assert.deepEqual(await session.loadFirst(),{ok:false,reason:"invalid-response"},JSON.stringify(body));
+  }
+  // A malformed note (missing revision) is refused too.
+  const note={id:"a",title:"t",projectId:null,areaId:"x",areaKind:"private"};
+  const session=createKindIndexReadSession("note",{scope:"all",contextVersion:()=>GEN_A},
+    async()=>json({notes:[note],scope:"all",hasMore:false,nextCursor:null}));
+  assert.equal((await session.loadFirst()).ok,false);
+});
+
+test("kind index: status codes map like the combined index; cursor paging stays server-driven",async()=>{
+  for(const [status,reason] of [[401,"signed-out"],[403,"signed-out"],[409,"stale"],[400,"invalid-request"],[404,"unavailable"],[503,"unavailable"]]){
+    const session=createKindIndexReadSession("note",{scope:"all",contextVersion:()=>GEN_A},
+      async()=>new Response("{}",{status}));
+    assert.deepEqual(await session.loadFirst(),{ok:false,reason},String(status));
+  }
+  const cursors=[];
+  const pages=[
+    {projects:[projectRow("a")],scope:"all",hasMore:true,nextCursor:"aA.bA"},
+    {projects:[projectRow("b","shared")],scope:"all",hasMore:false,nextCursor:null},
+  ];
+  const session=createKindIndexReadSession("project",{scope:"all",contextVersion:()=>GEN_A},async url=>{
+    cursors.push(new URL(String(url),"https://lumi.test").searchParams.get("cursor"));
+    return json(pages[cursors.length-1]);
+  });
+  await session.loadFirst();
+  const more=await session.loadMore();
+  assert.deepEqual(more.page.items.map(entry=>entry.item.id),["a","b"]);
+  assert.deepEqual(cursors,[null,"aA.bA"]);
+  // The adapter refuses requests for any other endpoint.
+  await assert.rejects(()=>kindIndexFetch("project",async()=>json({}))("/api/other?scope=all"),TypeError);
+});
+
+test("kind index client keeps nothing: no storage, logging or global state",()=>{
+  const source=read("lib/target-staging-kind-index-client.ts");
+  assert.doesNotMatch(source,/localStorage|sessionStorage|indexedDB|console\./);
 });

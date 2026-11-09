@@ -1,8 +1,9 @@
 "use client";
 /** R3-FE-3: read-only Projects / Notes lists of the main app in target mode.
  * Rows are exactly what the server global index returned for the selected
- * scope (Vše / Osobní / Sdílené): no client-side filtering or counting, only
- * presentation (project OR note titles of the page, grouped by Area).
+ * scope (Vše / Osobní / Sdílené) from the dedicated project-index / note-index
+ * endpoint of this view's kind: no client-side kind picking, filtering or
+ * counting, only presentation (titles grouped by Area).
  *
  * Lifecycle (as R3-FE-2): a read exists only for a server-confirmed runtime
  * generation; the feature session is created by useTargetSession (keyed by
@@ -14,7 +15,7 @@ import {useTargetSession} from "./target-data-provider";
 import {TargetDataStatus} from "./target-data-status";
 import {useTargetGate} from "./use-target-gate";
 import {useTargetScope} from "./target-scope-state";
-import {createGlobalIndexReadSession} from "../../lib/target-staging-global-index-read-session";
+import {createKindIndexReadSession} from "../../lib/target-staging-kind-index-client";
 import type {GlobalIndexFailure,GlobalIndexItem,GlobalIndexPage} from "../../lib/target-staging-global-index-client";
 import {
   consumeGlobalIndexWake,initialGlobalIndexWakeGate,invalidateGlobalIndexWakeGate,
@@ -31,8 +32,8 @@ type State=
   |{kind:"error";reason:GlobalIndexFailure|"hidden"};
 
 // Typing helper only: the hook is called through useTargetSession below.
-function useScopeSession(scope:"all"|"personal"|"shared"){
-  return useTargetSession(contextVersion=>createGlobalIndexReadSession({scope,contextVersion}),[scope]);
+function useScopeSession(kind:"project"|"note",scope:"all"|"personal"|"shared"){
+  return useTargetSession(contextVersion=>createKindIndexReadSession(kind,{scope,contextVersion}),[kind,scope]);
 }
 
 export default function TargetScopeLists({kind,language="cs"}:{
@@ -41,7 +42,7 @@ export default function TargetScopeLists({kind,language="cs"}:{
   const copy=scopesCopy[language];
   const scope=useTargetScope();
   const {gate,onRefusal,retry}=useTargetGate();
-  const session=useScopeSession(scope);
+  const session=useScopeSession(kind,scope);
   const [state,setState]=useState<State>({kind:"idle"});
   const [nonce,setNonce]=useState(0);
   const epoch=useRef(0);
@@ -157,7 +158,7 @@ export default function TargetScopeLists({kind,language="cs"}:{
   // Rows are shown only for the CURRENT session and scope: right after a scope
   // change the previous scope's rows are already gone from this render.
   const page=state.kind==="ready"&&state.session===session&&state.page.scope===scope?state.page:null;
-  const rows:GlobalIndexItem[]=page?page.items.filter(entry=>entry.kind===kind):[];
+  const rows:GlobalIndexItem[]=page?page.items:[];
   const groups=groupIndexRowsByArea(rows);
   return <section className="targetScopeList" data-testid="target-scope-list"
     data-scope={scope} data-kind={kind}

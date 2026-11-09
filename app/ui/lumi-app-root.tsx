@@ -32,7 +32,7 @@ const TargetMyPlan = dynamic(() => import("./target-my-plan"), { ssr: false });
 const TargetScopeSwitcher = dynamic(() => import("./target-scope-switcher"), { ssr: false });
 const TargetScopeLists = dynamic(() => import("./target-scope-lists"), { ssr: false });
 
-export type TargetScopesProps = { enabled: boolean };
+export type TargetScopesProps = { enabled: boolean; projects: boolean; notes: boolean };
 export type TargetMyPlanProps = { enabled: boolean; statusWrite: boolean; whenWrite: boolean };
 
 export function LumiAppRoot({ targetMyPlan, targetScopes }: { targetMyPlan?: TargetMyPlanProps; targetScopes?: TargetScopesProps } = {}) {
@@ -57,7 +57,9 @@ export function LumiAppRoot({ targetMyPlan, targetScopes }: { targetMyPlan?: Tar
   const targetPlan = Boolean(targetMyPlan?.enabled) && mobileDesignV1Preview && app.mobilePlanPreviewActive && view === "Today";
   // R3-FE-3: with target scopes on, Projects and Notes list the server index for the global scope.
   const scopesOn = Boolean(targetScopes?.enabled);
-  const scopeList = scopesOn && (view === "Projects" || view === "Notes") ? (view === "Projects" ? "project" : "note") : null;
+  // Per view: a view without its own flag keeps the legacy list.
+  const scopeList = scopesOn && view === "Projects" && targetScopes?.projects ? "project"
+    : scopesOn && view === "Notes" && targetScopes?.notes ? "note" : null;
   const scopeSwitcher = scopeList !== null || (scopesOn && targetPlan);
   return (
     <main className={`appShell view-${view.toLowerCase()}${app.selected ? " inspectorOpen" : ""}${view === "Projects" && app.openProject ? " projectPageOpen" : ""}`} data-design-system={mobileDesignV1Preview ? "lumi-v1" : undefined} data-workspace-tone={app.activeWorkspaceTone}
