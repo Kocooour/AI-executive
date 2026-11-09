@@ -133,7 +133,7 @@ test("owner creates a standalone private note, replay is idempotent and no legac
   const command = body(fx);
   assert.deepEqual(await checked(await send(command), 201),
     { ok: true, noteId: command.noteId });
-  assert.deepEqual(note(fx, command.noteId), {
+  assert.deepEqual({ ...note(fx, command.noteId) }, {
     id: command.noteId, title: command.title, body: command.body,
     area_id: fx.stage.unassignedAreaId, project_id: null,
   });
