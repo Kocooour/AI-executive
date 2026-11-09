@@ -137,3 +137,11 @@ test("the preview component keeps no inline Czech UI text outside comments",()=>
   assert.doesNotMatch(source,DIACRITICS);
   assert.doesNotMatch(source,/"cs-CZ"[\s\S]*"cs-CZ"[\s\S]*"cs-CZ"/); // only the default parameter values
 });
+
+test("Czech My Plan copy matches the full R3-FE-2 snapshot (every value)",()=>{
+  // Snapshot verified string-by-string against the pre-R3-FE-2b JSX. The one
+  // deliberate change is the space between the status-undo failure reason and
+  // the "Předchozí dokončení…" sentence, which JSX previously dropped.
+  const snapshot=JSON.parse(read("tests/fixtures/target-my-plan-copy-cs.json"));
+  assert.deepEqual(flatten(myPlanCopy.cs),snapshot);
+});
