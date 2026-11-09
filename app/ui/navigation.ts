@@ -1,3 +1,4 @@
+import { searchWithoutScope } from "../../lib/view-url";
 export const views = [
     "Home",
     "Inbox",
@@ -69,6 +70,7 @@ export function mobileV1Destination(tab: (typeof mobileV1Tabs)[number]): string 
 
 /** A development-only view URL, not a new data scope or a record locator. */
 export function mobileV1IsPlanPreviewRoute(search: string): boolean {
-  const params = new URLSearchParams(search);
+  // R3-FE-3: the shared reading scope may accompany the preview address.
+  const params = new URLSearchParams(searchWithoutScope(search));
   return [...params.keys()].length === 1 && params.get("view") === "MyPlanPreview";
 }

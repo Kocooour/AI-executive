@@ -3,6 +3,40 @@
 
 const parameter = "view";
 
+// R3-FE-3: the one global reading scope (Vše / Osobní / Sdílené) lives in the
+// address as `scope`. It only selects which server query is made; it is never an
+// authorization claim. Default (all) is omitted, invalid values read as default.
+export type UrlScope = "all" | "personal" | "shared";
+const scopeParameter = "scope";
+export const urlScopes: readonly UrlScope[] = ["all", "personal", "shared"];
+export const defaultUrlScope: UrlScope = "all";
+
+export function scopeFromSearch(search: string): UrlScope {
+  const values = new URLSearchParams(search).getAll(scopeParameter);
+  // A duplicated or unknown value is ambiguous: read it as the default.
+  return values.length === 1 && urlScopes.includes(values[0] as UrlScope) ? (values[0] as UrlScope) : defaultUrlScope;
+}
+
+/** The same address with `scope` replaced (default removed); all other keys keep their order. */
+export function searchWithScope(search: string, scope: UrlScope): string {
+  const params = new URLSearchParams(search);
+  const wanted = scope !== defaultUrlScope && urlScopes.includes(scope);
+  // Untouched when nothing changes, so other keys keep their exact spelling.
+  if (!params.has(scopeParameter)) {
+    if (!wanted) return search;
+    return `${search.startsWith("?") && search.length > 1 ? search + "&" : "?"}${scopeParameter}=${scope}`;
+  }
+  params.delete(scopeParameter);
+  if (wanted) params.set(scopeParameter, scope);
+  const text = params.toString();
+  return text ? `?${text}` : "";
+}
+
+/** Address without the scope key: scope is orthogonal to view and record targets. */
+export function searchWithoutScope(search: string): string {
+  return searchWithScope(search, defaultUrlScope);
+}
+
 export function viewFromSearch(search: string, known: readonly string[]): string | null {
   const requested = new URLSearchParams(search).get(parameter);
   return requested && known.includes(requested) ? requested : null;
@@ -15,7 +49,8 @@ export function searchForView(view: string, startView: string): string {
 // What to do with the address after the view or the start view changed.
 // "push" adds a history step (the user navigated), "replace" corrects the current one.
 export function addressUpdate(input: { currentSearch: string; view: string; startView: string; navigated: boolean }): { search: string; mode: "push" | "replace" } | null {
-  const search = searchForView(input.view, input.startView);
+  // R3-FE-3: a view change keeps the shared reading scope of the current address.
+  const search = searchWithScope(searchForView(input.view, input.startView), scopeFromSearch(input.currentSearch));
   if (search === input.currentSearch) return null;
   return { search, mode: input.navigated ? "push" : "replace" };
 }
@@ -35,7 +70,8 @@ function isOpaqueId(value: string | null): value is string {
 }
 
 export function targetFromSearch(search: string, knownViews: readonly string[], startView: string): NavigationTarget | null {
-  const params = new URLSearchParams(search);
+  // The scope key is orthogonal to the navigation target (R3-FE-3).
+  const params = new URLSearchParams(searchWithoutScope(search));
   const keys = [...params.keys()];
   const allowed = new Set(["view", "projectId", "taskId", "noteId"]);
   // Unknown/duplicate keys and ambiguous targets must not silently select another record.
@@ -94,5 +130,5 @@ export function viewExitFromProject(input: {
   if (!input.currentProjectId || !input.knownViews.includes(input.nextView)) return null;
   const current = targetFromSearch(input.currentSearch, input.knownViews, input.startView);
   if (current?.kind !== "project" || current.id !== input.currentProjectId) return null;
-  return { search: searchForView(input.nextView, input.startView), mode: "push" };
+  return { search: searchWithScope(searchForView(input.nextView, input.startView), scopeFromSearch(input.currentSearch)), mode: "push" };
 }

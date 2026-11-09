@@ -14,14 +14,22 @@ export const TARGET_UI_MY_PLAN_FLAGS=[
   "AI_EXECUTIVE_TARGET_STAGING_HTTP_MY_PLAN_DAY_ENABLED",
   "AI_EXECUTIVE_TARGET_STAGING_HTTP_MY_PLAN_SLICE_ENABLED",
 ] as const;
+/** R3-FE-3: the global Vše / Osobní / Sdílené switcher additionally needs the
+ * global-index read (the server route stays default-off on its own). */
+export const TARGET_UI_SCOPES_FLAGS=[
+  ...TARGET_UI_FLAGS,
+  "AI_EXECUTIVE_TARGET_UI_SCOPES_ENABLED",
+  "AI_EXECUTIVE_TARGET_STAGING_HTTP_GLOBAL_COMBINED_ENABLED",
+] as const;
 export type TargetUiConfig={
   myPlan:{enabled:boolean;statusWrite:boolean;whenWrite:boolean};
+  scopes:{enabled:boolean};
 };
 
 export function targetUiConfig(env:TargetUiEnv):TargetUiConfig|null {
   if(!TARGET_UI_FLAGS.every(name=>env[name]==="true"))return null;
   const enabled=TARGET_UI_MY_PLAN_FLAGS.every(name=>env[name]==="true");
-  return {myPlan:{
+  return {scopes:{enabled:TARGET_UI_SCOPES_FLAGS.every(name=>env[name]==="true")},myPlan:{
     enabled,
     // Write affordances exist only inside an enabled My Plan; each write gate
     // stays independent of the other.
