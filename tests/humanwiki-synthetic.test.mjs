@@ -956,6 +956,28 @@ test("lifecycle preview rejects unknown duplicate malformed and non-synthetic sc
     /unsupported or non-synthetic bundle/);
 });
 
+
+test("lifecycle action input remains a strict string enum", () => {
+  const bundles = [fixture("chatgpt"), fixture("claude")];
+  const source_id = "fixture-chatgpt-01";
+  for (const action of [
+    "pause_sync", "disconnect_source", "revoke_import_consent", "request_erasure",
+  ]) {
+    const report = previewSyntheticSourceLifecycle(bundles, [{ source_id, action }]);
+    assert.equal(report.source_states.find(source => source.source_id === source_id).action, action);
+    assert.equal(report.scenarios_applied, 1);
+    assert.equal(report.real_import_enabled, false);
+  }
+  for (const action of [
+    ["pause_sync"], ["request_erasure"], ["active"], ["pause_sync", "request_erasure"],
+    { toString: () => "pause_sync" }, new String("pause_sync"),
+    "active", "", "PAUSE_SYNC", null, undefined, true, 1, Symbol("pause_sync"),
+  ]) {
+    assert.throws(() => previewSyntheticSourceLifecycle(bundles, [{ source_id, action }]),
+      /Synthetic lifecycle: invalid lifecycle scenario/);
+  }
+});
+
 test("fixture-only lifecycle CLI compares actions without raw text, writes or inputs", () => {
   const cli = fileURLToPath(new URL("../scripts/humanwiki-synthetic/lifecycle-preview-cli.mjs", import.meta.url));
   const root = mkdtempSync(path.join(os.tmpdir(), "lumi-humanwiki-lifecycle-"));
