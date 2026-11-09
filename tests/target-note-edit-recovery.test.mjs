@@ -182,3 +182,48 @@ test("note UI retains exact-command retry after revision change and redacts revo
   assert.match(panel,/setState\(\{kind:"loading"\}\)/);
   assert.match(panel,/onAccessRefused=\{invalidateAndReload\}/);
 });
+
+
+test("integration: real target runtime eagerly purges detached note drafts on refresh rotation and refusal",async()=>{
+  const {createTargetClientRuntime}=await import("../lib/target-client-runtime.ts");
+  for(const scenario of ["rotation","refusal"]){
+    const first="A".repeat(43),second="B".repeat(43);
+    let calls=0;
+    const runtime=createTargetClientRuntime({
+      fetch:async()=>{
+        calls++;
+        const status=scenario==="refusal"&&calls>1?401:200;
+        return new Response(JSON.stringify(status===200?
+          {generation:calls===1?first:second}:{error:"Signed out"}),{
+          status,headers:{"content-type":"application/json","cache-control":"no-store"},
+        });
+      },
+      window:null,broadcastChannelFactory:null,
+    });
+    for(let n=0;n<20&&!runtime.known();n++)
+      await new Promise(resolve=>setTimeout(resolve,0));
+    assert.equal(runtime.generation(),first);
+    const unsubscribe=subscribeTrackedNoteEdit(runtime,first,id,()=>{});
+    let signal,settleWrite;
+    const pending=runTrackedNoteEdit(runtime,first,id,command,
+      async(_id,_command,s)=>{signal=s;return await new Promise(resolve=>{settleWrite=resolve;});});
+    await Promise.resolve();
+    unsubscribe(); // zero editors, coordinator remains registered with runtime
+    assert.ok(trackedNoteEdit(runtime,first,id));
+    if(scenario==="rotation"){
+      assert.equal(await runtime.refresh(),"ok");
+      assert.equal(runtime.generation(),second);
+    }else{
+      const refresh=runtime.reportRefusal();
+      assert.equal(runtime.known(),false,"reportRefusal must synchronously revoke the prior token");
+      await refresh;
+    }
+    assert.equal(signal.aborted,true,"runtime itself aborts the detached command on auth change");
+    assert.equal(trackedNoteEdit(runtime,first,id),null,"old private draft must be gone");
+    assert.deepEqual(await pending,{outcome:"denied"});
+    settleWrite({outcome:"saved",replayed:false});
+    await Promise.resolve();
+    assert.equal(trackedNoteEdit(runtime,first,id),null);
+    runtime.dispose();
+  }
+});
