@@ -227,3 +227,16 @@ test("integration: real target runtime eagerly purges detached note drafts on re
     runtime.dispose();
   }
 });
+
+
+test("a stale editor cannot clear a different generation's authorized command",async()=>{
+  const runtime=fakeRuntime();
+  runtime.rotate(rotated);
+  const newCommand={...command,commandId:"d6aa2d77-fd6a-4600-8e03-e7ed0aec0511"};
+  await runTrackedNoteEdit(runtime,rotated,id,newCommand,async()=>({outcome:"uncertain"}));
+  assert.equal(trackedNoteEdit(runtime,rotated,id)?.command.commandId,newCommand.commandId);
+  assert.equal(trackedNoteEdit(runtime,gen,id),null);
+  forgetTrackedNoteEdit(runtime,gen,id);
+  assert.equal(trackedNoteEdit(runtime,rotated,id)?.command.commandId,newCommand.commandId);
+  runtime.dispose();
+});
