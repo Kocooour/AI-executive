@@ -1,0 +1,15 @@
+/* R3-FE-2: embedded server My Plan. Scoped to .stagingMyPlanEmbedded /
+   .targetMyPlanGate so the legacy app styles are unaffected. */
+.stagingMyPlanPreview.stagingMyPlanEmbedded{max-width:none;margin:0;padding:8px 0 24px;
+  font-family:inherit;background:transparent;color:inherit;}
+.stagingMyPlanEmbedded .stagingMyPlanToolbar{padding:10px 0;}
+.stagingMyPlanEmbedded .stagingMyPlanToolbar input,
+.stagingMyPlanEmbedded .stagingMyPlanToolbar select{min-width:0;max-width:100%;}
+.targetMyPlanGate{display:grid;gap:10px;justify-items:start;padding:12px 0;}
+.targetMyPlanGate p{margin:0;line-height:1.5;}
+.targetMyPlanGate button{font:inherit;min-height:44px;padding:8px 14px;border-radius:10px;
+  border:1px solid var(--line,#9da99e);background:var(--surface,#fff);color:inherit;cursor:pointer;}
+@media (max-width:700px){
+  .stagingMyPlanEmbedded .stagingMyPlanToolbar{gap:10px;}
+  .stagingMyPlanEmbedded .stagingMyPlanToolbar label{flex:1 1 140px;}
+}

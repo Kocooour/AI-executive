@@ -4,7 +4,7 @@ import { mobileDesignV1Preview, mobileMoreGroups, mobileV1MoreGroups, mobileV1Mo
 import type { LumiApp } from "../use-lumi-app";
 import { ViewIcon } from "./project-icon";
 
-export function MobileNav({ app }: { app: LumiApp }) {
+export function MobileNav({ app, targetPlan = false }: { app: LumiApp; targetPlan?: boolean }) {
   const {
     closeDetail,
     language,
@@ -37,7 +37,9 @@ export function MobileNav({ app }: { app: LumiApp }) {
             key={x}
             ref={x === "More" ? moreTriggerRef : undefined}
             className={(x === "More" && moreOpen) || (!moreOpen && current) ? "active" : ""}
-            aria-label={planPreview ? (language === "cs" ? "Můj plán – vývojový náhled nad stávajícími daty" : "My Plan – development preview with legacy data") : label}
+            aria-label={planPreview ? (targetPlan
+              ? (language === "cs" ? "Můj plán – serverový plán ze stagingu" : "My Plan – server plan from staging")
+              : (language === "cs" ? "Můj plán – vývojový náhled nad stávajícími daty" : "My Plan – development preview with legacy data")) : label}
             data-nav-view={planPreview ? "Today" : x}
             data-nav-tab={planPreview ? "my-plan-preview" : x}
             aria-current={!moreOpen && current ? "page" : undefined}

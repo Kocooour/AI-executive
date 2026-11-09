@@ -11,6 +11,8 @@ export type TargetRuntimeDisposable={
   dispose():void;suspend?():void;resume?():void;
 };
 export type TargetRuntimeRefreshResult="ok"|"signed_out"|"unavailable";
+/** Last completed verification, for UI copy only (never an auth decision). */
+export type TargetRuntimeOutcome=TargetRuntimeRefreshResult|"feature_off";
 type Listener=(event?:unknown)=>void;
 type EventTargetLike={
   addEventListener(type:string,listener:Listener):void;
@@ -65,6 +67,13 @@ export function createTargetClientRuntime(config:TargetClientRuntimeConfig={}){
   let lastEventRefresh=-Infinity;
   let controller:AbortController|null=null;
   const subscribers=new Set<()=>void>();
+  const outcomeSubscribers=new Set<()=>void>();
+  let lastOutcome:TargetRuntimeOutcome|null=null;
+  function outcome(next:TargetRuntimeOutcome):void{
+    if(disposed||lastOutcome===next)return;
+    lastOutcome=next;
+    for(const fn of [...outcomeSubscribers])guarded(fn);
+  }
   const registered=new Set<TargetRuntimeDisposable>();
 
   const guarded=(fn:()=>void)=>{try{fn();}catch{/* one feature must not break others */}};
@@ -141,24 +150,29 @@ export function createTargetClientRuntime(config:TargetClientRuntimeConfig={}){
       if(response.status===401||response.status===403){
         void response.body?.cancel().catch(()=>{});
         bumpUnknown();
+        outcome("signed_out");
         return "signed_out";
       }
       if(response.status===404){
         // Feature switched off server-side: nothing may stay bound to old data.
         void response.body?.cancel().catch(()=>{});
         bumpUnknown();
+        outcome("feature_off");
         return "unavailable";
       }
       if(response.status!==200){
         void response.body?.cancel().catch(()=>{});
+        outcome("unavailable");
         return "unavailable";
       }
       const generation=await readGeneration(response,own.signal);
-      if(disposed||bumps!==localBumps||own.signal.aborted||generation===null)
-        return "unavailable";
+      if(disposed||bumps!==localBumps||own.signal.aborted)return "unavailable";
+      if(generation===null){outcome("unavailable");return "unavailable";}
       set(generation,false);
+      outcome("ok");
       return "ok";
     }catch{
+      if(!disposed&&bumps===localBumps)outcome("unavailable"); // incl. timeout
       return "unavailable";
     }finally{
       clearTimeout(timer);
@@ -253,6 +267,12 @@ export function createTargetClientRuntime(config:TargetClientRuntimeConfig={}){
       subscribers.add(fn);
       return ()=>{subscribers.delete(fn);};
     },
+    /** Last completed verification outcome (null before the first one). */
+    lastOutcome():TargetRuntimeOutcome|null{return lastOutcome;},
+    subscribeOutcome(fn:()=>void):()=>void{
+      outcomeSubscribers.add(fn);
+      return ()=>{outcomeSubscribers.delete(fn);};
+    },
     register(item:TargetRuntimeDisposable):()=>void{
       if(disposed){guarded(()=>item.dispose());return ()=>{};}
       registered.add(item);
@@ -278,6 +298,7 @@ export function createTargetClientRuntime(config:TargetClientRuntimeConfig={}){
       }
       disposeAll();
       subscribers.clear();
+      outcomeSubscribers.clear();
     },
   };
 }
