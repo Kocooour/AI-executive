@@ -111,10 +111,11 @@ test("lifecycle hooks abort and hide old actor data, revalidate after resume",()
     'setState({status:"error",reason})',
     'setFollowToday(false)',
     'setFollowToday(true)',
-    'Do vybraného dne včetně',
+    'copy.dayUpToSelected',
   ];
   for(const fragment of required)
     assert.ok(ui.includes(fragment),fragment);
+  assert.match(readFileSync(new URL("../lib/target-my-plan-copy.ts",import.meta.url),"utf8"),/dayUpToSelected:"Do vybraného dne včetně"/);
   assert.doesNotMatch(ui,/now-lastAwake<350/);
   assert.match(ui,/const hide=\(\)=>\{/);
   assert.match(ui,/if\(!navigator.onLine\)\{/);

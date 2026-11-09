@@ -119,7 +119,7 @@ test("flag off: the root loads the target screen lazily and only for target mode
   assert.match(rootSource,/dynamic\(\(\) => import\("\.\/target-my-plan"\), \{ ssr: false \}\)/);
   assert.doesNotMatch(rootSource,/^import .*target-my-plan/m);
   assert.match(rootSource,/const targetPlan = Boolean\(targetMyPlan\?\.enabled\) && mobileDesignV1Preview && app\.mobilePlanPreviewActive && view === "Today"/);
-  assert.match(rootSource,/targetPlan && targetMyPlan\s*\n\s*\? <TargetMyPlan gates=\{targetMyPlan\} \/>\s*\n\s*: <EntityList app=\{app\} \/>/);
+  assert.match(rootSource,/targetPlan && targetMyPlan\s*\n\s*\? <TargetMyPlan gates=\{targetMyPlan\} language=\{language\} \/>\s*\n\s*: <EntityList app=\{app\} \/>/);
   // Legacy pieces that would claim legacy data are suppressed in target mode.
   assert.match(rootSource,/!targetPlan && <TodayTop/);
   assert.match(rootSource,/!targetPlan && <TodayFooter/);

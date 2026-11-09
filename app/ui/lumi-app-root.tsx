@@ -98,7 +98,9 @@ export function LumiAppRoot({ targetMyPlan }: { targetMyPlan?: TargetMyPlanProps
         )}
         {targetPlan && (
           <p className="mobileV1PreviewNotice" role="status" data-plan-source="target-staging">
-            Zobrazený plán je serverový plán ze stagingu: vaše soukromé úkoly a sdílené úkoly přiřazené vám. Dosavadní místní seznam Dnes se zde nepoužívá.
+            {language === "cs"
+              ? "Zobrazený plán je serverový plán ze stagingu: vaše soukromé úkoly a sdílené úkoly přiřazené vám. Dosavadní místní seznam Dnes se zde nepoužívá."
+              : "This plan comes from the staging server: your private tasks and the shared tasks assigned to you. The existing local Today list is not used here."}
           </p>
         )}
         {!targetPlan && mobileDesignV1Preview && app.mobilePlanPreviewActive && view === "Today" && (
@@ -131,7 +133,7 @@ export function LumiAppRoot({ targetMyPlan }: { targetMyPlan?: TargetMyPlanProps
           <AgentsView app={app} />
           <SettingsView app={app} />
           {targetPlan && targetMyPlan
-            ? <TargetMyPlan gates={targetMyPlan} />
+            ? <TargetMyPlan gates={targetMyPlan} language={language} />
             : <EntityList app={app} />}
           {view === "Today" && !targetPlan && <TodayFooter app={app} />}
         </div>

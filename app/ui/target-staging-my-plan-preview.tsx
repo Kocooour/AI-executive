@@ -31,6 +31,7 @@ import {
 import {
   prepareConfirmedMyPlanUndo,keepConfirmedMyPlanUndoOnRefresh,
 } from "../../lib/target-staging-my-plan-undo";
+import {myPlanCopy,type MyPlanCopy,type MyPlanLanguage} from "../../lib/target-my-plan-copy";
 
 type StatusAction=
   |{kind:"idle"}
@@ -39,15 +40,6 @@ type StatusAction=
   |{kind:"error";reason:MyPlanStatusFailure};
 type StatusOperation={
   controller:AbortController;privacyEpoch:number;command:MyPlanStatusCommand|null;
-};
-const statusReasons:Record<MyPlanStatusFailure,string>={
-  "signed-out":"Přístup k zápisu zanikl. Znovu se přihlaste.",
-  "stale":"Úkol byl změněn jiným zápisem. Načetl se aktuální přehled.",
-  "unavailable":"Stagingový zápis není dostupný nebo byl vypnut.",
-  "invalid-response":"Odpověď zápisového endpointu nebyla bezpečně ověřena.",
-  "invalid-request":"Neplatné parametry zápisu; úkol nebyl potvrzen.",
-  "offline":"Připojení selhalo. Neproběhl žádný automatický opakovaný zápis.",
-  "aborted":"Operace byla přerušena. Aktuální stav je třeba znovu ověřit.",
 };
 
 type WhenAction=
@@ -59,42 +51,23 @@ type WhenOperation={
   controller:AbortController;privacyEpoch:number;command:MyPlanWhenCommand|null;
 };
 type UncertainWhen={command:MyPlanWhenCommand;previousWhenOn:string|null;undo:boolean};
-const whenReasons:Record<MyPlanWhenFailure,string>={
-  "signed-out":"Přístup k osobnímu plánu zanikl. Přihlaste se znovu.",
-  "stale":"Osobní plán nebo úkol se mezitím změnil. Načetl se aktuální přehled.",
-  "unavailable":"Osobní plánování na stagingu není dostupné nebo bylo vypnuto.",
-  "invalid-response":"Odpověď plánovacího endpointu nebyla bezpečně ověřena.",
-  "invalid-request":"Plánovací požadavek nesplňuje bezpečný kontrakt.",
-  "offline":"Spojení selhalo; žádný automatický zápis se neopakuje.",
-  "aborted":"Požadavek byl přerušen; stav je nutné znovu ověřit.",
-  "unchanged":"Zvolený osobní den už je nastavený.",
-};
 
 type ReadState=
   |{status:"loading"}
   |{status:"error";reason:MyPlanReadFailure}
   |{status:"ready";page:MyPlanSlicePage};
 
-const reasons:Record<MyPlanReadFailure,string>={
-  "signed-out":"Přihlášení není platné. Přehled byl skryt; přihlaste se znovu.",
-  "stale":"Data nebo oprávnění se změnily. Přehled byl skryt; obnovte jej.",
-  "unavailable":"Bezpečný stagingový přehled není dostupný nebo je vypnutý.",
-  "offline":"Připojení se nezdařilo. Žádné úkoly nebyly změněny.",
-  "invalid-response":"Odpověď neodpovídá bezpečnému kontraktu; údaje nejsou zobrazeny.",
-  "invalid-request":"Neplatné datum nebo parametry požadavku.",
-  "aborted":"Načítání bylo přerušeno.",
-};
-const humanDate=(day:string)=>new Intl.DateTimeFormat("cs-CZ",{
+const humanDate=(day:string,locale="cs-CZ")=>new Intl.DateTimeFormat(locale,{
   day:"numeric",month:"long",year:"numeric",
 }).format(new Date(day+"T12:00:00"));
-const nextHumanDate=(day:string)=>{
+const nextHumanDate=(day:string,locale="cs-CZ")=>{
   const following=new Date(day+"T12:00:00.000Z");
   following.setUTCDate(following.getUTCDate()+1);
-  return humanDate(following.toISOString().slice(0,10));
+  return humanDate(following.toISOString().slice(0,10),locale);
 };
 
-function PlanDay({label,tasks,date,canComplete,onComplete,canWhen,onWhen}:{
-  label:string;tasks:MyPlanSliceTask[];date:string;
+function PlanDay({label,tasks,date,canComplete,onComplete,canWhen,onWhen,copy}:{
+  copy:MyPlanCopy;label:string;tasks:MyPlanSliceTask[];date:string;
   canComplete:boolean;onComplete:(task:MyPlanSliceTask)=>void;
   canWhen:boolean;onWhen:(task:MyPlanSliceTask,whenOn:string)=>void;
 }){
@@ -107,36 +80,36 @@ function PlanDay({label,tasks,date,canComplete,onComplete,canWhen,onWhen}:{
   return <section className="stagingMyPlanDay" aria-label={label}>
     <h2>{label} <span className="stagingMyPlanCount">{tasks.length}</span></h2>
     {tasks.length===0
-      ?<p className="stagingMyPlanEmpty">Žádné úkoly v tomto dni.</p>
+      ?<p className="stagingMyPlanEmpty">{copy.dayEmpty}</p>
       :<div className="stagingMyPlanGroups">
         {[...areas].map(([id,group])=>
           <div className="stagingMyPlanArea" data-area-kind={group.kind}
-            aria-label={group.kind==="private"?"Soukromá oblast":"Sdílená oblast"}
+            aria-label={group.kind==="private"?copy.areaPrivate:copy.areaShared}
             role="group" key={id}>
             <ul>{group.tasks.map(task=>
               <li key={task.taskId}>
                 {canComplete
                   ?<button type="button" className="stagingMyPlanSquare stagingMyPlanComplete"
-                    aria-label={"Dokončit úkol: "+task.title}
+                    aria-label={copy.completeTask(task.title)}
                     onClick={()=>onComplete(task)}/>
                   :<span className="stagingMyPlanSquare" aria-hidden="true"/>}
                 <div className="stagingMyPlanTask">
                   <strong>{task.title}</strong>
                   {task.attentionOn<date&&
-                    <small>Vyžaduje pozornost od {humanDate(task.attentionOn)}</small>}
-                  {task.dueOn&&<small>Termín: {humanDate(task.dueOn)}</small>}
-                  {task.whenOn&&<small>Naplánováno: {humanDate(task.whenOn)}</small>}
+                    <small>{copy.attentionSince(humanDate(task.attentionOn,copy.locale))}</small>}
+                  {task.dueOn&&<small>{copy.dueOn(humanDate(task.dueOn,copy.locale))}</small>}
+                  {task.whenOn&&<small>{copy.plannedOn(humanDate(task.whenOn,copy.locale))}</small>}
                   {canWhen&&<div className="stagingMyPlanWhenControls" role="group"
-                    aria-label={"Osobní plán pro úkol: "+task.title}>
+                    aria-label={copy.whenGroup(task.title)}>
                     {(["today","tomorrow"] as const).map(choice=>{
                       const target=myPlanWhenTarget(date,choice);
                       return target&&task.whenOn!==target
                         ?<button key={choice} type="button"
                             aria-label={choice==="today"
-                              ?"Naplánovat osobně na dnešek: "+task.title
-                              :"Naplánovat osobně na zítřek: "+task.title}
+                              ?copy.whenTodayAria(task.title)
+                              :copy.whenTomorrowAria(task.title)}
                             onClick={()=>onWhen(task,target)}>
-                            {choice==="today"?"Kdy: Dnes":"Kdy: Zítra"}
+                            {choice==="today"?copy.whenToday:copy.whenTomorrow}
                           </button>:null;
                     })}
                   </div>}
@@ -148,13 +121,20 @@ function PlanDay({label,tasks,date,canComplete,onComplete,canWhen,onWhen}:{
 }
 export function TargetStagingMyPlanPreview({
   statusWriteEnabled=false,whenWriteEnabled=false,embedded=false,onRefusal,
+  language="cs",
 }:{
   statusWriteEnabled?:boolean;whenWriteEnabled?:boolean;
   /** R3-FE-2: rendered inside the main app (its <main>/<h1> own the page). */
   embedded?:boolean;
   /** R3-FE-2: called when a read or write ended signed-out (401/403). */
   onRefusal?:()=>void;
+  /** R3-FE-2b: copy and date language; the standalone page keeps Czech. */
+  language?:MyPlanLanguage;
 }){
+  const copy=myPlanCopy[language];
+  const statusReasons=copy.statusReasons;
+  const whenReasons=copy.whenReasons;
+  const reasons=copy.readReasons;
   const [date,setDate]=useState<string|null>(null);
   const [followToday,setFollowToday]=useState(true);
   const [areaFilter,setAreaFilter]=useState<MyPlanSliceFilter>("all");
@@ -817,18 +797,18 @@ export function TargetStagingMyPlanPreview({
   const Root=embedded?"section":"main";
   return <Root className={embedded?"stagingMyPlanPreview stagingMyPlanEmbedded":"stagingMyPlanPreview"}
     data-testid={embedded?"target-my-plan":undefined}
-    aria-label={embedded?"Serverový Můj plán":undefined}>
+    aria-label={embedded?copy.regionLabel:undefined}>
     {!embedded&&<header>
-      <p className="stagingMyPlanEyebrow">Lumi · izolovaný staging</p>
-      <h1>Můj plán</h1>
+      <p className="stagingMyPlanEyebrow">{copy.eyebrow}</p>
+      <h1>{copy.heading}</h1>
       <p>{whenWriteEnabled
-        ?"Izolovaný stagingový Můj plán: osobní Kdy Dnes/Zítra s novým CAS a bezpečným Undo. Bez offline fronty a změn společných termínů."
+        ?copy.headerWhen
         :statusWriteEnabled
-          ?"Izolovaný stagingový náhled s dokončením a bezpečným Undo. Bez kalendářových událostí, přesunu dne a offline fronty."
-          :"Čtecí náhled cílového modelu. Jen úkoly; bez úprav, kalendářových událostí a offline ukládání."}</p>
+          ?copy.headerStatus
+          :copy.headerReadOnly}</p>
     </header>}
     <div className="stagingMyPlanToolbar">
-      <label>Den
+      <label>{copy.toolbarDay}
         <input type="date" disabled={anyPending} value={date??""}
           onChange={event=>{
             const chosen=event.target.value;
@@ -839,7 +819,7 @@ export function TargetStagingMyPlanPreview({
             if(chosen!==date){invalidate("stale",true);setDate(chosen);}
           }}/>
       </label>
-      <label>Moje práce
+      <label>{copy.toolbarWork}
         <select value={areaFilter} disabled={anyPending}
           onChange={event=>{
             if(toolbarChangeBlocked())return;
@@ -847,9 +827,9 @@ export function TargetStagingMyPlanPreview({
             invalidate("stale",true);
             setAreaFilter(event.target.value as MyPlanSliceFilter);
           }}>
-          <option value="all">Osobní i přiřazené sdílené</option>
-          <option value="personal">Osobní</option>
-          <option value="shared">Přiřazené sdílené</option>
+          <option value="all">{copy.filterAll}</option>
+          <option value="personal">{copy.filterPersonal}</option>
+          <option value="shared">{copy.filterShared}</option>
         </select>
       </label>
       <button type="button" disabled={anyPending} onClick={()=>{
@@ -860,69 +840,64 @@ export function TargetStagingMyPlanPreview({
         setFollowToday(true);
         if(chosen===date)setRefresh(n=>n+1);
         else setDate(chosen);
-      }}>Aktuální den</button>
+      }}>{copy.currentDay}</button>
       <button type="button" disabled={anyPending}
-        onClick={refreshPlan}>Obnovit</button>
+        onClick={refreshPlan}>{copy.refresh}</button>
     </div>
-    {state.status==="loading"&&<p role="status">Načítám aktuální přehled…</p>}
+    {state.status==="loading"&&<p role="status">{copy.loading}</p>}
     {whenWriteEnabled&&whenAction.kind==="pending"&&
-      <p role="status" className="stagingMyPlanMutation">Ověřuji osobní plán a ukládám změnu…</p>}
+      <p role="status" className="stagingMyPlanMutation">{copy.whenPending}</p>}
     {whenWriteEnabled&&whenAction.kind==="checking"&&
-      <p role="status" className="stagingMyPlanMutation">Kontroluji původní potvrzení plánování…</p>}
+      <p role="status" className="stagingMyPlanMutation">{copy.whenChecking}</p>}
     {statusWriteEnabled&&state.status!=="error"&&action.kind==="pending"&&
-      <p role="status" className="stagingMyPlanMutation">Ověřuji oprávnění a ukládám změnu…</p>}
+      <p role="status" className="stagingMyPlanMutation">{copy.statusPending}</p>}
     {statusWriteEnabled&&state.status!=="error"&&action.kind==="checking"&&
-      <p role="status" className="stagingMyPlanMutation">Ověřuji potvrzení předchozí operace…</p>}
+      <p role="status" className="stagingMyPlanMutation">{copy.statusChecking}</p>}
     {state.status==="error"&&
       <p role="alert" className="stagingMyPlanWarning">{reasons[state.reason]}</p>}
     {statusWriteEnabled&&state.status==="error"&&
       state.reason!=="signed-out"&&action.kind==="committed"&&
       action.status==="completed"&&confirmedCommand.current!==null&&
       <div className="stagingMyPlanWarning" role="status">
-        <p>Dokončení je potvrzené. Načtení přehledu selhalo;
-          po novém ověření oprávnění bude možné Undo.</p>
+        <p>{copy.completedReadFailed}</p>
         <button type="button" onClick={refreshPlan}>
-          Znovu načíst přehled (Undo zůstane)
+          {copy.completedReloadButton}
         </button>
       </div>}
     {whenWriteEnabled&&state.status==="error"&&
       state.reason!=="signed-out"&&whenAction.kind==="committed"&&
       whenAction.undoable&&confirmedWhen.current!==null&&
       <div role="status" className="stagingMyPlanWarning">
-        <p>Osobní plán je potvrzený, ale načtení přehledu selhalo.
-          Undo bude dostupné po novém ověření oprávnění.</p>
+        <p>{copy.whenReadFailed}</p>
         <button type="button" onClick={refreshPlan}>
-          Znovu načíst osobní plán (Undo zůstane)
+          {copy.whenReloadButton}
         </button>
       </div>}
     {whenWriteEnabled&&whenAction.kind==="uncertain"&&
       state.status==="error"&&state.reason!=="signed-out"&&
       uncertainWhen.current!==null&&
       <div role="alert" className="stagingMyPlanWarning">
-        <p>Výsledek osobního plánování je nejistý.
-          Znovu se načte pouze autorizovaný přehled, nikoli zápis.</p>
+        <p>{copy.whenUncertainRead}</p>
         <button type="button" onClick={retryUncertainWhenRead}>
-          Znovu ověřit osobní přehled (bez zápisu)
+          {copy.whenUncertainReadButton}
         </button>
       </div>}
     {statusWriteEnabled&&action.kind==="uncertain"&&
       state.status==="error"&&state.reason!=="signed-out"&&
       uncertainCommand.current!==null&&
       <div role="alert" className="stagingMyPlanWarning">
-        <p>Výsledek předchozího zápisu není potvrzen. Obnovení přehledu
-          provede pouze nové autorizované čtení, nikdy další zápis.</p>
+        <p>{copy.statusUncertainRead}</p>
         <button type="button" onClick={retryUncertainRead}>
-          Znovu ověřit přehled (bez zápisu)
+          {copy.statusUncertainReadButton}
         </button>
       </div>}
     {state.status==="ready"&&date&&
       state.page.evaluationDate===date&&state.page.areaFilter===areaFilter&&<>
       {whenWriteEnabled&&whenAction.kind==="uncertain"&&
         <div role="alert" className="stagingMyPlanWarning">
-          <p>Předchozí osobní zápis nebyl potvrzen.
-            Další změny jsou zablokované; žádný PATCH se neopakuje.</p>
+          <p>{copy.whenUncertain}</p>
           <button type="button" onClick={()=>{void verifyUncertainWhenReceipt();}}>
-            Ověřit původní osobní potvrzení
+            {copy.whenUncertainButton}
           </button>
         </div>}
       {whenWriteEnabled&&whenAction.kind==="error"&&
@@ -931,58 +906,56 @@ export function TargetStagingMyPlanPreview({
         </p>}
       {whenWriteEnabled&&!anyPending&&whenAction.kind==="committed"&&
         <div role="status" className="stagingMyPlanMutation">
-          <span>Osobní plán potvrzen: {whenAction.whenOn
-            ?humanDate(whenAction.whenOn):"bez plánovaného dne"}.</span>
-          {whenFailure&&<span role="alert">Nová změna nebyla provedena:
-            {" "+whenReasons[whenFailure]} Předchozí plán zůstává potvrzený.</span>}
+          <span>{copy.whenConfirmed(whenAction.whenOn?humanDate(whenAction.whenOn,copy.locale):null)}</span>
+          {whenFailure&&<span role="alert">{copy.newChangeNotMade}
+            {" "+whenReasons[whenFailure]+" "+copy.whenKept}</span>}
           {whenAction.undoable&&
             <button type="button" onClick={()=>{void changeWhen({
               taskId:whenAction.taskId,areaId:whenAction.areaId,
-            },whenAction.previousWhenOn,true);}}>Vrátit osobní plán (Undo)</button>}
+            },whenAction.previousWhenOn,true);}}>{copy.whenUndo}</button>}
         </div>}
       {statusWriteEnabled&&action.kind==="uncertain"&&
         <div role="alert" className="stagingMyPlanWarning">
-          <p>Výsledek zápisu není potvrzen. Žádná další změna se neodešle automaticky.</p>
+          <p>{copy.statusUncertain}</p>
           <button type="button" onClick={()=>{void verifyUncertainReceipt();}}>
-            Ověřit původní potvrzení
+            {copy.statusUncertainButton}
           </button>
         </div>}
       {statusWriteEnabled&&action.kind==="error"&&
         <p role="alert" className="stagingMyPlanWarning">{statusReasons[action.reason]}</p>}
       {statusWriteEnabled&&!anyPending&&action.kind==="committed"&&
         <div role="status" className="stagingMyPlanMutation">
-          <span>{action.status==="completed"?"Dokončení potvrzeno.":"Obnovení potvrzeno."}</span>
+          <span>{action.status==="completed"?copy.completedConfirmed:copy.restoredConfirmed}</span>
           {action.status==="completed"&&undoFailure&&
-            <span role="alert">Nová změna nebyla provedena: {statusReasons[undoFailure]}
-              Předchozí dokončení zůstává potvrzené; Undo je stále dostupné.</span>}
+            <span role="alert">{copy.newChangeNotMade} {statusReasons[undoFailure]+" "+copy.statusKept}</span>}
           {action.status==="completed"&&
             <button type="button" onClick={()=>{void changeStatus({
               taskId:action.taskId,areaId:action.areaId,
-            },"open");}}>Vrátit dokončení (Undo)</button>}
+            },"open");}}>{copy.statusUndo}</button>}
         </div>}
       {/* During an uncertain write, a read could have raced the commit.
           Never render its potentially stale open-task list until confirmed. */}
       {!anyPending&&<>
-      <PlanDay label={followToday?"Dnes a dřívější":"Do vybraného dne včetně"}
+      <PlanDay copy={copy} label={followToday?copy.dayTodayAndEarlier:copy.dayUpToSelected}
         date={date} tasks={state.page.today.tasks}
         canComplete={canComplete} onComplete={task=>{void changeStatus(task,"completed");}}
         canWhen={canWhen} onWhen={(task,on)=>{void changeWhen(task,on);}}/>
-      <PlanDay label={(followToday?"Zítra · ":"Následující den · ")+
-        nextHumanDate(date)}
+      <PlanDay copy={copy} label={(followToday?copy.dayTomorrowPrefix:copy.dayNextPrefix)+
+        nextHumanDate(date,copy.locale)}
         date={date} tasks={state.page.tomorrow.tasks}
         canComplete={canComplete} onComplete={task=>{void changeStatus(task,"completed");}}
         canWhen={canWhen} onWhen={(task,on)=>{void changeWhen(task,on);}}/>
       {state.page.hasMore&&
         <button disabled={moreBusy||anyPending} type="button" onClick={()=>{void more();}}>
-          {moreBusy?"Načítám…":"Načíst další úkoly"}
+          {moreBusy?copy.moreBusy:copy.more}
         </button>}
       </>}
       <p className="stagingMyPlanScope">{whenWriteEnabled
-        ?"Osobní Kdy mění jen plán aktuálního uživatele, nikdy společný termín dueOn. Každý zápis vyžaduje nový CAS; žádná offline fronta."
+        ?copy.scopeWhen
         :statusWriteEnabled
-          ?"Izolované dokončení a Undo používají nové serverové CAS, nikoli offline synchronizaci. Přesun dne zůstává vypnutý."
-          :"Náhled je pouze pro čtení: dokončení, přesun a Undo nejsou zapnuté."}
-        {" "}Oprávnění se ověřují na serveru při každém načtení.</p>
+          ?copy.scopeStatus
+          :copy.scopeReadOnly}
+        {" "}{copy.scopeServer}</p>
     </>}
   </Root>;
 }

@@ -12,13 +12,17 @@ import {useCallback,useEffect,useMemo,useRef,useState,useSyncExternalStore} from
 import {useTargetGeneration,useTargetRuntime} from "./target-data-provider";
 import {TargetDataStatus} from "./target-data-status";
 import {TargetStagingMyPlanPreview} from "./target-staging-my-plan-preview";
+import {myPlanCopy,type MyPlanLanguage} from "../../lib/target-my-plan-copy";
 import {createRefusalBudget,targetMyPlanGate} from "../../lib/target-my-plan-embed";
 import "../target-staging/my-plan/preview/preview.css";
 import "./target-my-plan.css";
 
-export default function TargetMyPlan({gates}:{
+export default function TargetMyPlan({gates,language="cs"}:{
   gates:{statusWrite:boolean;whenWrite:boolean};
+  /** R3-FE-2b: follows the app language; Czech by default. */
+  language?:MyPlanLanguage;
 }){
+  const copy=myPlanCopy[language];
   const runtime=useTargetRuntime();
   const generation=useTargetGeneration();
   const subscribeOutcome=useMemo(
@@ -47,28 +51,29 @@ export default function TargetMyPlan({gates}:{
   const gate=targetMyPlanGate(runtime,generation,outcome,blocked);
   if(gate.kind==="checking")
     return <div className="targetMyPlanGate" data-testid="target-my-plan-checking">
-      <p role="status">Ověřuji přihlášení k serverovému plánu…</p>
+      <p role="status">{copy.gateChecking}</p>
     </div>;
   if(gate.kind==="feature_off")
     return <div className="targetMyPlanGate" data-testid="target-my-plan-feature-off">
       <TargetDataStatus error={{kind:"unavailable",action:"retry_later",
-        message:"Serverový plán teď není zapnutý. Dosavadní údaje se zde nezobrazují."}}
-        onAction={retry}/>
+        message:copy.gateFeatureOff}}
+        language={language} onAction={retry}/>
     </div>;
   if(gate.kind==="unavailable")
     return <div className="targetMyPlanGate" data-testid="target-my-plan-unavailable">
-      <TargetDataStatus failure="unavailable" onAction={retry}/>
+      <TargetDataStatus failure="unavailable" language={language} onAction={retry}/>
     </div>;
   if(gate.kind==="signed_out"||gate.kind==="refused")
     return <div className="targetMyPlanGate" data-testid={`target-my-plan-${gate.kind==="refused"?"refused":"signed-out"}`}>
       <TargetDataStatus error={gate.kind==="refused"?{kind:"signed_out",action:"verify",
-        message:"Server opakovaně odmítl zobrazit plán. Údaje byly skryty; ověřte přihlášení."}:undefined}
+        message:copy.gateRefused}:undefined}
+        language={language}
         failure={gate.kind==="signed_out"?"signed-out":undefined}
         // Re-verify instead of reloading: if the session really ended, the app's
         // own sign-in screen takes over; a valid session shows the plan again.
         onAction={retry}/>
     </div>;
-  return <TargetStagingMyPlanPreview key={gate.generation} embedded
+  return <TargetStagingMyPlanPreview key={gate.generation} embedded language={language}
     statusWriteEnabled={gates.statusWrite} whenWriteEnabled={gates.whenWrite}
     onRefusal={onRefusal}/>;
 }
