@@ -7,7 +7,7 @@ import { db, ensureDefaultWorkspace, migratePropertyRelations, personalWorkspace
 import { clearLocalData, finishInterruptedWipe, hasUnsentChanges, markSignedIn, restoreGenerationKey, signedInKey, signedOutKey } from "../../lib/local-data";
 import { failedSignOutNeedsReload, incompleteSignOutNoticeKey, runSignOut } from "../../lib/sign-out";
 import { dropNotesDraft, keepNotesDraft, keptNotesDrafts, leftoverDraftAction, settleNotesDraft, type KeptNotesDraft } from "../../lib/notes-drafts";
-import { addressUpdate, searchForTarget, searchForView, targetFromSearch, viewExitFromProject, viewFromSearch } from "../../lib/view-url";
+import { addressUpdate, searchForTarget, searchForView, searchWithoutScope, targetFromSearch, viewExitFromProject, viewFromSearch } from "../../lib/view-url";
 import { resolveLegacyProjectLink } from "../../lib/legacy-project-deep-link";
 import { requestsTypedRecord, showUnavailableLink } from "../../lib/navigation-link-status";
 import { legacyRecordBelongsToProject, resolveLegacyRecordLink } from "../../lib/legacy-record-deep-link";
@@ -1425,7 +1425,8 @@ export function useLumiApp() {
       "ai-executive-write-workspace",
     );
     const isPreviewPhone = mobileDesignV1Preview && window.matchMedia("(max-width: 700px)").matches;
-    const previewMobileStart = isPreviewPhone && window.location.search === "";
+    // The shared reading scope (?scope=) is not a navigation choice: it must not defeat the phone start.
+    const previewMobileStart = isPreviewPhone && searchWithoutScope(window.location.search) === "";
     const previewDirectLink = mobileDesignV1Preview && mobileV1IsPlanPreviewRoute(window.location.search);
     if (previewMobileStart || previewDirectLink) {
       setMobilePlanPreviewActive(true);

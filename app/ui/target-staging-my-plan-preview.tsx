@@ -31,6 +31,7 @@ import {
 import {
   prepareConfirmedMyPlanUndo,keepConfirmedMyPlanUndoOnRefresh,
 } from "../../lib/target-staging-my-plan-undo";
+import {scopeFeedbackDecision} from "../../lib/target-my-plan-scope-feedback";
 import {myPlanCopy,type MyPlanCopy,type MyPlanLanguage} from "../../lib/target-my-plan-copy";
 
 type StatusAction=
@@ -121,8 +122,11 @@ function PlanDay({label,tasks,date,canComplete,onComplete,canWhen,onWhen,copy}:{
 }
 export function TargetStagingMyPlanPreview({
   statusWriteEnabled=false,whenWriteEnabled=false,embedded=false,onRefusal,
-  language="cs",
+  language="cs",areaFilter:controlledFilter,
 }:{
+  /** R3-FE-3: when given, the global scope (Vše / Osobní / Sdílené) owns the
+   * area filter: the plan's own toolbar filter is hidden and this value is used. */
+  areaFilter?:MyPlanSliceFilter;
   statusWriteEnabled?:boolean;whenWriteEnabled?:boolean;
   /** R3-FE-2: rendered inside the main app (its <main>/<h1> own the page). */
   embedded?:boolean;
@@ -137,7 +141,8 @@ export function TargetStagingMyPlanPreview({
   const reasons=copy.readReasons;
   const [date,setDate]=useState<string|null>(null);
   const [followToday,setFollowToday]=useState(true);
-  const [areaFilter,setAreaFilter]=useState<MyPlanSliceFilter>("all");
+  const [ownFilter,setAreaFilter]=useState<MyPlanSliceFilter>("all");
+  const areaFilter=controlledFilter??ownFilter;
   const [refresh,setRefresh]=useState(0);
   const [state,setState]=useState<ReadState>({status:"loading"});
   const [moreBusy,setMoreBusy]=useState(false);
@@ -744,21 +749,41 @@ export function TargetStagingMyPlanPreview({
     setRefresh(n=>n+1);
   }
 
-  function resetFeedback(){
+  function resetStatusFeedback(){
     uncertainCommand.current=null;
     confirmedCommand.current=null;
     setUndoFailure(null);
     setAction({kind:"idle"});
+  }
+  function resetWhenFeedback(){
     uncertainWhen.current=null;
     confirmedWhen.current=null;
     setWhenFailure(null);
     setWhenAction({kind:"idle"});
+  }
+  function resetFeedback(){
+    resetStatusFeedback();
+    resetWhenFeedback();
   }
   const actionPending=action.kind==="pending"||action.kind==="checking"||
     action.kind==="uncertain";
   const whenPending=whenAction.kind==="pending"||
     whenAction.kind==="checking"||whenAction.kind==="uncertain";
   const anyPending=actionPending||whenPending;
+  // R3-FE-3: feedback (Undo, receipts) of a previous scope is cleared once no
+  // write is in flight; an uncertain command is never dropped (see the helper).
+  const feedbackScope=useRef<string|null>(null);
+  useEffect(()=>{
+    const decision=scopeFeedbackDecision({
+      recorded:feedbackScope.current,current:areaFilter,
+      statusKind:action.kind,whenKind:whenAction.kind,
+    });
+    feedbackScope.current=decision.recorded;
+    // Only a SETTLED family is cleared; in-flight/uncertain ones are kept.
+    if(decision.clearStatus)resetStatusFeedback();
+    if(decision.clearWhen)resetWhenFeedback();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[areaFilter,action.kind,whenAction.kind]);
   // Read the live synchronous refs from EACH handler, not just disabled state.
   // A second event may arrive before React commits the pending render.
   const toolbarChangeBlocked=()=>myPlanToolbarChangeBlocked({
@@ -819,7 +844,7 @@ export function TargetStagingMyPlanPreview({
             if(chosen!==date){invalidate("stale",true);setDate(chosen);}
           }}/>
       </label>
-      <label>{copy.toolbarWork}
+      {controlledFilter===undefined&&<label>{copy.toolbarWork}
         <select value={areaFilter} disabled={anyPending}
           onChange={event=>{
             if(toolbarChangeBlocked())return;
@@ -831,7 +856,7 @@ export function TargetStagingMyPlanPreview({
           <option value="personal">{copy.filterPersonal}</option>
           <option value="shared">{copy.filterShared}</option>
         </select>
-      </label>
+      </label>}
       <button type="button" disabled={anyPending} onClick={()=>{
         if(toolbarChangeBlocked())return;
         resetFeedback();

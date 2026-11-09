@@ -33,7 +33,7 @@ test("the server page mounts the provider only behind the flag and reads it per 
   assert.doesNotMatch(page,/^"use client"/m);
   assert.match(page,/export const dynamic = "force-dynamic"/);
   assert.match(page,/targetUiEnabled\(\)/);
-  assert.match(page,/targetData\s*\n?\s*\?\s*<TargetDataProvider><LumiAppRoot targetMyPlan=\{config\?\.myPlan\} \/><\/TargetDataProvider>\s*\n?\s*:\s*<LumiAppRoot \/>/);
+  assert.match(page,/targetData\s*\n?\s*\?\s*<TargetDataProvider><LumiAppRoot targetMyPlan=\{config\?\.myPlan\} targetScopes=\{config\?\.scopes\} \/><\/TargetDataProvider>\s*\n?\s*:\s*<LumiAppRoot \/>/);
   // The page itself never creates a runtime nor fetches.
   assert.doesNotMatch(page,/createTargetClientRuntime|fetch\(|target-client-runtime/);
 });
@@ -71,21 +71,24 @@ test("only the runtime (and its server route) reference the session endpoint; no
   };
   walk("app");walk("lib");
   assert.deepEqual(hits.sort(),["app/api/target-staging/session/route.ts","lib/target-client-runtime.ts"]);
-  // Consumers of the new hooks: only the lazily loaded R3-FE-2 My Plan screen.
+  // Consumers of the runtime hooks (.ts and .tsx): the lazily loaded My Plan screen (R3-FE-2),
+  // the scope lists with their gate hook (R3-FE-3), and the provider/status modules themselves.
   const users=[];
   const scan=dir=>{
     for(const name of readdirSync(path.join(root,dir))){
       const rel=path.join(dir,name);
       const full=path.join(root,rel);
       if(statSync(full).isDirectory())scan(rel);
-      else if(/\.tsx$/.test(name)&&/useTargetSession|useTargetGeneration|useTargetRuntime|TargetDataStatus/.test(readFileSync(full,"utf8")))
+      else if(/\.tsx?$/.test(name)&&/useTargetSession|useTargetGeneration|useTargetRuntime|TargetDataStatus/.test(readFileSync(full,"utf8")))
         users.push(rel);
     }
   };
   scan("app");
   assert.deepEqual(users.sort(),[
     "app/ui/target-data-provider.tsx","app/ui/target-data-status.tsx","app/ui/target-my-plan.tsx",
-  ]);
+    // R3-FE-3: the lazily loaded scope lists and the gate hook.
+    "app/ui/target-scope-lists.tsx","app/ui/use-target-gate.ts",
+  ].sort());
 });
 
 test("TargetDataStatus uses status for the info kind, alert for errors, and a real button",()=>{

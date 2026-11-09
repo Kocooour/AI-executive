@@ -27,9 +27,15 @@ import { OfflineRecoveryDialog } from "./views/offline-recovery-dialog";
 // R3-FE-2: loaded (with its CSS) only when the server page enabled the target My Plan.
 const TargetMyPlan = dynamic(() => import("./target-my-plan"), { ssr: false });
 
+// R3-FE-3: the scope switcher and the server-backed Projects / Notes lists load only
+// when the server page enabled target scopes; otherwise they are never fetched.
+const TargetScopeSwitcher = dynamic(() => import("./target-scope-switcher"), { ssr: false });
+const TargetScopeLists = dynamic(() => import("./target-scope-lists"), { ssr: false });
+
+export type TargetScopesProps = { enabled: boolean; projects: boolean; notes: boolean };
 export type TargetMyPlanProps = { enabled: boolean; statusWrite: boolean; whenWrite: boolean };
 
-export function LumiAppRoot({ targetMyPlan }: { targetMyPlan?: TargetMyPlanProps } = {}) {
+export function LumiAppRoot({ targetMyPlan, targetScopes }: { targetMyPlan?: TargetMyPlanProps; targetScopes?: TargetScopesProps } = {}) {
   const app = useLumiApp();
   const {
     activeWorkspace,
@@ -49,6 +55,12 @@ export function LumiAppRoot({ targetMyPlan }: { targetMyPlan?: TargetMyPlanProps
   }
   // Only the "Můj plán" entry of the v1 shell (view "Today") switches; every other view stays legacy.
   const targetPlan = Boolean(targetMyPlan?.enabled) && mobileDesignV1Preview && app.mobilePlanPreviewActive && view === "Today";
+  // R3-FE-3: with target scopes on, Projects and Notes list the server index for the global scope.
+  const scopesOn = Boolean(targetScopes?.enabled);
+  // Per view: a view without its own flag keeps the legacy list.
+  const scopeList = scopesOn && view === "Projects" && targetScopes?.projects ? "project"
+    : scopesOn && view === "Notes" && targetScopes?.notes ? "note" : null;
+  const scopeSwitcher = scopeList !== null || (scopesOn && targetPlan);
   return (
     <main className={`appShell view-${view.toLowerCase()}${app.selected ? " inspectorOpen" : ""}${view === "Projects" && app.openProject ? " projectPageOpen" : ""}`} data-design-system={mobileDesignV1Preview ? "lumi-v1" : undefined} data-workspace-tone={app.activeWorkspaceTone}
       data-my-plan-preview={mobileDesignV1Preview && app.mobilePlanPreviewActive && view === "Today" ? "true" : undefined}>
@@ -86,7 +98,7 @@ export function LumiAppRoot({ targetMyPlan }: { targetMyPlan?: TargetMyPlanProps
             </button>
           </div>
         ))}
-        {app.navigationUnavailable && (
+        {app.navigationUnavailable && !scopeList && (
           <div className="navigationUnavailableNotice" role="status" data-testid="navigation-unavailable">
             <p>{language === "cs"
               ? "Odkaz nelze otevřít. Položka není v aktuálních datech dostupná."
@@ -124,6 +136,7 @@ export function LumiAppRoot({ targetMyPlan }: { targetMyPlan?: TargetMyPlanProps
               {view === "Today" && !targetPlan && <TodayHeaderMeta app={app} />}
             </div>
           </div>
+          {scopeSwitcher && <TargetScopeSwitcher language={language} variant={scopeList === null ? "plan" : "lists"} />}
           <HeldBack app={app} />
           <CalendarView app={app} />
           <HomeView app={app} />
@@ -133,8 +146,10 @@ export function LumiAppRoot({ targetMyPlan }: { targetMyPlan?: TargetMyPlanProps
           <AgentsView app={app} />
           <SettingsView app={app} />
           {targetPlan && targetMyPlan
-            ? <TargetMyPlan gates={targetMyPlan} language={language} />
-            : <EntityList app={app} />}
+            ? <TargetMyPlan gates={targetMyPlan} language={language} scopeDriven={scopesOn} />
+            : scopeList
+              ? <TargetScopeLists key={scopeList} kind={scopeList} language={language} />
+              : <EntityList app={app} />}
           {view === "Today" && !targetPlan && <TodayFooter app={app} />}
         </div>
       </section>

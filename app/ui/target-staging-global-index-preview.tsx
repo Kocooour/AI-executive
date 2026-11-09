@@ -28,6 +28,7 @@ const failures:Record<GlobalIndexFailure,string>={
   "unavailable":"Bezpečný stagingový index není dostupný nebo je vypnutý.",
   "offline":"Připojení selhalo. Staré údaje nejsou zobrazeny.",
   "aborted":"Načítání bylo přerušeno. Přehled je nutné znovu ověřit.",
+  "rate-limited":"Příliš mnoho požadavků. Zkuste to za chvíli znovu.",
 };
 
 export function TargetStagingGlobalIndexPreview({

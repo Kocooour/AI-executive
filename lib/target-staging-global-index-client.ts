@@ -17,7 +17,7 @@ export type GlobalIndexItem=
 export type GlobalIndexPage={scope:GlobalIndexScope;items:GlobalIndexItem[];
   hasMore:boolean;nextCursor:string|null};
 export type GlobalIndexFailure="signed-out"|"stale"|"invalid-request"|
-  "invalid-response"|"unavailable"|"offline"|"aborted";
+  "invalid-response"|"unavailable"|"offline"|"aborted"|"rate-limited";
 export type GlobalIndexResult={ok:true;page:GlobalIndexPage}|
   {ok:false;reason:GlobalIndexFailure};
 
@@ -202,7 +202,8 @@ async function fetchUntilAbort(
     return result;
   }finally{signal.removeEventListener("abort",wake);}
 }
-async function boundedJson(response:Response,signal?:AbortSignal):Promise<unknown>{
+/** Size-bounded (8 MiB, Content-Length and streamed), strict UTF-8 JSON read. */
+export async function boundedJson(response:Response,signal?:AbortSignal):Promise<unknown>{
   const length=response.headers.get("content-length");
   if(length!==null&&(!/^(?:0|[1-9][0-9]*)$/.test(length)||
     !Number.isSafeInteger(Number(length))||Number(length)>MAX_BODY_BYTES)){
@@ -262,6 +263,7 @@ export async function fetchGlobalIndexPage(
       return {ok:false,reason:"signed-out"};
     if(response.status===409)return {ok:false,reason:"stale"};
     if(response.status===400)return {ok:false,reason:"invalid-request"};
+    if(response.status===429)return {ok:false,reason:"rate-limited"};
     return {ok:false,reason:"unavailable"};
   }
   if(response.redirected||!noStore(response.headers.get("cache-control"))||
