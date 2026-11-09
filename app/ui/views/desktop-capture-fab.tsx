@@ -17,6 +17,7 @@ export function DesktopCaptureFab({ app }: { app: LumiApp }) {
     const onKeyDown = (event: KeyboardEvent) => {
       if (!window.matchMedia("(min-width: 701px)").matches) return;
       const state = currentApp.current;
+      if (state.captureDisabled) return;
       const target = event.target instanceof Element ? event.target : null;
       const editable = Boolean(target?.closest(
         'input, textarea, select, [contenteditable]:not([contenteditable="false"])',
@@ -35,6 +36,7 @@ export function DesktopCaptureFab({ app }: { app: LumiApp }) {
   }, []);
 
   if (!mobileDesignV1Preview) return null;
+  if (app.captureDisabled) return null;
   const blocked = Boolean(app.capture || app.assistantOpen || app.moreOpen ||
     app.selected || app.confirmRequest);
   return (

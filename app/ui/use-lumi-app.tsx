@@ -7,9 +7,10 @@ import { db, ensureDefaultWorkspace, migratePropertyRelations, personalWorkspace
 import { clearLocalData, finishInterruptedWipe, hasUnsentChanges, markSignedIn, restoreGenerationKey, signedInKey, signedOutKey } from "../../lib/local-data";
 import { failedSignOutNeedsReload, incompleteSignOutNoticeKey, runSignOut } from "../../lib/sign-out";
 import { dropNotesDraft, keepNotesDraft, keptNotesDrafts, leftoverDraftAction, settleNotesDraft, type KeptNotesDraft } from "../../lib/notes-drafts";
-import { addressUpdate, searchForTarget, searchForView, searchWithoutScope, targetFromSearch, viewExitFromProject, viewFromSearch } from "../../lib/view-url";
+import { addressUpdate, scopeFromSearch, searchForTarget, searchForView, searchWithScope, searchWithoutScope, targetFromSearch, viewExitFromProject, viewFromSearch } from "../../lib/view-url";
 import { resolveLegacyProjectLink } from "../../lib/legacy-project-deep-link";
 import { requestsTypedRecord, showUnavailableLink } from "../../lib/navigation-link-status";
+import { TARGET_ADDRESS_EVENT, isPlanDetailSearch } from "../../lib/target-detail-route";
 import { legacyRecordBelongsToProject, resolveLegacyRecordLink } from "../../lib/legacy-record-deep-link";
 import { buildContext, type ContextBundle } from "../../lib/context";
 import { mergeSnapshots, type ServerSnapshot } from "../../lib/server-sync";
@@ -57,9 +58,24 @@ import { useSync } from "./hooks/use-sync";
 import { localizeServerError } from "../../lib/server-errors";
 import { workspaceTone } from "./workspace-tone";
 
+// The view named by a target detail address (record addresses always name it), else null.
+function detailViewOfSearch(search: string): string | null {
+  return new URLSearchParams(searchWithoutScope(search)).get("view");
+}
+
 // All client state, effects and handlers of the Lumi app shell, moved verbatim from app/page.tsx.
 // Views receive the returned object as `app` and destructure what they render.
-export function useLumiApp() {
+export function useLumiApp(options: { targetDetails?: boolean; targetUnified?: boolean } = {}) {
+  // R3-FE-4a: both default to false, and then none of the branches below run (legacy
+  // behaviour is untouched). targetDetails: a typed project/task/note address is an
+  // authorized target detail, resolved by the server, never by legacy local records.
+  // targetUnified: the global reading scope governs sidebar projects, inspector and
+  // capture, so legacy quick capture writes nothing (there is no target create API yet).
+  const targetDetailsRef = useRef(Boolean(options.targetDetails));
+  targetDetailsRef.current = Boolean(options.targetDetails);
+  const captureDisabled = Boolean(options.targetUnified);
+  const captureDisabledRef = useRef(captureDisabled);
+  captureDisabledRef.current = captureDisabled;
   // In-memory only: tasks can navigate to a Gmail source without putting
   // message IDs into URLs, localStorage or persisted navigation state.
   const [mailSourceToOpen, setMailSourceToOpen] = useState<{ workspaceId: string; accountId: string; messageId: string } | null>(null);
@@ -493,7 +509,7 @@ export function useLumiApp() {
   const sessionChannel = "ai-executive-session";
   // Explicit navigation away from a project creates its own history step.
   // Back then returns to the project, including when the next view is Projects (list).
-  function setView(next: string, options?: { previewMyPlan?: boolean }) {
+  function setView(next: string, options?: { previewMyPlan?: boolean; targetOpen?: boolean }) {
     // Explicit navigation is not Back: never steal focus from the chosen nav control.
     pendingProjectFocusRef.current = null;
     activeProjectFocusEntryRef.current = null;
@@ -517,6 +533,17 @@ export function useLumiApp() {
           exit?.search ?? searchForView(next, startupView);
         window.history.pushState(null, "", `${window.location.pathname}${nextSearch}`);
         addressedView.current = planPreview ? "MyPlanPreview" : next;
+      } catch { /* The normal view effect handles unavailable History API. */ }
+    } else if (targetDetailsRef.current && !options?.targetOpen && requestsTypedRecord(window.location.search)) {
+      // R3-FE-4a: choosing a view while a target detail is open leaves it: one new history
+      // step to the view-only address (the reading scope stays). targetOpen is the caller
+      // that pushes the target address itself right after switching the view.
+      try {
+        const nextSearch = searchWithScope(planPreview ? "?view=MyPlanPreview" : searchForView(next, startupView),
+          scopeFromSearch(window.location.search));
+        window.history.pushState(null, "", `${window.location.pathname}${nextSearch}`);
+        addressedView.current = planPreview ? "MyPlanPreview" : next;
+        window.dispatchEvent(new Event(TARGET_ADDRESS_EVENT));
       } catch { /* The normal view effect handles unavailable History API. */ }
     }
     setViewState(next);
@@ -1427,7 +1454,8 @@ export function useLumiApp() {
     const isPreviewPhone = mobileDesignV1Preview && window.matchMedia("(max-width: 700px)").matches;
     // The shared reading scope (?scope=) is not a navigation choice: it must not defeat the phone start.
     const previewMobileStart = isPreviewPhone && searchWithoutScope(window.location.search) === "";
-    const previewDirectLink = mobileDesignV1Preview && mobileV1IsPlanPreviewRoute(window.location.search);
+    const previewDirectLink = mobileDesignV1Preview && (mobileV1IsPlanPreviewRoute(window.location.search) ||
+      (targetDetailsRef.current && isPlanDetailSearch(window.location.search)));
     if (previewMobileStart || previewDirectLink) {
       setMobilePlanPreviewActive(true);
       if (previewMobileStart) setStartupView("Today");
@@ -1758,7 +1786,9 @@ export function useLumiApp() {
   useEffect(() => {
     if (deepLinkHandled.current || (authState !== "ready" && !offlineViewRef.current) ||
         (!items.length && syncStatus !== "synced" && syncStatus !== "offline")) return;
-    const route = targetFromSearch(window.location.search, addressableViews, startupView);
+    // R3-FE-4a: with target details on, a typed address is never resolved against local legacy records.
+    const targetTyped = targetDetailsRef.current && requestsTypedRecord(window.location.search);
+    const route = targetTyped ? null : targetFromSearch(window.location.search, addressableViews, startupView);
     let resolvedTypedTarget = false;
     if (route?.kind === "project") {
       const destination = resolveLegacyProjectLink(items, route.id, activeWorkspaceId);
@@ -1789,8 +1819,8 @@ export function useLumiApp() {
     }
     // Do not classify a missing typed target until the authenticated snapshot
     // has completed; incomplete local data is not evidence of inaccessibility.
-    if (requestsTypedRecord(window.location.search) && syncStatus !== "synced" && syncStatus !== "offline") return;
-    setNavigationUnavailable(showUnavailableLink(window.location.search, resolvedTypedTarget));
+    if (!targetTyped && requestsTypedRecord(window.location.search) && syncStatus !== "synced" && syncStatus !== "offline") return;
+    setNavigationUnavailable(!targetTyped && showUnavailableLink(window.location.search, resolvedTypedTarget));
     const taskId = new URLSearchParams(window.location.search).get("task");
     if (taskId) {
       const task = items.find((item) => item.id === taskId);
@@ -1848,6 +1878,12 @@ export function useLumiApp() {
     }
     const navigationView = mobileDesignV1Preview && mobilePlanPreviewActive && view === "Today"
       ? "MyPlanPreview" : view;
+    // R3-FE-4a: a target detail address of the current view is kept as it is (the shell
+    // opens it); once the view differs from it, the normal view address replaces it.
+    if (targetDetailsRef.current && requestsTypedRecord(window.location.search)) {
+      const typedView = detailViewOfSearch(window.location.search) ?? navigationView;
+      if (typedView === navigationView) { addressedView.current = navigationView; return; }
+    }
     // Even if the preview uses Today as its local initial data view,
     // explicit ?view=Today must remain distinct and reloadable.
     const navigationStart = mobileDesignV1Preview && view === "Today" ? "Home" : startupView;
@@ -1875,7 +1911,8 @@ export function useLumiApp() {
         activeProjectFocusEntryRef.current = destinationFocusId;
       }
       const previewRoute = mobileDesignV1Preview &&
-        mobileV1IsPlanPreviewRoute(window.location.search);
+        (mobileV1IsPlanPreviewRoute(window.location.search) ||
+          (targetDetailsRef.current && isPlanDetailSearch(window.location.search)));
       const next = previewRoute ? "Today" :
         viewFromSearch(window.location.search, addressableViews) || localStorage.getItem("ai-executive-startup-view") || "Home";
       // Leaving a field commits what was typed in it, as closing the panel by hand would.
@@ -1888,7 +1925,9 @@ export function useLumiApp() {
       // Reuse startup's legacy scope resolver so a Back/Forward destination in
       // a different, still-known workspace can be restored safely. URL IDs
       // never grant access; UI-09 replaces this with server-authorized reads.
-      const target = targetFromSearch(window.location.search, addressableViews, nextView);
+      // R3-FE-4a: a typed target address belongs to the target detail, not to legacy records.
+      const targetTyped = targetDetailsRef.current && requestsTypedRecord(window.location.search);
+      const target = targetTyped ? null : targetFromSearch(window.location.search, addressableViews, nextView);
       const project = nextView === "Projects" && target?.kind === "project"
         ? resolveLegacyProjectLink(latestItemsRef.current, target.id, activeWorkspaceRef.current)
         : null;
@@ -1897,7 +1936,7 @@ export function useLumiApp() {
       const destination = record ?? project;
       // A typed URL never discloses whether the record was deleted or its access
       // changed. Treat both outcomes identically and keep the safe list view.
-      const unavailableTarget = showUnavailableLink(window.location.search, Boolean(destination));
+      const unavailableTarget = !targetTyped && showUnavailableLink(window.location.search, Boolean(destination));
       setNavigationUnavailable(unavailableTarget);
       if (unavailableTarget) {
         // Back/Forward may keep the same list view, so the view-sync effect
@@ -2804,6 +2843,8 @@ export function useLumiApp() {
   }
 
   function openCapture(type: "task" | "note" = "task", projectId = "") {
+    // R3-FE-4a: no target create endpoint exists yet; legacy capture must not write legacy data in target mode.
+    if (captureDisabledRef.current) return;
     captureOpener.current = document.activeElement as HTMLElement | null;
     const projectWorkspaceId = (projectId && items.find((item) => item.id === projectId && item.type === "project")?.workspaceId) || "";
     const workspaceId = initialCaptureWorkspace(projectWorkspaceId, personalWorkspaceId);
@@ -4799,6 +4840,7 @@ export function useLumiApp() {
     notificationState,
     notificationStatus,
     openCapture,
+    captureDisabled,
     pactAgents,
     parseCapture,
     passkeyBusy,

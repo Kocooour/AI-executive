@@ -1,0 +1,49 @@
+/* R3-FE-4a: authorized details (inspector shell classes are reused for layout)
+   and the compact target project list in the sidebar. */
+.targetDetail{display:grid;align-content:start;gap:10px;}
+.targetDetail p{margin:0;line-height:1.5;}
+.targetDetailStatus{color:var(--muted,#5f5f62);font-size:14px;min-height:1.5em;}
+.targetDetailContent{display:grid;gap:10px;}
+.targetDetailContent h2{margin:0;overflow-wrap:anywhere;}
+.targetDetailContent h3{margin:8px 0 0;font-size:15px;}
+.targetDetailMuted,.targetDetailNote{color:var(--muted,#5f5f62);font-size:14px;}
+.targetDetailNoteBody{white-space:pre-wrap;overflow-wrap:anywhere;line-height:1.55;}
+.targetDetailTasks{list-style:none;margin:0;padding:6px;display:grid;gap:2px;border-radius:16px;
+  background:#DCFCE7;color:#1a1a1a;}
+.targetDetailContent[data-area-kind="shared"] .targetDetailTasks{background:#DBEAFE;}
+.targetDetailTaskRow,.targetDetailTaskText{display:flex;align-items:center;width:100%;min-height:44px;
+  padding:8px 12px;font:inherit;font-size:16px;font-weight:600;line-height:1.35;text-align:left;
+  overflow-wrap:anywhere;color:inherit;}
+.targetDetailTaskRow{border:0;border-radius:10px;background:transparent;cursor:pointer;}
+.targetDetailTaskRow:hover{background:rgba(0,0,0,.06);}
+.targetDetailTaskRow:focus-visible,.targetDetailLink:focus-visible{outline:3px solid #2563EB;outline-offset:2px;}
+.targetDetailLink{font:inherit;font-weight:650;padding:0;border:0;background:none;cursor:pointer;
+  color:inherit;text-decoration:underline;min-height:44px;}
+.targetDetail button:not(.inspectorClose):not(.targetDetailTaskRow):not(.targetDetailLink){
+  font:inherit;min-height:44px;padding:8px 14px;border-radius:10px;border:1px solid var(--line,#9da99e);
+  background:var(--surface,#fff);color:inherit;cursor:pointer;justify-self:start;}
+.targetDetail button:disabled{opacity:.6;cursor:default;}
+:root[data-theme="dark"] .targetDetailTasks{background:#183a26;color:#f2f2f5;}
+:root[data-theme="dark"] .targetDetailContent[data-area-kind="shared"] .targetDetailTasks{background:#1b2f55;}
+:root[data-theme="dark"] .targetDetailTaskRow:hover{background:rgba(255,255,255,.1);}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme]) .targetDetailTasks{background:#183a26;color:#f2f2f5;}
+  :root:not([data-theme]) .targetDetailContent[data-area-kind="shared"] .targetDetailTasks{background:#1b2f55;}
+}
+/* Rows of the target lists and of My Plan that open a detail. */
+.targetScopeRowButton,.stagingMyPlanOpen{font:inherit;font-weight:inherit;text-align:left;width:100%;
+  min-height:44px;padding:8px 12px;border:0;border-radius:10px;background:transparent;color:inherit;cursor:pointer;
+  overflow-wrap:anywhere;}
+.targetScopeRowButton:hover,.stagingMyPlanOpen:hover{background:rgba(0,0,0,.06);}
+.targetScopeRowButton:focus-visible,.stagingMyPlanOpen:focus-visible{outline:3px solid #2563EB;outline-offset:2px;}
+.targetScopeRowButton[aria-current="true"]{background:rgba(37,99,235,.14);}
+.stagingMyPlanOpen{padding:0;min-height:0;font-size:15px;font-weight:650;}
+.stagingMyPlanOpen{min-height:44px;display:flex;align-items:center;}
+/* Compact target project list in the sidebar. */
+.targetSidebarProjects{display:grid;gap:2px;}
+.targetSidebarProjects button{display:flex;align-items:center;gap:8px;width:100%;min-height:44px;
+  text-align:left;font:inherit;}
+.targetSidebarProjects .sidebarProjectTitle{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.targetSidebarProjects small,.targetSidebarProjectText{color:var(--muted,#5f5f62);font-size:13px;padding:6px 10px;}
+.targetSidebarProjectRow{display:block;min-height:44px;padding:10px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.targetScopeRow:has(.targetScopeRowButton){padding:0;}

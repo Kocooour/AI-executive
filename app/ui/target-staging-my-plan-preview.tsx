@@ -67,8 +67,11 @@ const nextHumanDate=(day:string,locale="cs-CZ")=>{
   return humanDate(following.toISOString().slice(0,10),locale);
 };
 
-function PlanDay({label,tasks,date,canComplete,onComplete,canWhen,onWhen,copy}:{
+function PlanDay({label,tasks,date,canComplete,onComplete,canWhen,onWhen,copy,onOpenTask,openLabel}:{
   copy:MyPlanCopy;label:string;tasks:MyPlanSliceTask[];date:string;
+  /** R3-FE-4a: embedded only; the title then opens the authorized task detail. */
+  onOpenTask?:(taskId:string,opener:HTMLElement)=>void;
+  openLabel?:(title:string)=>string;
   canComplete:boolean;onComplete:(task:MyPlanSliceTask)=>void;
   canWhen:boolean;onWhen:(task:MyPlanSliceTask,whenOn:string)=>void;
 }){
@@ -95,7 +98,13 @@ function PlanDay({label,tasks,date,canComplete,onComplete,canWhen,onWhen,copy}:{
                     onClick={()=>onComplete(task)}/>
                   :<span className="stagingMyPlanSquare" aria-hidden="true"/>}
                 <div className="stagingMyPlanTask">
-                  <strong>{task.title}</strong>
+                  {onOpenTask
+                    ?<button type="button" className="stagingMyPlanOpen"
+                        data-detail-row={"task:"+task.taskId}
+                        aria-label={openLabel?openLabel(task.title):undefined}
+                        onClick={event=>onOpenTask(task.taskId,event.currentTarget)}>
+                        <strong>{task.title}</strong></button>
+                    :<strong>{task.title}</strong>}
                   {task.attentionOn<date&&
                     <small>{copy.attentionSince(humanDate(task.attentionOn,copy.locale))}</small>}
                   {task.dueOn&&<small>{copy.dueOn(humanDate(task.dueOn,copy.locale))}</small>}
@@ -122,8 +131,11 @@ function PlanDay({label,tasks,date,canComplete,onComplete,canWhen,onWhen,copy}:{
 }
 export function TargetStagingMyPlanPreview({
   statusWriteEnabled=false,whenWriteEnabled=false,embedded=false,onRefusal,
-  language="cs",areaFilter:controlledFilter,
+  language="cs",areaFilter:controlledFilter,onOpenTask,openTaskLabel,
 }:{
+  /** R3-FE-4a: embedded only; opens the authorized task detail in the main app. */
+  onOpenTask?:(taskId:string,opener:HTMLElement)=>void;
+  openTaskLabel?:(title:string)=>string;
   /** R3-FE-3: when given, the global scope (Vše / Osobní / Sdílené) owns the
    * area filter: the plan's own toolbar filter is hidden and this value is used. */
   areaFilter?:MyPlanSliceFilter;
@@ -964,12 +976,14 @@ export function TargetStagingMyPlanPreview({
       <PlanDay copy={copy} label={followToday?copy.dayTodayAndEarlier:copy.dayUpToSelected}
         date={date} tasks={state.page.today.tasks}
         canComplete={canComplete} onComplete={task=>{void changeStatus(task,"completed");}}
-        canWhen={canWhen} onWhen={(task,on)=>{void changeWhen(task,on);}}/>
+        canWhen={canWhen} onWhen={(task,on)=>{void changeWhen(task,on);}}
+        onOpenTask={embedded?onOpenTask:undefined} openLabel={openTaskLabel}/>
       <PlanDay copy={copy} label={(followToday?copy.dayTomorrowPrefix:copy.dayNextPrefix)+
         nextHumanDate(date,copy.locale)}
         date={date} tasks={state.page.tomorrow.tasks}
         canComplete={canComplete} onComplete={task=>{void changeStatus(task,"completed");}}
-        canWhen={canWhen} onWhen={(task,on)=>{void changeWhen(task,on);}}/>
+        canWhen={canWhen} onWhen={(task,on)=>{void changeWhen(task,on);}}
+        onOpenTask={embedded?onOpenTask:undefined} openLabel={openTaskLabel}/>
       {state.page.hasMore&&
         <button disabled={moreBusy||anyPending} type="button" onClick={()=>{void more();}}>
           {moreBusy?copy.moreBusy:copy.more}

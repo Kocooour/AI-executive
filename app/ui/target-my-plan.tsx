@@ -13,13 +13,18 @@ import {useTargetGeneration,useTargetRuntime} from "./target-data-provider";
 import {TargetDataStatus} from "./target-data-status";
 import {useTargetScope} from "./target-scope-state";
 import {TargetStagingMyPlanPreview} from "./target-staging-my-plan-preview";
+import {openTargetDetail} from "./target-detail-state";
+import {detailCopy} from "../../lib/target-detail-copy";
 import {myPlanCopy,type MyPlanLanguage} from "../../lib/target-my-plan-copy";
 import {createRefusalBudget,targetMyPlanGate} from "../../lib/target-my-plan-embed";
 import "../target-staging/my-plan/preview/preview.css";
 import "./target-my-plan.css";
+import "./target-details.css";
 
-export default function TargetMyPlan({gates,language="cs",scopeDriven=false}:{
+export default function TargetMyPlan({gates,language="cs",scopeDriven=false,taskDetail=false}:{
   gates:{statusWrite:boolean;whenWrite:boolean};
+  /** R3-FE-4a: task titles open the authorized task detail in the main app. */
+  taskDetail?:boolean;
   /** R3-FE-3: the global All / Personal / Shared scope drives the plan's area filter. */
   scopeDriven?:boolean;
   /** R3-FE-2b: follows the app language; Czech by default. */
@@ -79,5 +84,7 @@ export default function TargetMyPlan({gates,language="cs",scopeDriven=false}:{
     </div>;
   return <TargetStagingMyPlanPreview key={gate.generation} embedded language={language}
     statusWriteEnabled={gates.statusWrite} whenWriteEnabled={gates.whenWrite}
-    onRefusal={onRefusal} areaFilter={scopeDriven?scope:undefined}/>;
+    onRefusal={onRefusal} areaFilter={scopeDriven?scope:undefined}
+    onOpenTask={taskDetail?(id,opener)=>openTargetDetail({kind:"task",id,view:"MyPlanPreview"},opener):undefined}
+    openTaskLabel={detailCopy[language].planOpenTask}/>;
 }

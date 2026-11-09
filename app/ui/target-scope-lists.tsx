@@ -22,7 +22,10 @@ import {
 } from "../../lib/target-staging-global-index-lifecycle";
 import {groupIndexRowsByArea} from "../../lib/target-scope-rows";
 import {scopesCopy,type ScopesLanguage} from "../../lib/target-scopes-copy";
+import {detailCopy} from "../../lib/target-detail-copy";
+import {detailRowKey,focusPendingRow,openTargetDetail} from "./target-detail-state";
 import "./target-scopes.css";
+import "./target-details.css";
 
 type Session=NonNullable<ReturnType<typeof useScopeSession>>;
 type State=
@@ -36,10 +39,13 @@ function useScopeSession(kind:"project"|"note",scope:"all"|"personal"|"shared"){
   return useTargetSession(contextVersion=>createKindIndexReadSession(kind,{scope,contextVersion}),[kind,scope]);
 }
 
-export default function TargetScopeLists({kind,language="cs"}:{
+export default function TargetScopeLists({kind,language="cs",detail=false}:{
   kind:"project"|"note";language?:ScopesLanguage;
+  /** R3-FE-4a: rows open the authorized detail in the main app (else they stay text). */
+  detail?:boolean;
 }){
   const copy=scopesCopy[language];
+  const rowCopy=detailCopy[language];
   const scope=useTargetScope();
   const {gate,onRefusal,retry}=useTargetGate();
   const session=useScopeSession(kind,scope);
@@ -76,6 +82,9 @@ export default function TargetScopeLists({kind,language="cs"}:{
     }).catch(()=>{if(epoch.current===id)setState({kind:"error",reason:"unavailable"});});
     return ()=>{epoch.current++;};
   },[session,ready,nonce]);
+
+  // R3-FE-4a: after a detail closed, focus returns to the row that opened it.
+  useEffect(()=>{if(state.kind==="ready")focusPendingRow();},[state]);
 
   // Privacy: titles never stay on screen while the tab is hidden or offline.
   useEffect(()=>{
@@ -179,7 +188,17 @@ export default function TargetScopeLists({kind,language="cs"}:{
       :groups.map(group=><ul key={group.areaId} className="targetScopeGroup"
         data-area-kind={group.areaKind}
         aria-label={group.areaKind==="private"?copy.groupPersonal:copy.groupShared}>
-        {group.items.map(entry=><li key={entry.item.id} className="targetScopeRow">{entry.item.title}</li>)}
+        {group.items.map(entry=><li key={entry.item.id} className="targetScopeRow">
+          {detail
+            ?<button type="button" className="targetScopeRowButton"
+                data-detail-row={detailRowKey(kind,entry.item.id)}
+                aria-label={kind==="project"?rowCopy.rowOpenProject(entry.item.title):rowCopy.rowOpenNote(entry.item.title)}
+                onClick={event=>openTargetDetail(kind==="project"
+                  ?{kind:"project",id:entry.item.id,view:"Projects"}
+                  :{kind:"note",id:entry.item.id,view:"Notes"},event.currentTarget)}>
+                {entry.item.title}</button>
+            :entry.item.title}
+        </li>)}
       </ul>))}
     {page&&page.hasMore&&state.kind==="ready"&&<button type="button" disabled={state.more}
       onClick={()=>{statusRef.current?.focus();void more();}}>

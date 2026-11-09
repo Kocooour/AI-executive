@@ -1,6 +1,9 @@
 "use client";
 import dynamic from "next/dynamic";
+import { useEffect } from "react";
 import { useLumiApp } from "./use-lumi-app";
+import { focusPendingRow, useTargetSearch } from "./target-detail-state";
+import { detailRequestFromSearch, detailRouteKey, type TargetDetailRequest } from "../../lib/target-detail-route";
 import { mobileDesignV1Preview } from "./navigation";
 import { projectSyncNoticeLabel } from "../../lib/project-sync-notice";
 import { AuthScreen } from "./views/auth-screen";
@@ -32,11 +35,31 @@ const TargetMyPlan = dynamic(() => import("./target-my-plan"), { ssr: false });
 const TargetScopeSwitcher = dynamic(() => import("./target-scope-switcher"), { ssr: false });
 const TargetScopeLists = dynamic(() => import("./target-scope-lists"), { ssr: false });
 
+// R3-FE-4a: authorized details inside the main app; loaded only when a detail flag is on.
+const TargetDetailPanel = dynamic(() => import("./target-detail-panel"), { ssr: false });
+
+export type TargetDetailsProps = { task: boolean; project: boolean; note: boolean };
 export type TargetScopesProps = { enabled: boolean; projects: boolean; notes: boolean };
 export type TargetMyPlanProps = { enabled: boolean; statusWrite: boolean; whenWrite: boolean };
 
-export function LumiAppRoot({ targetMyPlan, targetScopes }: { targetMyPlan?: TargetMyPlanProps; targetScopes?: TargetScopesProps } = {}) {
-  const app = useLumiApp();
+export function LumiAppRoot({ targetMyPlan, targetScopes, targetDetails }: { targetMyPlan?: TargetMyPlanProps; targetScopes?: TargetScopesProps; targetDetails?: TargetDetailsProps } = {}) {
+  // Owner decision 2026-11-09: with target scopes on, the single global scope governs the
+  // sidebar projects, the inspector and quick capture (see docs/R3-FE-04A-DETAILS.md).
+  const scopesOn = Boolean(targetScopes?.enabled);
+  const detailGates = { task: Boolean(targetDetails?.task), project: Boolean(targetDetails?.project), note: Boolean(targetDetails?.note) };
+  const detailsOn = detailGates.task || detailGates.project || detailGates.note;
+  const app = useLumiApp({ targetDetails: detailsOn, targetUnified: scopesOn });
+  const detailSearch = useTargetSearch(detailsOn);
+  const detailRequest: TargetDetailRequest = detailsOn ? detailRequestFromSearch(detailSearch, detailGates) : { state: "none" };
+  const detailKey = detailRequest.state === "route" ? detailRouteKey(detailRequest.route) : detailRequest.state;
+  // After a detail closed, focus returns to the row that opened it (or the page heading).
+  useEffect(() => {
+    if (!detailsOn) return;
+    const frame = window.requestAnimationFrame(() => {
+      focusPendingRow(document.querySelector<HTMLElement>(".appPane .pageTitleRow h1"));
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [detailsOn, detailKey]);
   const {
     activeWorkspace,
     activeWorkspaceId,
@@ -56,15 +79,27 @@ export function LumiAppRoot({ targetMyPlan, targetScopes }: { targetMyPlan?: Tar
   // Only the "Můj plán" entry of the v1 shell (view "Today") switches; every other view stays legacy.
   const targetPlan = Boolean(targetMyPlan?.enabled) && mobileDesignV1Preview && app.mobilePlanPreviewActive && view === "Today";
   // R3-FE-3: with target scopes on, Projects and Notes list the server index for the global scope.
-  const scopesOn = Boolean(targetScopes?.enabled);
   // Per view: a view without its own flag keeps the legacy list.
   const scopeList = scopesOn && view === "Projects" && targetScopes?.projects ? "project"
     : scopesOn && view === "Notes" && targetScopes?.notes ? "note" : null;
   const scopeSwitcher = scopeList !== null || (scopesOn && targetPlan);
+  // R3-FE-4a: which authorized detail (if any) belongs to the view on screen.
+  const planActive = mobileDesignV1Preview && app.mobilePlanPreviewActive && view === "Today";
+  const detailRoute = detailRequest.state === "route" ? detailRequest.route : null;
+  const detailMatchesView = detailRoute !== null && (detailRoute.view === "MyPlanPreview" ? targetPlan
+    : detailRoute.view === view && !planActive);
+  // A plan address whose target plan is off, or a malformed/disabled kind: one calm answer.
+  const detailUnavailable = detailRequest.state === "unavailable" ||
+    (detailRoute?.view === "MyPlanPreview" && planActive && !targetPlan);
+  const detailPanel = detailsOn && (detailUnavailable || detailMatchesView);
+  // The legacy inspector is never fed legacy records in a target view.
+  const targetView = scopeList !== null || targetPlan;
+  const legacyInspector = Boolean(app.selected) && !(scopesOn && targetView);
   return (
-    <main className={`appShell view-${view.toLowerCase()}${app.selected ? " inspectorOpen" : ""}${view === "Projects" && app.openProject ? " projectPageOpen" : ""}`} data-design-system={mobileDesignV1Preview ? "lumi-v1" : undefined} data-workspace-tone={app.activeWorkspaceTone}
+    <main className={`appShell view-${view.toLowerCase()}${legacyInspector || detailPanel ? " inspectorOpen" : ""}${view === "Projects" && app.openProject ? " projectPageOpen" : ""}`} data-design-system={mobileDesignV1Preview ? "lumi-v1" : undefined} data-workspace-tone={app.activeWorkspaceTone}
       data-my-plan-preview={mobileDesignV1Preview && app.mobilePlanPreviewActive && view === "Today" ? "true" : undefined}>
-      <Sidebar app={app} targetPlan={Boolean(targetMyPlan?.enabled)} />
+      <Sidebar app={app} targetPlan={Boolean(targetMyPlan?.enabled)}
+        targetSidebar={scopesOn && targetScopes?.projects ? { projects: true, openable: detailGates.project } : undefined} />
       <section className="appPane">
         {app.offlineView && (
           <div className="offlineStart" role="status">
@@ -146,9 +181,10 @@ export function LumiAppRoot({ targetMyPlan, targetScopes }: { targetMyPlan?: Tar
           <AgentsView app={app} />
           <SettingsView app={app} />
           {targetPlan && targetMyPlan
-            ? <TargetMyPlan gates={targetMyPlan} language={language} scopeDriven={scopesOn} />
+            ? <TargetMyPlan gates={targetMyPlan} language={language} scopeDriven={scopesOn} taskDetail={detailGates.task} />
             : scopeList
-              ? <TargetScopeLists key={scopeList} kind={scopeList} language={language} />
+              ? <TargetScopeLists key={scopeList} kind={scopeList} language={language}
+                detail={scopeList === "project" ? detailGates.project : detailGates.note} />
               : <EntityList app={app} />}
           {view === "Today" && !targetPlan && <TodayFooter app={app} />}
         </div>
@@ -156,7 +192,8 @@ export function LumiAppRoot({ targetMyPlan, targetScopes }: { targetMyPlan?: Tar
       <MobileNav app={app} targetPlan={Boolean(targetMyPlan?.enabled)} />
       <DesktopCaptureFab app={app} />
       <CaptureDialog app={app} />
-      <DetailPanel app={app} />
+      {!(scopesOn && targetView) && <DetailPanel app={app} />}
+      {detailPanel && <TargetDetailPanel route={detailUnavailable ? null : detailRoute} language={language} gates={detailGates} />}
       <AssistantPanel app={app} />
       <DeferPopover app={app} />
       <ConfirmDialog app={app} />

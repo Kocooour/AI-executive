@@ -119,7 +119,7 @@ test("flag off: the root loads the target screen lazily and only for target mode
   assert.match(rootSource,/dynamic\(\(\) => import\("\.\/target-my-plan"\), \{ ssr: false \}\)/);
   assert.doesNotMatch(rootSource,/^import .*target-my-plan/m);
   assert.match(rootSource,/const targetPlan = Boolean\(targetMyPlan\?\.enabled\) && mobileDesignV1Preview && app\.mobilePlanPreviewActive && view === "Today"/);
-  assert.match(rootSource,/targetPlan && targetMyPlan\s*\n\s*\? <TargetMyPlan gates=\{targetMyPlan\} language=\{language\} scopeDriven=\{scopesOn\} \/>\s*\n\s*: scopeList\s*\n\s*\? <TargetScopeLists key=\{scopeList\} kind=\{scopeList\} language=\{language\} \/>\s*\n\s*: <EntityList app=\{app\} \/>/);
+  assert.match(rootSource,/targetPlan && targetMyPlan\s*\n\s*\? <TargetMyPlan gates=\{targetMyPlan\} language=\{language\} scopeDriven=\{scopesOn\} taskDetail=\{detailGates\.task\} \/>\s*\n\s*: scopeList\s*\n\s*\? <TargetScopeLists key=\{scopeList\} kind=\{scopeList\} language=\{language\}\s*\n\s*detail=\{scopeList === "project" \? detailGates\.project : detailGates\.note\} \/>\s*\n\s*: <EntityList app=\{app\} \/>/);
   // Legacy pieces that would claim legacy data are suppressed in target mode.
   assert.match(rootSource,/!targetPlan && <TodayTop/);
   assert.match(rootSource,/!targetPlan && <TodayFooter/);
@@ -128,7 +128,7 @@ test("flag off: the root loads the target screen lazily and only for target mode
   assert.match(rootSource,/data-plan-source="legacy-today"/);
   const page=read("app/page.tsx");
   assert.match(page,/const config = targetUiEnabled\(\) \? targetUiConfig\(process\.env\) : null/);
-  assert.match(page,/const targetData = config\?\.myPlan\.enabled === true \|\| config\?\.scopes\.projects === true \|\| config\?\.scopes\.notes === true/);
+  assert.match(page,/const targetData = targetDataNeeded\(config\)/);
   assert.match(page,/: <LumiAppRoot \/>/); // flag off: no prop, no provider
   assert.doesNotMatch(page,/target-my-plan|fetch\(|target-staging\//);
 });
@@ -220,6 +220,6 @@ test("nav labels never claim legacy data in target mode",()=>{
     assert.match(source,/server plan from staging/,file);
   }
   const rootSource=read("app/ui/lumi-app-root.tsx");
-  assert.match(rootSource,/<Sidebar app=\{app\} targetPlan=\{Boolean\(targetMyPlan\?\.enabled\)\} \/>/);
+  assert.match(rootSource,/<Sidebar app=\{app\} targetPlan=\{Boolean\(targetMyPlan\?\.enabled\)\}/);
   assert.match(rootSource,/<MobileNav app=\{app\} targetPlan=\{Boolean\(targetMyPlan\?\.enabled\)\} \/>/);
 });

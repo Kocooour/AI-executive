@@ -23,16 +23,40 @@ export const TARGET_UI_SCOPES_FLAGS=[
 ] as const;
 export const TARGET_UI_SCOPES_PROJECTS_FLAG="AI_EXECUTIVE_TARGET_STAGING_HTTP_GLOBAL_PROJECTS_ENABLED";
 export const TARGET_UI_SCOPES_NOTES_FLAG="AI_EXECUTIVE_TARGET_STAGING_HTTP_GLOBAL_NOTES_ENABLED";
+/** R3-FE-4a: authorized details inside the main app. Each kind is gated by the
+ * new UI flag AND the server flags its detail route requires; a kind without
+ * all of them keeps today's behaviour (rows stay text). */
+export const TARGET_UI_DETAILS_FLAGS=[
+  ...TARGET_UI_FLAGS,
+  "AI_EXECUTIVE_TARGET_UI_DETAILS_ENABLED",
+] as const;
+/** task: /api/target-staging/task-temporal/detail */
+export const TARGET_UI_DETAIL_TASK_FLAG="AI_EXECUTIVE_TARGET_STAGING_HTTP_TEMPORAL_ENABLED";
+/** note: /api/target-staging/notes/[noteId] */
+export const TARGET_UI_DETAIL_NOTE_FLAG="AI_EXECUTIVE_TARGET_STAGING_HTTP_NOTES_ENABLED";
+/** project: /api/target-staging/projects/[projectId]/tasks needs only the base HTTP flag. */
 export type TargetUiConfig={
   myPlan:{enabled:boolean;statusWrite:boolean;whenWrite:boolean};
   scopes:{enabled:boolean;projects:boolean;notes:boolean};
+  details:{task:boolean;project:boolean;note:boolean};
 };
+
+/** The provider (and its session check) mounts only when some screen consumes it. */
+export function targetDataNeeded(config:TargetUiConfig|null):boolean{
+  return config!==null&&(config.myPlan.enabled||config.scopes.projects||config.scopes.notes||
+    config.details.task||config.details.project||config.details.note);
+}
 
 export function targetUiConfig(env:TargetUiEnv):TargetUiConfig|null {
   if(!TARGET_UI_FLAGS.every(name=>env[name]==="true"))return null;
   const enabled=TARGET_UI_MY_PLAN_FLAGS.every(name=>env[name]==="true");
   const scopes=TARGET_UI_SCOPES_FLAGS.every(name=>env[name]==="true");
-  return {scopes:{
+  const details=TARGET_UI_DETAILS_FLAGS.every(name=>env[name]==="true");
+  return {details:{
+    task:details&&env[TARGET_UI_DETAIL_TASK_FLAG]==="true",
+    project:details,
+    note:details&&env[TARGET_UI_DETAIL_NOTE_FLAG]==="true",
+  },scopes:{
     enabled:scopes,
     projects:scopes&&env[TARGET_UI_SCOPES_PROJECTS_FLAG]==="true",
     notes:scopes&&env[TARGET_UI_SCOPES_NOTES_FLAG]==="true",
