@@ -1,16 +1,15 @@
-/** R3-FE-4b: in-memory, runtime/generation-scoped recovery of ONE exact
- * idempotent note edit per note. Not storage, not an offline queue.
- *
- * The network operation must NOT be owned by a disposable detail component:
- * closing, hiding, or navigating away must not discard an already-sent
- * commandId after a server commit with a lost response.
- *
- * Restoring the command to UI is a separate, server-authorized operation.
+/** R3-FE-4b: recover ONE exact in-memory idempotent note edit per note.
+ * This coordinator outlives a disposable inspector but not the authenticated
+ * target runtime/generation. No browser storage, offline queue, or new UUID
+ * after ambiguous writes. A transport deadline can only make a write UNCERTAIN.
  */
 import {
   saveNoteEdit,type NoteEditCommand,type NoteEditSaveResult,
 } from "./target-staging-note-edit-client";
+import type {TargetClientRuntime} from "./target-client-runtime";
 
+export type NoteEditRuntime=Pick<TargetClientRuntime,"generation"|"known"|"register">;
+export const TARGET_NOTE_EDIT_WRITE_TIMEOUT_MS=20_000;
 export type TrackedNoteEditPhase="saving"|"uncertain"|"conflict"|"denied"|"saved";
 export type TrackedNoteEdit={
   readonly command:NoteEditCommand;
@@ -21,38 +20,64 @@ type Entry={
   phase:TrackedNoteEditPhase;
   controller:AbortController|null;
   pending:Promise<NoteEditSaveResult>|null;
+  cancel:()=>void;
 };
 type Bucket={
   generation:string;
   entries:Map<string,Entry>;
   listeners:Map<string,Set<()=>void>>;
+  disposed:boolean;
 };
-const buckets=new WeakMap<object,Bucket>();
+const buckets=new WeakMap<NoteEditRuntime,Bucket>();
+const denied=():NoteEditSaveResult=>({outcome:"denied"});
 const changed=(bucket:Bucket,id:string):void=>{
+  if(bucket.disposed)return;
   for(const listener of bucket.listeners.get(id)??[])listener();
 };
-function current(runtime:object,generation:string):Bucket{
-  const found=buckets.get(runtime);
-  if(found?.generation===generation)return found;
-  if(found) {
-    // Identity/restore rotation ends this recovery context. The server still
-    // independently authorizes any already received request.
-    for(const entry of found.entries.values())entry.controller?.abort();
-    found.entries.clear();
-    found.listeners.clear();
+/** The runtime owns cleanup, including when NO detail is mounted. Its
+ * registered disposables are synchronously disposed on signout, refusal,
+ * generation rotation and runtime.dispose(). */
+function purge(runtime:NoteEditRuntime,bucket:Bucket):void{
+  if(bucket.disposed)return;
+  bucket.disposed=true;
+  for(const entry of bucket.entries.values())entry.cancel();
+  bucket.entries.clear();
+  bucket.listeners.clear();
+  if(buckets.get(runtime)===bucket)buckets.delete(runtime);
+}
+function current(runtime:NoteEditRuntime,generation:string):Bucket|null{
+  const old=buckets.get(runtime);
+  // Fail closed: stale callers must not be able to recreate a disposed bucket
+  // under their old generation after the runtime changed or signed out.
+  if(!runtime.known()||generation===""||runtime.generation()!==generation){
+    if(old)purge(runtime,old);
+    return null;
   }
-  const next:Bucket={generation,entries:new Map(),listeners:new Map()};
+  if(old&&!old.disposed&&old.generation===generation)return old;
+  if(old)purge(runtime,old);
+  const next:Bucket={
+    generation,entries:new Map(),listeners:new Map(),disposed:false,
+  };
   buckets.set(runtime,next);
+  // Register BEFORE retaining any note content. Registration immediately
+  // disposes on an already-disposed runtime.
+  const unregister=runtime.register({dispose:()=>purge(runtime,next)});
+  if(next.disposed||!runtime.known()||runtime.generation()!==generation){
+    purge(runtime,next);
+    unregister();
+    return null;
+  }
   return next;
 }
-export function trackedNoteEdit(runtime:object,generation:string,id:string):
+export function trackedNoteEdit(runtime:NoteEditRuntime,generation:string,id:string):
   TrackedNoteEdit|null{
-  const entry=current(runtime,generation).entries.get(id);
+  const entry=current(runtime,generation)?.entries.get(id);
   return entry?{command:entry.command,phase:entry.phase}:null;
 }
-export function subscribeTrackedNoteEdit(runtime:object,generation:string,id:string,
+export function subscribeTrackedNoteEdit(runtime:NoteEditRuntime,generation:string,id:string,
   listener:()=>void):()=>void{
   const bucket=current(runtime,generation);
+  if(!bucket)return ()=>{};
   let group=bucket.listeners.get(id);
   if(!group){group=new Set();bucket.listeners.set(id,group);}
   group.add(listener);
@@ -61,50 +86,75 @@ export function subscribeTrackedNoteEdit(runtime:object,generation:string,id:str
     if(group?.size===0)bucket.listeners.delete(id);
   };
 }
-/** Explicitly forget after successful authorized refetch or loss of access.
- * Never call merely because the inspector unmounted or the page became hidden. */
-export function forgetTrackedNoteEdit(runtime:object,generation:string,id:string):void{
+/** Explicitly forget only after authorized success or a refusal; never
+ * because the inspector unmounted or a page became hidden. */
+export function forgetTrackedNoteEdit(runtime:NoteEditRuntime,generation:string,id:string):void{
   const bucket=current(runtime,generation);
-  const entry=bucket.entries.get(id);
-  if(!entry)return;
-  entry.controller?.abort();
+  const entry=bucket?.entries.get(id);
+  if(!bucket||!entry)return;
+  entry.cancel();
   bucket.entries.delete(id);
   changed(bucket,id);
 }
-/** Retry never changes the command. While a request is still pending, callers
- * receive the exact same promise and no duplicate network write is issued. */
+/** A stuck network transport must not pin the note in "saving" forever.
+ * Abort the request at the deadline AND race an uncertain result because a
+ * mocked/stalled fetch may ignore abort. The exact command remains recoverable.
+ * Never present a timeout as confirmation of commit or as an authorization
+ * error. A subsequent attempt uses the ORIGINAL commandId and CAS payload. */
 export function runTrackedNoteEdit(
-  runtime:object,generation:string,id:string,command:NoteEditCommand,
+  runtime:NoteEditRuntime,generation:string,id:string,command:NoteEditCommand,
   send:typeof saveNoteEdit=saveNoteEdit,
+  timeoutMs=TARGET_NOTE_EDIT_WRITE_TIMEOUT_MS,
 ):Promise<NoteEditSaveResult>{
   const bucket=current(runtime,generation);
+  if(!bucket)return Promise.resolve(denied());
   const existing=bucket.entries.get(id);
   if(existing&&JSON.stringify(existing.command)!==JSON.stringify(command))
-    return Promise.resolve({outcome:"conflict"}); // never replace an unresolved command
+    return Promise.resolve({outcome:"conflict"});
   if(existing?.pending)return existing.pending;
   if(existing?.phase==="saved")return Promise.resolve({outcome:"saved",replayed:true});
-  if(existing?.phase==="denied")return Promise.resolve({outcome:"denied"});
+  if(existing?.phase==="denied")return Promise.resolve(denied());
   if(existing?.phase==="conflict")return Promise.resolve({outcome:"conflict"});
   const entry:Entry=existing??{
-    command,phase:"uncertain" as const,controller:null,pending:null,
+    command,phase:"uncertain",controller:null,pending:null,cancel:()=>{},
   };
   bucket.entries.set(id,entry);
   const controller=new AbortController();
   entry.controller=controller;
   entry.phase="saving";
-  const pending=Promise.resolve().then(()=>send(id,entry.command,controller.signal))
-    .catch(():NoteEditSaveResult=>({outcome:"uncertain"}))
-    .then(result=>{
-      // Do not resurrect entries after a rotation or explicit revocation.
-      if(buckets.get(runtime)!==bucket||bucket.entries.get(id)!==entry)return result;
-      entry.phase=result.outcome==="saved"?"saved":
-        result.outcome==="denied"?"denied":
-        result.outcome==="conflict"?"conflict":"uncertain";
-      entry.controller=null;
-      entry.pending=null;
-      changed(bucket,id);
-      return result;
-    });
+  const duration=Number.isSafeInteger(timeoutMs)&&timeoutMs>0&&
+    timeoutMs<=TARGET_NOTE_EDIT_WRITE_TIMEOUT_MS
+    ?timeoutMs:TARGET_NOTE_EDIT_WRITE_TIMEOUT_MS;
+  let resolveDeadline:(result:NoteEditSaveResult)=>void=()=>{};
+  const deadline=new Promise<NoteEditSaveResult>(resolve=>{resolveDeadline=resolve;});
+  const timer=setTimeout(()=>{
+    controller.abort();
+    resolveDeadline({outcome:"uncertain"});
+  },duration);
+  entry.cancel=()=>{
+    clearTimeout(timer);
+    controller.abort();
+    resolveDeadline(denied());
+  };
+  // Do not dispatch a queued microtask if the runtime was revoked meanwhile.
+  const request=Promise.resolve().then(()=>{
+    if(bucket.disposed||!runtime.known()||
+      runtime.generation()!==generation||controller.signal.aborted)return denied();
+    return send(id,entry.command,controller.signal);
+  }).catch(():NoteEditSaveResult=>({outcome:"uncertain"}));
+  const pending=Promise.race([request,deadline]).then(result=>{
+    clearTimeout(timer);
+    if(buckets.get(runtime)!==bucket||bucket.disposed||
+      bucket.entries.get(id)!==entry)return result;
+    entry.phase=result.outcome==="saved"?"saved":
+      result.outcome==="denied"?"denied":
+      result.outcome==="conflict"?"conflict":"uncertain";
+    entry.controller=null;
+    entry.pending=null;
+    entry.cancel=()=>{};
+    changed(bucket,id);
+    return result;
+  });
   entry.pending=pending;
   changed(bucket,id);
   return pending;
