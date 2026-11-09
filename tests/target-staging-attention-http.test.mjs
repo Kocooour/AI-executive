@@ -237,7 +237,11 @@ test("paging binds the server evaluation instant in the signed cursor",async()=>
   assert.equal(claims.at,instant);
   claims.at=instant+86_400_000;
   const forged=Buffer.from(JSON.stringify(claims)).toString("base64url")+"."+sig;
-  for(const c of [forged,payload+"."+sig.slice(0,-2)+"AA",sig+"."+payload,
+  // Flip the last two signature characters to values that always differ from
+  // the original (a fixed "AA" was a no-op whenever the signature ended in AA).
+  const flipped=sig.slice(0,-2)+(sig.endsWith("AA")?"BB":"AA");
+  assert.notEqual(flipped,sig);
+  for(const c of [forged,payload+"."+flipped,sig+"."+payload,
     firstCursor.replace(".",".A")])
     assert.equal((await get(query+"&cursor="+encodeURIComponent(c),bob)).status,400);
   // A cursor without an instant claim (other endpoints' format) is invalid here.

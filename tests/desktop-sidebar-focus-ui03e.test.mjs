@@ -18,7 +18,7 @@ test("UI-03e only a committed preview desktop sidebar destination owns focus", (
 
 test("UI-03e route intent is limited to explicit sidebar navigation", () => {
   const sidebar = read("../app/ui/views/sidebar.tsx");
-  const page = read("../app/page.tsx");
+  const page = read("../app/ui/lumi-app-root.tsx");
   assert.match(sidebar, /desktopSidebarCanFocusDestination\(/);
   assert.match(sidebar, /pendingDesktopNavigationRef\.current/);
   assert.match(sidebar, /window\.requestAnimationFrame\(/);

@@ -199,7 +199,7 @@ test("transport has no persistent cache and is only used by server-gated staging
   assert.doesNotMatch(code,/\bwindow\.location\b|\bfetch\("https?:/);
   const page=readFileSync(path.join(root,
     "app/target-staging/my-plan/preview/page.tsx"),"utf8");
-  const productionPage=readFileSync(path.join(root,"app/page.tsx"),"utf8");
+  const productionPage=readFileSync(path.join(root,"app/ui/lumi-app-root.tsx"),"utf8");
   assert.match(preview,/statusWriteEnabled=false/);
   assert.match(preview,/dispatchMyPlanStatus/);
   assert.match(page,/myPlanStagingWriteUiEnabled\(process\.env\)/);

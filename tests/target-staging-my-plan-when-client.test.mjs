@@ -236,7 +236,7 @@ test("transport is only accessed behind server-gated staging UI and never persis
   const code=readFileSync(path.join(root,"lib/target-staging-my-plan-when-client.ts"),"utf8");
   const stage=readFileSync(path.join(root,
     "app/ui/target-staging-my-plan-preview.tsx"),"utf8");
-  const prod=readFileSync(path.join(root,"app/page.tsx"),"utf8");
+  const prod=readFileSync(path.join(root,"app/ui/lumi-app-root.tsx"),"utf8");
   const stagingRoute=readFileSync(path.join(root,
     "app/target-staging/my-plan/preview/page.tsx"),"utf8");
   assert.match(stage,/whenWriteEnabled=false/);

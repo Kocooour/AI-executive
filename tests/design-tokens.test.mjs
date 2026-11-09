@@ -165,7 +165,7 @@ test("Lumi v1 typography and semantic colors keep accessible contrast in light a
 
 test("Lumi v1 runtime palette remains behind the existing preview flag", () => {
   const root = path.join(path.dirname(tokensPath), "..", "..");
-  const page = readFileSync(path.join(root, "app", "page.tsx"), "utf8");
+  const page = readFileSync(path.join(root, "app", "ui", "lumi-app-root.tsx"), "utf8");
   const css = readFileSync(path.join(root, "app", "lumi-v1-runtime.css"), "utf8");
   const layout = readFileSync(path.join(root, "app", "layout.tsx"), "utf8");
   assert.match(page, /data-design-system=\{mobileDesignV1Preview \? "lumi-v1" : undefined\}/);

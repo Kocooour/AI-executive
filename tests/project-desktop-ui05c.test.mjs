@@ -196,7 +196,7 @@ test("UI-05c: rejected server PUT reaches preview status and delete actions, whi
 test("UI-05c: both preview mutations request failures and preserve a persistent accessible warning", () => {
   const app = read("../app/ui/use-lumi-app.tsx");
   const sync = read("../app/ui/hooks/use-sync.ts");
-  const root = read("../app/page.tsx");
+  const root = read("../app/ui/lumi-app-root.tsx");
   assert.equal(app.split('await syncToServer({ reportFailure: Boolean(expectedPreview) });').length - 1, 2,
     "completion and deletion must each observe the result of their own server write");
   assert.match(sync, /syncQueue\.current = settled\.queue;\s*return settled\.result;/);
@@ -293,7 +293,7 @@ test("UI-05c: stale acknowledgement cannot clear a newer failure for the same pr
 });
 
 test("UI-05c: app renders and dismisses warnings independently for every affected project", () => {
-  const root = read("../app/page.tsx");
+  const root = read("../app/ui/lumi-app-root.tsx");
   const app = read("../app/ui/use-lumi-app.tsx");
   assert.match(root, /app\.projectSyncNotices\.map\(\(notice\) => \(/);
   assert.match(root, /key=\{notice\.projectId\}/);
@@ -314,7 +314,7 @@ test("UI-05d: multiple pending project notices are individually identified and a
     "a missing or blank name still supplies an unambiguous identity");
   assert.deepEqual(Object.keys(projectSyncNoticesAfterUndo(pending, "project-b")), ["project-a"]);
   assert.equal(projectSyncNoticeTitle(withoutResolvedProjectSyncNotices(pending, [b])["project-a"]), "Dům");
-  const root = read("../app/page.tsx"), app = read("../app/ui/use-lumi-app.tsx");
+  const root = read("../app/ui/lumi-app-root.tsx"), app = read("../app/ui/use-lumi-app.tsx");
   assert.match(root, /<strong>\{projectSyncNoticeLabel\(notice, app\.projectSyncNotices, language\)\}<\/strong>/);
   assert.match(root, /aria-label=\{language === "cs"/);
   assert.match(root, /Skrýt upozornění projektu \$\{projectSyncNoticeLabel\(notice, app\.projectSyncNotices, language\)\}/);
@@ -356,7 +356,7 @@ test("UI-05d: duplicate workspace names and duplicate project titles use stable 
     "completed or old duplicate names in the same workspace also remain distinguishable");
   assert.equal(projectSyncNoticeLabel({ ...first, projectTitle: "  " }, [{ ...first, projectTitle: "  " }], "cs"),
     "project-111 (Rodina)");
-  const app = read("../app/ui/use-lumi-app.tsx"), root = read("../app/page.tsx");
+  const app = read("../app/ui/use-lumi-app.tsx"), root = read("../app/ui/lumi-app-root.tsx");
   assert.match(app, /workspaceTitle: items\.find\(\(item\) => item\.type === "workspace" && item\.workspaceId === e\.workspaceId\)\?\.title/);
   assert.match(app, /workspaceTitle: items\.find\(\(item\) => item\.type === "workspace" && item\.workspaceId === project\.workspaceId\)\?\.title/);
   assert.equal(root.split("projectSyncNoticeLabel(notice, app.projectSyncNotices, language)").length - 1, 3,
