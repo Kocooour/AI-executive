@@ -43,6 +43,18 @@ Do not treat an implementation as complete before both independent testers have 
 - Testers must inspect the implemented result independently; they must not merely restate the implementation agent's report.
 - The primary model remains accountable for the delivered result and must not accept agent findings without review.
 
+## Outcome-based milestone governance (binding)
+
+Fewer, larger vertical PRs beat many small technical slices. A merged PR is not proof of delivery; progress is measured by end-to-end acceptance. These rules sit alongside, and never relax, the existing review, CI, privacy, authorization and release gates.
+
+- **One milestone = one end-to-end acceptance test.** Before implementing, name the user-visible (or exact staging) outcome and its reproducible acceptance test in `docs/ROADMAP.md` or a linked issue. Default budget: **1–3 PRs**; group the PRs with a GitHub Milestone or label so the count is automatic.
+- **At most two consecutive synthetic, fixture-only or dry-run PRs** without a real consumer or integration step. A third requires an explicit owner decision; otherwise stop or re-plan. Never open a token integration PR to reset the count. Where real data or production use is blocked by ACL, consent, privacy or R3/R4 gates, keep the gates closed.
+- **Over budget → owner decision.** Before exceeding the agreed budget, stop discretionary slices and get an owner-approved re-scope or milestone exit. Green CI or a clean review does not waive this.
+- **No roadmap-only status PRs.** Update `docs/ROADMAP.md` inside the PR that changes the status.
+- **Safety wins over quotas.** A blocking security/privacy/data-loss fix may exceed the limits; note why in the PR. This never permits weakened tests, real-data import without consent, production activation or skipped release E2E.
+
+Each PR description starts with two lines: `Milestone:` (link) and `Acceptance step / synthetic:` (the end-to-end criterion advanced; yes|no) — template in `docs/DEVELOPMENT.md`. Review findings are fixed in the same PR (see *Mandatory code review on every PR*).
+
 ## CI gates: pull requests vs. production deployment
 
 - **Every PR** must pass the fast `PR Checks` workflow on its latest integrated head. It validates changed-line whitespace; for code/configuration changes it installs locked dependencies, checks deployment-script syntax, runs `pnpm typecheck`, selected relevant unit tests (`scripts/ci-pr-tests.mjs`), and `pnpm build`. Documentation-only PRs keep the required status but skip unnecessary install/build/test steps. Test selection includes changed tests and tests that reference changed modules, baseline smoke tests, and a mandatory authorization/security regression set when access-control, identity, data boundaries or related server routes change. Toolchain/lockfile changes run the entire unit suite even on a PR. Do not weaken tests to obtain a green status; add focused coverage and manually verify affected interactions when static selection cannot detect them.
