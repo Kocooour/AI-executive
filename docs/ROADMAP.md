@@ -32,7 +32,7 @@
 
 **Otevřené brány R4:** inventura dat, zařízení a integrací, ověřená archivní záloha/restore a **výslovný souhlas s přesným rozsahem případného cutoveru/resetu**. Dále produkční audit/retence, AI bundle live HTTP guard až při zavedení provider routy, host/SSRF/VAPID politika před skutečným push, integrita write-route/receipts a release Browser E2E; viz [bezpečnostní matice](R2D-SECURITY-MATRIX.md#zbývající-brány-před-r3-a-r4). Legacy testovací data nestaví migraci na kritickou cestu, ale nezrušují inventuru ani souhlas.
 
-**Integrační stav:** #344 a #352 jsou sloučeny do `main`; detailní kontrakt [R3-FE-02-MY-PLAN.md](R3-FE-02-MY-PLAN.md) a původní implementační checkpointy jsou zachovány. Tato roadmapa pouze upřesňuje navazující priority.
+**Integrační stav:** #344 (Můj plán), #352 (globální rozsah), #357 (autorizované read-only detaily) a #361 (owner-private note-create HTTP) jsou v `main`, ale celá cílová integrace zůstává **default-off**. #363 a #365 jsou otevřené a mohou zasahovat do stejného UI; [kontrakt Mého plánu](R3-FE-02-MY-PLAN.md) i historické checkpointy zůstávají zachovány. Před jakýmkoliv přepnutím je nezbytná integrovaná R3 akceptace a R4 release gate.
 
 ### Řízení iterací a exit H1-synthetic — 2026-11-09
 
