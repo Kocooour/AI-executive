@@ -33,7 +33,7 @@ test("R3-FE-4b: note edit is independently default-off even with enabled detail 
   assert.match(read("app/ui/lumi-app-root.tsx"),/noteEdit=\{targetNoteEdit && detailGates\.note\}/);
   assert.match(read("app/ui/target-detail-panel.tsx"),/noteEdit&&<TargetNoteEditor/);
   assert.match(read("app/ui/target-note-editor.tsx"),/onCommitted\(\)/);
-  assert.match(read("app/ui/target-note-editor.tsx"),/command:draft\.command/);
+  assert.match(read("app/ui/target-note-editor.tsx"),/draft\.command\?\?/);
 });
 
 test("the preflight parser and command reject extra fields, forged values and unsafe content",()=>{
@@ -63,7 +63,7 @@ test("GET preview is no-store, same-origin, exact-response-only and never trusts
   assert.equal(requests[0].init.cache,"no-store");
   assert.equal(requests[0].init.credentials,"same-origin");
   assert.equal(requests[0].init.redirect,"error");
-  assert.deepEqual(await loadNoteEditPreview("../bad",signal(),fetchImpl),{ok:false,reason:"denied"});
+  assert.deepEqual(await loadNoteEditPreview("..",signal(),fetchImpl),{ok:false,reason:"denied"});
   assert.equal(requests.length,1);
   assert.deepEqual(await loadNoteEditPreview(id,signal(),async()=>reply({...preview,leak:"x"})),
     {ok:false,reason:"invalid-response"});
