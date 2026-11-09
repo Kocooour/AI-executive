@@ -3,6 +3,7 @@
 import { readFileSync } from "node:fs";
 import {
   bindSyntheticProposalReview, rehearseSyntheticProposalReview,
+  rehearseSyntheticProposalReviewRevisionTransition,
 } from "./proposal-review-rehearsal.mjs";
 
 if (process.argv.length !== 2) {
@@ -27,6 +28,7 @@ if (process.argv.length !== 2) {
       { ...bound, toy_digest: "0".repeat(64) },
       // Deliberately malformed: must never be inspected after stale binding.
       [{ private_data_must_not_be_examined: "fictional" }]);
+    const revision = rehearseSyntheticProposalReviewRevisionTransition(bundles);
     let forbiddenConfirmRejected = false;
     try {
       rehearseSyntheticProposalReview(bundles, bound, [
@@ -42,6 +44,18 @@ if (process.argv.length !== 2) {
         shelved.review_gate_status !== "would_shelve_draft_without_review_outcome" ||
         stale.review_gate_status !== "would_block_stale_fictional_binding" ||
         stale.review_intent !== "not_evaluated" ||
+        revision.valid_independent_revision_b !== true ||
+        revision.changed_source_is_candidate_source !== true ||
+        revision.revised_message_is_not_candidate !== true ||
+        revision.unchanged_candidate_preserved !== true ||
+        revision.revisions_have_distinct_toy_digests !== true ||
+        revision.stale_a_on_b !== "would_block_stale_fictional_binding" ||
+        revision.stale_intent_not_evaluated !== true ||
+        revision.fresh_b_on_b !== "would_open_source_for_explicit_review_only" ||
+        revision.original_a_on_a !== "would_defer_draft_without_review_outcome" ||
+        revision.claims_created !== 0 ||
+        revision.review_outcomes_written !== 0 ||
+        revision.data_release_authorized !== false ||
         !forbiddenConfirmRejected ||
         inspect.missing_real_gates.length !== 6 ||
         inspect.claim_confirmed !== false ||
@@ -57,6 +71,12 @@ if (process.argv.length !== 2) {
       defer: deferred.review_gate_status,
       shelve: shelved.review_gate_status,
       stale: stale.review_gate_status,
+      valid_fictional_a_to_b_source_revision: revision.valid_independent_revision_b,
+      a_to_b_revised_non_candidate_message: revision.revised_message_is_not_candidate,
+      a_to_b_original_candidate_preserved: revision.unchanged_candidate_preserved,
+      a_to_b_stale_a_binding: revision.stale_a_on_b,
+      a_to_b_stale_intent_not_evaluated: revision.stale_intent_not_evaluated,
+      a_to_b_fresh_b_binding: revision.fresh_b_on_b,
       confirm_choice_rejected: forbiddenConfirmRejected,
       real_entry_gates_unverified: inspect.missing_real_gates.length,
       current_review: inspect.current_review,
