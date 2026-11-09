@@ -85,7 +85,7 @@ export function runTrackedNoteEdit(
   if(existing?.phase==="saved")return Promise.resolve({outcome:"saved",replayed:true});
   if(existing?.phase==="denied")return Promise.resolve({outcome:"denied"});
   if(existing?.phase==="conflict")return Promise.resolve({outcome:"conflict"});
-  const entry=existing??{
+  const entry:Entry=existing??{
     command,phase:"uncertain" as const,controller:null,pending:null,
   };
   bucket.entries.set(id,entry);
