@@ -61,6 +61,92 @@ function verifyCleanQueue(queue, overlap) {
 }
 
 /**
+ * Challenge the overlap/review rules with an INTERNAL fake copy only.
+ * The two pinned input fixtures intentionally contain no exact repeats;
+ * checking their empty duplicate-group list would be vacuously green.
+ * Never change the externally accepted fixture digests or expose the copy.
+ */
+function verifyFictionalDuplicateEvidence(bundles) {
+  const probe = structuredClone(bundles);
+  const chatgpt = probe.find(source => source.source_id === "fixture-chatgpt-01");
+  const claude = probe.find(source => source.source_id === "fixture-claude-01");
+  if (!chatgpt || !claude) fail();
+
+  const lines = chatgpt.conversations[0].mapping.a.message.content.parts[0].split("\n");
+  const assistantText = chatgpt.conversations[0].mapping.b.message.content.parts[0];
+  if (lines.length !== 2 || !lines[1].startsWith("> ")) fail();
+  // Same text in two direct owner turns, a third-party quote vs owner
+  // statement, and two assistant turns: NONE is independent evidence.
+  claude.conversations[0].chat_messages[0].content[0].text =
+    [lines[0], lines[1].slice(2)].join("\n");
+  claude.conversations[0].chat_messages[1].content[0].text = assistantText;
+
+  const overlap = previewSyntheticOverlaps(probe);
+  const queue = previewSyntheticReviewQueue(probe);
+  verifyCleanQueue(queue, overlap);
+  if (overlap.duplicate_groups !== 3 ||
+      overlap.cross_source_duplicate_groups !== 3 ||
+      overlap.repeated_segment_occurrences !== 6 ||
+      queue.duplicate_groups !== 3 ||
+      queue.entries.length !== 6 ||
+      overlap.groups.some(group =>
+        group.members.length !== 2 ||
+        group.cross_source !== true ||
+        group.independent_evidence !== false ||
+        group.review !== "proposed" ||
+        group.members.some(member =>
+          member.review !== "proposed" ||
+          member.sensitivity !== "unclassified")) ||
+      queue.entries.some(entry =>
+        entry.duplicate_group_id === null ||
+        entry.cross_source_repeat !== true ||
+        !entry.reason_codes.includes("repeated_text_not_independent_evidence") ||
+        entry.independent_evidence !== false ||
+        entry.eligible_for_automatic_confirmation !== false ||
+        entry.review !== "proposed" ||
+        entry.sensitivity !== "unclassified") ||
+      queue.claims_created !== 0 ||
+      queue.review_outcomes_written !== 0) fail();
+
+  const quoteGroup = overlap.groups.find(group =>
+    group.members.some(member => member.provenance === "quoted_third_party"));
+  if (!quoteGroup || quoteGroup.members.length !== 2 ||
+      !quoteGroup.members.some(member => member.provenance === "owner_statement") ||
+      !quoteGroup.members.some(member => member.speaker === "unknown")) fail();
+  return overlap.duplicate_groups;
+}
+
+/**
+ * A correct unchanged-source decision is not enough to validate version
+ * binding. Edit an UNSELECTED message in the selected fake source AFTER
+ * binding; the old user decision must fail with a stale-version error.
+ */
+function verifyStaleFictionalTriage(bundles, boundIntents) {
+  const old = boundIntents.find(intent =>
+    intent.locator.source_id === "fixture-chatgpt-01" &&
+    intent.choice === "consider");
+  if (!old) fail();
+  const edited = structuredClone(bundles);
+  const changedSource = edited.find(bundle =>
+    bundle.source_id === "fixture-chatgpt-01");
+  if (!changedSource) fail();
+  const other = changedSource.conversations[0].mapping.b.message;
+  if (old.locator.message_id === other.id) fail();
+  other.content.parts[0] += " (synthetic post-decision revision)";
+  // Keep the same locator and a structurally valid fictional bundle.
+  parseSyntheticBundle(changedSource);
+  let rejectedAsStale = false;
+  try {
+    rehearseVersionBoundSyntheticTriage(edited, [old]);
+  } catch (error) {
+    rejectedAsStale = error instanceof Error &&
+      error.message === "Synthetic versioned triage: stale or missing synthetic source version";
+  }
+  if (!rejectedAsStale) fail();
+  return true;
+}
+
+/**
  * Inputs must match the exact two committed *fictional fixtures*.
  * The source IDs, marker and unkeyed pinned digests are NOT authentication
  * or authorization for real content.
@@ -94,6 +180,7 @@ export function previewSyntheticHumanWikiAcceptance(bundles) {
   const overlap = previewSyntheticOverlaps(bundles);
   const queue = previewSyntheticReviewQueue(bundles);
   verifyCleanQueue(queue, overlap);
+  const duplicateGroupsExercised = verifyFictionalDuplicateEvidence(bundles);
 
   // Select three *fictional segment* intents, not claim decisions or consent.
   const selection = ["owner_statement", "quoted_third_party", "assistant_generated"]
@@ -115,6 +202,7 @@ export function previewSyntheticHumanWikiAcceptance(bundles) {
         entry.review !== "proposed" ||
         entry.sensitivity !== "unclassified" ||
         entry.independent_evidence !== false)) fail();
+  const staleDecisionRejected = verifyStaleFictionalTriage(bundles, boundIntents);
 
   const lifecycle = previewSyntheticSourceLifecycle(bundles, [
     { source_id: "fixture-chatgpt-01", action: "request_erasure" },
@@ -179,6 +267,10 @@ export function previewSyntheticHumanWikiAcceptance(bundles) {
     source_count: 2,
     segments_total: queue.segments_total,
     provenance_counts: { ...queue.provenance_counts },
+    synthetic_negative_cases: {
+      cross_source_duplicate_groups_exercised: duplicateGroupsExercised,
+      stale_source_decision_rejected: staleDecisionRejected,
+    },
     synthetic_checks: [
       status("resumable_import_and_idempotence"),
       status("speaker_quote_and_assistant_provenance"),
