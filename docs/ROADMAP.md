@@ -1,6 +1,6 @@
 # Lumi — aktuální roadmapa vývoje
 
-**Aktualizováno 2026-11-09 podle `main` @ `476f6dc`: R2d staging dokončeno; #341/#344/#352 jsou sloučené v R3, další hlavní detaily a integrace zbývají. **H1-synthetic završila přípravnou laboratoř po #354**, bez reálného importu a claims; navazující #355 vyžaduje posouzení podle nové stop/go brány pro syntetická PR, ne automatické pokračování. Nový model zůstává default-off, R4 a souhlas s reálným importem nejsou splněny. [Čistý start](decisions/2026-10-26-cisty-start-d3.md) dle [LUMI-FR-013](PRODUCT.md#lumi-fr-013). Starší checkpointy níže jsou historické.
+**Aktualizováno 2026-11-09 podle `main` @ `476f6dc`.** R2d staging dokončeno; #341/#344/#352 jsou sloučené v R3, další hlavní detaily a integrace zbývají. **H1-synthetic završila přípravnou laboratoř po #354**, bez reálného importu a claims; navazující #355 vyžaduje posouzení podle nové stop/go brány pro syntetická PR, ne automatické pokračování. Nový model zůstává default-off, R4 a souhlas s reálným importem nejsou splněny. [Čistý start](decisions/2026-10-26-cisty-start-d3.md) dle [LUMI-FR-013](PRODUCT.md#lumi-fr-013). Starší checkpointy níže jsou historické.
 
 ## Aktuální pozice
 
