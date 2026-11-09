@@ -1,0 +1,267 @@
+import assert from "node:assert/strict";
+import {readFileSync} from "node:fs";
+import path from "node:path";
+import {test} from "node:test";
+import {createTargetClientRuntime} from "../lib/target-client-runtime.ts";
+import {createGlobalIndexReadSession} from "../lib/target-staging-global-index-read-session.ts";
+import {groupIndexRowsByArea} from "../lib/target-scope-rows.ts";
+import {createRefusalBudget,targetMyPlanGate} from "../lib/target-my-plan-embed.ts";
+
+const root=path.resolve(import.meta.dirname,"..");
+const read=file=>readFileSync(path.join(root,file),"utf8");
+const GEN_A="A".repeat(43);
+const GEN_B="B".repeat(43);
+const settle=()=>new Promise(resolve=>setTimeout(resolve,10));
+const json=(body,status=200)=>Response.json(body,{status,headers:{"cache-control":"no-store"}});
+
+const project=(id,areaId,areaKind)=>({kind:"project",item:{id,title:"Project "+id,areaId,areaKind}});
+const note=(id,areaId,areaKind)=>({kind:"note",item:{id,title:"Note "+id,projectId:null,areaId,areaKind,revision:1}});
+const task=(id,areaId,areaKind)=>({kind:"task",item:{id,title:"Task "+id,projectId:null,areaId,areaKind,
+  status:"open",dueOn:null,...(areaKind==="shared"?{assignedToMe:false}:{})}});
+
+class Channel{
+  static last=null;
+  constructor(){Channel.last=this;this.l=[];}
+  addEventListener(_t,fn){this.l.push(fn);}
+  close(){}
+  emit(data){for(const fn of this.l)fn({data});}
+}
+/** One fetch fake for the session route and the global-index route; records every URL. */
+function fakeServer({generations=[GEN_A],index=()=>json({scope:"all",items:[],hasMore:false,nextCursor:null})}={}){
+  const calls=[];
+  const queue=[...generations];
+  const fetchFake=async(url,init)=>{
+    const text=String(url);
+    calls.push(text);
+    if(text.includes("/api/target-staging/session")){
+      const next=queue.shift()??GEN_A;
+      if(next==="401")return new Response("{}",{status:401});
+      return json({generation:next});
+    }
+    return index(new URL(text,"https://lumi.test"),init);
+  };
+  return {fetchFake,calls,indexCalls:()=>calls.filter(c=>c.includes("global-index"))};
+}
+const makeRuntime=server=>createTargetClientRuntime({
+  fetch:server.fetchFake,window:null,broadcastChannelFactory:()=>new Channel(),
+});
+const sessionFor=(runtime,server,scope)=>{
+  const created=createGlobalIndexReadSession({scope,contextVersion:runtime.generation},server.fetchFake);
+  runtime.register(created);
+  return created;
+};
+
+test("scope maps to the server query scope and nothing else (no actor, no client filter)",async()=>{
+  for(const scope of ["all","personal","shared"]){
+    const server=fakeServer({index:url=>{
+      assert.equal(url.pathname,"/api/target-staging/global-index");
+      assert.deepEqual([...url.searchParams.keys()].sort(),["limit","scope"]);
+      assert.equal(url.searchParams.get("scope"),scope);
+      return json({scope,items:[project("p1","a1",scope==="shared"?"shared":"private")],hasMore:false,nextCursor:null});
+    }});
+    const runtime=makeRuntime(server);
+    await settle();
+    const session=sessionFor(runtime,server,scope);
+    const result=await session.loadFirst();
+    assert.equal(result.ok,true,scope);
+    assert.equal(result.page.scope,scope);
+    assert.equal(server.indexCalls().length,1);
+    runtime.dispose();
+  }
+});
+
+test("server rows are rendered as returned: grouping never drops, adds or reorders rows",()=>{
+  const rows=[
+    project("1","a","private"),project("2","b","shared"),project("3","a","private"),
+    project("4","c","shared"),project("5","b","shared"),
+  ];
+  const groups=groupIndexRowsByArea(rows);
+  assert.deepEqual(groups.map(g=>g.areaId),["a","b","c"]); // first appearance order
+  assert.deepEqual(groups.map(g=>g.areaKind),["private","shared","shared"]);
+  assert.deepEqual(groups.map(g=>g.items.map(i=>i.item.id)),[["1","3"],["2","5"],["4"]]);
+  const flat=groups.flatMap(g=>g.items);
+  assert.equal(flat.length,rows.length);
+  assert.deepEqual(flat.map(i=>i.item.id).sort(),rows.map(i=>i.item.id).sort());
+  assert.deepEqual(groupIndexRowsByArea([]),[]);
+  // Rows are the same objects: nothing is copied, rewritten or counted.
+  assert.ok(flat.every(item=>rows.includes(item)));
+});
+
+test("the list component selects one kind from the server page but applies no other filter",()=>{
+  const source=read("app/ui/target-scope-lists.tsx");
+  const filters=source.match(/\.filter\([^)]*\)/g)??[];
+  assert.deepEqual(filters,[".filter(entry=>entry.kind===kind)"]);
+  assert.doesNotMatch(source,/\.sort\(|\.slice\(|\.length\s*[+\-*]/);
+  assert.doesNotMatch(source,/areaKind\s*===\s*scope|areaKind\s*!==\s*scope/);
+});
+
+test("scope change: the old scope's session is disposed and its late response is never delivered",async()=>{
+  let release;
+  const gate=new Promise(resolve=>{release=resolve;});
+  const server=fakeServer({index:async url=>{
+    const scope=url.searchParams.get("scope");
+    if(scope==="personal")await gate;
+    return json({scope,items:[project(scope+"1","a1",scope==="shared"?"shared":"private")],hasMore:false,nextCursor:null});
+  }});
+  const runtime=makeRuntime(server);
+  await settle();
+  const personal=sessionFor(runtime,server,"personal");
+  const pending=personal.loadFirst();
+  // The user switches to Shared: the component's session for Personal is disposed first.
+  personal.dispose();
+  const shared=sessionFor(runtime,server,"shared");
+  release();
+  const stale=await pending;
+  assert.equal(stale.ok,false);
+  assert.equal(stale.page,undefined);
+  const fresh=await shared.loadFirst();
+  assert.equal(fresh.ok,true);
+  assert.equal(fresh.page.scope,"shared");
+  assert.deepEqual(fresh.page.items.map(i=>i.item.id),["shared1"]);
+  assert.deepEqual((await personal.loadMore()).ok,false);
+  runtime.dispose();
+});
+
+test("generation change disposes registered sessions: no row of the old identity survives",async()=>{
+  const server=fakeServer({generations:[GEN_A,GEN_B],index:()=>json({scope:"all",
+    items:[project("p1","a1","private")],hasMore:true,nextCursor:"aA.bA"})});
+  const runtime=makeRuntime(server);
+  await settle();
+  assert.equal(runtime.generation(),GEN_A);
+  const session=sessionFor(runtime,server,"all");
+  assert.equal((await session.loadFirst()).ok,true);
+  assert.equal(session.getSnapshot().status,"ready");
+  await runtime.reportRefusal("session_revoked");
+  await settle();
+  assert.equal(session.getSnapshot().status,"disposed");
+  assert.equal((await session.loadMore()).ok,false);
+  assert.equal((await session.loadFirst()).ok,false);
+  runtime.dispose();
+});
+
+test("a session never exists before the runtime knows a server-confirmed generation",async()=>{
+  const gateOf=runtime=>targetMyPlanGate(runtime,runtime.generation(),runtime.lastOutcome(),false);
+  const server=fakeServer({generations:["401"]});
+  const runtime=makeRuntime(server);
+  assert.equal(gateOf(runtime).kind,"checking");
+  await settle();
+  assert.equal(gateOf(runtime).kind,"signed_out");
+  assert.equal(server.indexCalls().length,0,"no global-index request without a confirmed generation");
+  runtime.dispose();
+  // And the hook creates sessions only when known().
+  const hook=read("app/ui/target-data-provider.tsx");
+  assert.match(hook,/if\(!runtime\|\|!known\)\{setSession\(null\);return;\}/);
+});
+
+test("401 on the index read -> signed-out and a bounded refusal budget (no refusal loop)",async()=>{
+  const server=fakeServer({index:()=>new Response("{}",{status:401})});
+  const runtime=makeRuntime(server);
+  await settle();
+  const session=sessionFor(runtime,server,"all");
+  const result=await session.loadFirst();
+  assert.deepEqual(result,{ok:false,reason:"signed-out"});
+  assert.equal(session.getSnapshot().status,"failed");
+  const budget=createRefusalBudget();
+  assert.deepEqual([budget.admit(),budget.admit(),budget.admit()],[true,true,false]);
+  const gate=targetMyPlanGate(runtime,runtime.generation(),runtime.lastOutcome(),true);
+  assert.equal(gate.kind,"refused");
+  runtime.dispose();
+});
+
+test("hidden / offline: suspend hides titles at once and resume fetches nothing by itself",async()=>{
+  const server=fakeServer({index:()=>json({scope:"all",items:[project("p1","a1","private")],hasMore:false,nextCursor:null})});
+  const runtime=makeRuntime(server);
+  await settle();
+  const session=sessionFor(runtime,server,"all");
+  await session.loadFirst();
+  assert.equal(session.getSnapshot().page.items.length,1);
+  session.suspend();
+  assert.deepEqual(session.getSnapshot(),{status:"suspended"});
+  assert.equal((await session.loadFirst()).reason,"not-ready");
+  const before=server.indexCalls().length;
+  assert.equal(session.resume(),true);
+  await settle();
+  assert.equal(server.indexCalls().length,before,"resume never fetches");
+  assert.equal(session.getSnapshot().status,"idle"); // old rows are gone
+  assert.equal((await session.loadFirst()).ok,true);
+  runtime.dispose();
+});
+
+test("paging uses the server cursor and 'Load more' only while the server says hasMore",async()=>{
+  const pages=[
+    {scope:"all",items:[project("p1","a1","private")],hasMore:true,nextCursor:"aA.bA"},
+    {scope:"all",items:[project("p2","a2","shared")],hasMore:false,nextCursor:null},
+  ];
+  const cursors=[];
+  const server=fakeServer({index:url=>{cursors.push(url.searchParams.get("cursor"));return json(pages[cursors.length-1]);}});
+  const runtime=makeRuntime(server);
+  await settle();
+  const session=sessionFor(runtime,server,"all");
+  await session.loadFirst();
+  const more=await session.loadMore();
+  assert.equal(more.ok,true,JSON.stringify(more));
+  assert.deepEqual(more.page.items.map(i=>i.item.id),["p1","p2"]);
+  assert.deepEqual(cursors,[null,"aA.bA"]);
+  assert.equal(more.page.hasMore,false);
+  assert.equal((await session.loadMore()).ok,true);
+  assert.equal(cursors.length,2,"no request after the final page");
+  runtime.dispose();
+  void task;void note;
+});
+
+test("wiring: flags off -> legacy tree, lazy chunks only, no eager import, no request from page/root",()=>{
+  const root_=read("app/ui/lumi-app-root.tsx");
+  assert.match(root_,/dynamic\(\(\) => import\("\.\/target-scope-switcher"\), \{ ssr: false \}\)/);
+  assert.match(root_,/dynamic\(\(\) => import\("\.\/target-scope-lists"\), \{ ssr: false \}\)/);
+  assert.doesNotMatch(root_,/^import .*target-scope/m);
+  assert.match(root_,/const scopesOn = Boolean\(targetScopes\?\.enabled\)/);
+  assert.match(root_,/const scopeList = scopesOn && \(view === "Projects" \|\| view === "Notes"\)/);
+  assert.match(root_,/\{scopeSwitcher && <TargetScopeSwitcher language=\{language\} \/>\}/);
+  // Legacy lists stay the fallback for every other case.
+  assert.match(root_,/: <EntityList app=\{app\} \/>/);
+  const page=read("app/page.tsx");
+  assert.match(page,/targetScopes=\{config\?\.scopes\}/);
+  assert.match(page,/: <LumiAppRoot \/>/);
+  assert.doesNotMatch(page,/target-scope|fetch\(|api\/target-staging/);
+  assert.doesNotMatch(root_,/api\/target-staging|fetch\(|useTargetScope|createGlobalIndexReadSession/);
+});
+
+test("wiring: the switcher is a real radio group with arrows, aria-checked and roving focus",()=>{
+  const source=read("app/ui/target-scope-switcher.tsx");
+  assert.match(source,/role="radiogroup"/);
+  assert.match(source,/role="radio"/);
+  assert.match(source,/aria-checked=\{checked\}/);
+  assert.match(source,/tabIndex=\{checked\?0:-1\}/);
+  for(const key of ["ArrowRight","ArrowLeft","ArrowDown","ArrowUp","Home","End"])
+    assert.match(source,new RegExp(key));
+  assert.doesNotMatch(source,/fetch\(|localStorage|sessionStorage|indexedDB/);
+  const css=read("app/ui/target-scopes.css");
+  assert.match(css,/#8B5CF6/);assert.match(css,/#16A34A/);assert.match(css,/#2563EB/);
+  assert.match(css,/min-height:44px/);
+  assert.match(css,/:focus-visible/);
+  assert.match(css,/#DCFCE7/);assert.match(css,/#DBEAFE/);
+});
+
+test("wiring: scope screens persist and log nothing, show no counts or Area headings",()=>{
+  for(const file of ["app/ui/target-scope-lists.tsx","app/ui/target-scope-state.ts","app/ui/target-scope-switcher.tsx","app/ui/use-target-gate.ts"]){
+    const source=read(file);
+    assert.doesNotMatch(source,/localStorage|sessionStorage|indexedDB|caches\.|console\./,file);
+  }
+  const lists=read("app/ui/target-scope-lists.tsx");
+  assert.doesNotMatch(lists,/<h[1-6]/);
+  assert.doesNotMatch(lists,/items\.length|rows\.length\s*\}/);
+  assert.match(lists,/useTargetSession\(contextVersion=>createGlobalIndexReadSession\(\{scope,contextVersion\}\),\[scope\]\)/);
+  assert.match(lists,/state\.session===session&&state\.page\.scope===scope/);
+  assert.match(lists,/visibilitychange/);assert.match(lists,/pagehide/);assert.match(lists,/"offline"/);
+  assert.match(lists,/refusalRef\.current\(\)/);
+});
+
+test("wiring: My Plan follows the global scope and hides its own filter only in that mode",()=>{
+  const wrapper=read("app/ui/target-my-plan.tsx");
+  assert.match(wrapper,/areaFilter=\{scopeDriven\?scope:undefined\}/);
+  const preview=read("app/ui/target-staging-my-plan-preview.tsx");
+  assert.match(preview,/const areaFilter=controlledFilter\?\?ownFilter/);
+  assert.match(preview,/\{controlledFilter===undefined&&<label>\{copy\.toolbarWork\}/);
+  // The standalone staging page passes no controlled filter, so it keeps its toolbar.
+  assert.doesNotMatch(read("app/target-staging/my-plan/preview/page.tsx"),/areaFilter/);
+});

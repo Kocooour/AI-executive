@@ -115,7 +115,7 @@ test("target client action labels exist per language with identical keys",()=>{
 
 test("wiring: root passes language to TargetMyPlan, which passes it on; standalone page stays Czech",()=>{
   const rootSource=read("app/ui/lumi-app-root.tsx");
-  assert.match(rootSource,/<TargetMyPlan gates=\{targetMyPlan\} language=\{language\} \/>/);
+  assert.match(rootSource,/<TargetMyPlan gates=\{targetMyPlan\} language=\{language\} scopeDriven=\{scopesOn\} \/>/);
   assert.match(rootSource,/data-plan-source="target-staging"[\s\S]*?language === "cs"[\s\S]*?: "This plan comes from the staging server/);
   const plan=read("app/ui/target-my-plan.tsx");
   assert.match(plan,/<TargetStagingMyPlanPreview key=\{gate\.generation\} embedded language=\{language\}/);

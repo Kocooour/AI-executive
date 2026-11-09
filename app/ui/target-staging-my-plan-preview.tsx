@@ -121,8 +121,11 @@ function PlanDay({label,tasks,date,canComplete,onComplete,canWhen,onWhen,copy}:{
 }
 export function TargetStagingMyPlanPreview({
   statusWriteEnabled=false,whenWriteEnabled=false,embedded=false,onRefusal,
-  language="cs",
+  language="cs",areaFilter:controlledFilter,
 }:{
+  /** R3-FE-3: when given, the global scope (Vše / Osobní / Sdílené) owns the
+   * area filter: the plan's own toolbar filter is hidden and this value is used. */
+  areaFilter?:MyPlanSliceFilter;
   statusWriteEnabled?:boolean;whenWriteEnabled?:boolean;
   /** R3-FE-2: rendered inside the main app (its <main>/<h1> own the page). */
   embedded?:boolean;
@@ -137,7 +140,8 @@ export function TargetStagingMyPlanPreview({
   const reasons=copy.readReasons;
   const [date,setDate]=useState<string|null>(null);
   const [followToday,setFollowToday]=useState(true);
-  const [areaFilter,setAreaFilter]=useState<MyPlanSliceFilter>("all");
+  const [ownFilter,setAreaFilter]=useState<MyPlanSliceFilter>("all");
+  const areaFilter=controlledFilter??ownFilter;
   const [refresh,setRefresh]=useState(0);
   const [state,setState]=useState<ReadState>({status:"loading"});
   const [moreBusy,setMoreBusy]=useState(false);
@@ -759,6 +763,15 @@ export function TargetStagingMyPlanPreview({
   const whenPending=whenAction.kind==="pending"||
     whenAction.kind==="checking"||whenAction.kind==="uncertain";
   const anyPending=actionPending||whenPending;
+  // R3-FE-3: a change of the global scope drops stale feedback (Undo, receipts)
+  // of the previous scope unless a write is still in flight.
+  const lastFilter=useRef(areaFilter);
+  useEffect(()=>{
+    if(lastFilter.current===areaFilter)return;
+    lastFilter.current=areaFilter;
+    if(!anyPending)resetFeedback();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[areaFilter]);
   // Read the live synchronous refs from EACH handler, not just disabled state.
   // A second event may arrive before React commits the pending render.
   const toolbarChangeBlocked=()=>myPlanToolbarChangeBlocked({
@@ -819,7 +832,7 @@ export function TargetStagingMyPlanPreview({
             if(chosen!==date){invalidate("stale",true);setDate(chosen);}
           }}/>
       </label>
-      <label>{copy.toolbarWork}
+      {controlledFilter===undefined&&<label>{copy.toolbarWork}
         <select value={areaFilter} disabled={anyPending}
           onChange={event=>{
             if(toolbarChangeBlocked())return;
@@ -831,7 +844,7 @@ export function TargetStagingMyPlanPreview({
           <option value="personal">{copy.filterPersonal}</option>
           <option value="shared">{copy.filterShared}</option>
         </select>
-      </label>
+      </label>}
       <button type="button" disabled={anyPending} onClick={()=>{
         if(toolbarChangeBlocked())return;
         resetFeedback();

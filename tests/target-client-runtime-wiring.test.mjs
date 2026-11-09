@@ -33,7 +33,7 @@ test("the server page mounts the provider only behind the flag and reads it per 
   assert.doesNotMatch(page,/^"use client"/m);
   assert.match(page,/export const dynamic = "force-dynamic"/);
   assert.match(page,/targetUiEnabled\(\)/);
-  assert.match(page,/targetData\s*\n?\s*\?\s*<TargetDataProvider><LumiAppRoot targetMyPlan=\{config\?\.myPlan\} \/><\/TargetDataProvider>\s*\n?\s*:\s*<LumiAppRoot \/>/);
+  assert.match(page,/targetData\s*\n?\s*\?\s*<TargetDataProvider><LumiAppRoot targetMyPlan=\{config\?\.myPlan\} targetScopes=\{config\?\.scopes\} \/><\/TargetDataProvider>\s*\n?\s*:\s*<LumiAppRoot \/>/);
   // The page itself never creates a runtime nor fetches.
   assert.doesNotMatch(page,/createTargetClientRuntime|fetch\(|target-client-runtime/);
 });
@@ -85,7 +85,9 @@ test("only the runtime (and its server route) reference the session endpoint; no
   scan("app");
   assert.deepEqual(users.sort(),[
     "app/ui/target-data-provider.tsx","app/ui/target-data-status.tsx","app/ui/target-my-plan.tsx",
-  ]);
+    // R3-FE-3: the lazily loaded scope lists (the gate hook is a .ts file).
+    "app/ui/target-scope-lists.tsx",
+  ].sort());
 });
 
 test("TargetDataStatus uses status for the info kind, alert for errors, and a real button",()=>{
