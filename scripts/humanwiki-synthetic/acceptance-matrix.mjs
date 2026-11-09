@@ -14,9 +14,18 @@ import { bindSyntheticDerivativeRevision, recheckSyntheticDerivativeRevision } f
 import { bindSyntheticEpochFence, makeSyntheticEpochFenceFixture, rehearseSyntheticFenceWindow, recheckSyntheticEpochFence } from "./epoch-fence-rehearsal.mjs";
 
 const fail = () => { throw new Error("Synthetic acceptance: fixture contract not satisfied"); };
+// Deliberately pinned to the exact checked-in fictional JSON only. Unkeyed
+// digests prevent accidental use with modified data; they provide NO security,
+// authorization, provenance or real-source privacy protection.
 const sourceShapes = new Map([
-  ["fixture-chatgpt-01", "chatgpt-mapping-v1"],
-  ["fixture-claude-01", "claude-chat-v1"],
+  ["fixture-chatgpt-01", {
+    format: "chatgpt-mapping-v1",
+    digest: "44c36f199d552d57ea4b65a8cca7e52c03c5ee0fbc82a62a3283e047410c81f4",
+  }],
+  ["fixture-claude-01", {
+    format: "claude-chat-v1",
+    digest: "6b8cb2e9bf5962f41d88db3cb4ffc456f1bc9b51ef1c426b249d7a25303f1566",
+  }],
 ]);
 const status = id => ({ id, result: "toy_passed_real_release_blocked" });
 const realGates = Object.freeze([
@@ -52,8 +61,9 @@ function verifyCleanQueue(queue, overlap) {
 }
 
 /**
- * Inputs must be the two known *fictional shapes*. The source IDs and
- * synthetic_fixture marker are NOT sufficient authentication for real content.
+ * Inputs must match the exact two committed *fictional fixtures*.
+ * The source IDs, marker and unkeyed pinned digests are NOT authentication
+ * or authorization for real content.
  * Only the no-argument CLI reads checked-in fixture files. Never use this
  * helper with personal exports or attach it to an app endpoint.
  */
@@ -62,7 +72,9 @@ export function previewSyntheticHumanWikiAcceptance(bundles) {
   const parsed = bundles.map(bundle => parseSyntheticBundle(bundle));
   const seen = new Set();
   for (const source of parsed) {
-    if (sourceShapes.get(source.source_id) !== source.format ||
+    const pinned = sourceShapes.get(source.source_id);
+    if (!pinned || pinned.format !== source.format ||
+        pinned.digest !== source.digest ||
         seen.has(source.source_id) || !Array.isArray(source.messages) ||
         source.messages.length === 0) fail();
     seen.add(source.source_id);
