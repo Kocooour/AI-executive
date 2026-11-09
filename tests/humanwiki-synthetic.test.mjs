@@ -16,6 +16,7 @@ import { makeSyntheticRestoreFixture, previewSyntheticRestorePreflight } from ".
 import { previewSyntheticRestoreReplayPlan } from "../scripts/humanwiki-synthetic/restore-replay-plan.mjs";
 import { makeSyntheticDerivativeFixture, previewSyntheticDerivativeImpact } from "../scripts/humanwiki-synthetic/derivative-impact-preview.mjs";
 import { bindSyntheticDerivativeRevision, recheckSyntheticDerivativeRevision } from "../scripts/humanwiki-synthetic/derivative-revision.mjs";
+import { bindSyntheticEpochFence, recheckSyntheticEpochFence, rehearseSyntheticFenceWindow, makeSyntheticEpochFenceFixture } from "../scripts/humanwiki-synthetic/epoch-fence-rehearsal.mjs";
 import { ensurePrivateCheckpointDirectory, writeCheckpointAtomic } from "../scripts/humanwiki-synthetic/checkpoint.mjs";
 
 const fixture = name => JSON.parse(readFileSync(new URL(`../scripts/humanwiki-synthetic/fixtures/${name}.json`, import.meta.url), "utf8"));
@@ -1855,6 +1856,177 @@ test("fictional revision CLI is deterministic, no-arg, no-write and never emits 
     const denied = run(["../../personal-export.json"], "UTC");
     assert.equal(denied.status, 2);
     assert.equal(denied.stdout, "");
+    assert.deepEqual(readdirSync(root), []);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("fictional epoch fence binds a checked toy frame and never authorizes release", () => {
+  const frame = makeSyntheticEpochFenceFixture(makeSyntheticRestoreFixture(), 1);
+  const before = JSON.stringify(frame);
+  const token = bindSyntheticEpochFence(frame);
+  assert.deepEqual(Object.keys(token).sort(), ["revision", "schema", "toy_epoch"]);
+  assert.equal(token.schema, "fictional_dependency_epoch_fence_v1");
+  assert.equal(token.toy_epoch, 1);
+  const checked = recheckSyntheticEpochFence(frame, token);
+  assert.equal(checked.fence_status, "toy_fence_matches_no_release");
+  assert.equal(checked.toy_binding_matches_current, true);
+  assert.equal(checked.data_release_authorized, false);
+  assert.equal(checked.actual_compare_and_swap_performed, false);
+  assert.equal(checked.real_monotonic_epoch_authenticated, false);
+  assert.equal(checked.actual_witness_contacted, false);
+  assert.equal(checked.actual_invalidation_performed, 0);
+  assert.equal(checked.actual_deletions_performed, 0);
+  assert.equal(checked.actual_replay_performed, false);
+  assert.equal(checked.real_import_enabled, false);
+  assert.equal(checked.any_hash_disclosed, false);
+  assert.equal(JSON.stringify(frame), before);
+  assert.ok(!JSON.stringify(checked).includes(token.revision.toy_graph_digest));
+});
+
+test("same fictional content after epoch increment rejects ABA at final check", () => {
+  const frame = makeSyntheticEpochFenceFixture(makeSyntheticRestoreFixture(), 6);
+  const token = bindSyntheticEpochFence(frame);
+  const aba = { ...frame, toy_epoch: 8 };
+  assert.equal(recheckSyntheticDerivativeRevision(aba.restore_state, aba.graph,
+    token.revision).revision_status, "toy_revision_matches_no_release");
+  const final = recheckSyntheticEpochFence(aba, token);
+  assert.equal(final.fence_status, "stale_toy_epoch_or_revision");
+  const window = rehearseSyntheticFenceWindow(frame, aba, token);
+  assert.equal(window.window_status, "would_abort_at_final_check");
+  assert.equal(window.first_check, "toy_fence_matches_no_release");
+  assert.equal(window.final_check, "stale_toy_epoch_or_revision");
+  assert.equal(window.data_release_authorized, false);
+});
+
+test("toy fence recognizes stale graph or restore revision even without epoch advance", () => {
+  const frame = makeSyntheticEpochFenceFixture(makeSyntheticRestoreFixture(), 4);
+  const token = bindSyntheticEpochFence(frame);
+  const newer = structuredClone(frame);
+  newer.restore_state.snapshot = {
+    applied_sequence: 1, applied_digest: newer.restore_state.registry[0].digest,
+  };
+  assert.equal(recheckSyntheticEpochFence(newer, token).fence_status,
+    "stale_toy_epoch_or_revision");
+  assert.equal(rehearseSyntheticFenceWindow(frame, newer, token).window_status,
+    "would_abort_at_final_check");
+  const incomplete = structuredClone(frame);
+  incomplete.graph.artifacts.pop();
+  assert.equal(recheckSyntheticEpochFence(incomplete, token).fence_status,
+    "blocked_by_current_preflight_or_coverage");
+});
+
+test("unverified witness or damaged registry blocks fictional final stage", () => {
+  const frame = makeSyntheticEpochFenceFixture(makeSyntheticRestoreFixture(), 2);
+  const token = bindSyntheticEpochFence(frame);
+  const invalid = structuredClone(frame);
+  invalid.restore_state.registry[0].action = "revoke_import_consent";
+  const unavailable = structuredClone(frame);
+  unavailable.restore_state.witness = null;
+  for (const changed of [invalid, unavailable]) {
+    const report = rehearseSyntheticFenceWindow(frame, changed, token);
+    assert.equal(report.window_status, "would_abort_at_final_check");
+    assert.equal(report.first_check, "toy_fence_matches_no_release");
+    assert.equal(report.final_check, "blocked_by_current_preflight_or_coverage");
+    assert.equal(report.source_or_graph_details_disclosed, false);
+    assert.equal(report.actual_compare_and_swap_performed, false);
+    assert.equal(report.data_release_authorized, false);
+    assert.ok(!JSON.stringify(report).includes("fictional-source"));
+  }
+});
+
+test("early stale toy check short-circuits without inspecting later input", () => {
+  const frame = makeSyntheticEpochFenceFixture(makeSyntheticRestoreFixture(), 2);
+  const token = bindSyntheticEpochFence(frame);
+  const wrong = { ...frame, toy_epoch: 3 };
+  const result = rehearseSyntheticFenceWindow(wrong,
+    { arbitrary_private_data: "should not be examined" }, token);
+  assert.equal(result.window_status, "would_abort_at_first_check");
+  assert.equal(result.first_check, "stale_toy_epoch_or_revision");
+  assert.equal(result.final_check, "not_evaluated");
+  assert.equal(result.data_release_authorized, false);
+});
+
+test("fictional epoch fence rejects rollback and malformed epoch types", () => {
+  const frame = makeSyntheticEpochFenceFixture(makeSyntheticRestoreFixture(), 5);
+  const token = bindSyntheticEpochFence(frame);
+  const rolledBack = { ...frame, toy_epoch: 4 };
+  const result = rehearseSyntheticFenceWindow(frame, rolledBack, token);
+  assert.equal(result.window_status, "would_abort_epoch_rollback");
+  assert.equal(result.final_check, "stale_toy_epoch_or_revision");
+  for (const bad of [-1, 1.5, Infinity, NaN, "5", new Number(5),
+    Number.MAX_SAFE_INTEGER + 1, null, undefined]) {
+    assert.throws(() => makeSyntheticEpochFenceFixture(frame.restore_state, bad),
+      /Synthetic epoch fence:/);
+    assert.throws(() => bindSyntheticEpochFence({ ...frame, toy_epoch: bad }),
+      /Synthetic epoch fence:/);
+    assert.throws(() => recheckSyntheticEpochFence({ ...frame, toy_epoch: bad }, token),
+      /Synthetic epoch fence:/);
+  }
+});
+
+test("fictional epoch binding is typed, exact and rejects forged fields", () => {
+  const frame = makeSyntheticEpochFenceFixture(makeSyntheticRestoreFixture(), 1);
+  const token = bindSyntheticEpochFence(frame);
+  for (const bad of [
+    null, undefined, false, [], {}, "valid",
+    { ...token, extra: "private" },
+    { ...token, schema: "wrong" },
+    { ...token, schema: ["fictional_dependency_epoch_fence_v1"] },
+    { ...token, toy_epoch: "1" },
+    { ...token, revision: { ...token.revision, extra: true } },
+    { ...token, revision: { ...token.revision, toy_graph_digest: ["a".repeat(64)] } },
+    { ...token, revision: { ...token.revision, schema: "v2" } },
+  ]) assert.throws(() => recheckSyntheticEpochFence(frame, bad),
+    /Synthetic epoch fence: malformed fictional fence binding/);
+  const forged = { ...token, revision: {
+    ...token.revision, toy_graph_digest: "f".repeat(64),
+  }};
+  assert.equal(recheckSyntheticEpochFence(frame, forged).fence_status,
+    "stale_toy_epoch_or_revision");
+});
+
+test("graph reorder preserves toy epoch consistency but cannot commit data", () => {
+  const frame = makeSyntheticEpochFenceFixture(makeSyntheticRestoreFixture(), 7);
+  const token = bindSyntheticEpochFence(frame);
+  const reorder = structuredClone(frame);
+  reorder.graph.claims.reverse();
+  reorder.graph.artifacts.reverse();
+  for (const claim of reorder.graph.claims) claim.evidence.reverse();
+  for (const artifact of reorder.graph.artifacts) artifact.depends_on.reverse();
+  const report = rehearseSyntheticFenceWindow(frame, reorder, token);
+  assert.equal(report.window_status, "toy_checks_match_no_commit");
+  assert.equal(report.actual_compare_and_swap_performed, false);
+  assert.equal(report.data_release_authorized, false);
+  assert.equal(report.real_monotonic_epoch_authenticated, false);
+});
+
+test("toy epoch CLI is deterministic, no-argument, no-write, and status-only", () => {
+  const cli = fileURLToPath(new URL("../scripts/humanwiki-synthetic/epoch-fence-rehearsal-cli.mjs", import.meta.url));
+  const root = mkdtempSync(path.join(os.tmpdir(), "lumi-humanwiki-epoch-"));
+  const run = (args, zone) => spawnSync(process.execPath, [cli, ...args], {
+    encoding: "utf8", env: { ...process.env, TMPDIR: root, TZ: zone },
+  });
+  try {
+    const utc = run([], "UTC"), prague = run([], "Europe/Prague");
+    assert.equal(utc.status, 0, utc.stderr);
+    assert.equal(prague.status, 0, prague.stderr);
+    assert.equal(utc.stdout, prague.stdout);
+    const obj = JSON.parse(utc.stdout);
+    assert.equal(obj.unchanged_check_window, "toy_checks_match_no_commit");
+    assert.equal(obj.same_data_changed_epoch_aba, "would_abort_at_final_check");
+    assert.equal(obj.stale_first_check, "would_abort_at_first_check");
+    assert.equal(obj.witness_missing_at_final_check, "would_abort_at_final_check");
+    assert.equal(obj.changed_snapshot_at_final_check, "would_abort_at_final_check");
+    assert.equal(obj.actual_compare_and_swap_performed, false);
+    assert.equal(obj.data_release_authorized, false);
+    assert.equal(obj.real_import_enabled, false);
+    for (const forbidden of ["fictional-source", "fictional-claim",
+      "toy_graph_digest", "toy_restore_digest", "applied_digest", "previous_digest"]) {
+      assert.ok(!utc.stdout.includes(forbidden), forbidden);
+    }
+    const refused = run(["../../real-archive.json"], "UTC");
+    assert.equal(refused.status, 2);
+    assert.equal(refused.stdout, "");
     assert.deepEqual(readdirSync(root), []);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
