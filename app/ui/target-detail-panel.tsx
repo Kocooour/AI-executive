@@ -118,9 +118,10 @@ function UnavailablePanel({language}:{language:DetailLanguage}){
   </Shell>;
 }
 
-function Content({content,route,copy,gates,more,onMore,noteEdit,onCommitted,language}:{
+function Content({content,route,copy,gates,more,onMore,noteEdit,onCommitted,onAccessRefused,language}:{
   content:TargetDetailContent;route:TargetDetailRoute;copy:DetailCopy;gates:TargetDetailGates;
-  more:boolean;onMore:()=>void;noteEdit:boolean;onCommitted:()=>void;language:DetailLanguage;
+  more:boolean;onMore:()=>void;noteEdit:boolean;onCommitted:()=>void;
+  onAccessRefused:()=>void;language:DetailLanguage;
 }){
   const area=(kind:"private"|"shared")=>kind==="shared"?copy.areaShared:copy.areaPrivate;
   if(content.kind==="task"){
@@ -150,7 +151,8 @@ function Content({content,route,copy,gates,more,onMore,noteEdit,onCommitted,lang
       {note.body.length===0
         ?<p className="targetDetailMuted">{copy.noteBodyEmpty}</p>
         :<div className="targetDetailNoteBody" data-testid="target-detail-note-body">{note.body}</div>}
-      {noteEdit&&<TargetNoteEditor note={note} language={language} onCommitted={onCommitted}/>}
+      {noteEdit&&<TargetNoteEditor note={note} language={language}
+        onCommitted={onCommitted} onAccessRefused={onAccessRefused}/>}
     </article>;
   }
   const {page}=content;
@@ -292,6 +294,18 @@ function DetailBody({route,language,gates,noteEdit}:{
     sessionRef.current?.resume();
     setNonce(value=>value+1);
   },[]);
+  // A denied edit GET/PATCH may signal a revoked Area membership. Hide the
+  // entire previously authorized note immediately, not only its edit button.
+  // A new server read can still show a viewer-authorized note after a role
+  // downgrade. Supersede all earlier reads so no stale content reappears.
+  const invalidateAndReload=useCallback(()=>{
+    epoch.current++;
+    sessionRef.current?.suspend();
+    setState({kind:"loading"});
+    retryAttempt.current=0;
+    sessionRef.current?.resume();
+    setNonce(value=>value+1);
+  },[]);
   async function more(){
     if(state.kind!=="ready"||state.more||!session||
       document.visibilityState==="hidden"||!navigator.onLine)return;
@@ -342,7 +356,8 @@ function DetailBody({route,language,gates,noteEdit}:{
       {content&&state.kind==="ready"&&
         <Content content={content} route={route} copy={copy} gates={gates}
           more={state.more} onMore={()=>{void more();}} noteEdit={noteEdit}
-          onCommitted={reload} language={language}/>}
+          onCommitted={reload} onAccessRefused={invalidateAndReload}
+          language={language}/>}
       {content&&!(noteEdit&&content.kind==="note")&&<p className="targetDetailNote">{copy.readOnlyNote}</p>}
     </>}
   </Shell>;
