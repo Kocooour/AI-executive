@@ -114,6 +114,12 @@ function note(fx, id) {
     return db.prepare("SELECT id,title,body,area_id,project_id FROM notes WHERE id=?").get(id);
   } finally { db.close(); }
 }
+async function checkedRead(response, status) {
+  const data = await response.json();
+  assert.equal(response.status, status, JSON.stringify(data));
+  assert.equal(response.headers.get("cache-control"), "no-store");
+  return data;
+}
 async function checked(response, status) {
   const data = await response.json();
   assert.equal(response.status, status, JSON.stringify(data));
@@ -131,7 +137,7 @@ test("owner creates a standalone private note, replay is idempotent and no legac
     id: command.noteId, title: command.title, body: command.body,
     area_id: fx.stage.unassignedAreaId, project_id: null,
   });
-  const fetched = await checked(await getNoteHttp(command.noteId, owner()), 200);
+  const fetched = await checkedRead(await getNoteHttp(command.noteId, owner()), 200);
   assert.deepEqual(fetched.note, {
     id: command.noteId, title: command.title, body: command.body,
     areaId: fx.stage.unassignedAreaId, areaKind: "private",
@@ -146,7 +152,7 @@ test("durable session may create only into its own private Area", async () => {
   const bob = session(fx, "bob");
   const allowed = body(fx, { areaId: "bob-private" });
   assert.equal((await checked(await send(allowed, bob), 201)).noteId, allowed.noteId);
-  assert.equal((await checked(await getNoteHttp(allowed.noteId, bob), 200)).note.id, allowed.noteId);
+  assert.equal((await checkedRead(await getNoteHttp(allowed.noteId, bob), 200)).note.id, allowed.noteId);
   assert.equal((await checked(await getNoteHttp(allowed.noteId, owner()), 404)).error, "Not found");
   const cross = body(fx);
   assert.equal((await checked(await send(cross, bob), 404)).error, "Not found");
