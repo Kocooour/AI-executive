@@ -13,6 +13,7 @@ import { rehearseSyntheticTriage } from "../scripts/humanwiki-synthetic/triage-r
 import { bindSyntheticTriageIntents, rehearseVersionBoundSyntheticTriage } from "../scripts/humanwiki-synthetic/version-bound-triage.mjs";
 import { previewSyntheticSourceLifecycle } from "../scripts/humanwiki-synthetic/lifecycle-preview.mjs";
 import { makeSyntheticRestoreFixture, previewSyntheticRestorePreflight } from "../scripts/humanwiki-synthetic/restore-preflight.mjs";
+import { previewSyntheticRestoreReplayPlan } from "../scripts/humanwiki-synthetic/restore-replay-plan.mjs";
 import { ensurePrivateCheckpointDirectory, writeCheckpointAtomic } from "../scripts/humanwiki-synthetic/checkpoint.mjs";
 
 const fixture = name => JSON.parse(readFileSync(new URL(`../scripts/humanwiki-synthetic/fixtures/${name}.json`, import.meta.url), "utf8"));
@@ -1203,5 +1204,175 @@ test("read-only restore preflight CLI is deterministic and denies custom input",
     assert.equal(denied.status, 2);
     assert.equal(denied.stdout, "");
     assert.deepEqual(readdirSync(root), [], "restore preview must not persist anything");
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("toy restore plan lists separate erasure and consent revocation obligations", () => {
+  const fixture = makeSyntheticRestoreFixture();
+  const unchanged = JSON.stringify(fixture);
+  const report = previewSyntheticRestoreReplayPlan(fixture);
+  assert.equal(report.synthetic_fixture_only, true);
+  assert.equal(report.plan_status, "requires_hypothetical_replay");
+  assert.equal(report.pending_events_to_reconcile, 2);
+  assert.deepEqual(report.event_obligations.map(({ sequence, opaque_source_id, action }) =>
+    [sequence, opaque_source_id, action]), [
+    [1, "fictional-source-a", "request_erasure"],
+    [2, "fictional-source-b", "revoke_import_consent"],
+  ]);
+  assert.ok(report.event_obligations.every(event => event.completed === false));
+  assert.deepEqual(report.event_obligations[0].required_checks, [
+    "remove_source_and_exclusively_derived_claims",
+    "prune_multi_source_evidence_and_revalidate_remaining_basis",
+    "invalidate_dependent_search_cache_embeddings_exports_summaries",
+    "retain_independent_anti_resurrection_tombstone_witness",
+  ]);
+  assert.deepEqual(report.event_obligations[1].required_checks, [
+    "stop_source_processing_and_ai_egress",
+    "recheck_separate_valid_retention_and_evidence_basis",
+    "purge_unauthorized_proposals_copies_and_derivatives",
+    "invalidate_and_revalidate_dependent_search_cache_ai_outputs",
+  ]);
+  assert.equal(JSON.stringify(fixture), unchanged);
+});
+
+test("no fictional recovery plan authorizes release or claims completed work", () => {
+  const fixture = makeSyntheticRestoreFixture();
+  const final = { ...fixture,
+    snapshot: { applied_sequence: fixture.witness.sequence, applied_digest: fixture.witness.digest } };
+  const rollback = structuredClone(fixture);
+  rollback.registry.pop();
+  const cases = [
+    previewSyntheticRestoreReplayPlan(fixture),
+    previewSyntheticRestoreReplayPlan(final),
+    previewSyntheticRestoreReplayPlan(rollback),
+    previewSyntheticRestoreReplayPlan({ ...fixture, witness: null }),
+    previewSyntheticRestoreReplayPlan({ ...fixture, toy_key_available: false }),
+  ];
+  for (const report of cases) {
+    assert.equal(report.data_release_authorized, false);
+    assert.equal(report.all_release_gates_satisfied, false);
+    assert.equal(report.replay_completed, false);
+    assert.equal(report.actual_restore_applied, false);
+    assert.equal(report.actual_witness_contacted, false);
+    assert.equal(report.durable_events_written, 0);
+    assert.equal(report.tombstones_written, 0);
+    assert.equal(report.claims_created, 0);
+    assert.equal(report.real_import_enabled, false);
+    assert.ok(report.global_release_gates.includes(
+      "revalidate_source_acl_consent_retention_and_claim_evidence"));
+  }
+});
+
+test("rolled-back fictional registry never yields per-source replay details", () => {
+  const fixture = makeSyntheticRestoreFixture();
+  const rollback = structuredClone(fixture);
+  rollback.registry = rollback.registry.slice(0, 1);
+  const report = previewSyntheticRestoreReplayPlan(rollback);
+  assert.equal(report.plan_status, "blocked");
+  assert.equal(report.reason, "registry_behind_external_witness");
+  assert.equal(report.pending_events_to_reconcile, 0);
+  assert.deepEqual(report.event_obligations, []);
+  assert.equal(report.source_specific_work_disclosed, false);
+  const json = JSON.stringify(report);
+  assert.ok(!json.includes("fictional-source-a"));
+  assert.ok(!json.includes("fictional-source-b"));
+  assert.ok(!json.includes("request_erasure"));
+  assert.ok(!json.includes("revoke_import_consent"));
+});
+
+test("missing witness, key and tampered event all prevent replay planning", () => {
+  const fixture = makeSyntheticRestoreFixture();
+  const tampered = structuredClone(fixture);
+  tampered.registry[0].action = "revoke_import_consent";
+  for (const [state, reason] of [
+    [{ ...fixture, witness: null }, "witness_unavailable_or_invalid"],
+    [{ ...fixture, toy_independent_witness_verified: false }, "witness_unverified"],
+    [{ ...fixture, toy_key_available: false }, "key_unavailable"],
+    [tampered, "registry_chain_mismatch"],
+  ]) {
+    const report = previewSyntheticRestoreReplayPlan(state);
+    assert.equal(report.plan_status, "blocked");
+    assert.equal(report.reason, reason);
+    assert.deepEqual(report.event_obligations, []);
+    assert.equal(report.source_specific_work_disclosed, false);
+  }
+});
+
+test("a restored fictional snapshot one event behind has only one pending obligation", () => {
+  const fixture = makeSyntheticRestoreFixture();
+  fixture.snapshot = {
+    applied_sequence: 1,
+    applied_digest: fixture.registry[0].digest,
+  };
+  const report = previewSyntheticRestoreReplayPlan(fixture);
+  assert.equal(report.pending_events_to_reconcile, 1);
+  assert.deepEqual(report.event_obligations.map(e => e.action), ["revoke_import_consent"]);
+  assert.equal(report.event_obligations[0].sequence, 2);
+  assert.equal(report.data_release_authorized, false);
+});
+
+test("matching toy snapshot still requires ACL and derivative revalidation", () => {
+  const fixture = makeSyntheticRestoreFixture();
+  fixture.snapshot = {
+    applied_sequence: fixture.witness.sequence,
+    applied_digest: fixture.witness.digest,
+  };
+  const report = previewSyntheticRestoreReplayPlan(fixture);
+  assert.equal(report.plan_status, "preflight_passed_revalidation_still_required");
+  assert.equal(report.pending_events_to_reconcile, 0);
+  assert.deepEqual(report.event_obligations, []);
+  assert.equal(report.source_specific_work_disclosed, true);
+  assert.equal(report.all_release_gates_satisfied, false);
+  assert.equal(report.data_release_authorized, false);
+});
+
+test("restore replay plan strictly inherits fixture preflight validation", () => {
+  const fixture = makeSyntheticRestoreFixture();
+  for (const bad of [
+    null,
+    {},
+    { ...fixture, witness: { sequence: 2, digest: "nonsense" } },
+    { ...fixture, registry: [{ ...fixture.registry[0], extra: "secret" }] },
+    { ...fixture, snapshot: { ...fixture.snapshot, applied_sequence: -1 } },
+  ]) {
+    if (bad === null || !bad.snapshot || bad.registry[0]?.extra ||
+        bad.snapshot?.applied_sequence === -1) {
+      assert.throws(() => previewSyntheticRestoreReplayPlan(bad), /Synthetic restore:/);
+    } else {
+      assert.equal(previewSyntheticRestoreReplayPlan(bad).plan_status, "blocked");
+    }
+  }
+});
+
+test("restore replay CLI is deterministic, fixture-only and read-only", () => {
+  const cli = fileURLToPath(new URL("../scripts/humanwiki-synthetic/restore-replay-plan-cli.mjs", import.meta.url));
+  const root = mkdtempSync(path.join(os.tmpdir(), "lumi-humanwiki-replayplan-"));
+  const invoke = (args, zone) => spawnSync(process.execPath, [cli, ...args], {
+    encoding: "utf8", env: { ...process.env, TMPDIR: root, TZ: zone },
+  });
+  try {
+    const a = invoke([], "UTC");
+    const b = invoke([], "Europe/Prague");
+    assert.equal(a.status, 0, a.stderr);
+    assert.equal(b.status, 0, b.stderr);
+    assert.equal(a.stdout, b.stdout);
+    const report = JSON.parse(a.stdout);
+    assert.equal(report.synthetic_fixture_only, true);
+    assert.equal(report.pending_replay_obligations.length, 2);
+    assert.equal(report.blocked_rollback_reason, "registry_behind_external_witness");
+    assert.equal(report.blocked_reveals_event_details, false);
+    assert.equal(report.matched_snapshot_still_requires_revalidation, true);
+    assert.equal(report.data_release_authorized, false);
+    assert.equal(report.replay_completed, false);
+    assert.equal(report.actual_witness_contacted, false);
+    assert.equal(report.real_import_enabled, false);
+    for (const forbidden of ["applied_digest", "previous_digest", "bundle_digest",
+      "content_sha256", "fictional garden", "silver spaceship"]) {
+      assert.ok(!a.stdout.includes(forbidden), forbidden);
+    }
+    const rejected = invoke(["../../private-export.json"], "UTC");
+    assert.equal(rejected.status, 2);
+    assert.equal(rejected.stdout, "");
+    assert.deepEqual(readdirSync(root), []);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
