@@ -20,7 +20,7 @@ import { bindSyntheticEpochFence, recheckSyntheticEpochFence, rehearseSyntheticF
 import { previewSyntheticHumanWikiAcceptance } from "../scripts/humanwiki-synthetic/acceptance-matrix.mjs";
 import { previewSyntheticClaimProposals } from "../scripts/humanwiki-synthetic/claim-proposal-preview.mjs";
 import { bindSyntheticProposalReview, rehearseSyntheticProposalReview, rehearseSyntheticProposalReviewRevisionTransition } from "../scripts/humanwiki-synthetic/proposal-review-rehearsal.mjs";
-import { previewSyntheticProposalLifecycleHolds } from "../scripts/humanwiki-synthetic/proposal-lifecycle-holds.mjs";
+import { previewSyntheticProposalLifecycleHolds, rehearseSyntheticProposalLifecycleIntent } from "../scripts/humanwiki-synthetic/proposal-lifecycle-holds.mjs";
 import { ensurePrivateCheckpointDirectory, writeCheckpointAtomic } from "../scripts/humanwiki-synthetic/checkpoint.mjs";
 
 const fixture = name => JSON.parse(readFileSync(new URL(`../scripts/humanwiki-synthetic/fixtures/${name}.json`, import.meta.url), "utf8"));
@@ -2749,6 +2749,12 @@ test("HumanWiki proposal lifecycle applies six independent hypothetical source p
   assert.deepEqual(report.scenarios.map(s => s.review_intent_evaluated), [
     true, true, false, false, false, true,
   ]);
+  assert.deepEqual(report.scenarios.map(s => s.review_intent_status), [
+    "would_open_source_for_explicit_review_only",
+    "would_open_source_for_explicit_review_only",
+    "not_evaluated", "not_evaluated", "not_evaluated",
+    "would_open_source_for_explicit_review_only",
+  ]);
   assert.deepEqual(report.scenarios.map(s => s.visible_segments_in_toy_policy), [
     6, 6, 3, 3, 3, 3,
   ]);
@@ -2894,4 +2900,105 @@ test("HumanWiki lifecycle hold CLI uses fixed fiction and emits only determinist
     assert.equal(refused.stdout, "");
     assert.deepEqual(readdirSync(dir), []);
   } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("HumanWiki lifecycle gate actually consumes caller's valid intent for permitted sources", () => {
+  const bundles = [fixture("chatgpt"), fixture("claude")];
+  const before = JSON.stringify(bundles);
+  const candidate = previewSyntheticClaimProposals(bundles).draft_proposals[0];
+  for (const [scenario, expected] of [
+    ["active", "would_offer_existing_proposal_for_explicit_review_only"],
+    ["pause", "would_keep_existing_proposal_pending_without_source_refresh"],
+    ["unrelated_disconnect", "would_offer_existing_proposal_for_explicit_review_only"],
+  ]) {
+    let arrayReads = 0;
+    let choiceReads = 0;
+    const entry = { draft_id: candidate.draft_id };
+    Object.defineProperty(entry, "choice", {
+      configurable: true, enumerable: true,
+      get() { choiceReads++; return "inspect"; },
+    });
+    const providedIntent = new Proxy([entry], {
+      get(target, key, receiver) {
+        arrayReads++;
+        return Reflect.get(target, key, receiver);
+      },
+    });
+    const report = rehearseSyntheticProposalLifecycleIntent(bundles, scenario, providedIntent);
+    assert.ok(arrayReads > 0, scenario + ": passed array must be inspected");
+    assert.ok(choiceReads > 0, scenario + ": caller's choice must be inspected");
+    assert.equal(report.candidate_review_status, expected);
+    assert.equal(report.review_intent_evaluated, true);
+    assert.equal(report.review_intent_status, "would_open_source_for_explicit_review_only");
+    assert.equal(report.claims_created, 0);
+    assert.equal(report.review_outcomes_written, 0);
+    assert.equal(report.atomic_commit_performed, false);
+    assert.equal(report.data_release_authorized, false);
+  }
+  const validDeferral = rehearseSyntheticProposalLifecycleIntent(bundles, "active",
+    [{ draft_id: candidate.draft_id, choice: "defer" }]);
+  assert.equal(validDeferral.review_intent_evaluated, true);
+  assert.equal(validDeferral.review_intent_status, "would_defer_draft_without_review_outcome");
+  assert.equal(validDeferral.review_outcomes_written, 0);
+  assert.equal(JSON.stringify(bundles), before);
+});
+
+test("HumanWiki lifecycle policy blocks before reading any submitted intent, even malformed or hostile", () => {
+  const bundles = [fixture("chatgpt"), fixture("claude")];
+  const candidate = previewSyntheticClaimProposals(bundles).draft_proposals[0];
+  for (const scenario of ["disconnect", "revoke", "erase"]) {
+    let accessed = 0;
+    const poisoned = new Proxy([{}], {
+      get() { accessed++; throw new Error("blocked intent was read"); },
+      ownKeys() { accessed++; throw new Error("blocked intent was inspected"); },
+      getOwnPropertyDescriptor() {
+        accessed++; throw new Error("blocked intent inspected descriptor");
+      },
+    });
+    const report = rehearseSyntheticProposalLifecycleIntent(bundles, scenario, poisoned);
+    assert.equal(accessed, 0, scenario + ": lifecycle must run before intent validation");
+    assert.equal(report.review_intent_evaluated, false);
+    assert.equal(report.review_intent_status, "not_evaluated");
+    assert.equal(report.candidate_pending_visible, false);
+    assert.equal(report.binding_still_matches_toy_content, true);
+    assert.equal(report.claims_created, 0);
+    assert.equal(report.review_outcomes_written, 0);
+    assert.equal(report.data_release_authorized, false);
+    assert.equal(report.real_import_enabled, false);
+    // A bad choice would be rejected if it reached the downstream validator,
+    // yet it remains unread under the source-specific lifecycle hold.
+    const denied = rehearseSyntheticProposalLifecycleIntent(bundles, scenario, [
+      { draft_id: candidate.draft_id, choice: "confirm" },
+    ]);
+    assert.equal(denied.review_intent_status, "not_evaluated");
+  }
+});
+
+test("HumanWiki permitted source rejects invalid caller intents after lifecycle check", () => {
+  const bundles = [fixture("chatgpt"), fixture("claude")];
+  const candidate = previewSyntheticClaimProposals(bundles).draft_proposals[0];
+  for (const scenario of ["active", "pause", "unrelated_disconnect"]) {
+    for (const invalid of [
+      null, undefined, "inspect", [], {},
+      [{ draft_id: candidate.draft_id, choice: "confirm" }],
+      [{ draft_id: candidate.draft_id, choice: "share" }],
+      [{ draft_id: candidate.draft_id, choice: "inspect", extra: "ignored?" }],
+      [{ draft_id: "unrelated-draft", choice: "inspect" }],
+    ]) {
+      assert.throws(
+        () => rehearseSyntheticProposalLifecycleIntent(bundles, scenario, invalid),
+        /Synthetic proposal review: invalid (review intent list|fictional review intent)|Synthetic proposal lifecycle: fixture contract/,
+        scenario + ": invalid caller-supplied intent must not be accepted");
+    }
+  }
+  assert.throws(() => rehearseSyntheticProposalLifecycleIntent(bundles, "not-a-scenario",
+    new Proxy([], { get() { throw new Error("bad scenario inspected user input"); } })),
+  /Synthetic proposal lifecycle: fixture contract not satisfied/);
+  const changed = structuredClone(bundles);
+  changed[0].conversations[0].mapping.b.message.content.parts[0] += " tampered";
+  assert.throws(
+    () => rehearseSyntheticProposalLifecycleIntent(changed, "active",
+      [{ draft_id: candidate.draft_id, choice: "inspect" }]),
+    /Synthetic (acceptance|claim proposal):/,
+    "fixed fictional fixture validation remains mandatory");
 });
