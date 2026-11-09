@@ -16,6 +16,10 @@ if (process.argv.length !== 2) {
     const rollback = structuredClone(state);
     rollback.registry.pop();
     const blocked = previewSyntheticDerivativeImpact(rollback, graph);
+    const incompleteGraph = structuredClone(graph);
+    incompleteGraph.artifacts = incompleteGraph.artifacts.filter(
+      artifact => artifact.id !== "fictional-link-a");
+    const incomplete = previewSyntheticDerivativeImpact(state, incompleteGraph);
     const atWitness = previewSyntheticDerivativeImpact({
       ...state,
       snapshot: {
@@ -27,7 +31,9 @@ if (process.argv.length !== 2) {
         atWitness.impact_status !== "hypothetical_impacts_only" ||
         JSON.stringify(atWitness.claim_impacts) !== JSON.stringify(impacts.claim_impacts) ||
         blocked.impact_status !== "blocked" ||
-        blocked.claim_impacts.length || blocked.artifact_impacts.length) {
+        blocked.claim_impacts.length || blocked.artifact_impacts.length ||
+        incomplete.reason !== "fictional_dependency_coverage_incomplete" ||
+        incomplete.claim_impacts.length || incomplete.artifact_impacts.length) {
       throw new Error("Synthetic impact preview preflight mismatch");
     }
     console.log(JSON.stringify({
@@ -36,6 +42,10 @@ if (process.argv.length !== 2) {
       artifact_impacts: impacts.artifact_impacts,
       blocked_rollback_reason: blocked.reason,
       blocked_disclosed_sources: blocked.source_specific_details_disclosed,
+      incomplete_graph_reason: incomplete.reason,
+      incomplete_graph_disclosed_sources: incomplete.source_specific_details_disclosed,
+      fictional_fixture_manifest_matched: impacts.fictional_fixture_manifest_matched,
+      production_dependency_coverage_verified: impacts.production_dependency_coverage_verified,
       witness_current_does_not_waive_revalidation: true,
       data_release_authorized: false,
       actual_deletions_performed: 0,
