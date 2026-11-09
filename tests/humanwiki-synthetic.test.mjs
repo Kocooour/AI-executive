@@ -11,6 +11,9 @@ import { previewSyntheticOverlaps } from "../scripts/humanwiki-synthetic/overlap
 import { previewSyntheticReviewQueue } from "../scripts/humanwiki-synthetic/review-preview.mjs";
 import { rehearseSyntheticTriage } from "../scripts/humanwiki-synthetic/triage-rehearsal.mjs";
 import { bindSyntheticTriageIntents, rehearseVersionBoundSyntheticTriage } from "../scripts/humanwiki-synthetic/version-bound-triage.mjs";
+import { previewSyntheticSourceLifecycle } from "../scripts/humanwiki-synthetic/lifecycle-preview.mjs";
+import { makeSyntheticRestoreFixture, previewSyntheticRestorePreflight } from "../scripts/humanwiki-synthetic/restore-preflight.mjs";
+import { previewSyntheticRestoreReplayPlan } from "../scripts/humanwiki-synthetic/restore-replay-plan.mjs";
 import { ensurePrivateCheckpointDirectory, writeCheckpointAtomic } from "../scripts/humanwiki-synthetic/checkpoint.mjs";
 
 const fixture = name => JSON.parse(readFileSync(new URL(`../scripts/humanwiki-synthetic/fixtures/${name}.json`, import.meta.url), "utf8"));
@@ -797,5 +800,579 @@ test("version-bound CLI proves stale decisions fail without writes or personal d
     assert.equal(denied.status, 2);
     assert.equal(denied.stdout, "");
     assert.deepEqual(readdirSync(root), [], "CLI must not write any fixture checkpoint");
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("synthetic lifecycle baseline preserves only proposed source-segment metadata", () => {
+  const bundles = [fixture("chatgpt"), fixture("claude")];
+  const preview = previewSyntheticSourceLifecycle(bundles);
+  assert.equal(preview.synthetic_fixture_only, true);
+  assert.equal(preview.mode, "hypothetical_source_lifecycle_policy_only");
+  assert.equal(preview.scenarios_applied, 0);
+  assert.equal(preview.segments_total, 6);
+  assert.equal(preview.visible_segments, 6);
+  assert.equal(preview.suppressed_segments, 0);
+  assert.equal(preview.visible_entries.length, 6);
+  assert.ok(preview.source_states.every(source =>
+    source.action === "active" && source.would_allow_new_source_reads &&
+    source.would_allow_pending_review && !source.would_invalidate_source_derivatives &&
+    !source.operation_completed));
+  assert.ok(preview.visible_entries.every(entry =>
+    entry.review === "proposed" && entry.sensitivity === "unclassified" &&
+    !entry.eligible_for_automatic_confirmation && !entry.independent_evidence));
+  assert.equal(preview.claims_created, 0);
+  assert.equal(preview.review_outcomes_written, 0);
+  assert.equal(preview.actual_source_reads_performed, 0);
+  assert.equal(preview.durable_lifecycle_events_written, 0);
+  assert.equal(preview.tombstones_written, 0);
+  assert.equal(preview.real_import_enabled, false);
+  const serialized = JSON.stringify(preview);
+  for (const text of ["fictional garden", "silver spaceship", "blue gate is open",
+    "content_sha256", "bundle_digest"]) {
+    assert.ok(!serialized.includes(text), text);
+  }
+  assert.deepEqual(previewSyntheticSourceLifecycle([...bundles].reverse()), preview);
+});
+
+test("pause stops hypothetical new reads while preserving existing review visibility", () => {
+  const bundles = [fixture("chatgpt"), fixture("claude")];
+  const preview = previewSyntheticSourceLifecycle(bundles, [
+    { source_id: "fixture-chatgpt-01", action: "pause_sync" },
+  ]);
+  const paused = preview.source_states.find(s => s.source_id === "fixture-chatgpt-01");
+  assert.equal(paused.action, "pause_sync");
+  assert.equal(paused.would_allow_new_source_reads, false);
+  assert.equal(paused.would_allow_pending_review, true);
+  assert.equal(paused.would_invalidate_source_derivatives, false);
+  assert.equal(paused.retention_recheck_required, false);
+  assert.equal(paused.independent_witness_required, false);
+  assert.equal(paused.operation_completed, false);
+  assert.equal(preview.visible_segments, 6);
+  assert.equal(preview.suppressed_segments, 0);
+  assert.equal(preview.tombstones_written, 0);
+});
+
+test("disconnect hides source locators and requests invalidation without claim deletion", () => {
+  const bundles = [fixture("chatgpt"), fixture("claude")];
+  const preview = previewSyntheticSourceLifecycle(bundles, [
+    { source_id: "fixture-chatgpt-01", action: "disconnect_source" },
+  ]);
+  const disconnected = preview.source_states.find(s => s.source_id === "fixture-chatgpt-01");
+  assert.equal(disconnected.would_allow_new_source_reads, false);
+  assert.equal(disconnected.would_allow_pending_review, false);
+  assert.equal(disconnected.would_invalidate_source_derivatives, true);
+  assert.equal(disconnected.operation_completed, false);
+  assert.equal(preview.visible_segments, 3);
+  assert.equal(preview.suppressed_segments, 3);
+  assert.equal(disconnected.visible_segments, 0);
+  assert.equal(disconnected.suppressed_segments, 3);
+  assert.ok(preview.visible_entries.every(entry =>
+    entry.locator.source_id === "fixture-claude-01"));
+  assert.equal(preview.claims_created, 0);
+  assert.equal(preview.review_outcomes_written, 0);
+});
+
+test("revoked import consent blocks pending review but does not claim completed removal", () => {
+  const preview = previewSyntheticSourceLifecycle(
+    [fixture("chatgpt"), fixture("claude")], [
+      { source_id: "fixture-claude-01", action: "revoke_import_consent" },
+    ]);
+  const revoked = preview.source_states.find(s => s.source_id === "fixture-claude-01");
+  assert.equal(revoked.would_allow_pending_review, false);
+  assert.equal(revoked.would_allow_new_source_reads, false);
+  assert.equal(revoked.would_invalidate_source_derivatives, true);
+  assert.equal(revoked.retention_recheck_required, true);
+  assert.equal(revoked.reimport_blocked_pending_new_consent, true);
+  assert.equal(revoked.independent_witness_required, true);
+  assert.equal(revoked.operation_completed, false);
+  assert.equal(revoked.durable_lifecycle_event_written, false);
+  assert.equal(revoked.witness_confirmed, false);
+  assert.equal(preview.visible_segments, 3);
+  assert.ok(preview.visible_entries.every(entry =>
+    entry.locator.source_id !== "fixture-claude-01"));
+  assert.equal(preview.durable_lifecycle_events_written, 0);
+});
+
+test("erasure request stays fail-closed pending independently witnessed durable completion", () => {
+  const preview = previewSyntheticSourceLifecycle(
+    [fixture("chatgpt"), fixture("claude")], [
+      { source_id: "fixture-chatgpt-01", action: "request_erasure" },
+    ]);
+  const removed = preview.source_states.find(s => s.source_id === "fixture-chatgpt-01");
+  assert.equal(removed.action, "request_erasure");
+  assert.equal(removed.would_allow_pending_review, false);
+  assert.equal(removed.would_allow_new_source_reads, false);
+  assert.equal(removed.would_invalidate_source_derivatives, true);
+  assert.equal(removed.reimport_blocked_pending_new_consent, true);
+  assert.equal(removed.independent_witness_required, true);
+  assert.equal(removed.operation_completed, false);
+  assert.equal(removed.witness_confirmed, false);
+  assert.equal(preview.tombstones_written, 0);
+  assert.equal(preview.durable_lifecycle_events_written, 0);
+  assert.equal(preview.visible_segments, 3);
+  assert.ok(preview.visible_entries.every(entry =>
+    entry.locator.source_id !== "fixture-chatgpt-01"));
+});
+
+test("lifecycle scenarios isolate independent sources and do not change fixture inputs", () => {
+  const bundles = [fixture("chatgpt"), fixture("claude")];
+  const scenarios = [
+    { source_id: "fixture-claude-01", action: "pause_sync" },
+    { source_id: "fixture-chatgpt-01", action: "disconnect_source" },
+  ];
+  const snapshot = JSON.stringify({ bundles, scenarios });
+  const a = previewSyntheticSourceLifecycle(bundles, scenarios);
+  const b = previewSyntheticSourceLifecycle(
+    [...bundles].reverse(), [...scenarios].reverse());
+  assert.deepEqual(a, b);
+  assert.equal(a.scenarios_applied, 2);
+  assert.equal(a.visible_segments, 3);
+  assert.equal(a.suppressed_segments, 3);
+  assert.equal(JSON.stringify({ bundles, scenarios }), snapshot);
+  assert.equal(a.real_import_enabled, false);
+});
+
+test("lifecycle preview rejects unknown duplicate malformed and non-synthetic scenarios", () => {
+  const bundles = [fixture("chatgpt"), fixture("claude")];
+  const valid = { source_id: "fixture-chatgpt-01", action: "pause_sync" };
+  for (const invalid of [
+    null, 0, [], "disconnect_source",
+    { source_id: "fixture-chatgpt-01" },
+    { source_id: "fixture-chatgpt-01", action: "confirm" },
+    { source_id: "not-found", action: "pause_sync" },
+    { ...valid, unexpected: "data" },
+    { source_id: 1, action: "pause_sync" },
+    { source_id: "fixture-chatgpt-01", action: null },
+    Object.assign(Object.create(null), { source_id: "fixture-chatgpt-01" }),
+  ]) {
+    assert.throws(() => previewSyntheticSourceLifecycle(bundles, [invalid]),
+      /Synthetic lifecycle:/);
+  }
+  for (const invalid of [null, false, {}, "pause_sync", [valid, valid],
+    [valid, valid, valid]]) {
+    assert.throws(() => previewSyntheticSourceLifecycle(bundles, invalid),
+      /Synthetic lifecycle:/);
+  }
+  assert.throws(() => previewSyntheticSourceLifecycle(
+    [bundles[0], { ...bundles[1], synthetic_fixture: false }], [valid]),
+    /unsupported or non-synthetic bundle/);
+});
+
+
+test("lifecycle action input remains a strict string enum", () => {
+  const bundles = [fixture("chatgpt"), fixture("claude")];
+  const source_id = "fixture-chatgpt-01";
+  for (const action of [
+    "pause_sync", "disconnect_source", "revoke_import_consent", "request_erasure",
+  ]) {
+    const report = previewSyntheticSourceLifecycle(bundles, [{ source_id, action }]);
+    assert.equal(report.source_states.find(source => source.source_id === source_id).action, action);
+    assert.equal(report.scenarios_applied, 1);
+    assert.equal(report.real_import_enabled, false);
+  }
+  for (const action of [
+    ["pause_sync"], ["request_erasure"], ["active"], ["pause_sync", "request_erasure"],
+    { toString: () => "pause_sync" }, new String("pause_sync"),
+    "active", "", "PAUSE_SYNC", null, undefined, true, 1, Symbol("pause_sync"),
+  ]) {
+    assert.throws(() => previewSyntheticSourceLifecycle(bundles, [{ source_id, action }]),
+      /Synthetic lifecycle: invalid lifecycle scenario/);
+  }
+});
+
+test("fixture-only lifecycle CLI compares actions without raw text, writes or inputs", () => {
+  const cli = fileURLToPath(new URL("../scripts/humanwiki-synthetic/lifecycle-preview-cli.mjs", import.meta.url));
+  const root = mkdtempSync(path.join(os.tmpdir(), "lumi-humanwiki-lifecycle-"));
+  const invoke = (args, zone) => spawnSync(process.execPath, [cli, ...args], {
+    encoding: "utf8", env: { ...process.env, TMPDIR: root, TZ: zone },
+  });
+  try {
+    const utc = invoke([], "UTC");
+    const prague = invoke([], "Europe/Prague");
+    assert.equal(utc.status, 0, utc.stderr);
+    assert.equal(prague.status, 0, prague.stderr);
+    assert.equal(utc.stdout, prague.stdout);
+    const report = JSON.parse(utc.stdout);
+    assert.equal(report.synthetic_fixture_only, true);
+    assert.deepEqual(report.scenarios.map(s => s.action), [
+      "pause_sync", "disconnect_source", "revoke_import_consent", "request_erasure",
+    ]);
+    assert.equal(report.scenarios[0].would_allow_pending_review, true);
+    assert.ok(report.scenarios.slice(1).every(s =>
+      s.would_allow_pending_review === false && s.operation_completed === false));
+    assert.ok(report.scenarios.slice(2).every(s => s.independent_witness_required));
+    assert.equal(report.durable_lifecycle_events_written, 0);
+    assert.equal(report.tombstones_written, 0);
+    assert.equal(report.real_import_enabled, false);
+    for (const content of ["fictional garden", "silver spaceship", "blue gate is open",
+      "content_sha256", "bundle_digest"]) {
+      assert.ok(!utc.stdout.includes(content), content);
+    }
+    const rejected = invoke(["../../private-export.json"], "UTC");
+    assert.equal(rejected.status, 2);
+    assert.equal(rejected.stdout, "");
+    assert.deepEqual(readdirSync(root), [], "lifecycle CLI must never persist state");
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("synthetic restore preflight requires replay for an older snapshot without releasing content", () => {
+  const state = makeSyntheticRestoreFixture();
+  const before = JSON.stringify(state);
+  const report = previewSyntheticRestorePreflight(state);
+  assert.equal(report.synthetic_fixture_only, true);
+  assert.equal(report.mode, "offline_restore_preflight_rehearsal");
+  assert.equal(report.preflight_status, "requires_replay_and_revalidation");
+  assert.equal(report.reason, null);
+  assert.equal(report.pending_replay_count, 2);
+  assert.deepEqual(report.pending_replay_events, [
+    { sequence: 1, opaque_source_id: "fictional-source-a", action: "request_erasure" },
+    { sequence: 2, opaque_source_id: "fictional-source-b", action: "revoke_import_consent" },
+  ]);
+  assert.equal(report.replay_completed, false);
+  assert.equal(report.actual_restore_applied, false);
+  assert.equal(report.data_release_authorized, false);
+  assert.equal(report.actual_witness_contacted, false);
+  assert.equal(report.durable_events_written, 0);
+  assert.equal(report.tombstones_written, 0);
+  assert.equal(report.claims_created, 0);
+  assert.equal(report.real_import_enabled, false);
+  assert.equal(JSON.stringify(state), before);
+  const serialized = JSON.stringify(report);
+  for (const forbidden of ["bundle_digest", "content_sha256", "fictional garden",
+    "silver spaceship", "previous_digest", "applied_digest", "witness_digest"]) {
+    assert.ok(!serialized.includes(forbidden), forbidden);
+  }
+});
+
+test("a coherent old snapshot plus old registry is blocked by newer external witness", () => {
+  const fixture = makeSyntheticRestoreFixture();
+  const restored = structuredClone(fixture);
+  restored.registry = restored.registry.slice(0, 1);
+  const report = previewSyntheticRestorePreflight(restored);
+  assert.equal(report.preflight_status, "blocked");
+  assert.equal(report.reason, "registry_behind_external_witness");
+  assert.equal(report.pending_replay_count, 0);
+  assert.deepEqual(report.pending_replay_events, []);
+  assert.equal(report.data_release_authorized, false);
+  assert.equal(report.replay_completed, false);
+});
+
+test("unavailable witness unverified witness and missing key all fail closed", () => {
+  const fixture = makeSyntheticRestoreFixture();
+  const variations = [
+    [{ ...fixture, witness: null }, "witness_unavailable_or_invalid"],
+    [{ ...fixture, witness: { sequence: 1, digest: "garbage" } }, "witness_unavailable_or_invalid"],
+    [{ ...fixture, toy_independent_witness_verified: false }, "witness_unverified"],
+    [{ ...fixture, toy_key_available: false }, "key_unavailable"],
+  ];
+  for (const [state, reason] of variations) {
+    const report = previewSyntheticRestorePreflight(state);
+    assert.equal(report.reason, reason);
+    assert.equal(report.preflight_status, "blocked");
+    assert.equal(report.pending_replay_count, 0);
+    assert.equal(report.data_release_authorized, false);
+    assert.equal(report.actual_witness_contacted, false);
+  }
+});
+
+test("toy registry sequence gap and changed event metadata fail closed", () => {
+  const base = makeSyntheticRestoreFixture();
+  const gap = structuredClone(base);
+  gap.registry[0].sequence = 2;
+  assert.equal(previewSyntheticRestorePreflight(gap).reason, "registry_sequence_gap");
+  const forgedAction = structuredClone(base);
+  forgedAction.registry[0].action = "revoke_import_consent";
+  assert.equal(previewSyntheticRestorePreflight(forgedAction).reason, "registry_chain_mismatch");
+  const wrongPrior = structuredClone(base);
+  wrongPrior.registry[1].previous_digest = "f".repeat(64);
+  assert.equal(previewSyntheticRestorePreflight(wrongPrior).reason, "registry_chain_mismatch");
+  const wrongDigest = structuredClone(base);
+  wrongDigest.registry[0].digest = "f".repeat(64);
+  assert.equal(previewSyntheticRestorePreflight(wrongDigest).reason, "registry_chain_mismatch");
+});
+
+test("toy witness mismatch and unanchored registry tail block release", () => {
+  const base = makeSyntheticRestoreFixture();
+  const staleWitness = structuredClone(base);
+  staleWitness.witness = {
+    sequence: 1, digest: staleWitness.registry[0].digest,
+  };
+  assert.equal(previewSyntheticRestorePreflight(staleWitness).reason,
+    "registry_has_unwitnessed_tail");
+  const mismatching = structuredClone(base);
+  mismatching.witness.digest = "e".repeat(64);
+  assert.equal(previewSyntheticRestorePreflight(mismatching).reason,
+    "external_witness_digest_mismatch");
+  const ahead = structuredClone(base);
+  ahead.witness.sequence = 3;
+  assert.equal(previewSyntheticRestorePreflight(ahead).reason,
+    "registry_behind_external_witness");
+});
+
+test("restore cursor must match the observed registry checkpoint", () => {
+  const base = makeSyntheticRestoreFixture();
+  const ahead = structuredClone(base);
+  ahead.snapshot.applied_sequence = 3;
+  assert.equal(previewSyntheticRestorePreflight(ahead).reason, "restored_snapshot_ahead");
+  const badDigest = structuredClone(base);
+  badDigest.snapshot.applied_sequence = 1;
+  assert.equal(previewSyntheticRestorePreflight(badDigest).reason,
+    "restored_snapshot_digest_mismatch");
+  const current = structuredClone(base);
+  current.snapshot = {
+    applied_sequence: current.witness.sequence,
+    applied_digest: current.witness.digest,
+  };
+  const report = previewSyntheticRestorePreflight(current);
+  assert.equal(report.preflight_status, "checks_passed_in_toy_only");
+  assert.equal(report.pending_replay_count, 0);
+  assert.equal(report.data_release_authorized, false);
+  assert.equal(report.replay_completed, false);
+});
+
+test("toy restore fixture and registry accept only scoped nonpersonal metadata", () => {
+  const base = makeSyntheticRestoreFixture();
+  for (const modify of [
+    state => { state.registry[0].action = ["request_erasure"]; },
+    state => { state.registry[0].action = "pause_sync"; },
+    state => { state.registry[0].opaque_source_id = "some@example.com"; },
+    state => { state.registry[0].opaque_source_id = ["fictional-source-a"]; },
+    state => { state.registry[0].text = "private personal information"; },
+    state => { state.registry[0].sequence = 1.5; },
+    state => { state.registry[1].digest = undefined; },
+    state => { state.snapshot.applied_sequence = -1; },
+    state => { state.snapshot.extra = "bad"; },
+    state => { state.registry = Array.from({ length: 17 }, () => state.registry[0]); },
+    state => { state.toy_independent_witness_verified = "true"; },
+    state => { state.toy_key_available = "true"; },
+    state => { state.extra = "bad"; },
+  ]) {
+    const invalid = structuredClone(base);
+    modify(invalid);
+    assert.throws(() => previewSyntheticRestorePreflight(invalid),
+      /Synthetic restore:/);
+  }
+  for (const invalid of [null, [], {}, false, "fixture"]) {
+    assert.throws(() => previewSyntheticRestorePreflight(invalid),
+      /Synthetic restore:/);
+  }
+});
+
+test("empty fictional registry checkpoint also requires independently verified toy witness", () => {
+  const base = makeSyntheticRestoreFixture();
+  const genesis = "0".repeat(64);
+  const noEvents = {
+    ...base, registry: [],
+    snapshot: { applied_sequence: 0, applied_digest: genesis },
+    witness: { sequence: 0, digest: genesis },
+  };
+  const allowed = previewSyntheticRestorePreflight(noEvents);
+  assert.equal(allowed.preflight_status, "checks_passed_in_toy_only");
+  assert.equal(allowed.data_release_authorized, false);
+  const unavailable = previewSyntheticRestorePreflight({ ...noEvents, witness: null });
+  assert.equal(unavailable.preflight_status, "blocked");
+  assert.equal(unavailable.reason, "witness_unavailable_or_invalid");
+});
+
+test("read-only restore preflight CLI is deterministic and denies custom input", () => {
+  const cli = fileURLToPath(new URL("../scripts/humanwiki-synthetic/restore-preflight-cli.mjs", import.meta.url));
+  const root = mkdtempSync(path.join(os.tmpdir(), "lumi-humanwiki-restore-"));
+  const invoke = (args, zone) => spawnSync(process.execPath, [cli, ...args], {
+    encoding: "utf8", env: { ...process.env, TMPDIR: root, TZ: zone },
+  });
+  try {
+    const utc = invoke([], "UTC");
+    const prague = invoke([], "Europe/Prague");
+    assert.equal(utc.status, 0, utc.stderr);
+    assert.equal(prague.status, 0, prague.stderr);
+    assert.equal(utc.stdout, prague.stdout);
+    const report = JSON.parse(utc.stdout);
+    assert.equal(report.synthetic_fixture_only, true);
+    assert.equal(report.old_snapshot_status, "requires_replay_and_revalidation");
+    assert.equal(report.toy_pending_replay_events, 2);
+    assert.equal(report.old_registry_rollback, "registry_behind_external_witness");
+    assert.equal(report.missing_witness, "witness_unavailable_or_invalid");
+    assert.equal(report.missing_key, "key_unavailable");
+    assert.equal(report.current_snapshot_status, "checks_passed_in_toy_only");
+    assert.equal(report.data_release_authorized, false);
+    assert.equal(report.real_import_enabled, false);
+    for (const forbidden of ["fictional garden", "silver spaceship",
+      "content_sha256", "applied_digest", "previous_digest"]) {
+      assert.ok(!utc.stdout.includes(forbidden), forbidden);
+    }
+    const denied = invoke(["../../private-export.json"], "UTC");
+    assert.equal(denied.status, 2);
+    assert.equal(denied.stdout, "");
+    assert.deepEqual(readdirSync(root), [], "restore preview must not persist anything");
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("toy restore plan lists separate erasure and consent revocation obligations", () => {
+  const fixture = makeSyntheticRestoreFixture();
+  const unchanged = JSON.stringify(fixture);
+  const report = previewSyntheticRestoreReplayPlan(fixture);
+  assert.equal(report.synthetic_fixture_only, true);
+  assert.equal(report.plan_status, "requires_hypothetical_replay");
+  assert.equal(report.pending_events_to_reconcile, 2);
+  assert.deepEqual(report.event_obligations.map(({ sequence, opaque_source_id, action }) =>
+    [sequence, opaque_source_id, action]), [
+    [1, "fictional-source-a", "request_erasure"],
+    [2, "fictional-source-b", "revoke_import_consent"],
+  ]);
+  assert.ok(report.event_obligations.every(event => event.completed === false));
+  assert.deepEqual(report.event_obligations[0].required_checks, [
+    "remove_source_and_exclusively_derived_claims",
+    "prune_multi_source_evidence_and_revalidate_remaining_basis",
+    "invalidate_dependent_search_cache_embeddings_exports_summaries",
+    "retain_independent_anti_resurrection_tombstone_witness",
+  ]);
+  assert.deepEqual(report.event_obligations[1].required_checks, [
+    "stop_source_processing_and_ai_egress",
+    "recheck_separate_valid_retention_and_evidence_basis",
+    "purge_unauthorized_proposals_copies_and_derivatives",
+    "invalidate_and_revalidate_dependent_search_cache_ai_outputs",
+  ]);
+  assert.equal(JSON.stringify(fixture), unchanged);
+});
+
+test("no fictional recovery plan authorizes release or claims completed work", () => {
+  const fixture = makeSyntheticRestoreFixture();
+  const final = { ...fixture,
+    snapshot: { applied_sequence: fixture.witness.sequence, applied_digest: fixture.witness.digest } };
+  const rollback = structuredClone(fixture);
+  rollback.registry.pop();
+  const cases = [
+    previewSyntheticRestoreReplayPlan(fixture),
+    previewSyntheticRestoreReplayPlan(final),
+    previewSyntheticRestoreReplayPlan(rollback),
+    previewSyntheticRestoreReplayPlan({ ...fixture, witness: null }),
+    previewSyntheticRestoreReplayPlan({ ...fixture, toy_key_available: false }),
+  ];
+  for (const report of cases) {
+    assert.equal(report.data_release_authorized, false);
+    assert.equal(report.all_release_gates_satisfied, false);
+    assert.equal(report.replay_completed, false);
+    assert.equal(report.actual_restore_applied, false);
+    assert.equal(report.actual_witness_contacted, false);
+    assert.equal(report.durable_events_written, 0);
+    assert.equal(report.tombstones_written, 0);
+    assert.equal(report.claims_created, 0);
+    assert.equal(report.real_import_enabled, false);
+    assert.ok(report.global_release_gates.includes(
+      "revalidate_source_acl_consent_retention_and_claim_evidence"));
+  }
+});
+
+test("rolled-back fictional registry never yields per-source replay details", () => {
+  const fixture = makeSyntheticRestoreFixture();
+  const rollback = structuredClone(fixture);
+  rollback.registry = rollback.registry.slice(0, 1);
+  const report = previewSyntheticRestoreReplayPlan(rollback);
+  assert.equal(report.plan_status, "blocked");
+  assert.equal(report.reason, "registry_behind_external_witness");
+  assert.equal(report.pending_events_to_reconcile, 0);
+  assert.deepEqual(report.event_obligations, []);
+  assert.equal(report.source_specific_work_disclosed, false);
+  const json = JSON.stringify(report);
+  assert.ok(!json.includes("fictional-source-a"));
+  assert.ok(!json.includes("fictional-source-b"));
+  assert.ok(!json.includes("request_erasure"));
+  assert.ok(!json.includes("revoke_import_consent"));
+});
+
+test("missing witness, key and tampered event all prevent replay planning", () => {
+  const fixture = makeSyntheticRestoreFixture();
+  const tampered = structuredClone(fixture);
+  tampered.registry[0].action = "revoke_import_consent";
+  for (const [state, reason] of [
+    [{ ...fixture, witness: null }, "witness_unavailable_or_invalid"],
+    [{ ...fixture, toy_independent_witness_verified: false }, "witness_unverified"],
+    [{ ...fixture, toy_key_available: false }, "key_unavailable"],
+    [tampered, "registry_chain_mismatch"],
+  ]) {
+    const report = previewSyntheticRestoreReplayPlan(state);
+    assert.equal(report.plan_status, "blocked");
+    assert.equal(report.reason, reason);
+    assert.deepEqual(report.event_obligations, []);
+    assert.equal(report.source_specific_work_disclosed, false);
+  }
+});
+
+test("a restored fictional snapshot one event behind has only one pending obligation", () => {
+  const fixture = makeSyntheticRestoreFixture();
+  fixture.snapshot = {
+    applied_sequence: 1,
+    applied_digest: fixture.registry[0].digest,
+  };
+  const report = previewSyntheticRestoreReplayPlan(fixture);
+  assert.equal(report.pending_events_to_reconcile, 1);
+  assert.deepEqual(report.event_obligations.map(e => e.action), ["revoke_import_consent"]);
+  assert.equal(report.event_obligations[0].sequence, 2);
+  assert.equal(report.data_release_authorized, false);
+});
+
+test("matching toy snapshot still requires ACL and derivative revalidation", () => {
+  const fixture = makeSyntheticRestoreFixture();
+  fixture.snapshot = {
+    applied_sequence: fixture.witness.sequence,
+    applied_digest: fixture.witness.digest,
+  };
+  const report = previewSyntheticRestoreReplayPlan(fixture);
+  assert.equal(report.plan_status, "preflight_passed_revalidation_still_required");
+  assert.equal(report.pending_events_to_reconcile, 0);
+  assert.deepEqual(report.event_obligations, []);
+  assert.equal(report.source_specific_work_disclosed, false);
+  assert.equal(report.all_release_gates_satisfied, false);
+  assert.equal(report.data_release_authorized, false);
+});
+
+test("restore replay plan strictly inherits fixture preflight validation", () => {
+  const fixture = makeSyntheticRestoreFixture();
+  for (const bad of [
+    null,
+    {},
+    { ...fixture, witness: { sequence: 2, digest: "nonsense" } },
+    { ...fixture, registry: [{ ...fixture.registry[0], extra: "secret" }] },
+    { ...fixture, snapshot: { ...fixture.snapshot, applied_sequence: -1 } },
+  ]) {
+    if (bad === null || !bad.snapshot || bad.registry[0]?.extra ||
+        bad.snapshot?.applied_sequence === -1) {
+      assert.throws(() => previewSyntheticRestoreReplayPlan(bad), /Synthetic restore:/);
+    } else {
+      assert.equal(previewSyntheticRestoreReplayPlan(bad).plan_status, "blocked");
+    }
+  }
+});
+
+test("restore replay CLI is deterministic, fixture-only and read-only", () => {
+  const cli = fileURLToPath(new URL("../scripts/humanwiki-synthetic/restore-replay-plan-cli.mjs", import.meta.url));
+  const root = mkdtempSync(path.join(os.tmpdir(), "lumi-humanwiki-replayplan-"));
+  const invoke = (args, zone) => spawnSync(process.execPath, [cli, ...args], {
+    encoding: "utf8", env: { ...process.env, TMPDIR: root, TZ: zone },
+  });
+  try {
+    const a = invoke([], "UTC");
+    const b = invoke([], "Europe/Prague");
+    assert.equal(a.status, 0, a.stderr);
+    assert.equal(b.status, 0, b.stderr);
+    assert.equal(a.stdout, b.stdout);
+    const report = JSON.parse(a.stdout);
+    assert.equal(report.synthetic_fixture_only, true);
+    assert.equal(report.pending_replay_obligations.length, 2);
+    assert.equal(report.blocked_rollback_reason, "registry_behind_external_witness");
+    assert.equal(report.blocked_reveals_event_details, false);
+    assert.equal(report.matched_snapshot_still_requires_revalidation, true);
+    assert.equal(report.data_release_authorized, false);
+    assert.equal(report.replay_completed, false);
+    assert.equal(report.actual_witness_contacted, false);
+    assert.equal(report.real_import_enabled, false);
+    for (const forbidden of ["applied_digest", "previous_digest", "bundle_digest",
+      "content_sha256", "fictional garden", "silver spaceship"]) {
+      assert.ok(!a.stdout.includes(forbidden), forbidden);
+    }
+    const rejected = invoke(["../../private-export.json"], "UTC");
+    assert.equal(rejected.status, 2);
+    assert.equal(rejected.stdout, "");
+    assert.deepEqual(readdirSync(root), []);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
