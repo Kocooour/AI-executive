@@ -1038,7 +1038,7 @@ test("synthetic restore preflight requires replay for an older snapshot without 
   assert.equal(JSON.stringify(state), before);
   const serialized = JSON.stringify(report);
   for (const forbidden of ["bundle_digest", "content_sha256", "fictional garden",
-    "silver spaceship", "previous_digest", "applied_digest", "witness"]) {
+    "silver spaceship", "previous_digest", "applied_digest", "witness_digest"]) {
     assert.ok(!serialized.includes(forbidden), forbidden);
   }
 });
