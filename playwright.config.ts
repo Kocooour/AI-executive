@@ -85,6 +85,9 @@ export default defineConfig({
         AI_EXECUTIVE_TARGET_STAGING_HTTP_ENABLED: "true",
         AI_EXECUTIVE_TARGET_STAGING_HTTP_TEMPORAL_ENABLED: "true",
         AI_EXECUTIVE_TARGET_STAGING_TASK_CLIENT_PREVIEW_ENABLED: "true",
+        AI_EXECUTIVE_TARGET_STAGING_HTTP_GLOBAL_COMBINED_ENABLED: "true",
+        AI_EXECUTIVE_TARGET_STAGING_GLOBAL_INDEX_CLIENT_PREVIEW_ENABLED: "true",
+        AI_EXECUTIVE_TARGET_STAGING_INDEX_DETAIL_LINKS_ENABLED: "true",
       } : {}),
       // UI-09d has an independent default-off synthetic browser flag.
       ...(notePreviewTest ? {
