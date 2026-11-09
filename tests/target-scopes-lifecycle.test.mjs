@@ -390,3 +390,42 @@ test("CSS: scope ring/dot tones keep >= 3:1 on the track in light and dark",()=>
   for(const [name,hex] of Object.entries(dark)){assert.ok(hex,"dark "+name);assert.ok(ratio(hex,"#313133")>=3,"dark "+name);}
   assert.notEqual(light.personal.toUpperCase(),"#16A34A"); // the UX tone itself is 2.95:1 on the track
 });
+
+test("kind index: the ORIGINAL body is size-bounded and strictly decoded before adaptation",async()=>{
+  const okHeaders={"content-type":"application/json","cache-control":"no-store"};
+  // Oversized Content-Length is refused without reading the body.
+  let pulled=0;
+  const huge=new ReadableStream({pull(controller){pulled++;controller.enqueue(new Uint8Array(1024));}});
+  let session=createKindIndexReadSession("project",{scope:"all",contextVersion:()=>GEN_A},
+    async()=>new Response(huge,{status:200,headers:{...okHeaders,"content-length":String(9*1024*1024)}}));
+  assert.deepEqual(await session.loadFirst(),{ok:false,reason:"invalid-response"});
+  assert.ok(pulled<=2,`body read despite oversized length (${pulled} pulls)`);
+  // Chunked body without Content-Length is cut off past 8 MiB.
+  const chunk=new Uint8Array(1024*1024).fill(0x20);
+  let sent=0;
+  const chunked=new ReadableStream({pull(controller){
+    sent++;
+    if(sent>20){controller.close();return;}
+    controller.enqueue(chunk);
+  }});
+  session=createKindIndexReadSession("project",{scope:"all",contextVersion:()=>GEN_A},
+    async()=>new Response(chunked,{status:200,headers:okHeaders}));
+  assert.deepEqual(await session.loadFirst(),{ok:false,reason:"invalid-response"});
+  assert.ok(sent<=10,`read past the bound (${sent} chunks)`);
+  // Invalid UTF-8 is refused (strict decoder, not response.json()).
+  session=createKindIndexReadSession("project",{scope:"all",contextVersion:()=>GEN_A},
+    async()=>new Response(new Uint8Array([0x7b,0x22,0xff,0x22,0x3a,0x31,0x7d]),{status:200,headers:okHeaders}));
+  assert.deepEqual(await session.loadFirst(),{ok:false,reason:"invalid-response"});
+  const source=read("lib/target-staging-kind-index-client.ts");
+  assert.doesNotMatch(source,/response\.json\(\)/);
+  assert.match(source,/boundedJson\(response,/);
+});
+
+test("kind index: an abort during the body read rejects like an aborted fetch",async()=>{
+  const controller=new AbortController();
+  const body=new ReadableStream({pull(){return new Promise(()=>{});}});
+  const pending=kindIndexFetch("note",async()=>new Response(body,{status:200,headers:{"cache-control":"no-store"}}))(
+    "/api/target-staging/global-index?scope=all",{signal:controller.signal});
+  controller.abort();
+  await assert.rejects(pending);
+});

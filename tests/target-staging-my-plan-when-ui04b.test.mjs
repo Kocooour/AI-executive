@@ -135,7 +135,9 @@ test("UI-04b: hide/offline, signed-out and manual context switch remove prior-ac
   assert.match(ui,/const offline=\(\)=>\{\s*privacyChange\(\)/);
   assert.match(ui,/if\(op\.privacyEpoch!==privacyEpoch\.current\)\{/);
   assert.match(ui,/if\(result\.reason==="signed-out"\)\{[\s\S]*?confirmedWhen\.current=null/);
-  assert.match(ui,/function resetFeedback\(\)\{[\s\S]*?uncertainWhen\.current=null;[\s\S]*?confirmedWhen\.current=null/);
+  // resetFeedback clears both families via the per-family helpers (R3-FE-3).
+  assert.match(ui,/function resetWhenFeedback\(\)\{\s*uncertainWhen\.current=null;\s*confirmedWhen\.current=null;\s*setWhenFailure\(null\);\s*setWhenAction\(\{kind:"idle"\}\);\s*\}/);
+  assert.match(ui,/function resetFeedback\(\)\{\s*resetStatusFeedback\(\);\s*resetWhenFeedback\(\);\s*\}/);
   assert.match(ui,/function refreshPlan\(\)\{[\s\S]*?keepConfirmedWhenOnRefresh/);
   assert.match(ui,/\{copy\.whenReloadButton\}/);
   assert.match(copySource(),/whenReloadButton:"Znovu načíst osobní plán \(Undo zůstane\)"/);

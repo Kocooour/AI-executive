@@ -202,7 +202,8 @@ async function fetchUntilAbort(
     return result;
   }finally{signal.removeEventListener("abort",wake);}
 }
-async function boundedJson(response:Response,signal?:AbortSignal):Promise<unknown>{
+/** Size-bounded (8 MiB, Content-Length and streamed), strict UTF-8 JSON read. */
+export async function boundedJson(response:Response,signal?:AbortSignal):Promise<unknown>{
   const length=response.headers.get("content-length");
   if(length!==null&&(!/^(?:0|[1-9][0-9]*)$/.test(length)||
     !Number.isSafeInteger(Number(length))||Number(length)>MAX_BODY_BYTES)){

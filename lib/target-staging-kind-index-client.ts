@@ -8,6 +8,7 @@
  * and handed to that parser. The server remains the only authority for actor,
  * Area ACL and cursors; nothing is persisted. */
 import {createGlobalIndexReadSession} from "./target-staging-global-index-read-session";
+import {boundedJson} from "./target-staging-global-index-client";
 
 export type KindIndexKind="project"|"note";
 const endpoints:Record<KindIndexKind,string>={
@@ -38,14 +39,20 @@ export function kindIndexFetch(kind:KindIndexKind,fetchImpl:typeof fetch=fetch):
     }
     let adapted:unknown=null;
     try{
-      const raw:unknown=await response.json();
+      // Bounded, strict UTF-8 read of the ORIGINAL body (never an unbounded parse).
+      const raw:unknown=await boundedJson(response,init?.signal??undefined);
       if(raw!==null&&typeof raw==="object"&&!Array.isArray(raw)){
         const body=raw as Record<string,unknown>;
         if(sameKeys(body,[key,"scope","hasMore","nextCursor"])&&Array.isArray(body[key]))
           adapted={scope:body.scope,hasMore:body.hasMore,nextCursor:body.nextCursor,
             items:(body[key] as unknown[]).map(item=>({kind,item}))};
       }
-    }catch{/* handled as an invalid response below */}
+    }catch(error){
+      // Keep abort semantics: an aborted read rejects like an aborted fetch.
+      if(init?.signal?.aborted)throw init.signal.reason??new DOMException("Aborted","AbortError");
+      /* oversized / invalid UTF-8 / invalid JSON: handled as an invalid response below */
+      void error;
+    }
     // An unparsable or off-contract body becomes a body the strict parser refuses.
     return new Response(JSON.stringify(adapted),{status:200,headers});
   }) as typeof fetch;

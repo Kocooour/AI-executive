@@ -749,15 +749,21 @@ export function TargetStagingMyPlanPreview({
     setRefresh(n=>n+1);
   }
 
-  function resetFeedback(){
+  function resetStatusFeedback(){
     uncertainCommand.current=null;
     confirmedCommand.current=null;
     setUndoFailure(null);
     setAction({kind:"idle"});
+  }
+  function resetWhenFeedback(){
     uncertainWhen.current=null;
     confirmedWhen.current=null;
     setWhenFailure(null);
     setWhenAction({kind:"idle"});
+  }
+  function resetFeedback(){
+    resetStatusFeedback();
+    resetWhenFeedback();
   }
   const actionPending=action.kind==="pending"||action.kind==="checking"||
     action.kind==="uncertain";
@@ -773,7 +779,9 @@ export function TargetStagingMyPlanPreview({
       statusKind:action.kind,whenKind:whenAction.kind,
     });
     feedbackScope.current=decision.recorded;
-    if(decision.clear)resetFeedback();
+    // Only a SETTLED family is cleared; in-flight/uncertain ones are kept.
+    if(decision.clearStatus)resetStatusFeedback();
+    if(decision.clearWhen)resetWhenFeedback();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   },[areaFilter,action.kind,whenAction.kind]);
   // Read the live synchronous refs from EACH handler, not just disabled state.
