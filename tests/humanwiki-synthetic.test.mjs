@@ -8,6 +8,7 @@ import { test } from "node:test";
 import { parseSyntheticBundle, advanceSyntheticImport } from "../scripts/humanwiki-synthetic/ingest.mjs";
 import { inspectSyntheticImport } from "../scripts/humanwiki-synthetic/inspect.mjs";
 import { previewSyntheticOverlaps } from "../scripts/humanwiki-synthetic/overlap.mjs";
+import { previewSyntheticReviewQueue } from "../scripts/humanwiki-synthetic/review-preview.mjs";
 import { ensurePrivateCheckpointDirectory, writeCheckpointAtomic } from "../scripts/humanwiki-synthetic/checkpoint.mjs";
 
 const fixture = name => JSON.parse(readFileSync(new URL(`../scripts/humanwiki-synthetic/fixtures/${name}.json`, import.meta.url), "utf8"));
@@ -391,5 +392,120 @@ test("synthetic overlap CLI reads only fixed fixtures and never writes checkpoin
     assert.equal(rejected.status, 2);
     assert.equal(rejected.stdout, "");
     assert.deepEqual(readdirSync(root), [], "overlap CLI must not write files");
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("review queue keeps every fictional source segment proposed and unclassified", () => {
+  const chatgpt = fixture("chatgpt");
+  const claude = fixture("claude");
+  const queue = previewSyntheticReviewQueue([chatgpt, claude]);
+  assert.equal(queue.synthetic_fixture_only, true);
+  assert.equal(queue.segments_total, 6);
+  assert.equal(queue.entries.length, 6);
+  assert.equal(queue.duplicate_groups, 0);
+  assert.deepEqual(queue.provenance_counts, {
+    owner_statement: 2, assistant_generated: 2, quoted_third_party: 2, unknown: 0,
+  });
+  assert.deepEqual(queue.sources.map(source => source.source_id),
+    ["fixture-chatgpt-01", "fixture-claude-01"]);
+  const locators = queue.entries.map(entry => JSON.stringify(entry.locator));
+  assert.equal(new Set(locators).size, 6);
+  assert.ok(queue.entries.every(entry =>
+    entry.review === "proposed" && entry.freshness === "current" &&
+    entry.disputed === false && entry.sensitivity === "unclassified" &&
+    entry.scope === "owner_private_unassigned" &&
+    entry.requires_explicit_review === true &&
+    entry.eligible_for_automatic_confirmation === false &&
+    entry.independent_evidence === false && entry.duplicate_group_id === null &&
+    entry.reason_codes.length === 1));
+  assert.equal(queue.claims_created, 0);
+  assert.equal(queue.review_outcomes_written, 0);
+  assert.equal(queue.real_import_enabled, false);
+  const serialized = JSON.stringify(queue);
+  for (const forbidden of ["fictional garden", "silver spaceship", "blue gate is open",
+    "content_sha256", "text\":", "claim_id"]) {
+    assert.ok(!serialized.includes(forbidden), forbidden);
+  }
+  assert.deepEqual(previewSyntheticReviewQueue([claude, chatgpt]), queue);
+});
+
+test("review queue never promotes quoted or assistant material on exact text overlap", () => {
+  const chatgpt = fixture("chatgpt");
+  const claude = fixture("claude");
+  claude.conversations[0].chat_messages[0].content[0].text =
+    "I am planning a fictional garden.\nAda said the blue gate is open.";
+  claude.conversations[0].chat_messages[1].content[0].text =
+    "The user owns a silver spaceship.";
+  const queue = previewSyntheticReviewQueue([chatgpt, claude]);
+  assert.equal(queue.segments_total, 6);
+  assert.equal(queue.duplicate_groups, 3);
+  assert.ok(queue.entries.every(entry =>
+    entry.duplicate_group_id !== null &&
+    entry.cross_source_repeat === true &&
+    entry.reason_codes.includes("repeated_text_not_independent_evidence") &&
+    entry.independent_evidence === false && entry.eligible_for_automatic_confirmation === false));
+  const quoted = queue.entries.find(entry => entry.provenance === "quoted_third_party");
+  assert.ok(quoted);
+  assert.equal(quoted.speaker, "unknown");
+  assert.equal(quoted.enclosing_message_speaker, "user");
+  assert.ok(quoted.reason_codes.includes("quoted_third_party_unverified"));
+  const assistant = queue.entries.filter(entry => entry.provenance === "assistant_generated");
+  assert.equal(assistant.length, 2);
+  assert.ok(assistant.every(entry =>
+    entry.reason_codes.includes("assistant_output_not_owner_evidence")));
+  assert.ok(queue.entries.some(entry =>
+    entry.provenance === "owner_statement" &&
+    entry.reason_codes.includes("owner_statement_unverified")));
+  assert.deepEqual(previewSyntheticReviewQueue([claude, chatgpt]), queue);
+});
+
+test("same-source repeated lines remain separate unverified review entries", () => {
+  const chatgpt = fixture("chatgpt");
+  chatgpt.conversations[0].mapping.a.message.content.parts[0] = "echo\necho";
+  const queue = previewSyntheticReviewQueue([chatgpt, fixture("claude")]);
+  const repeated = queue.entries.filter(entry => entry.duplicate_group_id !== null);
+  assert.equal(repeated.length, 2);
+  assert.ok(repeated.every(entry =>
+    entry.cross_source_repeat === false && entry.independent_evidence === false));
+  assert.deepEqual(repeated.map(entry => entry.locator.segment), [0, 1]);
+  assert.equal(queue.claims_created, 0);
+});
+
+test("synthetic review triage rejects malformed sources and never mutates input", () => {
+  const a = fixture("chatgpt");
+  const b = fixture("claude");
+  const snapshot = JSON.stringify([a, b]);
+  previewSyntheticReviewQueue([a, b]);
+  assert.equal(JSON.stringify([a, b]), snapshot);
+  assert.throws(() => previewSyntheticReviewQueue([]), /exactly two synthetic bundles/);
+  assert.throws(() => previewSyntheticReviewQueue([a, { ...b, source_id: a.source_id }]),
+    /duplicate source identity/);
+  assert.throws(() => previewSyntheticReviewQueue([a, { ...b, synthetic_fixture: false }]),
+    /unsupported or non-synthetic bundle/);
+  const invalid = structuredClone(b);
+  invalid.conversations[0].chat_messages[0].created_at = "2026-02-31T10:00:00Z";
+  assert.throws(() => previewSyntheticReviewQueue([a, invalid]), /invalid message time/);
+});
+
+test("fixture review preview CLI is read-only, deterministic and denies file arguments", () => {
+  const cli = fileURLToPath(new URL("../scripts/humanwiki-synthetic/review-preview-cli.mjs", import.meta.url));
+  const root = mkdtempSync(path.join(os.tmpdir(), "lumi-humanwiki-review-"));
+  const invoke = (args, zone) => spawnSync(process.execPath, [cli, ...args], {
+    encoding: "utf8", env: { ...process.env, TMPDIR: root, TZ: zone },
+  });
+  try {
+    const utc = invoke([], "UTC");
+    const prague = invoke([], "Europe/Prague");
+    assert.equal(utc.status, 0, utc.stderr);
+    assert.equal(prague.status, 0, prague.stderr);
+    assert.equal(utc.stdout, prague.stdout);
+    const report = JSON.parse(utc.stdout);
+    assert.equal(report.entries.length, 6);
+    assert.equal(report.claims_created, 0);
+    assert.ok(!utc.stdout.includes("fictional garden"));
+    const rejected = invoke(["../../private-export.json"], "UTC");
+    assert.equal(rejected.status, 2);
+    assert.equal(rejected.stdout, "");
+    assert.deepEqual(readdirSync(root), [], "review preview CLI must not write checkpoints");
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
