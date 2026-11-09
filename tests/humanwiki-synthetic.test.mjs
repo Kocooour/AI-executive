@@ -14,6 +14,7 @@ import { bindSyntheticTriageIntents, rehearseVersionBoundSyntheticTriage } from 
 import { previewSyntheticSourceLifecycle } from "../scripts/humanwiki-synthetic/lifecycle-preview.mjs";
 import { makeSyntheticRestoreFixture, previewSyntheticRestorePreflight } from "../scripts/humanwiki-synthetic/restore-preflight.mjs";
 import { previewSyntheticRestoreReplayPlan } from "../scripts/humanwiki-synthetic/restore-replay-plan.mjs";
+import { makeSyntheticDerivativeFixture, previewSyntheticDerivativeImpact } from "../scripts/humanwiki-synthetic/derivative-impact-preview.mjs";
 import { ensurePrivateCheckpointDirectory, writeCheckpointAtomic } from "../scripts/humanwiki-synthetic/checkpoint.mjs";
 
 const fixture = name => JSON.parse(readFileSync(new URL(`../scripts/humanwiki-synthetic/fixtures/${name}.json`, import.meta.url), "utf8"));
@@ -1373,6 +1374,220 @@ test("restore replay CLI is deterministic, fixture-only and read-only", () => {
     const rejected = invoke(["../../private-export.json"], "UTC");
     assert.equal(rejected.status, 2);
     assert.equal(rejected.stdout, "");
+    assert.deepEqual(readdirSync(root), []);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("fictional dependency impact distinguishes erased-only, mixed and consent-only claims", () => {
+  const state = makeSyntheticRestoreFixture();
+  const original = JSON.stringify(state);
+  const report = previewSyntheticDerivativeImpact(state);
+  const by = new Map(report.claim_impacts.map(item => [item.claim_id, item]));
+  assert.equal(report.impact_status, "hypothetical_impacts_only");
+  assert.equal(by.get("fictional-claim-a").disposition, "would_remove_exclusively_erased_claim");
+  assert.deepEqual(by.get("fictional-claim-a").unaffected_source_candidates, []);
+  assert.equal(by.get("fictional-claim-ac").disposition,
+    "would_prune_erased_evidence_and_revalidate_all_remaining");
+  assert.deepEqual(by.get("fictional-claim-ac").unaffected_source_candidates,
+    ["fictional-source-c"]);
+  assert.equal(by.get("fictional-claim-ab").disposition,
+    "would_prune_erased_evidence_and_revalidate_all_remaining");
+  assert.deepEqual(by.get("fictional-claim-ab").unaffected_source_candidates, [],
+    "a revoked source is not automatically independent or authorized evidence");
+  assert.deepEqual(by.get("fictional-claim-ab").revoked_source_references,
+    ["fictional-source-b"]);
+  assert.equal(by.get("fictional-claim-b").disposition,
+    "would_hold_for_retention_and_consent_review");
+  assert.equal(by.get("fictional-claim-bc").disposition,
+    "would_hold_for_retention_and_consent_review");
+  assert.equal(by.get("fictional-claim-c").disposition,
+    "unchanged_source_but_global_revalidation_required");
+  assert.equal(by.get("fictional-claim-c").would_invalidate_dependent_artifacts, false);
+  assert.ok(report.claim_impacts.every(item =>
+    item.completed === false && item.independently_authorized_evidence_proven === false));
+  assert.equal(JSON.stringify(state), original);
+});
+
+test("fictional derivative invalidation propagates through caches summaries and exports", () => {
+  const report = previewSyntheticDerivativeImpact(makeSyntheticRestoreFixture());
+  const by = new Map(report.artifact_impacts.map(item => [item.artifact_id, item]));
+  for (const id of [
+    "fictional-search-a", "fictional-cache-ac", "fictional-embedding-bc",
+    "fictional-summary-mixed", "fictional-export-mixed", "fictional-link-a",
+    "fictional-cache-b", "fictional-export-ab",
+  ]) assert.equal(by.get(id).would_invalidate, true, id);
+  assert.deepEqual(by.get("fictional-export-mixed").dependency_ids,
+    ["fictional-summary-mixed"]);
+  assert.equal(by.get("fictional-autocomplete-c").would_invalidate, false);
+  assert.equal(by.get("fictional-search-c").would_invalidate, false);
+  assert.ok(report.artifact_impacts.every(item =>
+    item.must_revalidate_before_any_release &&
+    !item.invalidation_completed && !item.served));
+  assert.equal(report.data_release_authorized, false);
+  assert.equal(report.actual_deletions_performed, 0);
+  assert.equal(report.actual_invalidation_performed, 0);
+  assert.equal(report.actual_replay_performed, false);
+  assert.equal(report.actual_witness_contacted, false);
+  assert.equal(report.real_import_enabled, false);
+});
+
+test("fictional current snapshot does not bypass already-witnessed revocation impacts", () => {
+  const state = makeSyntheticRestoreFixture();
+  const old = previewSyntheticDerivativeImpact(state);
+  const alreadyApplied = structuredClone(state);
+  alreadyApplied.snapshot = {
+    applied_sequence: state.witness.sequence, applied_digest: state.witness.digest,
+  };
+  assert.equal(previewSyntheticRestoreReplayPlan(alreadyApplied).pending_events_to_reconcile, 0);
+  const fresh = previewSyntheticDerivativeImpact(alreadyApplied);
+  assert.deepEqual(fresh.claim_impacts, old.claim_impacts);
+  assert.deepEqual(fresh.artifact_impacts, old.artifact_impacts);
+  assert.equal(fresh.data_release_authorized, false);
+});
+
+test("blocked preflight never discloses fictional claims, artifacts or dependencies", () => {
+  const state = makeSyntheticRestoreFixture();
+  const rolledBack = structuredClone(state);
+  rolledBack.registry.pop();
+  const damaged = structuredClone(state);
+  damaged.registry[0].action = "revoke_import_consent";
+  for (const [input, reason] of [
+    [rolledBack, "registry_behind_external_witness"],
+    [{ ...state, witness: null }, "witness_unavailable_or_invalid"],
+    [{ ...state, toy_key_available: false }, "key_unavailable"],
+    [{ ...state, toy_independent_witness_verified: false }, "witness_unverified"],
+    [damaged, "registry_chain_mismatch"],
+  ]) {
+    const report = previewSyntheticDerivativeImpact(input);
+    assert.equal(report.impact_status, "blocked");
+    assert.equal(report.reason, reason);
+    assert.deepEqual(report.claim_impacts, []);
+    assert.deepEqual(report.artifact_impacts, []);
+    assert.equal(report.source_specific_details_disclosed, false);
+    assert.equal(report.data_release_authorized, false);
+    const serialized = JSON.stringify(report);
+    for (const forbidden of ["fictional-claim", "fictional-source",
+      "fictional-export", "fictional-summary"]) {
+      assert.ok(!serialized.includes(forbidden), forbidden);
+    }
+  }
+});
+
+test("synthetic dependency graph rejects private unknown duplicate or malformed claims", () => {
+  const state = makeSyntheticRestoreFixture();
+  for (const change of [
+    graph => { graph.claims[0].id = "someone@example.com"; },
+    graph => { graph.claims[1].id = graph.claims[0].id; },
+    graph => { graph.claims[0].evidence = []; },
+    graph => { graph.claims[0].evidence = ["fictional-source-a", "fictional-source-a"]; },
+    graph => { graph.claims[0].evidence = ["someone@example.com"]; },
+    graph => { graph.claims[0].evidence = [["fictional-source-a"]]; },
+    graph => { graph.claims[0].text = "private"; },
+    graph => { graph.claims[0] = null; },
+    graph => { graph.claims = [false]; },
+    graph => { graph.claims.push(structuredClone(graph.claims[0])); },
+    graph => { graph.extra = "private"; },
+  ]) {
+    const graph = makeSyntheticDerivativeFixture();
+    change(graph);
+    assert.throws(() => previewSyntheticDerivativeImpact(state, graph),
+      /Synthetic dependency impact:/);
+  }
+  for (const graph of [null, false, "graph", {}, [], { claims: [], artifacts: null }]) {
+    assert.throws(() => previewSyntheticDerivativeImpact(state, graph),
+      /Synthetic dependency impact:/);
+  }
+});
+
+test("synthetic dependency graph rejects unknown parents kinds cycles and duplicates", () => {
+  const state = makeSyntheticRestoreFixture();
+  for (const change of [
+    graph => { graph.artifacts[0].id = "personal-export.pdf"; },
+    graph => { graph.artifacts[0].kind = "approved"; },
+    graph => { graph.artifacts[0].depends_on = ["missing-claim"]; },
+    graph => { graph.artifacts[0].depends_on = []; },
+    graph => { graph.artifacts[0].depends_on = ["fictional-claim-a", "fictional-claim-a"]; },
+    graph => { graph.artifacts[0].depends_on = ["fictional-search-a"]; },
+    graph => { graph.artifacts[0].depends_on = ["fictional-cache-ac"];
+               graph.artifacts[1].depends_on = ["fictional-search-a"]; },
+    graph => { graph.artifacts[0].text = "private"; },
+    graph => { graph.artifacts[1].id = graph.artifacts[0].id; },
+    graph => { graph.artifacts.push(structuredClone(graph.artifacts[0])); },
+    graph => { graph.artifacts[0] = null; },
+  ]) {
+    const graph = makeSyntheticDerivativeFixture();
+    change(graph);
+    assert.throws(() => previewSyntheticDerivativeImpact(state, graph),
+      /Synthetic dependency impact:/);
+  }
+});
+
+test("synthetic dependency preview is deterministic for reordered graph and leaves inputs unchanged", () => {
+  const state = makeSyntheticRestoreFixture();
+  const graph = makeSyntheticDerivativeFixture();
+  const before = JSON.stringify({ state, graph });
+  const normal = previewSyntheticDerivativeImpact(state, graph);
+  const reordered = structuredClone(graph);
+  reordered.claims.reverse();
+  reordered.artifacts.reverse();
+  for (const claim of reordered.claims) claim.evidence.reverse();
+  for (const artifact of reordered.artifacts) artifact.depends_on.reverse();
+  assert.deepEqual(previewSyntheticDerivativeImpact(state, reordered), normal);
+  assert.equal(JSON.stringify({ state, graph }), before);
+  const serialized = JSON.stringify(normal);
+  for (const sensitive of ["bundle_digest", "content_sha256", "applied_digest",
+    "previous_digest", "fictional garden", "silver spaceship", "some@example.com"]) {
+    assert.ok(!serialized.includes(sensitive), sensitive);
+  }
+});
+
+test("empty toy revocation registry retains global holds and never authorizes access", () => {
+  const state = makeSyntheticRestoreFixture();
+  const genesis = "0".repeat(64);
+  state.registry = [];
+  state.witness = { sequence: 0, digest: genesis };
+  state.snapshot = { applied_sequence: 0, applied_digest: genesis };
+  const report = previewSyntheticDerivativeImpact(state);
+  assert.equal(report.impact_status, "hypothetical_impacts_only");
+  assert.ok(report.claim_impacts.every(item =>
+    item.disposition === "unchanged_source_but_global_revalidation_required"));
+  assert.ok(report.artifact_impacts.every(item =>
+    !item.would_invalidate && item.must_revalidate_before_any_release));
+  assert.equal(report.data_release_authorized, false);
+  assert.equal(report.independently_authorized_evidence_proven, false);
+  assert.equal(report.claims_created, 0);
+});
+
+test("fixture-only derivative impact CLI rejects arguments and writes nothing", () => {
+  const cli = fileURLToPath(new URL("../scripts/humanwiki-synthetic/derivative-impact-preview-cli.mjs", import.meta.url));
+  const root = mkdtempSync(path.join(os.tmpdir(), "lumi-humanwiki-derivatives-"));
+  const run = (args, zone) => spawnSync(process.execPath, [cli, ...args], {
+    encoding: "utf8", env: { ...process.env, TMPDIR: root, TZ: zone },
+  });
+  try {
+    const utc = run([], "UTC"), prague = run([], "Europe/Prague");
+    assert.equal(utc.status, 0, utc.stderr);
+    assert.equal(prague.status, 0, prague.stderr);
+    assert.equal(utc.stdout, prague.stdout);
+    const value = JSON.parse(utc.stdout);
+    assert.equal(value.synthetic_fixture_only, true);
+    assert.equal(value.claim_impacts.length, 6);
+    assert.equal(value.artifact_impacts.length, 10);
+    assert.equal(value.blocked_rollback_reason, "registry_behind_external_witness");
+    assert.equal(value.blocked_disclosed_sources, false);
+    assert.equal(value.witness_current_does_not_waive_revalidation, true);
+    assert.equal(value.data_release_authorized, false);
+    assert.equal(value.actual_deletions_performed, 0);
+    assert.equal(value.actual_invalidation_performed, 0);
+    assert.equal(value.actual_replay_performed, false);
+    assert.equal(value.real_import_enabled, false);
+    for (const forbidden of ["applied_digest", "previous_digest", "bundle_digest",
+      "content_sha256", "fictional garden", "silver spaceship"]) {
+      assert.ok(!utc.stdout.includes(forbidden), forbidden);
+    }
+    const denied = run(["../../real-export.json"], "UTC");
+    assert.equal(denied.status, 2);
+    assert.equal(denied.stdout, "");
     assert.deepEqual(readdirSync(root), []);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
