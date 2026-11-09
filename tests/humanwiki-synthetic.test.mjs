@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 import { parseSyntheticBundle, advanceSyntheticImport } from "../scripts/humanwiki-synthetic/ingest.mjs";
 import { inspectSyntheticImport } from "../scripts/humanwiki-synthetic/inspect.mjs";
+import { previewSyntheticOverlaps } from "../scripts/humanwiki-synthetic/overlap.mjs";
 import { ensurePrivateCheckpointDirectory, writeCheckpointAtomic } from "../scripts/humanwiki-synthetic/checkpoint.mjs";
 
 const fixture = name => JSON.parse(readFileSync(new URL(`../scripts/humanwiki-synthetic/fixtures/${name}.json`, import.meta.url), "utf8"));
@@ -281,5 +282,114 @@ test("inspection CLI is fixture-only, does not persist data and is host-timezone
       assert.equal(denied.stdout, "");
     }
     assert.deepEqual(readdirSync(root), [], "inspection must not create checkpoint files");
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("synthetic overlap preview is deterministic and creates no claims", () => {
+  const chatgpt = fixture("chatgpt");
+  const claude = fixture("claude");
+  const preview = previewSyntheticOverlaps([chatgpt, claude]);
+  assert.equal(preview.synthetic_fixture_only, true);
+  assert.deepEqual(preview.sources.map(source => source.source_id),
+    ["fixture-chatgpt-01", "fixture-claude-01"]);
+  assert.equal(preview.segments_total, 6);
+  assert.equal(preview.duplicate_groups, 0);
+  assert.equal(preview.cross_source_duplicate_groups, 0);
+  assert.equal(preview.repeated_segment_occurrences, 0);
+  assert.deepEqual(preview.groups, []);
+  assert.equal(preview.claims_created, 0);
+  assert.equal(preview.real_import_enabled, false);
+  assert.deepEqual(previewSyntheticOverlaps([claude, chatgpt]), preview);
+});
+
+test("synthetic repeated source text never merges quote or assistant provenance", () => {
+  const chatgpt = fixture("chatgpt");
+  const claude = fixture("claude");
+  claude.conversations[0].chat_messages[0].content[0].text =
+    "I am planning a fictional garden.\nAda said the blue gate is open.";
+  claude.conversations[0].chat_messages[1].content[0].text =
+    "The user owns a silver spaceship.";
+  const preview = previewSyntheticOverlaps([chatgpt, claude]);
+  assert.equal(preview.duplicate_groups, 3);
+  assert.equal(preview.cross_source_duplicate_groups, 3);
+  assert.equal(preview.repeated_segment_occurrences, 6);
+  assert.ok(preview.groups.every(group =>
+    group.members.length === 2 && group.cross_source === true &&
+    group.independent_evidence === false && group.review === "proposed"));
+  const quote = preview.groups.find(group =>
+    group.members.some(member => member.provenance === "quoted_third_party"));
+  assert.ok(quote);
+  assert.deepEqual(quote.members.map(member => member.provenance),
+    ["quoted_third_party", "owner_statement"]);
+  assert.deepEqual(quote.members.map(member => member.speaker),
+    ["unknown", "user"]);
+  assert.deepEqual(quote.members.map(member => member.enclosing_message_speaker),
+    ["user", "user"]);
+  const assistant = preview.groups.find(group =>
+    group.members.some(member => member.provenance === "assistant_generated"));
+  assert.ok(assistant);
+  assert.ok(assistant.members.every(member =>
+    member.provenance === "assistant_generated"));
+  assert.ok(preview.groups.every(group => group.members.every(member =>
+    member.review === "proposed" && member.sensitivity === "unclassified" &&
+    member.locator.source_id && Number.isInteger(member.locator.segment))));
+  const serialized = JSON.stringify(preview);
+  for (const text of ["garden.", "blue gate is open", "silver spaceship",
+    "content_sha256", "owner_private_unassigned"]) {
+    assert.ok(!serialized.includes(text), text);
+  }
+  assert.deepEqual(previewSyntheticOverlaps([claude, chatgpt]), preview);
+});
+
+test("synthetic repeated text within one source is not cross-source evidence", () => {
+  const chatgpt = fixture("chatgpt");
+  chatgpt.conversations[0].mapping.a.message.content.parts[0] = "echo\necho";
+  const preview = previewSyntheticOverlaps([chatgpt, fixture("claude")]);
+  assert.equal(preview.duplicate_groups, 1);
+  assert.equal(preview.cross_source_duplicate_groups, 0);
+  const group = preview.groups[0];
+  assert.equal(group.cross_source, false);
+  assert.equal(group.independent_evidence, false);
+  assert.equal(group.members.length, 2);
+  assert.deepEqual(group.members.map(member => member.locator.segment), [0, 1]);
+  const differentCase = fixture("claude");
+  differentCase.conversations[0].chat_messages[0].content[0].text = "Echo";
+  assert.equal(previewSyntheticOverlaps([chatgpt, differentCase]).cross_source_duplicate_groups, 0);
+});
+
+test("synthetic overlap preview rejects duplicate source identities and non-fixtures", () => {
+  const a = fixture("chatgpt");
+  const b = fixture("claude");
+  assert.throws(() => previewSyntheticOverlaps([]), /exactly two synthetic bundles/);
+  assert.throws(() => previewSyntheticOverlaps([a]), /exactly two synthetic bundles/);
+  assert.throws(() => previewSyntheticOverlaps([a, { ...b, source_id: a.source_id }]),
+    /duplicate source identity/);
+  assert.throws(() => previewSyntheticOverlaps([a, { ...b, synthetic_fixture: false }]),
+    /unsupported or non-synthetic bundle/);
+  const invalidTime = structuredClone(b);
+  invalidTime.conversations[0].chat_messages[0].created_at = "2026-02-31T10:00:00Z";
+  assert.throws(() => previewSyntheticOverlaps([a, invalidTime]), /invalid message time/);
+});
+
+test("synthetic overlap CLI reads only fixed fixtures and never writes checkpoints", () => {
+  const cli = fileURLToPath(new URL("../scripts/humanwiki-synthetic/overlap-cli.mjs", import.meta.url));
+  const root = mkdtempSync(path.join(os.tmpdir(), "lumi-humanwiki-overlap-"));
+  const run = (args, zone) => spawnSync(process.execPath, [cli, ...args], {
+    encoding: "utf8", env: { ...process.env, TMPDIR: root, TZ: zone },
+  });
+  try {
+    const utc = run([], "UTC");
+    const prague = run([], "Europe/Prague");
+    assert.equal(utc.status, 0, utc.stderr);
+    assert.equal(prague.status, 0, prague.stderr);
+    assert.equal(utc.stdout, prague.stdout);
+    const report = JSON.parse(utc.stdout);
+    assert.equal(report.duplicate_groups, 0);
+    assert.equal(report.claims_created, 0);
+    assert.ok(!utc.stdout.includes("fictional garden"));
+    const rejected = run(["../../private-export.json"], "UTC");
+    assert.equal(rejected.status, 2);
+    assert.equal(rejected.stdout, "");
+    assert.deepEqual(readdirSync(root), [], "overlap CLI must not write files");
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
