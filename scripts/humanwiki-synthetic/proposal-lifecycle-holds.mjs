@@ -139,13 +139,10 @@ export function previewSyntheticProposalLifecycleHolds(bundles) {
         lifecycle.tombstones_written !== 0) fail();
 
     const checked = consider(lifecycle, candidate, bundles, binding, poison);
+    // Only this candidate's source policy controls its pending-review gate;
+    // an unrelated source's hypothetical disconnect must not hide it.
     if (source.would_allow_pending_review !== checked.candidate_pending_visible ||
-        chosen.would_allow_new_source_reads !== (action === null) &&
-        id === "active") {
-      // Only the source's own flags, not a guessed global lifecycle state,
-      // determine whether the candidate can remain pending.
-      if (source.would_allow_pending_review !== checked.candidate_pending_visible) fail();
-    }
+        source.would_allow_new_source_reads !== checked.new_source_reads_allowed_by_policy) fail();
     if (id === "pause" &&
         (checked.candidate_review_status !==
            "would_keep_existing_proposal_pending_without_source_refresh" ||
