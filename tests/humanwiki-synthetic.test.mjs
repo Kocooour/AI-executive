@@ -15,6 +15,7 @@ import { previewSyntheticSourceLifecycle } from "../scripts/humanwiki-synthetic/
 import { makeSyntheticRestoreFixture, previewSyntheticRestorePreflight } from "../scripts/humanwiki-synthetic/restore-preflight.mjs";
 import { previewSyntheticRestoreReplayPlan } from "../scripts/humanwiki-synthetic/restore-replay-plan.mjs";
 import { makeSyntheticDerivativeFixture, previewSyntheticDerivativeImpact } from "../scripts/humanwiki-synthetic/derivative-impact-preview.mjs";
+import { bindSyntheticDerivativeRevision, recheckSyntheticDerivativeRevision } from "../scripts/humanwiki-synthetic/derivative-revision.mjs";
 import { ensurePrivateCheckpointDirectory, writeCheckpointAtomic } from "../scripts/humanwiki-synthetic/checkpoint.mjs";
 
 const fixture = name => JSON.parse(readFileSync(new URL(`../scripts/humanwiki-synthetic/fixtures/${name}.json`, import.meta.url), "utf8"));
@@ -1686,4 +1687,174 @@ test("failed restore gate suppresses impact even before malformed graph examinat
   assert.deepEqual(result.artifact_impacts, []);
   assert.equal(result.data_release_authorized, false);
   assert.equal(result.production_dependency_coverage_verified, false);
+});
+
+test("fictional dependency revision binds only the complete, checked toy inputs", () => {
+  const state = makeSyntheticRestoreFixture();
+  const graph = makeSyntheticDerivativeFixture();
+  const before = JSON.stringify({ state, graph });
+  const token = bindSyntheticDerivativeRevision(state, graph);
+  assert.deepEqual(Object.keys(token).sort(), [
+    "schema", "toy_graph_digest", "toy_restore_digest",
+  ]);
+  assert.equal(token.schema, "fictional_dependency_revision_v1");
+  assert.match(token.toy_graph_digest, /^[0-9a-f]{64}$/);
+  assert.match(token.toy_restore_digest, /^[0-9a-f]{64}$/);
+  const result = recheckSyntheticDerivativeRevision(state, graph, token);
+  assert.equal(result.revision_status, "toy_revision_matches_no_release");
+  assert.equal(result.toy_binding_matches_current, true);
+  assert.equal(result.source_specific_details_disclosed, false);
+  assert.equal(result.graph_content_or_hash_disclosed, false);
+  assert.equal(result.data_release_authorized, false);
+  assert.equal(result.real_graph_revision_authenticated, false);
+  assert.equal(result.actual_witness_contacted, false);
+  assert.equal(result.actual_invalidation_performed, 0);
+  assert.equal(result.actual_replay_performed, false);
+  assert.equal(result.real_import_enabled, false);
+  const serialized = JSON.stringify(result);
+  assert.ok(!serialized.includes(token.toy_graph_digest));
+  assert.ok(!serialized.includes(token.toy_restore_digest));
+  assert.ok(!serialized.includes("fictional-source-a"));
+  assert.equal(JSON.stringify({ state, graph }), before);
+});
+
+test("fictional dependency revisions are insensitive to graph and edge ordering", () => {
+  const state = makeSyntheticRestoreFixture();
+  const graph = makeSyntheticDerivativeFixture();
+  const token = bindSyntheticDerivativeRevision(state, graph);
+  const reverse = structuredClone(graph);
+  reverse.claims.reverse();
+  reverse.artifacts.reverse();
+  reverse.claims.forEach(c => c.evidence.reverse());
+  reverse.artifacts.forEach(a => a.depends_on.reverse());
+  assert.deepEqual(bindSyntheticDerivativeRevision(state, reverse), token);
+  assert.equal(recheckSyntheticDerivativeRevision(state, reverse, token).toy_binding_matches_current, true);
+});
+
+test("new valid restore cursor invalidates an earlier toy dependency observation", () => {
+  const state = makeSyntheticRestoreFixture();
+  const graph = makeSyntheticDerivativeFixture();
+  const token = bindSyntheticDerivativeRevision(state, graph);
+  const advanced = structuredClone(state);
+  advanced.snapshot = { applied_sequence: 1, applied_digest: advanced.registry[0].digest };
+  const newer = recheckSyntheticDerivativeRevision(advanced, graph, token);
+  assert.equal(previewSyntheticRestorePreflight(advanced).preflight_status,
+    "requires_replay_and_revalidation");
+  assert.equal(newer.revision_status, "stale_toy_revision_rejected");
+  assert.equal(newer.toy_binding_matches_current, false);
+  assert.equal(newer.data_release_authorized, false);
+  advanced.snapshot = { applied_sequence: 2, applied_digest: advanced.witness.digest };
+  assert.equal(recheckSyntheticDerivativeRevision(advanced, graph, token).revision_status,
+    "stale_toy_revision_rejected");
+  assert.equal(recheckSyntheticDerivativeRevision(state, graph, token).toy_binding_matches_current,
+    true, "the original fixture remains unchanged");
+});
+
+test("coherently changed toy registry and witness invalidate prior revision binding", () => {
+  const state = makeSyntheticRestoreFixture();
+  const graph = makeSyntheticDerivativeFixture();
+  const token = bindSyntheticDerivativeRevision(state, graph);
+  const empty = structuredClone(state);
+  const genesis = "0".repeat(64);
+  empty.registry = [];
+  empty.snapshot = { applied_sequence: 0, applied_digest: genesis };
+  empty.witness = { sequence: 0, digest: genesis };
+  assert.equal(previewSyntheticRestorePreflight(empty).preflight_status,
+    "checks_passed_in_toy_only");
+  const report = recheckSyntheticDerivativeRevision(empty, graph, token);
+  assert.equal(report.revision_status, "stale_toy_revision_rejected");
+  assert.equal(report.source_specific_details_disclosed, false);
+  assert.equal(report.data_release_authorized, false);
+});
+
+test("missing or invalid current witness and incomplete graph refuse stale revision recheck", () => {
+  const state = makeSyntheticRestoreFixture(), graph = makeSyntheticDerivativeFixture();
+  const binding = bindSyntheticDerivativeRevision(state, graph);
+  const truncated = structuredClone(graph);
+  truncated.artifacts.pop();
+  const redirected = structuredClone(graph);
+  redirected.artifacts[0].depends_on = ["fictional-claim-b"];
+  const tamperedRegistry = structuredClone(state);
+  tamperedRegistry.registry[0].action = "revoke_import_consent";
+  for (const [currentState, currentGraph] of [
+    [state, truncated], [state, redirected],
+    [{ ...state, witness: null }, graph],
+    [{ ...state, toy_key_available: false }, graph],
+    [{ ...state, toy_independent_witness_verified: false }, graph],
+    [tamperedRegistry, graph],
+  ]) {
+    const result = recheckSyntheticDerivativeRevision(currentState, currentGraph, binding);
+    assert.equal(result.revision_status, "blocked_by_current_preflight_or_coverage");
+    assert.equal(result.toy_binding_matches_current, false);
+    assert.equal(result.data_release_authorized, false);
+    assert.equal(result.source_specific_details_disclosed, false);
+    assert.equal(result.graph_content_or_hash_disclosed, false);
+    assert.ok(!JSON.stringify(result).includes("fictional-source"));
+  }
+});
+
+test("a blocked toy restore state takes precedence even over an invalid dependency graph", () => {
+  const state = makeSyntheticRestoreFixture(), graph = makeSyntheticDerivativeFixture();
+  const binding = bindSyntheticDerivativeRevision(state, graph);
+  const badState = { ...state, witness: null };
+  assert.equal(recheckSyntheticDerivativeRevision(badState, { unexpected: "private" }, binding)
+    .revision_status, "blocked_by_current_preflight_or_coverage");
+  assert.throws(() => bindSyntheticDerivativeRevision(badState, { unexpected: "private" }),
+    /Synthetic dependency revision: cannot bind blocked/);
+  assert.throws(() => bindSyntheticDerivativeRevision(state, { claims: [], artifacts: [] }),
+    /Synthetic dependency revision: cannot bind blocked/);
+});
+
+test("invalid, extra or non-string fictional revision bindings fail closed", () => {
+  const state = makeSyntheticRestoreFixture(), graph = makeSyntheticDerivativeFixture();
+  const valid = bindSyntheticDerivativeRevision(state, graph);
+  for (const invalid of [
+    null, false, 0, [], {}, "green", [valid],
+    { ...valid, extra: "bad" },
+    { ...valid, schema: ["fictional_dependency_revision_v1"] },
+    { ...valid, schema: "v2" },
+    { ...valid, toy_graph_digest: ["a".repeat(64)] },
+    { ...valid, toy_graph_digest: "a" },
+    { ...valid, toy_restore_digest: null },
+    { ...valid, toy_restore_digest: new String("a".repeat(64)) },
+    Object.assign(Object.create(null), { schema: valid.schema }),
+  ]) assert.throws(() => recheckSyntheticDerivativeRevision(state, graph, invalid),
+    /Synthetic dependency revision: malformed toy revision binding/);
+  const forged = { ...valid, toy_graph_digest: "f".repeat(64) };
+  const result = recheckSyntheticDerivativeRevision(state, graph, forged);
+  assert.equal(result.revision_status, "stale_toy_revision_rejected");
+  assert.equal(result.data_release_authorized, false);
+});
+
+test("fictional revision CLI is deterministic, no-arg, no-write and never emits toy hashes", () => {
+  const cli = fileURLToPath(new URL("../scripts/humanwiki-synthetic/derivative-revision-cli.mjs", import.meta.url));
+  const root = mkdtempSync(path.join(os.tmpdir(), "lumi-humanwiki-version-"));
+  const run = (args, zone) => spawnSync(process.execPath, [cli, ...args], {
+    encoding: "utf8", env: { ...process.env, TMPDIR: root, TZ: zone },
+  });
+  try {
+    const utc = run([], "UTC"), prague = run([], "Europe/Prague");
+    assert.equal(utc.status, 0, utc.stderr);
+    assert.equal(prague.status, 0, prague.stderr);
+    assert.equal(utc.stdout, prague.stdout);
+    const report = JSON.parse(utc.stdout);
+    assert.equal(report.synthetic_fixture_only, true);
+    assert.equal(report.unchanged_revision, "toy_revision_matches_no_release");
+    assert.equal(report.reordered_graph, "toy_revision_matches_no_release");
+    assert.equal(report.changed_snapshot, "stale_toy_revision_rejected");
+    assert.equal(report.incomplete_graph, "blocked_by_current_preflight_or_coverage");
+    assert.equal(report.missing_witness, "blocked_by_current_preflight_or_coverage");
+    assert.equal(report.toy_binding_digest_served, false);
+    assert.equal(report.real_graph_revision_authenticated, false);
+    assert.equal(report.data_release_authorized, false);
+    assert.equal(report.real_import_enabled, false);
+    for (const forbidden of [
+      "toy_graph_digest", "toy_restore_digest", "applied_digest", "previous_digest",
+      "fictional-source-a", "fictional-claim-a", "private",
+    ]) assert.ok(!utc.stdout.includes(forbidden), forbidden);
+    const denied = run(["../../personal-export.json"], "UTC");
+    assert.equal(denied.status, 2);
+    assert.equal(denied.stdout, "");
+    assert.deepEqual(readdirSync(root), []);
+  } finally { rmSync(root, { recursive: true, force: true }); }
 });
