@@ -3,6 +3,7 @@ import { makeSyntheticRestoreFixture } from "./restore-preflight.mjs";
 import {
   bindSyntheticEpochFence,
   makeSyntheticEpochFenceFixture,
+  recheckSyntheticEpochFence,
   rehearseSyntheticFenceWindow,
 } from "./epoch-fence-rehearsal.mjs";
 
@@ -14,9 +15,27 @@ if (process.argv.length !== 2) {
     const first = makeSyntheticEpochFenceFixture(makeSyntheticRestoreFixture(), 1);
     const binding = bindSyntheticEpochFence(first);
     const stable = rehearseSyntheticFenceWindow(first, first, binding);
-    const sameDataNewEpoch = { ...first, toy_epoch: 2 };
-    const aba = rehearseSyntheticFenceWindow(first, sameDataNewEpoch, binding);
-    const staleBefore = rehearseSyntheticFenceWindow(sameDataNewEpoch, first, binding);
+    // A(epoch 1) → B(epoch 2, genuinely different but valid data)
+    // → A(epoch 3, ORIGINAL data restored). Both input states stay fictional.
+    const intermediateB = structuredClone(first);
+    intermediateB.toy_epoch = 2;
+    intermediateB.restore_state.snapshot = {
+      applied_sequence: 1,
+      applied_digest: first.restore_state.registry[0].digest,
+    };
+    const bBinding = bindSyntheticEpochFence(intermediateB);
+    const bValidated = recheckSyntheticEpochFence(intermediateB, bBinding);
+    const staleAtB = recheckSyntheticEpochFence(intermediateB, binding);
+    const returnedA = structuredClone(first);
+    returnedA.toy_epoch = 3;
+    const aba = rehearseSyntheticFenceWindow(first, returnedA, binding);
+    // Deliberately roll back the UNTRUSTED epoch as well: this false match
+    // demonstrates the limit of the lab, NEVER a safe authorization.
+    const rolledBackEpoch = structuredClone(first);
+    const undetectedRollback = rehearseSyntheticFenceWindow(
+      first, rolledBackEpoch, binding,
+    );
+    const staleBefore = rehearseSyntheticFenceWindow(intermediateB, first, binding);
     const revokedWitness = {
       ...first,
       restore_state: { ...first.restore_state, witness: null },
@@ -29,7 +48,15 @@ if (process.argv.length !== 2) {
     };
     const staleRestore = rehearseSyntheticFenceWindow(first, changedSnapshot, binding);
     if (stable.window_status !== "toy_checks_match_no_commit" ||
+        bValidated.fence_status !== "toy_fence_matches_no_release" ||
+        staleAtB.fence_status !== "stale_toy_epoch_or_revision" ||
+        JSON.stringify(intermediateB.restore_state) === JSON.stringify(first.restore_state) ||
+        JSON.stringify(returnedA.restore_state) !== JSON.stringify(first.restore_state) ||
+        JSON.stringify(returnedA.graph) !== JSON.stringify(first.graph) ||
+        !(first.toy_epoch < intermediateB.toy_epoch &&
+          intermediateB.toy_epoch < returnedA.toy_epoch) ||
         aba.window_status !== "would_abort_at_final_check" ||
+        undetectedRollback.window_status !== "toy_checks_match_no_commit" ||
         staleBefore.window_status !== "would_abort_at_first_check" ||
         invalidWitness.window_status !== "would_abort_at_final_check" ||
         staleRestore.window_status !== "would_abort_at_final_check") {
@@ -38,7 +65,10 @@ if (process.argv.length !== 2) {
     console.log(JSON.stringify({
       synthetic_fixture_only: true,
       unchanged_check_window: stable.window_status,
-      same_data_changed_epoch_aba: aba.window_status,
+      aba_intermediate_b_validated: bValidated.fence_status,
+      aba_original_binding_stale_at_b: staleAtB.fence_status,
+      aba_a_to_b_to_a_with_advanced_epoch: aba.window_status,
+      aba_epoch_rollback_undetectable_in_toy: undetectedRollback.window_status,
       stale_first_check: staleBefore.window_status,
       witness_missing_at_final_check: invalidWitness.window_status,
       changed_snapshot_at_final_check: staleRestore.window_status,
