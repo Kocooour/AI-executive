@@ -18,6 +18,7 @@ import { makeSyntheticDerivativeFixture, previewSyntheticDerivativeImpact } from
 import { bindSyntheticDerivativeRevision, recheckSyntheticDerivativeRevision } from "../scripts/humanwiki-synthetic/derivative-revision.mjs";
 import { bindSyntheticEpochFence, recheckSyntheticEpochFence, rehearseSyntheticFenceWindow, makeSyntheticEpochFenceFixture } from "../scripts/humanwiki-synthetic/epoch-fence-rehearsal.mjs";
 import { previewSyntheticHumanWikiAcceptance } from "../scripts/humanwiki-synthetic/acceptance-matrix.mjs";
+import { previewSyntheticClaimProposals } from "../scripts/humanwiki-synthetic/claim-proposal-preview.mjs";
 import { ensurePrivateCheckpointDirectory, writeCheckpointAtomic } from "../scripts/humanwiki-synthetic/checkpoint.mjs";
 
 const fixture = name => JSON.parse(readFileSync(new URL(`../scripts/humanwiki-synthetic/fixtures/${name}.json`, import.meta.url), "utf8"));
@@ -2280,4 +2281,181 @@ test("HumanWiki matrix verifies stale-source triage after unrelated fictional me
   assert.equal(report.actual_imports_performed, 0);
   assert.equal(report.review_outcomes_written, 0);
   assert.equal(JSON.stringify(bundles), before);
+});
+
+test("HumanWiki fictional claim draft is a source-linked topic candidate, never a confirmed fact", () => {
+  const bundles = [fixture("chatgpt"), fixture("claude")];
+  const initial = JSON.stringify(bundles);
+  const report = previewSyntheticClaimProposals(bundles);
+  assert.equal(report.synthetic_fixture_only, true);
+  assert.equal(report.mode, "manually_curated_fictional_claim_proposal_preview");
+  assert.equal(report.stages_checked, 7);
+  assert.equal(report.source_segments_checked, 6);
+  assert.equal(report.draft_proposals_count, 1);
+  assert.equal(report.withheld_segments_count, 5);
+  assert.deepEqual(report.withheld_reason_counts, {
+    owner_question_not_an_assertion: 1,
+    assistant_output_not_owner_evidence: 2,
+    third_party_quote_not_owner_evidence: 2,
+  });
+  const [proposal] = report.draft_proposals;
+  assert.deepEqual(proposal.source_locator, {
+    source_id: "fixture-chatgpt-01",
+    conversation_id: "chat-synthetic-01",
+    message_id: "m-01",
+    segment: 0,
+  });
+  assert.equal(proposal.draft_id, "toy-garden-topic-draft-01");
+  assert.equal(proposal.draft_type, "fictional_project_topic_suggestion");
+  assert.equal(proposal.fictional_relation, "may_be_planning");
+  assert.equal(proposal.provenance, "owner_statement");
+  assert.equal(proposal.speaker, "user");
+  assert.equal(proposal.review, "proposed");
+  assert.equal(proposal.freshness, "current");
+  assert.equal(proposal.disputed, false);
+  assert.equal(proposal.sensitivity, "unclassified");
+  assert.equal(proposal.scope, "owner_private_unassigned");
+  assert.equal(proposal.independent_evidence, false);
+  assert.equal(proposal.requires_explicit_human_claim_review, true);
+  assert.equal(proposal.claim_confirmed, false);
+  assert.equal(proposal.canonical_claim_written, false);
+  assert.equal(proposal.canonical_task_written, false);
+  assert.equal(proposal.usable_as_personal_fact, false);
+  assert.equal(report.actual_claims_created, 0);
+  assert.equal(report.claims_confirmed, 0);
+  assert.equal(report.actual_tasks_created, 0);
+  assert.equal(report.review_outcomes_written, 0);
+  assert.equal(report.data_release_authorized, false);
+  assert.equal(JSON.stringify(bundles), initial, "lab preview must not mutate inputs");
+});
+
+test("HumanWiki fictional assistant and quote claims never become owner's biography", () => {
+  const report = previewSyntheticClaimProposals([fixture("chatgpt"), fixture("claude")]);
+  const excludes = report.withheld_entries;
+  assert.equal(excludes.length, 5);
+  assert.equal(new Set(excludes.map(item =>
+    JSON.stringify(item.source_locator))).size, 5);
+  assert.ok(excludes.every(item => item.eligible_for_claim_proposal === false));
+  assert.deepEqual(excludes.filter(item => item.provenance === "assistant_generated")
+    .map(item => item.reason_code), [
+    "assistant_output_not_owner_evidence", "assistant_output_not_owner_evidence",
+  ]);
+  assert.equal(excludes.filter(item =>
+    item.provenance === "quoted_third_party").length, 2);
+  assert.ok(excludes.filter(item => item.provenance === "quoted_third_party")
+    .every(item => item.reason_code === "third_party_quote_not_owner_evidence"));
+  const ownerQuestion = excludes.find(item =>
+    item.source_locator.source_id === "fixture-claude-01" &&
+    item.source_locator.message_id === "c-01");
+  assert.ok(ownerQuestion);
+  assert.equal(ownerQuestion.provenance, "owner_statement");
+  assert.equal(ownerQuestion.reason_code, "owner_question_not_an_assertion");
+  assert.equal(report.draft_proposals.some(item =>
+    item.source_locator.source_id === "fixture-claude-01"), false);
+  assert.equal(report.model_extraction_performed, false);
+  assert.equal(report.auto_identity_resolution_performed, false);
+  assert.equal(report.source_evidence_authenticated, false);
+  assert.equal(report.external_model_egress_performed, false);
+});
+
+test("HumanWiki fictional proposal preview is fixture-order invariant and content-free", () => {
+  const a = fixture("chatgpt"), b = fixture("claude");
+  const normal = previewSyntheticClaimProposals([a, b]);
+  const reverse = previewSyntheticClaimProposals([b, a]);
+  assert.deepEqual(reverse, normal);
+  assert.equal(normal.source_text_disclosed, false);
+  assert.equal(normal.explicit_claim_review_completed, false);
+  assert.equal(normal.h1_real_import_enabled, false);
+  assert.equal(normal.real_import_enabled, false);
+  assert.equal(normal.h1_real_entry_gates.length, 6);
+  assert.ok(normal.h1_real_entry_gates.every(x =>
+    x.result === "not_verified_blocked"));
+  const encoded = JSON.stringify(normal);
+  for (const forbidden of [
+    "I am planning a fictional garden", "silver spaceship.",
+    "Ada said the blue gate", "Could a fictional garden",
+    "content_sha256", "toy_graph_digest", "toy_restore_digest",
+  ]) assert.ok(!encoded.includes(forbidden), forbidden);
+});
+
+test("HumanWiki claim proposal preview refuses altered or missing fictional provenance", () => {
+  const a = fixture("chatgpt"), b = fixture("claude");
+  const invalid = [
+    null, [], {}, [a], [a, a], [a, b, b],
+    [{ ...a, synthetic_fixture: false }, b],
+    [{ ...a, source_id: "real-export-id" }, b],
+  ];
+  for (const bundles of invalid) {
+    assert.throws(() => previewSyntheticClaimProposals(bundles),
+      /Synthetic (import|acceptance|overlap|claim proposal):/);
+  }
+  for (const edit of [
+    bundles => { bundles[0].conversations[0].mapping.a.message.author.role = "assistant"; },
+    bundles => { bundles[1].conversations[0].chat_messages[0].sender = "assistant"; },
+    bundles => { bundles[0].conversations[0].mapping.a.message.content.parts[0] += " edited"; },
+    bundles => { bundles[1].conversations[0].chat_messages[0].content[0].text += " edited"; },
+    bundles => { bundles[0].conversations[0].mapping.a.message.create_time = "2026-01-01T10:00:10Z"; },
+  ]) {
+    const bundles = [structuredClone(a), structuredClone(b)];
+    edit(bundles);
+    assert.throws(() => previewSyntheticClaimProposals(bundles),
+      /Synthetic claim proposal: fixture contract not satisfied|Synthetic acceptance: fixture contract not satisfied/);
+  }
+});
+
+test("HumanWiki mock draft remains proposed even when re-run or other source order changes", () => {
+  const bundles = [fixture("chatgpt"), fixture("claude")];
+  const first = previewSyntheticClaimProposals(bundles);
+  const second = previewSyntheticClaimProposals(bundles);
+  assert.deepEqual(first, second);
+  assert.equal(new Set(first.draft_proposals.map(x => x.draft_id)).size, 1);
+  assert.equal(first.draft_proposals.every(x =>
+    x.review === "proposed" && x.canonical_claim_written === false), true);
+  assert.equal(first.actual_claims_created, 0);
+  assert.equal(first.actual_tasks_created, 0);
+  assert.equal(first.review_outcomes_written, 0);
+  assert.equal(first.external_model_egress_performed, false);
+  assert.equal(first.data_release_authorized, false);
+});
+
+test("HumanWiki toy proposal CLI is content-free, deterministic, no-write and no-argument", () => {
+  const cli = fileURLToPath(new URL("../scripts/humanwiki-synthetic/claim-proposal-preview-cli.mjs", import.meta.url));
+  const root = mkdtempSync(path.join(os.tmpdir(), "lumi-humanwiki-claim-proposal-"));
+  const run = (args, timezone) => spawnSync(process.execPath, [cli, ...args], {
+    encoding: "utf8", env: { ...process.env, TMPDIR: root, TZ: timezone },
+  });
+  try {
+    const utc = run([], "UTC");
+    const prague = run([], "Europe/Prague");
+    assert.equal(utc.status, 0, utc.stderr);
+    assert.equal(prague.status, 0, prague.stderr);
+    assert.equal(utc.stdout, prague.stdout);
+    const summary = JSON.parse(utc.stdout);
+    assert.equal(summary.source_segments_checked, 6);
+    assert.equal(summary.draft_proposals_count, 1);
+    assert.equal(summary.withheld_segments_count, 5);
+    assert.deepEqual(summary.withheld_reason_counts, {
+      owner_question_not_an_assertion: 1,
+      assistant_output_not_owner_evidence: 2,
+      third_party_quote_not_owner_evidence: 2,
+    });
+    assert.equal(summary.candidates_require_explicit_human_review, true);
+    assert.equal(summary.model_extraction_performed, false);
+    assert.equal(summary.source_locators_disclosed, false);
+    assert.equal(summary.source_digests_disclosed, false);
+    assert.equal(summary.actual_claims_created, 0);
+    assert.equal(summary.actual_tasks_created, 0);
+    assert.equal(summary.external_model_egress_performed, false);
+    assert.equal(summary.real_import_enabled, false);
+    assert.equal(summary.data_release_authorized, false);
+    for (const forbidden of [
+      "fixture-chatgpt-01", "fixture-claude-01", "m-01", "c-01",
+      "fictional_garden", "silver spaceship", "source_locator",
+      "content_sha256", "toy_graph_digest", "toy_restore_digest",
+    ]) assert.ok(!utc.stdout.includes(forbidden), forbidden);
+    const denied = run(["../../private-conversation.json"], "UTC");
+    assert.equal(denied.status, 2);
+    assert.equal(denied.stdout, "");
+    assert.deepEqual(readdirSync(root), []);
+  } finally { rmSync(root, { recursive: true, force: true }); }
 });
