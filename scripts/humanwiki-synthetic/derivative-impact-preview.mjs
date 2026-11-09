@@ -103,9 +103,49 @@ function validatedGraph(graph) {
   return { claims, artifacts };
 }
 
+// An independent, fixed EXPECTED toy inventory: allowlists above reject arbitrary
+// IDs, while this manifest also rejects silently missing/repointed known edges.
+// It is NOT authenticated provenance nor a complete inventory of real data.
+const expectedClaimEvidence = new Map([
+  ["fictional-claim-a", ["fictional-source-a"]],
+  ["fictional-claim-ac", ["fictional-source-a", "fictional-source-c"]],
+  ["fictional-claim-ab", ["fictional-source-a", "fictional-source-b"]],
+  ["fictional-claim-b", ["fictional-source-b"]],
+  ["fictional-claim-bc", ["fictional-source-b", "fictional-source-c"]],
+  ["fictional-claim-c", ["fictional-source-c"]],
+]);
+const expectedArtifactDependencies = new Map([
+  ["fictional-search-a", ["fictional-claim-a"]],
+  ["fictional-cache-ac", ["fictional-claim-ac"]],
+  ["fictional-embedding-bc", ["fictional-claim-bc"]],
+  ["fictional-summary-mixed", ["fictional-cache-ac", "fictional-embedding-bc"]],
+  ["fictional-export-mixed", ["fictional-summary-mixed"]],
+  ["fictional-link-a", ["fictional-claim-a"]],
+  ["fictional-autocomplete-c", ["fictional-claim-c"]],
+  ["fictional-search-c", ["fictional-claim-c"]],
+  ["fictional-cache-b", ["fictional-claim-b"]],
+  ["fictional-export-ab", ["fictional-claim-ab"]],
+]);
+const sameEdges = (actual, expected) =>
+  actual.length === expected.length &&
+  actual.every((value, index) => value === expected[index]);
+function hasCompleteToyCoverage(claims, artifacts) {
+  if (claims.size !== expectedClaimEvidence.size ||
+      artifacts.size !== expectedArtifactDependencies.size) return false;
+  for (const [id, expected] of expectedClaimEvidence) {
+    const claim = claims.get(id);
+    if (!claim || !sameEdges(claim.evidence, [...expected].sort(compare))) return false;
+  }
+  for (const [id, expected] of expectedArtifactDependencies) {
+    const artifact = artifacts.get(id);
+    if (!artifact || !sameEdges(artifact.depends_on, [...expected].sort(compare))) return false;
+  }
+  return true;
+}
 const emptyReport = {
   synthetic_fixture_only: true,
   mode: "fictional_derivative_dependency_impact_only",
+  production_dependency_coverage_verified: false,
   data_release_authorized: false,
   independently_authorized_evidence_proven: false,
   actual_deletions_performed: 0,
@@ -131,10 +171,22 @@ export function previewSyntheticDerivativeImpact(restoreState, graph = makeSynth
       claim_impacts: [],
       artifact_impacts: [],
       source_specific_details_disclosed: false,
+      fictional_fixture_manifest_matched: false,
     };
   }
 
   const { claims, artifacts } = validatedGraph(graph);
+  if (!hasCompleteToyCoverage(claims, artifacts)) {
+    return {
+      ...emptyReport,
+      impact_status: "blocked",
+      reason: "fictional_dependency_coverage_incomplete",
+      claim_impacts: [],
+      artifact_impacts: [],
+      source_specific_details_disclosed: false,
+      fictional_fixture_manifest_matched: false,
+    };
+  }
   const erased = new Set(restoreState.registry
     .filter(event => event.action === "request_erasure")
     .map(event => event.opaque_source_id));
@@ -186,6 +238,7 @@ export function previewSyntheticDerivativeImpact(restoreState, graph = makeSynth
   return {
     ...emptyReport,
     impact_status: "hypothetical_impacts_only",
+    fictional_fixture_manifest_matched: true,
     reason: null,
     claim_impacts: claimImpacts,
     artifact_impacts: artifactImpacts,

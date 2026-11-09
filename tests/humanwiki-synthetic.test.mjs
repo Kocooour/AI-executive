@@ -1575,6 +1575,10 @@ test("fixture-only derivative impact CLI rejects arguments and writes nothing", 
     assert.equal(value.artifact_impacts.length, 10);
     assert.equal(value.blocked_rollback_reason, "registry_behind_external_witness");
     assert.equal(value.blocked_disclosed_sources, false);
+    assert.equal(value.incomplete_graph_reason, "fictional_dependency_coverage_incomplete");
+    assert.equal(value.incomplete_graph_disclosed_sources, false);
+    assert.equal(value.fictional_fixture_manifest_matched, true);
+    assert.equal(value.production_dependency_coverage_verified, false);
     assert.equal(value.witness_current_does_not_waive_revalidation, true);
     assert.equal(value.data_release_authorized, false);
     assert.equal(value.actual_deletions_performed, 0);
@@ -1590,4 +1594,96 @@ test("fixture-only derivative impact CLI rejects arguments and writes nothing", 
     assert.equal(denied.stdout, "");
     assert.deepEqual(readdirSync(root), []);
   } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("canonical fictional dependency manifest is matched without granting real-data coverage", () => {
+  const state = makeSyntheticRestoreFixture();
+  const graph = makeSyntheticDerivativeFixture();
+  const original = JSON.stringify({ state, graph });
+  const result = previewSyntheticDerivativeImpact(state, graph);
+  assert.equal(result.impact_status, "hypothetical_impacts_only");
+  assert.equal(result.fictional_fixture_manifest_matched, true);
+  assert.equal(result.production_dependency_coverage_verified, false);
+  assert.equal(result.data_release_authorized, false);
+  assert.equal(result.claim_impacts.length, 6);
+  assert.equal(result.artifact_impacts.length, 10);
+  assert.equal(JSON.stringify({ state, graph }), original);
+});
+
+test("omitted fictional claims or artifacts cannot masquerade as complete graph coverage", () => {
+  const state = makeSyntheticRestoreFixture();
+  const cases = [
+    graph => { graph.artifacts = graph.artifacts.filter(x => x.id !== "fictional-link-a"); },
+    graph => { graph.artifacts = graph.artifacts.filter(x => x.id !== "fictional-export-mixed"); },
+    graph => {
+      graph.claims = graph.claims.filter(x => x.id !== "fictional-claim-c");
+      graph.artifacts = graph.artifacts.filter(x =>
+        x.id !== "fictional-autocomplete-c" && x.id !== "fictional-search-c");
+    },
+    graph => { graph.claims = []; graph.artifacts = []; },
+  ];
+  for (const mutate of cases) {
+    const graph = makeSyntheticDerivativeFixture();
+    mutate(graph);
+    const result = previewSyntheticDerivativeImpact(state, graph);
+    assert.equal(result.impact_status, "blocked");
+    assert.equal(result.reason, "fictional_dependency_coverage_incomplete");
+    assert.equal(result.fictional_fixture_manifest_matched, false);
+    assert.equal(result.production_dependency_coverage_verified, false);
+    assert.deepEqual(result.claim_impacts, []);
+    assert.deepEqual(result.artifact_impacts, []);
+    assert.equal(result.source_specific_details_disclosed, false);
+    assert.equal(result.data_release_authorized, false);
+    assert.ok(!JSON.stringify(result).includes("fictional-claim-a"));
+    assert.ok(!JSON.stringify(result).includes("fictional-source-a"));
+  }
+});
+
+test("missing known evidence on a mixed claim is a coverage failure, not unaffected evidence", () => {
+  const state = makeSyntheticRestoreFixture();
+  for (const evidence of [
+    ["fictional-source-c"], ["fictional-source-a"], ["fictional-source-b"],
+  ]) {
+    const graph = makeSyntheticDerivativeFixture();
+    graph.claims.find(x => x.id === "fictional-claim-ac").evidence = evidence;
+    const result = previewSyntheticDerivativeImpact(state, graph);
+    assert.equal(result.impact_status, "blocked");
+    assert.equal(result.reason, "fictional_dependency_coverage_incomplete");
+    assert.deepEqual(result.claim_impacts, []);
+    assert.equal(result.data_release_authorized, false);
+  }
+});
+
+test("repointed valid graph edges fail coverage even if shape and cycles are valid", () => {
+  const state = makeSyntheticRestoreFixture();
+  for (const mutate of [
+    graph => { graph.artifacts.find(x => x.id === "fictional-cache-ac").depends_on = ["fictional-claim-b"]; },
+    graph => { graph.artifacts.find(x => x.id === "fictional-summary-mixed").depends_on =
+      ["fictional-embedding-bc"]; },
+    graph => { graph.artifacts.find(x => x.id === "fictional-export-mixed").depends_on =
+      ["fictional-cache-b"]; },
+    graph => { graph.artifacts.find(x => x.id === "fictional-cache-ac").depends_on =
+      ["fictional-claim-ac", "fictional-claim-bc"]; },
+  ]) {
+    const graph = makeSyntheticDerivativeFixture();
+    mutate(graph);
+    const result = previewSyntheticDerivativeImpact(state, graph);
+    assert.equal(result.reason, "fictional_dependency_coverage_incomplete");
+    assert.equal(result.impact_status, "blocked");
+    assert.equal(result.artifact_impacts.length, 0);
+    assert.equal(result.source_specific_details_disclosed, false);
+  }
+});
+
+test("failed restore gate suppresses impact even before malformed graph examination", () => {
+  const state = makeSyntheticRestoreFixture();
+  state.witness = null;
+  const result = previewSyntheticDerivativeImpact(state, { sensitive: "do not inspect" });
+  assert.equal(result.impact_status, "blocked");
+  assert.equal(result.reason, "witness_unavailable_or_invalid");
+  assert.equal(result.fictional_fixture_manifest_matched, false);
+  assert.deepEqual(result.claim_impacts, []);
+  assert.deepEqual(result.artifact_impacts, []);
+  assert.equal(result.data_release_authorized, false);
+  assert.equal(result.production_dependency_coverage_verified, false);
 });
