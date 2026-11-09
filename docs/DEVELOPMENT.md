@@ -23,6 +23,33 @@ Suggested names:
 
 Choose a meaningful, filesystem-safe `<topic>`. Do not reuse a port or state prefix while its instance is still running.
 
+## Outcome-based milestones and PR checkpoints
+
+Before the first implementation PR, put one shared milestone plan in `docs/ROADMAP.md` or a linked issue. All parallel branches and agents use the **same** PR budget and checkpoint record. The binding rule is in [AGENTS.md](../AGENTS.md#outcome-based-milestone-governance-binding).
+
+A milestone plan states:
+
+- **Outcome and consumer:** what a user can do, or which exact safe staging integration is being delivered while real-data/production gates remain closed.
+- **Acceptance proof:** reproducible demo/test of the complete intended slice, plus relevant negative ACL/revocation/retention tests; separate completed capabilities from blocked features.
+- **Dependencies and constraints:** product, consent, privacy, security, backup/restore and R3/R4/release gates.
+- **PR budget and slices:** an initial expected range, numbered slices, first useful vertical outcome, owner, and clear exit/stop condition.
+
+Use this concise progress block in every PR description, alongside the existing branch, validation, review, and integration information:
+
+```text
+Milestone / plan link:
+Planned slice: n/N — acceptance criterion advanced:
+New demonstrable capability + test/demo:
+Remaining gaps and gated work:
+Synthetic-only or dry-run: yes/no
+Cumulative PR count for this milestone (all streams) / original budget:
+Checkpoint or approved exception (if threshold reached):
+```
+
+**Go/no-go before more work:** after every 3 merged PRs; after 2 consecutive non-integrated synthetic/dry-run PRs; and before exceeding the agreed upper PR budget by more than 2. Capture the actual functional result, objective proof, deviation, unresolved gates, and a bounded next step. Stop or consolidate if the milestone has not meaningfully advanced. A change's usefulness is assessed by its connection to an acceptance test, not by green CI alone.
+
+Record urgent blocking security fixes immediately even if the counts have been exceeded; explain the exception and carry out all existing independent review/CI gates. Do not use progress pressure to process real personal data without consent, to bypass ACL, or to authorize production cutover. Fix actionable findings in the existing PR rather than spawning serial follow-ups.
+
 ## Create isolated worktrees
 
 Start from a clean, up-to-date clone:
@@ -170,6 +197,7 @@ Run each variant with a separate port and state prefix, document the hypothesis 
 
 ## Pull request checklist
 
+- [ ] Milestone outcome, acceptance test, PR budget/slice, remaining gates and cumulative count recorded; go/no-go or exception linked when due
 - [ ] Dedicated branch and isolated worktree/check-out used
 - [ ] Unique port and local database/storage/environment prefix used
 - [ ] Production build and relevant focused checks pass
