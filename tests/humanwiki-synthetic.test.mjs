@@ -10,6 +10,7 @@ import { inspectSyntheticImport } from "../scripts/humanwiki-synthetic/inspect.m
 import { previewSyntheticOverlaps } from "../scripts/humanwiki-synthetic/overlap.mjs";
 import { previewSyntheticReviewQueue } from "../scripts/humanwiki-synthetic/review-preview.mjs";
 import { rehearseSyntheticTriage } from "../scripts/humanwiki-synthetic/triage-rehearsal.mjs";
+import { bindSyntheticTriageIntents, rehearseVersionBoundSyntheticTriage } from "../scripts/humanwiki-synthetic/version-bound-triage.mjs";
 import { ensurePrivateCheckpointDirectory, writeCheckpointAtomic } from "../scripts/humanwiki-synthetic/checkpoint.mjs";
 
 const fixture = name => JSON.parse(readFileSync(new URL(`../scripts/humanwiki-synthetic/fixtures/${name}.json`, import.meta.url), "utf8"));
@@ -645,5 +646,156 @@ test("triage rehearsal CLI is read-only, fixture-only and timezone-stable", () =
     assert.equal(denied.status, 2);
     assert.equal(denied.stdout, "");
     assert.deepEqual(readdirSync(root), [], "no checkpoint or source file may be written");
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("versioned toy triage captures source digests for exact selected locators", () => {
+  const bundles = [fixture("chatgpt"), fixture("claude")];
+  const queue = previewSyntheticReviewQueue(bundles);
+  const chat = queue.entries.find(entry => entry.locator.source_id === "fixture-chatgpt-01");
+  const claude = queue.entries.find(entry => entry.locator.source_id === "fixture-claude-01");
+  const selections = [
+    { locator: chat.locator, choice: "consider" },
+    { locator: claude.locator, choice: "defer" },
+  ];
+  const snapshot = JSON.stringify({ bundles, selections });
+  const bound = bindSyntheticTriageIntents(bundles, selections);
+  assert.equal(bound.length, 2);
+  for (let i = 0; i < bound.length; i++) {
+    assert.deepEqual(bound[i].locator, selections[i].locator);
+    assert.equal(bound[i].choice, selections[i].choice);
+    assert.match(bound[i].bundle_digest, /^[0-9a-f]{64}$/);
+  }
+  assert.notEqual(bound[0].bundle_digest, bound[1].bundle_digest);
+  assert.deepEqual(bindSyntheticTriageIntents([...bundles].reverse(), selections), bound);
+  assert.equal(JSON.stringify({ bundles, selections }), snapshot);
+});
+
+test("version-bound synthetic triage accepts current source versions without approving claims", () => {
+  const bundles = [fixture("chatgpt"), fixture("claude")];
+  const locators = previewSyntheticReviewQueue(bundles).entries.map(e => e.locator);
+  const intents = bindSyntheticTriageIntents(bundles, [
+    { locator: locators[0], choice: "consider" },
+    { locator: locators[2], choice: "skip" },
+  ]);
+  const snapshot = JSON.stringify({ bundles, intents });
+  const report = rehearseVersionBoundSyntheticTriage(bundles, intents);
+  assert.equal(report.source_version_binding, "toy_bundle_sha256_only");
+  assert.equal(report.source_version_checks, 2);
+  assert.deepEqual(report.disposition_counts,
+    { pending: 4, consider: 1, skip: 1, defer: 0 });
+  assert.equal(report.claims_created, 0);
+  assert.equal(report.review_outcomes_written, 0);
+  assert.equal(report.real_import_enabled, false);
+  assert.ok(report.entries.every(entry =>
+    entry.review === "proposed" && entry.sensitivity === "unclassified" &&
+    entry.independent_evidence === false && entry.eligible_for_automatic_confirmation === false));
+  assert.ok(!JSON.stringify(report).includes("bundle_digest"),
+    "source content fingerprints must not leak into the report");
+  assert.equal(JSON.stringify({ bundles, intents }), snapshot);
+  assert.deepEqual(rehearseVersionBoundSyntheticTriage([...bundles].reverse(), intents), report);
+  const zero = rehearseVersionBoundSyntheticTriage(bundles);
+  assert.equal(zero.source_version_checks, 0);
+  assert.equal(zero.disposition_counts.pending, 6);
+});
+
+test("version-bound synthetic intent rejects changed text under identical locator", () => {
+  const bundles = [fixture("chatgpt"), fixture("claude")];
+  const selected = previewSyntheticReviewQueue(bundles).entries.find(e =>
+    e.locator.source_id === "fixture-chatgpt-01");
+  const intents = bindSyntheticTriageIntents(bundles, [
+    { locator: selected.locator, choice: "consider" },
+  ]);
+  const changed = structuredClone(bundles);
+  changed[0].conversations[0].mapping.a.message.content.parts[0] += " (edited)";
+  assert.equal(changed[0].conversations[0].mapping.a.message.id, selected.locator.message_id);
+  assert.throws(() => rehearseVersionBoundSyntheticTriage(changed, intents),
+    /stale or missing synthetic source version/);
+  assert.equal(rehearseVersionBoundSyntheticTriage(bundles, intents).source_version_checks, 1);
+});
+
+test("source-wide binding invalidates on speaker time or unrelated-message edits", () => {
+  const bundles = [fixture("chatgpt"), fixture("claude")];
+  const selected = previewSyntheticReviewQueue(bundles).entries.find(e =>
+    e.locator.source_id === "fixture-chatgpt-01");
+  const intents = bindSyntheticTriageIntents(bundles, [
+    { locator: selected.locator, choice: "defer" },
+  ]);
+  for (const mutate of [
+    bundle => { bundle.conversations[0].mapping.a.message.author.role = "assistant"; },
+    bundle => { bundle.conversations[0].mapping.a.message.create_time = "2026-01-01T10:00:01Z"; },
+    bundle => { bundle.conversations[0].mapping.b.message.content.parts[0] += " changed"; },
+  ]) {
+    const changed = structuredClone(bundles);
+    mutate(changed[0]);
+    assert.throws(() => rehearseVersionBoundSyntheticTriage(changed, intents),
+      /stale or missing synthetic source version/);
+  }
+  const otherChanged = structuredClone(bundles);
+  otherChanged[1].conversations[0].chat_messages[0].content[0].text += " changed";
+  assert.equal(rehearseVersionBoundSyntheticTriage(otherChanged, intents).source_version_checks, 1,
+    "unrelated source changes do not invalidate this source-bound decision");
+});
+
+test("missing forged duplicate or unbound decisions fail closed", () => {
+  const bundles = [fixture("chatgpt"), fixture("claude")];
+  const locator = previewSyntheticReviewQueue(bundles).entries[0].locator;
+  const [valid] = bindSyntheticTriageIntents(bundles, [
+    { locator, choice: "consider" },
+  ]);
+  for (const invalid of [
+    { locator, choice: "consider" },
+    { ...valid, bundle_digest: undefined },
+    { ...valid, bundle_digest: "0".repeat(64) },
+    { ...valid, bundle_digest: valid.bundle_digest.toUpperCase() },
+    { ...valid, extra: "not allowed" },
+    { ...valid, choice: "confirm" },
+    { ...valid, locator: { ...locator, message_id: "missing" } },
+    { ...valid, locator: { ...locator, secret: "extra" } },
+    null,
+    false,
+  ]) {
+    assert.throws(() => rehearseVersionBoundSyntheticTriage(bundles, [invalid]));
+  }
+  assert.throws(() => rehearseVersionBoundSyntheticTriage(bundles, [valid, valid]),
+    /duplicate triage locator/);
+  for (const invalid of [null, 0, {}, "x"]) {
+    assert.throws(() => rehearseVersionBoundSyntheticTriage(bundles, invalid),
+      /invalid bound intent list/);
+  }
+  assert.throws(() => bindSyntheticTriageIntents(bundles, [
+    { locator, choice: "confirm" },
+  ]), /invalid triage intent/);
+  const wrongSource = [bundles[0], { ...bundles[1], source_id: bundles[0].source_id }];
+  assert.throws(() => rehearseVersionBoundSyntheticTriage(wrongSource, [valid]),
+    /duplicate source identity/);
+});
+
+test("version-bound CLI proves stale decisions fail without writes or personal data", () => {
+  const cli = fileURLToPath(new URL("../scripts/humanwiki-synthetic/version-bound-triage-cli.mjs", import.meta.url));
+  const root = mkdtempSync(path.join(os.tmpdir(), "lumi-humanwiki-version-bound-"));
+  const invoke = (args, zone) => spawnSync(process.execPath, [cli, ...args], {
+    encoding: "utf8", env: { ...process.env, TMPDIR: root, TZ: zone },
+  });
+  try {
+    const utc = invoke([], "UTC");
+    const prague = invoke([], "Europe/Prague");
+    assert.equal(utc.status, 0, utc.stderr);
+    assert.equal(prague.status, 0, prague.stderr);
+    assert.equal(utc.stdout, prague.stdout);
+    const report = JSON.parse(utc.stdout);
+    assert.equal(report.synthetic_fixture_only, true);
+    assert.equal(report.stale_intent_rejected, true);
+    assert.equal(report.bound_intents_checked, 1);
+    assert.equal(report.claims_created, 0);
+    assert.equal(report.review_outcomes_written, 0);
+    assert.equal(report.real_import_enabled, false);
+    for (const text of ["fictional garden", "silver spaceship", "blue gate is open", "bundle_digest"]) {
+      assert.ok(!utc.stdout.includes(text), text);
+    }
+    const denied = invoke(["../../private-export.json"], "UTC");
+    assert.equal(denied.status, 2);
+    assert.equal(denied.stdout, "");
+    assert.deepEqual(readdirSync(root), [], "CLI must not write any fixture checkpoint");
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
