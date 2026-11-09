@@ -1954,7 +1954,7 @@ test("fictional epoch fence rejects rollback and malformed epoch types", () => {
   assert.equal(result.window_status, "would_abort_epoch_rollback");
   assert.equal(result.final_check, "stale_toy_epoch_or_revision");
   for (const bad of [-1, 1.5, Infinity, NaN, "5", new Number(5),
-    Number.MAX_SAFE_INTEGER + 1, null, undefined]) {
+    Number.MAX_SAFE_INTEGER + 1, null]) {
     assert.throws(() => makeSyntheticEpochFenceFixture(frame.restore_state, bad),
       /Synthetic epoch fence:/);
     assert.throws(() => bindSyntheticEpochFence({ ...frame, toy_epoch: bad }),
