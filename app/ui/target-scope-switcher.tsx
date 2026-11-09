@@ -9,16 +9,21 @@ import {scopesCopy,type ScopesLanguage} from "../../lib/target-scopes-copy";
 import {urlScopes,type UrlScope} from "../../lib/view-url";
 import "./target-scopes.css";
 
-export default function TargetScopeSwitcher({language="cs"}:{language?:ScopesLanguage}){
+export default function TargetScopeSwitcher({language="cs",variant="lists"}:{
+  language?:ScopesLanguage;
+  /** "plan": the hints describe MY work (Můj plán is never "everything I can read"). */
+  variant?:"lists"|"plan";
+}){
   const copy=scopesCopy[language];
   const scope=useTargetScope();
   const setScope=useSetTargetScope();
   const baseId=useId();
   const buttons=useRef<Array<HTMLButtonElement|null>>([]);
+  const hints=variant==="plan"?copy.planHints:copy.listHints;
   const labels:Record<UrlScope,{label:string;hint:string}>={
-    all:{label:copy.all,hint:copy.allHint},
-    personal:{label:copy.personal,hint:copy.personalHint},
-    shared:{label:copy.shared,hint:copy.sharedHint},
+    all:{label:copy.all,hint:hints.all},
+    personal:{label:copy.personal,hint:hints.personal},
+    shared:{label:copy.shared,hint:hints.shared},
   };
   function onKeyDown(event:KeyboardEvent<HTMLButtonElement>,index:number){
     const last=urlScopes.length-1;
@@ -33,7 +38,7 @@ export default function TargetScopeSwitcher({language="cs"}:{language?:ScopesLan
     buttons.current[next]?.focus();
   }
   return <div className="targetScopeSwitcher" role="radiogroup"
-    aria-label={copy.groupLabel} data-testid="target-scope-switcher" data-scope={scope}>
+    aria-label={copy.groupLabel} data-testid="target-scope-switcher" data-scope={scope} data-variant={variant}>
     {urlScopes.map((value,index)=>{
       const checked=value===scope;
       const hintId=`${baseId}-${value}`;

@@ -71,7 +71,7 @@ test("scope maps to the server query scope and nothing else (no actor, no client
   }
 });
 
-test("server rows are rendered as returned: grouping never drops, adds or reorders rows",()=>{
+test("grouping by Area keeps the rows it is given: nothing dropped, added or reordered",()=>{
   const rows=[
     project("1","a","private"),project("2","b","shared"),project("3","a","private"),
     project("4","c","shared"),project("5","b","shared"),
@@ -219,7 +219,7 @@ test("wiring: flags off -> legacy tree, lazy chunks only, no eager import, no re
   assert.match(root_,/const scopesOn = Boolean\(targetScopes\?\.enabled\)/);
   assert.match(root_,/scopeList = scopesOn && view === "Projects" && targetScopes\?\.projects \? "project"/);
   assert.match(root_,/scopesOn && view === "Notes" && targetScopes\?\.notes \? "note" : null/);
-  assert.match(root_,/\{scopeSwitcher && <TargetScopeSwitcher language=\{language\} \/>\}/);
+  assert.match(root_,/\{scopeSwitcher && <TargetScopeSwitcher language=\{language\} variant=/);
   // Legacy lists stay the fallback for every other case.
   assert.match(root_,/: <EntityList app=\{app\} \/>/);
   const page=read("app/page.tsx");
@@ -254,7 +254,7 @@ test("wiring: scope screens persist and log nothing, show no counts or Area head
   assert.doesNotMatch(lists,/<h[1-6]/);
   assert.doesNotMatch(lists,/items\.length|rows\.length\s*\}/);
   assert.match(lists,/useTargetSession\(contextVersion=>createKindIndexReadSession\(kind,\{scope,contextVersion\}\),\[kind,scope\]\)/);
-  assert.match(lists,/state\.session===session&&state\.page\.scope===scope/);
+  assert.match(lists,/state\.session===session&&state\.rowKind===kind&&state\.page\.scope===scope/);
   assert.match(lists,/visibilitychange/);assert.match(lists,/pagehide/);assert.match(lists,/"offline"/);
   assert.match(lists,/refusalRef\.current\(\)/);
 });
@@ -344,4 +344,49 @@ test("kind index: status codes map like the combined index; cursor paging stays 
 test("kind index client keeps nothing: no storage, logging or global state",()=>{
   const source=read("lib/target-staging-kind-index-client.ts");
   assert.doesNotMatch(source,/localStorage|sessionStorage|indexedDB|console\./);
+});
+
+test("429 maps to the rate_limited kind: client reason, distinct calm copy, retry later",async()=>{
+  const {mapTargetClientFailure}=await import("../lib/target-client-errors.ts");
+  for(const kind of ["project","note"]){
+    const session=createKindIndexReadSession(kind,{scope:"all",contextVersion:()=>GEN_A},
+      async()=>new Response("{}",{status:429}));
+    assert.deepEqual(await session.loadFirst(),{ok:false,reason:"rate-limited"});
+  }
+  for(const language of ["cs","en"]){
+    const mapped=mapTargetClientFailure("rate_limited",language);
+    assert.equal(mapped.kind,"rate_limited");
+    assert.equal(mapped.action,"retry_later");
+  }
+  const lists=read("app/ui/target-scope-lists.tsx");
+  assert.match(lists,/state\.reason==="rate-limited"/);
+  assert.match(lists,/<TargetDataStatus failure="rate_limited"/);
+});
+
+test("wiring: lists keyed by kind in the root; legacy unresolved-link notice suppressed for target lists",()=>{
+  const root_=read("app/ui/lumi-app-root.tsx");
+  assert.match(root_,/<TargetScopeLists key=\{scopeList\} kind=\{scopeList\}/);
+  assert.match(root_,/app\.navigationUnavailable && !scopeList &&/);
+  assert.match(root_,/variant=\{scopeList === null \? "plan" : "lists"\}/);
+  const lists=read("app/ui/target-scope-lists.tsx");
+  assert.match(lists,/state\.rowKind===kind&&state\.page\.scope===scope/);
+  // Phone start ignores the scope key.
+  const app=read("app/ui/use-lumi-app.tsx");
+  assert.match(app,/previewMobileStart = isPreviewPhone && searchWithoutScope\(window\.location\.search\) === ""/);
+});
+
+test("CSS: scope ring/dot tones keep >= 3:1 on the track in light and dark",()=>{
+  const lin=c=>{c/=255;return c<=0.03928?c/12.92:((c+0.055)/1.055)**2.4;};
+  const lum=hex=>{const n=parseInt(hex.slice(1),16);return 0.2126*lin(n>>16)+0.7152*lin((n>>8)&255)+0.0722*lin(n&255);};
+  const ratio=(a,b)=>{const [x,y]=[lum(a),lum(b)].sort((p,q)=>q-p);return (x+0.05)/(y+0.05);};
+  const css=read("app/ui/target-scopes.css");
+  const tone=(selector)=>css.match(new RegExp(selector.replace(/[[\]"().]/g,"\\$&")+"\\{--scope-color:(#[0-9A-Fa-f]{6})"))?.[1];
+  const light={all:tone('.targetScopeOption'),personal:tone('.targetScopeOption[data-scope-option="personal"]'),
+    shared:tone('.targetScopeOption[data-scope-option="shared"]')};
+  const dark={all:tone(':root[data-theme="dark"] .targetScopeOption'),
+    personal:tone(':root[data-theme="dark"] .targetScopeOption[data-scope-option="personal"]'),
+    shared:tone(':root[data-theme="dark"] .targetScopeOption[data-scope-option="shared"]')};
+  for(const [name,hex] of Object.entries(light)){assert.ok(hex,"light "+name);assert.ok(ratio(hex,"#f2f2f5")>=3,"light "+name);}
+  for(const [name,hex] of Object.entries(dark)){assert.ok(hex,"dark "+name);assert.ok(ratio(hex,"#313133")>=3,"dark "+name);}
+  assert.notEqual(light.personal.toUpperCase(),"#16A34A"); // the UX tone itself is 2.95:1 on the track
 });

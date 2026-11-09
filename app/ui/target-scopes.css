@@ -6,7 +6,9 @@
 .targetScopeOption{--scope-color:#8B5CF6;display:inline-flex;align-items:center;justify-content:center;
   gap:8px;flex:1 1 0;min-width:0;min-height:44px;padding:8px 16px;font:inherit;font-weight:600;
   color:inherit;cursor:pointer;border:2px solid transparent;border-radius:10px;background:transparent;}
-.targetScopeOption[data-scope-option="personal"]{--scope-color:#16A34A;}
+/* Osobní: the UX tone #16A34A is only 2.95:1 on the subtle track, so the ring/dot
+   use the darker #15803D (>= 4.1:1). Dark mode uses lighter tones (>= 4.2:1). */
+.targetScopeOption[data-scope-option="personal"]{--scope-color:#15803D;}
 .targetScopeOption[data-scope-option="shared"]{--scope-color:#2563EB;}
 .targetScopeDot{width:10px;height:10px;border-radius:50%;flex:none;
   border:2px solid var(--scope-color);background:transparent;}
@@ -27,6 +29,9 @@
 .targetScopeGroup[data-area-kind="shared"]{background:#DBEAFE;}
 .targetScopeRow{min-height:44px;display:flex;align-items:center;padding:8px 12px;
   font-size:17px;font-weight:650;line-height:1.35;overflow-wrap:anywhere;}
+:root[data-theme="dark"] .targetScopeOption{--scope-color:#A78BFA;}
+:root[data-theme="dark"] .targetScopeOption[data-scope-option="personal"]{--scope-color:#4ADE80;}
+:root[data-theme="dark"] .targetScopeOption[data-scope-option="shared"]{--scope-color:#60A5FA;}
 :root[data-theme="dark"] .targetScopeGroup{background:#183a26;color:#f2f2f5;}
 :root[data-theme="dark"] .targetScopeGroup[data-area-kind="shared"]{background:#1b2f55;}
 .targetScopeGate{display:grid;gap:10px;justify-items:start;padding:12px 0;}
@@ -35,3 +40,10 @@
   border-radius:10px;border:1px solid var(--line,#9da99e);background:var(--surface,#fff);
   color:inherit;cursor:pointer;justify-self:start;}
 .targetScopeList button:disabled{opacity:.6;cursor:default;}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme]) .targetScopeOption{--scope-color:#A78BFA;}
+  :root:not([data-theme]) .targetScopeOption[data-scope-option="personal"]{--scope-color:#4ADE80;}
+  :root:not([data-theme]) .targetScopeOption[data-scope-option="shared"]{--scope-color:#60A5FA;}
+  :root:not([data-theme]) .targetScopeGroup{background:#183a26;color:#f2f2f5;}
+  :root:not([data-theme]) .targetScopeGroup[data-area-kind="shared"]{background:#1b2f55;}
+}

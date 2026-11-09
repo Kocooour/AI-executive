@@ -11,8 +11,9 @@ export default function Page() {
   // The provider (and its session check) mounts only when a target screen is
   // actually enabled; R3-FE-1 alone has no consumer and makes no request.
   const config = targetUiEnabled() ? targetUiConfig(process.env) : null;
-  // R3-FE-3: the provider also mounts for the global scope switcher alone.
-  const targetData = config?.myPlan.enabled === true || config?.scopes.enabled === true;
+  // R3-FE-3: the provider also mounts when a scoped list view is enabled; the
+  // switcher flag alone (no My Plan, no list) has no consumer and makes no request.
+  const targetData = config?.myPlan.enabled === true || config?.scopes.projects === true || config?.scopes.notes === true;
   return targetData
     ? <TargetDataProvider><LumiAppRoot targetMyPlan={config?.myPlan} targetScopes={config?.scopes} /></TargetDataProvider>
     : <LumiAppRoot />;

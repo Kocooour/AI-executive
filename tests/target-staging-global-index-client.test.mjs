@@ -123,7 +123,7 @@ test("R3 BE-16 pagination rejects empty, oversized, duplicated or unsigned conti
 
 test("R3 BE-16 status mapping and body discard fail closed before parsing",async()=>{
   for(const [status,reason] of [[401,"signed-out"],[403,"signed-out"],
-    [409,"stale"],[400,"invalid-request"],[429,"unavailable"],
+    [409,"stale"],[400,"invalid-request"],[429,"rate-limited"],
     [404,"unavailable"],[503,"unavailable"]]){
     let cancelled=false;
     const x=await fetchGlobalIndexPage(params,async()=>new Response(

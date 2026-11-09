@@ -14,7 +14,7 @@ Přepínač se zapne **jen když jsou všechny tři proměnné přesně `"true"`
 | `AI_EXECUTIVE_TARGET_STAGING_HTTP_GLOBAL_PROJECTS_ENABLED` | pohled Projekty ze serverového indexu (`project-index/global`, [R2D-GLOBAL-PROJECT-HTTP](R2D-GLOBAL-PROJECT-HTTP.md)) |
 | `AI_EXECUTIVE_TARGET_STAGING_HTTP_GLOBAL_NOTES_ENABLED` | pohled Poznámky ze serverového indexu (`note-index/global`, [R2D-GLOBAL-NOTE-HTTP](R2D-GLOBAL-NOTE-HTTP.md)) |
 
-Konfigurace má nově tvar `{myPlan:{…},scopes:{enabled,projects,notes}}`; příznaky seznamů bez příznaku přepínače nic nezapnou. Provider (a ověření `/api/target-staging/session`) se připojí, pokud je zapnutý Můj plán **nebo** přepínač. Příznaky Mého plánu a rozsahů jsou na sobě nezávislé. Při vypnutých příznacích je strom identický s dosavadním: žádný přepínač, žádný nový požadavek, moduly přepínače a seznamů se nenačtou (`next/dynamic`, `ssr:false`). Kombinovaný index (`global-index`) tato část nepoužívá.
+Konfigurace má nově tvar `{myPlan:{…},scopes:{enabled,projects,notes}}`; příznaky seznamů bez příznaku přepínače nic nezapnou. Provider (a ověření `/api/target-staging/session`) se připojí, jen pokud je zapnutý Můj plán **nebo** alespoň jeden škálovaný seznam (`scopes.projects` / `scopes.notes`); samotný příznak přepínače bez spotřebitele nevytvoří provider ani žádný požadavek. Příznaky Mého plánu a rozsahů jsou na sobě nezávislé. Při vypnutých příznacích je strom identický s dosavadním: žádný přepínač, žádný nový požadavek, moduly přepínače a seznamů se nenačtou (`next/dynamic`, `ssr:false`). Kombinovaný index (`global-index`) tato část nepoužívá.
 
 ## Sémantika
 
@@ -44,8 +44,22 @@ Konfigurace má nově tvar `{myPlan:{…},scopes:{enabled,projects,notes}}`; př
 ## Omezení
 
 - **Jen čtení:** řádky jsou text, bez navigace do detailu a bez zápisů — to je R3-FE-4 (tichá poznámka v UI).
+- **Omezení četnosti:** trasy `project-index/global` a `note-index/global` mají omezení 120 požadavků za 10 minut na klienta; odpověď 429 se zobrazí klidně jako „příliš mnoho požadavků, zkuste to později“ (druh `rate_limited`, bez automatického opakování). Pravidelné ověření relace (viz níže) tento limit netíží.
 - Počet řádků na stránku určuje server (výchozí 50); seznam nezobrazuje počty ani průběh.
 - Vyhledávání zatím rozsahem nezužuje. Boční panel a ostatní pohledy dál vycházejí z dosavadních dat.
 - Při otevření staršího (místního) detailu projektu se klíč `scope` z adresy ztratí (číst: výchozí Vše); detaily v cílovém režimu jsou předmětem R3-FE-4.
-- Pokud při změně rozsahu probíhá zápis Mého plánu, jeho stav se nezahazuje; teprve po dokončení se zpětná vazba (Undo) předchozího rozsahu vyčistí.
+- Pokud při změně rozsahu probíhá zápis Mého plánu, jeho stav se nezahazuje. Zpětná vazba (Undo, potvrzení) se eviduje k rozsahu, ve kterém zápis začal (`lib/target-my-plan-scope-feedback.ts`); po dokončení zápisu, když se aktuální rozsah liší, se vyčistí. Zápis, který je rozpracovaný, kontrolovaný nebo nejistý (uncertain), se **nikdy** nezahazuje, aby šlo dokončit sladění. Řádky plánu se vykreslí jen pro stránku, jejíž `areaFilter` odpovídá aktuálnímu rozsahu.
+- Rychlé zadání, boční panel s projekty a detailní panel se v cílovém režimu rozsahem neřídí — viz Otevřené otázky.
 - Žádná produkční aktivace; plná Browser E2E se nespouští.
+
+## Další chování
+
+- **Nápověda přepínače pro čtečku** je podle obrazovky: v seznamech „co smíte číst“, v Mém plánu vždy o **mé** práci (Vše = veškerá moje práce, ne vše čitelné).
+- **Start na telefonu (v1 shell):** klíč `scope` se při rozhodování o úvodní obrazovce ignoruje, takže `/?scope=shared` otevře Můj plán.
+- **Starší odkaz `projectId` v cílovém Projektech** nezobrazí hlášení „Odkaz nelze otevřít“ (pro pohledy vykreslené cílovými seznamy je potlačeno); detaily přijdou v R3-FE-4. Seznam se při přechodu Projekty → Poznámky vždy vytvoří znovu (klíč podle druhu).
+- **Barvy:** kroužek/tečka mají kontrast ≥ 3:1 vůči pozadí lišty; osobní zelená má ve světlém režimu tmavší odstín `#15803D` (UX odstín `#16A34A` má jen 2,95:1), v tmavém režimu jsou světlejší varianty.
+- **Pasivní zneplatnění:** běh R3-FE-1 nově ověřuje relaci každých 60 s, dokud je stránka viditelná a online (viz [R3-FE-01](R3-FE-01-CLIENT-RUNTIME.md)); odvolaný přístup tak skryje názvy i bez události fokusu.
+
+## Otevřené otázky pro vlastníka
+
+- **Řízení rozsahem mimo seznamy (LUMI-FR-013):** v cílovém režimu se globálním rozsahem zatím neřídí **starší boční seznam projektů, inspektor (detailní panel) ani Rychlý záchyt**. Rozhodnutí čeká na vlastníka; tato část je záměrně beze změny.

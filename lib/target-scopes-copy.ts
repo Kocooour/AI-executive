@@ -12,9 +12,9 @@ export type ScopesCopy={
   all:string;
   personal:string;
   shared:string;
-  allHint:string;
-  personalHint:string;
-  sharedHint:string;
+  /** Screen-reader hints per screen: lists describe what you may read, the plan only YOUR work. */
+  listHints:Record<"all"|"personal"|"shared",string>;
+  planHints:Record<"all"|"personal"|"shared",string>;
   projectsRegion:string;
   notesRegion:string;
   projectsEmpty:string;
@@ -42,9 +42,16 @@ export const scopesCopy:Record<ScopesLanguage,ScopesCopy>={
     all:"Vše",
     personal:"Osobní",
     shared:"Sdílené",
-    allHint:"Vše, co smíte číst, z osobních i sdílených Oblastí",
-    personalHint:"Jen vaše osobní Oblasti",
-    sharedHint:"Jen sdílené Oblasti, do kterých máte přístup",
+    listHints:{
+      all:"Vše, co smíte číst, z osobních i sdílených Oblastí",
+      personal:"Jen vaše osobní Oblasti",
+      shared:"Jen sdílené Oblasti, do kterých máte přístup",
+    },
+    planHints:{
+      all:"Veškerá vaše práce: vaše soukromé úkoly a sdílené úkoly přiřazené vám",
+      personal:"Jen vaše práce v osobních Oblastech",
+      shared:"Jen sdílené úkoly přiřazené vám",
+    },
     projectsRegion:"Projekty",
     notesRegion:"Poznámky",
     projectsEmpty:"V tomto rozsahu nejsou žádné projekty.",
@@ -78,9 +85,16 @@ export const scopesCopy:Record<ScopesLanguage,ScopesCopy>={
     all:"All",
     personal:"Personal",
     shared:"Shared",
-    allHint:"Everything you may read, from personal and shared Areas",
-    personalHint:"Only your personal Areas",
-    sharedHint:"Only the shared Areas you can access",
+    listHints:{
+      all:"Everything you may read, from personal and shared Areas",
+      personal:"Only your personal Areas",
+      shared:"Only the shared Areas you can access",
+    },
+    planHints:{
+      all:"All of your work: your private tasks and the shared tasks assigned to you",
+      personal:"Only your work in personal Areas",
+      shared:"Only the shared tasks assigned to you",
+    },
     projectsRegion:"Projects",
     notesRegion:"Notes",
     projectsEmpty:"There are no projects in this scope.",

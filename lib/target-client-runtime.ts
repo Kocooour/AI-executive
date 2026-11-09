@@ -32,6 +32,11 @@ export type TargetClientRuntimeConfig={
   window?:TargetRuntimeWindow|null;
   broadcastChannelFactory?:((name:string)=>TargetRuntimeChannel)|null;
   now?:()=>number;
+  /** Injectable timers for the passive revalidation poll (tests). */
+  timers?:{
+    setInterval(fn:()=>void,ms:number):unknown;
+    clearInterval(handle:unknown):void;
+  };
 };
 export const TARGET_SESSION_ENDPOINT="/api/target-staging/session";
 import {TARGET_SIGNED_IN_EVENT,TARGET_SIGNED_IN_MESSAGE} from "./target-auth-signal";
@@ -40,6 +45,10 @@ const GENERATION=/^[A-Za-z0-9_-]{43}$/;
 const MAX_BODY_BYTES=1024;
 const TIMEOUT_MS=8000;
 const FOCUS_THROTTLE_MS=1000;
+/** Passive revalidation while visible and online: a revoked session or lost
+ * membership must not leave titles on screen until the next focus event. One
+ * request a minute stays far below the session route rate limit. */
+export const TARGET_POLL_MS=60_000;
 
 export function createTargetClientRuntime(config:TargetClientRuntimeConfig={}){
   const fetchImpl:typeof fetch=config.fetch??((input,init)=>fetch(input,init));
@@ -47,6 +56,15 @@ export function createTargetClientRuntime(config:TargetClientRuntimeConfig={}){
     ?(typeof window!=="undefined"?(window as unknown as TargetRuntimeWindow):null)
     :config.window;
   const now=config.now??Date.now;
+  const timers=config.timers??{
+    setInterval:(fn:()=>void,ms:number)=>{
+      const handle=setInterval(fn,ms);
+      // A background poll must never keep a process alive.
+      (handle as {unref?:()=>void}|undefined)?.unref?.();
+      return handle;
+    },
+    clearInterval:(handle:unknown)=>clearInterval(handle as ReturnType<typeof setInterval>),
+  };
   let counter=0;
   const unknownToken=()=>{
     let random="";
@@ -204,6 +222,20 @@ export function createTargetClientRuntime(config:TargetClientRuntimeConfig={}){
     suspended=false;
     for(const item of [...registered])guarded(()=>item.resume?.());
   }
+  // Poll only while a window exists and the page is visible and online.
+  let poll:unknown=null;
+  function syncPoll(){
+    const want=win!==null&&active();
+    if(want&&poll===null){
+      poll=timers.setInterval(()=>{
+        if(active()){lastEventRefresh=now();void refresh();}
+        else syncPoll();
+      },TARGET_POLL_MS);
+    }else if(!want&&poll!==null){
+      timers.clearInterval(poll);
+      poll=null;
+    }
+  }
   function throttledRefresh(){
     const t=now();
     if(t-lastEventRefresh<FOCUS_THROTTLE_MS)return;
@@ -214,18 +246,20 @@ export function createTargetClientRuntime(config:TargetClientRuntimeConfig={}){
   const onVisibility=()=>{
     if(win?.document?.visibilityState==="hidden")suspendAll();
     else{resumeAll();throttledRefresh();}
+    syncPoll();
   };
   const onPageShow=(event?:unknown)=>{
     pageHidden=false;
     resumeAll();
+    syncPoll();
     // Always verify after BFCache restore; other pageshows are throttled.
     if((event as {persisted?:boolean}|undefined)?.persisted===true){
       lastEventRefresh=now();void refresh();
     }else throttledRefresh();
   };
-  const onPageHide=()=>{pageHidden=true;suspendAll();};
-  const onOffline=()=>suspendAll();
-  const onOnline=()=>{resumeAll();lastEventRefresh=now();void refresh();};
+  const onPageHide=()=>{pageHidden=true;suspendAll();syncPoll();};
+  const onOffline=()=>{suspendAll();syncPoll();};
+  const onOnline=()=>{resumeAll();syncPoll();lastEventRefresh=now();void refresh();};
   const onFocus=()=>throttledRefresh();
   // Sign-in completed without a reload (this tab or another): re-verify immediately, unthrottled.
   const onSignedIn=()=>{if(disposed)return;lastEventRefresh=now();void refresh();};
@@ -257,6 +291,7 @@ export function createTargetClientRuntime(config:TargetClientRuntimeConfig={}){
   // Initial verification; sessions stay unusable until a value is known.
   lastEventRefresh=now();
   void refresh();
+  syncPoll();
 
   return {
     generation():string{return value;},
@@ -288,6 +323,7 @@ export function createTargetClientRuntime(config:TargetClientRuntimeConfig={}){
     dispose():void{
       if(disposed)return;
       disposed=true;
+      syncPoll(); // active() is false once disposed: the interval is cleared
       controller?.abort();
       windowEvents.forEach(([name,fn])=>win?.removeEventListener?.(name,fn));
       win?.document?.removeEventListener("visibilitychange",onVisibility);

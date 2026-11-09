@@ -115,11 +115,14 @@ test("R3-FE-3: the My Plan flags alone never enable scopes (and vice versa)",()=
   assert.equal(targetUiConfig(scopesOnly).myPlan.enabled,false);
 });
 
-test("R3-FE-3: provider mount rule is My Plan OR scopes, as app/page.tsx computes it",()=>{
-  const mounts=env=>{const c=targetUiConfig(env);return c!==null&&(c.myPlan.enabled||c.scopes.enabled);};
+test("R3-FE-3: provider mount rule is My Plan OR a scoped list view, as app/page.tsx computes it",()=>{
+  const mounts=env=>{const c=targetUiConfig(env);return c!==null&&(c.myPlan.enabled||c.scopes.projects||c.scopes.notes);};
   assert.equal(mounts({}),false);
   assert.equal(mounts({AI_EXECUTIVE_TARGET_STAGING_HTTP_ENABLED:T,AI_EXECUTIVE_TARGET_UI_ENABLED:T}),false);
   assert.equal(mounts(base),true);
-  assert.equal(mounts(scopesOnly),true);
+  // The switcher flag alone has no consumer: no provider, no session request.
+  assert.equal(mounts(scopesOnly),false);
+  assert.equal(mounts({...scopesOnly,...projectsFlag}),true);
+  assert.equal(mounts({...scopesOnly,...notesFlag}),true);
   assert.equal(mounts({...projectsFlag,...notesFlag}),false);
 });

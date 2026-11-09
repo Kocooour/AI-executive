@@ -17,7 +17,7 @@ export type GlobalIndexItem=
 export type GlobalIndexPage={scope:GlobalIndexScope;items:GlobalIndexItem[];
   hasMore:boolean;nextCursor:string|null};
 export type GlobalIndexFailure="signed-out"|"stale"|"invalid-request"|
-  "invalid-response"|"unavailable"|"offline"|"aborted";
+  "invalid-response"|"unavailable"|"offline"|"aborted"|"rate-limited";
 export type GlobalIndexResult={ok:true;page:GlobalIndexPage}|
   {ok:false;reason:GlobalIndexFailure};
 
@@ -262,6 +262,7 @@ export async function fetchGlobalIndexPage(
       return {ok:false,reason:"signed-out"};
     if(response.status===409)return {ok:false,reason:"stale"};
     if(response.status===400)return {ok:false,reason:"invalid-request"};
+    if(response.status===429)return {ok:false,reason:"rate-limited"};
     return {ok:false,reason:"unavailable"};
   }
   if(response.redirected||!noStore(response.headers.get("cache-control"))||

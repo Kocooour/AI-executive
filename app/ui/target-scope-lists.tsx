@@ -28,7 +28,7 @@ type Session=NonNullable<ReturnType<typeof useScopeSession>>;
 type State=
   |{kind:"idle"}
   |{kind:"loading";session:Session}
-  |{kind:"ready";session:Session;page:GlobalIndexPage;more:boolean}
+  |{kind:"ready";session:Session;rowKind:"project"|"note";page:GlobalIndexPage;more:boolean}
   |{kind:"error";reason:GlobalIndexFailure|"hidden"};
 
 // Typing helper only: the hook is called through useTargetSession below.
@@ -70,7 +70,7 @@ export default function TargetScopeLists({kind,language="cs"}:{
     setState({kind:"loading",session});
     void session.loadFirst().then(result=>{
       if(epoch.current!==id)return;
-      if(result.ok===true)setState({kind:"ready",session,page:result.page,more:false});
+      if(result.ok===true)setState({kind:"ready",session,rowKind:kind,page:result.page,more:false});
       else if(result.reason==="superseded")return;
       else setState({kind:"error",reason:result.reason==="busy"||result.reason==="not-ready"?"stale":result.reason});
     }).catch(()=>{if(epoch.current===id)setState({kind:"error",reason:"unavailable"});});
@@ -129,7 +129,7 @@ export default function TargetScopeLists({kind,language="cs"}:{
     setState({...current,more:true});
     const result=await current.session.loadMore();
     if(epoch.current!==id)return;
-    if(result.ok===true)setState({kind:"ready",session:current.session,page:result.page,more:false});
+    if(result.ok===true)setState({kind:"ready",session:current.session,rowKind:current.rowKind,page:result.page,more:false});
     else if(result.reason==="superseded")return;
     else setState({kind:"error",reason:result.reason==="busy"||result.reason==="not-ready"?"stale":result.reason});
   }
@@ -157,7 +157,7 @@ export default function TargetScopeLists({kind,language="cs"}:{
 
   // Rows are shown only for the CURRENT session and scope: right after a scope
   // change the previous scope's rows are already gone from this render.
-  const page=state.kind==="ready"&&state.session===session&&state.page.scope===scope?state.page:null;
+  const page=state.kind==="ready"&&state.session===session&&state.rowKind===kind&&state.page.scope===scope?state.page:null;
   const rows:GlobalIndexItem[]=page?page.items:[];
   const groups=groupIndexRowsByArea(rows);
   return <section className="targetScopeList" data-testid="target-scope-list"
@@ -168,8 +168,12 @@ export default function TargetScopeLists({kind,language="cs"}:{
         :state.kind==="ready"&&state.more?copy.loadingMore
         :page?copy.loaded:copy.loading}
     </p>
-    {state.kind==="error"&&state.reason!=="hidden"&&<p role="alert">{copy.reasons[state.reason]}</p>}
-    {state.kind==="error"&&<button type="button" onClick={reload}>{copy.reload}</button>}
+    {state.kind==="error"&&state.reason==="rate-limited"&&
+      <TargetDataStatus failure="rate_limited" language={language} onAction={reload}/>}
+    {state.kind==="error"&&state.reason!=="hidden"&&state.reason!=="rate-limited"&&
+      <p role="alert">{copy.reasons[state.reason]}</p>}
+    {state.kind==="error"&&state.reason!=="rate-limited"&&
+      <button type="button" onClick={reload}>{copy.reload}</button>}
     {page&&(rows.length===0&&!page.hasMore
       ?<p>{kind==="project"?copy.projectsEmpty:copy.notesEmpty}</p>
       :groups.map(group=><ul key={group.areaId} className="targetScopeGroup"

@@ -98,7 +98,7 @@ export function LumiAppRoot({ targetMyPlan, targetScopes }: { targetMyPlan?: Tar
             </button>
           </div>
         ))}
-        {app.navigationUnavailable && (
+        {app.navigationUnavailable && !scopeList && (
           <div className="navigationUnavailableNotice" role="status" data-testid="navigation-unavailable">
             <p>{language === "cs"
               ? "Odkaz nelze otevřít. Položka není v aktuálních datech dostupná."
@@ -136,7 +136,7 @@ export function LumiAppRoot({ targetMyPlan, targetScopes }: { targetMyPlan?: Tar
               {view === "Today" && !targetPlan && <TodayHeaderMeta app={app} />}
             </div>
           </div>
-          {scopeSwitcher && <TargetScopeSwitcher language={language} />}
+          {scopeSwitcher && <TargetScopeSwitcher language={language} variant={scopeList === null ? "plan" : "lists"} />}
           <HeldBack app={app} />
           <CalendarView app={app} />
           <HomeView app={app} />
@@ -148,7 +148,7 @@ export function LumiAppRoot({ targetMyPlan, targetScopes }: { targetMyPlan?: Tar
           {targetPlan && targetMyPlan
             ? <TargetMyPlan gates={targetMyPlan} language={language} scopeDriven={scopesOn} />
             : scopeList
-              ? <TargetScopeLists kind={scopeList} language={language} />
+              ? <TargetScopeLists key={scopeList} kind={scopeList} language={language} />
               : <EntityList app={app} />}
           {view === "Today" && !targetPlan && <TodayFooter app={app} />}
         </div>

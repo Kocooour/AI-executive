@@ -31,6 +31,7 @@ import {
 import {
   prepareConfirmedMyPlanUndo,keepConfirmedMyPlanUndoOnRefresh,
 } from "../../lib/target-staging-my-plan-undo";
+import {scopeFeedbackDecision} from "../../lib/target-my-plan-scope-feedback";
 import {myPlanCopy,type MyPlanCopy,type MyPlanLanguage} from "../../lib/target-my-plan-copy";
 
 type StatusAction=
@@ -763,15 +764,18 @@ export function TargetStagingMyPlanPreview({
   const whenPending=whenAction.kind==="pending"||
     whenAction.kind==="checking"||whenAction.kind==="uncertain";
   const anyPending=actionPending||whenPending;
-  // R3-FE-3: a change of the global scope drops stale feedback (Undo, receipts)
-  // of the previous scope unless a write is still in flight.
-  const lastFilter=useRef(areaFilter);
+  // R3-FE-3: feedback (Undo, receipts) of a previous scope is cleared once no
+  // write is in flight; an uncertain command is never dropped (see the helper).
+  const feedbackScope=useRef<string|null>(null);
   useEffect(()=>{
-    if(lastFilter.current===areaFilter)return;
-    lastFilter.current=areaFilter;
-    if(!anyPending)resetFeedback();
+    const decision=scopeFeedbackDecision({
+      recorded:feedbackScope.current,current:areaFilter,
+      statusKind:action.kind,whenKind:whenAction.kind,
+    });
+    feedbackScope.current=decision.recorded;
+    if(decision.clear)resetFeedback();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  },[areaFilter]);
+  },[areaFilter,action.kind,whenAction.kind]);
   // Read the live synchronous refs from EACH handler, not just disabled state.
   // A second event may arrive before React commits the pending render.
   const toolbarChangeBlocked=()=>myPlanToolbarChangeBlocked({

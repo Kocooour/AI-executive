@@ -106,3 +106,8 @@ Přihlášení heslem i přístupovým klíčem se dokončí bez načtení strá
   již plně důvěryhodný); dopad je pouze na dostupnost (zahození relací), nikdy na data.
 - `/` se kvůli čtení vypínače vykresluje dynamicky (při každém požadavku); offline náhrada PWA je
   samostatná stránka `/offline`, takže offline chování se nemění.
+
+
+## Pravidelné ověření relace (R3-FE-3)
+
+Aby odvolaný přístup nebo ztráta členství nenechaly názvy na obrazovce až do další události fokusu či viditelnosti, běh nově volá `refresh()` každých `TARGET_POLL_MS` (60 s). Interval běží **jen** když existuje okno, stránka je viditelná a online a běh není uvolněn; skryje se/offline/`pagehide`/`dispose` ho zruší a návrat (viditelnost, `pageshow`, `online`) ho obnoví. Tik při skryté stránce nic nevolá. Časovače jsou injektovatelné (`config.timers`) pro testy a výchozí je `unref`, takže proces neudrží. 401 z tohoto ověření shodí generaci stejně jako jiné ověření a uvolní zaregistrované relace. Jeden požadavek za minutu je hluboko pod limitem trasy relace. Testy: `tests/target-client-runtime-poll.test.mjs`.

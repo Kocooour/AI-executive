@@ -53,3 +53,17 @@ test("R3-FE-3 copy: the read-only notes say details come later",()=>{
   assert.match(scopesCopy.cs.notesTitleOnlyNote,/názvy/);
   assert.match(scopesCopy.en.notesTitleOnlyNote,/titles only/);
 });
+
+test("R3-FE-3 copy: My Plan hints describe MY work, list hints describe what you may read",()=>{
+  for(const lang of ["cs","en"]){
+    const {listHints,planHints}=scopesCopy[lang];
+    assert.deepEqual(Object.keys(planHints),["all","personal","shared"]);
+    assert.notEqual(planHints.all,listHints.all);
+    assert.notEqual(planHints.shared,listHints.shared);
+  }
+  assert.match(scopesCopy.en.planHints.all,/your (own )?work|All of your work/i);
+  assert.match(scopesCopy.en.planHints.shared,/assigned to you/);
+  assert.match(scopesCopy.cs.planHints.all,/vaše (soukromé|práce)|Veškerá vaše práce/);
+  assert.doesNotMatch(scopesCopy.en.planHints.all,/everything you may read/i);
+  assert.match(scopesCopy.en.listHints.all,/Everything you may read/);
+});

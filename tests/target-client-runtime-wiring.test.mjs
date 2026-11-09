@@ -71,22 +71,23 @@ test("only the runtime (and its server route) reference the session endpoint; no
   };
   walk("app");walk("lib");
   assert.deepEqual(hits.sort(),["app/api/target-staging/session/route.ts","lib/target-client-runtime.ts"]);
-  // Consumers of the new hooks: only the lazily loaded R3-FE-2 My Plan screen.
+  // Consumers of the runtime hooks (.ts and .tsx): the lazily loaded My Plan screen (R3-FE-2),
+  // the scope lists with their gate hook (R3-FE-3), and the provider/status modules themselves.
   const users=[];
   const scan=dir=>{
     for(const name of readdirSync(path.join(root,dir))){
       const rel=path.join(dir,name);
       const full=path.join(root,rel);
       if(statSync(full).isDirectory())scan(rel);
-      else if(/\.tsx$/.test(name)&&/useTargetSession|useTargetGeneration|useTargetRuntime|TargetDataStatus/.test(readFileSync(full,"utf8")))
+      else if(/\.tsx?$/.test(name)&&/useTargetSession|useTargetGeneration|useTargetRuntime|TargetDataStatus/.test(readFileSync(full,"utf8")))
         users.push(rel);
     }
   };
   scan("app");
   assert.deepEqual(users.sort(),[
     "app/ui/target-data-provider.tsx","app/ui/target-data-status.tsx","app/ui/target-my-plan.tsx",
-    // R3-FE-3: the lazily loaded scope lists (the gate hook is a .ts file).
-    "app/ui/target-scope-lists.tsx",
+    // R3-FE-3: the lazily loaded scope lists and the gate hook.
+    "app/ui/target-scope-lists.tsx","app/ui/use-target-gate.ts",
   ].sort());
 });
 
