@@ -40,6 +40,7 @@ export const gmailMockPort = Number(process.env.LUMI_E2E_GMAIL_PORT);
 const systemChromium = process.env.E2E_CHROMIUM || (existsSync("/opt/pw-browsers/chromium") ? "/opt/pw-browsers/chromium" : undefined);
 // Only a separately selected synthetic browser scenario opts in to this staging preview.
 const titleSearchPreviewTest = process.env.LUMI_TITLE_SEARCH_PREVIEW_E2E === "true";
+const taskPreviewTest = process.env.LUMI_TASK_PREVIEW_E2E === "true";
 const notePreviewTest = process.env.LUMI_NOTE_PREVIEW_E2E === "true";
 const indexDetailPreviewTest = process.env.LUMI_INDEX_DETAIL_PREVIEW_E2E === "true";
 
@@ -79,6 +80,14 @@ export default defineConfig({
         AI_EXECUTIVE_TARGET_STAGING_HTTP_ENABLED: "true",
         AI_EXECUTIVE_TARGET_STAGING_HTTP_TITLE_SEARCH_ENABLED: "true",
         AI_EXECUTIVE_TARGET_STAGING_TITLE_SEARCH_CLIENT_PREVIEW_ENABLED: "true",
+      } : {}),
+      ...(taskPreviewTest ? {
+        AI_EXECUTIVE_TARGET_STAGING_HTTP_ENABLED: "true",
+        AI_EXECUTIVE_TARGET_STAGING_HTTP_TEMPORAL_ENABLED: "true",
+        AI_EXECUTIVE_TARGET_STAGING_TASK_CLIENT_PREVIEW_ENABLED: "true",
+        AI_EXECUTIVE_TARGET_STAGING_HTTP_GLOBAL_COMBINED_ENABLED: "true",
+        AI_EXECUTIVE_TARGET_STAGING_GLOBAL_INDEX_CLIENT_PREVIEW_ENABLED: "true",
+        AI_EXECUTIVE_TARGET_STAGING_INDEX_DETAIL_LINKS_ENABLED: "true",
       } : {}),
       // UI-09d has an independent default-off synthetic browser flag.
       ...(notePreviewTest ? {

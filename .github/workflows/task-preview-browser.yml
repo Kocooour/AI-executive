@@ -1,0 +1,68 @@
+name: Scoped UI-09f task-preview browser
+
+on:
+  pull_request:
+    paths:
+      - "app/target-staging/tasks/**"
+      - "app/target-staging/global-index/preview/**"
+      - "app/ui/target-staging-global-index-preview.tsx"
+      - "lib/target-staging-index-detail-links.ts"
+      - "app/ui/target-staging-task-preview.tsx"
+      - "lib/target-staging-task-preview-client.ts"
+      - "e2e/task-preview-ui09f*.spec.ts"
+      - "playwright.config.ts"
+      - ".github/workflows/task-preview-browser.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ui09f-browser-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  scoped-task-browser:
+    name: Scoped task-preview Chromium
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      CI: "true"
+      NEXT_TELEMETRY_DISABLED: "1"
+      E2E_PORT: "3128"
+      E2E_SKIP_BUILD: "1"
+    steps:
+      - name: Checkout PR integrated code
+        uses: actions/checkout@v5
+      - name: Install pnpm
+        uses: pnpm/action-setup@v5
+        with:
+          version: 10.20.0
+      - name: Set up Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+          cache: pnpm
+      - name: Install locked dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Build isolated preview
+        run: pnpm build
+      - name: Install Chromium
+        run: pnpm exec playwright install --with-deps chromium
+      - name: Assert default-off 404 without task permission flags
+        env:
+          LUMI_TASK_PREVIEW_E2E: "false"
+        run: pnpm exec playwright test e2e/task-preview-ui09f-default-off.spec.ts --project=desktop
+      - name: Test task DOM and revocation with synthetic HTTP responses
+        env:
+          LUMI_TASK_PREVIEW_E2E: "true"
+        run: pnpm exec playwright test e2e/task-preview-ui09f.spec.ts --project=desktop
+      - name: Upload browser traces after failure
+        if: failure()
+        uses: actions/upload-artifact@v6
+        with:
+          name: lumi-task-preview-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            test-results/
+            playwright-report/
+          if-no-files-found: ignore
+          retention-days: 7

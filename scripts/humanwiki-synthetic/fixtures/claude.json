@@ -1,0 +1,14 @@
+{
+  "synthetic_fixture": true,
+  "source_id": "fixture-claude-01",
+  "format": "claude-chat-v1",
+  "conversations": [
+    {
+      "id": "claude-synthetic-01",
+      "chat_messages": [
+        {"id": "c-01", "sender": "human", "created_at": "2026-02-02T10:00:00Z", "content": [{"type": "text", "text": "Could a fictional garden use a blue gate?"}]},
+        {"id": "c-02", "sender": "assistant", "created_at": "2026-02-02T10:01:00Z", "content": [{"type": "text", "text": "Perhaps.\n> An old story says the gate is open."}]}
+      ]
+    }
+  ]
+}
