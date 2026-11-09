@@ -6,8 +6,8 @@
 import {useSyncExternalStore} from "react";
 import {scopeFromSearch} from "../../lib/view-url";
 import {
-  canStepBack,detailHistoryState,detailRouteKey,detailRowKey,parentSearchForDetail,searchForDetail,
-  TARGET_ADDRESS_EVENT,type TargetDetailRoute,
+  canStepBack,detailHistoryState,detailIdOk,detailRouteKey,detailRowKey,parentSearchForDetail,
+  searchForDetail,TARGET_ADDRESS_EVENT,type TargetDetailRoute,
 } from "../../lib/target-detail-route";
 
 const noopSubscribe=()=>()=>{};
@@ -33,13 +33,15 @@ let pendingFocus:{key:string;expires:number}|null=null;
 
 /** Opening is a navigation step (a new history entry), so Back returns to the origin. */
 export function openTargetDetail(route:TargetDetailRoute,opener?:Element|null):void{
+  // Rows are only rendered as buttons for IDs this passes; never a silent no-op click.
+  if(!detailIdOk(route.id)||(route.projectId!==undefined&&!detailIdOk(route.projectId)))return;
   const scope=scopeFromSearch(window.location.search);
   const row=opener?.closest("[data-detail-row]")?.getAttribute("data-detail-row");
   if(row)origins.set(detailRouteKey(route),row);
   pendingFocus=null;
   try{
-    window.history.pushState(detailHistoryState(scope),"",
-      `${window.location.pathname}${searchForDetail(route,scope)}`);
+    const search=searchForDetail(route,scope);
+    window.history.pushState(detailHistoryState(scope,search),"",`${window.location.pathname}${search}`);
   }catch{return;/* History API blocked: nothing opens. */}
   announce();
 }
@@ -48,14 +50,13 @@ export function openTargetDetail(route:TargetDetailRoute,opener?:Element|null):v
  * otherwise (pasted link, other tab, scope changed meanwhile) it replaces the
  * address with the parent for the CURRENT scope, never leaving the site. */
 export function closeTargetDetail(route:TargetDetailRoute|null):void{
-  if(route)pendingFocus={key:origins.get(detailRouteKey(route))??"",expires:Date.now()+3000};
   if(canStepBack(window.history.state,window.location.search)){
     window.history.back();
     return;
   }
   try{
-    window.history.replaceState(null,"",
-      `${window.location.pathname}${parentSearchForDetail(route,scopeFromSearch(window.location.search))}`);
+    window.history.replaceState(null,"",`${window.location.pathname}${parentSearchForDetail(
+      route,scopeFromSearch(window.location.search),window.location.search)}`);
   }catch{/* The address stays; the detail simply remains open. */}
   announce();
 }

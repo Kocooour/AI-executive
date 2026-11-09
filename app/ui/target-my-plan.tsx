@@ -16,7 +16,8 @@ import {TargetStagingMyPlanPreview} from "./target-staging-my-plan-preview";
 import {openTargetDetail} from "./target-detail-state";
 import {detailCopy} from "../../lib/target-detail-copy";
 import {myPlanCopy,type MyPlanLanguage} from "../../lib/target-my-plan-copy";
-import {createRefusalBudget,targetMyPlanGate} from "../../lib/target-my-plan-embed";
+import {targetMyPlanGate} from "../../lib/target-my-plan-embed";
+import {refusalBudgetFor} from "../../lib/target-refusal-budget";
 import "../target-staging/my-plan/preview/preview.css";
 import "./target-my-plan.css";
 import "./target-details.css";
@@ -38,7 +39,6 @@ export default function TargetMyPlan({gates,language="cs",scopeDriven=false,task
     ()=>(notify:()=>void)=>runtime?runtime.subscribeOutcome(notify):()=>{},[runtime]);
   const outcome=useSyncExternalStore(
     subscribeOutcome,()=>runtime?runtime.lastOutcome():null,()=>null);
-  const budget=useRef(createRefusalBudget());
   const [blocked,setBlocked]=useState(false);
   const ownBump=useRef(false);
   // A generation change we did not cause (sign-in, account switch) lifts the block.
@@ -48,12 +48,12 @@ export default function TargetMyPlan({gates,language="cs",scopeDriven=false,task
   },[generation]);
   const onRefusal=useCallback(()=>{
     if(!runtime)return;
-    if(!budget.current.admit()){setBlocked(true);return;}
+    if(!refusalBudgetFor(runtime).admit()){setBlocked(true);return;}
     ownBump.current=true;
     void runtime.reportRefusal("session_revoked");
   },[runtime]);
   const retry=useCallback(()=>{
-    budget.current.reset();
+    refusalBudgetFor(runtime).reset();
     setBlocked(false);
     void runtime?.refresh();
   },[runtime]);

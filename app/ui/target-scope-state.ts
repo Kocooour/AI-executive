@@ -4,6 +4,7 @@
  * source of truth: nothing is stored in browser storage, and the value is only
  * ever used to choose which server query to make (never an authorization claim). */
 import {useCallback,useSyncExternalStore} from "react";
+import {withoutDetailMarker} from "../../lib/target-detail-route";
 import {defaultUrlScope,scopeFromSearch,searchWithScope,type UrlScope} from "../../lib/view-url";
 
 const CHANGED="lumi-target-scope-changed";
@@ -23,7 +24,8 @@ const serverSnapshot=():UrlScope=>defaultUrlScope;
 export function writeTargetScope(next:UrlScope):void{
   if(snapshot()===next)return;
   try{
-    window.history.pushState(window.history.state,"",
+    // The target-detail marker belongs to the entry it was pushed with, never to this one.
+    window.history.pushState(withoutDetailMarker(window.history.state),"",
       `${window.location.pathname}${searchWithScope(window.location.search,next)}${window.location.hash}`);
   }catch{/* History API blocked: the scope simply stays unchanged. */}
   window.dispatchEvent(new Event(CHANGED));

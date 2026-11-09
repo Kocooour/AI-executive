@@ -86,6 +86,7 @@ export function createTargetClientRuntime(config:TargetClientRuntimeConfig={}){
   let controller:AbortController|null=null;
   const subscribers=new Set<()=>void>();
   const outcomeSubscribers=new Set<()=>void>();
+  const tickSubscribers=new Set<()=>void>();
   let lastOutcome:TargetRuntimeOutcome|null=null;
   function outcome(next:TargetRuntimeOutcome):void{
     if(disposed||lastOutcome===next)return;
@@ -228,7 +229,15 @@ export function createTargetClientRuntime(config:TargetClientRuntimeConfig={}){
     const want=win!==null&&active();
     if(want&&poll===null){
       poll=timers.setInterval(()=>{
-        if(active()){lastEventRefresh=now();void refresh();}
+        if(active()){
+          lastEventRefresh=now();
+          // R3-FE-4a: membership loss does not change the auth generation, so open
+          // details and lists re-read on this tick - only after the session was
+          // re-verified, only while visible and online, never while hidden.
+          void refresh().then(result=>{
+            if(result==="ok"&&active())for(const fn of [...tickSubscribers])guarded(fn);
+          });
+        }
         else syncPoll();
       },TARGET_POLL_MS);
     }else if(!want&&poll!==null){
@@ -302,6 +311,11 @@ export function createTargetClientRuntime(config:TargetClientRuntimeConfig={}){
       subscribers.add(fn);
       return ()=>{subscribers.delete(fn);};
     },
+    /** Fired once per passive poll after a successful re-verification (visible + online only). */
+    subscribeTick(fn:()=>void):()=>void{
+      tickSubscribers.add(fn);
+      return ()=>{tickSubscribers.delete(fn);};
+    },
     /** Last completed verification outcome (null before the first one). */
     lastOutcome():TargetRuntimeOutcome|null{return lastOutcome;},
     subscribeOutcome(fn:()=>void):()=>void{
@@ -335,6 +349,7 @@ export function createTargetClientRuntime(config:TargetClientRuntimeConfig={}){
       disposeAll();
       subscribers.clear();
       outcomeSubscribers.clear();
+      tickSubscribers.clear();
     },
   };
 }

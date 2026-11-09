@@ -4,7 +4,8 @@
  * allowed only in the "ready" state, i.e. for a server-confirmed generation. */
 import {useCallback,useEffect,useMemo,useRef,useState,useSyncExternalStore} from "react";
 import {useTargetGeneration,useTargetRuntime} from "./target-data-provider";
-import {createRefusalBudget,targetMyPlanGate,type TargetMyPlanGate} from "../../lib/target-my-plan-embed";
+import {targetMyPlanGate,type TargetMyPlanGate} from "../../lib/target-my-plan-embed";
+import {refusalBudgetFor} from "../../lib/target-refusal-budget";
 
 export function useTargetGate():{gate:TargetMyPlanGate;onRefusal:()=>void;retry:()=>void}{
   const runtime=useTargetRuntime();
@@ -13,7 +14,6 @@ export function useTargetGate():{gate:TargetMyPlanGate;onRefusal:()=>void;retry:
     ()=>(notify:()=>void)=>runtime?runtime.subscribeOutcome(notify):()=>{},[runtime]);
   const outcome=useSyncExternalStore(
     subscribeOutcome,()=>runtime?runtime.lastOutcome():null,()=>null);
-  const budget=useRef(createRefusalBudget());
   const [blocked,setBlocked]=useState(false);
   const ownBump=useRef(false);
   // A generation change we did not cause (sign-in, account switch) lifts the block.
@@ -23,12 +23,12 @@ export function useTargetGate():{gate:TargetMyPlanGate;onRefusal:()=>void;retry:
   },[generation]);
   const onRefusal=useCallback(()=>{
     if(!runtime)return;
-    if(!budget.current.admit()){setBlocked(true);return;}
+    if(!refusalBudgetFor(runtime).admit()){setBlocked(true);return;}
     ownBump.current=true;
     void runtime.reportRefusal("session_revoked");
   },[runtime]);
   const retry=useCallback(()=>{
-    budget.current.reset();
+    refusalBudgetFor(runtime).reset();
     setBlocked(false);
     void runtime?.refresh();
   },[runtime]);
