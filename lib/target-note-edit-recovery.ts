@@ -50,7 +50,11 @@ function current(runtime:NoteEditRuntime,generation:string):Bucket|null{
   // Fail closed: stale callers must not be able to recreate a disposed bucket
   // under their old generation after the runtime changed or signed out.
   if(!runtime.known()||generation===""||runtime.generation()!==generation){
-    if(old)purge(runtime,old);
+    // An old component may issue a stale-generation lookup after a new
+    // authorized bucket exists. Reject it without destroying NEW commands.
+    // Only a bucket that is itself revoked/stale may be purged here.
+    if(old&&(!runtime.known()||old.generation!==runtime.generation()))
+      purge(runtime,old);
     return null;
   }
   if(old&&!old.disposed&&old.generation===generation)return old;
