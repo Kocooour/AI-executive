@@ -19,7 +19,7 @@ import { bindSyntheticDerivativeRevision, recheckSyntheticDerivativeRevision } f
 import { bindSyntheticEpochFence, recheckSyntheticEpochFence, rehearseSyntheticFenceWindow, makeSyntheticEpochFenceFixture } from "../scripts/humanwiki-synthetic/epoch-fence-rehearsal.mjs";
 import { previewSyntheticHumanWikiAcceptance } from "../scripts/humanwiki-synthetic/acceptance-matrix.mjs";
 import { previewSyntheticClaimProposals } from "../scripts/humanwiki-synthetic/claim-proposal-preview.mjs";
-import { bindSyntheticProposalReview, rehearseSyntheticProposalReview } from "../scripts/humanwiki-synthetic/proposal-review-rehearsal.mjs";
+import { bindSyntheticProposalReview, rehearseSyntheticProposalReview, rehearseSyntheticProposalReviewRevisionTransition } from "../scripts/humanwiki-synthetic/proposal-review-rehearsal.mjs";
 import { ensurePrivateCheckpointDirectory, writeCheckpointAtomic } from "../scripts/humanwiki-synthetic/checkpoint.mjs";
 
 const fixture = name => JSON.parse(readFileSync(new URL(`../scripts/humanwiki-synthetic/fixtures/${name}.json`, import.meta.url), "utf8"));
@@ -2611,6 +2611,12 @@ test("HumanWiki proposal review CLI is status-only, deterministic, no-write and 
     assert.equal(result.defer, "would_defer_draft_without_review_outcome");
     assert.equal(result.shelve, "would_shelve_draft_without_review_outcome");
     assert.equal(result.stale, "would_block_stale_fictional_binding");
+    assert.equal(result.valid_fictional_a_to_b_source_revision, true);
+    assert.equal(result.a_to_b_revised_non_candidate_message, true);
+    assert.equal(result.a_to_b_original_candidate_preserved, true);
+    assert.equal(result.a_to_b_stale_a_binding, "would_block_stale_fictional_binding");
+    assert.equal(result.a_to_b_stale_intent_not_evaluated, true);
+    assert.equal(result.a_to_b_fresh_b_binding, "would_open_source_for_explicit_review_only");
     assert.equal(result.confirm_choice_rejected, true);
     assert.equal(result.real_entry_gates_unverified, 6);
     assert.equal(result.current_review, "proposed");
@@ -2635,4 +2641,92 @@ test("HumanWiki proposal review CLI is status-only, deterministic, no-write and 
     assert.equal(denied.stdout, "");
     assert.deepEqual(readdirSync(root), []);
   } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("HumanWiki proposal-review A to B uses independently valid fictional source revision", () => {
+  const bundles = [fixture("chatgpt"), fixture("claude")];
+  const original = JSON.stringify(bundles);
+  const boundA = bindSyntheticProposalReview(bundles);
+  const changed = structuredClone(bundles);
+  const candidateA = bundles[0].conversations[0].mapping.a.message;
+  const selectedId = previewSyntheticClaimProposals(bundles).draft_proposals[0]
+    .source_locator.message_id;
+  const unselected = changed[0].conversations[0].mapping.b.message;
+  assert.equal(selectedId, candidateA.id);
+  assert.notEqual(unselected.id, selectedId,
+    "the change must affect a different message in the same source");
+  unselected.content.parts[0] += " (independent fictional revision B)";
+  assert.notEqual(JSON.stringify(changed), JSON.stringify(bundles));
+  assert.deepEqual(changed[0].conversations[0].mapping.a.message, candidateA,
+    "candidate message and its locator remain unchanged in B");
+
+  // B is a structurally VALID synthetic source, not just a replacement digest.
+  const reviewB = previewSyntheticReviewQueue(changed);
+  assert.equal(reviewB.segments_total, 6);
+  assert.equal(reviewB.duplicate_groups, 0);
+  assert.equal(reviewB.claims_created, 0);
+  assert.equal(reviewB.review_outcomes_written, 0);
+  const candidateB = reviewB.entries.find(entry =>
+    entry.locator.source_id === "fixture-chatgpt-01" &&
+    entry.locator.message_id === selectedId && entry.locator.segment === 0);
+  assert.ok(candidateB);
+  assert.equal(candidateB.provenance, "owner_statement");
+  assert.equal(candidateB.speaker, "user");
+  assert.equal(candidateB.review, "proposed");
+  assert.equal(candidateB.sensitivity, "unclassified");
+  assert.equal(candidateB.scope, "owner_private_unassigned");
+  assert.equal(candidateB.eligible_for_automatic_confirmation, false);
+
+  const transition = rehearseSyntheticProposalReviewRevisionTransition(bundles);
+  assert.equal(transition.mode, "fictional_proposal_review_a_to_b_transition_no_write");
+  assert.equal(transition.valid_independent_revision_b, true);
+  assert.equal(transition.changed_source_is_candidate_source, true);
+  assert.equal(transition.revised_message_is_not_candidate, true);
+  assert.equal(transition.unchanged_candidate_preserved, true);
+  assert.equal(transition.revisions_have_distinct_toy_digests, true);
+  assert.equal(transition.stale_a_on_b, "would_block_stale_fictional_binding");
+  assert.equal(transition.stale_intent_not_evaluated, true);
+  assert.equal(transition.fresh_b_on_b, "would_open_source_for_explicit_review_only");
+  assert.equal(transition.original_a_on_a, "would_defer_draft_without_review_outcome");
+  assert.equal(transition.claims_created, 0);
+  assert.equal(transition.review_outcomes_written, 0);
+  assert.equal(transition.actual_human_review_completed, false);
+  assert.equal(transition.atomic_commit_performed, false);
+  assert.equal(transition.data_release_authorized, false);
+  assert.equal(transition.real_import_enabled, false);
+  assert.equal(transition.missing_real_gates.length, 6);
+  assert.equal(transition.current_review, "proposed");
+  assert.equal(transition.current_sensitivity, "unclassified");
+
+  // The controlled B is internal only: production/public helpers must still
+  // reject altered inputs even though the standalone toy parser considers B valid.
+  assert.throws(() => bindSyntheticProposalReview(changed),
+    /Synthetic (acceptance|claim proposal):/);
+  assert.throws(() => rehearseSyntheticProposalReview(changed, boundA),
+    /Synthetic (acceptance|claim proposal):/);
+  assert.equal(JSON.stringify(bundles), original);
+});
+
+test("HumanWiki internal A-to-B exercise is stable, read-only and discloses no tokens", () => {
+  const a = fixture("chatgpt"), b = fixture("claude");
+  const before = JSON.stringify([a, b]);
+  const first = rehearseSyntheticProposalReviewRevisionTransition([a, b]);
+  const reordered = rehearseSyntheticProposalReviewRevisionTransition([b, a]);
+  assert.deepEqual(reordered, first);
+  assert.equal(JSON.stringify([a, b]), before);
+  const serialized = JSON.stringify(first);
+  for (const forbidden of [
+    "fixture-chatgpt-01", "fixture-claude-01",
+    "toy-garden-topic-draft-01", "fictional_garden",
+    "silver spaceship", "blue gate",
+    '"source_locator":', '"toy_digest":',
+    "content_sha256", "m-01", "m-02",
+  ]) assert.ok(!serialized.includes(forbidden), forbidden);
+  assert.deepEqual(rehearseSyntheticProposalReviewRevisionTransition([a, b]), first);
+  const modified = structuredClone(a);
+  modified.conversations[0].mapping.b.message.content.parts[0] += " edited";
+  assert.throws(() =>
+    rehearseSyntheticProposalReviewRevisionTransition([modified, b]),
+    /Synthetic (acceptance|claim proposal):/,
+    "top-level input pinning must not be bypassed by the internal B branch");
 });
