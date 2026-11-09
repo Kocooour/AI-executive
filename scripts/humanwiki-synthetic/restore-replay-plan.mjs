@@ -80,6 +80,6 @@ export function previewSyntheticRestoreReplayPlan(state) {
     reason: null,
     pending_events_to_reconcile: event_obligations.length,
     event_obligations,
-    source_specific_work_disclosed: true,
+    source_specific_work_disclosed: event_obligations.length > 0,
   };
 }
