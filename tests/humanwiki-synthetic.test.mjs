@@ -1883,19 +1883,68 @@ test("fictional epoch fence binds a checked toy frame and never authorizes relea
   assert.ok(!JSON.stringify(checked).includes(token.revision.toy_graph_digest));
 });
 
-test("same fictional content after epoch increment rejects ABA at final check", () => {
-  const frame = makeSyntheticEpochFenceFixture(makeSyntheticRestoreFixture(), 6);
-  const token = bindSyntheticEpochFence(frame);
-  const aba = { ...frame, toy_epoch: 8 };
-  assert.equal(recheckSyntheticDerivativeRevision(aba.restore_state, aba.graph,
+test("actual fictional A to B to A data transition rejects ABA with advanced toy epoch", () => {
+  const originalA = makeSyntheticEpochFenceFixture(makeSyntheticRestoreFixture(), 6);
+  const initial = JSON.stringify(originalA);
+  const token = bindSyntheticEpochFence(originalA);
+  // B: update a legitimate restore cursor, not merely the toy epoch.
+  const intermediateB = structuredClone(originalA);
+  intermediateB.toy_epoch = 7;
+  intermediateB.restore_state.snapshot = {
+    applied_sequence: 1, applied_digest: originalA.restore_state.registry[0].digest,
+  };
+  assert.notDeepEqual(intermediateB.restore_state, originalA.restore_state);
+  assert.equal(previewSyntheticRestorePreflight(intermediateB.restore_state).preflight_status,
+    "requires_replay_and_revalidation", "B must independently pass the toy preflight");
+  assert.equal(recheckSyntheticEpochFence(intermediateB,
+    bindSyntheticEpochFence(intermediateB)).fence_status,
+  "toy_fence_matches_no_release");
+  assert.equal(recheckSyntheticEpochFence(intermediateB, token).fence_status,
+    "stale_toy_epoch_or_revision");
+
+  // A again: restore the EXACT original source/graph metadata, but at epoch 8.
+  const returnedA = structuredClone(originalA);
+  returnedA.toy_epoch = 8;
+  assert.deepEqual(returnedA.restore_state, originalA.restore_state);
+  assert.deepEqual(returnedA.graph, originalA.graph);
+  assert.ok(originalA.toy_epoch < intermediateB.toy_epoch &&
+    intermediateB.toy_epoch < returnedA.toy_epoch);
+  assert.equal(recheckSyntheticDerivativeRevision(returnedA.restore_state, returnedA.graph,
     token.revision).revision_status, "toy_revision_matches_no_release");
-  const final = recheckSyntheticEpochFence(aba, token);
-  assert.equal(final.fence_status, "stale_toy_epoch_or_revision");
-  const window = rehearseSyntheticFenceWindow(frame, aba, token);
+  assert.equal(recheckSyntheticEpochFence(returnedA, token).fence_status,
+    "stale_toy_epoch_or_revision");
+  const window = rehearseSyntheticFenceWindow(originalA, returnedA, token);
   assert.equal(window.window_status, "would_abort_at_final_check");
   assert.equal(window.first_check, "toy_fence_matches_no_release");
   assert.equal(window.final_check, "stale_toy_epoch_or_revision");
   assert.equal(window.data_release_authorized, false);
+  assert.equal(window.actual_compare_and_swap_performed, false);
+  assert.equal(JSON.stringify(originalA), initial);
+});
+
+test("actual fictional A to B to A is undetectable if the caller also rolls epoch back", () => {
+  const originalA = makeSyntheticEpochFenceFixture(makeSyntheticRestoreFixture(), 6);
+  const token = bindSyntheticEpochFence(originalA);
+  const intermediateB = structuredClone(originalA);
+  intermediateB.toy_epoch = 7;
+  intermediateB.restore_state.snapshot = {
+    applied_sequence: 1, applied_digest: originalA.restore_state.registry[0].digest,
+  };
+  assert.notDeepEqual(intermediateB.restore_state.snapshot, originalA.restore_state.snapshot);
+  assert.equal(recheckSyntheticEpochFence(intermediateB,
+    bindSyntheticEpochFence(intermediateB)).fence_status, "toy_fence_matches_no_release");
+  // Return both original content AND original counter: an unauthenticated
+  // caller-controlled epoch cannot prove B ever existed.
+  const rolledBackA = structuredClone(originalA);
+  assert.equal(rolledBackA.toy_epoch, 6);
+  assert.deepEqual(rolledBackA.restore_state, originalA.restore_state);
+  const report = rehearseSyntheticFenceWindow(originalA, rolledBackA, token);
+  assert.equal(report.window_status, "toy_checks_match_no_commit");
+  assert.equal(report.final_check, "toy_fence_matches_no_release");
+  assert.equal(report.real_monotonic_epoch_authenticated, false);
+  assert.equal(report.actual_compare_and_swap_performed, false);
+  assert.equal(report.data_release_authorized, false);
+  assert.equal(report.real_import_enabled, false);
 });
 
 test("toy fence recognizes stale graph or restore revision even without epoch advance", () => {
@@ -2013,7 +2062,10 @@ test("toy epoch CLI is deterministic, no-argument, no-write, and status-only", (
     assert.equal(utc.stdout, prague.stdout);
     const obj = JSON.parse(utc.stdout);
     assert.equal(obj.unchanged_check_window, "toy_checks_match_no_commit");
-    assert.equal(obj.same_data_changed_epoch_aba, "would_abort_at_final_check");
+    assert.equal(obj.aba_intermediate_b_validated, "toy_fence_matches_no_release");
+    assert.equal(obj.aba_original_binding_stale_at_b, "stale_toy_epoch_or_revision");
+    assert.equal(obj.aba_a_to_b_to_a_with_advanced_epoch, "would_abort_at_final_check");
+    assert.equal(obj.aba_epoch_rollback_undetectable_in_toy, "toy_checks_match_no_commit");
     assert.equal(obj.stale_first_check, "would_abort_at_first_check");
     assert.equal(obj.witness_missing_at_final_check, "would_abort_at_final_check");
     assert.equal(obj.changed_snapshot_at_final_check, "would_abort_at_final_check");
