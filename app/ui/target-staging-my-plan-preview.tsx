@@ -147,8 +147,14 @@ function PlanDay({label,tasks,date,canComplete,onComplete,canWhen,onWhen}:{
   </section>;
 }
 export function TargetStagingMyPlanPreview({
-  statusWriteEnabled=false,whenWriteEnabled=false,
-}:{statusWriteEnabled?:boolean;whenWriteEnabled?:boolean}){
+  statusWriteEnabled=false,whenWriteEnabled=false,embedded=false,onRefusal,
+}:{
+  statusWriteEnabled?:boolean;whenWriteEnabled?:boolean;
+  /** R3-FE-2: rendered inside the main app (its <main>/<h1> own the page). */
+  embedded?:boolean;
+  /** R3-FE-2: called when a read or write ended signed-out (401/403). */
+  onRefusal?:()=>void;
+}){
   const [date,setDate]=useState<string|null>(null);
   const [followToday,setFollowToday]=useState(true);
   const [areaFilter,setAreaFilter]=useState<MyPlanSliceFilter>("all");
@@ -173,6 +179,13 @@ export function TargetStagingMyPlanPreview({
   const requestSequence=useRef(0);
   const current=useRef<AbortController|null>(null);
   const moreInFlight=useRef(false);
+
+  const refusalRef=useRef(onRefusal);
+  refusalRef.current=onRefusal;
+  // Every 401/403 from a read or write ends in a signed-out read state.
+  useEffect(()=>{
+    if(state.status==="error"&&state.reason==="signed-out")refusalRef.current?.();
+  },[state]);
 
   // Compute the local calendar anchor only after hydration, never server TZ.
   useEffect(()=>{setDate(localMyPlanDate());return()=>{
@@ -801,8 +814,11 @@ export function TargetStagingMyPlanPreview({
     setState(combined?{status:"ready",page:combined}:
       {status:"error",reason:"invalid-response"});
   }
-  return <main className="stagingMyPlanPreview">
-    <header>
+  const Root=embedded?"section":"main";
+  return <Root className={embedded?"stagingMyPlanPreview stagingMyPlanEmbedded":"stagingMyPlanPreview"}
+    data-testid={embedded?"target-my-plan":undefined}
+    aria-label={embedded?"Serverový Můj plán":undefined}>
+    {!embedded&&<header>
       <p className="stagingMyPlanEyebrow">Lumi · izolovaný staging</p>
       <h1>Můj plán</h1>
       <p>{whenWriteEnabled
@@ -810,7 +826,7 @@ export function TargetStagingMyPlanPreview({
         :statusWriteEnabled
           ?"Izolovaný stagingový náhled s dokončením a bezpečným Undo. Bez kalendářových událostí, přesunu dne a offline fronty."
           :"Čtecí náhled cílového modelu. Jen úkoly; bez úprav, kalendářových událostí a offline ukládání."}</p>
-    </header>
+    </header>}
     <div className="stagingMyPlanToolbar">
       <label>Den
         <input type="date" disabled={anyPending} value={date??""}
@@ -968,5 +984,5 @@ export function TargetStagingMyPlanPreview({
           :"Náhled je pouze pro čtení: dokončení, přesun a Undo nejsou zapnuté."}
         {" "}Oprávnění se ověřují na serveru při každém načtení.</p>
     </>}
-  </main>;
+  </Root>;
 }

@@ -9,6 +9,7 @@ import { parseSyntheticBundle, advanceSyntheticImport } from "../scripts/humanwi
 import { inspectSyntheticImport } from "../scripts/humanwiki-synthetic/inspect.mjs";
 import { previewSyntheticOverlaps } from "../scripts/humanwiki-synthetic/overlap.mjs";
 import { previewSyntheticReviewQueue } from "../scripts/humanwiki-synthetic/review-preview.mjs";
+import { rehearseSyntheticTriage } from "../scripts/humanwiki-synthetic/triage-rehearsal.mjs";
 import { ensurePrivateCheckpointDirectory, writeCheckpointAtomic } from "../scripts/humanwiki-synthetic/checkpoint.mjs";
 
 const fixture = name => JSON.parse(readFileSync(new URL(`../scripts/humanwiki-synthetic/fixtures/${name}.json`, import.meta.url), "utf8"));
@@ -507,5 +508,142 @@ test("fixture review preview CLI is read-only, deterministic and denies file arg
     assert.equal(rejected.status, 2);
     assert.equal(rejected.stdout, "");
     assert.deepEqual(readdirSync(root), [], "review preview CLI must not write checkpoints");
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("triage rehearsal defaults to pending and never confirms fictional content", () => {
+  const bundles = [fixture("chatgpt"), fixture("claude")];
+  const report = rehearseSyntheticTriage(bundles);
+  assert.equal(report.synthetic_fixture_only, true);
+  assert.equal(report.workflow, "fictional_source_segment_triage_rehearsal");
+  assert.deepEqual(report.disposition_counts,
+    { pending: 6, consider: 0, skip: 0, defer: 0 });
+  assert.equal(report.triage_intents_applied, 0);
+  assert.deepEqual(report.rehearsal_events, []);
+  assert.ok(report.entries.every(entry =>
+    entry.triage_disposition === "pending" &&
+    entry.review === "proposed" && entry.sensitivity === "unclassified" &&
+    entry.eligible_for_automatic_confirmation === false));
+  assert.equal(report.claims_created, 0);
+  assert.equal(report.review_outcomes_written, 0);
+  assert.equal(report.real_import_enabled, false);
+  assert.deepEqual(rehearseSyntheticTriage([...bundles].reverse()), report);
+});
+
+test("explicit fictional triage intents affect only their own source locator", () => {
+  const bundles = [fixture("chatgpt"), fixture("claude")];
+  const queue = previewSyntheticReviewQueue(bundles);
+  const owner = queue.entries.find(entry => entry.provenance === "owner_statement");
+  const assistant = queue.entries.find(entry => entry.provenance === "assistant_generated");
+  const quote = queue.entries.find(entry => entry.provenance === "quoted_third_party");
+  const intents = [
+    { locator: owner.locator, choice: "consider" },
+    { locator: assistant.locator, choice: "skip" },
+    { locator: quote.locator, choice: "defer" },
+  ];
+  const snapshot = JSON.stringify({ bundles, intents });
+  const report = rehearseSyntheticTriage(bundles, intents);
+  assert.deepEqual(report.disposition_counts,
+    { pending: 3, consider: 1, skip: 1, defer: 1 });
+  assert.deepEqual(report.rehearsal_events.map(event => [event.step, event.intent]),
+    [[1, "consider"], [2, "skip"], [3, "defer"]]);
+  assert.ok(report.rehearsal_events.every(event =>
+    event.kind === "synthetic_rehearsal_only"));
+  for (const [source, expected] of [
+    [owner, "consider"], [assistant, "skip"], [quote, "defer"],
+  ]) {
+    const entry = report.entries.find(item =>
+      JSON.stringify(item.locator) === JSON.stringify(source.locator));
+    assert.equal(entry.triage_disposition, expected);
+    assert.equal(entry.provenance, source.provenance);
+    assert.equal(entry.review, "proposed");
+    assert.equal(entry.sensitivity, "unclassified");
+    assert.equal(entry.independent_evidence, false);
+    assert.equal(entry.eligible_for_automatic_confirmation, false);
+  }
+  assert.equal(report.claims_created, 0);
+  assert.equal(report.review_outcomes_written, 0);
+  assert.equal(JSON.stringify({ bundles, intents }), snapshot);
+  assert.deepEqual(rehearseSyntheticTriage(bundles, intents), report);
+});
+
+test("triage choices do not propagate across repeated text or speakers", () => {
+  const chatgpt = fixture("chatgpt");
+  const claude = fixture("claude");
+  claude.conversations[0].chat_messages[0].content[0].text =
+    "I am planning a fictional garden.\nAda said the blue gate is open.";
+  const bundles = [chatgpt, claude];
+  const queue = previewSyntheticReviewQueue(bundles);
+  const quoted = queue.entries.find(entry => entry.provenance === "quoted_third_party");
+  const associated = queue.entries.find(entry =>
+    entry.duplicate_group_id === quoted.duplicate_group_id &&
+    JSON.stringify(entry.locator) !== JSON.stringify(quoted.locator));
+  assert.ok(associated);
+  assert.equal(associated.provenance, "owner_statement");
+  const report = rehearseSyntheticTriage(bundles, [
+    { locator: quoted.locator, choice: "skip" },
+  ]);
+  const matching = report.entries.filter(entry =>
+    entry.duplicate_group_id === quoted.duplicate_group_id);
+  assert.equal(matching.length, 2);
+  assert.deepEqual(matching.map(entry => [entry.provenance, entry.triage_disposition]),
+    [["quoted_third_party", "skip"], ["owner_statement", "pending"]]);
+  assert.ok(matching.every(entry =>
+    entry.independent_evidence === false &&
+    entry.review === "proposed" && entry.cross_source_repeat === true));
+});
+
+test("triage rehearsal fails closed on duplicate unknown and malformed decisions", () => {
+  const bundles = [fixture("chatgpt"), fixture("claude")];
+  const locator = previewSyntheticReviewQueue(bundles).entries[0].locator;
+  const valid = { locator, choice: "consider" };
+  for (const invalid of [
+    null, false, [], "consider", { locator },
+    { locator, choice: "confirm" },
+    { locator, choice: "consider", comment: "untrusted text" },
+    { locator: { ...locator, segment: "0" }, choice: "consider" },
+    { locator: { ...locator, segment: -1 }, choice: "consider" },
+    { locator: { ...locator, message_id: "not-present" }, choice: "consider" },
+    { locator: { ...locator, secret: "x" }, choice: "consider" },
+  ]) {
+    assert.throws(() => rehearseSyntheticTriage(bundles, [invalid]),
+      /Synthetic triage:/);
+  }
+  for (const intents of [null, 0, {}, "consider", [valid, valid]]) {
+    assert.throws(() => rehearseSyntheticTriage(bundles, intents),
+      /Synthetic triage:/);
+  }
+  assert.throws(() => rehearseSyntheticTriage(
+    [bundles[0], { ...bundles[1], synthetic_fixture: false }], [valid]),
+    /unsupported or non-synthetic/);
+  assert.throws(() => rehearseSyntheticTriage(
+    bundles, Array.from({ length: 7 }, () => valid)),
+    /invalid intent list/);
+});
+
+test("triage rehearsal CLI is read-only, fixture-only and timezone-stable", () => {
+  const cli = fileURLToPath(new URL("../scripts/humanwiki-synthetic/triage-rehearsal-cli.mjs", import.meta.url));
+  const root = mkdtempSync(path.join(os.tmpdir(), "lumi-humanwiki-triage-"));
+  const invoke = (args, zone) => spawnSync(process.execPath, [cli, ...args], {
+    encoding: "utf8", env: { ...process.env, TMPDIR: root, TZ: zone },
+  });
+  try {
+    const utc = invoke([], "UTC");
+    const prague = invoke([], "Europe/Prague");
+    assert.equal(utc.status, 0, utc.stderr);
+    assert.equal(prague.status, 0, prague.stderr);
+    assert.equal(utc.stdout, prague.stdout);
+    const report = JSON.parse(utc.stdout);
+    assert.equal(report.disposition_counts.pending, 6);
+    assert.equal(report.triage_intents_applied, 0);
+    assert.equal(report.claims_created, 0);
+    assert.equal(report.review_outcomes_written, 0);
+    for (const content of ["fictional garden", "silver spaceship", "blue gate is open", "content_sha256"]) {
+      assert.ok(!utc.stdout.includes(content), content);
+    }
+    const denied = invoke(["../../private-export.json"], "UTC");
+    assert.equal(denied.status, 2);
+    assert.equal(denied.stdout, "");
+    assert.deepEqual(readdirSync(root), [], "no checkpoint or source file may be written");
   } finally { rmSync(root, { recursive: true, force: true }); }
 });

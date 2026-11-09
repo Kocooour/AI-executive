@@ -7,7 +7,7 @@ import type { LumiApp } from "../use-lumi-app";
 import { ProjectIcon, ViewIcon } from "./project-icon";
 import { WorkspaceTile, workspaceTone } from "../workspace-appearance";
 
-export function Sidebar({ app }: { app: LumiApp }) {
+export function Sidebar({ app, targetPlan = false }: { app: LumiApp; targetPlan?: boolean }) {
   const {
     setSettingsSection,
     setInboxTab,
@@ -151,9 +151,11 @@ export function Sidebar({ app }: { app: LumiApp }) {
             <button
               className={`${active ? "active" : ""} ${dragTarget === `section:${x}` ? "dropActive" : ""}`.trim()}
               aria-current={active ? "page" : undefined}
-              aria-label={planPreview ? (language === "cs"
-                ? "Můj plán – vývojový náhled nad stávajícími daty"
-                : "My Plan – development preview with legacy data") : undefined}
+              aria-label={planPreview ? (targetPlan
+                ? (language === "cs" ? "Můj plán – serverový plán ze stagingu" : "My Plan – server plan from staging")
+                : (language === "cs"
+                  ? "Můj plán – vývojový náhled nad stávajícími daty"
+                  : "My Plan – development preview with legacy data")) : undefined}
               data-nav-view={x}
               data-nav-tab={planPreview ? "my-plan-preview" : undefined}
               data-drop-section={draggable ? x : undefined}
