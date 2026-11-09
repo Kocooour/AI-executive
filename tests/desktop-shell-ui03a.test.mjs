@@ -31,7 +31,7 @@ test("UI-03a: Cmd/Ctrl+Shift+Period opens desktop capture without hijacking text
 
 test("UI-03a: desktop FAB is preview-only, accessible and uses existing private-first capture", () => {
   const fab = read("../app/ui/views/desktop-capture-fab.tsx");
-  const page = read("../app/page.tsx");
+  const page = read("../app/ui/lumi-app-root.tsx");
   assert.match(fab, /if \(!mobileDesignV1Preview\) return null/);
   assert.match(fab, /window\.matchMedia\("\(min-width: 701px\)"\)/);
   assert.match(fab, /state\.capture \|\| state\.assistantOpen \|\| state\.moreOpen/);

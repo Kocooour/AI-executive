@@ -31,7 +31,7 @@ test("UI-02c: focus reveal respects sticky toolbar and bottom navigation", () =>
 test("UI-02c: preview-only More selection and modal cleanup use the same decision", () => {
   const app = read("../app/ui/use-lumi-app.tsx");
   const nav = read("../app/ui/views/mobile-nav.tsx");
-  const page = read("../app/page.tsx");
+  const page = read("../app/ui/lumi-app-root.tsx");
   assert.match(app, /function markMobileMoreNavigation\(destination: string\)/);
   assert.match(app, /if \(mobileDesignV1Preview\) moreFocusDestinationRef\.current = destination/);
   assert.match(app, /mobileMoreExitFocus\(destination, currentViewForMoreFocusRef\.current,/);

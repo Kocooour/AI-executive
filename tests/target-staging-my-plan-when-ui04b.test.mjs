@@ -236,7 +236,7 @@ test("UI-04b: confirmed personal day survives failed list read and manual GET-on
 
 test("UI-04b: production UI untouched and personal when remains actor-only",()=>{
   const ui=source("app/ui/target-staging-my-plan-preview.tsx");
-  const prod=source("app/page.tsx");
+  const prod=source("app/ui/lumi-app-root.tsx");
   assert.doesNotMatch(prod,/target-staging-my-plan-when-client|whenWriteEnabled/);
   assert.doesNotMatch(ui,/localStorage|sessionStorage|indexedDB|serviceWorker/);
   assert.doesNotMatch(ui,/method:\s*["'](?:PATCH|PUT|DELETE)/);

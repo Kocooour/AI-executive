@@ -117,7 +117,7 @@ test("UI-04c: filters and timeline suppression do not alter membership or duplic
 });
 
 test("UI-04c: My Plan preview stays opt-in and preserves legacy Today/other view branches", () => {
-  const page = readFileSync(new URL("../app/page.tsx", import.meta.url), "utf8");
+  const page = readFileSync(new URL("../app/ui/lumi-app-root.tsx", import.meta.url), "utf8");
   const list = readFileSync(new URL("../app/ui/views/entity-list.tsx", import.meta.url), "utf8");
   const today = readFileSync(new URL("../app/ui/views/today-view.tsx", import.meta.url), "utf8");
   const timeline = readFileSync(new URL("../app/ui/views/day-timeline.tsx", import.meta.url), "utf8");

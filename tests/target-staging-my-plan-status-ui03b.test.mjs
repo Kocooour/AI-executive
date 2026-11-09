@@ -43,7 +43,7 @@ test("Next server route gates all read access and only passes gated write UI pro
   assert.match(page,/statusWriteEnabled=\{statusWriteEnabled\}/);
   assert.doesNotMatch(gate,/NEXT_PUBLIC_/);
   assert.doesNotMatch(page,/NEXT_PUBLIC_/);
-  const prod=source("app/page.tsx");
+  const prod=source("app/ui/lumi-app-root.tsx");
   assert.doesNotMatch(prod,/TargetStagingMyPlanPreview|target-staging-my-plan-status-client/);
 });
 

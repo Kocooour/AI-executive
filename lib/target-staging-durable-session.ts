@@ -281,6 +281,47 @@ export function verifyDurableTargetStagingSessionLiveCoded(
 }
 
 /**
+ * R3-FE-1: the identity's CURRENT revocation epoch, read live (same pinned
+ * transaction as every other live check). A durable session must itself be live;
+ * the owner path reads the configured owner user's epoch. The value only feeds
+ * an HMAC-derived opaque client generation and is never returned verbatim.
+ */
+export type TargetStagingLiveAuthEpoch =
+  | { ok: true; epoch: number }
+  | { ok: false; reason: "invalid"; code: TargetStagingSessionDenial | "unauthorized" }
+  | { ok: false; reason: "unavailable" };
+export function readTargetStagingAuthEpochLive(
+  store: TargetStagingReadStore,
+  subject: { readonly tokenHash: string } | { readonly ownerUserId: string },
+  nowMs = Date.now(),
+): TargetStagingLiveAuthEpoch {
+  const unavailable: TargetStagingLiveAuthEpoch = { ok: false, reason: "unavailable" };
+  if ("tokenHash" in subject && !isTargetStagingSessionTokenHash(subject.tokenHash)) {
+    return { ok: false, reason: "invalid", code: "session_revoked" };
+  }
+  if ("ownerUserId" in subject && !USER_ID.test(subject.ownerUserId)) return unavailable;
+  return withLiveStagingReadTransaction<TargetStagingLiveAuthEpoch>(store, db => {
+    let userId: string;
+    if ("tokenHash" in subject) {
+      const live = lookupLiveTargetStagingSession(db, subject.tokenHash, nowMs);
+      if (!live) {
+        return { ok: false, reason: "invalid",
+          code: classifyTargetStagingSessionDenial(db, subject.tokenHash, nowMs) };
+      }
+      userId = live.userId;
+    } else userId = subject.ownerUserId;
+    const row = db.prepare("SELECT revocation_epoch AS epoch FROM identities WHERE id = ?")
+      .get(userId) as { epoch: number } | undefined;
+    if (!row) {
+      return "tokenHash" in subject ? { ok: false, reason: "invalid", code: "session_revoked" }
+        : { ok: false, reason: "invalid", code: "unauthorized" };
+    }
+    return Number.isSafeInteger(row.epoch) && row.epoch >= 0
+      ? { ok: true, epoch: row.epoch } : unavailable;
+  }, unavailable);
+}
+
+/**
  * One short read transaction on the LIVE staging store, opened exclusively via
  * the pinned read-only helper (never by path): directory fd, uid/mode, fd-relative
  * open, dev/ino/nlink identity re-proven after the first statement and after the

@@ -132,6 +132,18 @@ on:
       - "tests/target-staging-temporal-due-on-http.test.mjs"
       - "tests/target-r2d-security-matrix.test.mjs"
       - "tests/target-r2d-security-matrix-mutation-guards.test.mjs"
+      - "app/api/target-staging/session/**"
+      - "lib/target-staging-session-generation.ts"
+      - "lib/target-client-runtime.ts"
+      - "lib/target-client-errors.ts"
+      - "app/page.tsx"
+      - "app/ui/target-data-provider.tsx"
+      - "app/ui/target-data-status.tsx"
+      - "app/ui/lumi-app-root.tsx"
+      - "tests/target-staging-session-generation-http.test.mjs"
+      - "tests/target-client-runtime.test.mjs"
+      - "tests/target-client-errors.test.mjs"
+      - "tests/target-client-runtime-wiring.test.mjs"
   workflow_dispatch:
 
 permissions:
@@ -158,4 +170,4 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - name: Targeted ACL and project pagination tests
-        run: node --experimental-loader ./tests/ts-loader.mjs --test tests/target-staging-project-tasks.test.mjs tests/target-staging-project-index.test.mjs tests/target-staging-project-relations-http.test.mjs tests/target-staging-parent-backlinks-http.test.mjs tests/target-task-temporal-schema.test.mjs tests/target-task-temporal-read.test.mjs tests/target-task-due-window-read.test.mjs tests/target-task-personal-when-schema.test.mjs tests/target-personal-when-read.test.mjs tests/target-my-plan-day-task-read.test.mjs tests/target-global-task-read.test.mjs tests/target-global-project-read.test.mjs tests/target-global-note-read.test.mjs tests/target-global-combined-read.test.mjs tests/target-staging-global-task-http.test.mjs tests/target-staging-global-project-http.test.mjs tests/target-staging-global-note-http.test.mjs tests/target-staging-global-combined-http.test.mjs tests/target-staging-my-plan-day-http.test.mjs tests/target-staging-attention-http.test.mjs tests/target-staging-attention-command-http.test.mjs tests/target-staging-notifications-http.test.mjs tests/target-personal-when-writer.test.mjs tests/target-staging-personal-when-command-http.test.mjs tests/target-staging-personal-when-http.test.mjs tests/target-staging-temporal-due-window-http.test.mjs tests/target-staging-temporal-http.test.mjs tests/target-task-temporal-status-writer.test.mjs tests/target-task-temporal-due-on-writer.test.mjs tests/target-staging-temporal-status-http.test.mjs tests/target-staging-temporal-due-on-http.test.mjs tests/target-r2d-security-matrix.test.mjs tests/target-r2d-security-matrix-mutation-guards.test.mjs
+        run: node --experimental-loader ./tests/ts-loader.mjs --test tests/target-staging-project-tasks.test.mjs tests/target-staging-project-index.test.mjs tests/target-staging-project-relations-http.test.mjs tests/target-staging-parent-backlinks-http.test.mjs tests/target-task-temporal-schema.test.mjs tests/target-task-temporal-read.test.mjs tests/target-task-due-window-read.test.mjs tests/target-task-personal-when-schema.test.mjs tests/target-personal-when-read.test.mjs tests/target-my-plan-day-task-read.test.mjs tests/target-global-task-read.test.mjs tests/target-global-project-read.test.mjs tests/target-global-note-read.test.mjs tests/target-global-combined-read.test.mjs tests/target-staging-global-task-http.test.mjs tests/target-staging-global-project-http.test.mjs tests/target-staging-global-note-http.test.mjs tests/target-staging-global-combined-http.test.mjs tests/target-staging-my-plan-day-http.test.mjs tests/target-staging-attention-http.test.mjs tests/target-staging-attention-command-http.test.mjs tests/target-staging-notifications-http.test.mjs tests/target-personal-when-writer.test.mjs tests/target-staging-personal-when-command-http.test.mjs tests/target-staging-personal-when-http.test.mjs tests/target-staging-temporal-due-window-http.test.mjs tests/target-staging-temporal-http.test.mjs tests/target-task-temporal-status-writer.test.mjs tests/target-task-temporal-due-on-writer.test.mjs tests/target-staging-temporal-status-http.test.mjs tests/target-staging-temporal-due-on-http.test.mjs tests/target-r2d-security-matrix.test.mjs tests/target-r2d-security-matrix-mutation-guards.test.mjs tests/target-staging-session-generation-http.test.mjs tests/target-client-runtime.test.mjs tests/target-client-errors.test.mjs tests/target-client-runtime-wiring.test.mjs
