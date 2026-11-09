@@ -50,7 +50,7 @@ const noWrites = Object.freeze({
 const poison = new Proxy([{}], {
   get() { throw new Error("blocked fictional review intent was examined"); },
 });
-function consider(lifecycle, candidate, bundles, binding, blockedIntent) {
+function consider(lifecycle, candidate, bundles, binding, intents) {
   const source = lifecycle.source_states.find(x =>
     x.source_id === candidate.source_locator.source_id);
   if (!source) fail();
@@ -61,21 +61,24 @@ function consider(lifecycle, candidate, bundles, binding, blockedIntent) {
     if (!Object.hasOwn(holds, source.action) ||
         source.would_allow_new_source_reads !== false ||
         source.would_invalidate_source_derivatives !== true) fail();
-    // No access to blockedIntent, and no real reviewer/event/witness.
-    void blockedIntent;
+    // Return before observing intents: even a throwing proxy is untouched.
+    // No real reviewer/event/witness, no draft mutation or write.
     return {
       candidate_review_status: holds[source.action],
       review_intent_evaluated: false,
+      review_intent_status: "not_evaluated",
       binding_still_matches_toy_content: true,
       candidate_pending_visible: false,
       new_source_reads_allowed_by_policy: false,
     };
   }
-  const simulated = rehearseSyntheticProposalReview(bundles, binding, [{
-    draft_id: candidate.draft_id,
-    choice: "inspect",
-  }]);
-  if (simulated.review_gate_status !== "would_open_source_for_explicit_review_only" ||
+  // The SAME caller-supplied intent is evaluated by the existing strict
+  // fictional review validator, only AFTER this candidate's source gate.
+  const simulated = rehearseSyntheticProposalReview(bundles, binding, intents);
+  if (!["would_open_source_for_explicit_review_only",
+        "would_defer_draft_without_review_outcome",
+        "would_shelve_draft_without_review_outcome"].includes(simulated.review_gate_status) ||
+      !["inspect", "defer", "shelve"].includes(simulated.review_intent) ||
       simulated.current_review !== "proposed" ||
       simulated.claim_confirmed !== false ||
       simulated.review_outcomes_written !== 0 ||
@@ -85,18 +88,16 @@ function consider(lifecycle, candidate, bundles, binding, blockedIntent) {
       ? "would_offer_existing_proposal_for_explicit_review_only"
       : "would_keep_existing_proposal_pending_without_source_refresh",
     review_intent_evaluated: true,
+    review_intent_status: simulated.review_gate_status,
     binding_still_matches_toy_content: true,
     candidate_pending_visible: true,
     new_source_reads_allowed_by_policy: source.would_allow_new_source_reads,
   };
 }
 
-/**
- * Static experiment on exactly two *unchanged, pinned, fictional* exports.
- * Only scenarios inside this module may be run; no external content, source
- * paths, user actions, consent changes, real review or persistence is accepted.
- */
-export function previewSyntheticProposalLifecycleHolds(bundles) {
+// Build a fixed-fixture context before any lifecycle decision can inspect
+// an intent. This is NOT a consent/ACL check or an authenticated snapshot.
+function prepareFictionalContext(bundles) {
   const proposals = previewSyntheticClaimProposals(bundles);
   if (proposals.draft_proposals_count !== 1 ||
       proposals.withheld_segments_count !== 5 ||
@@ -118,8 +119,13 @@ export function previewSyntheticProposalLifecycleHolds(bundles) {
   const others = initialLifecycle.source_states.filter(state =>
     state.source_id !== candidate.source_locator.source_id);
   if (others.length !== 1 || initialLifecycle.segments_total !== 6) fail();
+  return { bundles, candidate, binding, initialLifecycle, others };
+}
 
-  const scenarios = cases.map(({ id, action, target }) => {
+// Shared, fixed-policy gate. The given intent is forwarded only when its
+// candidate source still allows pending review. No generated replacement.
+function evaluateFictionalScenario(context, { id, action, target }, intents) {
+  const { bundles, candidate, binding, others } = context;
     const sourceId = target === "candidate"
       ? candidate.source_locator.source_id : others[0].source_id;
     const lifecycle = previewSyntheticSourceLifecycle(
@@ -138,7 +144,7 @@ export function previewSyntheticProposalLifecycleHolds(bundles) {
         lifecycle.durable_lifecycle_events_written !== 0 ||
         lifecycle.tombstones_written !== 0) fail();
 
-    const checked = consider(lifecycle, candidate, bundles, binding, poison);
+    const checked = consider(lifecycle, candidate, bundles, binding, intents);
     // Only this candidate's source policy controls its pending-review gate;
     // an unrelated source's hypothetical disconnect must not hide it.
     if (source.would_allow_pending_review !== checked.candidate_pending_visible ||
@@ -168,6 +174,34 @@ export function previewSyntheticProposalLifecycleHolds(bundles) {
       visible_segments_in_toy_policy: lifecycle.visible_segments,
       suppressed_segments_in_toy_policy: lifecycle.suppressed_segments,
     };
+}
+
+/**
+ * Fixed-scenario synthetic-only intent evaluator for negative gate-order
+ * tests. This is not an application API. It accepts ONLY the exact two
+ * pinned fictional source fixtures and the six hardcoded scenario names.
+ * Invalid intents must fail on allowed sources; blocked sources must not
+ * even touch them.
+ */
+export function rehearseSyntheticProposalLifecycleIntent(bundles, scenarioId, intents) {
+  const scenario = cases.find(item => item.id === scenarioId);
+  if (!scenario) fail();
+  const checked = evaluateFictionalScenario(prepareFictionalContext(bundles), scenario, intents);
+  return { ...noWrites, ...checked, real_entry_gates_unverified: 6 };
+}
+
+/**
+ * Static matrix on exactly two *unchanged, pinned, fictional* exports.
+ * No external content, arbitrary scenarios, real review or persistence.
+ */
+export function previewSyntheticProposalLifecycleHolds(bundles) {
+  const context = prepareFictionalContext(bundles);
+  const { candidate, initialLifecycle } = context;
+  const scenarios = cases.map(scenario => {
+    const intents = Object.hasOwn(holds, scenario.action ?? "")
+      ? poison
+      : [{ draft_id: candidate.draft_id, choice: "inspect" }];
+    return evaluateFictionalScenario(context, scenario, intents);
   });
   if (scenarios.length !== 6 ||
       scenarios.filter(x => !x.candidate_pending_visible).length !== 3 ||
@@ -183,7 +217,7 @@ export function previewSyntheticProposalLifecycleHolds(bundles) {
     source_segments_checked: initialLifecycle.segments_total,
     scenario_count: scenarios.length,
     scenarios,
-    real_entry_gates_unverified: proposals.h1_real_entry_gates.length,
+    real_entry_gates_unverified: 6,
     source_text_disclosed: false,
     source_locators_disclosed: false,
     proposal_identifiers_disclosed: false,
