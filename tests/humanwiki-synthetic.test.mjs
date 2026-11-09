@@ -2095,6 +2095,10 @@ test("HumanWiki acceptance composes all seven fictional stages without real impo
   assert.deepEqual(report.provenance_counts, {
     owner_statement: 2, assistant_generated: 2, quoted_third_party: 2, unknown: 0,
   });
+  assert.deepEqual(report.synthetic_negative_cases, {
+    cross_source_duplicate_groups_exercised: 3,
+    stale_source_decision_rejected: true,
+  });
   assert.equal(report.synthetic_checks.length, 7);
   assert.ok(report.synthetic_checks.every(x =>
     x.result === "toy_passed_real_release_blocked"));
@@ -2209,4 +2213,71 @@ test("HumanWiki acceptance CLI accepts no arguments, is deterministic and writes
     assert.equal(refused.stdout, "");
     assert.deepEqual(readdirSync(root), []);
   } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("HumanWiki matrix checks nonempty conflicting speaker/quote duplicates without approving claims", () => {
+  const bundles = [fixture("chatgpt"), fixture("claude")];
+  const before = JSON.stringify(bundles);
+  assert.equal(previewSyntheticOverlaps(bundles).duplicate_groups, 0,
+    "the pinned fixtures alone never exercise a duplicate");
+  const report = previewSyntheticHumanWikiAcceptance(bundles);
+  assert.equal(report.synthetic_negative_cases.cross_source_duplicate_groups_exercised, 3);
+
+  // Reproduce the INTERNAL copied stress case without weakening input pinning.
+  const copy = structuredClone(bundles);
+  copy[1].conversations[0].chat_messages[0].content[0].text =
+    "I am planning a fictional garden.\nAda said the blue gate is open.";
+  copy[1].conversations[0].chat_messages[1].content[0].text =
+    "The user owns a silver spaceship.";
+  const overlap = previewSyntheticOverlaps(copy);
+  const queue = previewSyntheticReviewQueue(copy);
+  assert.equal(overlap.duplicate_groups, 3);
+  assert.equal(overlap.cross_source_duplicate_groups, 3);
+  assert.equal(overlap.repeated_segment_occurrences, 6);
+  assert.ok(overlap.groups.every(group =>
+    group.independent_evidence === false && group.review === "proposed" &&
+    group.members.length === 2));
+  assert.ok(overlap.groups.some(group =>
+    group.members.some(member => member.provenance === "quoted_third_party") &&
+    group.members.some(member => member.provenance === "owner_statement")));
+  assert.ok(queue.entries.every(entry =>
+    entry.review === "proposed" &&
+    entry.sensitivity === "unclassified" &&
+    entry.duplicate_group_id !== null &&
+    entry.reason_codes.includes("repeated_text_not_independent_evidence") &&
+    entry.eligible_for_automatic_confirmation === false &&
+    entry.independent_evidence === false));
+  assert.equal(queue.claims_created, 0);
+  assert.equal(queue.review_outcomes_written, 0);
+  assert.equal(JSON.stringify(bundles), before, "acceptance cannot mutate pinned sources");
+  assert.throws(() => previewSyntheticHumanWikiAcceptance(copy),
+    /Synthetic acceptance: fixture contract not satisfied/,
+    "mutated toy fixtures remain forbidden as external matrix inputs");
+});
+
+test("HumanWiki matrix verifies stale-source triage after unrelated fictional message edit", () => {
+  const bundles = [fixture("chatgpt"), fixture("claude")];
+  const before = JSON.stringify(bundles);
+  const owner = previewSyntheticReviewQueue(bundles).entries.find(entry =>
+    entry.locator.source_id === "fixture-chatgpt-01" &&
+    entry.provenance === "owner_statement");
+  assert.ok(owner);
+  const bound = bindSyntheticTriageIntents(bundles, [
+    { locator: owner.locator, choice: "consider" },
+  ]);
+  const changed = structuredClone(bundles);
+  const other = changed[0].conversations[0].mapping.b.message;
+  assert.notEqual(other.id, owner.locator.message_id,
+    "edit a different message in the same bound source");
+  other.content.parts[0] += " (synthetic post-decision revision)";
+  assert.throws(() => rehearseVersionBoundSyntheticTriage(changed, bound),
+    /stale or missing synthetic source version/);
+  assert.equal(rehearseVersionBoundSyntheticTriage(bundles, bound).claims_created, 0);
+  assert.equal(rehearseVersionBoundSyntheticTriage(bundles, bound).review_outcomes_written, 0);
+  const report = previewSyntheticHumanWikiAcceptance(bundles);
+  assert.equal(report.synthetic_negative_cases.stale_source_decision_rejected, true);
+  assert.equal(report.data_release_authorized, false);
+  assert.equal(report.actual_imports_performed, 0);
+  assert.equal(report.review_outcomes_written, 0);
+  assert.equal(JSON.stringify(bundles), before);
 });
