@@ -1,6 +1,6 @@
 "use client";
 
-/** UI-09d: authorized task body stays in memory only for this visible actor.
+/** UI-09f: authorized task detail stays in memory only for this visible actor.
  * No prefetch, writes, reload, persistence or production navigation. */
 import {useEffect,useRef,useState} from "react";
 import {

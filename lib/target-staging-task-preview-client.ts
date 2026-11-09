@@ -1,4 +1,4 @@
-/** UI-09d: explicit, no-store read of exactly one server-authorized staging task.
+/** UI-09f: explicit, no-store read of exactly one server-authorized staging task.
  * The server remains sole authority; never treat a parsed response as permission. */
 export type TaskPreview={
   id:string;title:string;projectId:string|null;areaId:string;

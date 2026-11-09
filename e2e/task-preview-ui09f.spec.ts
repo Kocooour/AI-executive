@@ -41,3 +41,30 @@ for(const event of ['blur','offline','pagehide'])test(`${event} aborts and ignor
   await expect(page.locator('.stagingTaskContent')).toHaveCount(0);
   await expect(page.getByRole('button',{name:'Načíst úkol'})).toBeEnabled();
 });
+
+for(const event of ['focus','hidden','pageshow','blur','offline','pagehide'])test(`visible content is removed on ${event} and requires an explicit new read`,async({page})=>{
+  let calls=0;
+  await page.route(endpoint,route=>{calls++;return fulfill(route,dto);});
+  await page.goto('/target-staging/tasks/task-1/preview');
+  const button=page.getByRole('button',{name:'Načíst úkol'});
+  await button.click();
+  await expect(page.locator('.stagingTaskContent')).toBeVisible();
+  expect(calls).toBe(1);
+  await page.evaluate(kind=>{
+    if(kind==='hidden'){
+      const previous=Object.getOwnPropertyDescriptor(document,'visibilityState');
+      Object.defineProperty(document,'visibilityState',{configurable:true,value:'hidden'});
+      document.dispatchEvent(new Event('visibilitychange'));
+      if(previous)Object.defineProperty(document,'visibilityState',previous);
+      else Reflect.deleteProperty(document,'visibilityState');
+    }else if(kind==='pageshow')window.dispatchEvent(new PageTransitionEvent('pageshow',{persisted:true}));
+    else window.dispatchEvent(new Event(kind));
+  },event);
+  await expect(page.locator('.stagingTaskContent')).toHaveCount(0);
+  await expect(page.locator('.stagingTaskError')).toBeVisible();
+  await page.waitForTimeout(200);
+  expect(calls).toBe(1);
+  await button.click();
+  await expect(page.locator('.stagingTaskContent')).toBeVisible();
+  expect(calls).toBe(2);
+});

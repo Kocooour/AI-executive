@@ -13,6 +13,17 @@ test('task DTO strictly validates ID, fields, assignment and status',()=>{
   assert.deepEqual(parseTaskPreview({task:shared},'t-1'),shared);
   for(const item of [{...task,id:'other'},{...task,actor:'secret'}, {...task,assignedToMe:true}, {...shared,assignedToMe:'yes'}, {...task,status:'completed'}, {...task,title:'\ud800'}, {...task,dueOn:'bad'}]) assert.equal(parseTaskPreview({task:item},'t-1'),null);
 });
+test('preview rejects oversized or malformed title and transport IDs at its safety limits',()=>{
+  const parse=changes=>parseTaskPreview({task:{...task,...changes}},'t-1');
+  assert.ok(parse({title:'x'.repeat(4096)}));
+  assert.equal(parse({title:'x'.repeat(4097)}),null);
+  assert.equal(parse({title:'\ud800'}),null);
+  for(const field of ['areaId','projectId']){
+    assert.ok(parse({[field]:'č'.repeat(2048)})); // exactly 4096 UTF-8 bytes
+    assert.equal(parse({[field]:'č'.repeat(2049)}),null);
+    assert.equal(parse({[field]:'\ud800'}),null);
+  }
+});
 test('explicit read is no-store and fails closed on denied, malformed and aborted responses',async()=>{
   let calls=0;
   const ok=await readStagingTaskPreview('t-1',new AbortController().signal,async (url,opts)=>{calls++;assert.equal(url,'/api/target-staging/task-temporal/detail?taskId=t-1');assert.equal(opts.cache,'no-store');assert.equal(opts.redirect,'error');return response({task});});
