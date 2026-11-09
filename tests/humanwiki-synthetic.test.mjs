@@ -12,6 +12,7 @@ import { previewSyntheticReviewQueue } from "../scripts/humanwiki-synthetic/revi
 import { rehearseSyntheticTriage } from "../scripts/humanwiki-synthetic/triage-rehearsal.mjs";
 import { bindSyntheticTriageIntents, rehearseVersionBoundSyntheticTriage } from "../scripts/humanwiki-synthetic/version-bound-triage.mjs";
 import { previewSyntheticSourceLifecycle } from "../scripts/humanwiki-synthetic/lifecycle-preview.mjs";
+import { makeSyntheticRestoreFixture, previewSyntheticRestorePreflight } from "../scripts/humanwiki-synthetic/restore-preflight.mjs";
 import { ensurePrivateCheckpointDirectory, writeCheckpointAtomic } from "../scripts/humanwiki-synthetic/checkpoint.mjs";
 
 const fixture = name => JSON.parse(readFileSync(new URL(`../scripts/humanwiki-synthetic/fixtures/${name}.json`, import.meta.url), "utf8"));
@@ -1010,5 +1011,197 @@ test("fixture-only lifecycle CLI compares actions without raw text, writes or in
     assert.equal(rejected.status, 2);
     assert.equal(rejected.stdout, "");
     assert.deepEqual(readdirSync(root), [], "lifecycle CLI must never persist state");
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("synthetic restore preflight requires replay for an older snapshot without releasing content", () => {
+  const state = makeSyntheticRestoreFixture();
+  const before = JSON.stringify(state);
+  const report = previewSyntheticRestorePreflight(state);
+  assert.equal(report.synthetic_fixture_only, true);
+  assert.equal(report.mode, "offline_restore_preflight_rehearsal");
+  assert.equal(report.preflight_status, "requires_replay_and_revalidation");
+  assert.equal(report.reason, null);
+  assert.equal(report.pending_replay_count, 2);
+  assert.deepEqual(report.pending_replay_events, [
+    { sequence: 1, opaque_source_id: "fictional-source-a", action: "request_erasure" },
+    { sequence: 2, opaque_source_id: "fictional-source-b", action: "revoke_import_consent" },
+  ]);
+  assert.equal(report.replay_completed, false);
+  assert.equal(report.actual_restore_applied, false);
+  assert.equal(report.data_release_authorized, false);
+  assert.equal(report.actual_witness_contacted, false);
+  assert.equal(report.durable_events_written, 0);
+  assert.equal(report.tombstones_written, 0);
+  assert.equal(report.claims_created, 0);
+  assert.equal(report.real_import_enabled, false);
+  assert.equal(JSON.stringify(state), before);
+  const serialized = JSON.stringify(report);
+  for (const forbidden of ["bundle_digest", "content_sha256", "fictional garden",
+    "silver spaceship", "previous_digest", "applied_digest", "witness"]) {
+    assert.ok(!serialized.includes(forbidden), forbidden);
+  }
+});
+
+test("a coherent old snapshot plus old registry is blocked by newer external witness", () => {
+  const fixture = makeSyntheticRestoreFixture();
+  const restored = structuredClone(fixture);
+  restored.registry = restored.registry.slice(0, 1);
+  const report = previewSyntheticRestorePreflight(restored);
+  assert.equal(report.preflight_status, "blocked");
+  assert.equal(report.reason, "registry_behind_external_witness");
+  assert.equal(report.pending_replay_count, 0);
+  assert.deepEqual(report.pending_replay_events, []);
+  assert.equal(report.data_release_authorized, false);
+  assert.equal(report.replay_completed, false);
+});
+
+test("unavailable witness unverified witness and missing key all fail closed", () => {
+  const fixture = makeSyntheticRestoreFixture();
+  const variations = [
+    [{ ...fixture, witness: null }, "witness_unavailable_or_invalid"],
+    [{ ...fixture, witness: { sequence: 1, digest: "garbage" } }, "witness_unavailable_or_invalid"],
+    [{ ...fixture, toy_independent_witness_verified: false }, "witness_unverified"],
+    [{ ...fixture, toy_key_available: false }, "key_unavailable"],
+  ];
+  for (const [state, reason] of variations) {
+    const report = previewSyntheticRestorePreflight(state);
+    assert.equal(report.reason, reason);
+    assert.equal(report.preflight_status, "blocked");
+    assert.equal(report.pending_replay_count, 0);
+    assert.equal(report.data_release_authorized, false);
+    assert.equal(report.actual_witness_contacted, false);
+  }
+});
+
+test("toy registry sequence gap and changed event metadata fail closed", () => {
+  const base = makeSyntheticRestoreFixture();
+  const gap = structuredClone(base);
+  gap.registry[0].sequence = 2;
+  assert.equal(previewSyntheticRestorePreflight(gap).reason, "registry_sequence_gap");
+  const forgedAction = structuredClone(base);
+  forgedAction.registry[0].action = "revoke_import_consent";
+  assert.equal(previewSyntheticRestorePreflight(forgedAction).reason, "registry_chain_mismatch");
+  const wrongPrior = structuredClone(base);
+  wrongPrior.registry[1].previous_digest = "f".repeat(64);
+  assert.equal(previewSyntheticRestorePreflight(wrongPrior).reason, "registry_chain_mismatch");
+  const wrongDigest = structuredClone(base);
+  wrongDigest.registry[0].digest = "f".repeat(64);
+  assert.equal(previewSyntheticRestorePreflight(wrongDigest).reason, "registry_chain_mismatch");
+});
+
+test("toy witness mismatch and unanchored registry tail block release", () => {
+  const base = makeSyntheticRestoreFixture();
+  const staleWitness = structuredClone(base);
+  staleWitness.witness = {
+    sequence: 1, digest: staleWitness.registry[0].digest,
+  };
+  assert.equal(previewSyntheticRestorePreflight(staleWitness).reason,
+    "registry_has_unwitnessed_tail");
+  const mismatching = structuredClone(base);
+  mismatching.witness.digest = "e".repeat(64);
+  assert.equal(previewSyntheticRestorePreflight(mismatching).reason,
+    "external_witness_digest_mismatch");
+  const ahead = structuredClone(base);
+  ahead.witness.sequence = 3;
+  assert.equal(previewSyntheticRestorePreflight(ahead).reason,
+    "registry_behind_external_witness");
+});
+
+test("restore cursor must match the observed registry checkpoint", () => {
+  const base = makeSyntheticRestoreFixture();
+  const ahead = structuredClone(base);
+  ahead.snapshot.applied_sequence = 3;
+  assert.equal(previewSyntheticRestorePreflight(ahead).reason, "restored_snapshot_ahead");
+  const badDigest = structuredClone(base);
+  badDigest.snapshot.applied_sequence = 1;
+  assert.equal(previewSyntheticRestorePreflight(badDigest).reason,
+    "restored_snapshot_digest_mismatch");
+  const current = structuredClone(base);
+  current.snapshot = {
+    applied_sequence: current.witness.sequence,
+    applied_digest: current.witness.digest,
+  };
+  const report = previewSyntheticRestorePreflight(current);
+  assert.equal(report.preflight_status, "checks_passed_in_toy_only");
+  assert.equal(report.pending_replay_count, 0);
+  assert.equal(report.data_release_authorized, false);
+  assert.equal(report.replay_completed, false);
+});
+
+test("toy restore fixture and registry accept only scoped nonpersonal metadata", () => {
+  const base = makeSyntheticRestoreFixture();
+  for (const modify of [
+    state => { state.registry[0].action = ["request_erasure"]; },
+    state => { state.registry[0].action = "pause_sync"; },
+    state => { state.registry[0].opaque_source_id = "some@example.com"; },
+    state => { state.registry[0].opaque_source_id = ["fictional-source-a"]; },
+    state => { state.registry[0].text = "private personal information"; },
+    state => { state.registry[0].sequence = 1.5; },
+    state => { state.registry[1].digest = undefined; },
+    state => { state.snapshot.applied_sequence = -1; },
+    state => { state.snapshot.extra = "bad"; },
+    state => { state.registry = Array.from({ length: 17 }, () => state.registry[0]); },
+    state => { state.toy_independent_witness_verified = "true"; },
+    state => { state.toy_key_available = "true"; },
+    state => { state.extra = "bad"; },
+  ]) {
+    const invalid = structuredClone(base);
+    modify(invalid);
+    assert.throws(() => previewSyntheticRestorePreflight(invalid),
+      /Synthetic restore:/);
+  }
+  for (const invalid of [null, [], {}, false, "fixture"]) {
+    assert.throws(() => previewSyntheticRestorePreflight(invalid),
+      /Synthetic restore:/);
+  }
+});
+
+test("empty fictional registry checkpoint also requires independently verified toy witness", () => {
+  const base = makeSyntheticRestoreFixture();
+  const genesis = "0".repeat(64);
+  const noEvents = {
+    ...base, registry: [],
+    snapshot: { applied_sequence: 0, applied_digest: genesis },
+    witness: { sequence: 0, digest: genesis },
+  };
+  const allowed = previewSyntheticRestorePreflight(noEvents);
+  assert.equal(allowed.preflight_status, "checks_passed_in_toy_only");
+  assert.equal(allowed.data_release_authorized, false);
+  const unavailable = previewSyntheticRestorePreflight({ ...noEvents, witness: null });
+  assert.equal(unavailable.preflight_status, "blocked");
+  assert.equal(unavailable.reason, "witness_unavailable_or_invalid");
+});
+
+test("read-only restore preflight CLI is deterministic and denies custom input", () => {
+  const cli = fileURLToPath(new URL("../scripts/humanwiki-synthetic/restore-preflight-cli.mjs", import.meta.url));
+  const root = mkdtempSync(path.join(os.tmpdir(), "lumi-humanwiki-restore-"));
+  const invoke = (args, zone) => spawnSync(process.execPath, [cli, ...args], {
+    encoding: "utf8", env: { ...process.env, TMPDIR: root, TZ: zone },
+  });
+  try {
+    const utc = invoke([], "UTC");
+    const prague = invoke([], "Europe/Prague");
+    assert.equal(utc.status, 0, utc.stderr);
+    assert.equal(prague.status, 0, prague.stderr);
+    assert.equal(utc.stdout, prague.stdout);
+    const report = JSON.parse(utc.stdout);
+    assert.equal(report.synthetic_fixture_only, true);
+    assert.equal(report.old_snapshot_status, "requires_replay_and_revalidation");
+    assert.equal(report.toy_pending_replay_events, 2);
+    assert.equal(report.old_registry_rollback, "registry_behind_external_witness");
+    assert.equal(report.missing_witness, "witness_unavailable_or_invalid");
+    assert.equal(report.missing_key, "key_unavailable");
+    assert.equal(report.current_snapshot_status, "checks_passed_in_toy_only");
+    assert.equal(report.data_release_authorized, false);
+    assert.equal(report.real_import_enabled, false);
+    for (const forbidden of ["fictional garden", "silver spaceship",
+      "content_sha256", "applied_digest", "previous_digest"]) {
+      assert.ok(!utc.stdout.includes(forbidden), forbidden);
+    }
+    const denied = invoke(["../../private-export.json"], "UTC");
+    assert.equal(denied.status, 2);
+    assert.equal(denied.stdout, "");
+    assert.deepEqual(readdirSync(root), [], "restore preview must not persist anything");
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
