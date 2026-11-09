@@ -17,14 +17,13 @@ import {useCallback,useEffect,useRef,useState} from "react";
 import {useTargetSession} from "./target-data-provider";
 import {TargetDataStatus} from "./target-data-status";
 import {useTargetGate} from "./use-target-gate";
-import {
-  closeTargetDetail,detailRowKey,expectFocusReturn,focusPendingRow,openTargetDetail,
-} from "./target-detail-state";
+import {useTargetTick,useTargetWake} from "./use-target-revalidation";
+import {closeTargetDetail,detailRowKey,focusPendingRow,openTargetDetail} from "./target-detail-state";
 import {
   createTargetDetailSession,type TargetDetailContent,type TargetDetailFailure,
 } from "../../lib/target-detail-session";
 import {
-  detailRouteKey,type TargetDetailGates,type TargetDetailRoute,
+  detailIdOk,detailRouteKey,type TargetDetailGates,type TargetDetailRoute,
 } from "../../lib/target-detail-route";
 import {detailCopy,type DetailCopy,type DetailLanguage} from "../../lib/target-detail-copy";
 import "./target-details.css";
@@ -42,24 +41,57 @@ const humanDate=(day:string,locale:string)=>{
   }catch{return day;}
 };
 
+const FOCUSABLE='a[href],button:not([disabled]),input:not([disabled]),select:not([disabled]),textarea:not([disabled]),[tabindex]:not([tabindex="-1"])';
+
 function Shell({route,label,language,children,panelRef}:{
   route:TargetDetailRoute|null;label:string;language:DetailLanguage;
   children:React.ReactNode;panelRef:React.RefObject<HTMLElement|null>;
 }){
   const copy=detailCopy[language];
   const close=useCallback(()=>closeTargetDetail(route),[route]);
+  // Document level while the panel is open (also after clicking elsewhere, e.g. the
+  // scope radio): Esc closes it and Tab / focus stay inside the panel.
+  useEffect(()=>{
+    const panel=panelRef.current;
+    if(!panel)return;
+    const onKey=(event:KeyboardEvent)=>{
+      if(event.defaultPrevented)return;
+      if(event.key==="Escape"){
+        const target=event.target instanceof Element?event.target:null;
+        if(target?.closest("input, textarea, select"))return;
+        // Another modal (confirm, assistant, ...) owns Esc first.
+        if(document.querySelector('[aria-modal="true"]:not([data-testid="target-detail"])'))return;
+        event.preventDefault();
+        close();
+        return;
+      }
+      if(event.key!=="Tab")return;
+      const items=Array.from(panel.querySelectorAll<HTMLElement>(FOCUSABLE))
+        .filter(element=>element.getClientRects().length>0);
+      if(items.length===0){event.preventDefault();panel.focus();return;}
+      const first=items[0],last=items[items.length-1],active=document.activeElement;
+      if(!panel.contains(active)){event.preventDefault();first.focus();}
+      else if(event.shiftKey&&(active===first||active===panel)){event.preventDefault();last.focus();}
+      else if(!event.shiftKey&&active===last){event.preventDefault();first.focus();}
+    };
+    const onFocusIn=(event:FocusEvent)=>{
+      const target=event.target;
+      if(!(target instanceof Node)||panel.contains(target))return;
+      if(target instanceof Element&&target.closest('[aria-modal="true"]'))return;
+      panel.focus({preventScroll:true});
+    };
+    document.addEventListener("keydown",onKey);
+    document.addEventListener("focusin",onFocusIn);
+    return ()=>{
+      document.removeEventListener("keydown",onKey);
+      document.removeEventListener("focusin",onFocusIn);
+    };
+  },[close,panelRef]);
   return <div className="backdrop inspectorBackdrop targetDetailBackdrop" onClick={close}>
     <aside ref={panelRef} tabIndex={-1} className="detail inspectorDetail targetDetail"
+      role="dialog" aria-modal="true"
       data-testid="target-detail" data-detail-kind={route?.kind??"unavailable"}
-      aria-label={label} onClick={event=>event.stopPropagation()}
-      onKeyDown={event=>{
-        if(event.key!=="Escape"||event.defaultPrevented)return;
-        const target=event.target instanceof Element?event.target:null;
-        if(target?.closest('input, textarea, select, [role="dialog"], [aria-modal="true"]'))return;
-        event.preventDefault();
-        event.stopPropagation();
-        close();
-      }}>
+      aria-label={label} onClick={event=>event.stopPropagation()}>
       <button className="close inspectorClose" type="button" onClick={close}>
         <span className="inspectorCloseIcon"><span aria-hidden="true">×</span>
           <span className="inspectorCloseAccessible">{copy.close}</span></span>
@@ -95,7 +127,7 @@ function Content({content,route,copy,gates,more,onMore}:{
       {task.assignedToMe&&<p>{copy.assignedToMe}</p>}
       {content.parentTitle!==null&&<p className="targetDetailParent">
         <span>{copy.parentProject}: </span>
-        {route.view==="Projects"&&gates.project&&task.projectId!==null
+        {route.view==="Projects"&&gates.project&&task.projectId!==null&&detailIdOk(task.projectId)
           ?<button type="button" className="targetDetailLink"
               aria-label={copy.openParentProject(content.parentTitle)}
               onClick={event=>openTargetDetail({kind:"project",id:task.projectId as string,view:"Projects"},event.currentTarget)}>
@@ -123,7 +155,7 @@ function Content({content,route,copy,gates,more,onMore}:{
       ?<p className="targetDetailMuted">{copy.tasksEmpty}</p>
       :<ul className="targetDetailTasks">
         {page.tasks.map(task=><li key={task.id}>
-          {gates.task
+          {gates.task&&detailIdOk(task.id)
             ?<button type="button" className="targetDetailTaskRow"
                 data-detail-row={detailRowKey("task",task.id)}
                 aria-label={copy.taskOpen(task.title)}
@@ -151,7 +183,8 @@ function DetailBody({route,language,gates}:{
   const epoch=useRef(0);
   const sessionRef=useRef(session);
   sessionRef.current=session;
-  const hiddenRef=useRef(false);
+  const stateRef=useRef(state);
+  stateRef.current=state;
   const panelRef=useRef<HTMLElement|null>(null);
   const refusalRef=useRef(onRefusal);
   refusalRef.current=onRefusal;
@@ -162,24 +195,33 @@ function DetailBody({route,language,gates}:{
     if(state.kind==="error"&&state.reason==="signed-out")refusalRef.current();
   },[state]);
 
-  // Focus moves into the panel when it opens; closing returns it to the row.
+  // Focus moves into the panel when it opens. (Closing returns it to the row; the
+  // app root decides that from the address, so going deeper never steals it back.)
   const key=detailRouteKey(route);
-  useEffect(()=>{
-    panelRef.current?.focus({preventScroll:true});
-    return ()=>{expectFocusReturn(route);};
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  },[key]);
+  useEffect(()=>{panelRef.current?.focus({preventScroll:true});},[key]);
+
+  const wake=useTargetWake({
+    hide:reason=>{
+      epoch.current++;
+      sessionRef.current?.suspend();
+      setState({kind:"error",reason});
+    },
+    ready:()=>{
+      sessionRef.current?.resume();
+      setNonce(value=>value+1);
+    },
+    failed:()=>setState({kind:"error",reason:"unavailable"}),
+  });
 
   // A fresh server read for every open and every wake; never from a cache.
   useEffect(()=>{
     if(!session||!ready)return;
     const id=++epoch.current;
     if(document.visibilityState==="hidden"||!navigator.onLine){
-      hiddenRef.current=true;
+      wake.markHidden();
       setState({kind:"error",reason:navigator.onLine?"hidden":"offline"});
       return ()=>{epoch.current++;};
     }
-    hiddenRef.current=false;
     setState({kind:"loading"});
     void session.load().then(result=>{
       if(epoch.current!==id)return;
@@ -188,42 +230,31 @@ function DetailBody({route,language,gates}:{
       else setState({kind:"error",reason:result.reason==="not-ready"?"stale":result.reason});
     }).catch(()=>{if(epoch.current===id)setState({kind:"error",reason:"unavailable"});});
     return ()=>{epoch.current++;};
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   },[session,ready,nonce]);
 
-  // Privacy: content never stays on screen while hidden or offline.
-  useEffect(()=>{
-    const hide=(reason:"hidden"|"offline")=>{
-      hiddenRef.current=true;
-      epoch.current++;
-      sessionRef.current?.suspend();
-      setState({kind:"error",reason});
-    };
-    const wake=()=>{
-      if(!hiddenRef.current||document.visibilityState==="hidden"||!navigator.onLine)return;
-      hiddenRef.current=false;
-      sessionRef.current?.resume();
-      setNonce(value=>value+1);
-    };
-    const visibility=()=>document.visibilityState==="hidden"?hide("hidden"):wake();
-    const offline=()=>hide("offline");
-    const pagehide=()=>hide("hidden");
-    const pageshow=(event:PageTransitionEvent)=>{if(event.persisted)hiddenRef.current=true;wake();};
-    document.addEventListener("visibilitychange",visibility);
-    window.addEventListener("offline",offline);
-    window.addEventListener("online",wake);
-    window.addEventListener("pagehide",pagehide);
-    window.addEventListener("pageshow",pageshow);
-    window.addEventListener("focus",wake);
-    return ()=>{
-      epoch.current++;
-      document.removeEventListener("visibilitychange",visibility);
-      window.removeEventListener("offline",offline);
-      window.removeEventListener("online",wake);
-      window.removeEventListener("pagehide",pagehide);
-      window.removeEventListener("pageshow",pageshow);
-      window.removeEventListener("focus",wake);
-    };
-  },[]);
+  // Passive revalidation (runtime tick, ~60 s, visible + online only): membership loss
+  // does not change the auth generation, so an open detail re-reads. The shown
+  // content is replaced only by the complete new result; any failure removes it
+  // (a 404 becomes the calm not-available state).
+  useTargetTick(()=>{
+    const current=stateRef.current;
+    const live=sessionRef.current;
+    if(current.kind!=="ready"||current.more||!live)return;
+    const id=++epoch.current;
+    const wanted=current.content.kind==="project"?current.content.page.tasks.length:0;
+    void (async()=>{
+      let result=await live.load();
+      // Keep the user's position: re-walk as many pages as were loaded before.
+      for(let guard=0;guard<20&&result.ok===true&&result.content.kind==="project"&&
+        result.content.page.hasMore&&result.content.page.tasks.length<wanted;guard++)
+        result=await live.loadMore();
+      if(epoch.current!==id)return;
+      if(result.ok===true)setState({kind:"ready",content:result.content,more:false});
+      else if(result.reason==="superseded")return;
+      else setState({kind:"error",reason:result.reason==="not-ready"?"stale":result.reason});
+    })().catch(()=>{if(epoch.current===id)setState({kind:"error",reason:"unavailable"});});
+  });
 
   // Returning from a task to its project: focus the task row once rows exist.
   useEffect(()=>{if(state.kind==="ready")focusPendingRow();},[state]);
@@ -248,7 +279,10 @@ function DetailBody({route,language,gates}:{
   const content=state.kind==="ready"?state.content:null;
   const title=content?.kind==="task"?content.task.title:content?.kind==="note"?content.note.title
     :content?.kind==="project"?content.page.project.title:null;
-  const label=title===null?copy.panelLabelLoading(kindLabel):copy.panelLabel(kindLabel,title);
+  // The accessible name follows what is shown: title, loading, or the calm unavailable sentence.
+  const label=title!==null?copy.panelLabel(kindLabel,title)
+    :state.kind==="error"&&state.reason==="not-available"?copy.failures["not-available"]
+    :copy.panelLabelLoading(kindLabel);
 
   let gateView:React.ReactNode=null;
   if(gate.kind==="checking")

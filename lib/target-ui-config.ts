@@ -41,10 +41,11 @@ export type TargetUiConfig={
   details:{task:boolean;project:boolean;note:boolean};
 };
 
-/** The provider (and its session check) mounts only when some screen consumes it. */
+/** The provider (and its session check) mounts only when some screen consumes it.
+ * Details are no consumer of their own: they open only from a target list or the
+ * target My Plan, so details flags without those stay inert (no provider, no request). */
 export function targetDataNeeded(config:TargetUiConfig|null):boolean{
-  return config!==null&&(config.myPlan.enabled||config.scopes.projects||config.scopes.notes||
-    config.details.task||config.details.project||config.details.note);
+  return config!==null&&(config.myPlan.enabled||config.scopes.projects||config.scopes.notes);
 }
 
 export function targetUiConfig(env:TargetUiEnv):TargetUiConfig|null {

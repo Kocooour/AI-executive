@@ -24,6 +24,8 @@ import {groupIndexRowsByArea} from "../../lib/target-scope-rows";
 import {scopesCopy,type ScopesLanguage} from "../../lib/target-scopes-copy";
 import {detailCopy} from "../../lib/target-detail-copy";
 import {detailRowKey,focusPendingRow,openTargetDetail} from "./target-detail-state";
+import {useTargetTick} from "./use-target-revalidation";
+import {detailIdOk} from "../../lib/target-detail-route";
 import "./target-scopes.css";
 import "./target-details.css";
 
@@ -55,6 +57,8 @@ export default function TargetScopeLists({kind,language="cs",detail=false}:{
   const sessionRef=useRef(session);
   sessionRef.current=session;
   const statusRef=useRef<HTMLParagraphElement>(null);
+  const stateRef=useRef(state);
+  stateRef.current=state;
   const wakeGate=useRef(initialGlobalIndexWakeGate());
   const refusalRef=useRef(onRefusal);
   refusalRef.current=onRefusal;
@@ -82,6 +86,27 @@ export default function TargetScopeLists({kind,language="cs",detail=false}:{
     }).catch(()=>{if(epoch.current===id)setState({kind:"error",reason:"unavailable"});});
     return ()=>{epoch.current++;};
   },[session,ready,nonce]);
+
+  // R3-FE-4a: passive revalidation on the runtime tick (~60 s, visible + online only).
+  // Membership loss does not change the auth generation, so the rows are re-read from
+  // the first page and re-walked to the page count the user had loaded (position kept);
+  // the new rows replace the old ones only as a whole, any failure hides them as usual.
+  useTargetTick(()=>{
+    const current=stateRef.current;
+    const live=sessionRef.current;
+    if(current.kind!=="ready"||current.more||!live||current.session!==live)return;
+    const id=++epoch.current;
+    const wanted=current.page.items.length;
+    void (async()=>{
+      let result=await live.loadFirst();
+      for(let guard=0;guard<20&&result.ok===true&&result.page.hasMore&&result.page.items.length<wanted;guard++)
+        result=await live.loadMore();
+      if(epoch.current!==id)return;
+      if(result.ok===true)setState({kind:"ready",session:live,rowKind:kind,page:result.page,more:false});
+      else if(result.reason==="superseded")return;
+      else setState({kind:"error",reason:result.reason==="busy"||result.reason==="not-ready"?"stale":result.reason});
+    })().catch(()=>{if(epoch.current===id)setState({kind:"error",reason:"unavailable"});});
+  });
 
   // R3-FE-4a: after a detail closed, focus returns to the row that opened it.
   useEffect(()=>{if(state.kind==="ready")focusPendingRow();},[state]);
@@ -189,7 +214,7 @@ export default function TargetScopeLists({kind,language="cs",detail=false}:{
         data-area-kind={group.areaKind}
         aria-label={group.areaKind==="private"?copy.groupPersonal:copy.groupShared}>
         {group.items.map(entry=><li key={entry.item.id} className="targetScopeRow">
-          {detail
+          {detail&&detailIdOk(entry.item.id)
             ?<button type="button" className="targetScopeRowButton"
                 data-detail-row={detailRowKey(kind,entry.item.id)}
                 aria-label={kind==="project"?rowCopy.rowOpenProject(entry.item.title):rowCopy.rowOpenNote(entry.item.title)}

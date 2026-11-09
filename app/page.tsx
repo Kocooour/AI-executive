@@ -12,8 +12,8 @@ export default function Page() {
   // actually enabled; R3-FE-1 alone has no consumer and makes no request.
   const config = targetUiEnabled() ? targetUiConfig(process.env) : null;
   // R3-FE-3: the provider also mounts when a scoped list view is enabled; the
-  // switcher flag alone (no My Plan, no list) has no consumer and makes no request.
-  // R3-FE-4a: authorized details (any kind) are a consumer too.
+  // switcher flag alone (no My Plan, no list) has no consumer and makes no request. Details open only from a
+  // list or the plan, so they are no consumer either.
   const targetData = targetDataNeeded(config);
   return targetData
     ? <TargetDataProvider><LumiAppRoot targetMyPlan={config?.myPlan} targetScopes={config?.scopes} targetDetails={config?.details} /></TargetDataProvider>

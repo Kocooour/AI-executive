@@ -4,6 +4,7 @@
  * Status controls require an independent SERVER opt-in. No offline queue,
  * optimistic status, persistent task cache or production UI integration. */
 import {useEffect,useRef,useState} from "react";
+import {detailIdOk} from "../../lib/target-detail-route";
 import {
   appendMyPlanSlice,fetchMyPlanSlice,localMyPlanDate,validMyPlanDate,
   type MyPlanReadFailure,type MyPlanSliceFilter,
@@ -98,7 +99,7 @@ function PlanDay({label,tasks,date,canComplete,onComplete,canWhen,onWhen,copy,on
                     onClick={()=>onComplete(task)}/>
                   :<span className="stagingMyPlanSquare" aria-hidden="true"/>}
                 <div className="stagingMyPlanTask">
-                  {onOpenTask
+                  {onOpenTask&&detailIdOk(task.taskId)
                     ?<button type="button" className="stagingMyPlanOpen"
                         data-detail-row={"task:"+task.taskId}
                         aria-label={openLabel?openLabel(task.title):undefined}

@@ -1,6 +1,6 @@
 "use client";
 import dynamic from "next/dynamic";
-import { useEffect, useRef, useState } from "react";
+import { useContext, useEffect, useRef, useState } from "react";
 import { desktopV1PrimaryViews, mobileDesignV1Preview, primaryViews, secondaryViews } from "../navigation";
 import { desktopSidebarCanFocusDestination } from "../../../lib/desktop-sidebar-focus";
 import { mobileMoreHeadingRevealDelta } from "../../../lib/mobile-more-focus";
@@ -8,12 +8,13 @@ import type { LumiApp } from "../use-lumi-app";
 import { ProjectIcon, ViewIcon } from "./project-icon";
 import { WorkspaceTile, workspaceTone } from "../workspace-appearance";
 import { openTargetDetail } from "../target-detail-state";
+import { TargetSidebarContext } from "../target-sidebar-context";
 
 // R3-FE-4a: loaded only when the server page enabled target scopes with the project index.
 const TargetSidebarProjects = dynamic(() => import("../target-sidebar-projects"), { ssr: false });
-export type TargetSidebarProps = { projects: boolean; openable: boolean };
 
-export function Sidebar({ app, targetPlan = false, targetSidebar }: { app: LumiApp; targetPlan?: boolean; targetSidebar?: TargetSidebarProps }) {
+export function Sidebar({ app, targetPlan = false }: { app: LumiApp; targetPlan?: boolean }) {
+  const targetSidebar = useContext(TargetSidebarContext);
   const {
     setSettingsSection,
     setInboxTab,
@@ -208,7 +209,7 @@ export function Sidebar({ app, targetPlan = false, targetSidebar }: { app: LumiA
           <TargetSidebarProjects language={language} openable={targetSidebar.openable}
             onOpen={(projectId, opener) => {
               // Switch the shell to Projects and push the project address in one step.
-              if (view !== "Projects") setView("Projects", { targetOpen: true });
+              if (view !== "Projects") setView("Projects", { keepAddress: true });
               closeDetail();
               openTargetDetail({ kind: "project", id: projectId, view: "Projects" }, opener);
             }}

@@ -13,7 +13,8 @@ import {useTargetScope} from "./target-scope-state";
 import {createKindIndexReadSession} from "../../lib/target-staging-kind-index-client";
 import type {GlobalIndexPage} from "../../lib/target-staging-global-index-client";
 import {detailCopy,type DetailLanguage} from "../../lib/target-detail-copy";
-import {detailRouteFromSearch} from "../../lib/target-detail-route";
+import {detailIdOk,detailRouteFromSearch} from "../../lib/target-detail-route";
+import {useTargetTick,useTargetWake} from "./use-target-revalidation";
 import {useTargetSearch} from "./target-detail-state";
 import "./target-details.css";
 
@@ -41,7 +42,8 @@ export default function TargetSidebarProjects({language="cs",openable,onOpen,onS
   const epoch=useRef(0);
   const sessionRef=useRef(session);
   sessionRef.current=session;
-  const hiddenRef=useRef(false);
+  const stateRef=useRef(state);
+  stateRef.current=state;
   const refusalRef=useRef(onRefusal);
   refusalRef.current=onRefusal;
   const ready=gate.kind==="ready";
@@ -50,11 +52,10 @@ export default function TargetSidebarProjects({language="cs",openable,onOpen,onS
     if(!session||!ready)return;
     const id=++epoch.current;
     if(document.visibilityState==="hidden"||!navigator.onLine){
-      hiddenRef.current=true;
+      wake.markHidden();
       setState({kind:"error",reason:"hidden"});
       return ()=>{epoch.current++;};
     }
-    hiddenRef.current=false;
     setState({kind:"idle"});
     void session.loadFirst().then(result=>{
       if(epoch.current!==id)return;
@@ -66,39 +67,36 @@ export default function TargetSidebarProjects({language="cs",openable,onOpen,onS
       }
     }).catch(()=>{if(epoch.current===id)setState({kind:"error",reason:"failed"});});
     return ()=>{epoch.current++;};
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   },[session,ready,nonce]);
 
-  useEffect(()=>{
-    const hide=()=>{
-      hiddenRef.current=true;
+  const wake=useTargetWake({
+    hide:()=>{
       epoch.current++;
       sessionRef.current?.suspend();
       setState({kind:"error",reason:"hidden"});
-    };
-    const wake=()=>{
-      if(!hiddenRef.current||document.visibilityState==="hidden"||!navigator.onLine)return;
-      hiddenRef.current=false;
+    },
+    ready:()=>{
       sessionRef.current?.resume();
       setNonce(value=>value+1);
-    };
-    const visibility=()=>document.visibilityState==="hidden"?hide():wake();
-    const pageshow=(event:PageTransitionEvent)=>{if(event.persisted)hiddenRef.current=true;wake();};
-    document.addEventListener("visibilitychange",visibility);
-    window.addEventListener("offline",hide);
-    window.addEventListener("online",wake);
-    window.addEventListener("pagehide",hide);
-    window.addEventListener("pageshow",pageshow);
-    window.addEventListener("focus",wake);
-    return ()=>{
-      epoch.current++;
-      document.removeEventListener("visibilitychange",visibility);
-      window.removeEventListener("offline",hide);
-      window.removeEventListener("online",wake);
-      window.removeEventListener("pagehide",hide);
-      window.removeEventListener("pageshow",pageshow);
-      window.removeEventListener("focus",wake);
-    };
-  },[]);
+    },
+    failed:()=>setState({kind:"error",reason:"failed"}),
+  });
+  // Passive revalidation on the runtime tick: the first page is re-read; failure hides it.
+  useTargetTick(()=>{
+    const live=sessionRef.current;
+    if(!live||stateRef.current.kind!=="ready")return;
+    const id=++epoch.current;
+    void live.loadFirst().then(result=>{
+      if(epoch.current!==id)return;
+      if(result.ok===true)setState({kind:"ready",page:result.page});
+      else if(result.reason==="superseded")return;
+      else{
+        if(result.reason==="signed-out")refusalRef.current();
+        setState({kind:"error",reason:"failed"});
+      }
+    }).catch(()=>{if(epoch.current===id)setState({kind:"error",reason:"failed"});});
+  });
 
   // Titles are shown only for the CURRENT session and scope.
   const page=state.kind==="ready"&&state.page.scope===scope?state.page:null;
@@ -108,13 +106,13 @@ export default function TargetSidebarProjects({language="cs",openable,onOpen,onS
     data-testid="target-sidebar-projects" data-scope={scope}>
     {projects.map(entry=>{
       const item=entry.item;
-      return openable
+      return openable&&detailIdOk(item.id)
         ?<button type="button" key={item.id} data-sidebar-target-project={item.id}
             aria-current={openId===item.id?"page":undefined}
             className={openId===item.id?"active":undefined}
             title={item.title} aria-label={copy.sidebarProjectOpen(item.title)}
             onClick={event=>onOpen(item.id,event.currentTarget)}>
-            <span className="sidebarProjectTitle">{item.title}</span>
+            <span className="targetSidebarProjectTitle">{item.title}</span>
           </button>
         :<span key={item.id} className="targetSidebarProjectRow" title={item.title}>{item.title}</span>;
     })}

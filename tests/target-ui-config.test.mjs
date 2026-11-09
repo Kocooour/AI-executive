@@ -163,11 +163,13 @@ test("R3-FE-4a: details are independent of My Plan and scopes and the config sta
   for(const value of Object.values(config.details))assert.equal(typeof value,"boolean");
 });
 
-test("R3-FE-4a: provider mount rule includes details, and the switcher alone still mounts nothing",()=>{
+test("R3-FE-4a: details are no provider consumer of their own (they stay inert without a list or plan)",()=>{
   const mounts=env=>targetDataNeeded(targetUiConfig(env));
-  assert.equal(mounts({...baseUi,...detailsFlag}),true);
-  assert.equal(mounts({...baseUi,...detailsFlag,...taskFlag}),true);
-  assert.equal(mounts({...baseUi,...taskFlag,...noteDetailFlag}),false);
+  assert.equal(mounts({...baseUi,...detailsFlag}),false);
+  assert.equal(mounts({...baseUi,...detailsFlag,...taskFlag,...noteDetailFlag}),false);
+  assert.equal(mounts({...scopesOnly,...detailsFlag}),false);
+  assert.equal(mounts({...scopesOnly,...projectsFlag,...detailsFlag}),true);
+  assert.equal(mounts({...base,...detailsFlag}),true);
   assert.equal(mounts(scopesOnly),false);
   assert.equal(targetDataNeeded(null),false);
 });
