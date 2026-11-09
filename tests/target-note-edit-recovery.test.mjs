@@ -48,12 +48,12 @@ test("outstanding PATCH is owned by runtime, not detail unmount: lost ACK retain
 test("changed command UUID/content cannot replace an unresolved ambiguous operation",async()=>{
   const runtime={};
   await runTrackedNoteEdit(runtime,gen,id,command,async()=>({outcome:"uncertain"}));
-  assert.throws(()=>runTrackedNoteEdit(runtime,gen,id,
+  assert.deepEqual(await runTrackedNoteEdit(runtime,gen,id,
     {...command,commandId:"d6aa2d77-fd6a-4600-8e03-e7ed0aec0511"},
-    async()=>({outcome:"saved",replayed:false})),/different command/);
-  assert.throws(()=>runTrackedNoteEdit(runtime,gen,id,
+    async()=>({outcome:"saved",replayed:false})),{outcome:"conflict"});
+  assert.deepEqual(await runTrackedNoteEdit(runtime,gen,id,
     {...command,body:"different"},
-    async()=>({outcome:"saved",replayed:false})),/different command/);
+    async()=>({outcome:"saved",replayed:false})),{outcome:"conflict"});
   assert.equal(trackedNoteEdit(runtime,gen,id).command.commandId,command.commandId);
 });
 
