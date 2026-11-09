@@ -1,5 +1,6 @@
 /** Staging-only authorized, pinned note create/move journal writer.
- * Default-unused: there is no new route, UI hook or production activation.
+ * The default-off HTTP route supports private standalone note creation only;
+ * no UI integration, HTTP move/shared-create route or production activation exists.
  * A new user-visible sharing boundary must be explicitly confirmed.
  */
 import { createHash } from "node:crypto";
