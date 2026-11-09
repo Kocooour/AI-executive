@@ -35,7 +35,10 @@ Object.assign(process.env, {
   AI_EXECUTIVE_TARGET_STAGING_HTTP_NOTES_WRITE_ENABLED: "true",
   AI_EXECUTIVE_TARGET_STAGING_HTTP_NOTES_CREATE_ENABLED: "true",
 });
-const { bootstrapIsolatedTargetStore } = await import("../lib/target-store-bootstrap.ts");
+const { bootstrapIsolatedTargetStore, TARGET_STAGING_NOTE_LIFECYCLE_RECEIPT_PREFIX } =
+  await import("../lib/target-store-bootstrap.ts");
+const { TARGET_STAGING_JOURNAL_FILENAME } =
+  await import("../lib/target-staging-anchor-journal.ts");
 const durable = await import("../lib/target-staging-durable-session.ts");
 const { createSessionToken, sessionCookieName } = await import("../lib/auth.ts");
 const { POST } = await import("../app/api/target-staging/notes/route.ts");
@@ -114,6 +117,23 @@ function note(fx, id) {
     return db.prepare("SELECT id,title,body,area_id,project_id FROM notes WHERE id=?").get(id);
   } finally { db.close(); }
 }
+/** Content-free state for proving a rejected create has no durable side effect. */
+function createPersistenceState(fx, noteId) {
+  const db = new DatabaseSync(fx.stage.databasePath, { readOnly: true });
+  try {
+    const count = (sql, ...args) => db.prepare(sql).get(...args).n;
+    return {
+      noteExists: db.prepare("SELECT 1 FROM notes WHERE id=?").get(noteId) !== undefined,
+      notes: count("SELECT COUNT(*) AS n FROM notes"),
+      lifecycleReceipts: count("SELECT COUNT(*) AS n FROM metadata WHERE key LIKE ?",
+        TARGET_STAGING_NOTE_LIFECYCLE_RECEIPT_PREFIX + "%"),
+      lifecycleAudit: count("SELECT COUNT(*) AS n FROM note_lifecycle_audit"),
+      changeSequence: count("SELECT COALESCE(MAX(seq),0) AS n FROM change_log"),
+      anchor: db.prepare("SELECT value FROM metadata WHERE key='anchor_seq'").get().value,
+      journal: readFileSync(path.join(fx.stage.directory, TARGET_STAGING_JOURNAL_FILENAME), "utf8"),
+    };
+  } finally { db.close(); }
+}
 async function checkedRead(response, status) {
   const data = await response.json();
   assert.equal(response.status, status, JSON.stringify(data));
@@ -163,6 +183,29 @@ test("durable session may create only into its own private Area", async () => {
   const ownerShared = body(fx, { areaId: "team-area" });
   assert.equal((await checked(await send(ownerShared), 404)).error, "Not found");
 });
+test("revoked durable session cannot POST a private note or leave receipt, audit or journal changes", async () => {
+  const fx = fixture();
+  const bob = session(fx, "bob");
+  const tokenHash = durable.hashTargetStagingSessionToken(bob.split("=")[1]);
+  const live = durable.verifyDurableTargetStagingSessionLive(fx.store, tokenHash);
+  assert.ok(live?.sessionId);
+  assert.equal(durable.revokeDurableTargetStagingSession(fx.store, live.sessionId).ok, true);
+  const command = body(fx, { areaId: "bob-private" });
+  const before = createPersistenceState(fx, command.noteId);
+  assert.equal(before.noteExists, false);
+  assert.equal(before.lifecycleReceipts, 0);
+  assert.equal(before.lifecycleAudit, 0);
+  const rejected = await checked(await send(command, bob), 401);
+  assert.equal(rejected.code, "session_revoked");
+  assert.deepEqual(createPersistenceState(fx, command.noteId), before,
+    "revoked HTTP create must not insert note, receipt, audit or journal intent");
+
+  // Replaying the rejected command with the same stale cookie must remain inert.
+  const retry = await checked(await send(command, bob), 401);
+  assert.equal(retry.code, "session_revoked");
+  assert.deepEqual(createPersistenceState(fx, command.noteId), before);
+});
+
 test("missing flag, unbound identity and invalid protocol/shape never write", async () => {
   const fx = fixture();
   const cmd = body(fx);
