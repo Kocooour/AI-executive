@@ -9,6 +9,7 @@
  *    racing the runtime refresh with an immediate read. */
 import {useEffect,useMemo,useRef} from "react";
 import {useTargetRuntime} from "./target-data-provider";
+import {createWakeMachine} from "../../lib/target-wake";
 
 export function useTargetTick(tick:()=>void):void{
   const runtime=useTargetRuntime();
@@ -25,62 +26,44 @@ export function useTargetTick(tick:()=>void):void{
 
 export function useTargetWake(handlers:{
   hide:(reason:"hidden"|"offline")=>void;
-  /** The runtime re-verified: the screen may read again. */
+  /** The runtime re-verified (or could not): the screen may read again. */
   ready:()=>void;
-  /** The runtime could not re-verify (twice): show the retryable state. */
-  failed:()=>void;
+  /** The session ended: show the signed-out state instead of staying hidden. */
+  signedOut:()=>void;
 }):{markHidden:()=>void}{
   const runtime=useTargetRuntime();
   const ref=useRef(handlers);
   ref.current=handlers;
-  const hidden=useRef(false);
-  const epoch=useRef(0);
-  const markHidden=useMemo(()=>()=>{hidden.current=true;},[]);
+  const machine=useRef<ReturnType<typeof createWakeMachine>|null>(null);
+  const markHidden=useMemo(()=>()=>{machine.current?.markHidden();},[]);
   useEffect(()=>{
-    let alive=true;
-    const hide=(reason:"hidden"|"offline")=>{
-      hidden.current=true;
-      epoch.current++;
-      ref.current.hide(reason);
-    };
-    const wake=()=>{
-      if(!hidden.current||document.visibilityState==="hidden"||!navigator.onLine)return;
-      hidden.current=false;
-      const id=++epoch.current;
-      const verify=async(attempt:number):Promise<void>=>{
-        if(!runtime){ref.current.failed();return;}
-        const result=await runtime.refresh();
-        if(!alive||epoch.current!==id)return;
-        if(result==="ok"){ref.current.ready();return;}
-        if(result==="unavailable"&&attempt===0){
-          await new Promise(resolve=>setTimeout(resolve,1500));
-          if(!alive||epoch.current!==id)return;
-          return verify(1);
-        }
-        // signed_out: the gate/generation handling takes over; unavailable twice: retryable.
-        if(result==="unavailable")ref.current.failed();
-      };
-      void verify(0);
-    };
-    const visibility=()=>document.visibilityState==="hidden"?hide("hidden"):wake();
-    const offline=()=>hide("offline");
-    const pagehide=()=>hide("hidden");
-    const pageshow=(event:PageTransitionEvent)=>{if(event.persisted)hidden.current=true;wake();};
+    const wake=createWakeMachine({
+      refresh:()=>runtime?runtime.refresh():Promise.resolve("unavailable" as const),
+      visible:()=>document.visibilityState!=="hidden",
+      online:()=>navigator.onLine,
+      handlers:()=>ref.current,
+    });
+    machine.current=wake;
+    const onWake=()=>{void wake.wake();};
+    const visibility=()=>document.visibilityState==="hidden"?wake.hide("hidden"):onWake();
+    const offline=()=>wake.hide("offline");
+    const pagehide=()=>wake.hide("hidden");
+    const pageshow=(event:PageTransitionEvent)=>{if(event.persisted)wake.markHidden();onWake();};
     document.addEventListener("visibilitychange",visibility);
     window.addEventListener("offline",offline);
-    window.addEventListener("online",wake);
+    window.addEventListener("online",onWake);
     window.addEventListener("pagehide",pagehide);
     window.addEventListener("pageshow",pageshow);
-    window.addEventListener("focus",wake);
+    window.addEventListener("focus",onWake);
     return ()=>{
-      alive=false;
-      epoch.current++;
+      wake.dispose();
+      machine.current=null;
       document.removeEventListener("visibilitychange",visibility);
       window.removeEventListener("offline",offline);
-      window.removeEventListener("online",wake);
+      window.removeEventListener("online",onWake);
       window.removeEventListener("pagehide",pagehide);
       window.removeEventListener("pageshow",pageshow);
-      window.removeEventListener("focus",wake);
+      window.removeEventListener("focus",onWake);
     };
   },[runtime]);
   return {markHidden};

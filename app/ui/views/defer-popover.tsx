@@ -68,6 +68,8 @@ export function DeferChip({ app, task, fromAttention }: {
         data-meta-kind={planned ? "date" : extra ? extra.kind : "none"}
         data-defer-chip={task.id}
         aria-label={label}
+        disabled={app.legacyWritesDisabled}
+        title={app.legacyReadOnlyHint}
         aria-haspopup="dialog"
         aria-expanded={open}
         onClick={(event) => {

@@ -80,7 +80,7 @@ export default function TargetSidebarProjects({language="cs",openable,onOpen,onS
       sessionRef.current?.resume();
       setNonce(value=>value+1);
     },
-    failed:()=>setState({kind:"error",reason:"failed"}),
+    signedOut:()=>{refusalRef.current();setState({kind:"error",reason:"failed"});},
   });
   // Passive revalidation on the runtime tick: the first page is re-read; failure hides it.
   useTargetTick(()=>{

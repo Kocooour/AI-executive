@@ -2,9 +2,10 @@
 import dynamic from "next/dynamic";
 import { useEffect, useRef } from "react";
 import { TargetSidebarContext } from "./target-sidebar-context";
+import { LegacyWritesContext } from "./legacy-writes-context";
 import { useLumiApp } from "./use-lumi-app";
 import { expectFocusReturn, focusPendingRow, useTargetSearch } from "./target-detail-state";
-import { detailActivation, detailRouteKey, isParentOf, type DetailActivation } from "../../lib/target-detail-route";
+import { detailActivation, detailRouteKey, isParentOf, isTargetAddress, viewOfSearch, type DetailActivation } from "../../lib/target-detail-route";
 import { activeTargetViewFor, detailsActive, targetViewsFor } from "../../lib/target-shell-views";
 import { detailCopy } from "../../lib/target-detail-copy";
 import { mobileDesignV1Preview } from "./navigation";
@@ -88,6 +89,16 @@ export function LumiAppRoot({ targetMyPlan, targetScopes, targetDetails }: { tar
     return () => window.cancelAnimationFrame(frame);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [detailsOn, detailKey]);
+  // A legitimate typed link to ANOTHER active target view (e.g. ?view=Notes&noteId=... while Projects is
+  // shown) switches the shell to that view and opens it; the address is kept (never rewritten).
+  useEffect(() => {
+    if (!detailsOn || !isTargetAddress(detailSearch, targetViews)) return;
+    const wanted = viewOfSearch(detailSearch);
+    if (wanted === null || wanted === activeTargetView) return;
+    if (wanted === "MyPlanPreview") app.setView("Today", { previewMyPlan: true, keepAddress: true });
+    else app.setView(wanted, { keepAddress: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [detailsOn, detailSearch, activeTargetView]);
   if (authState !== "ready" && !app.offlineView) {
     return (
       <AuthScreen app={app} />
@@ -99,8 +110,9 @@ export function LumiAppRoot({ targetMyPlan, targetScopes, targetDetails }: { tar
   const targetView = scopeList !== null || targetPlan;
   const legacyInspector = Boolean(app.selected) && !(scopesOn && targetView);
   // Unified target mode: views that still show legacy data are read-only (no target create/edit API yet).
-  const legacyReadOnly = app.legacyWritesDisabled && !targetView && view !== "Settings";
+  const legacyReadOnly = app.legacyWritesDisabled && !targetView;
   return (
+    <LegacyWritesContext.Provider value={{ disabled: app.legacyWritesDisabled, hint: app.legacyReadOnlyHint }}>
     <main className={`appShell view-${view.toLowerCase()}${legacyInspector || detailPanel ? " inspectorOpen" : ""}${view === "Projects" && app.openProject ? " projectPageOpen" : ""}`} data-design-system={mobileDesignV1Preview ? "lumi-v1" : undefined} data-workspace-tone={app.activeWorkspaceTone}
       data-my-plan-preview={mobileDesignV1Preview && app.mobilePlanPreviewActive && view === "Today" ? "true" : undefined}>
       <TargetSidebarContext.Provider value={scopesOn && targetScopes?.projects ? { projects: true, openable: detailsOn && detailGates.project } : undefined}>
@@ -169,7 +181,7 @@ export function LumiAppRoot({ targetMyPlan, targetScopes, targetDetails }: { tar
               {detailCopy[language].legacyReadOnlyNotice}
             </p>
           )}
-          {legacyReadOnly && app.legacyWriteAttempt && (
+          {app.legacyWritesDisabled && app.legacyWriteAttempt && (
             <div className="navigationUnavailableNotice legacyReadOnlyNotice" role="alert" data-testid="legacy-write-blocked">
               <p>{detailCopy[language].legacyWriteBlocked}</p>
               <button type="button" onClick={app.dismissLegacyWriteAttempt}>{detailCopy[language].dismiss}</button>
@@ -222,5 +234,6 @@ export function LumiAppRoot({ targetMyPlan, targetScopes, targetDetails }: { tar
         </div>
       )}
     </main>
+    </LegacyWritesContext.Provider>
   );
 }

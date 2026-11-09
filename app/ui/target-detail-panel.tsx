@@ -18,6 +18,7 @@ import {useTargetSession} from "./target-data-provider";
 import {TargetDataStatus} from "./target-data-status";
 import {useTargetGate} from "./use-target-gate";
 import {useTargetTick,useTargetWake} from "./use-target-revalidation";
+import {wakeRetryDelay} from "../../lib/target-wake";
 import {closeTargetDetail,detailRowKey,focusPendingRow,openTargetDetail} from "./target-detail-state";
 import {
   createTargetDetailSession,type TargetDetailContent,type TargetDetailFailure,
@@ -200,6 +201,10 @@ function DetailBody({route,language,gates}:{
   const key=detailRouteKey(route);
   useEffect(()=>{panelRef.current?.focus({preventScroll:true});},[key]);
 
+  const afterWake=useRef(false);
+  const retryAttempt=useRef(0);
+  const retryTimer=useRef<ReturnType<typeof setTimeout>|null>(null);
+  useEffect(()=>()=>{if(retryTimer.current!==null)clearTimeout(retryTimer.current);},[]);
   const wake=useTargetWake({
     hide:reason=>{
       epoch.current++;
@@ -207,10 +212,13 @@ function DetailBody({route,language,gates}:{
       setState({kind:"error",reason});
     },
     ready:()=>{
+      // A read right after a wake may hit a network that is not ready yet: retry it automatically.
+      afterWake.current=true;
+      retryAttempt.current=0;
       sessionRef.current?.resume();
       setNonce(value=>value+1);
     },
-    failed:()=>setState({kind:"error",reason:"unavailable"}),
+    signedOut:()=>setState({kind:"error",reason:"signed-out"}),
   });
 
   // A fresh server read for every open and every wake; never from a cache.
@@ -225,9 +233,24 @@ function DetailBody({route,language,gates}:{
     setState({kind:"loading"});
     void session.load().then(result=>{
       if(epoch.current!==id)return;
-      if(result.ok===true)setState({kind:"ready",content:result.content,more:false});
-      else if(result.reason==="superseded")return;
-      else setState({kind:"error",reason:result.reason==="not-ready"?"stale":result.reason});
+      if(result.ok===true){
+        afterWake.current=false;
+        setState({kind:"ready",content:result.content,more:false});
+      }else if(result.reason==="superseded")return;
+      else{
+        const reason=result.reason==="not-ready"?"stale":result.reason;
+        setState({kind:"error",reason});
+        const delay=afterWake.current?wakeRetryDelay(reason,retryAttempt.current):null;
+        if(delay!==null){
+          retryAttempt.current++;
+          retryTimer.current=setTimeout(()=>{
+            retryTimer.current=null;
+            if(epoch.current!==id||document.visibilityState==="hidden"||!navigator.onLine)return;
+            sessionRef.current?.resume();
+            setNonce(value=>value+1);
+          },delay);
+        }else afterWake.current=false;
+      }
     }).catch(()=>{if(epoch.current===id)setState({kind:"error",reason:"unavailable"});});
     return ()=>{epoch.current++;};
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -260,6 +283,7 @@ function DetailBody({route,language,gates}:{
   useEffect(()=>{if(state.kind==="ready")focusPendingRow();},[state]);
 
   const reload=useCallback(()=>{
+    afterWake.current=false;
     sessionRef.current?.resume();
     setNonce(value=>value+1);
   },[]);
@@ -279,9 +303,9 @@ function DetailBody({route,language,gates}:{
   const content=state.kind==="ready"?state.content:null;
   const title=content?.kind==="task"?content.task.title:content?.kind==="note"?content.note.title
     :content?.kind==="project"?content.page.project.title:null;
-  // The accessible name follows what is shown: title, loading, or the calm unavailable sentence.
+  // The accessible name follows what is shown: title, loading, or the sentence of the error/hidden state.
   const label=title!==null?copy.panelLabel(kindLabel,title)
-    :state.kind==="error"&&state.reason==="not-available"?copy.failures["not-available"]
+    :state.kind==="error"?(state.reason==="hidden"?copy.hidden:copy.failures[state.reason])
     :copy.panelLabelLoading(kindLabel);
 
   let gateView:React.ReactNode=null;
