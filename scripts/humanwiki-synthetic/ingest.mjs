@@ -9,6 +9,34 @@ const plainObject = value => object(value) &&
 const nonempty = value => typeof value === "string" && value.length > 0 && value.length <= 200;
 const compareIds = (a, b) => a < b ? -1 : a > b ? 1 : 0;
 
+
+// Require a fully specified UTC/offset timestamp; Date.parse alone silently rolls
+// impossible dates forward and treats zone-less dates as host-local time.
+function observedAtUtc(timestamp) {
+  const match = typeof timestamp === "string" &&
+    /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d{1,9})?(Z|[+-]\d{2}:\d{2})$/.exec(timestamp);
+  if (!match || match[0] !== timestamp) fail("invalid message time");
+  const [, yearText, monthText, dayText, hourText, minuteText, secondText, zone] = match;
+  const [year, month, day, hour, minute, second] =
+    [yearText, monthText, dayText, hourText, minuteText, secondText].map(Number);
+  const calendar = new Date(0);
+  // setUTCFullYear handles years 0000-0099 without Date.UTC's 1900 offset.
+  calendar.setUTCFullYear(year, month - 1, day);
+  if (calendar.getUTCFullYear() !== year || calendar.getUTCMonth() !== month - 1 ||
+    calendar.getUTCDate() !== day || hour > 23 || minute > 59 || second > 59) {
+    fail("invalid message time");
+  }
+  if (zone !== "Z") {
+    const [offsetHour, offsetMinute] = zone.slice(1).split(":").map(Number);
+    if (offsetHour > 14 || offsetMinute > 59 || (offsetHour === 14 && offsetMinute !== 0)) {
+      fail("invalid message time");
+    }
+  }
+  const instant = Date.parse(timestamp);
+  if (!Number.isFinite(instant)) fail("invalid message time");
+  return new Date(instant).toISOString();
+}
+
 function messageText(content, format) {
   if (format === "chatgpt-mapping-v1") {
     if (!object(content) || content.content_type !== "text" || !Array.isArray(content.parts) ||
@@ -72,12 +100,12 @@ export function parseSyntheticBundle(bundle) {
       const normalizedSpeaker = speaker === "human" ? "user" : speaker;
       const text = messageText(message.content, bundle.format);
       const timestamp = bundle.format === "chatgpt-mapping-v1" ? message.create_time : message.created_at;
-      if (typeof timestamp !== "string" || !Number.isFinite(Date.parse(timestamp))) fail("invalid message time");
+      const observedAt = observedAtUtc(timestamp);
       const key = JSON.stringify([bundle.source_id, conversation.id, message.id]);
       if (seen.has(key)) fail("duplicate message id within bundle");
       seen.add(key);
       messages.push({ conversation_id: conversation.id, message_id: message.id, speaker: normalizedSpeaker,
-        observed_at: new Date(timestamp).toISOString(), segments: segments(text, normalizedSpeaker) });
+        observed_at: observedAt, segments: segments(text, normalizedSpeaker) });
       if (messages.length > 1000) fail("message limit exceeded");
     }
   }
