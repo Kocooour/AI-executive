@@ -189,7 +189,7 @@ test("4b introduces only a separately gated private standalone note-create HTTP 
   assert.match(writer,/privateCreateOnly/);
   assert.match(writer,/dest\.kind !== "private"/);
   const shell=read("app/ui/use-lumi-app.tsx");
-  assert.match(shell,/targetScopeWritesBlocked/);
+  assert.match(shell,/if \(blockLegacyWrite\(\)\) return;/);
   const doc=read("docs/R3-BE-04B-PRIVATE-NOTE-CREATE.md");
   assert.match(doc,/Quick Capture.*vypnut/);
 });
