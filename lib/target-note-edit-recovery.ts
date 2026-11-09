@@ -80,7 +80,7 @@ export function runTrackedNoteEdit(
   const bucket=current(runtime,generation);
   const existing=bucket.entries.get(id);
   if(existing&&JSON.stringify(existing.command)!==JSON.stringify(command))
-    throw new Error("Unresolved edit: a different command cannot replace it");
+    return Promise.resolve({outcome:"conflict"}); // never replace an unresolved command
   if(existing?.pending)return existing.pending;
   if(existing?.phase==="saved")return Promise.resolve({outcome:"saved",replayed:true});
   if(existing?.phase==="denied")return Promise.resolve({outcome:"denied"});
