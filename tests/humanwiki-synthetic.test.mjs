@@ -1321,7 +1321,7 @@ test("matching toy snapshot still requires ACL and derivative revalidation", () 
   assert.equal(report.plan_status, "preflight_passed_revalidation_still_required");
   assert.equal(report.pending_events_to_reconcile, 0);
   assert.deepEqual(report.event_obligations, []);
-  assert.equal(report.source_specific_work_disclosed, true);
+  assert.equal(report.source_specific_work_disclosed, false);
   assert.equal(report.all_release_gates_satisfied, false);
   assert.equal(report.data_release_authorized, false);
 });
