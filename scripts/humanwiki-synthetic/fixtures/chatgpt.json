@@ -1,0 +1,14 @@
+{
+  "synthetic_fixture": true,
+  "source_id": "fixture-chatgpt-01",
+  "format": "chatgpt-mapping-v1",
+  "conversations": [
+    {
+      "id": "chat-synthetic-01",
+      "mapping": {
+        "a": {"message": {"id": "m-01", "author": {"role": "user"}, "create_time": "2026-01-01T10:00:00Z", "content": {"content_type": "text", "parts": ["I am planning a fictional garden.\n> Ada said the blue gate is open."]}}},
+        "b": {"message": {"id": "m-02", "author": {"role": "assistant"}, "create_time": "2026-01-01T10:01:00Z", "content": {"content_type": "text", "parts": ["The user owns a silver spaceship."]}}}
+      }
+    }
+  ]
+}
