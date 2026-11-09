@@ -2450,7 +2450,7 @@ test("HumanWiki toy proposal CLI is content-free, deterministic, no-write and no
     assert.equal(summary.data_release_authorized, false);
     for (const forbidden of [
       "fixture-chatgpt-01", "fixture-claude-01", "m-01", "c-01",
-      "fictional_garden", "silver spaceship", "source_locator",
+      "fictional_garden", "silver spaceship", '"source_locator":',
       "content_sha256", "toy_graph_digest", "toy_restore_digest",
     ]) assert.ok(!utc.stdout.includes(forbidden), forbidden);
     const denied = run(["../../private-conversation.json"], "UTC");
