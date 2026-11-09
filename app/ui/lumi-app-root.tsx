@@ -1,4 +1,5 @@
 "use client";
+import dynamic from "next/dynamic";
 import { useLumiApp } from "./use-lumi-app";
 import { mobileDesignV1Preview } from "./navigation";
 import { projectSyncNoticeLabel } from "../../lib/project-sync-notice";
@@ -23,7 +24,12 @@ import { DeferPopover } from "./views/defer-popover";
 import { HeldBack } from "./views/held-back";
 import { OfflineRecoveryDialog } from "./views/offline-recovery-dialog";
 
-export function LumiAppRoot() {
+// R3-FE-2: loaded (with its CSS) only when the server page enabled the target My Plan.
+const TargetMyPlan = dynamic(() => import("./target-my-plan"), { ssr: false });
+
+export type TargetMyPlanProps = { enabled: boolean; statusWrite: boolean; whenWrite: boolean };
+
+export function LumiAppRoot({ targetMyPlan }: { targetMyPlan?: TargetMyPlanProps } = {}) {
   const app = useLumiApp();
   const {
     activeWorkspace,
@@ -41,6 +47,8 @@ export function LumiAppRoot() {
       <AuthScreen app={app} />
     );
   }
+  // Only the "Můj plán" entry of the v1 shell (view "Today") switches; every other view stays legacy.
+  const targetPlan = Boolean(targetMyPlan?.enabled) && mobileDesignV1Preview && app.mobilePlanPreviewActive && view === "Today";
   return (
     <main className={`appShell view-${view.toLowerCase()}${app.selected ? " inspectorOpen" : ""}${view === "Projects" && app.openProject ? " projectPageOpen" : ""}`} data-design-system={mobileDesignV1Preview ? "lumi-v1" : undefined} data-workspace-tone={app.activeWorkspaceTone}
       data-my-plan-preview={mobileDesignV1Preview && app.mobilePlanPreviewActive && view === "Today" ? "true" : undefined}>
@@ -88,7 +96,12 @@ export function LumiAppRoot() {
             </button>
           </div>
         )}
-        {mobileDesignV1Preview && app.mobilePlanPreviewActive && view === "Today" && (
+        {targetPlan && (
+          <p className="mobileV1PreviewNotice" role="status" data-plan-source="target-staging">
+            Zobrazený plán je serverový plán ze stagingu: vaše soukromé úkoly a sdílené úkoly přiřazené vám. Dosavadní místní seznam Dnes se zde nepoužívá.
+          </p>
+        )}
+        {!targetPlan && mobileDesignV1Preview && app.mobilePlanPreviewActive && view === "Today" && (
           <p className="mobileV1PreviewNotice" role="status" data-plan-source="legacy-today">
             {language === "cs"
               ? "Vývojový náhled Mého plánu: nyní zobrazuje dosavadní seznam Dnes v aktivním prostoru, nikoli cílový autorizovaný Můj plán."
@@ -106,19 +119,21 @@ export function LumiAppRoot() {
               <h1 tabIndex={mobileDesignV1Preview ? -1 : undefined}>{mobileDesignV1Preview && app.mobilePlanPreviewActive && view === "Today"
                 ? (language === "cs" ? "Můj plán" : "My Plan") : tr(view)}</h1>
               {(view === "Today" || view === "Home") && <time>{new Intl.DateTimeFormat(language === "cs" ? "cs-CZ" : "en-GB", { weekday: "short", day: "numeric", month: "short" }).format(new Date())}</time>}
-              {view === "Today" && <TodayHeaderMeta app={app} />}
+              {view === "Today" && !targetPlan && <TodayHeaderMeta app={app} />}
             </div>
           </div>
           <HeldBack app={app} />
           <CalendarView app={app} />
           <HomeView app={app} />
-          {view === "Today" && <TodayTop app={app} />}
+          {view === "Today" && !targetPlan && <TodayTop app={app} />}
           <SearchResults app={app} />
           <ContextView app={app} />
           <AgentsView app={app} />
           <SettingsView app={app} />
-          <EntityList app={app} />
-          {view === "Today" && <TodayFooter app={app} />}
+          {targetPlan && targetMyPlan
+            ? <TargetMyPlan gates={targetMyPlan} />
+            : <EntityList app={app} />}
+          {view === "Today" && !targetPlan && <TodayFooter app={app} />}
         </div>
       </section>
       <MobileNav app={app} />
