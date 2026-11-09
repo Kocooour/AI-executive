@@ -8,8 +8,10 @@ import { targetUiConfig } from "../lib/target-ui-config";
 export const dynamic = "force-dynamic";
 
 export default function Page() {
-  const targetData = targetUiEnabled();
-  const config = targetData ? targetUiConfig(process.env) : null;
+  // The provider (and its session check) mounts only when a target screen is
+  // actually enabled; R3-FE-1 alone has no consumer and makes no request.
+  const config = targetUiEnabled() ? targetUiConfig(process.env) : null;
+  const targetData = config?.myPlan.enabled === true;
   return targetData
     ? <TargetDataProvider><LumiAppRoot targetMyPlan={config?.myPlan} /></TargetDataProvider>
     : <LumiAppRoot />;

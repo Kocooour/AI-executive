@@ -52,7 +52,7 @@ export function LumiAppRoot({ targetMyPlan }: { targetMyPlan?: TargetMyPlanProps
   return (
     <main className={`appShell view-${view.toLowerCase()}${app.selected ? " inspectorOpen" : ""}${view === "Projects" && app.openProject ? " projectPageOpen" : ""}`} data-design-system={mobileDesignV1Preview ? "lumi-v1" : undefined} data-workspace-tone={app.activeWorkspaceTone}
       data-my-plan-preview={mobileDesignV1Preview && app.mobilePlanPreviewActive && view === "Today" ? "true" : undefined}>
-      <Sidebar app={app} />
+      <Sidebar app={app} targetPlan={Boolean(targetMyPlan?.enabled)} />
       <section className="appPane">
         {app.offlineView && (
           <div className="offlineStart" role="status">
@@ -136,7 +136,7 @@ export function LumiAppRoot({ targetMyPlan }: { targetMyPlan?: TargetMyPlanProps
           {view === "Today" && !targetPlan && <TodayFooter app={app} />}
         </div>
       </section>
-      <MobileNav app={app} />
+      <MobileNav app={app} targetPlan={Boolean(targetMyPlan?.enabled)} />
       <DesktopCaptureFab app={app} />
       <CaptureDialog app={app} />
       <DetailPanel app={app} />
