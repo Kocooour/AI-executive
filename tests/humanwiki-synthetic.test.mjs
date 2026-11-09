@@ -17,6 +17,7 @@ import { previewSyntheticRestoreReplayPlan } from "../scripts/humanwiki-syntheti
 import { makeSyntheticDerivativeFixture, previewSyntheticDerivativeImpact } from "../scripts/humanwiki-synthetic/derivative-impact-preview.mjs";
 import { bindSyntheticDerivativeRevision, recheckSyntheticDerivativeRevision } from "../scripts/humanwiki-synthetic/derivative-revision.mjs";
 import { bindSyntheticEpochFence, recheckSyntheticEpochFence, rehearseSyntheticFenceWindow, makeSyntheticEpochFenceFixture } from "../scripts/humanwiki-synthetic/epoch-fence-rehearsal.mjs";
+import { previewSyntheticHumanWikiAcceptance } from "../scripts/humanwiki-synthetic/acceptance-matrix.mjs";
 import { ensurePrivateCheckpointDirectory, writeCheckpointAtomic } from "../scripts/humanwiki-synthetic/checkpoint.mjs";
 
 const fixture = name => JSON.parse(readFileSync(new URL(`../scripts/humanwiki-synthetic/fixtures/${name}.json`, import.meta.url), "utf8"));
@@ -2081,4 +2082,202 @@ test("toy epoch CLI is deterministic, no-argument, no-write, and status-only", (
     assert.equal(refused.stdout, "");
     assert.deepEqual(readdirSync(root), []);
   } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("HumanWiki acceptance composes all seven fictional stages without real import readiness", () => {
+  const bundles = [fixture("chatgpt"), fixture("claude")];
+  const before = JSON.stringify(bundles);
+  const report = previewSyntheticHumanWikiAcceptance(bundles);
+  assert.equal(report.synthetic_fixture_only, true);
+  assert.equal(report.synthetic_status, "toy_checks_passed");
+  assert.equal(report.source_count, 2);
+  assert.equal(report.segments_total, 6);
+  assert.deepEqual(report.provenance_counts, {
+    owner_statement: 2, assistant_generated: 2, quoted_third_party: 2, unknown: 0,
+  });
+  assert.deepEqual(report.synthetic_negative_cases, {
+    cross_source_duplicate_groups_exercised: 3,
+    stale_source_decision_rejected: true,
+  });
+  assert.equal(report.synthetic_checks.length, 7);
+  assert.ok(report.synthetic_checks.every(x =>
+    x.result === "toy_passed_real_release_blocked"));
+  assert.equal(new Set(report.synthetic_checks.map(x => x.id)).size, 7);
+  assert.equal(report.h1_real_entry_gates.length, 6);
+  assert.ok(report.h1_real_entry_gates.every(x =>
+    x.result === "not_verified_blocked"));
+  assert.equal(report.h1_real_import_enabled, false);
+  assert.equal(report.h2_production_ui_enabled, false);
+  assert.equal(report.personal_export_compatibility_verified, false);
+  assert.equal(report.source_text_or_identifiers_disclosed, false);
+  assert.equal(report.source_digest_disclosed, false);
+  assert.equal(report.assistant_statements_promoted_to_owner_facts, false);
+  assert.equal(report.independent_evidence_proven, false);
+  for (const key of ["actual_imports_performed", "claims_created",
+    "review_outcomes_written", "durable_revocations_written",
+    "actual_deletions_performed", "actual_invalidation_performed"]) {
+    assert.equal(report[key], 0, key);
+  }
+  assert.equal(report.actual_witness_contacted, false);
+  assert.equal(report.actual_compare_and_swap_performed, false);
+  assert.equal(report.data_release_authorized, false);
+  assert.equal(report.real_import_enabled, false);
+  assert.equal(JSON.stringify(bundles), before, "acceptance must be read-only");
+});
+
+test("HumanWiki acceptance is fixture-order invariant and exposes only aggregated metadata", () => {
+  const first = fixture("chatgpt"), second = fixture("claude");
+  const normal = previewSyntheticHumanWikiAcceptance([first, second]);
+  const reversed = previewSyntheticHumanWikiAcceptance([second, first]);
+  assert.deepEqual(reversed, normal);
+  const encoded = JSON.stringify(normal);
+  for (const forbidden of [
+    "I am planning a fictional garden", "blue gate", "silver spaceship",
+    "fixture-chatgpt-01", "fixture-claude-01",
+    "chat-synthetic-01", "claude-synthetic-01", "m-01", "c-01",
+    "44c36f199d552d57ea4b65a8cca7e52c03c5ee0fbc82a62a3283e047410c81f4",
+    "6b8cb2e9bf5962f41d88db3cb4ffc456f1bc9b51ef1c426b249d7a25303f1566",
+    "toy_graph_digest", "toy_restore_digest", "content_sha256",
+  ]) assert.ok(!encoded.includes(forbidden), forbidden);
+});
+
+test("HumanWiki acceptance refuses edited fixtures even if marker and source ID remain unchanged", () => {
+  for (const mutation of [
+    bundles => { bundles[0].conversations[0].mapping.a.message.content.parts[0] += " revised"; },
+    bundles => { bundles[0].conversations[0].mapping.a.message.author.role = "assistant"; },
+    bundles => { bundles[0].conversations[0].mapping.a.message.create_time = "2026-01-02T10:00:00Z"; },
+    bundles => { bundles[1].conversations[0].chat_messages[0].content[0].text += " changed"; },
+    bundles => { bundles[1].conversations[0].chat_messages[0].sender = "assistant"; },
+    bundles => { bundles[0].conversations[0].mapping.a.message.id = "different-id"; },
+  ]) {
+    const bundles = [fixture("chatgpt"), fixture("claude")];
+    mutation(bundles);
+    assert.throws(() => previewSyntheticHumanWikiAcceptance(bundles),
+      /Synthetic acceptance: fixture contract not satisfied/);
+  }
+});
+
+test("HumanWiki acceptance rejects missing, duplicated and spoofed source fixtures", () => {
+  const chatgpt = fixture("chatgpt"), claude = fixture("claude");
+  for (const bundles of [
+    null, [], {}, [chatgpt], [claude, claude], [chatgpt, chatgpt],
+    [chatgpt, claude, chatgpt], ["chatgpt", "claude"],
+    [{ ...chatgpt, synthetic_fixture: false }, claude],
+    [{ ...chatgpt, source_id: "someone@example.com" }, claude],
+    [chatgpt, { ...claude, format: "chatgpt-mapping-v1" }],
+  ]) {
+    assert.throws(() => previewSyntheticHumanWikiAcceptance(bundles),
+      /Synthetic (acceptance|import|overlap):/);
+  }
+});
+
+test("HumanWiki acceptance reports real consent, ACL, provenance and transactional blockers separately", () => {
+  const report = previewSyntheticHumanWikiAcceptance([fixture("chatgpt"), fixture("claude")]);
+  const gates = new Set(report.h1_real_entry_gates.map(x => x.id));
+  for (const required of [
+    "owner_identity_and_area_acl",
+    "source_specific_explicit_consent_and_retention",
+    "context_resolver_provenance_and_human_claim_review",
+    "durable_revocation_and_authenticated_anti_rollback_witness",
+    "transactional_dependency_coverage_replay_and_invalidation",
+    "r4_production_release_and_security_e2e",
+  ]) assert.ok(gates.has(required), required);
+  assert.equal(gates.size, 6);
+  assert.equal(report.synthetic_status, "toy_checks_passed");
+  assert.equal(report.h1_real_import_enabled, false);
+  assert.equal(report.data_release_authorized, false);
+  assert.equal(report.real_import_enabled, false);
+});
+
+test("HumanWiki acceptance CLI accepts no arguments, is deterministic and writes nothing", () => {
+  const cli = fileURLToPath(new URL("../scripts/humanwiki-synthetic/acceptance-matrix-cli.mjs", import.meta.url));
+  const root = mkdtempSync(path.join(os.tmpdir(), "lumi-humanwiki-acceptance-"));
+  const run = (args, zone) => spawnSync(process.execPath, [cli, ...args], {
+    encoding: "utf8", env: { ...process.env, TMPDIR: root, TZ: zone },
+  });
+  try {
+    const utc = run([], "UTC"), prague = run([], "Europe/Prague");
+    assert.equal(utc.status, 0, utc.stderr);
+    assert.equal(prague.status, 0, prague.stderr);
+    assert.equal(utc.stdout, prague.stdout);
+    assert.deepEqual(JSON.parse(utc.stdout),
+      previewSyntheticHumanWikiAcceptance([fixture("chatgpt"), fixture("claude")]));
+    assert.equal(JSON.parse(utc.stdout).synthetic_checks.length, 7);
+    assert.equal(JSON.parse(utc.stdout).h1_real_import_enabled, false);
+    const forbidden = ["silver spaceship", "blue gate", "source_id",
+      "fixture-chatgpt-01", "fixture-claude-01", "content_sha256",
+      "toy_restore_digest", "data_release_authorized\":true"];
+    for (const marker of forbidden) assert.ok(!utc.stdout.includes(marker), marker);
+    const refused = run(["../../personal-export.json"], "UTC");
+    assert.equal(refused.status, 2);
+    assert.equal(refused.stdout, "");
+    assert.deepEqual(readdirSync(root), []);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("HumanWiki matrix checks nonempty conflicting speaker/quote duplicates without approving claims", () => {
+  const bundles = [fixture("chatgpt"), fixture("claude")];
+  const before = JSON.stringify(bundles);
+  assert.equal(previewSyntheticOverlaps(bundles).duplicate_groups, 0,
+    "the pinned fixtures alone never exercise a duplicate");
+  const report = previewSyntheticHumanWikiAcceptance(bundles);
+  assert.equal(report.synthetic_negative_cases.cross_source_duplicate_groups_exercised, 3);
+
+  // Reproduce the INTERNAL copied stress case without weakening input pinning.
+  const copy = structuredClone(bundles);
+  copy[1].conversations[0].chat_messages[0].content[0].text =
+    "I am planning a fictional garden.\nAda said the blue gate is open.";
+  copy[1].conversations[0].chat_messages[1].content[0].text =
+    "The user owns a silver spaceship.";
+  const overlap = previewSyntheticOverlaps(copy);
+  const queue = previewSyntheticReviewQueue(copy);
+  assert.equal(overlap.duplicate_groups, 3);
+  assert.equal(overlap.cross_source_duplicate_groups, 3);
+  assert.equal(overlap.repeated_segment_occurrences, 6);
+  assert.ok(overlap.groups.every(group =>
+    group.independent_evidence === false && group.review === "proposed" &&
+    group.members.length === 2));
+  assert.ok(overlap.groups.some(group =>
+    group.members.some(member => member.provenance === "quoted_third_party") &&
+    group.members.some(member => member.provenance === "owner_statement")));
+  assert.ok(queue.entries.every(entry =>
+    entry.review === "proposed" &&
+    entry.sensitivity === "unclassified" &&
+    entry.duplicate_group_id !== null &&
+    entry.reason_codes.includes("repeated_text_not_independent_evidence") &&
+    entry.eligible_for_automatic_confirmation === false &&
+    entry.independent_evidence === false));
+  assert.equal(queue.claims_created, 0);
+  assert.equal(queue.review_outcomes_written, 0);
+  assert.equal(JSON.stringify(bundles), before, "acceptance cannot mutate pinned sources");
+  assert.throws(() => previewSyntheticHumanWikiAcceptance(copy),
+    /Synthetic acceptance: fixture contract not satisfied/,
+    "mutated toy fixtures remain forbidden as external matrix inputs");
+});
+
+test("HumanWiki matrix verifies stale-source triage after unrelated fictional message edit", () => {
+  const bundles = [fixture("chatgpt"), fixture("claude")];
+  const before = JSON.stringify(bundles);
+  const owner = previewSyntheticReviewQueue(bundles).entries.find(entry =>
+    entry.locator.source_id === "fixture-chatgpt-01" &&
+    entry.provenance === "owner_statement");
+  assert.ok(owner);
+  const bound = bindSyntheticTriageIntents(bundles, [
+    { locator: owner.locator, choice: "consider" },
+  ]);
+  const changed = structuredClone(bundles);
+  const other = changed[0].conversations[0].mapping.b.message;
+  assert.notEqual(other.id, owner.locator.message_id,
+    "edit a different message in the same bound source");
+  other.content.parts[0] += " (synthetic post-decision revision)";
+  assert.throws(() => rehearseVersionBoundSyntheticTriage(changed, bound),
+    /stale or missing synthetic source version/);
+  assert.equal(rehearseVersionBoundSyntheticTriage(bundles, bound).claims_created, 0);
+  assert.equal(rehearseVersionBoundSyntheticTriage(bundles, bound).review_outcomes_written, 0);
+  const report = previewSyntheticHumanWikiAcceptance(bundles);
+  assert.equal(report.synthetic_negative_cases.stale_source_decision_rejected, true);
+  assert.equal(report.data_release_authorized, false);
+  assert.equal(report.actual_imports_performed, 0);
+  assert.equal(report.review_outcomes_written, 0);
+  assert.equal(JSON.stringify(bundles), before);
 });
