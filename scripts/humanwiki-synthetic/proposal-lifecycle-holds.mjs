@@ -198,7 +198,12 @@ export function previewSyntheticProposalLifecycleHolds(bundles) {
   const context = prepareFictionalContext(bundles);
   const { candidate, initialLifecycle } = context;
   const scenarios = cases.map(scenario => {
-    const intents = Object.hasOwn(holds, scenario.action ?? "")
+    // A disconnect of the OTHER source must not block this candidate.
+    // Choose an unreadable intent only when the candidate's own source is
+    // held, never merely because some source has a disconnect action.
+    const candidateHeld = scenario.target === "candidate" &&
+      Object.hasOwn(holds, scenario.action ?? "");
+    const intents = candidateHeld
       ? poison
       : [{ draft_id: candidate.draft_id, choice: "inspect" }];
     return evaluateFictionalScenario(context, scenario, intents);
