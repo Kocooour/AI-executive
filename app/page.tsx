@@ -16,6 +16,6 @@ export default function Page() {
   // list or the plan, so they are no consumer either.
   const targetData = targetDataNeeded(config);
   return targetData
-    ? <TargetDataProvider><LumiAppRoot targetMyPlan={config?.myPlan} targetScopes={config?.scopes} targetDetails={config?.details} /></TargetDataProvider>
+    ? <TargetDataProvider><LumiAppRoot targetMyPlan={config?.myPlan} targetScopes={config?.scopes} targetDetails={config?.details} targetEdits={config?.edits} /></TargetDataProvider>
     : <LumiAppRoot />;
 }

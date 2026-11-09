@@ -8,6 +8,7 @@ import { expectFocusReturn, focusPendingRow, useTargetSearch } from "./target-de
 import { detailActivation, detailRouteKey, isParentOf, isTargetAddress, viewOfSearch, type DetailActivation } from "../../lib/target-detail-route";
 import { activeTargetViewFor, detailsActive, targetViewsFor } from "../../lib/target-shell-views";
 import { detailCopy } from "../../lib/target-detail-copy";
+import type { TargetUiEdits } from "../../lib/target-ui-config";
 import { mobileDesignV1Preview } from "./navigation";
 import { projectSyncNoticeLabel } from "../../lib/project-sync-notice";
 import { AuthScreen } from "./views/auth-screen";
@@ -44,9 +45,10 @@ const TargetDetailPanel = dynamic(() => import("./target-detail-panel"), { ssr: 
 
 export type TargetDetailsProps = { task: boolean; project: boolean; note: boolean };
 export type TargetScopesProps = { enabled: boolean; projects: boolean; notes: boolean };
+export type TargetEditsProps = TargetUiEdits;
 export type TargetMyPlanProps = { enabled: boolean; statusWrite: boolean; whenWrite: boolean };
 
-export function LumiAppRoot({ targetMyPlan, targetScopes, targetDetails }: { targetMyPlan?: TargetMyPlanProps; targetScopes?: TargetScopesProps; targetDetails?: TargetDetailsProps } = {}) {
+export function LumiAppRoot({ targetMyPlan, targetScopes, targetDetails, targetEdits }: { targetMyPlan?: TargetMyPlanProps; targetScopes?: TargetScopesProps; targetDetails?: TargetDetailsProps; targetEdits?: TargetEditsProps } = {}) {
   // Owner decision 2026-11-09: with target scopes on, the single global scope governs the
   // sidebar projects, the inspector and quick capture (see docs/R3-FE-04A-DETAILS.md).
   const scopesOn = Boolean(targetScopes?.enabled);
@@ -222,7 +224,7 @@ export function LumiAppRoot({ targetMyPlan, targetScopes, targetDetails }: { tar
       <DesktopCaptureFab app={app} />
       <CaptureDialog app={app} />
       {!(scopesOn && targetView) && <DetailPanel app={app} />}
-      {detailPanel && <TargetDetailPanel route={detailRoute} language={language} gates={detailGates} />}
+      {detailPanel && <TargetDetailPanel route={detailRoute} language={language} gates={detailGates} edits={targetEdits} />}
       <AssistantPanel app={app} />
       <DeferPopover app={app} />
       <ConfirmDialog app={app} />

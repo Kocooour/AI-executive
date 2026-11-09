@@ -31,6 +31,8 @@ import {
   detailIdOk,detailRouteKey,type TargetDetailGates,type TargetDetailRoute,
 } from "../../lib/target-detail-route";
 import {detailCopy,type DetailCopy,type DetailLanguage} from "../../lib/target-detail-copy";
+import type {TargetUiEdits} from "../../lib/target-ui-config";
+import {NoteEdits,TaskEdits,kindHasEdits,useDetailEdits,type DetailEditApi} from "./target-detail-edit";
 import "./target-details.css";
 
 type State=
@@ -117,9 +119,9 @@ function UnavailablePanel({language}:{language:DetailLanguage}){
   </Shell>;
 }
 
-function Content({content,route,copy,gates,more,onMore}:{
+function Content({content,route,copy,gates,more,onMore,edit}:{
   content:TargetDetailContent;route:TargetDetailRoute;copy:DetailCopy;gates:TargetDetailGates;
-  more:boolean;onMore:()=>void;
+  more:boolean;onMore:()=>void;edit:DetailEditApi|null;
 }){
   const area=(kind:"private"|"shared")=>kind==="shared"?copy.areaShared:copy.areaPrivate;
   if(content.kind==="task"){
@@ -139,6 +141,7 @@ function Content({content,route,copy,gates,more,onMore}:{
               {content.parentTitle}</button>
           :<strong>{content.parentTitle}</strong>}
       </p>}
+      {edit&&<TaskEdits api={edit} task={task}/>}
     </article>;
   }
   if(content.kind==="note"){
@@ -149,6 +152,7 @@ function Content({content,route,copy,gates,more,onMore}:{
       {note.body.length===0
         ?<p className="targetDetailMuted">{copy.noteBodyEmpty}</p>
         :<div className="targetDetailNoteBody" data-testid="target-detail-note-body">{note.body}</div>}
+      {edit&&<NoteEdits api={edit} note={note}/>}
     </article>;
   }
   const {page}=content;
@@ -175,8 +179,8 @@ function Content({content,route,copy,gates,more,onMore}:{
   </article>;
 }
 
-function DetailBody({route,language,gates}:{
-  route:TargetDetailRoute;language:DetailLanguage;gates:TargetDetailGates;
+function DetailBody({route,language,gates,edits}:{
+  route:TargetDetailRoute;language:DetailLanguage;gates:TargetDetailGates;edits?:TargetUiEdits;
 }){
   const copy=detailCopy[language];
   const {gate,onRefusal,retry}=useTargetGate();
@@ -263,10 +267,13 @@ function DetailBody({route,language,gates}:{
   // does not change the auth generation, so an open detail re-reads. The shown
   // content is replaced only by the complete new result; any failure removes it
   // (a 404 becomes the calm not-available state).
-  useTargetTick(()=>{
+  const editRef=useRef<DetailEditApi|null>(null);
+  const revalidate=useCallback(()=>{
     const current=stateRef.current;
     const live=sessionRef.current;
     if(current.kind!=="ready"||current.more||!live)return;
+    // A deleted item is gone: never re-read it (that would replace the confirmation by a 404).
+    if(editRef.current?.deleted)return;
     const id=++epoch.current;
     const wanted=current.content.kind==="project"?current.content.page.tasks.length:0;
     void (async()=>{
@@ -280,7 +287,8 @@ function DetailBody({route,language,gates}:{
       else if(result.reason==="superseded")return;
       else setState({kind:"error",reason:result.reason==="not-ready"?"stale":result.reason});
     })().catch(()=>{if(epoch.current===id)setState({kind:"error",reason:"unavailable"});});
-  });
+  },[]);
+  useTargetTick(revalidate);
 
   // Returning from a task to its project: focus the task row once rows exist.
   useEffect(()=>{if(state.kind==="ready")focusPendingRow();},[state]);
@@ -311,6 +319,13 @@ function DetailBody({route,language,gates}:{
     :state.kind==="error"?(state.reason==="hidden"?copy.hidden:copy.failures[state.reason])
     :copy.panelLabelLoading(kindLabel);
 
+  const edit=useDetailEdits({
+    route,language,edits,content,sessionKey:session,
+    removed:state.kind==="error"?state.reason:null,
+    readFetch,onRefusal,revalidate,onClose:()=>closeTargetDetail(route),
+  });
+  editRef.current=edit;
+
   let gateView:React.ReactNode=null;
   if(gate.kind==="checking")
     gateView=<p role="status" data-testid="target-detail-checking">{copy.loading}</p>;
@@ -339,17 +354,20 @@ function DetailBody({route,language,gates}:{
         <button type="button" onClick={reload}>{copy.retry}</button>}
       {content&&state.kind==="ready"&&
         <Content content={content} route={route} copy={copy} gates={gates}
-          more={state.more} onMore={()=>{void more();}}/>}
-      {content&&<p className="targetDetailNote">{copy.readOnlyNote}</p>}
+          more={state.more} onMore={()=>{void more();}} edit={edit}/>}
+      {content&&!(edit&&kindHasEdits(content.kind,edits))&&
+        <p className="targetDetailNote">{copy.readOnlyNote}</p>}
     </>}
   </Shell>;
 }
 
-export default function TargetDetailPanel({route,language="cs",gates}:{
+export default function TargetDetailPanel({route,language="cs",gates,edits}:{
   /** null: the address asked for something that cannot be opened. */
   route:TargetDetailRoute|null;language?:DetailLanguage;gates:TargetDetailGates;
+  /** R3-FE-4b: which edits exist at all (server-derived flags); absent = read-only as in 4a. */
+  edits?:TargetUiEdits;
 }){
   if(route===null)return <UnavailablePanel language={language}/>;
   // Keyed by target: another item is a new session, never a reuse of old content.
-  return <DetailBody key={detailRouteKey(route)} route={route} language={language} gates={gates}/>;
+  return <DetailBody key={detailRouteKey(route)} route={route} language={language} gates={gates} edits={edits}/>;
 }
