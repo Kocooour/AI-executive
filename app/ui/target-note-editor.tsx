@@ -76,7 +76,7 @@ export default function TargetNoteEditor({note,language,onCommitted}:{
     setMessage("");
     const result=await loadNoteEditPreview(note.id,signal.signal);
     if(seq!==requestNumber.current||signal.signal.aborted)return;
-    if(result.ok){
+    if(result.ok===true){
       if(!stillBound())return;
       // The detail must not become a stale-editor baseline if it changed before
       // the edit-token GET. Server CAS handles changes after the fresh read.
