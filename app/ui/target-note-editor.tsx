@@ -3,8 +3,8 @@
  * Drafts, preflight CAS and command UUID are memory-only and identity-bound.
  * Network ambiguity never generates a replacement command automatically. */
 import {useEffect,useRef,useState,type FormEvent} from "react";
-import {useTargetGeneration} from "./target-data-provider";
-import type {NotePreview} from "../../lib/target-staging-note-preview-client";
+import {useTargetGeneration,useTargetRuntime} from "./target-data-provider";
+import {readStagingNotePreview,type NotePreview} from "../../lib/target-staging-note-preview-client";
 import {
   loadNoteEditPreview,saveNoteEdit,validNoteEditText,
   type NoteEditCommand,type NoteEditPreview,
@@ -47,7 +47,11 @@ export default function TargetNoteEditor({note,language,onCommitted}:{
 }){
   const copy=words[language];
   const generation=useTargetGeneration();
+  const runtime=useTargetRuntime();
   const boundGeneration=useRef(generation);
+  const stillBound=()=>runtime?.known()===true&&
+    runtime.generation()===boundGeneration.current&&
+    document.visibilityState!=="hidden"&&navigator.onLine;
   const alive=boundGeneration.current!==""&&generation===boundGeneration.current;
   const [mode,setMode]=useState<Mode>({kind:"idle"});
   const [message,setMessage]=useState("");
@@ -73,7 +77,19 @@ export default function TargetNoteEditor({note,language,onCommitted}:{
     const result=await loadNoteEditPreview(note.id,signal.signal);
     if(seq!==requestNumber.current||signal.signal.aborted)return;
     if(result.ok){
-      if(generation!==boundGeneration.current)return;
+      if(!stillBound())return;
+      // The detail must not become a stale-editor baseline if it changed before
+      // the edit-token GET. Server CAS handles changes after the fresh read.
+      const fresh=await readStagingNotePreview(note.id,signal.signal);
+      if(seq!==requestNumber.current||signal.signal.aborted||!stillBound())return;
+      if(!fresh.ok||fresh.note.revision!==note.revision||
+          fresh.note.title!==note.title||fresh.note.body!==note.body||
+          fresh.note.areaId!==result.preview.writeAreaId){
+        setMode({kind:"idle"});
+        setMessage(copy.conflict);
+        onCommitted();
+        return;
+      }
       setMode({kind:"draft",draft:{
         preview:result.preview,revision:note.revision,title:note.title,body:note.body,
         command:null,phase:"edit",
@@ -91,7 +107,7 @@ export default function TargetNoteEditor({note,language,onCommitted}:{
     onCommitted(); // fresh authorized read; never restore a discarded cached draft
   }
   async function commit(draft:Draft){
-    if(!alive||draft.phase==="saving"||!navigator.onLine){
+    if(!alive||!stillBound()||draft.phase==="saving"){
       setMessage(copy.offline);return;
     }
     if(note.revision!==draft.revision){
@@ -111,7 +127,7 @@ export default function TargetNoteEditor({note,language,onCommitted}:{
     setMode({kind:"draft",draft:{...draft,command,phase:"saving"}});
     setMessage("");
     const result=await saveNoteEdit(note.id,command,signal.signal);
-    if(seq!==requestNumber.current||signal.signal.aborted||generation!==boundGeneration.current)return;
+    if(seq!==requestNumber.current||signal.signal.aborted||!stillBound())return;
     if(result.outcome==="saved"){
       setMode({kind:"idle"});
       onCommitted(); // server-authorized refetch; never trust optimistic text
