@@ -163,7 +163,7 @@ test("timestamp validation rejects zone-less, impossible and invalid-offset time
       "2026-01-01T10:00:00", "2026-02-31T10:00:00Z", "2025-02-29T10:00:00Z",
       "2026-13-01T10:00:00Z", "2026-01-01T24:00:00Z",
       "2026-01-01T10:00:60Z", "2026-01-01T10:00:00+14:30",
-      "2026-01-01T10:00:00+01:60", "2026-01-01T10:00:00Z\\n",
+      "2026-01-01T10:00:00+01:60", "2026-01-01T10:00:00Z\n",
     ]) {
       const bundle = fixture(provider);
       const message = provider === "chatgpt" ?
