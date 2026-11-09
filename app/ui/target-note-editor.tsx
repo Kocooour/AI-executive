@@ -5,12 +5,15 @@
 import {useEffect,useRef,useState,type FormEvent} from "react";
 import {useTargetGeneration,useTargetRuntime} from "./target-data-provider";
 import {readStagingNotePreview,type NotePreview} from "../../lib/target-staging-note-preview-client";
+import {queuedTargetFetch} from "../../lib/target-read-queue";
 import {
   loadNoteEditPreview,saveNoteEdit,validNoteEditText,
   type NoteEditCommand,type NoteEditPreview,
 } from "../../lib/target-staging-note-edit-client";
 import type {DetailLanguage} from "../../lib/target-detail-copy";
 
+// R3-FE-4a read budget applies to note editor as well as lists and detail.
+const editReadFetch=queuedTargetFetch();
 type Draft={
   preview:NoteEditPreview;revision:number;title:string;body:string;
   command:NoteEditCommand|null;
@@ -74,13 +77,13 @@ export default function TargetNoteEditor({note,language,onCommitted}:{
     controller.current=signal;
     setMode({kind:"checking"});
     setMessage("");
-    const result=await loadNoteEditPreview(note.id,signal.signal);
+    const result=await loadNoteEditPreview(note.id,signal.signal,editReadFetch);
     if(seq!==requestNumber.current||signal.signal.aborted)return;
     if(result.ok===true){
       if(!stillBound())return;
       // The detail must not become a stale-editor baseline if it changed before
       // the edit-token GET. Server CAS handles changes after the fresh read.
-      const fresh=await readStagingNotePreview(note.id,signal.signal);
+      const fresh=await readStagingNotePreview(note.id,signal.signal,editReadFetch);
       if(seq!==requestNumber.current||signal.signal.aborted||!stillBound())return;
       if(!fresh.ok||fresh.note.revision!==note.revision||
           fresh.note.title!==note.title||fresh.note.body!==note.body||
@@ -113,6 +116,10 @@ export default function TargetNoteEditor({note,language,onCommitted}:{
     if(note.revision!==draft.revision){
       setMode({kind:"draft",draft:{...draft,phase:"conflict"}});
       return;
+    }
+    if(draft.command===null&&draft.title===note.title&&draft.body===note.body){
+      setMode({kind:"idle"});
+      return; // No change means no CAS command or spurious 409 unchanged.
     }
     if(draft.command===null&&!validNoteEditText(draft.title,draft.body)){
       setMessage(copy.invalid);return;
