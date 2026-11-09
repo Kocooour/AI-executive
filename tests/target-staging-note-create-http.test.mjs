@@ -39,6 +39,7 @@ const { bootstrapIsolatedTargetStore } = await import("../lib/target-store-boots
 const durable = await import("../lib/target-staging-durable-session.ts");
 const { createSessionToken, sessionCookieName } = await import("../lib/auth.ts");
 const { POST } = await import("../app/api/target-staging/notes/route.ts");
+const { GET: GET_NOTE } = await import("../app/api/target-staging/notes/[noteId]/route.ts");
 const { parseNoteCreateReply } = await import("../lib/target-staging-note-create-process.ts");
 
 after(() => {
@@ -98,6 +99,15 @@ function send(data, cookie = owner(), headers = {}, url = "http://localhost:3001
     ...headers,
   }, body: JSON.stringify(data) }));
 }
+function getNoteHttp(id, cookie) {
+  const request = new Request(
+    "http://localhost:3001/api/target-staging/notes/" + encodeURIComponent(id),
+    { headers: {
+      ...(cookie ? { cookie } : {}), "x-forwarded-for": "10.9.0.25",
+    } },
+  );
+  return GET_NOTE(request, { params: Promise.resolve({ noteId: id }) });
+}
 function note(fx, id) {
   const db = new DatabaseSync(fx.stage.databasePath, { readOnly: true });
   try {
@@ -121,6 +131,12 @@ test("owner creates a standalone private note, replay is idempotent and no legac
     id: command.noteId, title: command.title, body: command.body,
     area_id: fx.stage.unassignedAreaId, project_id: null,
   });
+  const fetched = await checked(await getNoteHttp(command.noteId, owner()), 200);
+  assert.deepEqual(fetched.note, {
+    id: command.noteId, title: command.title, body: command.body,
+    areaId: fx.stage.unassignedAreaId, areaKind: "private",
+    projectId: null, revision: 0,
+  });
   assert.deepEqual(await checked(await send(command), 200),
     { ok: true, noteId: command.noteId, replayed: true });
   assert.equal((await checked(await send({ ...command, title: "Changed" }), 409)).error, "Revision conflict");
@@ -130,6 +146,8 @@ test("durable session may create only into its own private Area", async () => {
   const bob = session(fx, "bob");
   const allowed = body(fx, { areaId: "bob-private" });
   assert.equal((await checked(await send(allowed, bob), 201)).noteId, allowed.noteId);
+  assert.equal((await checked(await getNoteHttp(allowed.noteId, bob), 200)).note.id, allowed.noteId);
+  assert.equal((await checked(await getNoteHttp(allowed.noteId, owner()), 404)).error, "Not found");
   const cross = body(fx);
   assert.equal((await checked(await send(cross, bob), 404)).error, "Not found");
   assert.equal(note(fx, cross.noteId), undefined);
