@@ -23,6 +23,15 @@ Suggested names:
 
 Choose a meaningful, filesystem-safe `<topic>`. Do not reuse a port or state prefix while its instance is still running.
 
+## Outcome-based milestones and PR checkpoints
+
+The binding rules (1–3 PR budget, max. two consecutive synthetic PRs, owner decision when over budget, no roadmap-only PRs) are in [AGENTS.md](../AGENTS.md#outcome-based-milestone-governance-binding). Group a milestone's PRs with a GitHub Milestone or label; start every PR description with:
+
+```text
+Milestone: <link>
+Acceptance step / synthetic: <what end-to-end criterion advances> / yes|no
+```
+
 ## Create isolated worktrees
 
 Start from a clean, up-to-date clone:
@@ -170,6 +179,7 @@ Run each variant with a separate port and state prefix, document the hypothesis 
 
 ## Pull request checklist
 
+- [ ] `Milestone:` and `Acceptance step / synthetic:` lines present; PR assigned to the milestone
 - [ ] Dedicated branch and isolated worktree/check-out used
 - [ ] Unique port and local database/storage/environment prefix used
 - [ ] Production build and relevant focused checks pass
