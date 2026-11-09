@@ -169,6 +169,12 @@ export function LumiAppRoot({ targetMyPlan, targetScopes, targetDetails }: { tar
               {detailCopy[language].legacyReadOnlyNotice}
             </p>
           )}
+          {legacyReadOnly && app.legacyWriteAttempt && (
+            <div className="navigationUnavailableNotice legacyReadOnlyNotice" role="alert" data-testid="legacy-write-blocked">
+              <p>{detailCopy[language].legacyWriteBlocked}</p>
+              <button type="button" onClick={app.dismissLegacyWriteAttempt}>{detailCopy[language].dismiss}</button>
+            </div>
+          )}
           <div className="pageIntro">
             {view !== "Home" && (
               <p className="eyebrow">

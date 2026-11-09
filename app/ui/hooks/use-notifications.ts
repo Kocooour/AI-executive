@@ -8,7 +8,7 @@ import { localizeServerError } from "../../../lib/server-errors";
 // (loaded on start), enabling, disabling and testing push, and saving the preferences one after
 // another. Moved verbatim from use-lumi-app.tsx. The Settings view also refreshes the state
 // together with the backups; that effect stays in use-lumi-app.tsx, so the setter is returned.
-export function useNotifications({ tr, language }: { tr: (key: string) => string; language: string }) {
+export function useNotifications({ tr, language, writesBlocked = () => false }: { tr: (key: string) => string; language: string; writesBlocked?: () => boolean }) {
   const [notificationState, setNotificationState] = useState<NotificationState | null>(null),
     [notificationStatus, setNotificationStatus] = useState("");
   // A status shown in one language is not kept after the language changes.
@@ -23,6 +23,7 @@ export function useNotifications({ tr, language }: { tr: (key: string) => string
   }, []);
 
   async function enableNotifications() {
+    if (writesBlocked()) return;
     setNotificationStatus(tr("notifRequesting"));
     try {
       if (!("serviceWorker" in navigator) || !("PushManager" in window)) {
@@ -57,6 +58,7 @@ export function useNotifications({ tr, language }: { tr: (key: string) => string
     }
   }
   async function disableNotifications() {
+    if (writesBlocked()) return;
     setNotificationStatus(tr("notifDisabling"));
     try {
       const registration = await navigator.serviceWorker.ready;
@@ -77,6 +79,7 @@ export function useNotifications({ tr, language }: { tr: (key: string) => string
     }
   }
   async function testNotification() {
+    if (writesBlocked()) return;
     setNotificationStatus(tr("notifTestSending"));
     try {
       const response = await fetch("/api/notifications", {
@@ -102,6 +105,7 @@ export function useNotifications({ tr, language }: { tr: (key: string) => string
     }
   }
   async function saveNotificationSettings(preferences: NotificationPreferences) {
+    if (writesBlocked()) return;
     setNotificationState((current) => current ? { ...current, preferences } : current);
     notificationSettingsQueue.current = notificationSettingsQueue.current
       .catch(() => undefined)

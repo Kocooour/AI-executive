@@ -8,7 +8,9 @@ import { cachedAttention, saveAttention } from "../../../lib/attention-cache";
 // The "Needs attention" list on Home: loading and refreshing the server's evaluation, keeping the
 // last one while the connection is lost (marked out of date), and snooze/dismiss. Moved verbatim
 // from use-lumi-app.tsx; the values it needs from the rest of the app are passed in.
-export function useAttention({ authState, offlineView = false, activeWorkspaceId, syncStatus, items, pendingDeletedIds, tr, language, signingOut }: {
+export function useAttention({ writesBlocked = () => false, authState, offlineView = false, activeWorkspaceId, syncStatus, items, pendingDeletedIds, tr, language, signingOut }: {
+  /** R3-FE-4a: true (and announced) when unified target mode makes legacy user writes inert. */
+  writesBlocked?: () => boolean;
   tr: (key: string) => string;
   language: string;
   authState: string;
@@ -60,6 +62,7 @@ export function useAttention({ authState, offlineView = false, activeWorkspaceId
   }
 
   async function actOnAttention(item: AttentionResponse["items"][number], action: "snooze" | "dismiss") {
+    if (writesBlocked()) return;
     if (!attention || attentionActionsBlocked) return;
     setAttentionBusyKey(item.attentionKey);
     setAttentionError("");

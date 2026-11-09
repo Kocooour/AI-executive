@@ -8,8 +8,10 @@ import { localizeServerError } from "../../../lib/server-errors";
 // moving its blocks (approval-bound actions with Undo), and starting, pausing and finishing work on
 // a task. Moved verbatim from use-lumi-app.tsx; the values it needs from the rest of the app are
 // passed in.
-export function useDayPlan({ authState, activeWorkspaceId, writeWorkspaceId, items, language, tr, calendarToday,
+export function useDayPlan({ writesBlocked = () => false, authState, activeWorkspaceId, writeWorkspaceId, items, language, tr, calendarToday,
   calendarWorkspaceSelection, askConfirm, closeDetail, pullFromServer, selectWorkspace, syncQueue, pendingKey }: {
+  /** R3-FE-4a: true (and announced) when unified target mode makes legacy user writes inert. */
+  writesBlocked?: () => boolean;
   authState: string;
   activeWorkspaceId: string;
   writeWorkspaceId: string;
@@ -68,6 +70,7 @@ export function useDayPlan({ authState, activeWorkspaceId, writeWorkspaceId, ite
   }
 
   async function workSessionAction(action: "start" | "pause" | "resume" | "finish", task?: Entity) {
+    if (writesBlocked()) return;
     if (workSessionBusy) return;
     const workspaceId = action === "start" && task ? task.workspaceId
       : workSession?.workspaceId || (activeWorkspaceId === "all" ? writeWorkspaceId : activeWorkspaceId);
@@ -147,6 +150,7 @@ export function useDayPlan({ authState, activeWorkspaceId, writeWorkspaceId, ite
     return () => window.clearInterval(timer);
   }, [workSession?.id, workSession?.state]);
   async function applyDayPlanAction(item: DayPlanItem, decision: "accepted" | "tomorrow" | "dismissed") {
+    if (writesBlocked()) return;
     if (dayPlanBusy || !dayPlan) return;
     const trigger = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     if (dayPlan.workspaceId !== calendarWorkspaceSelection.current || dayPlan.date !== calendarToday) return;
@@ -190,6 +194,7 @@ export function useDayPlan({ authState, activeWorkspaceId, writeWorkspaceId, ite
     }
   }
   async function undoDayPlanBlock() {
+    if (writesBlocked()) return;
     if (!dayPlanUndo || dayPlanBusy) return;
     setDayPlanBusy(true);
     try {

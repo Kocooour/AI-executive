@@ -47,6 +47,9 @@ export type DetailCopy={
   planOpenTask:(title:string)=>string;
   /** Unified target mode: views that still show legacy data cannot be edited. */
   legacyReadOnlyNotice:string;
+  /** Announced when a user action on legacy data was blocked (nothing was changed). */
+  legacyWriteBlocked:string;
+  dismiss:string;
 };
 
 export const detailCopy:Record<DetailLanguage,DetailCopy>={
@@ -96,6 +99,8 @@ export const detailCopy:Record<DetailLanguage,DetailCopy>={
     rowOpenProject:title=>`Otevřít projekt ${title}`,
     rowOpenNote:title=>`Otevřít poznámku ${title}`,
     planOpenTask:title=>`Otevřít detail úkolu ${title}`,
+    legacyWriteBlocked:"Změna nebyla provedena: dosavadní data jsou v režimu serverových dat jen pro čtení.",
+    dismiss:"Skrýt",
     legacyReadOnlyNotice:"Tento pohled zatím ukazuje dosavadní data; úpravy jsou v režimu serverových dat vypnuté.",
   },
   en:{
@@ -144,6 +149,8 @@ export const detailCopy:Record<DetailLanguage,DetailCopy>={
     rowOpenProject:title=>`Open project ${title}`,
     rowOpenNote:title=>`Open note ${title}`,
     planOpenTask:title=>`Open task details for ${title}`,
+    legacyWriteBlocked:"Nothing was changed: the existing data is read-only in server-data mode.",
+    dismiss:"Dismiss",
     legacyReadOnlyNotice:"This view still shows the existing data; editing is switched off in server-data mode.",
   },
 };

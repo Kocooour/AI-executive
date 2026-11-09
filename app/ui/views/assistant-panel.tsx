@@ -101,7 +101,7 @@ export function AssistantPanel({ app }: { app: LumiApp }) {
   const approve = () => {
     // An explicit review is required on every viewport. Never dispatch a stale
     // approval from a queued click: the server still validates the proposal.
-    if (!proposal || !review || review.resolved || aiBusy || proposalApprovalGate(proposal, writeWorkspaceId, Date.now(), review.blocked)) return;
+    if (!proposal || !review || review.resolved || aiBusy || app.legacyWritesDisabled || proposalApprovalGate(proposal, writeWorkspaceId, Date.now(), review.blocked)) return;
     void resolveAIProposal(proposal.id, "confirm");
   };
   return (
@@ -121,7 +121,7 @@ export function AssistantPanel({ app }: { app: LumiApp }) {
             {messages.length === 0 && (
               <div className="assistantWelcome">
                 <p>{tr("assistantWelcome")}</p>
-                <button onClick={() => askAI(tr("todayBriefPrompt"))} disabled={aiBusy}>
+                <button onClick={() => askAI(tr("todayBriefPrompt"))} disabled={aiBusy || app.legacyWritesDisabled}>
                   {tr("todayBrief")}
                 </button>
                 <small>{tr("assistantWritesConfirm")}</small>
@@ -153,7 +153,7 @@ export function AssistantPanel({ app }: { app: LumiApp }) {
                   </div>
                 )}
                 {m.actionId && !m.resolved && (
-                  <button className="aiUndo" disabled={aiBusy} onClick={() => undoAIAction(m.actionId!)}>
+                  <button className="aiUndo" disabled={aiBusy || app.legacyWritesDisabled} onClick={() => undoAIAction(m.actionId!)}>
                     {tr("undoAi")}
                   </button>
                 )}
@@ -171,7 +171,7 @@ export function AssistantPanel({ app }: { app: LumiApp }) {
               placeholder={`${tr("askAi")}…`}
               disabled={aiBusy}
             />
-            <button onClick={() => askAI()} disabled={aiBusy || !aiText.trim()}>{tr("send")}</button>
+            <button onClick={() => askAI()} disabled={aiBusy || app.legacyWritesDisabled || !aiText.trim()}>{tr("send")}</button>
           </div>
           {proposal && review && !review.resolved && <div className="mobileApprovalBackdrop" onClick={() => setReviewId(null)}>
             <section className="mobileApprovalSheet" id="lumi-proposal-review" role="dialog" aria-modal="true" aria-label={tr("approvalReview")} onClick={(event) => event.stopPropagation()}>
@@ -184,7 +184,7 @@ export function AssistantPanel({ app }: { app: LumiApp }) {
               </div>
               <div className="mobileApprovalActions">
                 <button className="primaryAction" disabled={aiBusy || Boolean(unavailable)} onClick={approve}>{tr("approvalApprove")}</button>
-                <button disabled={aiBusy} onClick={() => resolveAIProposal(proposal.id, "cancel")}>{tr("reject")}</button>
+                <button disabled={aiBusy || app.legacyWritesDisabled} onClick={() => resolveAIProposal(proposal.id, "cancel")}>{tr("reject")}</button>
               </div>
             </section>
           </div>}

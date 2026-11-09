@@ -40,7 +40,7 @@ export function AgentsView({ app }: { app: LumiApp }) {
                         <span>{tr("agentNoWrite")}</span>
                       </div>
                       {latest && <small>{tr("latestResult")}: {latest.status === "completed" ? tr("completedRun") : latest.status === "failed" ? tr("failedRun") : tr("runningRun")} · {new Date(latest.createdAt).toLocaleString(language === "cs" ? "cs-CZ" : "en-GB")}</small>}
-                      <button className="primaryAction" disabled={Boolean(agentBusyId) || !agent.triggerModes.includes("manual")} onClick={() => runPACTAgent(agent.id)}>
+                      <button className="primaryAction" disabled={Boolean(agentBusyId) || app.legacyWritesDisabled || !agent.triggerModes.includes("manual")} onClick={() => runPACTAgent(agent.id)}>
                         {agentBusyId === agent.id ? tr("working") : tr("runAgent")}
                       </button>
                     </article>

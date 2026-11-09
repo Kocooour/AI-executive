@@ -11,7 +11,9 @@ import type { BackupSummary, ConfirmRequest, Language } from "../types";
 // the setters are returned.
 export const maxImportBytes = 200 * 1024 * 1024;
 
-export function useBackups({ language, tr, askConfirm, replaceLocal }: {
+export function useBackups({ language, tr, askConfirm, replaceLocal, writesBlocked = () => false }: {
+  /** R3-FE-4a: true (and announced) when unified target mode makes legacy user writes inert. */
+  writesBlocked?: () => boolean;
   language: Language;
   tr: (key: string) => string;
   askConfirm: (request: ConfirmRequest) => Promise<boolean>;
@@ -68,6 +70,7 @@ export function useBackups({ language, tr, askConfirm, replaceLocal }: {
   }
 
   async function restoreServerBackup(backup: BackupSummary) {
+    if (writesBlocked()) return;
     if (backupBusy) return;
     if (!(await askConfirm({ title: tr("backupRestoreTitle"), confirmLabel: tr("restore"), danger: true,
       message: tr(backup.format === "legacy" ? "backupRestoreConfirmLegacy" : "backupRestoreConfirmFull").replace("{date}", () => dateText(backup.createdAt)) }))) return;
@@ -117,6 +120,7 @@ export function useBackups({ language, tr, askConfirm, replaceLocal }: {
   }
 
   async function importExport(file: File) {
+    if (writesBlocked()) return;
     if (backupBusy) return;
     if (file.size > maxImportBytes) { report(tr("backupFileTooLarge"), true); return; }
     if (!(await askConfirm({ title: tr("backupImportTitle"), confirmLabel: tr("restore"), danger: true,

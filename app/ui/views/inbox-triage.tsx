@@ -1,3 +1,4 @@
+import { LegacyWriteGate } from "./legacy-write-gate";
 "use client";
 
 import { useRef, useState } from "react";
@@ -67,7 +68,7 @@ export function InboxTriage({ app, task }: { app: LumiApp; task: Entity }) {
     projectId: selectedProject?.id, areaId: selectedProject ? undefined : selectedArea?.id,
   }));
 
-  return <section className="inboxTriage" aria-label={tr("triageTitle")}>
+  return <LegacyWriteGate><section className="inboxTriage" aria-label={tr("triageTitle")}>
     <header className="inboxTriageHeader">
       <h3>{tr("triageTitle")}</h3>
       <p className="inboxTriageWorkspace">
@@ -158,5 +159,5 @@ export function InboxTriage({ app, task }: { app: LumiApp; task: Entity }) {
         if (accepted) await triageInbox(task, "discard");
       })}>{tr("triageDiscard")}</button>
     {error && <p role="alert">{error}</p>}
-  </section>;
+  </section></LegacyWriteGate>;
 }

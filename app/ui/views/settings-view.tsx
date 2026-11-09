@@ -241,7 +241,8 @@ export function SettingsView({ app }: { app: LumiApp }) {
                     />
                     <button
                       onClick={saveWorkspaceName}
-                      disabled={!workspaceDraft.trim()}
+                      disabled={!workspaceDraft.trim() || app.legacyWritesDisabled}
+                      title={app.legacyReadOnlyHint}
                     >
                       {tr("save")}
                     </button>
@@ -272,7 +273,8 @@ export function SettingsView({ app }: { app: LumiApp }) {
                     />
                     <button
                       onClick={createWorkspace}
-                      disabled={!newWorkspaceDraft.trim()}
+                      disabled={!newWorkspaceDraft.trim() || app.legacyWritesDisabled}
+                      title={app.legacyReadOnlyHint}
                     >
                       {tr("create")}
                     </button>
@@ -555,11 +557,11 @@ export function SettingsView({ app }: { app: LumiApp }) {
                   <button type="button" className="secondaryAction" onClick={downloadExport} disabled={backupBusy}>
                     {tr("backupExport")}
                   </button>
-                  <button type="button" className="secondaryAction" disabled={backupBusy}
+                  <button type="button" className="secondaryAction" disabled={backupBusy || app.legacyWritesDisabled} title={app.legacyReadOnlyHint}
                     onClick={() => document.getElementById("backupImportInput")?.click()}>
                     {tr("backupImport")}
                   </button>
-                  <input id="backupImportInput" type="file" accept=".zip,application/zip" hidden aria-label={tr("backupImportFile")}
+                  <input id="backupImportInput" type="file" disabled={app.legacyWritesDisabled} accept=".zip,application/zip" hidden aria-label={tr("backupImportFile")}
                     onChange={(event) => {
                       const file = event.target.files?.[0];
                       event.target.value = "";
@@ -583,7 +585,7 @@ export function SettingsView({ app }: { app: LumiApp }) {
                         </small>
                       </span>
                       <button
-                        disabled={Boolean(backup.error) || backupBusy}
+                        disabled={Boolean(backup.error) || backupBusy || app.legacyWritesDisabled}
                         onClick={() => restoreServerBackup(backup)}
                       >
                         {tr("restore")}
