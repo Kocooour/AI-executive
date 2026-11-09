@@ -11,6 +11,7 @@ import { previewSyntheticOverlaps } from "../scripts/humanwiki-synthetic/overlap
 import { previewSyntheticReviewQueue } from "../scripts/humanwiki-synthetic/review-preview.mjs";
 import { rehearseSyntheticTriage } from "../scripts/humanwiki-synthetic/triage-rehearsal.mjs";
 import { bindSyntheticTriageIntents, rehearseVersionBoundSyntheticTriage } from "../scripts/humanwiki-synthetic/version-bound-triage.mjs";
+import { previewSyntheticSourceLifecycle } from "../scripts/humanwiki-synthetic/lifecycle-preview.mjs";
 import { ensurePrivateCheckpointDirectory, writeCheckpointAtomic } from "../scripts/humanwiki-synthetic/checkpoint.mjs";
 
 const fixture = name => JSON.parse(readFileSync(new URL(`../scripts/humanwiki-synthetic/fixtures/${name}.json`, import.meta.url), "utf8"));
@@ -797,5 +798,195 @@ test("version-bound CLI proves stale decisions fail without writes or personal d
     assert.equal(denied.status, 2);
     assert.equal(denied.stdout, "");
     assert.deepEqual(readdirSync(root), [], "CLI must not write any fixture checkpoint");
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("synthetic lifecycle baseline preserves only proposed source-segment metadata", () => {
+  const bundles = [fixture("chatgpt"), fixture("claude")];
+  const preview = previewSyntheticSourceLifecycle(bundles);
+  assert.equal(preview.synthetic_fixture_only, true);
+  assert.equal(preview.mode, "hypothetical_source_lifecycle_policy_only");
+  assert.equal(preview.scenarios_applied, 0);
+  assert.equal(preview.segments_total, 6);
+  assert.equal(preview.visible_segments, 6);
+  assert.equal(preview.suppressed_segments, 0);
+  assert.equal(preview.visible_entries.length, 6);
+  assert.ok(preview.source_states.every(source =>
+    source.action === "active" && source.would_allow_new_source_reads &&
+    source.would_allow_pending_review && !source.would_invalidate_source_derivatives &&
+    !source.operation_completed));
+  assert.ok(preview.visible_entries.every(entry =>
+    entry.review === "proposed" && entry.sensitivity === "unclassified" &&
+    !entry.eligible_for_automatic_confirmation && !entry.independent_evidence));
+  assert.equal(preview.claims_created, 0);
+  assert.equal(preview.review_outcomes_written, 0);
+  assert.equal(preview.actual_source_reads_performed, 0);
+  assert.equal(preview.durable_lifecycle_events_written, 0);
+  assert.equal(preview.tombstones_written, 0);
+  assert.equal(preview.real_import_enabled, false);
+  const serialized = JSON.stringify(preview);
+  for (const text of ["fictional garden", "silver spaceship", "blue gate is open",
+    "content_sha256", "bundle_digest"]) {
+    assert.ok(!serialized.includes(text), text);
+  }
+  assert.deepEqual(previewSyntheticSourceLifecycle([...bundles].reverse()), preview);
+});
+
+test("pause stops hypothetical new reads while preserving existing review visibility", () => {
+  const bundles = [fixture("chatgpt"), fixture("claude")];
+  const preview = previewSyntheticSourceLifecycle(bundles, [
+    { source_id: "fixture-chatgpt-01", action: "pause_sync" },
+  ]);
+  const paused = preview.source_states.find(s => s.source_id === "fixture-chatgpt-01");
+  assert.equal(paused.action, "pause_sync");
+  assert.equal(paused.would_allow_new_source_reads, false);
+  assert.equal(paused.would_allow_pending_review, true);
+  assert.equal(paused.would_invalidate_source_derivatives, false);
+  assert.equal(paused.retention_recheck_required, false);
+  assert.equal(paused.independent_witness_required, false);
+  assert.equal(paused.operation_completed, false);
+  assert.equal(preview.visible_segments, 6);
+  assert.equal(preview.suppressed_segments, 0);
+  assert.equal(preview.tombstones_written, 0);
+});
+
+test("disconnect hides source locators and requests invalidation without claim deletion", () => {
+  const bundles = [fixture("chatgpt"), fixture("claude")];
+  const preview = previewSyntheticSourceLifecycle(bundles, [
+    { source_id: "fixture-chatgpt-01", action: "disconnect_source" },
+  ]);
+  const disconnected = preview.source_states.find(s => s.source_id === "fixture-chatgpt-01");
+  assert.equal(disconnected.would_allow_new_source_reads, false);
+  assert.equal(disconnected.would_allow_pending_review, false);
+  assert.equal(disconnected.would_invalidate_source_derivatives, true);
+  assert.equal(disconnected.operation_completed, false);
+  assert.equal(preview.visible_segments, 3);
+  assert.equal(preview.suppressed_segments, 3);
+  assert.equal(disconnected.visible_segments, 0);
+  assert.equal(disconnected.suppressed_segments, 3);
+  assert.ok(preview.visible_entries.every(entry =>
+    entry.locator.source_id === "fixture-claude-01"));
+  assert.equal(preview.claims_created, 0);
+  assert.equal(preview.review_outcomes_written, 0);
+});
+
+test("revoked import consent blocks pending review but does not claim completed removal", () => {
+  const preview = previewSyntheticSourceLifecycle(
+    [fixture("chatgpt"), fixture("claude")], [
+      { source_id: "fixture-claude-01", action: "revoke_import_consent" },
+    ]);
+  const revoked = preview.source_states.find(s => s.source_id === "fixture-claude-01");
+  assert.equal(revoked.would_allow_pending_review, false);
+  assert.equal(revoked.would_allow_new_source_reads, false);
+  assert.equal(revoked.would_invalidate_source_derivatives, true);
+  assert.equal(revoked.retention_recheck_required, true);
+  assert.equal(revoked.reimport_blocked_pending_new_consent, true);
+  assert.equal(revoked.independent_witness_required, true);
+  assert.equal(revoked.operation_completed, false);
+  assert.equal(revoked.durable_lifecycle_event_written, false);
+  assert.equal(revoked.witness_confirmed, false);
+  assert.equal(preview.visible_segments, 3);
+  assert.ok(preview.visible_entries.every(entry =>
+    entry.locator.source_id !== "fixture-claude-01"));
+  assert.equal(preview.durable_lifecycle_events_written, 0);
+});
+
+test("erasure request stays fail-closed pending independently witnessed durable completion", () => {
+  const preview = previewSyntheticSourceLifecycle(
+    [fixture("chatgpt"), fixture("claude")], [
+      { source_id: "fixture-chatgpt-01", action: "request_erasure" },
+    ]);
+  const removed = preview.source_states.find(s => s.source_id === "fixture-chatgpt-01");
+  assert.equal(removed.action, "request_erasure");
+  assert.equal(removed.would_allow_pending_review, false);
+  assert.equal(removed.would_allow_new_source_reads, false);
+  assert.equal(removed.would_invalidate_source_derivatives, true);
+  assert.equal(removed.reimport_blocked_pending_new_consent, true);
+  assert.equal(removed.independent_witness_required, true);
+  assert.equal(removed.operation_completed, false);
+  assert.equal(removed.witness_confirmed, false);
+  assert.equal(preview.tombstones_written, 0);
+  assert.equal(preview.durable_lifecycle_events_written, 0);
+  assert.equal(preview.visible_segments, 3);
+  assert.ok(preview.visible_entries.every(entry =>
+    entry.locator.source_id !== "fixture-chatgpt-01"));
+});
+
+test("lifecycle scenarios isolate independent sources and do not change fixture inputs", () => {
+  const bundles = [fixture("chatgpt"), fixture("claude")];
+  const scenarios = [
+    { source_id: "fixture-claude-01", action: "pause_sync" },
+    { source_id: "fixture-chatgpt-01", action: "disconnect_source" },
+  ];
+  const snapshot = JSON.stringify({ bundles, scenarios });
+  const a = previewSyntheticSourceLifecycle(bundles, scenarios);
+  const b = previewSyntheticSourceLifecycle(
+    [...bundles].reverse(), [...scenarios].reverse());
+  assert.deepEqual(a, b);
+  assert.equal(a.scenarios_applied, 2);
+  assert.equal(a.visible_segments, 3);
+  assert.equal(a.suppressed_segments, 3);
+  assert.equal(JSON.stringify({ bundles, scenarios }), snapshot);
+  assert.equal(a.real_import_enabled, false);
+});
+
+test("lifecycle preview rejects unknown duplicate malformed and non-synthetic scenarios", () => {
+  const bundles = [fixture("chatgpt"), fixture("claude")];
+  const valid = { source_id: "fixture-chatgpt-01", action: "pause_sync" };
+  for (const invalid of [
+    null, 0, [], "disconnect_source",
+    { source_id: "fixture-chatgpt-01" },
+    { source_id: "fixture-chatgpt-01", action: "confirm" },
+    { source_id: "not-found", action: "pause_sync" },
+    { ...valid, unexpected: "data" },
+    { source_id: 1, action: "pause_sync" },
+    { source_id: "fixture-chatgpt-01", action: null },
+    Object.assign(Object.create(null), { source_id: "fixture-chatgpt-01" }),
+  ]) {
+    assert.throws(() => previewSyntheticSourceLifecycle(bundles, [invalid]),
+      /Synthetic lifecycle:/);
+  }
+  for (const invalid of [null, false, {}, "pause_sync", [valid, valid],
+    [valid, valid, valid]]) {
+    assert.throws(() => previewSyntheticSourceLifecycle(bundles, invalid),
+      /Synthetic lifecycle:/);
+  }
+  assert.throws(() => previewSyntheticSourceLifecycle(
+    [bundles[0], { ...bundles[1], synthetic_fixture: false }], [valid]),
+    /unsupported or non-synthetic bundle/);
+});
+
+test("fixture-only lifecycle CLI compares actions without raw text, writes or inputs", () => {
+  const cli = fileURLToPath(new URL("../scripts/humanwiki-synthetic/lifecycle-preview-cli.mjs", import.meta.url));
+  const root = mkdtempSync(path.join(os.tmpdir(), "lumi-humanwiki-lifecycle-"));
+  const invoke = (args, zone) => spawnSync(process.execPath, [cli, ...args], {
+    encoding: "utf8", env: { ...process.env, TMPDIR: root, TZ: zone },
+  });
+  try {
+    const utc = invoke([], "UTC");
+    const prague = invoke([], "Europe/Prague");
+    assert.equal(utc.status, 0, utc.stderr);
+    assert.equal(prague.status, 0, prague.stderr);
+    assert.equal(utc.stdout, prague.stdout);
+    const report = JSON.parse(utc.stdout);
+    assert.equal(report.synthetic_fixture_only, true);
+    assert.deepEqual(report.scenarios.map(s => s.action), [
+      "pause_sync", "disconnect_source", "revoke_import_consent", "request_erasure",
+    ]);
+    assert.equal(report.scenarios[0].would_allow_pending_review, true);
+    assert.ok(report.scenarios.slice(1).every(s =>
+      s.would_allow_pending_review === false && s.operation_completed === false));
+    assert.ok(report.scenarios.slice(2).every(s => s.independent_witness_required));
+    assert.equal(report.durable_lifecycle_events_written, 0);
+    assert.equal(report.tombstones_written, 0);
+    assert.equal(report.real_import_enabled, false);
+    for (const content of ["fictional garden", "silver spaceship", "blue gate is open",
+      "content_sha256", "bundle_digest"]) {
+      assert.ok(!utc.stdout.includes(content), content);
+    }
+    const rejected = invoke(["../../private-export.json"], "UTC");
+    assert.equal(rejected.status, 2);
+    assert.equal(rejected.stdout, "");
+    assert.deepEqual(readdirSync(root), [], "lifecycle CLI must never persist state");
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
