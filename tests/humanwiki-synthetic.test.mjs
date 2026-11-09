@@ -3104,7 +3104,7 @@ test("HumanWiki regrant-fence admitted toy frames reject confirm/share and malfo
       [{ draft_id: "another-draft", choice: "inspect" }],
       [{ draft_id: draftId, choice: "inspect", consent_granted: true }],
     ]) assert.throws(() => rehearseSyntheticProposalRegrantScenario(bundles, scenario, bad),
-      /Synthetic proposal review: invalid (review intent list|fictional review intent)|Synthetic proposal lifecycle: fictional fixture contract not satisfied/);
+      /Synthetic proposal review: invalid (review intent list|fictional review intent)|Synthetic proposal lifecycle: fixture contract not satisfied/);
   }
   const postponed = rehearseSyntheticProposalRegrantScenario(bundles,
     "fresh_toy_regrant_new_binding", [{ draft_id: draftId, choice: "defer" }]);
