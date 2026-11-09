@@ -1,6 +1,7 @@
 /** R3-FE-1: pure mapping of every existing target-client failure shape to one
- * calm Czech taxonomy. No technical ids, status codes or stack traces reach the
+ * calm Czech (R3-FE-2b: or English) taxonomy. No technical ids, status codes or stack traces reach the
  * message. `uncertain` never claims success or failure. */
+export type TargetClientLanguage="cs"|"en";
 export type TargetClientErrorKind=
   |"signed_out"|"forbidden_or_missing"|"stale"|"conflict"|"invalid"
   |"rate_limited"|"unavailable"|"offline"|"uncertain";
@@ -15,7 +16,8 @@ export type TargetClientFailureInput=
   |string|number|{status:number;error?:string;code?:string}
   |{reason:string}|{status:string};
 
-const table:Record<TargetClientErrorKind,{action:TargetClientErrorAction;message:string}>={
+type ErrorTable=Record<TargetClientErrorKind,{action:TargetClientErrorAction;message:string}>;
+const csTable:ErrorTable={
   signed_out:{action:"sign_in",
     message:"Přihlášení skončilo. Přihlaste se znovu; dříve zobrazené údaje byly skryty."},
   forbidden_or_missing:{action:"none",
@@ -35,14 +37,47 @@ const table:Record<TargetClientErrorKind,{action:TargetClientErrorAction;message
   uncertain:{action:"verify",
     message:"Výsledek se právě ověřuje. Zatím nevíme, zda se změna uložila; nic prosím neopakujte."},
 };
-export const targetClientActionLabels:Record<
-  Exclude<TargetClientErrorAction,"none">,string>={
+const enTable:ErrorTable={
+  signed_out:{action:"sign_in",
+    message:"You have been signed out. Please sign in again; data shown earlier has been hidden."},
+  forbidden_or_missing:{action:"none",
+    message:"This item is not available, or you do not have access to it."},
+  stale:{action:"reload",
+    message:"This has changed in the meantime. Please reload it."},
+  conflict:{action:"reload",
+    message:"Someone else changed this in the meantime. Load the latest version and try again."},
+  invalid:{action:"none",
+    message:"The request could not be processed. Please check what you entered."},
+  rate_limited:{action:"retry_later",
+    message:"There are too many requests right now. Please try again in a moment."},
+  unavailable:{action:"retry_later",
+    message:"The service is not available right now. Please try again later."},
+  offline:{action:"retry_later",
+    message:"You are offline. Try again once you are back online."},
+  uncertain:{action:"verify",
+    message:"We are still checking the result. We do not know yet whether the change was saved; please do not repeat it."},
+};
+const tables:Record<TargetClientLanguage,ErrorTable>={cs:csTable,en:enTable};
+type ActionLabels=Record<Exclude<TargetClientErrorAction,"none">,string>;
+const csActionLabels:ActionLabels={
   sign_in:"Přihlásit se",reload:"Načíst znovu",verify:"Ověřit stav",
   retry_later:"Zkusit znovu",
 };
+const enActionLabels:ActionLabels={
+  sign_in:"Sign in",reload:"Reload",verify:"Check status",
+  retry_later:"Try again",
+};
+/** Czech labels (unchanged R3-FE-1 export); see `targetClientActionLabelsFor`. */
+export const targetClientActionLabels:ActionLabels=csActionLabels;
+export const targetClientActionLabelsByLanguage:Record<TargetClientLanguage,ActionLabels>=
+  {cs:csActionLabels,en:enActionLabels};
+export function targetClientActionLabelsFor(language:TargetClientLanguage="cs"):ActionLabels {
+  return targetClientActionLabelsByLanguage[language==="en"?"en":"cs"];
+}
 
 const norm=(value:string)=>value.trim().toLowerCase().replace(/[\s-]+/g,"_");
-const make=(kind:TargetClientErrorKind):TargetClientError=>({kind,...table[kind]});
+const make=(kind:TargetClientErrorKind,language:TargetClientLanguage):TargetClientError=>
+  ({kind,...tables[language==="en"?"en":"cs"][kind]});
 
 function byName(name:string):TargetClientErrorKind|null {
   switch(norm(name)){
@@ -81,22 +116,24 @@ function byStatus(status:number,text:string):TargetClientErrorKind {
 }
 
 /** Total: an unrecognised input degrades to the generic `unavailable` copy. */
-export function mapTargetClientFailure(input:TargetClientFailureInput):TargetClientError {
+export function mapTargetClientFailure(
+  input:TargetClientFailureInput,language:TargetClientLanguage="cs",
+):TargetClientError {
   try{
-    if(typeof input==="number")return make(byStatus(input,""));
-    if(typeof input==="string")return make(byName(input)??"unavailable");
+    if(typeof input==="number")return make(byStatus(input,""),language);
+    if(typeof input==="string")return make(byName(input)??"unavailable",language);
     if(input&&typeof input==="object"){
       if("reason" in input&&typeof input.reason==="string")
-        return make(byName(input.reason)??"unavailable");
+        return make(byName(input.reason)??"unavailable",language);
       if("status" in input){
-        if(typeof input.status==="string")return make(byName(input.status)??"unavailable");
+        if(typeof input.status==="string")return make(byName(input.status)??"unavailable",language);
         if(typeof input.status==="number"&&Number.isInteger(input.status)){
           const text="error" in input&&typeof input.error==="string"?input.error
             :"code" in input&&typeof input.code==="string"?input.code:"";
-          return make(byStatus(input.status,text));
+          return make(byStatus(input.status,text),language);
         }
       }
     }
   }catch{/* fall through */}
-  return make("unavailable");
+  return make("unavailable",language);
 }

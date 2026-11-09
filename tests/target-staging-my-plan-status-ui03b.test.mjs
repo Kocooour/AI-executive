@@ -11,6 +11,7 @@ import {checkMyPlanStatusReceipt} from "../lib/target-staging-my-plan-status-cli
 
 const root=path.join(import.meta.dirname,"..");
 const source=filename=>readFileSync(path.join(root,filename),"utf8");
+const copySource=()=>readFileSync(path.join(root,"lib/target-my-plan-copy.ts"),"utf8");
 
 test("status UI is independently default-off and needs all five exact server flags",()=>{
   const enabled=Object.fromEntries(MY_PLAN_STATUS_UI_WRITE_FLAGS.map(name=>[name,"true"]));
@@ -51,9 +52,11 @@ test("task completion uses square control with screen reader label and large tou
   const ui=source("app/ui/target-staging-my-plan-preview.tsx");
   const css=source("app/target-staging/my-plan/preview/preview.css");
   assert.match(ui,/statusWriteEnabled=false/);
-  assert.match(ui,/statusWriteEnabled\s*\?\s*"Izolovaný stagingový náhled s dokončením/);
+  assert.match(ui,/statusWriteEnabled\s*\?\s*copy\.headerStatus/);
+  assert.match(copySource(),/headerStatus:"Izolovaný stagingový náhled s dokončením/);
   assert.match(ui,/\{canComplete[\s\S]*?<button type="button" className="stagingMyPlanSquare stagingMyPlanComplete"/);
-  assert.match(ui,/aria-label=\{"Dokončit úkol: "\+task\.title\}/);
+  assert.match(ui,/aria-label=\{copy\.completeTask\(task\.title\)\}/);
+  assert.match(copySource(),/completeTask:title=>"Dokončit úkol: "\+title/);
   assert.match(ui,/canComplete=\{canComplete\}/);
   assert.match(css,/button\.stagingMyPlanComplete\s*\{[\s\S]*?width:44px;height:44px;min-height:44px/);
   assert.match(css,/button\.stagingMyPlanComplete::before\s*\{[\s\S]*?width:20px;height:20px/);
@@ -91,7 +94,8 @@ test("manual receipt verification never resends a PATCH and blocks new status co
   assert.match(ui,/const actionPending=action\.kind==="pending"\|\|action\.kind==="checking"\|\|\s*action\.kind==="uncertain"/);
   assert.match(ui,/disabled=\{anyPending\}/);
   assert.match(ui,/\{!anyPending&&<>[\s\S]*?<PlanDay/);
-  assert.match(ui,/Ověřit původní potvrzení/);
+  assert.match(ui,/\{copy\.statusUncertainButton\}/);
+  assert.match(copySource(),/statusUncertainButton:"Ověřit původní potvrzení"/);
   assert.doesNotMatch(ui,/localStorage|indexedDB|sessionStorage|serviceWorker/);
 });
 
@@ -115,7 +119,8 @@ test("Undo is a fresh authorized open command, not an old PATCH replay",()=>{
   assert.match(ui,/statusWriteEnabled&&!anyPending&&action\.kind==="committed"/);
   assert.match(ui,/action\.status==="completed"&&/);
   assert.match(ui,/action\.taskId===task\.taskId&&action\.areaId===task\.areaId/);
-  assert.match(ui,/Vrátit dokončení \(Undo\)/);
+  assert.match(ui,/\{copy\.statusUndo\}/);
+  assert.match(copySource(),/statusUndo:"Vrátit dokončení \(Undo\)"/);
   assert.match(ui,/areaId:action\.areaId,[\s\S]*?\},"open"\)/);
   assert.doesNotMatch(ui,/checkMyPlanStatusReceipt\(.*"open"/);
 });
@@ -213,7 +218,8 @@ test("P1: failed-read recovery is visible outside ready state and never changes 
   assert.match(retry,/invalidate\("stale",true\)/);
   assert.match(retry,/setRefresh\(n=>n\+1\)/);
   assert.doesNotMatch(retry,/dispatchMyPlanStatus|prepareMyPlanStatus|resetFeedback\(|uncertainCommand\.current\s*=/);
-  const control=ui.indexOf("Znovu ověřit přehled (bez zápisu)");
+  assert.match(copySource(),/statusUncertainReadButton:"Znovu ověřit přehled \(bez zápisu\)"/);
+  const control=ui.indexOf("{copy.statusUncertainReadButton}");
   const ready=ui.indexOf('{state.status==="ready"&&date&&');
   assert.ok(control>0&&control<ready,"read recovery must appear even when list is in error");
   assert.match(ui,/state\.status==="error"&&state\.reason!=="signed-out"/);
@@ -256,9 +262,11 @@ test("P1: manual Refresh retains confirmed Undo across list 503 but still reauth
   assert.match(refresh,/invalidate\("stale",true\)/);
   assert.match(refresh,/setRefresh\(n=>n\+1\)/);
   assert.doesNotMatch(refresh,/dispatchMyPlanStatus|prepareMyPlanStatus/);
-  assert.match(ui,/onClick=\{refreshPlan\}>Obnovit/);
+  assert.match(ui,/onClick=\{refreshPlan\}>\{copy\.refresh\}/);
+  assert.match(copySource(),/refresh:"Obnovit"/);
   assert.match(ui,/state\.status==="error"&&[\s\S]*?action\.kind==="committed"&&/);
-  assert.match(ui,/Znovu načíst přehled \(Undo zůstane\)/);
+  assert.match(ui,/\{copy\.completedReloadButton\}/);
+  assert.match(copySource(),/completedReloadButton:"Znovu načíst přehled \(Undo zůstane\)"/);
   assert.match(ui,/undoFailure&&/);
   assert.match(ui,/setUndoFailure\(null\)/);
 });

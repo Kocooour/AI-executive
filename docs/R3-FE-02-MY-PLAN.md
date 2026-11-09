@@ -47,7 +47,7 @@ Chybí-li kterýkoli z prvních dvou příznaků, `app/page.tsx` se vykreslí ja
 
 - Zatím bez přepínačů Vše / Osobní / Sdílené v hlavní aplikaci (v hlavičce plánu zůstává stagingový filtr „Moje práce“).
 - Bez událostí kalendáře, přesunu dne a offline fronty.
-- Texty cílového plánu jsou zatím jen česky (převzaté ze stagingového náhledu); při anglickém jazyce aplikace jsou smíšené. Lokalizace přes `tr()` je otevřená otázka pro vlastníka/UI-10.
+- Texty cílového plánu jsou dvojjazyčné (R3-FE-2b, rozhodnutí vlastníka 2026-11-09: „připrav i anglickou verzi“). Vložený plán sleduje jazyk aplikace (`language` z `useLumiApp`): `LumiAppRoot` → `TargetMyPlan` → `TargetStagingMyPlanPreview` a `TargetDataStatus`. Texty jsou v typovaných tabulkách `lib/target-my-plan-copy.ts` (cs/en se shodnou sadou klíčů, hlídá test) a `lib/target-client-errors.ts` (`mapTargetClientFailure(input, language="cs")`, `targetClientActionLabelsFor(language)`); data a časy se formátují `cs-CZ` / `en-GB`. Samostatná stagingová stránka (`/target-staging/my-plan/preview`) zůstává česky (výchozí jazyk). Anglické texty jsou klidné a krátké, bez technických id a stavových kódů; nejistý výsledek nikdy netvrdí úspěch ani selhání. Datový tok, rozpočet odmítnutí, brány, životní cyklus, skrývání a blokace zápisů se nemění.
 - 403 z kontroly Origin u zápisu se zatím zobrazí jako ukončené přihlášení (data se skryjí a ověří znovu); bezpečné, ale nepřesné.
 - Žádná produkční aktivace a žádný reset/přenos dat; to je samostatné rozhodnutí (R4) po záloze a ověřené obnově.
 - Nový tok nenahrazuje nic bez příznaku; plná E2E sada zůstává vyhrazená pro předprodukční bránu.

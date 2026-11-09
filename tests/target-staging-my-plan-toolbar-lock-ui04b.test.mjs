@@ -54,7 +54,7 @@ test("P1 date, Area filter and Aktuální den each check the SAME live ref guard
     ["date",'<input type="date"',"</label>"],
     ["Area",'<select value={areaFilter}',"</select>"],
     ["today",'<button type="button" disabled={anyPending} onClick={()=>{',
-      "}}>Aktuální den</button>"],
+      "}}>{copy.currentDay}</button>"],
   ];
   for(const [name,first,last] of sections){
     const start=code.indexOf(first);

@@ -13,6 +13,7 @@ import {fetchMyPlanSlice} from "../lib/target-staging-my-plan-client.ts";
 
 const root=path.join(import.meta.dirname,"..");
 const source=p=>readFileSync(path.join(root,p),"utf8");
+const copySource=()=>readFileSync(path.join(root,"lib/target-my-plan-copy.ts"),"utf8");
 const command={
   commandId:"123e4567-e89b-42d3-a456-426614174000",
   taskId:"task-1",whenOn:"2026-11-07",
@@ -69,8 +70,10 @@ test("UI-04b: human-readable 44px actions are gated per task/Area",()=>{
   assert.match(ui,/myPlanWhenTarget\(date,choice\)/);
   assert.match(ui,/task\.whenOn!==target/);
   assert.match(ui,/onClick=\{\(\)=>onWhen\(task,target\)\}/);
-  assert.match(ui,/Naplánovat osobně na dnešek:/);
-  assert.match(ui,/Naplánovat osobně na zítřek:/);
+  assert.match(ui,/copy\.whenTodayAria\(task\.title\)/);
+  assert.match(ui,/copy\.whenTomorrowAria\(task\.title\)/);
+  assert.match(copySource(),/Naplánovat osobně na dnešek: /);
+  assert.match(copySource(),/Naplánovat osobně na zítřek: /);
   assert.match(ui,/canWhen=\{canWhen\}/);
   assert.match(css,/stagingMyPlanWhenControls button\s*\{[\s\S]*?min-height:44px/);
 });
@@ -117,8 +120,10 @@ test("UI-04b: uncertain receipt never dispatches another PATCH; list-error recov
   assert.match(retry,/invalidate\("stale",true\)/);
   assert.match(retry,/setRefresh\(n=>n\+1\)/);
   assert.doesNotMatch(retry,/dispatchMyPlanWhen|prepareMyPlanWhen\(/);
-  assert.match(ui,/Znovu ověřit osobní přehled \(bez zápisu\)/);
-  assert.match(ui,/Ověřit původní osobní potvrzení/);
+  assert.match(ui,/\{copy\.whenUncertainReadButton\}/);
+  assert.match(ui,/\{copy\.whenUncertainButton\}/);
+  assert.match(copySource(),/whenUncertainReadButton:"Znovu ověřit osobní přehled \(bez zápisu\)"/);
+  assert.match(copySource(),/whenUncertainButton:"Ověřit původní osobní potvrzení"/);
   assert.match(ui,/uncertainWhen\.current!==null&&/);
 });
 
@@ -132,7 +137,8 @@ test("UI-04b: hide/offline, signed-out and manual context switch remove prior-ac
   assert.match(ui,/if\(result\.reason==="signed-out"\)\{[\s\S]*?confirmedWhen\.current=null/);
   assert.match(ui,/function resetFeedback\(\)\{[\s\S]*?uncertainWhen\.current=null;[\s\S]*?confirmedWhen\.current=null/);
   assert.match(ui,/function refreshPlan\(\)\{[\s\S]*?keepConfirmedWhenOnRefresh/);
-  assert.match(ui,/Znovu načíst osobní plán \(Undo zůstane\)/);
+  assert.match(ui,/\{copy\.whenReloadButton\}/);
+  assert.match(copySource(),/whenReloadButton:"Znovu načíst osobní plán \(Undo zůstane\)"/);
 });
 
 test("UI-04b: original actor-bound receipt then a fresh private CAS reverses the intended value",async()=>{
