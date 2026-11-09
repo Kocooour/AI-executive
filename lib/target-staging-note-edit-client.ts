@@ -86,7 +86,10 @@ export async function loadNoteEditPreview(noteId:string,signal:AbortSignal,
     });
     if(signal.aborted)return {ok:false,reason:"offline"};
     if(response.status!==200)return {ok:false,reason:failure(response.status)};
-    const preview=parseNoteEditPreview(await strictJson(response));
+    let parsed:unknown;
+    try{parsed=await strictJson(response);}
+    catch{return {ok:false,reason:"invalid-response"};}
+    const preview=parseNoteEditPreview(parsed);
     return preview?{ok:true,preview}:{ok:false,reason:"invalid-response"};
   }catch{return {ok:false,reason:signal.aborted?"offline":"unavailable"};}
 }
