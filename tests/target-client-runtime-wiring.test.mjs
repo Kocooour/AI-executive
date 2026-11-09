@@ -33,7 +33,7 @@ test("the server page mounts the provider only behind the flag and reads it per 
   assert.doesNotMatch(page,/^"use client"/m);
   assert.match(page,/export const dynamic = "force-dynamic"/);
   assert.match(page,/targetUiEnabled\(\)/);
-  assert.match(page,/targetData\s*\n?\s*\?\s*<TargetDataProvider><LumiAppRoot targetMyPlan=\{config\?\.myPlan\} targetScopes=\{config\?\.scopes\} \/><\/TargetDataProvider>\s*\n?\s*:\s*<LumiAppRoot \/>/);
+  assert.match(page,/targetData\s*\n?\s*\?\s*<TargetDataProvider><LumiAppRoot targetMyPlan=\{config\?\.myPlan\} targetScopes=\{config\?\.scopes\} targetDetails=\{config\?\.details\} \/><\/TargetDataProvider>\s*\n?\s*:\s*<LumiAppRoot \/>/);
   // The page itself never creates a runtime nor fetches.
   assert.doesNotMatch(page,/createTargetClientRuntime|fetch\(|target-client-runtime/);
 });
@@ -88,6 +88,8 @@ test("only the runtime (and its server route) reference the session endpoint; no
     "app/ui/target-data-provider.tsx","app/ui/target-data-status.tsx","app/ui/target-my-plan.tsx",
     // R3-FE-3: the lazily loaded scope lists and the gate hook.
     "app/ui/target-scope-lists.tsx","app/ui/use-target-gate.ts",
+    // R3-FE-4a: the lazily loaded authorized detail panel and the compact sidebar project list.
+    "app/ui/target-detail-panel.tsx","app/ui/target-sidebar-projects.tsx","app/ui/use-target-revalidation.ts",
   ].sort());
 });
 

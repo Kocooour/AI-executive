@@ -1,13 +1,20 @@
 "use client";
-import { useEffect, useRef, useState } from "react";
+import dynamic from "next/dynamic";
+import { useContext, useEffect, useRef, useState } from "react";
 import { desktopV1PrimaryViews, mobileDesignV1Preview, primaryViews, secondaryViews } from "../navigation";
 import { desktopSidebarCanFocusDestination } from "../../../lib/desktop-sidebar-focus";
 import { mobileMoreHeadingRevealDelta } from "../../../lib/mobile-more-focus";
 import type { LumiApp } from "../use-lumi-app";
 import { ProjectIcon, ViewIcon } from "./project-icon";
 import { WorkspaceTile, workspaceTone } from "../workspace-appearance";
+import { openTargetDetail } from "../target-detail-state";
+import { TargetSidebarContext } from "../target-sidebar-context";
+
+// R3-FE-4a: loaded only when the server page enabled target scopes with the project index.
+const TargetSidebarProjects = dynamic(() => import("../target-sidebar-projects"), { ssr: false });
 
 export function Sidebar({ app, targetPlan = false }: { app: LumiApp; targetPlan?: boolean }) {
+  const targetSidebar = useContext(TargetSidebarContext);
   const {
     setSettingsSection,
     setInboxTab,
@@ -18,7 +25,6 @@ export function Sidebar({ app, targetPlan = false }: { app: LumiApp; targetPlan?
     dragTarget,
     inspect,
     projectsAttention,
-    sidebarProjects,
     draggableSectionNames,
     language,
     openCapture,
@@ -33,6 +39,8 @@ export function Sidebar({ app, targetPlan = false }: { app: LumiApp; targetPlan?
     workspaceName,
     workspaces,
   } = app;
+  // R3-FE-4a: in target mode the legacy workspace project list is never shown (the target index replaces it).
+  const sidebarProjects = app.captureDisabled ? [] : app.sidebarProjects;
   // "More views" opens a list in the scrolling area under the projects; its toggle stays in the footer.
   const [secondaryOpen, setSecondaryOpen] = useState(false);
   const secondaryRef = useRef<HTMLDivElement>(null);
@@ -196,6 +204,17 @@ export function Sidebar({ app, targetPlan = false }: { app: LumiApp; targetPlan?
               onClick={(event) => navigateToView(x, event.currentTarget)}>{tr(x)}</button>)}
           </div>
         )}
+        {/* R3-FE-4a: in target mode the global scope owns this list; legacy workspace projects are never shown. */}
+        {app.captureDisabled && targetSidebar?.projects && (
+          <TargetSidebarProjects language={language} openable={targetSidebar.openable}
+            onOpen={(projectId, opener) => {
+              // Switch the shell to Projects and push the project address in one step.
+              if (view !== "Projects") setView("Projects", { keepAddress: true });
+              closeDetail();
+              openTargetDetail({ kind: "project", id: projectId, view: "Projects" }, opener);
+            }}
+            onShowAll={() => { setView("Projects"); closeDetail(); }} />
+        )}
         {sidebarProjects.length > 0 && (
           <section className="sidebarProjects" aria-label={tr("sidebarProjects")}>
             {sidebarProjects.map((project) => (
@@ -231,6 +250,7 @@ export function Sidebar({ app, targetPlan = false }: { app: LumiApp; targetPlan?
               inspector open it is hidden to keep the inspector unobstructed,
               so provide a fixed, keyboard-accessible sidebar entry instead.
               Legacy sidebar controls remain unchanged when preview is off. */}
+          {!app.captureDisabled && <>
           {mobileDesignV1Preview && app.selected && (
             <button type="button" className="desktopInspectorCapture"
               data-desktop-inspector-capture
@@ -240,11 +260,12 @@ export function Sidebar({ app, targetPlan = false }: { app: LumiApp; targetPlan?
               ＋ {tr("new")}
             </button>
           )}
+          </>}
           {!mobileDesignV1Preview && (
             <>
-              <button onClick={() => openCapture()} aria-label={tr("addTask")}>
+              {!app.captureDisabled && <button onClick={() => openCapture()} aria-label={tr("addTask")}>
                 ＋ {tr("new")}
-              </button>
+              </button>}
               <button type="button" className="secondaryNavToggle" aria-expanded={secondaryOpen} aria-controls="sidebar-secondary-views" onClick={() => setSecondaryOpen((open) => !open)}>
                 <span aria-hidden="true">{secondaryOpen ? "▾" : "▸"}</span> {tr("moreViews")}
               </button>

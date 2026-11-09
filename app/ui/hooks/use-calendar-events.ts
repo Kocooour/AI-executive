@@ -32,8 +32,10 @@ export interface EventSuggestion {
 // The owner's decisions about calendar events (hide, "not a task") and the task made from an event.
 // Decisions are stored on the workspace entity (lib/calendar-decisions.ts), so they sync like any
 // other record and belong to one workspace. The calendar itself stays read-only.
-export function useCalendarEvents({ items, calendarEvents, calendarFresh, calendarTimezone, workdayStart, workdayEnd, today, activeWorkspaceId, calendarWorkspaceSelection,
+export function useCalendarEvents({ writesBlocked = () => false, items, calendarEvents, calendarFresh, calendarTimezone, workdayStart, workdayEnd, today, activeWorkspaceId, calendarWorkspaceSelection,
   localDataVersion, syncToServer, load, setUndo, setUndoRelations, undoCreated, undoDecisions, create, deferTask }: {
+  /** R3-FE-4a: true (and announced) when unified target mode makes legacy user writes inert. */
+  writesBlocked?: () => boolean;
   items: Entity[];
   calendarEvents: CalendarEvent[];
   calendarFresh: boolean;
@@ -81,6 +83,7 @@ export function useCalendarEvents({ items, calendarEvents, calendarFresh, calend
     return run;
   }
   async function writeDecisions(change: (decisions: CalendarDecisions) => CalendarDecisions) {
+    if (writesBlocked()) return false;
     if (isAdopting()) return false;
     busy.current = true;
     setFailed(false);
@@ -136,6 +139,7 @@ export function useCalendarEvents({ items, calendarEvents, calendarFresh, calend
 
   // "Yes, it is a task": a task in the event's workspace with the event's title, day and length.
   async function createEventTask(event: CalendarEvent) {
+    if (writesBlocked()) return;
     if (isAdopting() || busy.current || eventTasks.has(event.id)) return;
     busy.current = true;
     setFailed(false);
@@ -177,6 +181,7 @@ export function useCalendarEvents({ items, calendarEvents, calendarFresh, calend
   }
 
   async function applySuggestion() {
+    if (writesBlocked()) return;
     if (!suggestion) return;
     const task = await db.entities.get(suggestion.taskId);
     setSuggestion(null);

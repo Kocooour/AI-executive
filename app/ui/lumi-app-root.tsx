@@ -1,6 +1,13 @@
 "use client";
 import dynamic from "next/dynamic";
+import { useEffect, useRef } from "react";
+import { TargetSidebarContext } from "./target-sidebar-context";
+import { LegacyWritesContext } from "./legacy-writes-context";
 import { useLumiApp } from "./use-lumi-app";
+import { expectFocusReturn, focusPendingRow, useTargetSearch } from "./target-detail-state";
+import { detailActivation, detailRouteKey, isParentOf, isTargetAddress, viewOfSearch, type DetailActivation } from "../../lib/target-detail-route";
+import { activeTargetViewFor, detailsActive, targetViewsFor } from "../../lib/target-shell-views";
+import { detailCopy } from "../../lib/target-detail-copy";
 import { mobileDesignV1Preview } from "./navigation";
 import { projectSyncNoticeLabel } from "../../lib/project-sync-notice";
 import { AuthScreen } from "./views/auth-screen";
@@ -32,11 +39,24 @@ const TargetMyPlan = dynamic(() => import("./target-my-plan"), { ssr: false });
 const TargetScopeSwitcher = dynamic(() => import("./target-scope-switcher"), { ssr: false });
 const TargetScopeLists = dynamic(() => import("./target-scope-lists"), { ssr: false });
 
+// R3-FE-4a: authorized details inside the main app; loaded only when a detail flag is on.
+const TargetDetailPanel = dynamic(() => import("./target-detail-panel"), { ssr: false });
+
+export type TargetDetailsProps = { task: boolean; project: boolean; note: boolean };
 export type TargetScopesProps = { enabled: boolean; projects: boolean; notes: boolean };
 export type TargetMyPlanProps = { enabled: boolean; statusWrite: boolean; whenWrite: boolean };
 
-export function LumiAppRoot({ targetMyPlan, targetScopes }: { targetMyPlan?: TargetMyPlanProps; targetScopes?: TargetScopesProps } = {}) {
-  const app = useLumiApp();
+export function LumiAppRoot({ targetMyPlan, targetScopes, targetDetails }: { targetMyPlan?: TargetMyPlanProps; targetScopes?: TargetScopesProps; targetDetails?: TargetDetailsProps } = {}) {
+  // Owner decision 2026-11-09: with target scopes on, the single global scope governs the
+  // sidebar projects, the inspector and quick capture (see docs/R3-FE-04A-DETAILS.md).
+  const scopesOn = Boolean(targetScopes?.enabled);
+  const detailGates = { task: Boolean(targetDetails?.task), project: Boolean(targetDetails?.project), note: Boolean(targetDetails?.note) };
+  const shellInput = { scopesOn, projectsList: Boolean(targetScopes?.projects), notesList: Boolean(targetScopes?.notes),
+    myPlan: Boolean(targetMyPlan?.enabled), v1Shell: mobileDesignV1Preview };
+  // Details act only on views that really render target data (never on legacy views).
+  const targetViews = targetViewsFor(shellInput);
+  const detailsOn = detailsActive(detailGates, targetViews);
+  const app = useLumiApp({ targetDetails: detailsOn, targetUnified: scopesOn, targetViews: detailsOn ? targetViews : [] });
   const {
     activeWorkspace,
     activeWorkspaceId,
@@ -48,23 +68,56 @@ export function LumiAppRoot({ targetMyPlan, targetScopes }: { targetMyPlan?: Tar
     view,
     workspaceName,
   } = app;
+  const planActive = mobileDesignV1Preview && app.mobilePlanPreviewActive && view === "Today";
+  const { scopeList, targetPlan, active: activeTargetView } = activeTargetViewFor({ ...shellInput, view, planActive });
+  const detailSearch = useTargetSearch(detailsOn);
+  const activation: DetailActivation = detailsOn
+    ? detailActivation({ search: detailSearch, gates: detailGates, activeTargetView }) : { state: "none" };
+  const detailRoute = activation.state === "route" ? activation.route : null;
+  const detailKey = detailRoute !== null ? detailRouteKey(detailRoute) : activation.state;
+  // After a detail closed (Close, Back, Forward), focus returns to the row that opened it;
+  // opening a deeper detail (project -> its task) never returns focus to the list.
+  const previousRoute = useRef<typeof detailRoute>(null);
+  useEffect(() => {
+    if (!detailsOn) return;
+    const previous = previousRoute.current;
+    previousRoute.current = detailRoute;
+    if (previous !== null && !isParentOf(previous, detailRoute)) expectFocusReturn(previous);
+    const frame = window.requestAnimationFrame(() => {
+      focusPendingRow(document.querySelector<HTMLElement>(".appPane .pageTitleRow h1"));
+    });
+    return () => window.cancelAnimationFrame(frame);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [detailsOn, detailKey]);
+  // A legitimate typed link to ANOTHER active target view (e.g. ?view=Notes&noteId=... while Projects is
+  // shown) switches the shell to that view and opens it; the address is kept (never rewritten).
+  useEffect(() => {
+    if (!detailsOn || !isTargetAddress(detailSearch, targetViews)) return;
+    const wanted = viewOfSearch(detailSearch);
+    if (wanted === null || wanted === activeTargetView) return;
+    if (wanted === "MyPlanPreview") app.setView("Today", { previewMyPlan: true, keepAddress: true });
+    else app.setView(wanted, { keepAddress: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [detailsOn, detailSearch, activeTargetView]);
   if (authState !== "ready" && !app.offlineView) {
     return (
       <AuthScreen app={app} />
     );
   }
-  // Only the "Můj plán" entry of the v1 shell (view "Today") switches; every other view stays legacy.
-  const targetPlan = Boolean(targetMyPlan?.enabled) && mobileDesignV1Preview && app.mobilePlanPreviewActive && view === "Today";
-  // R3-FE-3: with target scopes on, Projects and Notes list the server index for the global scope.
-  const scopesOn = Boolean(targetScopes?.enabled);
-  // Per view: a view without its own flag keeps the legacy list.
-  const scopeList = scopesOn && view === "Projects" && targetScopes?.projects ? "project"
-    : scopesOn && view === "Notes" && targetScopes?.notes ? "note" : null;
   const scopeSwitcher = scopeList !== null || (scopesOn && targetPlan);
+  const detailPanel = detailsOn && activation.state !== "none";
+  // The legacy inspector is never fed legacy records in a target view.
+  const targetView = scopeList !== null || targetPlan;
+  const legacyInspector = Boolean(app.selected) && !(scopesOn && targetView);
+  // Unified target mode: views that still show legacy data are read-only (no target create/edit API yet).
+  const legacyReadOnly = app.legacyWritesDisabled && !targetView;
   return (
-    <main className={`appShell view-${view.toLowerCase()}${app.selected ? " inspectorOpen" : ""}${view === "Projects" && app.openProject ? " projectPageOpen" : ""}`} data-design-system={mobileDesignV1Preview ? "lumi-v1" : undefined} data-workspace-tone={app.activeWorkspaceTone}
+    <LegacyWritesContext.Provider value={{ disabled: app.legacyWritesDisabled, hint: app.legacyReadOnlyHint }}>
+    <main className={`appShell view-${view.toLowerCase()}${legacyInspector || detailPanel ? " inspectorOpen" : ""}${view === "Projects" && app.openProject ? " projectPageOpen" : ""}`} data-design-system={mobileDesignV1Preview ? "lumi-v1" : undefined} data-workspace-tone={app.activeWorkspaceTone}
       data-my-plan-preview={mobileDesignV1Preview && app.mobilePlanPreviewActive && view === "Today" ? "true" : undefined}>
-      <Sidebar app={app} targetPlan={Boolean(targetMyPlan?.enabled)} />
+      <TargetSidebarContext.Provider value={scopesOn && targetScopes?.projects ? { projects: true, openable: detailsOn && detailGates.project } : undefined}>
+        <Sidebar app={app} targetPlan={Boolean(targetMyPlan?.enabled)} />
+      </TargetSidebarContext.Provider>
       <section className="appPane">
         {app.offlineView && (
           <div className="offlineStart" role="status">
@@ -123,6 +176,17 @@ export function LumiAppRoot({ targetMyPlan, targetScopes }: { targetMyPlan?: Tar
           </p>
         )}
         <div className="content">
+          {legacyReadOnly && (
+            <p className="navigationUnavailableNotice legacyReadOnlyNotice" role="status" data-testid="legacy-read-only-notice">
+              {detailCopy[language].legacyReadOnlyNotice}
+            </p>
+          )}
+          {app.legacyWritesDisabled && app.legacyWriteAttempt && (
+            <div className="navigationUnavailableNotice legacyReadOnlyNotice" role="alert" data-testid="legacy-write-blocked">
+              <p>{detailCopy[language].legacyWriteBlocked}</p>
+              <button type="button" onClick={app.dismissLegacyWriteAttempt}>{detailCopy[language].dismiss}</button>
+            </div>
+          )}
           <div className="pageIntro">
             {view !== "Home" && (
               <p className="eyebrow">
@@ -146,9 +210,10 @@ export function LumiAppRoot({ targetMyPlan, targetScopes }: { targetMyPlan?: Tar
           <AgentsView app={app} />
           <SettingsView app={app} />
           {targetPlan && targetMyPlan
-            ? <TargetMyPlan gates={targetMyPlan} language={language} scopeDriven={scopesOn} />
+            ? <TargetMyPlan gates={targetMyPlan} language={language} scopeDriven={scopesOn} taskDetail={detailGates.task} />
             : scopeList
-              ? <TargetScopeLists key={scopeList} kind={scopeList} language={language} />
+              ? <TargetScopeLists key={scopeList} kind={scopeList} language={language}
+                detail={scopeList === "project" ? detailGates.project : detailGates.note} />
               : <EntityList app={app} />}
           {view === "Today" && !targetPlan && <TodayFooter app={app} />}
         </div>
@@ -156,7 +221,8 @@ export function LumiAppRoot({ targetMyPlan, targetScopes }: { targetMyPlan?: Tar
       <MobileNav app={app} targetPlan={Boolean(targetMyPlan?.enabled)} />
       <DesktopCaptureFab app={app} />
       <CaptureDialog app={app} />
-      <DetailPanel app={app} />
+      {!(scopesOn && targetView) && <DetailPanel app={app} />}
+      {detailPanel && <TargetDetailPanel route={detailRoute} language={language} gates={detailGates} />}
       <AssistantPanel app={app} />
       <DeferPopover app={app} />
       <ConfirmDialog app={app} />
@@ -168,5 +234,6 @@ export function LumiAppRoot({ targetMyPlan, targetScopes }: { targetMyPlan?: Tar
         </div>
       )}
     </main>
+    </LegacyWritesContext.Provider>
   );
 }

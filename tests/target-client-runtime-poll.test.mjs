@@ -109,3 +109,59 @@ test("poll: no window (tests, SSR) arms nothing",async()=>{
   assert.equal(armed,0);
   runtime.dispose();
 });
+
+// ---- R3-FE-4a: revalidation tick for open details and lists ---------------
+test("tick: subscribers run once per poll after a successful re-verification",async()=>{
+  const {runtime,calls,fire}=setup([json({generation:G1})]);
+  await settle();
+  let ticks=0;
+  const off=runtime.subscribeTick(()=>{ticks++;});
+  assert.equal(ticks,0,"no tick from the initial verification");
+  fire();await settle();
+  assert.equal(calls.length,2);
+  assert.equal(ticks,1);
+  fire();await settle();
+  assert.equal(ticks,2);
+  off();
+  fire();await settle();
+  assert.equal(ticks,2,"unsubscribed");
+  runtime.dispose();
+});
+
+test("tick: never while hidden or offline",async()=>{
+  const {runtime,win,calls,fire}=setup([json({generation:G1})]);
+  await settle();
+  let ticks=0;
+  runtime.subscribeTick(()=>{ticks++;});
+  win.document.visibilityState="hidden";win.document.emit("visibilitychange");
+  fire();await settle();
+  assert.equal(ticks,0,"hidden: no tick");
+  assert.equal(calls.length,1,"hidden: no session check either");
+  win.document.visibilityState="visible";win.navigator.onLine=false;win.emit("offline");
+  fire();await settle();
+  assert.equal(ticks,0,"offline: no tick");
+  runtime.dispose();
+});
+
+test("tick: an unavailable session check is not a tick",async()=>{
+  const {runtime,fire}=setup([json({generation:G1}),json({error:"x"},503)]);
+  await settle();
+  let ticks=0;
+  runtime.subscribeTick(()=>{ticks++;});
+  fire();await settle();
+  assert.equal(ticks,0);
+  runtime.dispose();
+});
+
+test("tick: a tick cannot run after dispose and a throwing subscriber does not break others",async()=>{
+  const {runtime,fire}=setup([json({generation:G1})]);
+  await settle();
+  let good=0;
+  runtime.subscribeTick(()=>{throw new Error("boom");});
+  runtime.subscribeTick(()=>{good++;});
+  fire();await settle();
+  assert.equal(good,1);
+  runtime.dispose();
+  fire();await settle();
+  assert.equal(good,1);
+});

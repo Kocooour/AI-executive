@@ -162,7 +162,7 @@ export function HomeView({ app }: { app: LumiApp }) {
             </article>
           ))}
           {homeTodayTasks.length === 0 && homeToday.inAttention > 0 && <p className="attentionEmpty">{tr("homeTodayAllAttention")}</p>}
-          {homeTodayTasks.length === 0 && homeToday.inAttention === 0 && <div className="calmEmpty"><span>✓</span><p>{tr("nothingToday")}</p><button onClick={() => openCapture()}>{tr("addTask")}</button></div>}
+          {homeTodayTasks.length === 0 && homeToday.inAttention === 0 && <div className="calmEmpty"><span>✓</span><p>{tr("nothingToday")}</p>{!app.captureDisabled && <button onClick={() => openCapture()}>{tr("addTask")}</button>}</div>}
         </div>
         {moreToday > 0 && <button type="button" className="textAction" onClick={() => setView("Today")}>{fill("homeMoreToday", { n: moreToday })} →</button>}
         <CalendarEventNotice app={app} />

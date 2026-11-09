@@ -1,5 +1,6 @@
 "use client";
-import type {ButtonHTMLAttributes} from "react";
+import {useContext,type ButtonHTMLAttributes} from "react";
+import {LegacyWritesContext} from "../legacy-writes-context";
 import type {LumiCompletionTone} from "../../../lib/lumi-completion-state";
 
 type Props=Omit<ButtonHTMLAttributes<HTMLButtonElement>,"children"|"type"|"aria-label"|"aria-pressed"> & {
@@ -15,10 +16,13 @@ type Props=Omit<ButtonHTMLAttributes<HTMLButtonElement>,"children"|"type"|"aria-
 /** Shared status control for v1 tasks/projects; visual state never grants a write. */
 export function LumiCompletionControl({
   kind,tone,complete,actionLabel,stateLabel,blockedReason,shapeClassName,
-  className,disabled,...buttonProps
+  className,disabled:ownDisabled,...buttonProps
 }:Props){
+  // Unified target mode: legacy completion is inert and says so (never a silent no-op).
+  const writes=useContext(LegacyWritesContext);
+  const disabled=ownDisabled||writes.disabled;
   const label=disabled
-    ? `${stateLabel}. ${blockedReason||actionLabel}`
+    ? `${stateLabel}. ${writes.disabled&&writes.hint?writes.hint:blockedReason||actionLabel}`
     : `${actionLabel}. ${stateLabel}`;
   return (
     <button {...buttonProps} type="button" disabled={disabled}

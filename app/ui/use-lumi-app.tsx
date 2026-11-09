@@ -7,9 +7,11 @@ import { db, ensureDefaultWorkspace, migratePropertyRelations, personalWorkspace
 import { clearLocalData, finishInterruptedWipe, hasUnsentChanges, markSignedIn, restoreGenerationKey, signedInKey, signedOutKey } from "../../lib/local-data";
 import { failedSignOutNeedsReload, incompleteSignOutNoticeKey, runSignOut } from "../../lib/sign-out";
 import { dropNotesDraft, keepNotesDraft, keptNotesDrafts, leftoverDraftAction, settleNotesDraft, type KeptNotesDraft } from "../../lib/notes-drafts";
-import { addressUpdate, searchForTarget, searchForView, searchWithoutScope, targetFromSearch, viewExitFromProject, viewFromSearch } from "../../lib/view-url";
+import { addressUpdate, scopeFromSearch, searchForTarget, searchForView, searchWithScope, searchWithoutScope, targetFromSearch, viewExitFromProject, viewFromSearch } from "../../lib/view-url";
 import { resolveLegacyProjectLink } from "../../lib/legacy-project-deep-link";
 import { requestsTypedRecord, showUnavailableLink } from "../../lib/navigation-link-status";
+import { detailCopy } from "../../lib/target-detail-copy";
+import { TARGET_ADDRESS_EVENT, holdTypedAddress, isPlanDetailSearch, isTargetAddress, shouldLeaveTypedAddress } from "../../lib/target-detail-route";
 import { legacyRecordBelongsToProject, resolveLegacyRecordLink } from "../../lib/legacy-record-deep-link";
 import { buildContext, type ContextBundle } from "../../lib/context";
 import { mergeSnapshots, type ServerSnapshot } from "../../lib/server-sync";
@@ -59,7 +61,30 @@ import { workspaceTone } from "./workspace-tone";
 
 // All client state, effects and handlers of the Lumi app shell, moved verbatim from app/page.tsx.
 // Views receive the returned object as `app` and destructure what they render.
-export function useLumiApp() {
+export function useLumiApp(options: { targetDetails?: boolean; targetUnified?: boolean; targetViews?: readonly string[] } = {}) {
+  // R3-FE-4a: both default to false, and then none of the branches below run (legacy
+  // behaviour is untouched). targetDetails: a typed project/task/note address is an
+  // authorized target detail, resolved by the server, never by legacy local records.
+  // targetUnified: the global reading scope governs sidebar projects, inspector and
+  // capture, so legacy quick capture writes nothing (there is no target create API yet).
+  const targetDetailsRef = useRef(Boolean(options.targetDetails));
+  targetDetailsRef.current = Boolean(options.targetDetails);
+  // Views that really render target data (target Projects / Notes lists, target My Plan). Typed
+  // addresses of any other view keep their exact legacy behaviour.
+  const targetViewsRef = useRef<readonly string[]>(options.targetViews ?? []);
+  targetViewsRef.current = options.targetViews ?? [];
+  const targetTypedNow = () => targetDetailsRef.current && isTargetAddress(window.location.search, targetViewsRef.current);
+  const captureDisabled = Boolean(options.targetUnified);
+  const captureDisabledRef = useRef(captureDisabled);
+  captureDisabledRef.current = captureDisabled;
+  // A user tried to change legacy data in unified mode: nothing is written, nothing reports success,
+  // and the shell says so (calm alert) instead of a silent no-op.
+  const [legacyWriteAttempt, setLegacyWriteAttempt] = useState(false);
+  const blockLegacyWrite = () => {
+    if (!captureDisabledRef.current) return false;
+    setLegacyWriteAttempt(true);
+    return true;
+  };
   // In-memory only: tasks can navigate to a Gmail source without putting
   // message IDs into URLs, localStorage or persisted navigation state.
   const [mailSourceToOpen, setMailSourceToOpen] = useState<{ workspaceId: string; accountId: string; messageId: string } | null>(null);
@@ -493,7 +518,7 @@ export function useLumiApp() {
   const sessionChannel = "ai-executive-session";
   // Explicit navigation away from a project creates its own history step.
   // Back then returns to the project, including when the next view is Projects (list).
-  function setView(next: string, options?: { previewMyPlan?: boolean }) {
+  function setView(next: string, options?: { previewMyPlan?: boolean; keepAddress?: boolean }) {
     // Explicit navigation is not Back: never steal focus from the chosen nav control.
     pendingProjectFocusRef.current = null;
     activeProjectFocusEntryRef.current = null;
@@ -518,6 +543,18 @@ export function useLumiApp() {
         window.history.pushState(null, "", `${window.location.pathname}${nextSearch}`);
         addressedView.current = planPreview ? "MyPlanPreview" : next;
       } catch { /* The normal view effect handles unavailable History API. */ }
+    } else if (shouldLeaveTypedAddress({ enabled: targetDetailsRef.current, keepAddress: Boolean(options?.keepAddress),
+      search: window.location.search, targetViews: targetViewsRef.current })) {
+      // R3-FE-4a: choosing a view while a target detail is open leaves it: one new history
+      // step to the view-only address (the reading scope stays). keepAddress is for startup /
+      // restore and for the caller that pushes the target address itself right after switching.
+      try {
+        const nextSearch = searchWithScope(planPreview ? "?view=MyPlanPreview" : searchForView(next, startupView),
+          scopeFromSearch(window.location.search));
+        window.history.pushState(null, "", `${window.location.pathname}${nextSearch}`);
+        addressedView.current = planPreview ? "MyPlanPreview" : next;
+        window.dispatchEvent(new Event(TARGET_ADDRESS_EVENT));
+      } catch { /* The normal view effect handles unavailable History API. */ }
     }
     setViewState(next);
     setOpenProjectId(null);
@@ -525,6 +562,8 @@ export function useLumiApp() {
   // A project address is durable across reloads and devices. History state is only
   // a hint that a Back step was created in this tab, never an access grant.
   function openProjectPage(project: Entity) {
+    // R3-FE-4a: where Projects is a target view, legacy project pages (and their legacy IDs in the address) do not exist.
+    if (captureDisabledRef.current && targetViewsRef.current.includes("Projects")) return;
     // A stale sidebar/search result must not open a project outside the current scope.
     if (!visibleProjectsRef.current.some((visible) => visible.id === project.id && visible.workspaceId === project.workspaceId)) return;
     pendingProjectFocusRef.current = null;
@@ -704,6 +743,8 @@ export function useLumiApp() {
     } catch { /* The address synchronization effect handles the fallback. */ }
   }
   async function askAI(promptOverride?: string) {
+    // R3-FE-4a: no target API for this legacy action yet; unified mode keeps it inert.
+    if (blockLegacyWrite()) return;
     const prompt = typeof promptOverride === "string" ? promptOverride.trim() : aiText.trim();
     if (!prompt || aiBusy) return;
     const requestVersion = assistantRequestVersion.current;
@@ -757,6 +798,8 @@ export function useLumiApp() {
   }
 
   async function resolveAIProposal(proposalId: string, action: "confirm" | "cancel") {
+    // R3-FE-4a: no target API for this legacy action yet; unified mode keeps it inert.
+    if (blockLegacyWrite()) return;
     if (aiBusy) return;
     const requestVersion = assistantRequestVersion.current;
     setAiBusy(true);
@@ -800,6 +843,8 @@ export function useLumiApp() {
   }
 
   async function undoAIAction(actionId: string) {
+    // R3-FE-4a: no target API for this legacy action yet; unified mode keeps it inert.
+    if (blockLegacyWrite()) return;
     if (aiBusy) return;
     const requestVersion = assistantRequestVersion.current;
     setAiBusy(true);
@@ -838,6 +883,8 @@ export function useLumiApp() {
   }
 
   async function runPACTAgent(agentId: string) {
+    // R3-FE-4a: no target API for this legacy action yet; unified mode keeps it inert.
+    if (blockLegacyWrite()) return;
     if (agentBusyId) return;
     const workspaceId = activeWorkspaceId === "all" ? writeWorkspaceId : activeWorkspaceId;
     setAgentBusyId(agentId);
@@ -907,6 +954,8 @@ export function useLumiApp() {
   }
 
   async function contextAction(action: "create" | "archive", id?: string) {
+    // R3-FE-4a: unified target mode has no target create/edit API yet; legacy data is never written.
+    if (blockLegacyWrite()) return undefined as never;
     if (contextBusy) return;
     const workspaceId = activeWorkspaceId === "all" ? writeWorkspaceId : activeWorkspaceId;
     setContextBusy(true);
@@ -994,6 +1043,8 @@ export function useLumiApp() {
   }
 
   async function subjectAction(action: "create" | "rename" | "archive", subject?: StandaloneSubjectItem) {
+    // R3-FE-4a: unified target mode has no target create/edit API yet; legacy data is never written.
+    if (blockLegacyWrite()) return undefined as never;
     const workspaceId = calendarWorkspaceSelection.current;
     const busyKey = `subject:${action}:${subject?.id || workspaceId}`;
     if (contextInFlight.current.has(busyKey)) return;
@@ -1098,6 +1149,8 @@ export function useLumiApp() {
   }
 
   async function saveContextClaim() {
+    // R3-FE-4a: unified target mode has no target create/edit API yet; legacy data is never written.
+    if (blockLegacyWrite()) return undefined as never;
     const workspaceId = calendarWorkspaceSelection.current;
     const target = editingClaim;
     const objectKey = target?.id || `new:${workspaceId}`;
@@ -1172,6 +1225,8 @@ export function useLumiApp() {
   }
 
   async function contextClaimAction(claim: ContextClaimItem, action: "review" | "archive", decision?: ContextClaimItem["reviewStatus"]) {
+    // R3-FE-4a: no target API for this legacy action yet; unified mode keeps it inert.
+    if (blockLegacyWrite()) return;
     const workspaceId = calendarWorkspaceSelection.current;
     if (contextInFlight.current.has(`claim:${claim.id}`)) return;
     const scope = `claim:${action}:${claim.id}`;
@@ -1218,6 +1273,8 @@ export function useLumiApp() {
   // "skip" is the owner's way out of a step that is refused for good: it drops that step from its stack
   // and changes no data.
   async function contextHistoryAction(action: "undo" | "redo" | "skip", after?: ContextHistoryState, keyboard = false) {
+    // R3-FE-4a: no target API for this legacy action yet; unified mode keeps it inert.
+    if (blockLegacyWrite()) return;
     const workspaceId = calendarWorkspaceSelection.current;
     const shortcutEpoch = contextShortcutEpoch.current;
     const skipping = action === "skip" ? historySkip : null;
@@ -1304,6 +1361,8 @@ export function useLumiApp() {
   contextShortcut.current = { active: view === "Context" && !capture && !assistantOpen && !moreOpen && authState === "ready", run: (action) => { void contextHistoryAction(action, undefined, true); } };
 
   async function previewContextInbox() {
+    // R3-FE-4a: no target API for this legacy action yet; unified mode keeps it inert.
+    if (blockLegacyWrite()) return;
     if (!contextInboxText.trim() || contextInboxBusy) return;
     const workspaceId = calendarWorkspaceSelection.current;
     setContextInboxBusy("preview"); setContextInboxStatus("");
@@ -1321,6 +1380,8 @@ export function useLumiApp() {
   }
 
   async function approveContextInbox(proposal: ContextInboxProposal) {
+    // R3-FE-4a: no target API for this legacy action yet; unified mode keeps it inert.
+    if (blockLegacyWrite()) return;
     const workspaceId = calendarWorkspaceSelection.current;
     const busyKey = `inbox:${proposal.id}`;
     if (contextInboxBusy || contextInFlight.current.has(busyKey)) return;
@@ -1353,6 +1414,8 @@ export function useLumiApp() {
   }
 
   async function createSuggestedTarget(proposal: ContextInboxProposal) {
+    // R3-FE-4a: unified target mode has no target create/edit API yet; legacy data is never written.
+    if (blockLegacyWrite()) return undefined as never;
     const workspaceId = calendarWorkspaceSelection.current;
     const busyKey = `inbox-target:${proposal.id}`;
     if (!proposal.suggestedTarget || contextInboxBusy || contextInFlight.current.has(busyKey)) return;
@@ -1427,18 +1490,19 @@ export function useLumiApp() {
     const isPreviewPhone = mobileDesignV1Preview && window.matchMedia("(max-width: 700px)").matches;
     // The shared reading scope (?scope=) is not a navigation choice: it must not defeat the phone start.
     const previewMobileStart = isPreviewPhone && searchWithoutScope(window.location.search) === "";
-    const previewDirectLink = mobileDesignV1Preview && mobileV1IsPlanPreviewRoute(window.location.search);
+    const previewDirectLink = mobileDesignV1Preview && (mobileV1IsPlanPreviewRoute(window.location.search) ||
+      (targetDetailsRef.current && targetViewsRef.current.includes("MyPlanPreview") && isPlanDetailSearch(window.location.search)));
     if (previewMobileStart || previewDirectLink) {
       setMobilePlanPreviewActive(true);
       if (previewMobileStart) setStartupView("Today");
       setViewState("Today");
     } else if (savedView && views.includes(savedView)) {
       setStartupView(savedView);
-      setView(savedView);
+      setView(savedView, { keepAddress: true });
     }
     // An explicit ordinary view (including ?view=Today) wins over the preview.
     const addressedView = viewFromSearch(window.location.search, addressableViews);
-    if (addressedView) setView(addressedView);
+    if (addressedView) setView(addressedView, { keepAddress: true });
     setAddressReady(true);
     if (savedWorkspace) {
       setActiveWorkspaceId(savedWorkspace);
@@ -1758,7 +1822,9 @@ export function useLumiApp() {
   useEffect(() => {
     if (deepLinkHandled.current || (authState !== "ready" && !offlineViewRef.current) ||
         (!items.length && syncStatus !== "synced" && syncStatus !== "offline")) return;
-    const route = targetFromSearch(window.location.search, addressableViews, startupView);
+    // R3-FE-4a: with target details on, a typed address is never resolved against local legacy records.
+    const targetTyped = targetTypedNow();
+    const route = targetTyped ? null : targetFromSearch(window.location.search, addressableViews, startupView);
     let resolvedTypedTarget = false;
     if (route?.kind === "project") {
       const destination = resolveLegacyProjectLink(items, route.id, activeWorkspaceId);
@@ -1789,8 +1855,8 @@ export function useLumiApp() {
     }
     // Do not classify a missing typed target until the authenticated snapshot
     // has completed; incomplete local data is not evidence of inaccessibility.
-    if (requestsTypedRecord(window.location.search) && syncStatus !== "synced" && syncStatus !== "offline") return;
-    setNavigationUnavailable(showUnavailableLink(window.location.search, resolvedTypedTarget));
+    if (!targetTyped && requestsTypedRecord(window.location.search) && syncStatus !== "synced" && syncStatus !== "offline") return;
+    setNavigationUnavailable(!targetTyped && showUnavailableLink(window.location.search, resolvedTypedTarget));
     const taskId = new URLSearchParams(window.location.search).get("task");
     if (taskId) {
       const task = items.find((item) => item.id === taskId);
@@ -1848,6 +1914,10 @@ export function useLumiApp() {
     }
     const navigationView = mobileDesignV1Preview && mobilePlanPreviewActive && view === "Today"
       ? "MyPlanPreview" : view;
+    // R3-FE-4a: a target detail address of the current view is kept as it is (the shell
+    // opens it); once the view differs from it, the normal view address replaces it.
+    if (holdTypedAddress({ enabled: targetDetailsRef.current, search: window.location.search,
+      navigationView, targetViews: targetViewsRef.current })) { addressedView.current = navigationView; return; }
     // Even if the preview uses Today as its local initial data view,
     // explicit ?view=Today must remain distinct and reloadable.
     const navigationStart = mobileDesignV1Preview && view === "Today" ? "Home" : startupView;
@@ -1875,7 +1945,8 @@ export function useLumiApp() {
         activeProjectFocusEntryRef.current = destinationFocusId;
       }
       const previewRoute = mobileDesignV1Preview &&
-        mobileV1IsPlanPreviewRoute(window.location.search);
+        (mobileV1IsPlanPreviewRoute(window.location.search) ||
+          (targetDetailsRef.current && targetViewsRef.current.includes("MyPlanPreview") && isPlanDetailSearch(window.location.search)));
       const next = previewRoute ? "Today" :
         viewFromSearch(window.location.search, addressableViews) || localStorage.getItem("ai-executive-startup-view") || "Home";
       // Leaving a field commits what was typed in it, as closing the panel by hand would.
@@ -1888,7 +1959,9 @@ export function useLumiApp() {
       // Reuse startup's legacy scope resolver so a Back/Forward destination in
       // a different, still-known workspace can be restored safely. URL IDs
       // never grant access; UI-09 replaces this with server-authorized reads.
-      const target = targetFromSearch(window.location.search, addressableViews, nextView);
+      // R3-FE-4a: a typed target address belongs to the target detail, not to legacy records.
+      const targetTyped = targetTypedNow();
+      const target = targetTyped ? null : targetFromSearch(window.location.search, addressableViews, nextView);
       const project = nextView === "Projects" && target?.kind === "project"
         ? resolveLegacyProjectLink(latestItemsRef.current, target.id, activeWorkspaceRef.current)
         : null;
@@ -1897,7 +1970,7 @@ export function useLumiApp() {
       const destination = record ?? project;
       // A typed URL never discloses whether the record was deleted or its access
       // changed. Treat both outcomes identically and keep the safe list view.
-      const unavailableTarget = showUnavailableLink(window.location.search, Boolean(destination));
+      const unavailableTarget = !targetTyped && showUnavailableLink(window.location.search, Boolean(destination));
       setNavigationUnavailable(unavailableTarget);
       if (unavailableTarget) {
         // Back/Forward may keep the same list view, so the view-sync effect
@@ -2241,6 +2314,8 @@ export function useLumiApp() {
   }, [capture, captureType, draft, activeWorkspaceId, captureWriteWorkspaceId, captureProjectId, captureProjectWorkspaceId, language, captureServerUnavailable]);
 
   async function saveWorkspaceName() {
+    // R3-FE-4a: no target API for this legacy action yet; unified mode keeps it inert.
+    if (blockLegacyWrite()) return;
     const name = workspaceDraft.trim();
     if (!name || name.length > 120) return;
     const workspaceId =
@@ -2365,6 +2440,8 @@ export function useLumiApp() {
   }
 
   async function createWorkspace() {
+    // R3-FE-4a: no target API for this legacy action yet; unified mode keeps it inert.
+    if (blockLegacyWrite()) return;
     const name = newWorkspaceDraft.trim();
     if (!name || name.length > 120) return;
     const workspaceId = crypto.randomUUID();
@@ -2456,11 +2533,12 @@ export function useLumiApp() {
   );
   // Leaving the Inbox returns it to its tasks, so the sidebar entry always opens the task list.
   useEffect(() => { if (view !== "Inbox") setInboxTab("tasks"); }, [view]);
+  useEffect(() => { setLegacyWriteAttempt(false); }, [view]);
   // A message to open belongs to the mail tab only; it is dropped when that tab is not shown.
   useEffect(() => { if (view !== "Inbox" || inboxTab !== "mail") setMailSourceToOpen(null); }, [view, inboxTab]);
   const projectGroups = view === "Projects" ? groupProjectsByArea(projects, areas, scopedRelations) : [];
   const { notificationState, setNotificationState, notificationStatus, enableNotifications, disableNotifications,
-    testNotification, saveNotificationSettings } = useNotifications({ tr, language });
+    testNotification, saveNotificationSettings } = useNotifications({ tr, language, writesBlocked: blockLegacyWrite });
   const calendarTimezone = notificationState?.preferences.timezone || "Europe/Prague";
   const calendarToday = useMemo(() => {
     const parts = Object.fromEntries(new Intl.DateTimeFormat("en-CA", {
@@ -2468,13 +2546,13 @@ export function useLumiApp() {
     }).formatToParts(new Date(badgeNow)).map((part) => [part.type, part.value]));
     return `${parts.year}-${parts.month}-${parts.day}`;
   }, [badgeNow, calendarTimezone]);
-  const dayPlanState = useDayPlan({ authState, activeWorkspaceId, writeWorkspaceId, items, language, tr, calendarToday,
+  const dayPlanState = useDayPlan({ writesBlocked: blockLegacyWrite, authState, activeWorkspaceId, writeWorkspaceId, items, language, tr, calendarToday,
     calendarWorkspaceSelection, askConfirm, closeDetail, pullFromServer, selectWorkspace, syncQueue, pendingKey });
   const { applyDayPlanAction, currentDayPlanBlock, dayPlanBusy, dayPlanNow, dayPlanStatus, dayPlanTimeline, dayPlanUndo, dayPlanWhy, loadDayPlan, nextDayPlanBlock, setDayPlanNow, setDayPlanStatus, undoDayPlanBlock, visibleDayPlan, workElapsedText, workOverrun, workSession, workSessionAction, workSessionBusy, workSessionStatus } = dayPlanState;
   const { passkeys, passkeyLabel, setPasskeyLabel, passkeyPassword, setPasskeyPassword, passkeyStatus, registerPasskey,
     removePasskey } = usePasskeys({ view, authState, tr, language, askConfirm, setPasskeyBusy });
   const { backups, setBackups, backupStatus, setBackupStatus, backupBusy, backupFailed, createServerBackup, restoreServerBackup, downloadExport, importExport } = useBackups({
-    language, tr, askConfirm, replaceLocal: replaceLocalWithServer });
+    writesBlocked: blockLegacyWrite, language, tr, askConfirm, replaceLocal: replaceLocalWithServer });
   // After the reload that ended an adoption of restored data: the success message of the action that ran it, or the notice
   // that the restore happened elsewhere. (Applied once the app is ready, after the language has settled.)
   useEffect(() => {
@@ -2512,7 +2590,7 @@ export function useLumiApp() {
     setOfflineRetry(result === "unavailable" ? "failed" : "");
     window.setTimeout(() => setOfflineRetry((state) => (state === "failed" ? "" : state)), 4_000);
   }
-  const attentionState = useAttention({ authState, offlineView, activeWorkspaceId, syncStatus, items, pendingDeletedIds, tr, language, signingOut: () => signedOut.current || document.body.inert });
+  const attentionState = useAttention({ writesBlocked: blockLegacyWrite, authState, offlineView, activeWorkspaceId, syncStatus, items, pendingDeletedIds, tr, language, signingOut: () => signedOut.current || document.body.inert });
   const calendarTomorrowDate = new Date(`${calendarToday}T12:00:00Z`);
   calendarTomorrowDate.setUTCDate(calendarTomorrowDate.getUTCDate() + 1);
   const calendarTomorrow = calendarTomorrowDate.toISOString().slice(0, 10);
@@ -2545,7 +2623,7 @@ export function useLumiApp() {
     .filter((event) => calendarEventOverlapsLocalRange(event, calendarNearTermRange))
     .sort((a, b) => Date.parse(a.start) - Date.parse(b.start)), [calendarEvents, calendarNearTermRange]);
   const calendarEventsState = useCalendarEvents({
-    items, calendarEvents, calendarFresh, calendarTimezone, today, activeWorkspaceId, calendarWorkspaceSelection,
+    writesBlocked: blockLegacyWrite, items, calendarEvents, calendarFresh, calendarTimezone, today, activeWorkspaceId, calendarWorkspaceSelection,
     workdayStart: notificationState?.preferences.workdayStart || "08:00", workdayEnd: notificationState?.preferences.workdayEnd || "18:00",
     localDataVersion, syncToServer, load, setUndo, setUndoRelations, undoCreated, undoDecisions, create, deferTask,
   });
@@ -2633,6 +2711,8 @@ export function useLumiApp() {
     extra: Record<string, unknown> = {},
     onLocalCommit?: () => void,
   ) {
+    // R3-FE-4a: unified target mode has no target create/edit API yet; legacy data is never written.
+    if (blockLegacyWrite()) return undefined as never;
     if (!title.trim()) return;
     const now = writeTime(),
       id = typeof extra.entityId === "string" ? extra.entityId : crypto.randomUUID(),
@@ -2804,6 +2884,8 @@ export function useLumiApp() {
   }
 
   function openCapture(type: "task" | "note" = "task", projectId = "") {
+    // R3-FE-4a: no target create endpoint exists yet; legacy capture must not write legacy data in target mode.
+    if (blockLegacyWrite()) return;
     captureOpener.current = document.activeElement as HTMLElement | null;
     const projectWorkspaceId = (projectId && items.find((item) => item.id === projectId && item.type === "project")?.workspaceId) || "";
     const workspaceId = initialCaptureWorkspace(projectWorkspaceId, personalWorkspaceId);
@@ -2930,6 +3012,8 @@ export function useLumiApp() {
   // A value replaced by a change from another device (lib/field-merge.ts): put it back, or keep
   // the current value. Either way the notice is removed on every device.
   async function resolveConflict(e: Entity, conflictId: string, restore: boolean) {
+    // R3-FE-4a: unified target mode has no target create/edit API yet; legacy data is never written.
+    if (blockLegacyWrite()) return undefined as never;
     const current = (await db.entities.get(e.id)) || e;
     const conflict = entityConflicts(current).find((item) => item.id === conflictId);
     if (!conflict) return;
@@ -3020,6 +3104,8 @@ export function useLumiApp() {
   useEffect(() => setRowError(false), [view]);
   // The add row under a list: a refused item keeps its text and says so instead of failing silently.
   async function createFromRow(type: EntityType, title: string) {
+    // R3-FE-4a: unified target mode has no target create/edit API yet; legacy data is never written.
+    if (blockLegacyWrite()) return undefined as never;
     setRowError(false);
     try {
       await create(type, title, type === "task" ? { originalCaptureText: title.trim().slice(0, 1000) } : {});
@@ -3035,6 +3121,8 @@ export function useLumiApp() {
     relationType: string,
     clearInbox = false,
   ) {
+    // R3-FE-4a: unified target mode has no target create/edit API yet; legacy data is never written.
+    if (blockLegacyWrite()) return undefined as never;
     const source = await db.entities.get(sourceId);
     const target = targetId ? await db.entities.get(targetId) : null;
     if (!source || source.type === "workspace") return;
@@ -3133,6 +3221,8 @@ export function useLumiApp() {
     destination: "today" | "someday" | "waiting" | "plan" | "project" | "organize" | "discard",
     value: string | { projectId?: string; areaId?: string } = "",
   ) {
+    // R3-FE-4a: unified target mode has no target create/edit API yet; legacy data is never written.
+    if (blockLegacyWrite()) return undefined as never;
     if (activeWorkspaceRef.current === "all" || activeWorkspaceRef.current !== task.workspaceId ||
         writeWorkspaceId !== task.workspaceId) {
       throw new Error("Inbox triage requires an explicit writable workspace");
@@ -3253,6 +3343,8 @@ export function useLumiApp() {
     assignment: { projectId?: string; areaId?: string; projectRevision?: number; areaRevision?: number;
                   projectTitle?: string; areaTitle?: string } = {},
   ) {
+    // R3-FE-4a: unified target mode has no target create/edit API yet; legacy data is never written.
+    if (blockLegacyWrite()) return undefined as never;
     const workspaceId = activeWorkspaceRef.current;
     if (signedOut.current || isAdopting() || authStateRef.current !== "ready" ||
         workspaceId === "all" || workspaceId !== writeWorkspaceId ||
@@ -3326,6 +3418,8 @@ export function useLumiApp() {
   // `seq`: the count of key presses in the title when the save started (see titleEditSeq). If more
   // was typed meanwhile, the open detail keeps what is being typed.
   async function rename(e: Entity, title: string, seq?: number) {
+    // R3-FE-4a: unified target mode has no target create/edit API yet; legacy data is never written.
+    if (blockLegacyWrite()) return undefined as never;
     // The fallback Area is the system Area: it keeps its name.
     if (isFallbackArea(e, items)) return;
     // Restored data is being adopted and the page reloads: nothing typed against the replaced data is saved (lib/adoption.ts).
@@ -3388,6 +3482,8 @@ export function useLumiApp() {
     }
   }
   async function remove(e: Entity, expectedPreview?: ProjectPreviewActionSnapshot) {
+    // R3-FE-4a: unified target mode has no target create/edit API yet; legacy data is never written.
+    if (blockLegacyWrite()) return undefined as never;
     if (isFallbackArea(e, items)) return;
     let linkedRelations = expectedPreview ? [] as Relation[] : (await db.relations.toArray()).filter(
       (relation) => relation.sourceEntityId === e.id || relation.targetEntityId === e.id,
@@ -3443,6 +3539,8 @@ export function useLumiApp() {
     if (expectedPreview) setProjectSyncNotices((current) => withoutProjectSyncNotice(current, e.id));
   }
   async function setProjectStatus(project: Entity, status: "active" | "completed", expectedPreview?: ProjectPreviewActionSnapshot) {
+    // R3-FE-4a: unified target mode has no target create/edit API yet; legacy data is never written.
+    if (blockLegacyWrite()) return undefined as never;
     if (project.type !== "project") return;
     let committedAt = 0;
     if (expectedPreview) {
@@ -3503,6 +3601,8 @@ export function useLumiApp() {
     if (expectedPreview) setProjectSyncNotices((current) => withoutProjectSyncNotice(current, project.id));
   }
   async function restore() {
+    // R3-FE-4a: unified target mode has no target create/edit API yet; legacy data is never written.
+    if (blockLegacyWrite()) return undefined as never;
     if (!undo) return;
     if (undoDecisions.current?.entity === undo) {
       const { previous } = undoDecisions.current;
@@ -3560,6 +3660,8 @@ export function useLumiApp() {
   // `properties` may be a function of the stored properties, for a change that depends on them
   // (a checklist item ticked): it is then computed from the stored record, not from what is shown.
   async function patch(e: Entity, properties: Record<string, unknown> | ((stored: Record<string, unknown>) => Record<string, unknown>), action = "updated", onlyIfOpen = false, expectedTaskSnapshot?: string) {
+    // R3-FE-4a: unified target mode has no target create/edit API yet; legacy data is never written.
+    if (blockLegacyWrite()) return undefined as never;
     // Restored data is being adopted and the page reloads: nothing typed against the replaced data is saved (lib/adoption.ts).
     if (isAdopting()) return;
     localDataVersion.current += 1;
@@ -3613,6 +3715,8 @@ export function useLumiApp() {
     keepNotesDraft(localStorage, pageId.current, id, text, base);
   }
   async function saveNotes(e: Pick<Entity, "id">, notes: string) {
+    // R3-FE-4a: unified target mode has no target create/edit API yet; legacy data is never written.
+    if (blockLegacyWrite()) return undefined as never;
     // Restored data is being adopted and the page reloads: nothing typed against the replaced data is saved (lib/adoption.ts).
     if (isAdopting()) return;
     try {
@@ -3639,6 +3743,8 @@ export function useLumiApp() {
   }
   // Writes the title and/or text of a note in one local write, then sends it to the server.
   async function patchNoteText(e: Entity, fields: { title?: string; content?: string }, action: string, keepTypedTitle: boolean) {
+    // R3-FE-4a: unified target mode has no target create/edit API yet; legacy data is never written.
+    if (blockLegacyWrite()) return undefined as never;
     // Restored data is being adopted and the page reloads: nothing typed against the replaced data is saved (lib/adoption.ts).
     if (isAdopting()) return;
     localDataVersion.current += 1;
@@ -3661,6 +3767,8 @@ export function useLumiApp() {
       : open));
   }
   async function saveNoteBody(e: Pick<Entity, "id">, text: string) {
+    // R3-FE-4a: unified target mode has no target create/edit API yet; legacy data is never written.
+    if (blockLegacyWrite()) return undefined as never;
     // Restored data is being adopted and the page reloads: nothing typed against the replaced data is saved (lib/adoption.ts).
     if (isAdopting()) return;
     try {
@@ -4016,6 +4124,7 @@ export function useLumiApp() {
     via: "manual" | "lumi",
     expectedTaskSnapshot?: string,
   ): Promise<boolean> {
+    if (blockLegacyWrite()) return false;
     if (activeWorkspaceId === "all" || isAdopting() || deferInFlight.current) return false;
     // One choice at a time: a second one while the first is being saved would replace its Undo snapshot.
     deferInFlight.current = true;
@@ -4074,6 +4183,8 @@ export function useLumiApp() {
   // The popover belongs to the list it was opened on.
   useEffect(() => { setDeferOpen(null); setDeferError(false); }, [view, activeWorkspaceId]);
   async function done(id: string) {
+    // R3-FE-4a: unified target mode has no target create/edit API yet; legacy data is never written.
+    if (blockLegacyWrite()) return undefined as never;
     if (workSession?.taskId === id) { await workSessionAction("finish"); return; }
     const t = await db.entities.get(id);
     if (
@@ -4154,6 +4265,8 @@ export function useLumiApp() {
     load();
   }
   async function reopenTask(task: Entity) {
+    // R3-FE-4a: unified target mode has no target create/edit API yet; legacy data is never written.
+    if (blockLegacyWrite()) return undefined as never;
     const activity = Array.isArray(task.properties.activity) ? task.properties.activity : [];
     localDataVersion.current += 1;
     await db.entities.update(task.id, {
@@ -4267,6 +4380,8 @@ export function useLumiApp() {
   }
 
   async function persistManualOrder(ordered: Entity[], movedId: string, scope: string, allAreaPeers?: Entity[]) {
+    // R3-FE-4a: unified target mode has no target create/edit API yet; legacy data is never written.
+    if (blockLegacyWrite()) return undefined as never;
     if (allAreaPeers) {
       // Reordering a filtered My Plan group can require renumbering hidden
       // neighbours. None of the records about to change may be held, pending,
@@ -4368,6 +4483,8 @@ export function useLumiApp() {
   }
 
   async function moveTaskToSection(task: Entity, section: string) {
+    // R3-FE-4a: unified target mode has no target create/edit API yet; legacy data is never written.
+    if (blockLegacyWrite()) return undefined as never;
     if (task.type !== "task" || !draggableSectionNames.includes(section)) return;
     if (section === "Completed") {
       await done(task.id);
@@ -4420,6 +4537,8 @@ export function useLumiApp() {
   }
 
   async function completeDrop(sourceId: string, target: string, scope = dragScopeRef.current) {
+    // R3-FE-4a: unified target mode has no target create/edit API yet; legacy data is never written.
+    if (blockLegacyWrite()) return undefined as never;
     const source = items.find((entity) => entity.id === sourceId);
     if (!source || !target) return;
     // My Plan's rows may only change manual rank inside their current visible
@@ -4799,6 +4918,11 @@ export function useLumiApp() {
     notificationState,
     notificationStatus,
     openCapture,
+    captureDisabled,
+    legacyWritesDisabled: captureDisabled,
+    legacyWriteAttempt,
+    legacyReadOnlyHint: captureDisabled ? detailCopy[language].legacyReadOnlyNotice : undefined,
+    dismissLegacyWriteAttempt: () => setLegacyWriteAttempt(false),
     pactAgents,
     parseCapture,
     passkeyBusy,

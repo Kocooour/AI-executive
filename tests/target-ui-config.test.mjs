@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import {test} from "node:test";
-import {targetUiConfig,TARGET_UI_MY_PLAN_FLAGS,TARGET_UI_SCOPES_FLAGS} from "../lib/target-ui-config.ts";
+import {targetDataNeeded,targetUiConfig,TARGET_UI_DETAILS_FLAGS,TARGET_UI_MY_PLAN_FLAGS,TARGET_UI_SCOPES_FLAGS} from "../lib/target-ui-config.ts";
 
 const T="true";
 const base={
@@ -23,6 +23,7 @@ const whenWrite={
 };
 const off={enabled:false,statusWrite:false,whenWrite:false};
 const off3={enabled:false,projects:false,notes:false};
+const det0={task:false,project:false,note:false};
 
 test("default env: target UI off, no config at all",()=>{
   assert.equal(targetUiConfig({}),null);
@@ -37,7 +38,7 @@ test("either R3-FE-1 flag missing or not exactly true: null (identical legacy tr
 });
 
 test("My Plan is enabled only when ALL five flags are exactly true",()=>{
-  assert.deepEqual(targetUiConfig(base),{myPlan:{...off,enabled:true},scopes:off3});
+  assert.deepEqual(targetUiConfig(base),{myPlan:{...off,enabled:true},scopes:off3,details:det0});
   assert.equal(TARGET_UI_MY_PLAN_FLAGS.length,5);
   for(const name of TARGET_UI_MY_PLAN_FLAGS){
     const env={...base,...statusWrite,...whenWrite};
@@ -46,23 +47,23 @@ test("My Plan is enabled only when ALL five flags are exactly true",()=>{
       assert.equal(targetUiConfig(env),null,name);continue;
     }
     // Missing my-plan flag: target UI still on, My Plan and its writes off.
-    assert.deepEqual(targetUiConfig(env),{myPlan:off,scopes:off3},name);
+    assert.deepEqual(targetUiConfig(env),{myPlan:off,scopes:off3,details:det0},name);
     for(const bad of ["1","TRUE","false",""])
-      assert.deepEqual(targetUiConfig({...env,[name]:bad}),{myPlan:off,scopes:off3},name+bad);
+      assert.deepEqual(targetUiConfig({...env,[name]:bad}),{myPlan:off,scopes:off3,details:det0},name+bad);
   }
 });
 
 test("write gates are independent of each other and never apply without My Plan",()=>{
-  assert.deepEqual(targetUiConfig({...base,...statusWrite}),{myPlan:{enabled:true,statusWrite:true,whenWrite:false},scopes:off3});
-  assert.deepEqual(targetUiConfig({...base,...whenWrite}),{myPlan:{enabled:true,statusWrite:false,whenWrite:true},scopes:off3});
-  assert.deepEqual(targetUiConfig({...base,...statusWrite,...whenWrite}),{myPlan:{enabled:true,statusWrite:true,whenWrite:true},scopes:off3});
+  assert.deepEqual(targetUiConfig({...base,...statusWrite}),{myPlan:{enabled:true,statusWrite:true,whenWrite:false},scopes:off3,details:det0});
+  assert.deepEqual(targetUiConfig({...base,...whenWrite}),{myPlan:{enabled:true,statusWrite:false,whenWrite:true},scopes:off3,details:det0});
+  assert.deepEqual(targetUiConfig({...base,...statusWrite,...whenWrite}),{myPlan:{enabled:true,statusWrite:true,whenWrite:true},scopes:off3,details:det0});
   const noMyPlan={...base,...statusWrite,...whenWrite};
   delete noMyPlan.AI_EXECUTIVE_TARGET_UI_MY_PLAN_ENABLED;
-  assert.deepEqual(targetUiConfig(noMyPlan),{myPlan:off,scopes:off3});
+  assert.deepEqual(targetUiConfig(noMyPlan),{myPlan:off,scopes:off3,details:det0});
   // A partial write gate leaves that write off while reads stay on.
   const partial={...base,...statusWrite};
   delete partial.AI_EXECUTIVE_TARGET_STAGING_HTTP_TEMPORAL_WRITE_ENABLED;
-  assert.deepEqual(targetUiConfig(partial),{myPlan:{...off,enabled:true},scopes:off3});
+  assert.deepEqual(targetUiConfig(partial),{myPlan:{...off,enabled:true},scopes:off3,details:det0});
 });
 
 test("the config is plain serializable booleans only",()=>{
@@ -80,15 +81,15 @@ const projectsFlag={AI_EXECUTIVE_TARGET_STAGING_HTTP_GLOBAL_PROJECTS_ENABLED:T};
 const notesFlag={AI_EXECUTIVE_TARGET_STAGING_HTTP_GLOBAL_NOTES_ENABLED:T};
 
 test("R3-FE-3: switcher needs all three flags exactly true, independent of My Plan",()=>{
-  assert.deepEqual(targetUiConfig(scopesOnly),{myPlan:off,scopes:{enabled:true,projects:false,notes:false}});
+  assert.deepEqual(targetUiConfig(scopesOnly),{myPlan:off,scopes:{enabled:true,projects:false,notes:false},details:det0});
   assert.deepEqual(targetUiConfig({...base,...scopesOnly}),
-    {myPlan:{...off,enabled:true},scopes:{enabled:true,projects:false,notes:false}});
+    {myPlan:{...off,enabled:true},scopes:{enabled:true,projects:false,notes:false},details:det0});
   assert.equal(TARGET_UI_SCOPES_FLAGS.length,3);
   for(const name of TARGET_UI_SCOPES_FLAGS){
     const env={...scopesOnly,...projectsFlag,...notesFlag};
     delete env[name];
     const expected=name==="AI_EXECUTIVE_TARGET_UI_ENABLED"||name==="AI_EXECUTIVE_TARGET_STAGING_HTTP_ENABLED"
-      ?null:{myPlan:off,scopes:off3};
+      ?null:{myPlan:off,scopes:off3,details:det0};
     assert.deepEqual(targetUiConfig(env),expected,name);
     for(const bad of ["1","TRUE","yes","false",""])
       assert.deepEqual(targetUiConfig({...env,[name]:bad}),expected,name+bad);
@@ -115,8 +116,8 @@ test("R3-FE-3: the My Plan flags alone never enable scopes (and vice versa)",()=
   assert.equal(targetUiConfig(scopesOnly).myPlan.enabled,false);
 });
 
-test("R3-FE-3: provider mount rule is My Plan OR a scoped list view, as app/page.tsx computes it",()=>{
-  const mounts=env=>{const c=targetUiConfig(env);return c!==null&&(c.myPlan.enabled||c.scopes.projects||c.scopes.notes);};
+test("R3-FE-3: provider mount rule is My Plan OR a scoped list view (R3-FE-4a: or a detail), as app/page.tsx computes it",()=>{
+  const mounts=env=>targetDataNeeded(targetUiConfig(env));
   assert.equal(mounts({}),false);
   assert.equal(mounts({AI_EXECUTIVE_TARGET_STAGING_HTTP_ENABLED:T,AI_EXECUTIVE_TARGET_UI_ENABLED:T}),false);
   assert.equal(mounts(base),true);
@@ -125,4 +126,50 @@ test("R3-FE-3: provider mount rule is My Plan OR a scoped list view, as app/page
   assert.equal(mounts({...scopesOnly,...projectsFlag}),true);
   assert.equal(mounts({...scopesOnly,...notesFlag}),true);
   assert.equal(mounts({...projectsFlag,...notesFlag}),false);
+});
+
+// ---- R3-FE-4a: authorized details in the main app --------------------------
+const detailsFlag={AI_EXECUTIVE_TARGET_UI_DETAILS_ENABLED:T};
+const taskFlag={AI_EXECUTIVE_TARGET_STAGING_HTTP_TEMPORAL_ENABLED:T};
+const noteDetailFlag={AI_EXECUTIVE_TARGET_STAGING_HTTP_NOTES_ENABLED:T};
+const baseUi={AI_EXECUTIVE_TARGET_STAGING_HTTP_ENABLED:T,AI_EXECUTIVE_TARGET_UI_ENABLED:T};
+
+test("R3-FE-4a: details are off by default and without the new UI flag",()=>{
+  assert.deepEqual(targetUiConfig(baseUi).details,det0);
+  assert.deepEqual(targetUiConfig({...baseUi,...taskFlag,...noteDetailFlag}).details,det0);
+  assert.equal(targetUiConfig({...detailsFlag,...taskFlag,...noteDetailFlag}),null);
+});
+
+test("R3-FE-4a: each kind needs the UI flag AND the flags its own route requires",()=>{
+  assert.deepEqual(TARGET_UI_DETAILS_FLAGS.slice(-1),["AI_EXECUTIVE_TARGET_UI_DETAILS_ENABLED"]);
+  const on={...baseUi,...detailsFlag};
+  assert.deepEqual(targetUiConfig(on).details,{task:false,project:true,note:false});
+  assert.deepEqual(targetUiConfig({...on,...taskFlag}).details,{task:true,project:true,note:false});
+  assert.deepEqual(targetUiConfig({...on,...noteDetailFlag}).details,{task:false,project:true,note:true});
+  assert.deepEqual(targetUiConfig({...on,...taskFlag,...noteDetailFlag}).details,{task:true,project:true,note:true});
+  for(const bad of ["1","TRUE","yes","false",""]){
+    assert.deepEqual(targetUiConfig({...baseUi,AI_EXECUTIVE_TARGET_UI_DETAILS_ENABLED:bad,...taskFlag,...noteDetailFlag}).details,det0,bad);
+    assert.equal(targetUiConfig({...on,AI_EXECUTIVE_TARGET_STAGING_HTTP_TEMPORAL_ENABLED:bad}).details.task,false,bad);
+    assert.equal(targetUiConfig({...on,AI_EXECUTIVE_TARGET_STAGING_HTTP_NOTES_ENABLED:bad}).details.note,false,bad);
+  }
+});
+
+test("R3-FE-4a: details are independent of My Plan and scopes and the config stays plain booleans",()=>{
+  const all={...baseUi,...detailsFlag,...taskFlag,...noteDetailFlag};
+  const config=targetUiConfig(all);
+  assert.equal(config.myPlan.enabled,false);
+  assert.equal(config.scopes.enabled,false);
+  assert.deepEqual(JSON.parse(JSON.stringify(config)),config);
+  for(const value of Object.values(config.details))assert.equal(typeof value,"boolean");
+});
+
+test("R3-FE-4a: details are no provider consumer of their own (they stay inert without a list or plan)",()=>{
+  const mounts=env=>targetDataNeeded(targetUiConfig(env));
+  assert.equal(mounts({...baseUi,...detailsFlag}),false);
+  assert.equal(mounts({...baseUi,...detailsFlag,...taskFlag,...noteDetailFlag}),false);
+  assert.equal(mounts({...scopesOnly,...detailsFlag}),false);
+  assert.equal(mounts({...scopesOnly,...projectsFlag,...detailsFlag}),true);
+  assert.equal(mounts({...base,...detailsFlag}),true);
+  assert.equal(mounts(scopesOnly),false);
+  assert.equal(targetDataNeeded(null),false);
 });

@@ -58,7 +58,8 @@ export function MobileNav({ app, targetPlan = false }: { app: LumiApp; targetPla
           </button>
         );})}
       </nav>
-      {!moreOpen && <button className="mobileCaptureButton" type="button" onClick={() => openCapture()} aria-label={tr("quickCapture")} title={tr("quickCapture")}>＋</button>}
+      {/* R3-FE-4a: no target create endpoint yet; legacy capture is hidden in target mode. */}
+      {!moreOpen && !app.captureDisabled && <button className="mobileCaptureButton" type="button" onClick={() => openCapture()} aria-label={tr("quickCapture")} title={tr("quickCapture")}>＋</button>}
       {moreOpen && (
         <div className="mobileMoreBackdrop" onClick={() => setMoreOpen(false)}>
           <div id="mobile-more-dialog" className="mobileMore" role="dialog" aria-modal="true" aria-labelledby="mobile-more-title" ref={moreDialogRef} onClick={(e) => e.stopPropagation()} onKeyDown={(event) => handleOverlayKeys(event, () => setMoreOpen(false))}>

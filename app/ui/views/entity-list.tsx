@@ -398,7 +398,7 @@ export function EntityList({ app }: { app: LumiApp }) {
                   <div className="empty">{tr("nothingHere")}</div>
                 )}
               </div>
-              {!['Home', 'Search'].includes(view) && (
+              {!['Home', 'Search'].includes(view) && !app.legacyWritesDisabled && (
                 <div className="capture">
                   <input
                     value={text}

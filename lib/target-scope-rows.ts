@@ -22,3 +22,6 @@ export function groupIndexRowsByArea(rows:readonly GlobalIndexItem[]):IndexRowGr
   }
   return groups;
 }
+
+/** Rows loaded so far (used only to keep the user's position when a list is re-read; never displayed). */
+export const loadedRowCount=(page:{items:readonly unknown[]}):number=>page.items.length;

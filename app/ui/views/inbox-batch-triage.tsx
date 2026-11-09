@@ -1,4 +1,5 @@
 "use client";
+import { LegacyWriteGate } from "./legacy-write-gate";
 
 import { useEffect, useState } from "react";
 import type { LumiApp } from "../use-lumi-app";
@@ -96,7 +97,7 @@ export function InboxBatchTriage({ app }: { app: LumiApp }) {
     }
   }
 
-  return <section className="batchTriage" aria-label={tr("batchTitle")}>
+  return <LegacyWriteGate><section className="batchTriage" aria-label={tr("batchTitle")}>
     <div className="batchTriageHeading">
       <h2>{tr("batchTitle")}</h2>
       <span role="status" aria-live="polite">
@@ -161,5 +162,5 @@ export function InboxBatchTriage({ app }: { app: LumiApp }) {
       </div>
     </div>}
     {error && <p role="alert" className="batchTriageError">{error}</p>}
-  </section>;
+  </section></LegacyWriteGate>;
 }
