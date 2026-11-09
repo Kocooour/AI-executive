@@ -1,5 +1,5 @@
-import { LegacyWriteGate } from "./legacy-write-gate";
 "use client";
+import { LegacyWriteGate } from "./legacy-write-gate";
 
 import { useEffect, useState } from "react";
 import type { LumiApp } from "../use-lumi-app";

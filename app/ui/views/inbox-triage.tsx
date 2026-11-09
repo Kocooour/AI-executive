@@ -1,5 +1,5 @@
-import { LegacyWriteGate } from "./legacy-write-gate";
 "use client";
+import { LegacyWriteGate } from "./legacy-write-gate";
 
 import { useRef, useState } from "react";
 import { addLocalDays, ymd } from "../../../lib/local-dates";

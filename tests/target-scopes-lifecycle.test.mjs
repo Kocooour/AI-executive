@@ -92,7 +92,7 @@ test("the list component applies no client-side filter at all (no kind picking e
   const source=read("app/ui/target-scope-lists.tsx");
   assert.deepEqual(source.match(/\.filter\([^)]*\)/g)??[],[]);
   assert.doesNotMatch(source,/entry\.kind===kind|createGlobalIndexReadSession/);
-  assert.match(source,/createKindIndexReadSession\(kind,\{scope,contextVersion\}\),\[kind,scope\]/);
+  assert.match(source,/createKindIndexReadSession\(kind,\{scope,contextVersion\},readFetch\),\[kind,scope\]/);
   assert.doesNotMatch(source,/\.sort\(|\.slice\(|\.length\s*[+\-*]/);
   assert.doesNotMatch(source,/areaKind\s*===\s*scope|areaKind\s*!==\s*scope/);
 });
@@ -256,7 +256,7 @@ test("wiring: scope screens persist and log nothing, show no counts or Area head
   const lists=read("app/ui/target-scope-lists.tsx");
   assert.doesNotMatch(lists,/<h[1-6]/);
   assert.doesNotMatch(lists,/items\.length|rows\.length\s*\}/);
-  assert.match(lists,/useTargetSession\(contextVersion=>createKindIndexReadSession\(kind,\{scope,contextVersion\}\),\[kind,scope\]\)/);
+  assert.match(lists,/useTargetSession\(contextVersion=>createKindIndexReadSession\(kind,\{scope,contextVersion\},readFetch\),\[kind,scope\]\)/);
   assert.match(lists,/state\.session===session&&state\.rowKind===kind&&state\.page\.scope===scope/);
   assert.match(lists,/visibilitychange/);assert.match(lists,/pagehide/);assert.match(lists,/"offline"/);
   assert.match(lists,/refusalRef\.current\(\)/);

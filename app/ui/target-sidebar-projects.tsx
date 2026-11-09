@@ -13,6 +13,7 @@ import {useTargetScope} from "./target-scope-state";
 import {createKindIndexReadSession} from "../../lib/target-staging-kind-index-client";
 import type {GlobalIndexPage} from "../../lib/target-staging-global-index-client";
 import {detailCopy,type DetailLanguage} from "../../lib/target-detail-copy";
+import {queuedTargetFetch} from "../../lib/target-read-queue";
 import {detailIdOk,detailRouteFromSearch} from "../../lib/target-detail-route";
 import {useTargetTick,useTargetWake} from "./use-target-revalidation";
 import {useTargetSearch} from "./target-detail-state";
@@ -22,6 +23,9 @@ type State=
   |{kind:"idle"}
   |{kind:"ready";page:GlobalIndexPage}
   |{kind:"error";reason:"hidden"|"failed"};
+
+// Shared one-at-a-time read queue: the server answers 503 beyond two concurrent reads.
+const readFetch=queuedTargetFetch();
 
 export default function TargetSidebarProjects({language="cs",openable,onOpen,onShowAll}:{
   language?:DetailLanguage;
@@ -36,7 +40,7 @@ export default function TargetSidebarProjects({language="cs",openable,onOpen,onS
   const open=detailRouteFromSearch(search);
   const {gate,onRefusal}=useTargetGate();
   const session=useTargetSession(
-    contextVersion=>createKindIndexReadSession("project",{scope,limit:50,contextVersion}),[scope]);
+    contextVersion=>createKindIndexReadSession("project",{scope,limit:50,contextVersion},readFetch),[scope]);
   const [state,setState]=useState<State>({kind:"idle"});
   const [nonce,setNonce]=useState(0);
   const epoch=useRef(0);

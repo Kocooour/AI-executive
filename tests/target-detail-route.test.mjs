@@ -6,7 +6,7 @@ import {
   detailRowKey,isParentOf,isPlanDetailSearch,parentSearchForDetail,requestsTargetRecord,searchForDetail,
   TARGET_ADDRESS_EVENT,
 } from "../lib/target-detail-route.ts";
-import {scopeFromSearch} from "../lib/view-url.ts";
+import {addressUpdate,scopeFromSearch} from "../lib/view-url.ts";
 
 const all={task:true,project:true,note:true};
 const none={task:false,project:false,note:false};
@@ -193,4 +193,15 @@ test("keys are stable and never contain more than kind, id and parent",()=>{
   assert.equal(detailRowKey("task","t"),"task:t");
   assert.equal(detailRouteKey({kind:"task",id:"t",view:"Projects",projectId:"p"}),"task:t@p");
   assert.equal(TARGET_ADDRESS_EVENT,"lumi-target-address-changed");
+});
+
+test("desktop (no v1 shell): ?view=MyPlanPreview&taskId is ignored AND replaced by the normal address",()=>{
+  // targetViews has no MyPlanPreview there, so the layer ignores the address ...
+  assert.equal(isTargetAddress("?view=MyPlanPreview&taskId=t",["Projects"]),false);
+  assert.equal(holdTypedAddress({enabled:true,search:"?view=MyPlanPreview&taskId=t",navigationView:"Home",targetViews:["Projects"]}),false);
+  // ... and the normal address sync replaces it (replace, not a new history step; scope kept).
+  assert.deepEqual(addressUpdate({currentSearch:"?view=MyPlanPreview&taskId=t",view:"Home",startView:"Home",navigated:false}),
+    {search:"",mode:"replace"});
+  assert.deepEqual(addressUpdate({currentSearch:"?view=MyPlanPreview&taskId=t&scope=shared",view:"Home",startView:"Home",navigated:false}),
+    {search:"?scope=shared",mode:"replace"});
 });

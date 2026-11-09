@@ -19,6 +19,10 @@ import {TargetDataStatus} from "./target-data-status";
 import {useTargetGate} from "./use-target-gate";
 import {useTargetTick,useTargetWake} from "./use-target-revalidation";
 import {wakeRetryDelay} from "../../lib/target-wake";
+import {queuedTargetFetch} from "../../lib/target-read-queue";
+
+// Shared one-at-a-time read queue: the server answers 503 beyond two concurrent reads.
+const readFetch=queuedTargetFetch();
 import {closeTargetDetail,detailRowKey,focusPendingRow,openTargetDetail} from "./target-detail-state";
 import {
   createTargetDetailSession,type TargetDetailContent,type TargetDetailFailure,
@@ -177,7 +181,7 @@ function DetailBody({route,language,gates}:{
   const copy=detailCopy[language];
   const {gate,onRefusal,retry}=useTargetGate();
   const session=useTargetSession(
-    contextVersion=>createTargetDetailSession({kind:route.kind,id:route.id,contextVersion}),
+    contextVersion=>createTargetDetailSession({kind:route.kind,id:route.id,contextVersion},readFetch),
     [route.kind,route.id]);
   const [state,setState]=useState<State>({kind:"idle"});
   const [nonce,setNonce]=useState(0);
@@ -201,7 +205,8 @@ function DetailBody({route,language,gates}:{
   const key=detailRouteKey(route);
   useEffect(()=>{panelRef.current?.focus({preventScroll:true});},[key]);
 
-  const afterWake=useRef(false);
+  // A read that fails because the network is not ready yet, or the server is momentarily busy
+  // (503), is retried automatically with a bounded back-off before "Try again" is the only way on.
   const retryAttempt=useRef(0);
   const retryTimer=useRef<ReturnType<typeof setTimeout>|null>(null);
   useEffect(()=>()=>{if(retryTimer.current!==null)clearTimeout(retryTimer.current);},[]);
@@ -212,8 +217,6 @@ function DetailBody({route,language,gates}:{
       setState({kind:"error",reason});
     },
     ready:()=>{
-      // A read right after a wake may hit a network that is not ready yet: retry it automatically.
-      afterWake.current=true;
       retryAttempt.current=0;
       sessionRef.current?.resume();
       setNonce(value=>value+1);
@@ -234,13 +237,13 @@ function DetailBody({route,language,gates}:{
     void session.load().then(result=>{
       if(epoch.current!==id)return;
       if(result.ok===true){
-        afterWake.current=false;
+        retryAttempt.current=0;
         setState({kind:"ready",content:result.content,more:false});
       }else if(result.reason==="superseded")return;
       else{
         const reason=result.reason==="not-ready"?"stale":result.reason;
         setState({kind:"error",reason});
-        const delay=afterWake.current?wakeRetryDelay(reason,retryAttempt.current):null;
+        const delay=wakeRetryDelay(reason,retryAttempt.current);
         if(delay!==null){
           retryAttempt.current++;
           retryTimer.current=setTimeout(()=>{
@@ -249,7 +252,7 @@ function DetailBody({route,language,gates}:{
             sessionRef.current?.resume();
             setNonce(value=>value+1);
           },delay);
-        }else afterWake.current=false;
+        }
       }
     }).catch(()=>{if(epoch.current===id)setState({kind:"error",reason:"unavailable"});});
     return ()=>{epoch.current++;};
@@ -283,7 +286,7 @@ function DetailBody({route,language,gates}:{
   useEffect(()=>{if(state.kind==="ready")focusPendingRow();},[state]);
 
   const reload=useCallback(()=>{
-    afterWake.current=false;
+    retryAttempt.current=0;
     sessionRef.current?.resume();
     setNonce(value=>value+1);
   },[]);

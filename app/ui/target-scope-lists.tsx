@@ -26,6 +26,10 @@ import {detailCopy} from "../../lib/target-detail-copy";
 import {detailRowKey,focusPendingRow,openTargetDetail} from "./target-detail-state";
 import {useTargetTick} from "./use-target-revalidation";
 import {detailIdOk} from "../../lib/target-detail-route";
+import {queuedTargetFetch} from "../../lib/target-read-queue";
+
+// Shared one-at-a-time read queue: the server answers 503 beyond two concurrent reads.
+const readFetch=queuedTargetFetch();
 import "./target-scopes.css";
 import "./target-details.css";
 
@@ -38,7 +42,7 @@ type State=
 
 // Typing helper only: the hook is called through useTargetSession below.
 function useScopeSession(kind:"project"|"note",scope:"all"|"personal"|"shared"){
-  return useTargetSession(contextVersion=>createKindIndexReadSession(kind,{scope,contextVersion}),[kind,scope]);
+  return useTargetSession(contextVersion=>createKindIndexReadSession(kind,{scope,contextVersion},readFetch),[kind,scope]);
 }
 
 export default function TargetScopeLists({kind,language="cs",detail=false}:{

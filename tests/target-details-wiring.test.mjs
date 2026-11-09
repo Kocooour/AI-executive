@@ -68,7 +68,7 @@ test("target addresses are never resolved against legacy records (no legacy fall
 });
 
 test("unification: Quick Capture is a no-op and hidden everywhere in target mode",()=>{
-  assert.match(hookSource,/function openCapture\([^)]*\) \{\s*\/\/[^\n]*\n\s*if \(captureDisabledRef\.current\) return;/);
+  assert.match(hookSource,/function openCapture\([^)]*\) \{\s*\/\/[^\n]*\n\s*if \(blockLegacyWrite\(\)\) return;/);
   assert.match(hookSource,/const captureDisabled = Boolean\(options\.targetUnified\)/);
   assert.match(hookSource,/\n\s*captureDisabled,\n/);
   assert.match(read("app/ui/views/mobile-nav.tsx"),/!moreOpen && !app\.captureDisabled && <button className="mobileCaptureButton"/);
@@ -143,8 +143,13 @@ test("the panel reads only for a server-confirmed generation and routes 401 thro
   const hooks=read("app/ui/use-target-revalidation.ts");
   for(const event of ["visibilitychange","offline","pagehide","pageshow","online"])
     assert.match(hooks,new RegExp(`"${event}"`),event);
-  assert.match(hooks,/await runtime\.refresh\(\)/);
-  assert.match(hooks,/if\(result==="ok"\)\{ref\.current\.ready\(\);return;\}/);
+  // The wake logic is a pure, tested machine (lib/target-wake.ts): it waits for the runtime's
+  // fresh verification, never gives up before reading, and shows signed-out instead of staying hidden.
+  assert.match(hooks,/createWakeMachine\(\{/);
+  assert.match(hooks,/refresh:\(\)=>runtime\?runtime\.refresh\(\)/);
+  const machine=read("lib/target-wake.ts");
+  assert.match(machine,/if\(result==="signed_out"\)deps\.handlers\(\)\.signedOut\(\);\s*\n\s*else deps\.handlers\(\)\.ready\(\);/);
+  assert.match(panel,/signedOut:\(\)=>setState\(\{kind:"error",reason:"signed-out"\}\)/);
   assert.match(panel,/useTargetWake\(\{/);
   assert.match(panel,/sessionRef\.current\?\.suspend\(\)/);
   // Revalidation tick: an open detail re-reads, a failure (404) replaces the content.
@@ -195,26 +200,78 @@ test("docs and workflow: the slice documentation and focused CI paths exist",()=
     assert.ok(doc.includes(needle),needle);
 });
 
-test("unified mode: every legacy entity writer is inert, and the guard is absent from nothing else",()=>{
-  const writers=["create","createFromRow","done","reopenTask","moveTaskToSection","patch","patchNoteText",
-    "persistManualOrder","relate","remove","rename","resolveConflict","restore","setProjectStatus","triageInbox",
-    "triageInboxBatch","completeDrop","createSuggestedTarget","saveContextClaim","subjectAction","contextAction",
-    "saveNotes","saveNoteBody"];
-  for(const name of writers){
-    const start=hookSource.search(new RegExp(`\\n  (?:async )?function ${name}\\(`));
-    assert.ok(start>0,name);
-    const head=hookSource.slice(start,start+900);
-    assert.match(head,/if \(captureDisabledRef\.current\) return undefined as never;/,name+" must be guarded");
+const writersInApp=["create","createFromRow","done","reopenTask","moveTaskToSection","patch","patchNoteText",
+  "persistManualOrder","relate","remove","rename","resolveConflict","restore","setProjectStatus","triageInbox",
+  "triageInboxBatch","completeDrop","createSuggestedTarget","saveContextClaim","subjectAction","contextAction",
+  "saveNotes","saveNoteBody",
+  // Agents / assistant / context / settings (user-initiated, write legacy or server-legacy data)
+  "askAI","resolveAIProposal","undoAIAction","runPACTAgent","contextClaimAction","contextHistoryAction",
+  "previewContextInbox","approveContextInbox","saveWorkspaceName","createWorkspace"];
+const writersInHooks={
+  "use-backups.ts":["restoreServerBackup","importExport"],
+  "use-calendar-events.ts":["writeDecisions","createEventTask","applySuggestion"],
+  "use-day-plan.ts":["workSessionAction","applyDayPlanAction","undoDayPlanBlock"],
+  "use-attention.ts":["actOnAttention"],
+  "use-notifications.ts":["enableNotifications","disableNotifications","testNotification","saveNotificationSettings"],
+};
+const functionHead=(source,name,length=900)=>{
+  const start=source.search(new RegExp(`\\n  (?:async )?function ${name}\\(`));
+  assert.ok(start>0,name);
+  return source.slice(start,start+length);
+};
+
+test("unified mode: every user-initiated legacy writer is guarded by the unified-mode flag (and inert when flags off)",()=>{
+  for(const name of writersInApp)
+    assert.match(functionHead(hookSource,name),/if \(blockLegacyWrite\(\)\) return/,name+" must be guarded");
+  for(const [file,names] of Object.entries(writersInHooks)){
+    const source=read("app/ui/hooks/"+file);
+    assert.match(source,/writesBlocked = \(\) => false/,file+" defaults to NOT blocked (flags off = legacy)");
+    for(const name of names)
+      assert.match(functionHead(source,name,500),/if \(writesBlocked\(\)\) return/,file+" "+name);
   }
-  // Flags off: the ref is false, so the guards never fire.
+  // The hooks receive the flag from the app hook; the default false means identical legacy behaviour.
+  for(const hook of ["useNotifications","useDayPlan","useBackups","useAttention","useCalendarEvents"])
+    assert.match(hookSource,new RegExp(`${hook}\\(\\{[^}]*writesBlocked: blockLegacyWrite`),hook);
+  // The blocker is inert unless the unified flag is on, and announces (never silent).
+  assert.match(hookSource,/const blockLegacyWrite = \(\) => \{\s*if \(!captureDisabledRef\.current\) return false;\s*setLegacyWriteAttempt\(true\);\s*return true;/);
   assert.match(hookSource,/const captureDisabled = Boolean\(options\.targetUnified\)/);
   assert.match(hookSource,/legacyWritesDisabled: captureDisabled/);
+  // Blocked writers never report success: defer returns false BEFORE any Undo is set.
+  const defer=functionHead(hookSource,"deferTask",400);
+  assert.match(defer,/if \(blockLegacyWrite\(\)\) return false;/);
+  // Backups: creating a server backup (read-only export of the server copy) stays available.
+  assert.doesNotMatch(functionHead(read("app/ui/hooks/use-backups.ts"),"createServerBackup",300),/writesBlocked/);
   // The inline add row of legacy lists is not rendered in unified mode.
   assert.match(read("app/ui/views/entity-list.tsx"),/!app\.legacyWritesDisabled && \(/);
 });
 
+test("unified mode: legacy write controls render DISABLED with the notice, not as silent no-ops",()=>{
+  const gate=read("app/ui/views/legacy-write-gate.tsx");
+  assert.match(gate,/<fieldset disabled className="legacyWriteGate" title=\{writes\.hint\}/);
+  assert.match(rootSource,/LegacyWritesContext\.Provider value=\{\{ disabled: app\.legacyWritesDisabled, hint: app\.legacyReadOnlyHint \}\}/);
+  for(const file of ["app/ui/views/inbox-triage.tsx","app/ui/views/inbox-batch-triage.tsx"])
+    assert.match(read(file),/<LegacyWriteGate>/,file);
+  assert.match(read("app/ui/views/lumi-completion-control.tsx"),/const disabled=ownDisabled\|\|writes\.disabled/);
+  assert.match(read("app/ui/views/defer-popover.tsx"),/disabled=\{app\.legacyWritesDisabled\}\s*\n\s*title=\{app\.legacyReadOnlyHint\}/);
+  for(const [file,needle] of [
+    ["app/ui/views/context-view.tsx","|| app.legacyWritesDisabled"],
+    ["app/ui/views/agents-view.tsx","app.legacyWritesDisabled"],
+    ["app/ui/views/assistant-panel.tsx","app.legacyWritesDisabled"],
+    ["app/ui/views/settings-view.tsx","app.legacyWritesDisabled"],
+  ])assert.ok(read(file).includes(needle),file);
+  // An attempted blocked action is announced, with nothing changed.
+  assert.match(rootSource,/app\.legacyWritesDisabled && app\.legacyWriteAttempt && \(/);
+  assert.match(rootSource,/role="alert" data-testid="legacy-write-blocked"/);
+});
+
+test("a typed link to another active target view switches to it and opens (address kept)",()=>{
+  assert.match(rootSource,/app\.setView\("Today", \{ previewMyPlan: true, keepAddress: true \}\)/);
+  assert.match(rootSource,/else app\.setView\(wanted, \{ keepAddress: true \}\)/);
+  assert.match(rootSource,/if \(wanted === null \|\| wanted === activeTargetView\) return;/);
+});
+
 test("unified mode: legacy views stay visible read-only with a calm cs/en notice (owner decision 2026-11-09, option 1)",()=>{
-  assert.match(rootSource,/const legacyReadOnly = app\.legacyWritesDisabled && !targetView && view !== "Settings";/);
+  assert.match(rootSource,/const legacyReadOnly = app\.legacyWritesDisabled && !targetView;/);
   assert.match(rootSource,/\{legacyReadOnly && \(\s*<p className="navigationUnavailableNotice legacyReadOnlyNotice" role="status"/);
   const copy=read("lib/target-detail-copy.ts");
   assert.match(copy,/Tento pohled zatím ukazuje dosavadní data; úpravy jsou v režimu serverových dat vypnuté\./);
@@ -262,7 +319,7 @@ test("focus: deeper opens never return focus to the list; the panel owns focus; 
   const panel=read("app/ui/target-detail-panel.tsx");
   assert.doesNotMatch(panel,/expectFocusReturn/);
   assert.match(rootSource,/if \(previous !== null && !isParentOf\(previous, detailRoute\)\) expectFocusReturn\(previous\)/);
-  assert.match(panel,/state\.kind==="error"&&state\.reason==="not-available"\?copy\.failures\["not-available"\]/);
+  assert.match(panel,/state\.kind==="error"\?\(state\.reason==="hidden"\?copy\.hidden:copy\.failures\[state\.reason\]\)/);
 });
 
 test("sidebar target titles are not clipped by the legacy 18 px icon-slot rule",()=>{
@@ -278,4 +335,12 @@ test("the refusal budget is shared per runtime (gate hook and My Plan)",()=>{
     assert.match(source,/refusalBudgetFor\(runtime\)/,file);
     assert.doesNotMatch(source,/createRefusalBudget\(\)/,file);
   }
+});
+
+test("mount rule: page.tsx wiring is checked literally, independent of targetDataNeeded",()=>{
+  const page=read("app/page.tsx");
+  assert.match(page,/const config = targetUiEnabled\(\) \? targetUiConfig\(process\.env\) : null;/);
+  assert.match(page,/const targetData = targetDataNeeded\(config\);\s*return targetData\s*\?\s*<TargetDataProvider><LumiAppRoot targetMyPlan=\{config\?\.myPlan\} targetScopes=\{config\?\.scopes\} targetDetails=\{config\?\.details\} \/><\/TargetDataProvider>\s*:\s*<LumiAppRoot \/>;/);
+  // The rule itself, literally: details are no consumer of their own.
+  assert.match(read("lib/target-ui-config.ts"),/return config!==null&&\(config\.myPlan\.enabled\|\|config\.scopes\.projects\|\|config\.scopes\.notes\);/);
 });
