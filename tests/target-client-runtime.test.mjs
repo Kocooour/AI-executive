@@ -378,3 +378,16 @@ test("works without a window or BroadcastChannel",async()=>{
   assert.deepEqual(calls,[TARGET_SESSION_ENDPOINT]);
   runtime.dispose();
 });
+
+test("cache-control must carry an exact no-store directive",async()=>{
+  for(const cc of ["no-store-x","max-age=0, no-store-v2","nostore"]){
+    const {runtime}=setup([json({generation:G1},200,{"cache-control":cc})]);
+    await settle();
+    assert.equal(runtime.known(),false,cc);
+    runtime.dispose();
+  }
+  const {runtime}=setup([json({generation:G1},200,{"cache-control":"private, No-Store"})]);
+  await settle();
+  assert.equal(runtime.generation(),G1);
+  runtime.dispose();
+});

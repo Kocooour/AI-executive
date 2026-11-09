@@ -85,3 +85,19 @@ Při `401` / `session_revoked` z jakéhokoli cílového požadavku volejte `useT
 ## Testy
 
 `tests/target-client-runtime.test.mjs`, `tests/target-staging-session-generation-http.test.mjs`, `tests/target-client-errors.test.mjs`, `tests/target-client-runtime-wiring.test.mjs` (chybějící příznak = žádný provider ani požadavek). Jsou součástí cíleného workflow `r2d-project-reads.yml`.
+
+## Hranice zjištěné nezávislým testem
+
+- „Odvolání relace“ znamená: odvolaná relace dostane 401 a runtime přejde na neznámou generaci
+  (všechny registrované relace se zahodí). Sesterské relace téhož uživatele si hodnotu ponechají;
+  generace se mění až při změně epochy identity (odhlásit všude) nebo novém přihlášení.
+- Po 401 a následné 200 se *stejnou* hodnotou ji runtime znovu přijme; dříve zahozené relace se
+  ale neoživí (vzniknou nové). A → B → A je tedy terminální pro konkrétní instanci relace, ne pro
+  samotnou hodnotu generace.
+- Výpadek sítě runtime hlásí jako `unavailable`; text „offline“ zobrazuje UI podle vlastního stavu
+  připojení. Při chybě endpointu prohlížeč zapíše do konzole standardní hlášku o neúspěšném
+  požadavku; UI to neovlivní.
+- Zprávu „signed-out“ přes `BroadcastChannel` může poslat jen skript ze stejného originu (který je
+  již plně důvěryhodný); dopad je pouze na dostupnost (zahození relací), nikdy na data.
+- `/` se kvůli čtení vypínače vykresluje dynamicky (při každém požadavku); offline náhrada PWA je
+  samostatná stránka `/offline`, takže offline chování se nemění.

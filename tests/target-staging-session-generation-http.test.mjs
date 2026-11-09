@@ -194,6 +194,7 @@ test("query strings are refused, the limiter answers 429, and misconfiguration i
   const fx=fixture();
   const owner=ownerCookie();
   assert.equal((await call(owner,{query:"?x=1"})).status,400);
+  assert.equal((await call(owner,{query:"?"})).status,400,"a bare ? is a query too");
   const ip="10.99.0.1";
   let limited=null;
   for(let i=0;i<130&&!limited;i++){

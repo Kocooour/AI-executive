@@ -90,7 +90,8 @@ export function createTargetClientRuntime(config:TargetClientRuntimeConfig={}){
   async function readGeneration(response:Response,signal:AbortSignal):Promise<string|null> {
     const type=response.headers.get("content-type")?.split(";")[0].trim().toLowerCase();
     if(response.redirected||type!=="application/json"||
-      !/\bno-store\b/i.test(response.headers.get("cache-control")??""))return null;
+      !(response.headers.get("cache-control")??"").split(",")
+        .some(d=>d.trim().toLowerCase()==="no-store"))return null;
     let text="";
     if(response.body){
       const reader=response.body.getReader();

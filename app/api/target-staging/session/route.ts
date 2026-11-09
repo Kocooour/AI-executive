@@ -28,7 +28,8 @@ export async function GET(request:Request):Promise<Response> {
   const admitted=admitStagingIdentity(request,identity,base);
   if(admitted)return admitted;
   try {
-    if(new URL(request.url).search!=="")return refuse(400,"Invalid request");
+    // Any query, including a bare "?" (URL.search is then ""), is refused.
+    if(request.url.includes("?"))return refuse(400,"Invalid request");
     const limited=enforceRateLimit(request,"target-staging-session-generation",120,600000);
     if(limited)return Response.json({error:"Too many requests"},{
       status:429,headers:{...headers,"retry-after":String(limited.retryAfter)},
