@@ -31,8 +31,8 @@ const failures:Record<GlobalIndexFailure,string>={
 };
 
 export function TargetStagingGlobalIndexPreview({
-  projectDetailEnabled=false,noteDetailEnabled=false,
-}:{projectDetailEnabled?:boolean;noteDetailEnabled?:boolean}){
+  projectDetailEnabled=false,noteDetailEnabled=false,taskDetailEnabled=false,
+}:{projectDetailEnabled?:boolean;noteDetailEnabled?:boolean;taskDetailEnabled?:boolean}){
   const [scope,setScope]=useState<GlobalIndexScope>("all");
   const [refresh,setRefresh]=useState(0);
   const [state,setState]=useState<ReadState>({status:"loading"});
@@ -191,7 +191,7 @@ export function TargetStagingGlobalIndexPreview({
         ?<p className="stagingGlobalEmpty">V tomto rozsahu nejsou dostupné položky.</p>
         :<ul className="stagingGlobalItems">
           {ready.items.map(entry=>{const href=stagingIndexDetailHref(entry.kind,entry.item.id,{
-            project:projectDetailEnabled,note:noteDetailEnabled,
+            project:projectDetailEnabled,note:noteDetailEnabled,task:taskDetailEnabled,
           });return <li
             key={entry.kind+":"+entry.item.id}
             className="stagingGlobalItem" data-area-kind={entry.item.areaKind}>
@@ -201,7 +201,8 @@ export function TargetStagingGlobalIndexPreview({
               href={href}
               aria-label={entry.kind==="project"
                 ?"Otevřít projekt: "+entry.item.title
-                :"Otevřít poznámku: "+entry.item.title}>
+                :entry.kind==="note"?"Otevřít poznámku: "+entry.item.title
+                :"Otevřít úkol: "+entry.item.title}>
               {entry.item.title}
             </a> : <span className="stagingGlobalItemTitle">{entry.item.title}</span>}
             <span className="stagingGlobalKind">{kindLabels[entry.kind]}</span>

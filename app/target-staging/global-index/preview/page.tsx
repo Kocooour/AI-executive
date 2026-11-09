@@ -20,7 +20,11 @@ export default function GlobalIndexStagingPreviewPage(){
   const noteDetailEnabled=linkDetails&&
     process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_NOTES_ENABLED==="true"&&
     process.env.AI_EXECUTIVE_TARGET_STAGING_NOTE_CLIENT_PREVIEW_ENABLED==="true";
+  const taskDetailEnabled=linkDetails&&
+    process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_TEMPORAL_ENABLED==="true"&&
+    process.env.AI_EXECUTIVE_TARGET_STAGING_TASK_CLIENT_PREVIEW_ENABLED==="true";
   return <TargetStagingGlobalIndexPreview
     projectDetailEnabled={projectDetailEnabled}
-    noteDetailEnabled={noteDetailEnabled}/>;
+    noteDetailEnabled={noteDetailEnabled}
+    taskDetailEnabled={taskDetailEnabled}/>;
 }
