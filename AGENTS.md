@@ -53,7 +53,7 @@ Fewer, larger vertical PRs beat many small technical slices. A merged PR is not 
 - **No roadmap-only status PRs.** Update `docs/ROADMAP.md` inside the PR that changes the status.
 - **Safety wins over quotas.** A blocking security/privacy/data-loss fix may exceed the limits; note why in the PR. This never permits weakened tests, real-data import without consent, production activation or skipped release E2E.
 
-Each PR description starts with two lines: `Milestone:` (link) and `Acceptance step / synthetic: yes|no`. Review findings are fixed in the same PR (see *Mandatory code review on every PR*).
+Each PR description starts with two lines: `Milestone:` (link) and `Acceptance step / synthetic:` (the end-to-end criterion advanced; yes|no) — template in `docs/DEVELOPMENT.md`. Review findings are fixed in the same PR (see *Mandatory code review on every PR*).
 
 ## CI gates: pull requests vs. production deployment
 
