@@ -3,6 +3,7 @@
 // The caller-supplied digest is toy metadata, NOT a signed/secure token.
 import { createHash } from "node:crypto";
 import { previewSyntheticClaimProposals } from "./claim-proposal-preview.mjs";
+import { previewSyntheticReviewQueue } from "./review-preview.mjs";
 
 const fail = reason => { throw new Error("Synthetic proposal review: " + reason); };
 const plain = value => value !== null && typeof value === "object" &&
@@ -68,9 +69,18 @@ function current(bundles) {
   // ordering is canonical and cannot influence the fake review token.
   const ordered = [...bundles].sort((a, b) =>
     a.source_id < b.source_id ? -1 : a.source_id > b.source_id ? 1 : 0);
-  return { draft, toy_digest: sha(JSON.stringify({
-    sources: ordered, draft,
-  })) };
+  return { draft, toy_digest: toyFrameDigest(ordered, draft) };
+}
+
+// Internal digest for validated, immutable-to-the-caller fictional frames.
+// The source ordering is canonical even when the fixtures are supplied reversed.
+function toyFrameDigest(sources, draft) {
+  const ordered = [...sources].sort((a, b) =>
+    a.source_id < b.source_id ? -1 : a.source_id > b.source_id ? 1 : 0);
+  return sha(JSON.stringify({ sources: ordered, draft }));
+}
+function bindingFromFrame(frame) {
+  return { schema, draft_id: frame.draft.draft_id, toy_digest: frame.toy_digest };
 }
 
 function checkBinding(binding) {
@@ -96,12 +106,7 @@ function checkIntent(intents, draftId) {
 
 /** Bind a single fictional draft to the two exact, checked-in fake sources. */
 export function bindSyntheticProposalReview(bundles) {
-  const value = current(bundles);
-  return {
-    schema,
-    draft_id: value.draft.draft_id,
-    toy_digest: value.toy_digest,
-  };
+  return bindingFromFrame(current(bundles));
 }
 
 /**
@@ -111,7 +116,12 @@ export function bindSyntheticProposalReview(bundles) {
  */
 export function rehearseSyntheticProposalReview(bundles, binding, intents = []) {
   checkBinding(binding);
-  const value = current(bundles);
+  return evaluateFictionalReviewFrame(current(bundles), binding, intents);
+}
+
+// This private evaluator accepts only frames already validated or assembled
+// inside this module. Public callers cannot bypass exact-fixture pinning.
+function evaluateFictionalReviewFrame(value, binding, intents) {
   if (value.toy_digest !== binding.toy_digest) {
     return {
       ...noWrite,
@@ -134,6 +144,107 @@ export function rehearseSyntheticProposalReview(bundles, binding, intents = []) 
     ...noWrite,
     review_gate_status: choice ? statuses[choice] : "no_review_intent_submitted",
     review_intent: choice ?? "none",
+    missing_real_gates: [...missingGates],
+    current_review: "proposed",
+    current_sensitivity: "unclassified",
+    current_scope: "owner_private_unassigned",
+  };
+}
+
+// An INTERNAL, deterministic A → B exercise. Both frames are fictional, and
+// the public binder/reviewer STILL accept only the two exact committed inputs.
+// B edits a different message in the SAME source as the candidate; the
+// candidate/source locator and the review-protection fields are unchanged.
+// This prevents a fake "stale" test using only a zeroed caller token.
+export function rehearseSyntheticProposalReviewRevisionTransition(bundles) {
+  const frameA = current(bundles); // strict pinned input + full toy acceptance
+  const bindingA = bindingFromFrame(frameA);
+  const revisionB = structuredClone(bundles);
+  const chatgptB = revisionB.find(item => item.source_id === "fixture-chatgpt-01");
+  const chatgptA = bundles.find(item => item.source_id === "fixture-chatgpt-01");
+  if (!chatgptA || !chatgptB) fail("invalid fictional transition source");
+  const unchangedCandidate = chatgptB.conversations[0].mapping.a.message;
+  const otherMessage = chatgptB.conversations[0].mapping.b.message;
+  if (otherMessage.id === frameA.draft.source_locator.message_id ||
+      typeof otherMessage.content?.parts?.[0] !== "string") {
+    fail("invalid fictional transition message");
+  }
+  otherMessage.content.parts[0] += " (independent fictional revision B)";
+
+  // The B source is independently valid for the existing synthetic parser
+  // and review queue. It is NOT passed through the strict public proposal
+  // preview: that must continue to reject anything but committed A fixtures.
+  const baseline = previewSyntheticReviewQueue(bundles);
+  const revised = previewSyntheticReviewQueue(revisionB);
+  const beforeCandidate = chatgptA.conversations[0].mapping.a.message;
+  const expectedLocator = JSON.stringify(frameA.draft.source_locator);
+  const revisedCandidate = revised.entries.find(item =>
+    JSON.stringify(item.locator) === expectedLocator);
+  if (JSON.stringify(revisionB) === JSON.stringify(bundles) ||
+      JSON.stringify(unchangedCandidate) !== JSON.stringify(beforeCandidate) ||
+      baseline.entries.length !== 6 ||
+      revised.entries.length !== baseline.entries.length ||
+      revised.duplicate_groups !== 0 ||
+      revised.claims_created !== 0 || revised.review_outcomes_written !== 0 ||
+      revised.entries.some(item =>
+        item.review !== "proposed" ||
+        item.sensitivity !== "unclassified" ||
+        item.scope !== "owner_private_unassigned" ||
+        item.independent_evidence !== false ||
+        item.eligible_for_automatic_confirmation !== false ||
+        item.requires_explicit_review !== true) ||
+      !revisedCandidate ||
+      revisedCandidate.provenance !== frameA.draft.provenance ||
+      revisedCandidate.speaker !== frameA.draft.speaker ||
+      revisedCandidate.observed_at !== frameA.draft.observed_at ||
+      revisedCandidate.review !== frameA.draft.review) {
+    fail("fictional revision B invalid");
+  }
+  const frameB = {
+    draft: frameA.draft,
+    toy_digest: toyFrameDigest(revisionB, frameA.draft),
+  };
+  if (frameA.toy_digest === frameB.toy_digest) fail("fictional revision not advanced");
+  const bindingB = bindingFromFrame(frameB);
+  // A stale intent must not be read, even if its submitted shape is hostile.
+  const unreadableIntent = new Proxy([{}], {
+    get() { throw new Error("stale fictional intent should never be inspected"); },
+  });
+  const stale = evaluateFictionalReviewFrame(frameB, bindingA, unreadableIntent);
+  const fresh = evaluateFictionalReviewFrame(frameB, bindingB, [
+    { draft_id: bindingB.draft_id, choice: "inspect" },
+  ]);
+  const initial = evaluateFictionalReviewFrame(frameA, bindingA, [
+    { draft_id: bindingA.draft_id, choice: "defer" },
+  ]);
+  if (stale.review_gate_status !== "would_block_stale_fictional_binding" ||
+      stale.review_intent !== "not_evaluated" ||
+      fresh.review_gate_status !== "would_open_source_for_explicit_review_only" ||
+      initial.review_gate_status !== "would_defer_draft_without_review_outcome" ||
+      [stale, fresh, initial].some(report =>
+        report.current_review !== "proposed" ||
+        report.current_sensitivity !== "unclassified" ||
+        report.claim_confirmed !== false ||
+        report.claims_created !== 0 ||
+        report.review_outcomes_written !== 0 ||
+        report.actual_human_review_completed !== false ||
+        report.atomic_commit_performed !== false ||
+        report.data_release_authorized !== false ||
+        report.real_import_enabled !== false)) {
+    fail("fictional transition result invalid");
+  }
+  return {
+    ...noWrite,
+    mode: "fictional_proposal_review_a_to_b_transition_no_write",
+    valid_independent_revision_b: true,
+    changed_source_is_candidate_source: true,
+    revised_message_is_not_candidate: true,
+    unchanged_candidate_preserved: true,
+    revisions_have_distinct_toy_digests: true,
+    stale_a_on_b: stale.review_gate_status,
+    stale_intent_not_evaluated: stale.review_intent === "not_evaluated",
+    fresh_b_on_b: fresh.review_gate_status,
+    original_a_on_a: initial.review_gate_status,
     missing_real_gates: [...missingGates],
     current_review: "proposed",
     current_sensitivity: "unclassified",
