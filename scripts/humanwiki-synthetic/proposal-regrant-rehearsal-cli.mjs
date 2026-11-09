@@ -16,6 +16,9 @@ if (process.argv.length !== 2) {
         report.scenarios.some(s => s.data_release_authorized !== false ||
           s.actual_new_consent_recorded !== false || s.real_import_enabled !== false) ||
         report.content_only_binding_stays_identical !== true ||
+        report.old_issued_binding_rejected_after_regrant !== true ||
+        report.fresh_issued_binding_accepted_for_no_write_review !== true ||
+        report.remembered_revocation_blocks_rollback !== true ||
         report.synthetic_regrant_is_not_real_consent !== true) {
       throw new Error("toy replay contract not satisfied");
     }
@@ -30,6 +33,12 @@ if (process.argv.length !== 2) {
         review_intent_inspected: s.review_intent_inspected,
       })),
       content_only_binding_stays_identical: report.content_only_binding_stays_identical,
+      old_issued_binding_rejected_after_regrant:
+        report.old_issued_binding_rejected_after_regrant,
+      fresh_issued_binding_accepted_for_no_write_review:
+        report.fresh_issued_binding_accepted_for_no_write_review,
+      remembered_revocation_blocks_rollback:
+        report.remembered_revocation_blocks_rollback,
       synthetic_regrant_is_not_real_consent: report.synthetic_regrant_is_not_real_consent,
       real_entry_gates_unverified: report.real_entry_gates_unverified,
       actual_new_consent_recorded: report.actual_new_consent_recorded,
