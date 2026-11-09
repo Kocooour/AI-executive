@@ -68,3 +68,79 @@ for(const event of ['focus','hidden','pageshow','blur','offline','pagehide'])tes
   await expect(page.locator('.stagingTaskContent')).toBeVisible();
   expect(calls).toBe(2);
 });
+
+// UI-09f: real mounted index-to-task navigation; both HTTP payloads are synthetic.
+const indexEndpoint='**/api/target-staging/global-index?*';
+const indexTaskPage={
+  scope:'all',
+  items:[
+    {kind:'task',item:{id:'task-1',title:'Ověřený úkol',projectId:null,
+      areaId:'secret-area',areaKind:'shared',status:'open',dueOn:null,assignedToMe:true}},
+    {kind:'task',item:{id:'task/unsafe',title:'Úkol bez bezpečného odkazu',
+      projectId:null,areaId:'private-area',areaKind:'private',status:'open',dueOn:null}},
+  ],
+  hasMore:false,nextCursor:null,
+};
+const indexUrl='/target-staging/global-index/preview';
+
+test('index task link opens the detail without prefetch or implicit authorization',async({page})=>{
+  let indexGets=0,detailGets=0;
+  await page.route(indexEndpoint,route=>{indexGets++;return fulfill(route,indexTaskPage);});
+  await page.route(endpoint,route=>{detailGets++;return fulfill(route,dto);});
+  await page.goto(indexUrl);
+  const link=page.getByRole('link',{name:'Otevřít úkol: Ověřený úkol'});
+  await expect(link).toHaveAttribute('href','/target-staging/tasks/task-1/preview');
+  await expect(page.getByText('Úkol bez bezpečného odkazu')).toBeVisible();
+  await expect(page.getByRole('link',{name:/Úkol bez bezpečného odkazu/})).toHaveCount(0);
+  expect(indexGets).toBe(1);expect(detailGets).toBe(0);
+  await link.click();
+  await expect(page).toHaveURL(/\/target-staging\/tasks\/task-1\/preview$/);
+  await expect(page.getByRole('heading',{name:'Detail úkolu'})).toBeVisible();
+  await expect(page.locator('.stagingTaskContent')).toHaveCount(0);
+  expect(detailGets).toBe(0);
+  await page.getByRole('button',{name:'Načíst úkol'}).click();
+  await expect(page.locator('.stagingTaskContent')).toContainText('Ověřený úkol');
+  expect(detailGets).toBe(1);
+});
+
+test('a task linked from the index still requires server permission',async({page})=>{
+  await page.route(indexEndpoint,route=>fulfill(route,indexTaskPage));
+  let detailGets=0;
+  await page.route(endpoint,route=>{detailGets++;return fulfill(route,{error:'secret'},404);});
+  await page.goto(indexUrl);
+  await page.getByRole('link',{name:'Otevřít úkol: Ověřený úkol'}).click();
+  await expect(page.locator('.stagingTaskContent')).toHaveCount(0);
+  expect(detailGets).toBe(0);
+  await page.getByRole('button',{name:'Načíst úkol'}).click();
+  await expect(page.locator('.stagingTaskError')).toContainText('Úkol není dostupný');
+  await expect(page.locator('.stagingTaskError')).not.toContainText('secret');
+  await expect(page.locator('.stagingTaskContent')).toHaveCount(0);
+  expect(detailGets).toBe(1);
+});
+
+test.describe('task preview on narrow mobile Chromium viewport',()=>{
+  test.use({viewport:{width:375,height:812},isMobile:true,hasTouch:true});
+  test('touch navigation and manual read remain accessible without overflow',async({page})=>{
+    const title='Bezpečný úkol '+ 'W'.repeat(250);
+    let detailGets=0;
+    await page.route(indexEndpoint,route=>fulfill(route,indexTaskPage));
+    await page.route(endpoint,route=>{
+      detailGets++;return fulfill(route,{task:{...dto.task,title}});
+    });
+    await page.goto(indexUrl);
+    const link=page.getByRole('link',{name:'Otevřít úkol: Ověřený úkol'});
+    await expect(link).toBeVisible();
+    expect((await link.boundingBox())?.height??0).toBeGreaterThanOrEqual(44);
+    await link.tap();
+    await expect(page.getByRole('heading',{name:'Detail úkolu'})).toBeVisible();
+    expect(detailGets).toBe(0);
+    const button=page.getByRole('button',{name:'Načíst úkol'});
+    expect((await button.boundingBox())?.height??0).toBeGreaterThanOrEqual(44);
+    await button.tap();
+    await expect(page.locator('.stagingTaskContent h2')).toHaveText(title);
+    expect(detailGets).toBe(1);
+    expect(await page.evaluate(()=>
+      document.documentElement.scrollWidth<=document.documentElement.clientWidth+1
+    )).toBe(true);
+  });
+});
