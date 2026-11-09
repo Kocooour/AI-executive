@@ -34,3 +34,9 @@ Quick Capture ani vytváření úkolů/projektů, změny termínů a dokončení
 ## Validace
 
 `tests/target-note-edit-ui.test.mjs`: default-off matice všech 7 bran, přísná kontrola serverového CAS preflightu a command DTO, odmítnutí cizích polí, hranice Unicode a velikosti, GET/PATCH request kontrakt, idempotentní replay, runtime-scoped command recovery při zavření detailu a ztracené odpovědi, odmítnutí nového UUID dokud není starý příkaz vyřešen, okamžitou redakci při revokaci a nulové falešné úspěchy při timeoutu či odmítnutí. Doplňková sada: `tests/target-note-edit-recovery.test.mjs`. PR CI zahrnuje typecheck, scoped testy a build; plná Browser E2E až před nasazením přesného release SHA.
+
+## Ošetření transportu a odhlášení (review follow-up)
+
+- Jeden pokus o PATCH má **nejvýše 20 sekund** na dokončení. Po vypršení klient požadavek abortuje a **i když transport ignoruje abort**, uvolní uzamčený stav do `uncertain`. Výsledek se nikdy neprezentuje jako úspěch či jisté selhání zápisu. Následující pokus může opakovat pouze stejný `commandId` a přesně stejný payload; backendově kontrolovaný idempotentní receipt řeší commit se ztracenou odpovědí.
+- Koordinátor je **registrován u skutečného target runtime** nezávisle na otevřeném detailu. Při změně auth generation, sign-out, reportRefusal nebo dispose jej runtime synchronně vyřadí; koordinátor abortuje pending transport, vymaže všechny uložené titulky, těla a CAS tokeny, odstraní listeners a nepřijme nové zápisy se starou generací. Pouhá navigace/hidden stránka sama příkaz nemaže.
+- Ověřovací scénáře `tests/target-note-edit-recovery.test.mjs`: navždy zaseklý transport nereagující na abort, retry se stejným UUID, odmítnutí jiného příkazu, změna skutečného runtime bez otevřeného editoru, sign-out/dispose, nepovolení dispatch před revokací a ochrana před opožděným dokončením.
