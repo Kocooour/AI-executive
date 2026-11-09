@@ -3162,6 +3162,9 @@ test("HumanWiki regrant ABA CLI is content-free, deterministic, no-write and no-
     const report = JSON.parse(utc.stdout);
     assert.equal(report.scenario_count, 7);
     assert.equal(report.content_only_binding_stays_identical, true);
+    assert.equal(report.old_issued_binding_rejected_after_regrant, true);
+    assert.equal(report.fresh_issued_binding_accepted_for_no_write_review, true);
+    assert.equal(report.remembered_revocation_blocks_rollback, true);
     assert.equal(report.synthetic_regrant_is_not_real_consent, true);
     assert.equal(report.real_entry_gates_unverified, 6);
     assert.equal(report.actual_new_consent_recorded, false);
