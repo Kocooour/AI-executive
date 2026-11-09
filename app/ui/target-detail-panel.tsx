@@ -31,6 +31,7 @@ import {
   detailIdOk,detailRouteKey,type TargetDetailGates,type TargetDetailRoute,
 } from "../../lib/target-detail-route";
 import {detailCopy,type DetailCopy,type DetailLanguage} from "../../lib/target-detail-copy";
+import TargetNoteEditor from "./target-note-editor";
 import "./target-details.css";
 
 type State=
@@ -117,9 +118,9 @@ function UnavailablePanel({language}:{language:DetailLanguage}){
   </Shell>;
 }
 
-function Content({content,route,copy,gates,more,onMore}:{
+function Content({content,route,copy,gates,more,onMore,noteEdit,onCommitted,language}:{
   content:TargetDetailContent;route:TargetDetailRoute;copy:DetailCopy;gates:TargetDetailGates;
-  more:boolean;onMore:()=>void;
+  more:boolean;onMore:()=>void;noteEdit:boolean;onCommitted:()=>void;language:DetailLanguage;
 }){
   const area=(kind:"private"|"shared")=>kind==="shared"?copy.areaShared:copy.areaPrivate;
   if(content.kind==="task"){
@@ -149,6 +150,7 @@ function Content({content,route,copy,gates,more,onMore}:{
       {note.body.length===0
         ?<p className="targetDetailMuted">{copy.noteBodyEmpty}</p>
         :<div className="targetDetailNoteBody" data-testid="target-detail-note-body">{note.body}</div>}
+      {noteEdit&&<TargetNoteEditor note={note} language={language} onCommitted={onCommitted}/>}
     </article>;
   }
   const {page}=content;
@@ -175,8 +177,8 @@ function Content({content,route,copy,gates,more,onMore}:{
   </article>;
 }
 
-function DetailBody({route,language,gates}:{
-  route:TargetDetailRoute;language:DetailLanguage;gates:TargetDetailGates;
+function DetailBody({route,language,gates,noteEdit}:{
+  route:TargetDetailRoute;language:DetailLanguage;gates:TargetDetailGates;noteEdit:boolean;
 }){
   const copy=detailCopy[language];
   const {gate,onRefusal,retry}=useTargetGate();
@@ -339,17 +341,18 @@ function DetailBody({route,language,gates}:{
         <button type="button" onClick={reload}>{copy.retry}</button>}
       {content&&state.kind==="ready"&&
         <Content content={content} route={route} copy={copy} gates={gates}
-          more={state.more} onMore={()=>{void more();}}/>}
-      {content&&<p className="targetDetailNote">{copy.readOnlyNote}</p>}
+          more={state.more} onMore={()=>{void more();}} noteEdit={noteEdit}
+          onCommitted={reload} language={language}/>}
+      {content&&!(noteEdit&&content.kind==="note")&&<p className="targetDetailNote">{copy.readOnlyNote}</p>}
     </>}
   </Shell>;
 }
 
-export default function TargetDetailPanel({route,language="cs",gates}:{
+export default function TargetDetailPanel({route,language="cs",gates,noteEdit=false}:{
   /** null: the address asked for something that cannot be opened. */
-  route:TargetDetailRoute|null;language?:DetailLanguage;gates:TargetDetailGates;
+  route:TargetDetailRoute|null;language?:DetailLanguage;gates:TargetDetailGates;noteEdit?:boolean;
 }){
   if(route===null)return <UnavailablePanel language={language}/>;
   // Keyed by target: another item is a new session, never a reuse of old content.
-  return <DetailBody key={detailRouteKey(route)} route={route} language={language} gates={gates}/>;
+  return <DetailBody key={detailRouteKey(route)} route={route} language={language} gates={gates} noteEdit={noteEdit&&gates.note}/>;
 }
