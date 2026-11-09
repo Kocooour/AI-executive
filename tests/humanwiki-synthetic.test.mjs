@@ -1,9 +1,12 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { readFileSync, writeFileSync, chmodSync, mkdirSync, mkdtempSync, readdirSync, rmSync, symlinkSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 import { parseSyntheticBundle, advanceSyntheticImport } from "../scripts/humanwiki-synthetic/ingest.mjs";
+import { inspectSyntheticImport } from "../scripts/humanwiki-synthetic/inspect.mjs";
 import { ensurePrivateCheckpointDirectory, writeCheckpointAtomic } from "../scripts/humanwiki-synthetic/checkpoint.mjs";
 
 const fixture = name => JSON.parse(readFileSync(new URL(`../scripts/humanwiki-synthetic/fixtures/${name}.json`, import.meta.url), "utf8"));
@@ -195,4 +198,88 @@ test("timestamp validation normalizes valid zoned times and leap days to UTC", (
       assert.deepEqual(advanceSyntheticImport(parsed, staged), advanceSyntheticImport(parsed));
     }
   }
+});
+
+test("synthetic inspection inventories provenance but exposes no source text or claims", () => {
+  for (const provider of ["chatgpt", "claude"]) {
+    const parsed = parseSyntheticBundle(fixture(provider));
+    const report = inspectSyntheticImport(parsed);
+    assert.equal(report.synthetic_fixture_only, true);
+    assert.equal(report.messages_total, 2);
+    assert.equal(report.segments_total, 3);
+    assert.equal(report.messages_staged, 0);
+    assert.equal(report.messages_remaining, 2);
+    assert.equal(report.segments_staged, 0);
+    assert.equal(report.segments_remaining, 3);
+    assert.deepEqual(report.provenance_segments, {
+      owner_statement: 1, assistant_generated: 1, quoted_third_party: 1, unknown: 0,
+    });
+    assert.equal(report.sensitivity, "unclassified");
+    assert.equal(report.review, "proposed");
+    assert.equal(report.claims_created, 0);
+    assert.equal(report.real_import_enabled, false);
+    assert.equal(report.bundle_sha256, parsed.digest);
+    const serialized = JSON.stringify(report);
+    assert.ok(!serialized.includes("garden"));
+    assert.ok(!serialized.includes("spaceship"));
+    assert.ok(!serialized.includes("gate is open"));
+    assert.ok(!serialized.includes("text"));
+    assert.deepEqual(inspectSyntheticImport(parsed), report);
+  }
+});
+
+test("synthetic inspection handles resumed checkpoints and rejects damaged replay", () => {
+  const parsed = parseSyntheticBundle(fixture("chatgpt"));
+  const first = advanceSyntheticImport(parsed, undefined, 1);
+  const snapshot = JSON.stringify(first);
+  const report = inspectSyntheticImport(parsed, first);
+  assert.equal(report.messages_staged, 1);
+  assert.equal(report.segments_staged, 2);
+  assert.equal(report.messages_remaining, 1);
+  assert.equal(report.segments_remaining, 1);
+  assert.equal(JSON.stringify(first), snapshot, "inspection must not mutate state");
+  const completed = advanceSyntheticImport(parsed, first);
+  const final = inspectSyntheticImport(parsed, completed);
+  assert.equal(final.messages_remaining, 0);
+  assert.equal(final.segments_remaining, 0);
+  const damaged = structuredClone(first);
+  damaged.records[0].text = "tampered";
+  assert.throws(() => inspectSyntheticImport(parsed, damaged), /checkpoint records do not match cursor/);
+  const wrongFixture = parseSyntheticBundle(fixture("claude"));
+  assert.throws(() => inspectSyntheticImport(wrongFixture, first), /checkpoint mismatch/);
+});
+
+test("synthetic inspection rejects unknown provenance and malformed arguments", () => {
+  const parsed = parseSyntheticBundle(fixture("chatgpt"));
+  const changed = structuredClone(parsed);
+  changed.messages[0].segments[0].provenance = "owner_confirmed";
+  assert.throws(() => inspectSyntheticImport(changed), /unknown segment provenance/);
+  assert.throws(() => inspectSyntheticImport(null), /invalid parsed synthetic bundle/);
+  assert.throws(() => inspectSyntheticImport({ messages: [], format: "unknown" }), /invalid parsed synthetic bundle/);
+  assert.throws(() => inspectSyntheticImport(parsed, 0), /invalid checkpoint object/);
+});
+
+test("inspection CLI is fixture-only, does not persist data and is host-timezone stable", () => {
+  const cli = fileURLToPath(new URL("../scripts/humanwiki-synthetic/inspect-cli.mjs", import.meta.url));
+  const root = mkdtempSync(path.join(os.tmpdir(), "lumi-humanwiki-inspection-"));
+  const invoke = (args, zone) => spawnSync(process.execPath, [cli, ...args], {
+    encoding: "utf8", env: { ...process.env, TMPDIR: root, TZ: zone },
+  });
+  try {
+    const utc = invoke(["chatgpt"], "UTC");
+    const prague = invoke(["chatgpt"], "Europe/Prague");
+    assert.equal(utc.status, 0, utc.stderr);
+    assert.equal(prague.status, 0, prague.stderr);
+    assert.equal(utc.stdout, prague.stdout);
+    const report = JSON.parse(utc.stdout);
+    assert.equal(report.messages_total, 2);
+    assert.equal(report.claims_created, 0);
+    assert.ok(!utc.stdout.includes("fictional garden"));
+    for (const args of [[], ["../../private-export.json"], ["chatgpt", "extra"]]) {
+      const denied = invoke(args, "UTC");
+      assert.equal(denied.status, 2);
+      assert.equal(denied.stdout, "");
+    }
+    assert.deepEqual(readdirSync(root), [], "inspection must not create checkpoint files");
+  } finally { rmSync(root, { recursive: true, force: true }); }
 });
