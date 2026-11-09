@@ -38,6 +38,11 @@ const flags = Object.freeze({
   }),
 });
 
+// "active" is an internal default, never an externally supplied lifecycle action.
+const scenarioActions = new Set([
+  "pause_sync", "disconnect_source", "revoke_import_consent", "request_erasure",
+]);
+
 /**
  * Read-only hypothetical policy snapshot for two bundled fictional source shapes.
  * Requests are NOT applied, consent/revocation records are NOT stored, and the
@@ -53,7 +58,8 @@ export function previewSyntheticSourceLifecycle(bundles, scenarios = []) {
   for (const scenario of scenarios) {
     if (!exactKeys(scenario, ["source_id", "action"]) ||
         typeof scenario.source_id !== "string" ||
-        !Object.hasOwn(flags, scenario.action)) {
+        typeof scenario.action !== "string" ||
+        !scenarioActions.has(scenario.action)) {
       fail("invalid lifecycle scenario");
     }
     if (!sourceIds.has(scenario.source_id)) fail("unknown lifecycle source");
