@@ -40,6 +40,7 @@ Klientská hodnota `generation()` je `""`, dokud není známa. Po jakémkoli odm
 | `pageshow` (i `persisted`, BFCache), `online` | `resume()` + `refresh()` |
 | `hidden`, `pagehide`, `offline` | `suspend()` všech zaregistrovaných relací |
 | zpráva `signed-out` na `BroadcastChannel("ai-executive-session")` | okamžitě neznámá generace a `dispose()` všech |
+| zpráva `signed-in` na `BroadcastChannel("ai-executive-session")` (bez BroadcastChannel událost okna `lumi:auth-signed-in`) | okamžité ověření generace bez omezení četnosti |
 | změna generace | `dispose()` **všech** zaregistrovaných; funkce musí relace vytvořit znovu |
 | `reportRefusal(kind)` | neznámá generace + `refresh()` |
 | `dispose()` | odebere všechny listenery, zavře kanál, zruší rozpracovaný požadavek |
@@ -85,6 +86,10 @@ Při `401` / `session_revoked` z jakéhokoli cílového požadavku volejte `useT
 ## Testy
 
 `tests/target-client-runtime.test.mjs`, `tests/target-staging-session-generation-http.test.mjs`, `tests/target-client-errors.test.mjs`, `tests/target-client-runtime-wiring.test.mjs` (chybějící příznak = žádný provider ani požadavek). Jsou součástí cíleného workflow `r2d-project-reads.yml`.
+
+## Přihlášení v téže záložce
+
+Přihlášení heslem i přístupovým klíčem se dokončí bez načtení stránky. Oba toky v `app/ui/hooks/use-sign-in.ts` hned po přechodu do stavu `ready` volají `announceSignedIn()` (`lib/target-auth-signal.ts`), která pošle obsahově prázdnou zprávu `signed-in` na kanál `ai-executive-session` (doručí se i kanálu běhového prostředí v téže záložce a v ostatních záložkách), případně bez BroadcastChannel vyvolá událost okna `lumi:auth-signed-in`. Běhové prostředí na ni okamžitě zavolá `refresh()`, takže neznámá generace po odhlášení se po novém přihlášení nahradí potvrzenou hodnotou. Při vypnutém příznaku nic neposlouchá (starý posluchač reaguje jen na `signed-out`), takže nevzniká žádný požadavek.
 
 ## Hranice zjištěné nezávislým testem
 

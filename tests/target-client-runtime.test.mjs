@@ -391,3 +391,75 @@ test("cache-control must carry an exact no-store directive",async()=>{
   assert.equal(runtime.generation(),G1);
   runtime.dispose();
 });
+
+const {announceSignedIn,TARGET_SIGNED_IN_EVENT}=await import("../lib/target-auth-signal.ts");
+
+test("a same-tab sign-in (broadcast) refreshes the generation at once, even within the throttle",async()=>{
+  const {runtime,calls,channel}=setup([json({generation:G1}),json({error:"x"},401),json({generation:G2})]);
+  await settle();
+  const old=disposable();
+  runtime.register(old);
+  // Sign-out leaves an unknown generation; a refresh then sees 401.
+  channel().post("signed-out");
+  await runtime.refresh();
+  assert.equal(runtime.known(),false);
+  const before=calls.length;
+  channel().post("signed-in");
+  await settle();
+  assert.equal(calls.length,before+1);
+  assert.equal(runtime.generation(),G2);
+  assert.equal(runtime.known(),true);
+  runtime.dispose();
+});
+
+test("the sign-in window event (no BroadcastChannel) refreshes unthrottled and is removed on dispose",async()=>{
+  const {runtime,win,calls}=setup([json({generation:G1}),json({generation:G2})]);
+  await settle();
+  win.emit("focus"); // throttled: no fetch
+  assert.equal(calls.length,1);
+  win.emit(TARGET_SIGNED_IN_EVENT);
+  await settle();
+  assert.equal(calls.length,2);
+  assert.equal(runtime.generation(),G2);
+  runtime.dispose();
+  win.emit(TARGET_SIGNED_IN_EVENT);
+  await settle();
+  assert.equal(calls.length,2);
+});
+
+test("announceSignedIn reaches a runtime in the same tab through a real BroadcastChannel",async()=>{
+  const calls=[];
+  const runtime=createTargetClientRuntime({
+    fetch:async url=>{calls.push(url);return json({generation:calls.length===1?G1:G2});},
+    window:fakeWindow(),
+  });
+  await settle();
+  assert.equal(runtime.generation(),G1);
+  announceSignedIn();
+  for(let i=0;i<50&&runtime.generation()!==G2;i++)await new Promise(r=>setTimeout(r,5));
+  assert.equal(runtime.generation(),G2);
+  assert.equal(calls.length,2);
+  runtime.dispose();
+});
+
+test("announceSignedIn is content-free and falls back to a window event",()=>{
+  const posted=[];let closed=0;
+  announceSignedIn({broadcastChannelFactory:name=>({postMessage:d=>posted.push([name,d]),close:()=>closed++}),window:null});
+  assert.deepEqual(posted,[["ai-executive-session","signed-in"]]);
+  assert.equal(closed,1);
+  const events=[];
+  announceSignedIn({broadcastChannelFactory:null,window:{dispatchEvent:e=>{events.push(e.type);return true;}}});
+  assert.deepEqual(events,[TARGET_SIGNED_IN_EVENT]);
+  // No channel, no window: no throw.
+  announceSignedIn({broadcastChannelFactory:null,window:null});
+});
+
+test("both password and passkey sign-in flows announce the sign-in right after becoming ready",async()=>{
+  const {readFileSync}=await import("node:fs");
+  const source=readFileSync(new URL("../app/ui/hooks/use-sign-in.ts",import.meta.url),"utf8");
+  const ready=[...source.matchAll(/setAuthState\("ready"\);\s*announceSignedIn\(\);\s*await afterSignIn\(\);/g)];
+  assert.equal(ready.length,2);
+  assert.equal([...source.matchAll(/setAuthState\("ready"\)/g)].length,2);
+  assert.match(source,/async function signInWithPassword|setAuthPassword\(""\);\s*clearSignedOut\(\);\s*setAuthState\("ready"\);\s*announceSignedIn\(\)/);
+  assert.match(source,/clearSignedOut\(\);\s*setAuthState\("ready"\);\s*announceSignedIn\(\);[\s\S]*?catch \(error\)/);
+});

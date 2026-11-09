@@ -4,6 +4,7 @@ import { browserSupportsWebAuthn, startAuthentication } from "@simplewebauthn/br
 import { fetchClientAuthStatus } from "../../../lib/client-auth-status";
 import { failWhileOffline, watchSession } from "../../../lib/session-watch";
 import { clearSignedOut } from "../../../lib/local-data";
+import { announceSignedIn } from "../../../lib/target-auth-signal";
 import { incompleteSignOutNoticeKey } from "../../../lib/sign-out";
 import { localizeServerError } from "../../../lib/server-errors";
 
@@ -172,6 +173,7 @@ export function useSignIn({ tr, language, answerConfirm, isSignedOut, showsOffli
       setAuthPassword("");
       clearSignedOut();
       setAuthState("ready");
+      announceSignedIn();
       await afterSignIn();
     } catch {
       setAuthError(tr("authUnreachable"));
@@ -199,6 +201,7 @@ export function useSignIn({ tr, language, answerConfirm, isSignedOut, showsOffli
       if (!verifyResponse.ok) throw new Error(localizeServerError(result.error, tr) || tr("passkeySignInFailed"));
       clearSignedOut();
       setAuthState("ready");
+      announceSignedIn();
       await afterSignIn();
     } catch (error) {
       setAuthError(error instanceof Error ? error.message : tr("passkeySignInFailed"));

@@ -32,6 +32,7 @@ export type TargetClientRuntimeConfig={
   now?:()=>number;
 };
 export const TARGET_SESSION_ENDPOINT="/api/target-staging/session";
+import {TARGET_SIGNED_IN_EVENT,TARGET_SIGNED_IN_MESSAGE} from "./target-auth-signal";
 export const TARGET_SESSION_CHANNEL="ai-executive-session";
 const GENERATION=/^[A-Za-z0-9_-]{43}$/;
 const MAX_BODY_BYTES=1024;
@@ -212,17 +213,20 @@ export function createTargetClientRuntime(config:TargetClientRuntimeConfig={}){
   const onOffline=()=>suspendAll();
   const onOnline=()=>{resumeAll();lastEventRefresh=now();void refresh();};
   const onFocus=()=>throttledRefresh();
+  // Sign-in completed without a reload (this tab or another): re-verify immediately, unthrottled.
+  const onSignedIn=()=>{if(disposed)return;lastEventRefresh=now();void refresh();};
   const windowEvents:[string,Listener][]=[
     ["pageshow",onPageShow],["pagehide",onPageHide],["online",onOnline],
-    ["offline",onOffline],["focus",onFocus],
+    ["offline",onOffline],["focus",onFocus],[TARGET_SIGNED_IN_EVENT,onSignedIn],
   ];
   if(win)for(const [name,fn] of windowEvents)win.addEventListener(name,fn);
   win?.document?.addEventListener("visibilitychange",onVisibility);
 
   let channel:TargetRuntimeChannel|null=null;
   const onMessage=(event:{data?:unknown})=>{
-    if(event?.data!=="signed-out"||disposed)return;
-    bumpUnknown();
+    if(disposed)return;
+    if(event?.data==="signed-out")bumpUnknown();
+    else if(event?.data===TARGET_SIGNED_IN_MESSAGE)onSignedIn();
   };
   try{
     const factory=config.broadcastChannelFactory===undefined
