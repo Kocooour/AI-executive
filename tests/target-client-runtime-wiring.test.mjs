@@ -89,7 +89,7 @@ test("only the runtime (and its server route) reference the session endpoint; no
     // R3-FE-3: the lazily loaded scope lists and the gate hook.
     "app/ui/target-scope-lists.tsx","app/ui/use-target-gate.ts",
     // R3-FE-4a: the lazily loaded authorized detail panel and the compact sidebar project list.
-    "app/ui/target-detail-panel.tsx","app/ui/target-sidebar-projects.tsx",
+    "app/ui/target-detail-panel.tsx","app/ui/target-sidebar-projects.tsx","app/ui/use-target-revalidation.ts",
   ].sort());
 });
 

@@ -33,24 +33,29 @@ test("flags off: the shell is the legacy tree - heavy target modules are only dy
 });
 
 test("flags off: no listener, no panel and no request without a detail flag",()=>{
-  assert.match(rootSource,/useLumiApp\(\{ targetDetails: detailsOn, targetUnified: scopesOn \}\)/);
+  assert.match(rootSource,/useLumiApp\(\{ targetDetails: detailsOn, targetUnified: scopesOn, targetViews: detailsOn \? targetViews : \[\] \}\)/);
+  // Details are inert unless a target list / plan exists to open them from.
+  assert.match(rootSource,/const detailsOn = detailsActive\(detailGates, targetViews\)/);
   assert.match(rootSource,/useTargetSearch\(detailsOn\)/);
   assert.match(read("app/ui/target-detail-state.ts"),/useSyncExternalStore\(enabled\?subscribe:noopSubscribe/);
-  assert.match(rootSource,/detailsOn \? detailRequestFromSearch\(detailSearch, detailGates\) : \{ state: "none" \}/);
+  assert.match(rootSource,/detailsOn\s*\? detailActivation\(\{ search: detailSearch, gates: detailGates, activeTargetView \}\) : \{ state: "none" \}/);
   assert.match(rootSource,/\{detailPanel && <TargetDetailPanel/);
-  assert.match(hookSource,/export function useLumiApp\(options: \{ targetDetails\?: boolean; targetUnified\?: boolean \} = \{\}\)/);
+  assert.match(hookSource,/export function useLumiApp\(options: \{ targetDetails\?: boolean; targetUnified\?: boolean; targetViews\?: readonly string\[\] \} = \{\}\)/);
 });
 
 test("every legacy-address deviation in use-lumi-app is guarded by the target-details ref",()=>{
   const guarded=[
-    /else if \(targetDetailsRef\.current && !options\?\.targetOpen && requestsTypedRecord/,
-    /\(targetDetailsRef\.current && isPlanDetailSearch\(window\.location\.search\)\)/,
-    /const targetTyped = targetDetailsRef\.current && requestsTypedRecord\(window\.location\.search\)/,
-    /const route = targetTyped \? null : targetFromSearch/,
+    /else if \(shouldLeaveTypedAddress\(\{ enabled: targetDetailsRef\.current, keepAddress: Boolean\(options\?\.keepAddress\)/,
+    /targetDetailsRef\.current && targetViewsRef\.current\.includes\("MyPlanPreview"\) && isPlanDetailSearch\(window\.location\.search\)/,
+    /const targetTyped = targetTypedNow\(\);\s*const route = targetTyped \? null : targetFromSearch/,
     /setNavigationUnavailable\(!targetTyped && showUnavailableLink/,
-    /if \(targetDetailsRef\.current && requestsTypedRecord\(window\.location\.search\)\) \{\s*const typedView/,
+    /if \(holdTypedAddress\(\{ enabled: targetDetailsRef\.current, search: window\.location\.search,/,
     /const target = targetTyped \? null : targetFromSearch\(window\.location\.search, addressableViews, nextView\)/,
     /const unavailableTarget = !targetTyped && showUnavailableLink/,
+    /const targetTypedNow = \(\) => targetDetailsRef\.current && isTargetAddress\(window\.location\.search, targetViewsRef\.current\)/,
+    // Startup / restore keeps the address (cold deep links and reloads open their detail).
+    /setView\(savedView, \{ keepAddress: true \}\)/,
+    /if \(addressedView\) setView\(addressedView, \{ keepAddress: true \}\)/,
   ];
   for(const pattern of guarded)assert.match(hookSource,pattern,String(pattern));
   assert.match(hookSource,/const targetDetailsRef = useRef\(Boolean\(options\.targetDetails\)\)/);
@@ -79,7 +84,8 @@ test("unification: Quick Capture is a no-op and hidden everywhere in target mode
 test("unification: target mode shows the target project index, never the legacy workspace projects",()=>{
   assert.match(sidebar,/\{app\.captureDisabled && targetSidebar\?\.projects && \(\s*<TargetSidebarProjects/);
   assert.match(sidebar,/const sidebarProjects = app\.captureDisabled \? \[\] : app\.sidebarProjects;/);
-  assert.match(rootSource,/targetSidebar=\{scopesOn && targetScopes\?\.projects \?/);
+  assert.match(rootSource,/TargetSidebarContext\.Provider value=\{scopesOn && targetScopes\?\.projects \?/);
+  assert.match(sidebar,/useContext\(TargetSidebarContext\)/);
   const component=read("app/ui/target-sidebar-projects.tsx");
   assert.match(component,/createKindIndexReadSession\("project"/);
   assert.match(component,/useTargetSession\(/);
@@ -105,7 +111,7 @@ test("rows open details only through the typed detail flag of their kind; otherw
   assert.match(rootSource,/detail=\{scopeList === "project" \? detailGates\.project : detailGates\.note\}/);
   assert.match(rootSource,/taskDetail=\{detailGates\.task\}/);
   const lists=read("app/ui/target-scope-lists.tsx");
-  assert.match(lists,/\{detail\s*\?<button type="button" className="targetScopeRowButton"/);
+  assert.match(lists,/\{detail&&detailIdOk\(entry\.item\.id\)\s*\?<button type="button" className="targetScopeRowButton"/);
   assert.match(lists,/:entry\.item\.title\}/);
   const plan=read("app/ui/target-staging-my-plan-preview.tsx");
   assert.match(plan,/onOpenTask=\{embedded\?onOpenTask:undefined\}/);
@@ -133,16 +139,27 @@ test("the panel reads only for a server-confirmed generation and routes 401 thro
   assert.match(panel,/const ready=gate\.kind==="ready"/);
   assert.match(panel,/if\(!session\|\|!ready\)return;/);
   assert.match(panel,/state\.reason==="signed-out"\)refusalRef\.current\(\)/);
-  // Privacy: hidden, pagehide, offline and BFCache all remove the content.
-  for(const event of ["visibilitychange","offline","pagehide","pageshow"])
-    assert.match(panel,new RegExp(`"${event}"`),event);
+  // Privacy: hidden, pagehide, offline and BFCache remove the content; returning waits for the runtime's fresh verification.
+  const hooks=read("app/ui/use-target-revalidation.ts");
+  for(const event of ["visibilitychange","offline","pagehide","pageshow","online"])
+    assert.match(hooks,new RegExp(`"${event}"`),event);
+  assert.match(hooks,/await runtime\.refresh\(\)/);
+  assert.match(hooks,/if\(result==="ok"\)\{ref\.current\.ready\(\);return;\}/);
+  assert.match(panel,/useTargetWake\(\{/);
   assert.match(panel,/sessionRef\.current\?\.suspend\(\)/);
+  // Revalidation tick: an open detail re-reads, a failure (404) replaces the content.
+  assert.match(panel,/useTargetTick\(\(\)=>\{/);
 });
 
 test("focus management: the panel takes focus on open and Escape/close/backdrop all close it",()=>{
   const panel=read("app/ui/target-detail-panel.tsx");
   assert.match(panel,/panelRef\.current\?\.focus\(\{preventScroll:true\}\)/);
-  assert.match(panel,/event\.key!=="Escape"/);
+  // Esc and the focus trap live at DOCUMENT level while the panel is open.
+  assert.match(panel,/document\.addEventListener\("keydown",onKey\)/);
+  assert.match(panel,/event\.key==="Escape"/);
+  assert.match(panel,/document\.addEventListener\("focusin",onFocusIn\)/);
+  assert.match(panel,/role="dialog" aria-modal="true"/);
+  assert.match(panel,/event\.key!=="Tab"/);
   assert.match(panel,/className="close inspectorClose"/);
   assert.match(panel,/onClick=\{close\}>/);
   assert.match(panel,/tabIndex=\{-1\}/);
@@ -176,4 +193,89 @@ test("docs and workflow: the slice documentation and focused CI paths exist",()=
   const doc=read("docs/R3-FE-04A-DETAILS.md");
   for(const needle of ["AI_EXECUTIVE_TARGET_UI_DETAILS_ENABLED","2026-11-09","Quick Capture","Vyhledávání"])
     assert.ok(doc.includes(needle),needle);
+});
+
+test("unified mode: every legacy entity writer is inert, and the guard is absent from nothing else",()=>{
+  const writers=["create","createFromRow","done","reopenTask","moveTaskToSection","patch","patchNoteText",
+    "persistManualOrder","relate","remove","rename","resolveConflict","restore","setProjectStatus","triageInbox",
+    "triageInboxBatch","completeDrop","createSuggestedTarget","saveContextClaim","subjectAction","contextAction",
+    "saveNotes","saveNoteBody"];
+  for(const name of writers){
+    const start=hookSource.search(new RegExp(`\\n  (?:async )?function ${name}\\(`));
+    assert.ok(start>0,name);
+    const head=hookSource.slice(start,start+900);
+    assert.match(head,/if \(captureDisabledRef\.current\) return undefined as never;/,name+" must be guarded");
+  }
+  // Flags off: the ref is false, so the guards never fire.
+  assert.match(hookSource,/const captureDisabled = Boolean\(options\.targetUnified\)/);
+  assert.match(hookSource,/legacyWritesDisabled: captureDisabled/);
+  // The inline add row of legacy lists is not rendered in unified mode.
+  assert.match(read("app/ui/views/entity-list.tsx"),/!app\.legacyWritesDisabled && \(/);
+});
+
+test("unified mode: legacy views stay visible read-only with a calm cs/en notice (owner decision 2026-11-09, option 1)",()=>{
+  assert.match(rootSource,/const legacyReadOnly = app\.legacyWritesDisabled && !targetView && view !== "Settings";/);
+  assert.match(rootSource,/\{legacyReadOnly && \(\s*<p className="navigationUnavailableNotice legacyReadOnlyNotice" role="status"/);
+  const copy=read("lib/target-detail-copy.ts");
+  assert.match(copy,/Tento pohled zatím ukazuje dosavadní data; úpravy jsou v režimu serverových dat vypnuté\./);
+  assert.match(copy,/This view still shows the existing data; editing is switched off in server-data mode\./);
+  // The views themselves are not hidden.
+  assert.doesNotMatch(rootSource,/legacyReadOnly \? null/);
+});
+
+test("legacy writers cannot feed the detail layer: project pages are inert where Projects is a target view",()=>{
+  assert.match(hookSource,/function openProjectPage\(project: Entity\) \{\s*\/\/[^\n]*\n\s*if \(captureDisabledRef\.current && targetViewsRef\.current\.includes\("Projects"\)\) return;/);
+  // Typed addresses of any non-target view are resolved by the legacy code exactly as before.
+  assert.match(hookSource,/const targetTypedNow = \(\) => targetDetailsRef\.current && isTargetAddress\(/);
+});
+
+test("rows are buttons only for IDs the detail layer can open; otherwise plain text (never a silent no-op)",()=>{
+  for(const [file,needle] of [
+    ["app/ui/target-scope-lists.tsx","detailIdOk(entry.item.id)"],
+    ["app/ui/target-sidebar-projects.tsx","detailIdOk(item.id)"],
+    ["app/ui/target-detail-panel.tsx","gates.task&&detailIdOk(task.id)"],
+    ["app/ui/target-staging-my-plan-preview.tsx","onOpenTask&&detailIdOk(task.taskId)"],
+  ])assert.ok(read(file).includes(needle),file);
+  assert.match(read("app/ui/target-detail-state.ts"),/if\(!detailIdOk\(route\.id\)/);
+});
+
+test("revalidation: lists, sidebar and detail re-read on the runtime tick; wake waits for the fresh verification",()=>{
+  for(const file of ["app/ui/target-scope-lists.tsx","app/ui/target-sidebar-projects.tsx","app/ui/target-detail-panel.tsx"])
+    assert.match(read(file),/useTargetTick\(/,file);
+  const lists=read("app/ui/target-scope-lists.tsx");
+  // Re-walk to the loaded row count, replacing the rows only as a whole.
+  assert.match(lists,/loadedRowCount\(current\.page\)/);
+  assert.match(lists,/live\.loadFirst\(\)/);
+  assert.match(lists,/live\.loadMore\(\)/);
+  const hooks=read("app/ui/use-target-revalidation.ts");
+  assert.match(hooks,/runtime\.subscribeTick\(/);
+  assert.match(hooks,/document\.visibilityState==="hidden"\|\|!navigator\.onLine\)return;\s*\n\s*ref\.current\(\)/);
+  assert.match(read("lib/target-client-runtime.ts"),/for\(const fn of \[\.\.\.tickSubscribers\]\)guarded\(fn\)/);
+});
+
+test("scope change does not carry the detail marker; close of the unavailable overlay keeps the view",()=>{
+  assert.match(read("app/ui/target-scope-state.ts"),/pushState\(withoutDetailMarker\(window\.history\.state\)/);
+  assert.match(read("app/ui/target-detail-state.ts"),/parentSearchForDetail\(\s*route,scopeFromSearch\(window\.location\.search\),window\.location\.search\)/);
+});
+
+test("focus: deeper opens never return focus to the list; the panel owns focus; the label follows the state",()=>{
+  const panel=read("app/ui/target-detail-panel.tsx");
+  assert.doesNotMatch(panel,/expectFocusReturn/);
+  assert.match(rootSource,/if \(previous !== null && !isParentOf\(previous, detailRoute\)\) expectFocusReturn\(previous\)/);
+  assert.match(panel,/state\.kind==="error"&&state\.reason==="not-available"\?copy\.failures\["not-available"\]/);
+});
+
+test("sidebar target titles are not clipped by the legacy 18 px icon-slot rule",()=>{
+  const css=read("app/ui/target-details.css");
+  assert.match(css,/\.appShell > aside \.sidebarProjects\.targetSidebarProjects button > span\.targetSidebarProjectTitle\{/);
+  assert.match(css,/width:auto/);
+  assert.match(read("app/ui/target-sidebar-projects.tsx"),/className="targetSidebarProjectTitle"/);
+});
+
+test("the refusal budget is shared per runtime (gate hook and My Plan)",()=>{
+  for(const file of ["app/ui/use-target-gate.ts","app/ui/target-my-plan.tsx"]){
+    const source=read(file);
+    assert.match(source,/refusalBudgetFor\(runtime\)/,file);
+    assert.doesNotMatch(source,/createRefusalBudget\(\)/,file);
+  }
 });

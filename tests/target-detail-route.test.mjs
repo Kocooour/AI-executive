@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import {test} from "node:test";
 import {
-  canStepBack,detailHistoryState,detailRequestFromSearch,detailRouteFromSearch,detailRouteKey,
+  canStepBack,detailActivation,detailHistoryState,detailIdOk,holdTypedAddress,isTargetAddress,
+  shouldLeaveTypedAddress,viewOfSearch,withoutDetailMarker,detailRequestFromSearch,detailRouteFromSearch,detailRouteKey,
   detailRowKey,isParentOf,isPlanDetailSearch,parentSearchForDetail,requestsTargetRecord,searchForDetail,
   TARGET_ADDRESS_EVENT,
 } from "../lib/target-detail-route.ts";
@@ -31,7 +32,7 @@ test("project, task and note routes round-trip through the address, keeping the 
 });
 
 test("opaque ids are encoded, never interpreted",()=>{
-  const id="a b/ž&=?#%";
+  const id="a bž&=?#%+";
   const route={kind:"note",id,view:"Notes"};
   assert.deepEqual(detailRouteFromSearch(searchForDetail(route,"all")),route);
   assert.throws(()=>searchForDetail({kind:"note",id:"",view:"Notes"},"all"));
@@ -90,13 +91,102 @@ test("close leads to the parent of the current scope: project for a project task
   assert.equal(isParentOf({kind:"project",id:"q",view:"Projects"},{kind:"task",id:"t",view:"Projects",projectId:"p"}),false);
 });
 
-test("Back is used only for an entry this tab pushed under the same scope",()=>{
-  assert.equal(canStepBack(detailHistoryState("all"),"?view=Notes&noteId=n"),true);
-  assert.equal(canStepBack(detailHistoryState("shared"),"?view=Notes&noteId=n&scope=shared"),true);
+test("Back is used only for an entry this tab pushed for exactly this address and scope",()=>{
+  const a="?view=Notes&noteId=n";
+  assert.equal(canStepBack(detailHistoryState("all",a),a),true);
+  const b="?view=Notes&noteId=n&scope=shared";
+  assert.equal(canStepBack(detailHistoryState("shared",b),b),true);
   // The scope changed after opening: closing must not return to a stale scope.
-  assert.equal(canStepBack(detailHistoryState("all"),"?view=Notes&noteId=n&scope=shared"),false);
+  assert.equal(canStepBack(detailHistoryState("all",a),b),false);
+  // A copy of the marker on another entry with the same scope but another address never counts.
+  assert.equal(canStepBack(detailHistoryState("all",a),"?view=Notes&noteId=other"),false);
   for(const state of [null,undefined,{},{lumiTargetDetail:null},"x",{lumiRecord:"n"}])
-    assert.equal(canStepBack(state,"?view=Notes&noteId=n"),false);
+    assert.equal(canStepBack(state,a),false);
+});
+
+test("a scope change never carries the detail marker into its new history entry",()=>{
+  const a="?view=Notes&noteId=n";
+  const state=detailHistoryState("all",a);
+  assert.equal(withoutDetailMarker(state),null);
+  assert.deepEqual(withoutDetailMarker({...state,other:1}),{other:1});
+  assert.equal(withoutDetailMarker(null),null);
+  assert.deepEqual(withoutDetailMarker({x:1}),{x:1});
+  // Close after a scope change: the new entry has no marker, so Close replaces to the list of the NEW scope.
+  const afterScope="?view=Notes&noteId=n&scope=shared";
+  assert.equal(canStepBack(withoutDetailMarker(state),afterScope),false);
+  assert.equal(parentSearchForDetail({kind:"note",id:"n",view:"Notes"},"shared",afterScope),"?view=Notes&scope=shared");
+});
+
+test("closing the unavailable overlay returns to the current view's own parent address",()=>{
+  assert.equal(parentSearchForDetail(null,"all","?view=Notes&noteId=a&noteId=b"),"?view=Notes");
+  assert.equal(parentSearchForDetail(null,"shared","?view=MyPlanPreview&taskId="),"?view=MyPlanPreview&scope=shared");
+  assert.equal(parentSearchForDetail(null,"all","?view=Projects&projectId=x%00"),"?view=Projects");
+  // A view that is not a detail view falls back to Projects (never to a legacy view).
+  assert.equal(parentSearchForDetail(null,"all","?view=Inbox&taskId=x"),"?view=Projects");
+  assert.equal(viewOfSearch("?view=Notes&noteId=1&scope=shared"),"Notes");
+});
+
+test("ID rule: the intersection of address, client and server rules; unopenable IDs are text",()=>{
+  for(const ok of ["a","abc-123","uuid-0000","ž č","x".repeat(256)])assert.equal(detailIdOk(ok),true,ok);
+  for(const bad of ["", " a","a ", ".","..","a/b","a\\b","a\u0001","a\u007f","x".repeat(257),"\ud800","a\n"])
+    assert.equal(detailIdOk(bad),false,JSON.stringify(bad));
+  assert.equal(detailIdOk(null),false);
+  assert.equal(detailIdOk(5),false);
+  // Whatever passes survives the address round trip exactly.
+  for(const id of ["a b","ž&=?#%+","x".repeat(256)]){
+    const route={kind:"note",id,view:"Notes"};
+    assert.deepEqual(detailRouteFromSearch(searchForDetail(route,"all")),route);
+  }
+  // A parent ID that fails the rule makes the whole address unusable.
+  assert.equal(detailRouteFromSearch("?view=Projects&projectId=a%2Fb&taskId=t"),null);
+});
+
+test("target addresses are acted on only for views that really render target data",()=>{
+  const views=["Projects"];
+  assert.equal(isTargetAddress("?view=Projects&projectId=p",views),true);
+  // Legacy writers: legacy inspect (?view=Today&taskId=L) and legacy project pages with flags/lists off.
+  assert.equal(isTargetAddress("?view=Today&taskId=L",views),false);
+  assert.equal(isTargetAddress("?view=Home&taskId=L",views),false);
+  assert.equal(isTargetAddress("?view=Notes&noteId=L",views),false);
+  assert.equal(isTargetAddress("?view=Projects&projectId=p",[]),false);
+  assert.equal(isTargetAddress("?view=Projects",views),false);
+  assert.equal(isTargetAddress("?projectId=p",views),false);
+  const gates={task:true,project:true,note:true};
+  assert.deepEqual(detailActivation({search:"?view=Today&taskId=L",gates,activeTargetView:null}),{state:"none"});
+  assert.deepEqual(detailActivation({search:"?view=Projects&projectId=p",gates,activeTargetView:null}),{state:"none"});
+  // An address for another view than the one on screen is ignored, not rendered.
+  assert.deepEqual(detailActivation({search:"?view=Notes&noteId=n",gates,activeTargetView:"Projects"}),{state:"none"});
+  assert.deepEqual(detailActivation({search:"?view=MyPlanPreview&taskId=t",gates,activeTargetView:"Projects"}),{state:"none"});
+  assert.deepEqual(detailActivation({search:"?view=Projects&projectId=p",gates,activeTargetView:"Projects"}),
+    {state:"route",route:{kind:"project",id:"p",view:"Projects"}});
+  assert.deepEqual(detailActivation({search:"?view=Projects&projectId=a&projectId=b",gates,activeTargetView:"Projects"}),
+    {state:"unavailable"});
+  assert.deepEqual(detailActivation({search:"?view=Notes&noteId=n",gates:{...gates,note:false},activeTargetView:"Notes"}),
+    {state:"unavailable"});
+  assert.deepEqual(detailActivation({search:"?view=Notes",gates,activeTargetView:"Notes"}),{state:"none"});
+});
+
+test("cold start: a target address survives restore; only an explicit view choice leaves it",()=>{
+  const search="?view=Projects&projectId=p1&scope=shared";
+  const base={enabled:true,search,targetViews:["Projects"]};
+  // Startup/restore calls setView with keepAddress: the address is never rewritten.
+  assert.equal(shouldLeaveTypedAddress({...base,keepAddress:true}),false);
+  // The address effect runs first with the initial view, then with the restored one.
+  assert.equal(holdTypedAddress({...base,navigationView:"Projects"}),true);
+  assert.equal(holdTypedAddress({...base,navigationView:"Home"}),false,"another view replaces the address (normal view sync)");
+  // A user's view choice while the detail is open is one new view-only history step.
+  assert.equal(shouldLeaveTypedAddress({...base,keepAddress:false}),true);
+  // Same for every shape.
+  for(const shape of ["?view=Projects&projectId=p&taskId=t","?view=Notes&noteId=n"]){
+    const views=["Projects","Notes"];
+    assert.equal(shouldLeaveTypedAddress({enabled:true,keepAddress:true,search:shape,targetViews:views}),false,shape);
+    assert.equal(holdTypedAddress({enabled:true,search:shape,navigationView:shape.includes("Notes")?"Notes":"Projects",targetViews:views}),true,shape);
+  }
+  assert.equal(holdTypedAddress({enabled:true,search:"?view=MyPlanPreview&taskId=t",navigationView:"MyPlanPreview",targetViews:["MyPlanPreview"]}),true);
+  // Flags off or a legacy view: exactly the legacy behaviour (never leave/hold).
+  assert.equal(shouldLeaveTypedAddress({enabled:false,keepAddress:false,search,targetViews:["Projects"]}),false);
+  assert.equal(holdTypedAddress({enabled:false,search,navigationView:"Projects",targetViews:["Projects"]}),false);
+  assert.equal(holdTypedAddress({enabled:true,search:"?view=Today&taskId=L",navigationView:"Today",targetViews:["Projects"]}),false);
 });
 
 test("keys are stable and never contain more than kind, id and parent",()=>{

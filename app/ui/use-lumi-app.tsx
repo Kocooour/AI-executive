@@ -10,7 +10,7 @@ import { dropNotesDraft, keepNotesDraft, keptNotesDrafts, leftoverDraftAction, s
 import { addressUpdate, scopeFromSearch, searchForTarget, searchForView, searchWithScope, searchWithoutScope, targetFromSearch, viewExitFromProject, viewFromSearch } from "../../lib/view-url";
 import { resolveLegacyProjectLink } from "../../lib/legacy-project-deep-link";
 import { requestsTypedRecord, showUnavailableLink } from "../../lib/navigation-link-status";
-import { TARGET_ADDRESS_EVENT, holdTypedAddress, isPlanDetailSearch, isTargetAddress, shouldLeaveTypedAddress, viewOfSearch } from "../../lib/target-detail-route";
+import { TARGET_ADDRESS_EVENT, holdTypedAddress, isPlanDetailSearch, isTargetAddress, shouldLeaveTypedAddress } from "../../lib/target-detail-route";
 import { legacyRecordBelongsToProject, resolveLegacyRecordLink } from "../../lib/legacy-record-deep-link";
 import { buildContext, type ContextBundle } from "../../lib/context";
 import { mergeSnapshots, type ServerSnapshot } from "../../lib/server-sync";

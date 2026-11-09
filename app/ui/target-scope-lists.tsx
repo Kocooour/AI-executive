@@ -20,7 +20,7 @@ import type {GlobalIndexFailure,GlobalIndexItem,GlobalIndexPage} from "../../lib
 import {
   consumeGlobalIndexWake,initialGlobalIndexWakeGate,invalidateGlobalIndexWakeGate,
 } from "../../lib/target-staging-global-index-lifecycle";
-import {groupIndexRowsByArea} from "../../lib/target-scope-rows";
+import {groupIndexRowsByArea,loadedRowCount} from "../../lib/target-scope-rows";
 import {scopesCopy,type ScopesLanguage} from "../../lib/target-scopes-copy";
 import {detailCopy} from "../../lib/target-detail-copy";
 import {detailRowKey,focusPendingRow,openTargetDetail} from "./target-detail-state";
@@ -96,10 +96,10 @@ export default function TargetScopeLists({kind,language="cs",detail=false}:{
     const live=sessionRef.current;
     if(current.kind!=="ready"||current.more||!live||current.session!==live)return;
     const id=++epoch.current;
-    const wanted=current.page.items.length;
+    const wanted=loadedRowCount(current.page);
     void (async()=>{
       let result=await live.loadFirst();
-      for(let guard=0;guard<20&&result.ok===true&&result.page.hasMore&&result.page.items.length<wanted;guard++)
+      for(let guard=0;guard<20&&result.ok===true&&result.page.hasMore&&loadedRowCount(result.page)<wanted;guard++)
         result=await live.loadMore();
       if(epoch.current!==id)return;
       if(result.ok===true)setState({kind:"ready",session:live,rowKind:kind,page:result.page,more:false});

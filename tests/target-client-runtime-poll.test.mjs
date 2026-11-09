@@ -128,19 +128,28 @@ test("tick: subscribers run once per poll after a successful re-verification",as
   runtime.dispose();
 });
 
-test("tick: never while hidden or offline, and not after a failed re-verification",async()=>{
-  const {runtime,win,fire}=setup([json({generation:G1}),json({generation:G1}),json({error:"x"},503),json({generation:G1})]);
+test("tick: never while hidden or offline",async()=>{
+  const {runtime,win,calls,fire}=setup([json({generation:G1})]);
   await settle();
   let ticks=0;
   runtime.subscribeTick(()=>{ticks++;});
   win.document.visibilityState="hidden";win.document.emit("visibilitychange");
   fire();await settle();
-  assert.equal(ticks,0,"hidden: the interval is cleared and a stray call does nothing");
-  win.document.visibilityState="visible";win.document.emit("visibilitychange");
+  assert.equal(ticks,0,"hidden: no tick");
+  assert.equal(calls.length,1,"hidden: no session check either");
+  win.document.visibilityState="visible";win.navigator.onLine=false;win.emit("offline");
+  fire();await settle();
+  assert.equal(ticks,0,"offline: no tick");
+  runtime.dispose();
+});
+
+test("tick: an unavailable session check is not a tick",async()=>{
+  const {runtime,fire}=setup([json({generation:G1}),json({error:"x"},503)]);
   await settle();
-  const before=ticks;
-  fire();await settle(); // 503: unavailable
-  assert.equal(ticks,before,"an unavailable session check is not a tick");
+  let ticks=0;
+  runtime.subscribeTick(()=>{ticks++;});
+  fire();await settle();
+  assert.equal(ticks,0);
   runtime.dispose();
 });
 

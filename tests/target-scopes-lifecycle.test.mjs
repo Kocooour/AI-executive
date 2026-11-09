@@ -217,8 +217,11 @@ test("wiring: flags off -> legacy tree, lazy chunks only, no eager import, no re
   assert.match(root_,/dynamic\(\(\) => import\("\.\/target-scope-lists"\), \{ ssr: false \}\)/);
   assert.doesNotMatch(root_,/^import .*target-scope/m);
   assert.match(root_,/const scopesOn = Boolean\(targetScopes\?\.enabled\)/);
-  assert.match(root_,/scopeList = scopesOn && view === "Projects" && targetScopes\?\.projects \? "project"/);
-  assert.match(root_,/scopesOn && view === "Notes" && targetScopes\?\.notes \? "note" : null/);
+  // The per-view decision lives in a pure helper (lib/target-shell-views.ts).
+  assert.match(root_,/activeTargetViewFor\(\{ \.\.\.shellInput, view, planActive \}\)/);
+  const helper=read("lib/target-shell-views.ts");
+  assert.match(helper,/input\.scopesOn&&input\.view==="Projects"&&input\.projectsList\?"project"/);
+  assert.match(helper,/input\.scopesOn&&input\.view==="Notes"&&input\.notesList\?"note":null/);
   assert.match(root_,/\{scopeSwitcher && <TargetScopeSwitcher language=\{language\} variant=/);
   // Legacy lists stay the fallback for every other case.
   assert.match(root_,/: <EntityList app=\{app\} \/>/);
