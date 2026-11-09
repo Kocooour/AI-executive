@@ -20,6 +20,7 @@ import { bindSyntheticEpochFence, recheckSyntheticEpochFence, rehearseSyntheticF
 import { previewSyntheticHumanWikiAcceptance } from "../scripts/humanwiki-synthetic/acceptance-matrix.mjs";
 import { previewSyntheticClaimProposals } from "../scripts/humanwiki-synthetic/claim-proposal-preview.mjs";
 import { bindSyntheticProposalReview, rehearseSyntheticProposalReview, rehearseSyntheticProposalReviewRevisionTransition } from "../scripts/humanwiki-synthetic/proposal-review-rehearsal.mjs";
+import { previewSyntheticProposalLifecycleHolds } from "../scripts/humanwiki-synthetic/proposal-lifecycle-holds.mjs";
 import { ensurePrivateCheckpointDirectory, writeCheckpointAtomic } from "../scripts/humanwiki-synthetic/checkpoint.mjs";
 
 const fixture = name => JSON.parse(readFileSync(new URL(`../scripts/humanwiki-synthetic/fixtures/${name}.json`, import.meta.url), "utf8"));
@@ -2729,4 +2730,168 @@ test("HumanWiki internal A-to-B exercise is stable, read-only and discloses no t
     rehearseSyntheticProposalReviewRevisionTransition([modified, b]),
     /Synthetic (acceptance|claim proposal):/,
     "top-level input pinning must not be bypassed by the internal B branch");
+});
+
+test("HumanWiki proposal lifecycle applies six independent hypothetical source policies", () => {
+  const bundles = [fixture("chatgpt"), fixture("claude")];
+  const before = JSON.stringify(bundles);
+  const report = previewSyntheticProposalLifecycleHolds(bundles);
+  assert.equal(report.synthetic_fixture_only, true);
+  assert.equal(report.mode, "fictional_proposal_source_lifecycle_hold_matrix_no_write");
+  assert.equal(report.source_segments_checked, 6);
+  assert.equal(report.scenario_count, 6);
+  assert.deepEqual(report.scenarios.map(s => s.scenario), [
+    "active", "pause", "disconnect", "revoke", "erase", "unrelated_disconnect",
+  ]);
+  assert.deepEqual(report.scenarios.map(s => s.candidate_pending_visible), [
+    true, true, false, false, false, true,
+  ]);
+  assert.deepEqual(report.scenarios.map(s => s.review_intent_evaluated), [
+    true, true, false, false, false, true,
+  ]);
+  assert.deepEqual(report.scenarios.map(s => s.visible_segments_in_toy_policy), [
+    6, 6, 3, 3, 3, 3,
+  ]);
+  assert.equal(report.scenarios.every(s => s.binding_still_matches_toy_content), true);
+  assert.equal(report.real_entry_gates_unverified, 6);
+  assert.equal(report.initial_candidate_review, "proposed");
+  assert.equal(report.initial_candidate_sensitivity, "unclassified");
+  assert.equal(report.initial_candidate_scope, "owner_private_unassigned");
+  assert.equal(JSON.stringify(bundles), before, "no real lifecycle change may occur");
+});
+
+test("HumanWiki pause retains pending proposal without treating it as permission to refresh source", () => {
+  const report = previewSyntheticProposalLifecycleHolds([fixture("chatgpt"), fixture("claude")]);
+  const paused = report.scenarios.find(s => s.scenario === "pause");
+  const active = report.scenarios.find(s => s.scenario === "active");
+  assert.ok(paused);
+  assert.ok(active);
+  assert.equal(active.new_source_reads_allowed_by_policy, true);
+  assert.equal(paused.candidate_review_status,
+    "would_keep_existing_proposal_pending_without_source_refresh");
+  assert.equal(paused.candidate_pending_visible, true);
+  assert.equal(paused.new_source_reads_allowed_by_policy, false);
+  assert.equal(paused.affected_source_pending_review_allowed, true);
+  assert.equal(paused.affected_source_derivatives_would_be_invalidated, false);
+  assert.equal(paused.affected_source_requires_independent_witness, false);
+  assert.equal(paused.visible_segments_in_toy_policy, 6);
+  assert.equal(paused.suppressed_segments_in_toy_policy, 0);
+  assert.equal(report.actual_source_reads_performed, 0);
+  assert.equal(report.actual_human_review_completed, false);
+});
+
+test("HumanWiki source disconnect and consent revocation or erasure hold candidate despite unchanged version binding", () => {
+  const report = previewSyntheticProposalLifecycleHolds([fixture("chatgpt"), fixture("claude")]);
+  const statuses = new Map([
+    ["disconnect", "would_withhold_candidate_after_source_disconnect"],
+    ["revoke", "would_withhold_candidate_after_import_consent_revocation"],
+    ["erase", "would_withhold_candidate_after_source_erasure_request"],
+  ]);
+  for (const [scenario, status] of statuses) {
+    const entry = report.scenarios.find(s => s.scenario === scenario);
+    assert.ok(entry, scenario);
+    assert.equal(entry.candidate_review_status, status);
+    assert.equal(entry.candidate_pending_visible, false);
+    assert.equal(entry.review_intent_evaluated, false,
+      "a source policy hold must be applied before examining review intent");
+    assert.equal(entry.binding_still_matches_toy_content, true);
+    assert.equal(entry.new_source_reads_allowed_by_policy, false);
+    assert.equal(entry.affected_source_pending_review_allowed, false);
+    assert.equal(entry.affected_source_derivatives_would_be_invalidated, true);
+    assert.equal(entry.visible_segments_in_toy_policy, 3);
+    assert.equal(entry.suppressed_segments_in_toy_policy, 3);
+  }
+  assert.equal(report.scenarios.find(s => s.scenario === "disconnect")
+    .affected_source_requires_independent_witness, false);
+  assert.equal(report.scenarios.find(s => s.scenario === "revoke")
+    .affected_source_requires_independent_witness, true);
+  assert.equal(report.scenarios.find(s => s.scenario === "revoke")
+    .affected_source_requires_retention_recheck, true);
+  assert.equal(report.scenarios.find(s => s.scenario === "erase")
+    .affected_source_requires_independent_witness, true);
+  assert.equal(report.scenarios.find(s => s.scenario === "erase")
+    .affected_source_requires_retention_recheck, false);
+});
+
+test("HumanWiki unrelated fictional source disconnect cannot hide owner's independent candidate", () => {
+  const bundles = [fixture("chatgpt"), fixture("claude")];
+  const report = previewSyntheticProposalLifecycleHolds(bundles);
+  const other = report.scenarios.find(s => s.scenario === "unrelated_disconnect");
+  assert.ok(other);
+  assert.equal(other.candidate_review_status,
+    "would_offer_existing_proposal_for_explicit_review_only");
+  assert.equal(other.candidate_pending_visible, true);
+  assert.equal(other.review_intent_evaluated, true);
+  assert.equal(other.affected_source_pending_review_allowed, false);
+  assert.equal(other.affected_source_derivatives_would_be_invalidated, true);
+  assert.equal(other.new_source_reads_allowed_by_policy, true);
+  assert.equal(other.visible_segments_in_toy_policy, 3);
+  assert.equal(other.suppressed_segments_in_toy_policy, 3);
+  assert.equal(report.actual_invalidation_performed, 0);
+});
+
+test("HumanWiki hypothetical lifecycle review never writes, and rejects mutated fiction", () => {
+  const bundles = [fixture("chatgpt"), fixture("claude")];
+  const result = previewSyntheticProposalLifecycleHolds(bundles);
+  assert.equal(result.actual_source_reads_performed, 0);
+  assert.equal(result.actual_human_review_completed, false);
+  assert.equal(result.reviewer_identity_authenticated, false);
+  assert.equal(result.source_consent_verified, false);
+  assert.equal(result.durable_lifecycle_events_written, 0);
+  assert.equal(result.actual_deletions_performed, 0);
+  assert.equal(result.independent_witness_contacted, false);
+  assert.equal(result.atomic_commit_performed, false);
+  assert.equal(result.claims_created, 0);
+  assert.equal(result.review_outcomes_written, 0);
+  assert.equal(result.actual_tasks_created, 0);
+  assert.equal(result.actual_invalidation_performed, 0);
+  assert.equal(result.data_release_authorized, false);
+  assert.equal(result.real_import_enabled, false);
+  assert.deepEqual(previewSyntheticProposalLifecycleHolds([...bundles].reverse()), result);
+  const changed = structuredClone(bundles);
+  changed[0].conversations[0].mapping.b.message.content.parts[0] += " changed";
+  assert.throws(() => previewSyntheticProposalLifecycleHolds(changed),
+    /Synthetic (acceptance|claim proposal):/);
+  for (const invalid of [null, [], [bundles[0]], [bundles[1], bundles[1]],
+    [{ ...bundles[0], synthetic_fixture: false }, bundles[1]]]) {
+    assert.throws(() => previewSyntheticProposalLifecycleHolds(invalid),
+      /Synthetic (acceptance|claim proposal|import|overlap):/);
+  }
+});
+
+test("HumanWiki lifecycle hold CLI uses fixed fiction and emits only deterministic non-content statuses", () => {
+  const cli = fileURLToPath(new URL("../scripts/humanwiki-synthetic/proposal-lifecycle-holds-cli.mjs", import.meta.url));
+  const dir = mkdtempSync(path.join(os.tmpdir(), "lumi-humanwiki-source-lifecycle-"));
+  const run = (args, tz) => spawnSync(process.execPath, [cli, ...args], {
+    encoding: "utf8", env: { ...process.env, TMPDIR: dir, TZ: tz },
+  });
+  try {
+    const a = run([], "UTC"), b = run([], "Europe/Prague");
+    assert.equal(a.status, 0, a.stderr);
+    assert.equal(b.status, 0, b.stderr);
+    assert.equal(a.stdout, b.stdout);
+    const parsed = JSON.parse(a.stdout);
+    assert.equal(parsed.scenario_count, 6);
+    assert.equal(parsed.scenarios.length, 6);
+    assert.equal(parsed.scenarios.filter(s => !s.candidate_pending_visible).length, 3);
+    assert.equal(parsed.actual_source_reads_performed, 0);
+    assert.equal(parsed.claims_created, 0);
+    assert.equal(parsed.durable_lifecycle_events_written, 0);
+    assert.equal(parsed.real_import_enabled, false);
+    assert.equal(parsed.source_text_disclosed, false);
+    assert.equal(parsed.source_locators_disclosed, false);
+    assert.equal(parsed.proposal_identifiers_disclosed, false);
+    assert.equal(parsed.toy_binding_digest_disclosed, false);
+    for (const forbidden of [
+      "fixture-chatgpt-01", "fixture-claude-01",
+      "toy-garden-topic-draft-01", "fictional_garden",
+      "I am planning a fictional garden", "silver spaceship",
+      '"source_locator":', '"toy_digest":', '"source_id":',
+      "content_sha256", "m-01", "c-01",
+    ]) assert.ok(!a.stdout.includes(forbidden), forbidden);
+    const refused = run(["../../private-export.json"], "UTC");
+    assert.equal(refused.status, 2);
+    assert.equal(refused.stdout, "");
+    assert.deepEqual(readdirSync(dir), []);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 });
