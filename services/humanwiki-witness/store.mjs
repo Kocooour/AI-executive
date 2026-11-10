@@ -89,9 +89,11 @@ const validSignature = signature =>
   Buffer.from(signature,"base64url").toString("base64url") === signature;
 
 const schemaCheck = db => {
+  // Permit no extra application-defined tables, views, indexes or triggers:
+  // a foreign DDL object could alter publication behavior without changing
+  // the three expected objects or their canonical definitions.
   const rows = db.prepare(`SELECT name,type,sql FROM sqlite_master
-    WHERE name IN ('witness_high_water_events','witness_high_water_no_update',
-      'witness_high_water_no_delete')`).all();
+    WHERE name NOT LIKE 'sqlite_%'`).all();
   if (rows.length !== DEFINITIONS.length) throw Error("witness_unavailable");
   const byName = new Map(rows.map(row => [row.name,row]));
   for (const definition of DEFINITIONS) {
