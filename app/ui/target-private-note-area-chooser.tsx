@@ -3,9 +3,10 @@
  * capture surface. Selection is a hint, not authorization to send a write.
  * No create POST or private draft is ever dispatched or persisted here. */
 import {useEffect,useRef,useState} from "react";
+import {flushSync} from "react-dom";
 import {handleOverlayKeys} from "./focus";
 import {useTargetGeneration,useTargetRuntime} from "./target-data-provider";
-import {useTargetTick} from "./use-target-revalidation";
+import {useTargetTick,useTargetWake} from "./use-target-revalidation";
 import {loadPrivateNoteAreaChoices,type PrivateNoteAreaChoice} from
   "../../lib/target-private-note-area-client";
 
@@ -40,6 +41,35 @@ export default function TargetPrivateNoteAreaChooser({
   const closeRef=useRef<HTMLButtonElement>(null);
   useEffect(()=>{closeRef.current?.focus();},[]);
   useTargetTick(()=>setNonce(v=>v+1));
+  const hidePrivate=()=>{
+    setChosen("");
+    setState({kind:"unavailable",generation});
+  };
+  // Never display a cached private Area while a tab is hidden, offline, or
+  // being frozen into BFCache. Flush synchronously at pagehide: waiting for
+  // React's next task could let the browser snapshot sensitive old DOM.
+  // Wake reads are allowed only AFTER a fresh runtime session verification.
+  useTargetWake({
+    hide:()=>flushSync(hidePrivate),
+    ready:()=>{
+      if(runtime?.known()&&runtime.lastOutcome()==="ok"&&
+        runtime.generation()===generation)setNonce(v=>v+1);
+      else hidePrivate();
+    },
+    signedOut:()=>{
+      setChosen("");
+      setState({kind:"signed-out",generation});
+    },
+  });
+  // Defend even when a browser restores a BFCache snapshot without firing
+  // visibilitychange (or a matching pagehide handler on this component).
+  useEffect(()=>{
+    const onPageShow=(event:PageTransitionEvent)=>{
+      if(event.persisted)flushSync(hidePrivate);
+    };
+    window.addEventListener("pageshow",onPageShow);
+    return ()=>window.removeEventListener("pageshow",onPageShow);
+  },[generation]);
   useEffect(()=>{
     const controller=new AbortController();
     let mounted=true;
@@ -49,12 +79,17 @@ export default function TargetPrivateNoteAreaChooser({
     if(!runtime||!runtime.known()||runtime.generation()!==generation){
       return ()=>{mounted=false;controller.abort();};
     }
+    const invalidate=()=>{
+      controller.abort();
+      if(timeout!==null)clearTimeout(timeout);
+      if(mounted)hidePrivate();
+    };
     const unregister=runtime.register({
-      dispose:()=>controller.abort(),
-      suspend:()=>controller.abort(),
+      dispose:invalidate,
+      suspend:invalidate,
     });
     const available=()=>document.visibilityState==="visible"&&navigator.onLine;
-    if(!available()){
+    if(controller.signal.aborted||!available()){
       setState({kind:"unavailable",generation});
     }else{
       timeout=setTimeout(()=>{
@@ -76,28 +111,17 @@ export default function TargetPrivateNoteAreaChooser({
           setState({kind:"unavailable",generation});
       });
     }
-    const onWake=()=>{
-      setState({kind:"unavailable",generation});
-      setChosen("");
-      if(document.visibilityState==="visible"&&navigator.onLine)
-        setNonce(v=>v+1);
-    };
-    document.addEventListener("visibilitychange",onWake);
-    window.addEventListener("offline",onWake);
-    window.addEventListener("online",onWake);
     return ()=>{
       mounted=false;
       if(timeout!==null)clearTimeout(timeout);
       controller.abort();unregister();
-      document.removeEventListener("visibilitychange",onWake);
-      window.removeEventListener("offline",onWake);
-      window.removeEventListener("online",onWake);
     };
   },[runtime,generation,nonce]);
   // Never display an old actor's private titles, even for one render after
   // auth generation changes. Explicit selection has no fallback.
   const ready=runtime?.known()&&state.kind==="ready"&&
-    state.generation===generation&&runtime.generation()===generation;
+    state.generation===generation&&runtime.generation()===generation&&
+    document.visibilityState==="visible"&&navigator.onLine;
   const areas=ready?state.areas:[];
   const selection=areas.find(a=>a.id===chosen)||null;
   const error=state.kind==="signed-out"?c.signedOut:c.failed;
@@ -124,7 +148,15 @@ export default function TargetPrivateNoteAreaChooser({
       {selection&&<p data-testid="target-private-area-selected">{c.selected}: {selection.title}</p>}
       <p role="note">{c.unfinished}</p>
       <div className="captureActions">
-        {!ready&&<button type="button" onClick={()=>setNonce(v=>v+1)}>{c.reload}</button>}
+        {!ready&&<button type="button" onClick={()=>{
+          // An explicit retry is also forbidden to bypass the wake/session gate.
+          if(!runtime)return;
+          void runtime.refresh().then(result=>{
+            if(result==="ok"&&runtime.known()&&runtime.generation()===generation)
+              setNonce(v=>v+1);
+            else hidePrivate();
+          });
+        }}>{c.reload}</button>}
         <button ref={closeRef} type="button" onClick={onClose}>{c.close}</button>
       </div>
     </div>
