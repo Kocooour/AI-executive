@@ -6,6 +6,8 @@
 
 V detailu úkolu a poznámky (panel uvnitř hlavní aplikace, jen cílový režim):
 
+**Integrační bezpečnost:** všechny varianty zapnutí editace poznámky (samostatný `AI_EXECUTIVE_TARGET_UI_NOTE_EDIT_ENABLED`, 4b `AI_EXECUTIVE_TARGET_UI_EDITS_ENABLED` i oba současně) používají jediný `TargetNoteEditor` s runtime-scoped `runTrackedNoteEdit` a obsahově prázdnou tabovou bariérou UUID/generace. 4b `NoteEdits` při editaci poznámky vykresluje pouze samostatné smazání, nikdy druhý PATCH editor. Dokud existuje nevyřešený edit PATCH, je smazání skryté a před potvrzeným odesláním se bariéra znovu kontroluje. Po reloadu lze původní příkaz pouze ověřit čtecím receipt; nová UUID se nevytvářejí. V tabovém úložišti se neukládá obsah poznámky ani CAS.
+
 | Druh | Ovládací prvek | Trasa (jediné odeslání) | Undo |
 | --- | --- | --- | --- |
 | úkol | **Upravit název** | `PATCH tasks/[id]/title` | ano: původní název (nový příkaz) |

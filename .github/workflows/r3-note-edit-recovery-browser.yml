@@ -7,6 +7,7 @@ on:
     paths:
       - ".github/workflows/r3-note-edit-recovery-browser.yml"
       - "app/ui/target-note-editor.tsx"
+      - "app/ui/target-detail-edit.tsx"
       - "app/ui/target-detail-panel.tsx"
       - "app/ui/target-scope-lists.tsx"
       - "app/ui/target-data-provider.tsx"
@@ -37,8 +38,12 @@ concurrency:
 
 jobs:
   chromium:
-    name: Note edit and reload recovery (Chromium)
+    name: Note edit recovery (${{ matrix.profile }}, Chromium)
     runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        profile: [legacy, combined, 4b]
     timeout-minutes: 25
     env:
       CI: "true"
@@ -48,6 +53,7 @@ jobs:
       # This flag is consumed ONLY by the throwaway Playwright server config.
       # It is not a deployment or production feature activation.
       LUMI_TARGET_NOTE_EDIT_E2E: "true"
+      LUMI_TARGET_NOTE_EDIT_PROFILE: ${{ matrix.profile }}
     steps:
       - name: Checkout isolated PR code
         uses: actions/checkout@v5
@@ -72,7 +78,7 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@v6
         with:
-          name: lumi-r3-note-recovery-${{ github.run_id }}-${{ github.run_attempt }}
+          name: lumi-r3-note-recovery-${{ matrix.profile }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             test-results/
             playwright-report/

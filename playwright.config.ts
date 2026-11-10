@@ -46,6 +46,10 @@ const indexDetailPreviewTest = process.env.LUMI_INDEX_DETAIL_PREVIEW_E2E === "tr
 const targetDetailEditRaceTest = process.env.LUMI_TARGET_DETAIL_EDITS_E2E === "true";
 const focusFallbackTest = process.env.LUMI_TARGET_DETAIL_FOCUS_E2E === "true";
 const noteEditRecoveryTest = process.env.LUMI_TARGET_NOTE_EDIT_E2E === "true";
+// Profile-specific recovery QA (including BOTH active edit flags), isolated to Playwright.
+const noteEditProfile = process.env.LUMI_TARGET_NOTE_EDIT_PROFILE ?? "legacy";
+if(noteEditRecoveryTest&&!["legacy","combined","4b"].includes(noteEditProfile))
+  throw new Error("Invalid LUMI_TARGET_NOTE_EDIT_PROFILE");
 const privateNoteAreasTest = process.env.LUMI_PRIVATE_NOTE_AREAS_E2E === "true";
 
 export default defineConfig({
@@ -124,7 +128,8 @@ export default defineConfig({
         AI_EXECUTIVE_TARGET_UI_DETAILS_ENABLED: "true",
         AI_EXECUTIVE_TARGET_STAGING_HTTP_WRITE_ENABLED: "true",
         AI_EXECUTIVE_TARGET_STAGING_HTTP_NOTES_WRITE_ENABLED: "true",
-        AI_EXECUTIVE_TARGET_UI_NOTE_EDIT_ENABLED: "true",
+        ...(noteEditProfile==="4b" ? {} : {AI_EXECUTIVE_TARGET_UI_NOTE_EDIT_ENABLED: "true"}),
+        ...(noteEditProfile==="legacy" ? {} : {AI_EXECUTIVE_TARGET_UI_EDITS_ENABLED: "true"}),
       } : {}),
       // Only the synthetic isolated Playwright instance exposes the read-only
       // actor-private Quick Capture chooser; never the host production app.

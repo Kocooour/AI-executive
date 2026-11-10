@@ -17,7 +17,7 @@ test("the panel shows a read-only note only when neither legacy nor 4b edits are
   const panel=read("app/ui/target-detail-panel.tsx");
   assert.match(panel,/content&&!\(noteEdit&&content\.kind==="note"\)&&!\(edit&&kindHasEdits\(content\.kind,edits\)\)&&/);
   assert.match(panel,/<TaskEdits api=\{edit\} task=\{task\} expectedRevision=\{content\.expectedRevision\?\?null\}\/>/);
-  assert.match(panel,/<NoteEdits api=\{edit\} note=\{note\}\/>/);
+  assert.match(panel,/<NoteEdits api=\{edit\} note=\{note\} managedNoteEdit=\{noteEdit\|\|edit\.flags\.noteEdit\}\/>/);
   assert.match(panel,/useTargetTick\(revalidate\);/);
   // A deleted item is never re-read (it would replace the confirmation by a 404).
   assert.match(panel,/if\(deletedRef\.current\|\|editRef\.current\?\.deleted\)return;/);
@@ -133,8 +133,14 @@ test("merged editor gates preserve independent note editor without presenting du
   const panel=read("app/ui/target-detail-panel.tsx");
   const rootSource=read("app/ui/lumi-app-root.tsx");
   const page=read("app/page.tsx");
-  assert.match(panel,/noteEdit&&!edit\?\.flags\.noteEdit&&<TargetNoteEditor/);
-  assert.match(panel,/\{edit&&<NoteEdits api=\{edit\} note=\{note\}\/>\}/);
+  assert.match(panel,/\(noteEdit\|\|Boolean\(edit\?\.flags\.noteEdit\)\)&&!edit\?\.deleted&&/);
+  assert.match(panel,/<TargetNoteEditor note=\{note\}/);
+  assert.match(panel,/\{edit&&<NoteEdits api=\{edit\} note=\{note\} managedNoteEdit=/);
+  const editor=read("app/ui/target-detail-edit.tsx");
+  assert.match(editor,/noteEdit:!managedNoteEdit&&api\.flags\.noteEdit&&api\.abilities\.context/);
+  assert.match(editor,/noteEditReloadMarker\(generation\)\.kind==="clear"/);
+  assert.match(editor,/trackedNoteEdit\(runtime,generation,note\.id\)===null/);
+  assert.match(editor,/if\(canDelete\(\)\)api\.run\(\{kind:"noteDelete"/);
   assert.doesNotMatch(rootSource,/targetPrivateNoteAreas=\{Boolean\(config\?\.scopes\.notes\)/); // server-only gate
   assert.match(page,/targetNoteEdit=\{Boolean\(config\?\.details\.note\) && targetNoteEditUiEnabled\(process\.env\)\}/);
   assert.match(page,/targetPrivateNoteAreas=\{Boolean\(config\?\.scopes\.notes\)&&targetPrivateNoteAreaUiEnabled\(process\.env\)\}/);

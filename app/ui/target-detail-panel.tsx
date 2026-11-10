@@ -20,6 +20,7 @@ import {useTargetGate} from "./use-target-gate";
 import {useTargetTick,useTargetWake} from "./use-target-revalidation";
 import {wakeRetryDelay} from "../../lib/target-wake";
 import {queuedTargetFetch} from "../../lib/target-read-queue";
+import {emitTargetChange} from "../../lib/target-data-invalidation";
 
 // Shared one-at-a-time read queue: the server answers 503 beyond two concurrent reads.
 const readFetch=queuedTargetFetch();
@@ -154,9 +155,17 @@ function Content({content,route,copy,gates,more,onMore,edit,noteEdit,onCommitted
       {note.body.length===0
         ?<p className="targetDetailMuted">{copy.noteBodyEmpty}</p>
         :<div className="targetDetailNoteBody" data-testid="target-detail-note-body">{note.body}</div>}
-      {edit&&<NoteEdits api={edit} note={note}/>}
-      {noteEdit&&!edit?.flags.noteEdit&&<TargetNoteEditor note={note} language={language}
-        onCommitted={onCommitted} onAccessRefused={onAccessRefused}/>}
+      {/* One recovery-safe PATCH editor for every enabled note-edit profile. In
+          4b the other controller remains responsible for note deletion only. */}
+      {edit&&<NoteEdits api={edit} note={note} managedNoteEdit={noteEdit||edit.flags.noteEdit}/>}
+      {(noteEdit||Boolean(edit?.flags.noteEdit))&&!edit?.deleted&&
+        <TargetNoteEditor note={note} language={language}
+          onCommitted={()=>{
+            // The recovery-safe editor does not use the 4b controller, so its
+            // successful PATCH must still invalidate note lists and the sidebar.
+            emitTargetChange({kind:"note",id:note.id,change:"updated"});
+            onCommitted();
+          }} onAccessRefused={onAccessRefused}/>}
     </article>;
   }
   const {page}=content;

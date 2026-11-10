@@ -19,6 +19,9 @@ import {localMyPlanDate} from "../../lib/target-staging-my-plan-client";
 import {myPlanWhenTarget,prepareMyPlanWhen} from "../../lib/target-staging-my-plan-when-client";
 import {editCopy,type EditCopy} from "../../lib/target-edit-copy";
 import {useTargetScope} from "./target-scope-state";
+import {useTargetGeneration,useTargetRuntime} from "./target-data-provider";
+import {noteEditReloadMarker} from "../../lib/target-note-edit-reload";
+import {subscribeTrackedNoteEdit,trackedNoteEdit} from "../../lib/target-note-edit-recovery";
 import type {DetailLanguage} from "../../lib/target-detail-copy";
 import type {TargetDetailContent} from "../../lib/target-detail-session";
 import type {TargetUiEdits} from "../../lib/target-ui-config";
@@ -462,9 +465,30 @@ function NoteEditor({api,note}:{api:DetailEditApi;note:NotePreview}){
   </form>;
 }
 
-export function NoteEdits({api,note}:{api:DetailEditApi;note:NotePreview}){
+export function NoteEdits({api,note,managedNoteEdit=false}:{
+  api:DetailEditApi;note:NotePreview;managedNoteEdit?:boolean;
+}){
+  const runtime=useTargetRuntime();
+  const generation=useTargetGeneration();
+  const [,notifyRecovery]=useState(0);
+  // An uncertain PATCH is owned by the runtime beyond the panel's lifetime.
+  // Re-check the content-free global tab barrier on tracked command changes.
+  useEffect(()=>{
+    if(!managedNoteEdit||!runtime||generation==="")return;
+    return subscribeTrackedNoteEdit(runtime,generation,note.id,()=>notifyRecovery(old=>old+1));
+  },[managedNoteEdit,runtime,generation,note.id]);
+  const canDelete=()=>{
+    if(!managedNoteEdit)return true;
+    return runtime?.known()===true&&runtime.generation()===generation&&
+      noteEditReloadMarker(generation).kind==="clear"&&
+      trackedNoteEdit(runtime,generation,note.id)===null;
+  };
+  const blockedByManagedEdit=!canDelete();
   const {copy,capability,state}=api;
-  const flags={...api.flags,noteEdit:api.flags.noteEdit&&api.abilities.context,noteDelete:api.flags.noteDelete&&api.abilities.context};
+  // The recovery-safe TargetNoteEditor owns every note PATCH. This controller
+  // handles only note DELETE, never a competing UUID-creating PATCH.
+  const flags={...api.flags,noteEdit:!managedNoteEdit&&api.flags.noteEdit&&api.abilities.context,
+    noteDelete:api.flags.noteDelete&&api.abilities.context};
   if(api.deleted)return <DeletedNotice api={api} text={copy.deletedNote}/>;
   if(capability==="checking"||capability==="off")
     return <p className="targetDetailMuted" role="status" data-testid="target-detail-edit-checking">{copy.checking}</p>;
@@ -473,9 +497,17 @@ export function NoteEdits({api,note}:{api:DetailEditApi;note:NotePreview}){
   return <div className="targetDetailEdit" data-testid="target-detail-edit">
     {flags.noteEdit&&!(state.kind==="conflict"&&api.draft.kept)&&<div className="targetDetailEditRow"><NoteEditor api={api} note={note}/></div>}
     <ConflictKept api={api} kind="note" current={{title:note.title,body:note.body}}/>
-    {flags.noteDelete&&<DeleteControl api={api} label={copy.deleteNote}
+    {flags.noteDelete&&!blockedByManagedEdit&&<DeleteControl api={api} label={copy.deleteNote}
       confirmText={copy.confirmDeleteNote(note.title)} base={note} revision={null}
-      onDelete={base=>api.run({kind:"noteDelete",noteId:base.id,areaId:base.areaId,base})}/>}
+      onDelete={base=>{
+        // Confirmation may have been open when another note PATCH began.
+        // Fail closed even if the button was rendered before its tab barrier.
+        if(canDelete())api.run({kind:"noteDelete",noteId:base.id,areaId:base.areaId,base});
+      }}/>}
+    {flags.noteDelete&&blockedByManagedEdit&&
+      <p className="targetDetailMuted" role="status" data-testid="target-detail-edit-note-recovery-blocked">
+        {copy.uncertainBlocked}
+      </p>}
     <Feedback api={api}/>
   </div>;
 }
