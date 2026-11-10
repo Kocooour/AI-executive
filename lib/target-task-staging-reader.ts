@@ -68,6 +68,7 @@ import {validTargetStagingAttentionLifecycleCommand,
   from "./target-attention-lifecycle-writer";
 import type { TemporalScope, TemporalStatus, TemporalTaskPage, TemporalTaskDetail, TemporalDueWindow, TemporalDueWindowPage } from "./target-task-temporal-read-model";
 import { readAuthorizedTargetNote } from "./target-note-access";
+import {readTargetProjectTitleRecovery,type TargetProjectTitleRecovery} from "./target-project-title-command-status";
 import { readAuthorizedTargetNoteSyncPage, type TargetNoteSyncPage } from "./target-note-sync-read-model";
 import { evaluateTargetAreaPolicy } from "./target-area-policy";
 import {readTargetNoteEditCommandStatus,readTargetNoteEditRecovery,
@@ -952,6 +953,19 @@ export function readPreflightedTargetNoteEditCommandStatus(
           if (!actor) return denied();
           return readTargetNoteEditCommandStatus(db, actor, request);
         }, denied));
+}
+
+/** Actor is derived exclusively from an authenticated preflighted reader. */
+export function readPreflightedProjectTitleRecovery(
+  store:TargetStagingReadStore,access:TargetStagingReadCredential,commandId:string,
+):TargetProjectTitleRecovery{
+  const denied=():TargetProjectTitleRecovery=>({ok:false,reason:"unavailable"});
+  return withPreflightedStore<TargetProjectTitleRecovery>(store,denied,(db,preflight)=>
+    inReadSnapshot(db,()=>{
+      if(!preflight(db))return denied();
+      const actor=verifiedActor(db,access,true);
+      return actor?readTargetProjectTitleRecovery(db,actor,commandId,store.expectedRestoreGeneration):denied();
+    },denied));
 }
 
 /** Read-only, signed-writer-scoped receipt lookup for reload recovery. */

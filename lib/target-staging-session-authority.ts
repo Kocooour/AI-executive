@@ -42,7 +42,7 @@ import {
   previewPreflightedTargetTaskTitleEdit, readPreflightedIsolatedTargetTask,
   readPreflightedIsolatedPersonalTargetTask, readPreflightedPersonalTargetTaskWithRevision,
   readPreflightedTargetTaskTitleCommandStatus, readPreflightedTargetTaskDeleteCommandStatus,
-  readPreflightedTargetNoteEditCommandStatus,readPreflightedTargetNoteEditRecovery, readPreflightedTargetNoteDeleteCommandStatus,
+  readPreflightedTargetNoteEditCommandStatus,readPreflightedTargetNoteEditRecovery,readPreflightedProjectTitleRecovery, readPreflightedTargetNoteDeleteCommandStatus,
   listPreflightedPrivateProjectsAtOffset, readPreflightedPrivateProjectDetail,
   readPreflightedPrivateTaskTitleAudit,
   readPreflightedScopedTaskPage, readPreflightedSharedTargetTask, readPreflightedChangeFeedPage,
@@ -90,6 +90,7 @@ import type { FeedClaims } from "./target-staging-feed-cursor";
 import type { TargetPrivateTaskTitleAuditResult } from "./target-task-read-model";
 import type { TargetStagingTaskTitleCommandStatusResult, TargetTemporalStatusReceiptResult, TargetTemporalStatusReceiptSnapshot, TargetTemporalDueOnReceiptResult, TargetTemporalDueOnReceiptSnapshot } from "./target-task-staging-reader";
 import type {TargetNoteEditCommandStatus,TargetNoteEditRecovery} from "./target-note-command-status";
+import type {TargetProjectTitleRecovery} from "./target-project-title-command-status";
 import type { TargetNoteDeleteCommandStatus } from "./target-note-delete-command-status";
 import { validTargetTaskTitleEditPreviewRequest } from "./target-task-write-preflight";
 import { writePreflightedTargetTaskTitle, validTargetStagingTaskTitleWriteRequest } from "./target-task-staging-writer";
@@ -1251,6 +1252,13 @@ export class TargetStagingSessionAuthority {
       return {ok:false, reason:"invalid_request"};
     return changePreflightedTargetNoteLifecycle(
       this.#store,credential,request,durableSessionTokenHash,privateCreateOnly);
+  }
+
+  /** Read-only actor-scoped project rename receipt lookup, no title released. */
+  projectTitleRecovery(sessionToken:string,commandId:string):TargetProjectTitleRecovery{
+    const credential=this.#credential(sessionToken,true);
+    return credential?readPreflightedProjectTitleRecovery(this.#store,credential,commandId)
+      :{ok:false,reason:"unavailable"};
   }
 
   /** Read-only actor-scoped recovery of a note edit after browser reload. */
