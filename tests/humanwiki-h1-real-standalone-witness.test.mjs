@@ -108,6 +108,14 @@ test("missing or partly tampered ledger fails closed and cannot auto bootstrap",
   assert.throws(()=>witnessCurrentHead(partial,registryId,privateKey));
   assert.throws(()=>publishWitnessCheckpoint(partial,registryId,privateKey,{
     sequence:1,previousDigest:EMPTY,digest:"a".repeat(64)}));
+
+  const rogue=fixture();
+  bootstrapWitnessStore(rogue,registryId,privateKey);
+  const modified=new DatabaseSync(path.join(rogue,"witness-high-water.sqlite"));
+  modified.exec("CREATE TABLE unrelated_backdoor(data TEXT)");
+  modified.close();
+  assert.throws(()=>witnessCurrentHead(rogue,registryId,privateKey),
+    "unexpected SQLite object must block witness signatures");
 });
 test("protected private files reject symlinks and group-readable key material",()=>{
   const dir=fixture();
@@ -121,6 +129,10 @@ test("protected private files reject symlinks and group-readable key material",(
   const symlink=path.join(dir,"shortcut.pem");
   symlinkSync(otherFile,symlink);
   assert.throws(()=>readProtectedWitnessFile(symlink),/witness_unavailable/);
+  chmodSync(dir,0o755);
+  assert.throws(()=>readProtectedWitnessFile(otherFile),/witness_unavailable/,
+    "group-readable key directory cannot hold trusted signing material");
+  chmodSync(dir,0o700);
 });
 
 test("real HTTPS server signs only its latest head, refuses all uploads and malformed challenges",async()=>{
