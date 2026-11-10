@@ -13,8 +13,9 @@ import { TargetSidebarContext } from "../target-sidebar-context";
 // R3-FE-4a: loaded only when the server page enabled target scopes with the project index.
 const TargetSidebarProjects = dynamic(() => import("../target-sidebar-projects"), { ssr: false });
 
-export function Sidebar({ app, targetPlan = false, onTargetCapture }: {
+export function Sidebar({ app, targetPlan = false, onTargetCapture, targetInspectorOpen = false }: {
   app: LumiApp; targetPlan?: boolean; onTargetCapture?:()=>void;
+  targetInspectorOpen?:boolean;
 }) {
   const targetSidebar = useContext(TargetSidebarContext);
   const {
@@ -252,7 +253,8 @@ export function Sidebar({ app, targetPlan = false, onTargetCapture }: {
               inspector open it is hidden to keep the inspector unobstructed,
               so provide a fixed, keyboard-accessible sidebar entry instead.
               Legacy sidebar controls remain unchanged when preview is off. */}
-          {mobileDesignV1Preview && app.selected && (!app.captureDisabled || onTargetCapture) && (
+          {mobileDesignV1Preview && (app.selected || (onTargetCapture && targetInspectorOpen)) &&
+            (!app.captureDisabled || onTargetCapture) && (
             <button type="button" className="desktopInspectorCapture"
               data-desktop-inspector-capture
               data-target-private-capture-fab={onTargetCapture?"sidebar":undefined}
