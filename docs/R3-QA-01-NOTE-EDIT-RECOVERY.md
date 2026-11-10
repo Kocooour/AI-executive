@@ -4,7 +4,7 @@
 
 ## Měřitelný výsledek
 
-Pro jednu serverově potvrzenou identitu a dvě autorizované soukromé poznámky v izolovaném browser test serveru:
+Pro jednu serverově potvrzenou identitu a dvě autorizované soukromé poznámky v izolovaném browser test serveru proběhne **každý ze tří scénářů zvlášť na 390 px (mobil) i 1280 px (desktop)**, tedy celkem šest browser případů:
 
 1. **První PATCH končí definitivním 409 až po zavření detailu.** Koordinátor musí uvolnit marker bez namountovaného editoru a následný pokus o editaci druhé poznámky musí být možný na telefonu (390 px) i desktopu (1280 px). Nevznikne nový příkaz A.
 2. **Nejistý PATCH → zopakování přesného stejného UUID → 409.** Oprávněný uživatel dál přečte druhou poznámku, ale žádnou novou editaci nesmí odeslat; obsahově prázdný marker zůstane. Použije se stále stejný commandId.
