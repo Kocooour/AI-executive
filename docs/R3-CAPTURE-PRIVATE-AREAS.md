@@ -28,6 +28,6 @@ Cílený CI workflow používá port `3121`, `LUMI_PRIVATE_NOTE_AREAS_E2E=true` 
 
 ## Navazující skutečný zápis
 
-R3-CAPTURE-1 zůstává samostatně default-off read-only. Další bezpečnostně oddělené 
+R3-CAPTURE-1 zůstává samostatně default-off read-only. Další bezpečnostně oddělené
 [R3-CAPTURE-2 — soukromá poznámka / skutečné vytvoření a obnova příkazu](R3-CAPTURE-PRIVATE-NOTE-CREATE.md)
 je explicitní create brána, nikoli rozšíření pravomoci read-only seznamu Oblastí.
