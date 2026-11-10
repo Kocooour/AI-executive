@@ -15,7 +15,7 @@ import {
   type TrackedNoteEditPhase,
 } from "../../lib/target-note-edit-recovery";
 import type {DetailLanguage} from "../../lib/target-detail-copy";
-import {noteEditReloadMarker,reserveNoteEditReload,confirmNoteEditReload,rejectFreshNoteEditReload}
+import {noteEditReloadMarker,reserveNoteEditReload,confirmNoteEditReload}
   from "../../lib/target-note-edit-reload";
 import {recoverNoteEditAfterReload} from "../../lib/target-note-reload-status-client";
 
@@ -80,11 +80,8 @@ export default function TargetNoteEditor({note,language,onCommitted,onAccessRefu
   const [mode,setMode]=useState<Mode>({kind:"idle"});
   const [message,setMessage]=useState("");
   const requestNumber=useRef(0);
-  // A definitive 409 from the FIRST send is safe to discard. A later 409
-  // after any uncertain attempt is NOT proof that an earlier PATCH cannot
-  // still commit; keep the reload barrier in that case.
-  const freshCommand=useRef<string|null>(null);
-  const ambiguousCommands=useRef(new Set<string>());
+  // Definitive first-PATCH results are reconciled by the runtime coordinator,
+  // including after this inspector unmounts; no component-local write ledger.
   // This controller is for GET preflight only; PATCH is owned by the recovery
   // coordinator and intentionally does NOT abort when the detail unmounts.
   const controller=useRef<AbortController|null>(null);
@@ -125,11 +122,6 @@ export default function TargetNoteEditor({note,language,onCommitted,onAccessRefu
       }else if(tracked.phase==="denied"){
         refuse();
       }else{
-        if(tracked.phase==="uncertain")ambiguousCommands.current.add(tracked.command.commandId);
-        if(tracked.phase==="conflict"&&
-          freshCommand.current===tracked.command.commandId&&
-          !ambiguousCommands.current.has(tracked.command.commandId))
-          rejectFreshNoteEditReload(boundGeneration.current,tracked.command.commandId);
         // Do not reveal saved draft text until edit access has been checked
         // after a fresh mount. Only an already-authorized editor is updated.
         setMode(previous=>previous.kind==="draft"&&
@@ -325,7 +317,6 @@ export default function TargetNoteEditor({note,language,onCommitted,onAccessRefu
         ?copy.storageUnavailable:copy.reload);
       return;
     }
-    if(!retry)freshCommand.current=command.commandId;
     setMode({kind:"draft",draft:{...draft,command,phase:"saving"}});
     setMessage("");
     // Deliberately not awaited or aborted on unmount. The coordinator retains
