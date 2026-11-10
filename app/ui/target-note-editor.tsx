@@ -15,6 +15,9 @@ import {
   type TrackedNoteEditPhase,
 } from "../../lib/target-note-edit-recovery";
 import type {DetailLanguage} from "../../lib/target-detail-copy";
+import {noteEditReloadMarker,reserveNoteEditReload,confirmNoteEditReload}
+  from "../../lib/target-note-edit-reload";
+import {recoverNoteEditAfterReload} from "../../lib/target-note-reload-status-client";
 
 // Shared R3-FE-4a server read budget also applies to edit preflight.
 const editReadFetch=queuedTargetFetch();
@@ -24,7 +27,7 @@ type Draft={
   phase:"edit"|"saving"|"uncertain"|"conflict";
 };
 type Mode={kind:"idle"}|{kind:"checking"}|{kind:"denied"}|
-  {kind:"recovery"}|{kind:"draft";draft:Draft};
+  {kind:"recovery"}|{kind:"reload"}|{kind:"draft";draft:Draft};
 const words={
   cs:{
     edit:"Upravit poznámku",checking:"Ověřuji oprávnění k úpravě…",
@@ -38,6 +41,9 @@ const words={
     retry:"Ověřit uložením znovu",conflict:"Poznámka nebo oprávnění se změnily. Koncept se neuložil.",
     offline:"Bez připojení nelze změny bezpečně uložit.",
     refresh:"Zahodit koncept a načíst aktuální obsah",
+    reload:"Předchozí zápis není po obnovení stránky potvrzený. Čtení poznámek funguje dál, ale nové úpravy jsou do potvrzení zablokované.",
+    receipt:"Ověřit předchozí zápis",notRecorded:"Server zatím zápis nepotvrdil. Zkontrolujte jej později; nový příkaz se nespustí.",
+    storageUnavailable:"Úložiště této záložky není dostupné. Zápis nelze bezpečně zahájit ani obnovit.",
   },
   en:{
     edit:"Edit note",checking:"Checking edit access…",
@@ -51,6 +57,9 @@ const words={
     retry:"Retry the same command",conflict:"The note or access changed. Your draft was not saved.",
     offline:"Changes cannot be saved safely while offline.",
     refresh:"Discard draft and reload current content",
+    reload:"The previous save cannot be confirmed after a page reload. Notes remain readable, but new edits are blocked until confirmation.",
+    receipt:"Check previous save",notRecorded:"The server has not confirmed the write. Check again later; no new command will be sent.",
+    storageUnavailable:"This tab's storage is unavailable. A save cannot safely start or be recovered.",
   },
 };
 function editorPhase(phase:TrackedNoteEditPhase):Draft["phase"]{
@@ -102,6 +111,7 @@ export default function TargetNoteEditor({note,language,onCommitted,onAccessRefu
       const tracked=trackedNoteEdit(runtime,boundGeneration.current,note.id);
       if(!tracked)return;
       if(tracked.phase==="saved"){
+        confirmNoteEditReload(boundGeneration.current,tracked.command.commandId);
         forgetTrackedNoteEdit(runtime,boundGeneration.current,note.id);
         requestNumber.current++;
         controller.current?.abort();
@@ -122,6 +132,7 @@ export default function TargetNoteEditor({note,language,onCommitted,onAccessRefu
     const existing=trackedNoteEdit(runtime,boundGeneration.current,note.id);
     if(existing){
       if(existing.phase==="saved"){
+        confirmNoteEditReload(boundGeneration.current,existing.command.commandId);
         forgetTrackedNoteEdit(runtime,boundGeneration.current,note.id);
       }else if(existing.phase==="denied"){
         refuse();
@@ -131,6 +142,10 @@ export default function TargetNoteEditor({note,language,onCommitted,onAccessRefu
         // in-memory draft from an identity that is no longer a writer.
         void recover();
       }
+    }else if(noteEditReloadMarker(boundGeneration.current).kind!=="clear"){
+      // A full reload discards the private command body. Only the random UUID
+      // survived; never synthesize a replacement PATCH from a fresh preflight.
+      setMode({kind:"reload"});
     }
     return unsubscribe;
     // Runtime/generation/ID define this recovery boundary, not note revisions.
@@ -143,6 +158,7 @@ export default function TargetNoteEditor({note,language,onCommitted,onAccessRefu
     const tracked=trackedNoteEdit(runtime,boundGeneration.current,note.id);
     if(!tracked){setMode({kind:"idle"});return;}
     if(tracked.phase==="saved"){
+      confirmNoteEditReload(boundGeneration.current,tracked.command.commandId);
       forgetTrackedNoteEdit(runtime,boundGeneration.current,note.id);
       onCommitted();
       return;
@@ -172,6 +188,7 @@ export default function TargetNoteEditor({note,language,onCommitted,onAccessRefu
     const latest=trackedNoteEdit(runtime,boundGeneration.current,note.id);
     if(!latest||latest.command.commandId!==tracked.command.commandId)return;
     if(latest.phase==="saved"){
+      confirmNoteEditReload(boundGeneration.current,latest.command.commandId);
       forgetTrackedNoteEdit(runtime,boundGeneration.current,note.id);
       onCommitted();
     }else if(latest.phase==="denied"){
@@ -184,10 +201,46 @@ export default function TargetNoteEditor({note,language,onCommitted,onAccessRefu
       }});
     }
   }
+  /** Post-reload recovery is read-only. A missing/denied receipt is not proof
+   * the original PATCH will never commit, so do not unlock or resend it. */
+  async function reconcileReload(){
+    if(!runtime||!alive)return;
+    if(!stillBound()){setMessage(copy.offline);return;}
+    const marker=noteEditReloadMarker(boundGeneration.current);
+    if(marker.kind==="clear"){
+      setMode({kind:"idle"});setMessage("");return;
+    }
+    if(marker.kind!=="blocked"){
+      setMode({kind:"reload"});setMessage(copy.storageUnavailable);return;
+    }
+    const seq=++requestNumber.current;
+    controller.current?.abort();
+    const signal=new AbortController();
+    controller.current=signal;
+    setMode({kind:"checking"});
+    setMessage("");
+    const result=await recoverNoteEditAfterReload(marker.commandId,signal.signal);
+    if(seq!==requestNumber.current||signal.signal.aborted||!stillBound())return;
+    if(result==="committed"&&confirmNoteEditReload(boundGeneration.current,marker.commandId)){
+      setMode({kind:"idle"});
+      onCommitted(); // fresh authorized read, never cached note text
+      return;
+    }
+    setMode({kind:"reload"});
+    setMessage(result==="not_recorded"?copy.notRecorded:
+      result==="denied"?copy.denied:
+      result==="committed"?copy.storageUnavailable:copy.offline);
+  }
   async function begin(){
     if(!runtime||!alive)return;
     if(trackedNoteEdit(runtime,boundGeneration.current,note.id)){
       void recover();return;
+    }
+    const marker=noteEditReloadMarker(boundGeneration.current);
+    if(marker.kind!=="clear"){
+      setMode({kind:"reload"});
+      setMessage(marker.kind==="unavailable"?copy.storageUnavailable:"");
+      return;
     }
     if(!stillBound()){setMessage(copy.offline);return;}
     const seq=++requestNumber.current;
@@ -253,6 +306,15 @@ export default function TargetNoteEditor({note,language,onCommitted,onAccessRefu
     const command=draft.command??{
       ...draft.preview,commandId:crypto.randomUUID(),title:draft.title,body:draft.body,
     };
+    // Commit a content-free tab marker BEFORE dispatching a PATCH. Without it,
+    // a full reload would erase the exact command UUID after a lost response.
+    // An unresolved command on ANY note blocks new WRITES only, never reads.
+    if(!reserveNoteEditReload(boundGeneration.current,command.commandId)){
+      setMode({kind:"reload"});
+      setMessage(noteEditReloadMarker(boundGeneration.current).kind==="unavailable"
+        ?copy.storageUnavailable:copy.reload);
+      return;
+    }
     setMode({kind:"draft",draft:{...draft,command,phase:"saving"}});
     setMessage("");
     // Deliberately not awaited or aborted on unmount. The coordinator retains
@@ -262,7 +324,7 @@ export default function TargetNoteEditor({note,language,onCommitted,onAccessRefu
 
   if(!alive)return null;
   if(mode.kind==="idle"||mode.kind==="checking"||mode.kind==="denied"||
-      mode.kind==="recovery")
+      mode.kind==="recovery"||mode.kind==="reload")
     return <div className="targetNoteEdit" data-testid="target-note-edit">
       {mode.kind==="idle"&&<button type="button" onClick={()=>{void begin();}}>{copy.edit}</button>}
       {mode.kind==="checking"&&<p role="status">{copy.checking}</p>}
@@ -270,6 +332,10 @@ export default function TargetNoteEditor({note,language,onCommitted,onAccessRefu
       {mode.kind==="recovery"&&<>
         <p role="status">{copy.recovering}</p>
         <button type="button" onClick={()=>{void recover();}}>{copy.recover}</button>
+      </>}
+      {mode.kind==="reload"&&<>
+        <p role="status">{copy.reload}</p>
+        <button type="button" onClick={()=>{void reconcileReload();}}>{copy.receipt}</button>
       </>}
       {message&&<p role="alert">{message}</p>}
     </div>;
