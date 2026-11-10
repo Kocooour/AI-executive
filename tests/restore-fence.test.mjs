@@ -104,6 +104,8 @@ const exempt = {
   "POST /api/target-staging/notes/[noteId]/delete/status": "read-only exact note-delete receipt reconciliation on isolated staging SQLite; current actor, Area ACL, generation and session checks, no persisted mutation",
   "PATCH /api/target-staging/notes/[noteId]/edit": "writes only isolated staging SQLite outside the legacy backup scope; staging anchor validates the server restore generation and the transactional note writer rechecks client generation, durable session, ACL, parent and note revisions before atomic commit",
   "DELETE /api/target-staging/notes/[noteId]": "writes only isolated staging SQLite outside legacy backup scope; staging anchor verifies live restore state and the pinned delete writer checks client restore generation, durable session, Area ACL, note and parent CAS before atomic tombstone, audit and receipt commit",
+  "POST /api/target-staging/notes": "creates owner-private standalone notes only in separate isolated staging SQLite, outside the legacy backup scope; the staging anchor and pinned writer verify restore generation, live session, private Area ACL, idempotency and content-free journal before atomic commit",
+  "PATCH /api/target-staging/projects/[projectId]/title": "renames projects only in separate isolated staging SQLite, outside the legacy backup scope; the staging anchor and pinned writer verify restore generation, live session, current Area editor/admin or private-owner ACL, project revision CAS, idempotent audit and journal before atomic commit",
 
 };
 
