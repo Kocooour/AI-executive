@@ -70,7 +70,7 @@ import type { TemporalScope, TemporalStatus, TemporalTaskPage, TemporalTaskDetai
 import { readAuthorizedTargetNote } from "./target-note-access";
 import { readAuthorizedTargetNoteSyncPage, type TargetNoteSyncPage } from "./target-note-sync-read-model";
 import { evaluateTargetAreaPolicy } from "./target-area-policy";
-import { readTargetNoteEditCommandStatus, type TargetNoteEditCommandStatus } from "./target-note-command-status";
+import { readTargetNoteEditCommandStatus,readTargetNoteEditRecovery,type TargetNoteEditCommandStatus,type TargetNoteEditRecovery } from "./target-note-command-status";
 import { readTargetNoteDeleteCommandStatus, type TargetNoteDeleteCommandStatus } from "./target-note-delete-command-status";
 import { validTargetStagingNoteDeleteRequest, type TargetStagingNoteDeleteRequest } from "./target-note-delete-writer";
 import {
@@ -951,6 +951,18 @@ export function readPreflightedTargetNoteEditCommandStatus(
           if (!actor) return denied();
           return readTargetNoteEditCommandStatus(db, actor, request);
         }, denied));
+}
+
+export function readPreflightedTargetNoteEditRecovery(
+  store:TargetStagingReadStore,access:TargetStagingReadCredential,commandId:string,
+):TargetNoteEditRecovery{
+  const denied=():TargetNoteEditRecovery=>({ok:false,reason:"unavailable"});
+  return withPreflightedStore<TargetNoteEditRecovery>(store,denied,(db,preflight)=>
+    inReadSnapshot(db,()=>{
+      if(!preflight(db))return denied();
+      const actor=verifiedActor(db,access,true);
+      return actor?readTargetNoteEditRecovery(db,actor,commandId):denied();
+    },denied));
 }
 
 /** R2d.2c.2f.4: canonical, write-audience, content-free note delete status. */

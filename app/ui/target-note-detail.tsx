@@ -1,28 +1,30 @@
 "use client";
 import {useCallback,useEffect,useRef,useState} from "react";
 import {readStagingNotePreview,type NotePreview,type NotePreviewFailure} from "../../lib/target-staging-note-preview-client";
-import {patchNoteEdit,preflightNoteEdit,statusNoteEdit,type EditCommand,type EditFailure} from "../../lib/target-note-edit-client";
+import {patchNoteEdit,preflightNoteEdit,statusNoteEdit,recoverNoteEdit,type EditCommand,type EditFailure} from "../../lib/target-note-edit-client";
 import {useTargetGeneration} from "./target-data-provider";
-import {pendingNoteCommand,holdNoteCommand,clearNoteCommand} from "../../lib/target-note-pending-command";
+import {pendingNoteCommand,holdNoteCommand,clearNoteCommand,noteEditBlocked,lostNoteCommandId,clearRecoveredNoteCommand} from "../../lib/target-note-pending-command";
 import type {UrlScope} from "../../lib/view-url";
 import type {ScopesLanguage} from "../../lib/target-scopes-copy";
 
 type Failure=NotePreviewFailure|EditFailure;
 type State={kind:"loading"}|{kind:"error";reason:Failure}|{kind:"ready";note:NotePreview}|
   {kind:"editing";note:NotePreview;title:string;body:string;invalid?:boolean;failure?:Failure}|
-  {kind:"saving"}|{kind:"uncertain"}|{kind:"saved"};
+  {kind:"saving"}|{kind:"uncertain"}|{kind:"lost"}|{kind:"saved"};
 const labels={
   cs:{back:"Zpět na poznámky",loading:"Ověřuji aktuální přístup…",unavailable:"Poznámka nebo přístup nejsou dostupné.",
     retry:"Znovu ověřit",edit:"Upravit",save:"Uložit",cancel:"Zrušit",title:"Název",body:"Obsah",
     saving:"Ukládám a ověřuji výsledek…",uncertain:"Výsledek uložení není jistý. Před další úpravou ověřte stav příkazu.",
     check:"Ověřit výsledek",notRecorded:"Zápis zatím nebyl potvrzen. Ověřte jeho stav znovu; nový zápis se nespouští.",
     saved:"Uloženo. Načtěte aktuální autorizovaný obsah.",savedRead:"Načíst obsah",offline:"Připojení není dostupné. Obsah byl skryt.",
+    lost:"Dřívější zápis je stále nejasný. Další úpravy jsou zablokovány, dokud server nepotvrdí jeho výsledek.",
     private:"Osobní oblast",shared:"Sdílená oblast",viewOnly:"V tomto režimu lze poznámku pouze číst."},
   en:{back:"Back to notes",loading:"Checking current access…",unavailable:"The note or access is unavailable.",
     retry:"Check again",edit:"Edit",save:"Save",cancel:"Cancel",title:"Title",body:"Content",
     saving:"Saving and checking the result…",uncertain:"The save result is uncertain. Check the command before editing again.",
     check:"Check result",notRecorded:"The write has not been confirmed. Check its status again; no new write is sent.",
     saved:"Saved. Load the current authorized content.",savedRead:"Load content",offline:"Connection unavailable. Content was hidden.",
+    lost:"A previous write is still uncertain. Further edits are blocked until the server confirms its result.",
     private:"Personal area",shared:"Shared area",viewOnly:"This note is read only here."},
 };
 const foreground=()=>document.visibilityState!=="hidden"&&navigator.onLine;
@@ -43,6 +45,9 @@ export default function TargetNoteDetail({noteId,scope,language="cs",editEnabled
   const load=useCallback(async()=>{
     const id=++epoch.current;
     readController.current?.abort();
+    if(noteEditBlocked(generation)){
+      setState({kind:pendingNoteCommand(generation)?"uncertain":"lost"});return;
+    }
     const controller=new AbortController();readController.current=controller;
     setState({kind:"loading"});
     if(!foreground()){setState({kind:"error",reason:"offline"});return;}
@@ -57,10 +62,12 @@ export default function TargetNoteDetail({noteId,scope,language="cs",editEnabled
       setState({kind:"error",reason:"not-found"});return;
     }
     setState({kind:"ready",note:result.note});
-  },[noteId,scope]);
+  },[noteId,scope,generation]);
   useEffect(()=>{
     if(!generation){setState({kind:"error",reason:"stale"});return;}
-    if(pendingNoteCommand(generation)){setState({kind:"uncertain"});return;}
+    if(noteEditBlocked(generation)){
+      setState({kind:pendingNoteCommand(generation)?"uncertain":"lost"});return;
+    }
     void load();
     return ()=>{epoch.current++;readController.current?.abort();};
   },[generation,load]);
@@ -68,7 +75,7 @@ export default function TargetNoteDetail({noteId,scope,language="cs",editEnabled
     const conceal=()=>{
       epoch.current++;readController.current?.abort();
       draft.current=null;
-      setState(pendingNoteCommand(generation)?{kind:"uncertain"}:{kind:"error",reason:navigator.onLine?"stale":"offline"});
+      setState(pendingNoteCommand(generation)?{kind:"uncertain"}:noteEditBlocked(generation)?{kind:"lost"}:{kind:"error",reason:navigator.onLine?"stale":"offline"});
     };
     const visibility=()=>{if(document.visibilityState==="hidden")conceal();};
     const bfcache=(event:PageTransitionEvent)=>{if(event.persisted)conceal();};
@@ -85,7 +92,7 @@ export default function TargetNoteDetail({noteId,scope,language="cs",editEnabled
   },[generation]);
   async function save(){
     const current=stateRef.current;
-    if(current.kind!=="editing"||!foreground()||pendingNoteCommand(generation))return;
+    if(current.kind!=="editing"||!foreground()||noteEditBlocked(generation))return;
     const title=current.title.trim(),body=current.body;
     if(!title||new TextEncoder().encode(title).length>4096||new TextEncoder().encode(body).length>128*1024){
       setState({...current,invalid:true});return;
@@ -121,7 +128,7 @@ export default function TargetNoteDetail({noteId,scope,language="cs",editEnabled
     // revision, Area and restore checks under the server write transaction.
     if(proof.value.writeAreaId!==current.note.areaId){setState({kind:"error",reason:"stale"});return;}
     const command:EditCommand={...proof.value,commandId:crypto.randomUUID(),title,body};
-    if(!holdNoteCommand(generation,noteId,command)){setState({kind:"uncertain"});return;}
+    if(!holdNoteCommand(generation,noteId,command)){setState({kind:pendingNoteCommand(generation)?"uncertain":"lost"});return;}
     draft.current=null;
     const result=await patchNoteEdit(noteId,command,controller.signal);
     if(id!==epoch.current||!foreground())return;
@@ -131,19 +138,23 @@ export default function TargetNoteDetail({noteId,scope,language="cs",editEnabled
   }
   async function check(){
     const pending=pendingNoteCommand(generation);
-    if(!pending||!foreground())return;
+    const lostId=pending?null:lostNoteCommandId(generation);
+    if((!pending&&!lostId)||!foreground())return;
     const id=++epoch.current;
     setState({kind:"saving"});
-    const result=await statusNoteEdit(pending.noteId,pending.command,new AbortController().signal);
+    const result=pending
+      ?await statusNoteEdit(pending.noteId,pending.command,new AbortController().signal)
+      :await recoverNoteEdit(lostId!,new AbortController().signal);
     if(id!==epoch.current||!foreground())return;
     if(result.ok&&result.value==="committed"){
-      clearNoteCommand(generation,pending.command.commandId);
-      if(pending.noteId===noteId)setState({kind:"saved"});
+      if(pending)clearNoteCommand(generation,pending.command.commandId);
+      else clearRecoveredNoteCommand(generation,lostId!);
+      if(!pending||pending.noteId===noteId)setState({kind:"saved"});
       else void load();
       return;
     }
     if(result.ok===false&&result.reason==="signed-out")refusal.current();
-    setState({kind:"uncertain"});
+    setState({kind:pending?"uncertain":"lost"});
   }
   const note=state.kind==="ready"||state.kind==="editing"?state.note:null;
   return <section className="targetNoteDetail" data-testid="target-note-detail" aria-label={language==="cs"?"Detail poznámky":"Note detail"}>
@@ -154,6 +165,8 @@ export default function TargetNoteDetail({noteId,scope,language="cs",editEnabled
     {state.kind==="saving"&&<p role="status">{copy.saving}</p>}
     {state.kind==="uncertain"&&<><p role="alert">{copy.uncertain} {copy.notRecorded}</p>
       <button type="button" onClick={()=>void check()}>{copy.check}</button></>}
+    {state.kind==="lost"&&<><p role="alert">{copy.lost}</p>
+      {lostNoteCommandId(generation)&&<button type="button" onClick={()=>void check()}>{copy.check}</button>}</>}
     {state.kind==="saved"&&<><p role="status">{copy.saved}</p>
       <button type="button" onClick={()=>void load()}>{copy.savedRead}</button></>}
     {note&&<article data-area-kind={note.areaKind}>
@@ -167,7 +180,9 @@ export default function TargetNoteDetail({noteId,scope,language="cs",editEnabled
         {state.failure&&<p role="alert">{copy.unavailable}</p>}
         <div><button type="submit">{copy.save}</button><button type="button" onClick={()=>setState({kind:"ready",note:state.note})}>{copy.cancel}</button></div>
       </form>:<><h2>{note.title}</h2><pre>{note.body}</pre>
-        {editEnabled?<button type="button" onClick={()=>setState({kind:"editing",note,title:note.title,body:note.body})}>{copy.edit}</button>
+        {editEnabled?<button type="button" onClick={()=>noteEditBlocked(generation)
+          ?setState({kind:pendingNoteCommand(generation)?"uncertain":"lost"})
+          :setState({kind:"editing",note,title:note.title,body:note.body})}>{copy.edit}</button>
           :<p>{copy.viewOnly}</p>}</>}
     </article>}
   </section>;

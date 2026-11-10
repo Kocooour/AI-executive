@@ -36,6 +36,7 @@ const { createSessionToken, sessionCookieName } = await import("../lib/auth.ts")
 const { GET, DELETE: DELETE_NOTE } = await import("../app/api/target-staging/notes/[noteId]/route.ts");
 const { GET: EDIT_PREVIEW, PATCH: EDIT } = await import("../app/api/target-staging/notes/[noteId]/edit/route.ts");
 const { POST: EDIT_STATUS } = await import("../app/api/target-staging/notes/[noteId]/edit/status/route.ts");
+const { POST: EDIT_RECOVERY } = await import("../app/api/target-staging/notes/edit-recovery/route.ts");
 const { POST: DELETE_STATUS } = await import("../app/api/target-staging/notes/[noteId]/delete/status/route.ts");
 const { readStagingAuthorizedNoteInChild, parseStagingNoteDetail } =
   await import("../lib/target-staging-read-process.ts");
@@ -416,6 +417,29 @@ function status(noteId, cookie, payload, options = {}) {
     body: options.raw === undefined ? JSON.stringify(payload) : options.raw,
   }), editContext(noteId));
 }
+function recovery(cookie,commandId){
+  return EDIT_RECOVERY(new Request("http://localhost:3001/api/target-staging/notes/edit-recovery",{
+    method:"POST",headers:{"content-type":"application/json","x-lumi-target-protocol":"1",
+      origin:"http://localhost:3001",...(cookie?{cookie}:{}),"x-forwarded-for":"10.9.0.28"},
+    body:JSON.stringify({commandId}),
+  }));
+}
+
+test("content-free recovery proves only a current actor's authorized committed note edit",async()=>{
+  const fx=fixture();
+  const bob=login(fx,"bob"),carol=login(fx,"carol");
+  const preview=await authorizedEditPreview("shared",bob);
+  const command={...preview,commandId:randomUUID(),title:"Recovered",body:"Private content"};
+  assert.deepEqual(await (await recovery(bob,command.commandId)).json(),{status:"not_recorded"});
+  assert.equal((await edit("shared",bob,command)).status,200);
+  assert.deepEqual(await (await recovery(bob,command.commandId)).json(),{status:"committed"});
+  assert.deepEqual(await (await recovery(ownerCookie(),command.commandId)).json(),{status:"not_recorded"});
+  assert.deepEqual(await (await recovery(carol,command.commandId)).json(),{status:"not_recorded"});
+  const db=new DatabaseSync(fx.stage.databasePath);
+  db.prepare("DELETE FROM area_members WHERE area_id='team-area' AND user_id='bob'").run();
+  db.close();
+  assert.equal((await recovery(bob,command.commandId)).status,404);
+});
 
 test("note command reconciliation distinguishes missing, committed and conflicting receipts without writing", async () => {
   const fx = fixture();

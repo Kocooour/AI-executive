@@ -92,3 +92,13 @@ export async function statusNoteEdit(noteId:string,command:EditCommand,signal:Ab
   return record(v)&&exact(v,["status"])&&(v.status==="committed"||v.status==="not_recorded")
     ?{ok:true,value:v.status}:{ok:false,reason:"invalid-response"};
 }
+/** Content-free recovery after reload; committed is the only unlock proof. */
+export async function recoverNoteEdit(commandId:string,signal:AbortSignal,
+  fetchImpl:typeof fetch=fetch):Promise<Result<"committed"|"not_recorded">>{
+  if(!uuid.test(commandId))return {ok:false,reason:"invalid-response"};
+  const result=await request("/api/target-staging/notes/edit-recovery","POST",{commandId},signal,fetchImpl);
+  if(result.ok===false)return result;
+  const v=result.value;
+  return record(v)&&exact(v,["status"])&&(v.status==="committed"||v.status==="not_recorded")
+    ?{ok:true,value:v.status}:{ok:false,reason:"invalid-response"};
+}
