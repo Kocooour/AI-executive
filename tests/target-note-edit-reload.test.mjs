@@ -7,6 +7,9 @@ import {
 import {
   recoverNoteEditAfterReload,NOTE_EDIT_RECOVERY_TIMEOUT_MS,
 } from "../lib/target-note-reload-status-client.ts";
+import {
+  forgetTrackedNoteEdit,runTrackedNoteEdit,subscribeTrackedNoteEdit,trackedNoteEdit,
+} from "../lib/target-note-edit-recovery.ts";
 
 const A="A".repeat(43),B="B".repeat(43);
 const id="4c977f1a-f9e8-4b6c-b2a8-53818c6c471e";
@@ -20,6 +23,128 @@ const storage={
 Object.defineProperty(globalThis,"sessionStorage",{configurable:true,value:storage});
 const headers={"content-type":"application/json","cache-control":"no-store"};
 const reply=(value,status=200)=>new Response(JSON.stringify(value),{status,headers});
+
+const noteId="note-in-edit";
+const command={
+  commandId:id,expectedRevision:"a".repeat(64),
+  restoreGeneration:"88d20aae-362c-4e28-a547-90ec9db5a31e",
+  writeAreaId:"private-area",title:"Private title",body:"Private content",
+};
+function fakeRuntime(){
+  let generation=A,known=true;
+  const disposables=new Set();
+  const disposeAll=()=>{
+    const entries=[...disposables];
+    disposables.clear();
+    for(const item of entries)item.dispose();
+  };
+  return {
+    generation:()=>generation,
+    known:()=>known,
+    register:(item)=>{
+      if(!known){item.dispose();return ()=>{};}
+      disposables.add(item);
+      return ()=>disposables.delete(item);
+    },
+    rotate:(value)=>{generation=value;disposeAll();},
+    signOut:()=>{known=false;generation="unknown-revoked";disposeAll();},
+  };
+}
+
+test("detached editor: first definitive 409 clears its tab marker in runtime coordinator",async()=>{
+  data.clear();
+  const runtime=fakeRuntime();
+  assert.equal(reserveNoteEditReload(A,id),true);
+  let finish;
+  const detach=subscribeTrackedNoteEdit(runtime,A,noteId,()=>{});
+  const flight=runTrackedNoteEdit(runtime,A,noteId,command,
+    async()=>await new Promise(resolve=>{finish=resolve;}));
+  await Promise.resolve();
+  assert.equal(typeof finish,"function");
+  assert.deepEqual(noteEditReloadMarker(A),{kind:"blocked",commandId:id});
+  detach(); // original editor gone BEFORE the server's 409
+  finish({outcome:"conflict"});
+  assert.deepEqual(await flight,{outcome:"conflict"});
+  assert.equal(trackedNoteEdit(runtime,A,noteId).phase,"conflict");
+  assert.deepEqual(noteEditReloadMarker(A),{kind:"clear"},
+    "coordinator must clear marker without any mounted inspector");
+  forgetTrackedNoteEdit(runtime,A,noteId); // user discards stale conflict UI
+  assert.equal(reserveNoteEditReload(A,other),true,
+    "a definitive first rejection must not block editing another note");
+  const next={...command,commandId:other};
+  assert.deepEqual(await runTrackedNoteEdit(runtime,A,"another-note",next,
+    async()=>({outcome:"saved",replayed:false})),{outcome:"saved",replayed:false});
+  assert.deepEqual(noteEditReloadMarker(A),{kind:"clear"});
+});
+
+test("detached editor: first successful PATCH also clears only its exact tab marker",async()=>{
+  data.clear();
+  const runtime=fakeRuntime();
+  assert.equal(reserveNoteEditReload(A,id),true);
+  let finish;
+  const detach=subscribeTrackedNoteEdit(runtime,A,noteId,()=>{});
+  const flight=runTrackedNoteEdit(runtime,A,noteId,command,
+    async()=>await new Promise(resolve=>{finish=resolve;}));
+  await Promise.resolve();
+  detach();
+  finish({outcome:"saved",replayed:false});
+  assert.deepEqual(await flight,{outcome:"saved",replayed:false});
+  assert.deepEqual(noteEditReloadMarker(A),{kind:"clear"});
+});
+
+test("uncertain first PATCH then retry conflict leaves UUID barrier intact after unmount",async()=>{
+  data.clear();
+  const runtime=fakeRuntime();
+  assert.equal(reserveNoteEditReload(A,id),true);
+  assert.deepEqual(await runTrackedNoteEdit(runtime,A,noteId,command,
+    async()=>({outcome:"uncertain"})),{outcome:"uncertain"});
+  const detach=subscribeTrackedNoteEdit(runtime,A,noteId,()=>{});
+  detach();
+  assert.deepEqual(await runTrackedNoteEdit(runtime,A,noteId,command,
+    async()=>({outcome:"conflict"})),{outcome:"conflict"});
+  assert.equal(trackedNoteEdit(runtime,A,noteId).phase,"conflict");
+  assert.deepEqual(noteEditReloadMarker(A),{kind:"blocked",commandId:id},
+    "409 after uncertain PATCH does not prove that the earlier write failed");
+  forgetTrackedNoteEdit(runtime,A,noteId);
+  assert.equal(reserveNoteEditReload(A,other),false);
+  data.clear();
+});
+
+test("timeout then late first-PATCH conflict never unlocks a new command",async()=>{
+  data.clear();
+  const runtime=fakeRuntime();
+  assert.equal(reserveNoteEditReload(A,id),true);
+  let finish;
+  const first=runTrackedNoteEdit(runtime,A,noteId,command,
+    async()=>await new Promise(resolve=>{finish=resolve;}),12);
+  await Promise.resolve();
+  assert.deepEqual(await first,{outcome:"uncertain"});
+  finish({outcome:"conflict"}); // arrives after the timeout's uncertain result
+  await Promise.resolve();
+  assert.deepEqual(noteEditReloadMarker(A),{kind:"blocked",commandId:id});
+  assert.deepEqual(await runTrackedNoteEdit(runtime,A,noteId,command,
+    async()=>({outcome:"conflict"})),{outcome:"conflict"});
+  assert.deepEqual(noteEditReloadMarker(A),{kind:"blocked",commandId:id});
+  data.clear();
+});
+
+test("revoked old runtime cannot erase a newer generation's marker",async()=>{
+  data.clear();
+  const runtime=fakeRuntime();
+  assert.equal(reserveNoteEditReload(A,id),true);
+  let finish;
+  const old=runTrackedNoteEdit(runtime,A,noteId,command,
+    async()=>await new Promise(resolve=>{finish=resolve;}));
+  await Promise.resolve();
+  runtime.rotate(B); // old coordinator is disposed and request is aborted
+  assert.deepEqual(noteEditReloadMarker(B),{kind:"clear"});
+  assert.equal(reserveNoteEditReload(B,other),true);
+  finish({outcome:"saved",replayed:false});
+  assert.deepEqual(await old,{outcome:"denied"});
+  await Promise.resolve();
+  assert.deepEqual(noteEditReloadMarker(B),{kind:"blocked",commandId:other});
+  data.clear();
+});
 
 test("only UUID and server generation survive a simulated reload; changed UUID cannot replace it",()=>{
   data.clear();
@@ -131,7 +256,9 @@ test("UI wiring retains main shared detail and unrelated reads while only writes
   assert.match(editor,/reserveNoteEditReload\(boundGeneration\.current,command\.commandId\)/);
   assert.match(editor,/recoverNoteEditAfterReload\(marker\.commandId,signal\.signal\)/);
   assert.match(editor,/confirmNoteEditReload\(boundGeneration\.current,marker\.commandId\)/);
-  assert.match(editor,/rejectFreshNoteEditReload/);
-  assert.match(editor,/ambiguousCommands/);
+  assert.match(recovery,/const firstDispatch=existing===undefined/);
+  assert.match(recovery,/rejectFreshNoteEditReload\(generation,entry\.command\.commandId\)/);
+  assert.doesNotMatch(editor,/freshCommand|ambiguousCommands|rejectFreshNoteEditReload/,
+    "first result classification must outlive the unmounted editor");
   assert.doesNotMatch(panel,/noteEditReloadMarker/,"read-only detail is independent of write recovery");
 });
