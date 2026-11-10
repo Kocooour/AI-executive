@@ -53,6 +53,7 @@ import {
   readPreflightedPersonalWhenPage,
   readPreflightedMyPlanDayTaskPage,
   readPreflightedAttentionCandidatePage,readPreflightedStoreSnapshot,
+  readPreflightedPrivateNoteAreaTargets,
   type TargetAttentionProfilePage,
   readPreflightedMyPlanTwoDayTaskPage,
   readPreflightedGlobalTaskPage,
@@ -73,7 +74,7 @@ import {
   readPreflightedAuthorizedNoteSync,
 } from "./target-task-staging-reader";
 import type { TargetStagingReadStore, TargetPreflightedPrivateProjectDetail, TargetPreflightedSharedTaskDetail,
-  TargetPreflightedPersonalTaskDetail } from "./target-task-staging-reader";
+  TargetPreflightedPersonalTaskDetail,TargetPrivateNoteAreaTargets } from "./target-task-staging-reader";
 import type { TargetPrivateProjectPage } from "./target-project-read-model";
 import type { TargetAuthorizedProjectTasksResult } from "./target-project-task-read-model";
 import type { TargetAuthorizedStructuralRelationsResult } from "./target-project-structural-relations";
@@ -401,6 +402,17 @@ export class TargetStagingSessionAuthority {
     const signature = createHmac("sha256", this.#key).update(TOKEN_DOMAIN)
       .update(payload).digest("base64url");
     return { signingKey: this.#key, sessionToken: `${payload}.${signature}` };
+  }
+
+  /** R3-CAPTURE-1: signed actor + pinned private writable Area witnesses.
+   * Live release guard belongs to the HTTP route; never trust scope alone. */
+  readPrivateNoteAreaTargets(actorUserId:string):TargetPrivateNoteAreaTargets|null{
+    if(this.#closed)return null;
+    try{
+      const credential=this.#oneShotReadCredential(actorUserId);
+      return credential
+        ?readPreflightedPrivateNoteAreaTargets(this.#store,credential):null;
+    }catch{return null;}
   }
 
   /** R2-ID.2b: one shared / my-plan page plus its read-linearization record,

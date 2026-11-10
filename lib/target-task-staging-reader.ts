@@ -44,7 +44,7 @@ import {readAuthorizedMyPlanDayTaskPage} from "./target-my-plan-day-task-read-mo
 import {readAuthorizedAttentionCandidatePage} from "./target-attention-read-model";
 import {readTargetAttentionProfileZone} from "./target-attention-profile-zone";
 import type {AttentionCandidatePage,AttentionAreaFilter,AttentionView} from "./target-attention-read-model";
-import {readAuthorizedGlobalTaskPage} from "./target-global-task-read-model";
+import {eligibleGlobalTaskAreas,readAuthorizedGlobalTaskPage} from "./target-global-task-read-model";
 import type {TargetGlobalTaskPage,TargetGlobalTaskScope} from "./target-global-task-read-model";
 import {readAuthorizedGlobalProjectPage} from "./target-global-project-read-model";
 import type {TargetGlobalProjectPage} from "./target-global-project-read-model";
@@ -262,6 +262,41 @@ function withPreflightedStore<T>(
   } catch {
     return denied();
   }
+}
+
+/** R3-CAPTURE-1: the exact private Areas writable by the signed actor.
+ * No client area/scope/actor input. All rows and Area ACL witnesses come
+ * from ONE preflighted pinned snapshot; HTTP must verify the witness LIVE.
+ * This is a real read consumer for Quick Capture, not permission to create. */
+export type TargetPrivateNoteAreaTargets={
+  areas:{id:string;title:string}[];
+  linearization:TargetReadLinearization;
+};
+export function readPreflightedPrivateNoteAreaTargets(
+  store:TargetStagingReadStore,access:TargetStagingReadCredential,
+):TargetPrivateNoteAreaTargets|null{
+  return withPreflightedStore<TargetPrivateNoteAreaTargets|null>(
+    store,()=>null,(db,preflight)=>inReadSnapshot(db,()=>{
+      if(!preflight(db))return null;
+      const actor=verifiedActor(db,access);
+      if(!actor)return null;
+      const witnesses=eligibleGlobalTaskAreas(db,actor,"personal");
+      if(!witnesses||witnesses.some(a=>
+        a.areaKind!=="private"||a.access!=="private-owner"))return null;
+      const getTitle=db.prepare("SELECT title FROM areas WHERE id=? AND kind='private' AND owner_user_id=?");
+      const areas:{id:string;title:string}[]=[];
+      for(const witness of witnesses){
+        const row=getTitle.get(witness.areaId,actor) as {title:unknown}|undefined;
+        if(!row||typeof row.title!=="string"||
+          row.title.trim().length===0||!row.title.isWellFormed()||
+          Buffer.byteLength(row.title,"utf8")>4096||
+          /[\u0000-\u001f\u007f]/u.test(row.title))return null;
+        areas.push({id:witness.areaId,title:row.title});
+      }
+      return {areas,linearization:{actorUserId:actor,
+        areas:witnesses.map(a=>({areaId:a.areaId,areaKind:a.areaKind,
+          access:a.access,policyRevision:a.policyRevision}))}};
+    },()=>null));
 }
 
 /** Request inputs contain only the selected scope and pagination, never an actor. */
