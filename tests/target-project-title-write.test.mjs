@@ -53,7 +53,15 @@ test('project rename enforces role and CAS, persists audit, supports retry, and 
  assert.deepEqual(inspectIsolatedTargetStore({...store,mode:'r2-model'}), {ok:true,mode:'r2-model',issues:[]});
  const bob=cookie('bob'), carol=cookie('carol'), dave=cookie('dave');
  let response=await preview(new Request(base+'title',{headers:headers(bob)}),ctx);assert.equal(response.status,200);const page=await response.json();
- assert.deepEqual(Object.keys(page).sort(),['restoreGeneration','snapshotRevision','writeAreaId']);
+ assert.deepEqual(Object.keys(page).sort(),['principalBinding','restoreGeneration','snapshotRevision','writeAreaId']);
+ assert.match(page.principalBinding,/^[A-Za-z0-9_-]{43}$/);
+ const sameActor=await preview(new Request(base+'title',{headers:headers(cookie('bob'))}),ctx);
+ assert.equal((await sameActor.json()).principalBinding,page.principalBinding,
+   'fresh authenticated session for the same actor must get the same scoped binding');
+ assert.equal((await preview(new Request(base+'title',{headers:headers(carol)}),ctx)).status,404,
+   'viewer cannot obtain a writer identity binding');
+ assert.equal((await preview(new Request(base+'title',{headers:headers(dave)}),ctx)).status,404,
+   'outsider cannot obtain a writer identity binding');
  assert.equal(page.writeAreaId,'team-area');assert.equal(page.restoreGeneration,stage.restoreGeneration);
  const cmd={commandId:randomUUID(),title:'Updated',expectedRevision:page.snapshotRevision,writeAreaId:page.writeAreaId,restoreGeneration:page.restoreGeneration};
  assert.equal((await write(carol,cmd)).status,404); assert.equal((await write(dave,cmd)).status,404);

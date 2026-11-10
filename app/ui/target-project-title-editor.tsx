@@ -130,7 +130,10 @@ export default function TargetProjectTitleEditor({project,language,onCommitted,o
    if(!retry&&(project.title!==d.original||project.areaId!==d.preview.writeAreaId)){setMode({kind:'draft',draft:{...d,phase:'conflict'}});return;}
    if(!retry&&d.title===project.title){forgetProjectTitleDraft(runtime,bound.current,project.id);setMode({kind:'idle'});return;}
    if(!retry&&!validProjectTitleEditText(d.title)){setMessage(copy.invalid);return;}
-   const command=d.command??{...d.preview,commandId:crypto.randomUUID(),title:d.title};
+   // The server-only principal comparison proof is NEVER part of a mutation body.
+   const command=d.command??{expectedRevision:d.preview.expectedRevision,
+     writeAreaId:d.preview.writeAreaId,restoreGeneration:d.preview.restoreGeneration,
+     commandId:crypto.randomUUID(),title:d.title};
    setMode({kind:'draft',draft:{...d,command,phase:'saving'}});setMessage('');
    void runTrackedProjectTitleEdit(runtime,bound.current,project.id,command);
    forgetProjectTitleDraft(runtime,bound.current,project.id);

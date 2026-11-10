@@ -9,6 +9,7 @@ import { writeProjectTitleInChild } from "../../../../../../lib/target-staging-t
 import { targetProtocolRefusal, legacySnapshotRefusal, resyncRequiredResponse, writeAreaMismatchResponse } from "../../../../../../lib/target-staging-write-contract";
 import { validProjectTitleCommand } from "../../../../../../lib/target-project-title-writer";
 import { isReadableStagingProjectId } from "../../../../../../lib/target-project-id";
+import { projectTitlePrincipalBinding } from "../../../../../../lib/target-project-title-identity";
 import { readStagingProjectTitlePreviewInChild, type StagingPersonalReadConfig } from "../../../../../../lib/target-staging-read-process";
 
 export const runtime = "nodejs";
@@ -71,8 +72,13 @@ export async function GET(request: Request, context: { params: Promise<{ project
   if (!result) return answer(503, "Staging unavailable");
   const access = result.page.linearization.areas[0]?.access;
   if (access !== "private-owner" && access !== "editor" && access !== "admin") return answer(404, "Not found");
+  // Only release a same-actor comparison proof AFTER verified live Area ACL.
+  // This opaque proof is not an authorization credential and is never read by PATCH.
+  const principalBinding=projectTitlePrincipalBinding(
+    result.page.linearization.actorUserId,projectId,base.expectedRestoreGeneration);
+  if(!principalBinding)return answer(503,"Staging unavailable");
   return Response.json({snapshotRevision:result.page.revision,writeAreaId:result.page.project.areaId,
-    restoreGeneration:base.expectedRestoreGeneration}, {headers});
+    restoreGeneration:base.expectedRestoreGeneration,principalBinding}, {headers});
   } catch (error) {
     logStagingFailure("target-staging/projects/[projectId]/title", "preview_exception", error);
     return answer(503, "Staging unavailable");

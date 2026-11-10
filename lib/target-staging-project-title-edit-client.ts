@@ -4,9 +4,9 @@
 import {readableProjectId} from "./target-staging-project-tasks-client";
 
 export type ProjectTitleEditPreview={
-  expectedRevision:string;writeAreaId:string;restoreGeneration:string;
+  expectedRevision:string;writeAreaId:string;restoreGeneration:string;principalBinding:string;
 };
-export type ProjectTitleEditCommand=ProjectTitleEditPreview&{
+export type ProjectTitleEditCommand=Omit<ProjectTitleEditPreview,"principalBinding">&{
   commandId:string;title:string;
 };
 export type ProjectTitleEditFailure="denied"|"conflict"|"unavailable"|"offline"|"invalid-response";
@@ -17,6 +17,7 @@ export type ProjectTitleEditSaveResult=
 
 const uuid=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const hex=/^[0-9a-f]{64}$/;
+const binding=/^[A-Za-z0-9_-]{43}$/;
 const area=/^[A-Za-z0-9_.:@-]{1,120}$/;
 const encoder=new TextEncoder();
 const record=(v:unknown):v is Record<string,unknown> =>
@@ -30,12 +31,14 @@ export function validProjectTitleEditText(title:string):boolean{
 }
 export function parseProjectTitleEditPreview(value:unknown):ProjectTitleEditPreview|null{
   if(!record(value)||Object.keys(value).sort().join(",")!==
-    "restoreGeneration,snapshotRevision,writeAreaId")return null;
+    "principalBinding,restoreGeneration,snapshotRevision,writeAreaId")return null;
   if(typeof value.snapshotRevision!=="string"||!hex.test(value.snapshotRevision)||
     typeof value.restoreGeneration!=="string"||!uuid.test(value.restoreGeneration)||
-    !(typeof value.writeAreaId==="string"&&area.test(value.writeAreaId)))return null;
+    !(typeof value.writeAreaId==="string"&&area.test(value.writeAreaId))||
+    typeof value.principalBinding!=="string"||!binding.test(value.principalBinding))return null;
   return {expectedRevision:value.snapshotRevision,
-    restoreGeneration:value.restoreGeneration,writeAreaId:value.writeAreaId};
+    restoreGeneration:value.restoreGeneration,writeAreaId:value.writeAreaId,
+    principalBinding:value.principalBinding};
 }
 export function validProjectTitleEditCommand(value:unknown):value is ProjectTitleEditCommand{
   if(!record(value)||Object.keys(value).sort().join(",")!==
