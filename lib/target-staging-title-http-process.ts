@@ -205,6 +205,23 @@ export async function readStagingNoteEditCommandStatusInChild(
   return parseStatus(value);
 }
 
+/** Read-only content-free receipt lookup after a tab reload. */
+export async function readStagingNoteEditRecoveryInChild(
+  config:StagingPersonalReadConfig,commandId:string,
+):Promise<import("./target-note-command-status").TargetNoteEditRecovery|null>{
+  const value=await run(config,"target-staging-note-recovery-child.mjs",JSON.stringify({commandId}));
+  if(!value||typeof value!=="object"||Array.isArray(value))return null;
+  const v=value as Record<string,unknown>;
+  if(v.ok===true&&v.status==="not_recorded"&&Object.keys(v).sort().join(",")==="ok,status")
+    return {ok:true,status:"not_recorded"};
+  if(v.ok===true&&v.status==="committed"&&typeof v.noteId==="string"&&
+     typeof v.areaId==="string"&&Object.keys(v).sort().join(",")==="areaId,noteId,ok,status")
+    return {ok:true,status:"committed",noteId:v.noteId,areaId:v.areaId};
+  if(v.ok===false&&v.reason==="unavailable"&&Object.keys(v).sort().join(",")==="ok,reason")
+    return {ok:false,reason:"unavailable"};
+  return null;
+}
+
 /** R2d.2c.2d: bounded staging-only note edit child. All content travels through stdin. */
 export async function writeStagingNoteInChild(
   config: StagingPersonalReadConfig,
