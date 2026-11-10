@@ -186,3 +186,19 @@ test("validation: title and note rules mirror the routes; invalid commands are n
   assert.equal(buildNoteEditCommand(NOTE,"T","b\0",ctx()),null);
   assert.equal(buildTaskDeleteCommand(TASK,{...ctx(),writeAreaId:"bad area"}),null);
 });
+
+test("note Area IDs follow the canonical 512-byte Unicode contract, unlike temporal task IDs",async()=>{
+  const noteArea="rodina péče";
+  const server=fakeServer({[NOTE_PREFLIGHT]:()=>json(ctx({writeAreaId:noteArea}))});
+  const result=await readNoteWriteContext(NOTE,noteArea,server.fetchFake);
+  assert.equal(result.ok,true);
+  assert.equal(server.count(NOTE_PREFLIGHT),1);
+  assert.equal(validWriteContext(ctx({writeAreaId:noteArea}),"note"),true);
+  assert.equal(validWriteContext(ctx({writeAreaId:noteArea})),false);
+  assert.ok(buildNoteEditCommand(NOTE,"Title","Body",ctx({writeAreaId:noteArea})));
+  assert.ok(buildNoteDeleteCommand(NOTE,ctx({writeAreaId:noteArea})));
+  assert.equal((await readTaskWriteContext(TASK,noteArea,server.fetchFake)).reason,"invalid-request");
+  for(const bad of [" leading","trailing ",".","..","x".repeat(513)]){
+    assert.equal((await readNoteWriteContext(NOTE,bad,server.fetchFake)).reason,"invalid-request");
+  }
+});
