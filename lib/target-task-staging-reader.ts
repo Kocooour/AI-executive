@@ -12,7 +12,7 @@
 import { closeSync, constants, fstatSync, lstatSync, openSync, readdirSync, realpathSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { TARGET_STORE_FILENAME, verifyExistingTargetStagingPath } from "./target-store-bootstrap";
+import { TARGET_STORE_FILENAME, TARGET_STORE_SCHEMA_VERSION, verifyExistingTargetStagingPath } from "./target-store-bootstrap";
 import { inspectIsolatedTargetStore } from "./target-store-preflight";
 import { checkTargetStagingJournal, warmTargetStagingJournal } from "./target-staging-anchor-journal";
 import { withPinnedTargetSnapshot } from "./target-store-read-snapshot";
@@ -1250,6 +1250,21 @@ export function readPreflightedAuthorizedProjectTasks(
         });
       }, () => null),
   );
+}
+
+/** Project title preview must never offer a token on the older read-compatible schema. */
+export function readPreflightedProjectTitlePreview(
+  store: TargetStagingReadStore, access: TargetStagingReadCredential, projectId: string,
+): TargetAuthorizedProjectTasksResult | null {
+  return withPreflightedStore<TargetAuthorizedProjectTasksResult | null>(store, () => null, (db, preflight) =>
+    inReadSnapshot<TargetAuthorizedProjectTasksResult | null>(db, () => {
+      if (!preflight(db)) return null;
+      const actorUserId = verifiedActor(db, access);
+      const version = db.prepare("SELECT value FROM metadata WHERE key='schema_version'").get() as {value:string} | undefined;
+      if (!actorUserId || version?.value !== String(TARGET_STORE_SCHEMA_VERSION)) return null;
+      return readAuthorizedProjectTasksPage(db, { actorUserId, projectId, limit:1, offset:0,
+        restoreGeneration:store.expectedRestoreGeneration });
+    }, () => null));
 }
 
 /** R2d structural project links on ONE authorized, preflighted snapshot. */

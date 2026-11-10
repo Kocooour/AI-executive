@@ -55,7 +55,10 @@ import { bootstrapTargetStagingWitness } from "./target-staging-anchor-witness";
 // crash. An explicit in-flight marker is committed BEFORE calling the sender;
 // only an interrupted in-flight send becomes unknown (never retried).
 // As with other schema revisions, old staging stores are intentionally rejected.
-export const TARGET_STORE_SCHEMA_VERSION = 25;
+export const TARGET_STORE_SCHEMA_VERSION = 26;
+export const TARGET_STORE_LEGACY_SCHEMA_VERSION = 25;
+export const isSupportedTargetSchemaVersion = (value: unknown): boolean =>
+  value === String(TARGET_STORE_SCHEMA_VERSION) || value === String(TARGET_STORE_LEGACY_SCHEMA_VERSION);
 /** Capacities of the v23 push foundation in a fresh isolated store. */
 export const TARGET_STAGING_MAX_PUSH_TARGETS = 4096;
 export const TARGET_STAGING_MAX_PUSH_TARGETS_PER_USER = 64;
@@ -210,7 +213,7 @@ export function verifyTargetStagingPath(stagingDirectory: string): string {
   return destination;
 }
 
-export const TARGET_SCHEMA_SQL = `
+export const TARGET_SCHEMA_V25_SQL = `
 -- Every table whose invariants rely on triggers is WITHOUT ROWID (or has an
 -- INTEGER PRIMARY KEY alias guarded in BEFORE INSERT): INSERT OR REPLACE with an
 -- explicit rowid would otherwise delete a different row without DELETE triggers.
@@ -1890,6 +1893,36 @@ CREATE TRIGGER restore_superseded_sessions_capacity BEFORE INSERT ON restore_sup
 WHEN (SELECT COUNT(*) FROM restore_superseded_sessions) >= ${TARGET_STAGING_SUPERSEDED_SESSIONS_MAX}
 BEGIN SELECT RAISE(ABORT, 'superseded session capacity reached'); END;
 `;
+
+// Project commands have their own immutable, content-free receipt ledger.  A
+// single row is both the receipt and audit event, committed with the change.
+export const TARGET_PROJECT_TITLE_SCHEMA_SQL = `
+CREATE TABLE project_title_audit (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  receipt_key TEXT NOT NULL UNIQUE CHECK(length(receipt_key)=64),
+  request_digest TEXT NOT NULL CHECK(length(request_digest)=64),
+  actor_user_id TEXT NOT NULL REFERENCES identities(id),
+  project_id TEXT NOT NULL,
+  area_id TEXT NOT NULL REFERENCES areas(id),
+  policy_revision INTEGER NOT NULL CHECK(typeof(policy_revision)='integer' AND policy_revision>=0),
+  revision_before INTEGER NOT NULL CHECK(typeof(revision_before)='integer' AND revision_before>=0),
+  revision_after INTEGER NOT NULL CHECK(typeof(revision_after)='integer' AND revision_after=revision_before+1),
+  expected_revision TEXT NOT NULL CHECK(length(expected_revision)=64),
+  restore_generation TEXT NOT NULL,
+  committed_at_ms INTEGER NOT NULL CHECK(typeof(committed_at_ms)='integer' AND committed_at_ms>0)
+);
+CREATE TRIGGER project_title_audit_no_update BEFORE UPDATE ON project_title_audit
+BEGIN SELECT RAISE(ABORT, 'audit events are immutable'); END;
+CREATE TRIGGER project_title_audit_no_delete BEFORE DELETE ON project_title_audit
+BEGIN SELECT RAISE(ABORT, 'audit events are immutable'); END;
+CREATE TRIGGER project_title_audit_replace_guard BEFORE INSERT ON project_title_audit
+WHEN EXISTS(SELECT 1 FROM project_title_audit WHERE id=NEW.id OR receipt_key=NEW.receipt_key)
+BEGIN SELECT RAISE(ABORT, 'audit replacement is forbidden'); END;
+CREATE TRIGGER project_title_audit_capacity BEFORE INSERT ON project_title_audit
+WHEN (SELECT COUNT(*) FROM project_title_audit) >= ${TARGET_STAGING_AUDIT_MAX_EVENTS}
+BEGIN SELECT RAISE(ABORT, 'audit capacity reached'); END;
+`;
+export const TARGET_SCHEMA_SQL = TARGET_SCHEMA_V25_SQL + TARGET_PROJECT_TITLE_SCHEMA_SQL;
 
 /**
  * Create a stage-only schema and initial private 'Nezařazeno' Area. Explicit caller

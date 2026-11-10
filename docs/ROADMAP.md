@@ -32,6 +32,8 @@
 
 **Otevřené brány R4:** inventura dat, zařízení a integrací, ověřená archivní záloha/restore a **výslovný souhlas s přesným rozsahem případného cutoveru/resetu**. Dále produkční audit/retence, AI bundle live HTTP guard až při zavedení provider routy, host/SSRF/VAPID politika před skutečným push, integrita write-route/receipts a release Browser E2E; viz [bezpečnostní matice](R2D-SECURITY-MATRIX.md#zbývající-brány-před-r3-a-r4). Legacy testovací data nestaví migraci na kritickou cestu, ale nezrušují inventuru ani souhlas.
 
+**Backendový krok R3-FE-4:** tento změnový soubor přidává default-off stagingový zápis názvu projektu a explicitní nedestruktivní upgrade v25 → v26 ([kontrakt a postup](R3-PROJECT-TITLE-BE.md)). Rozpracovaný editor hlavního UI je pevně vypnutý i při zapnutí jeho příznaku: runtime neumí bezpečně uchovat nevyřízený příkaz přes vypršení session a ověřit stejnou identitu po přihlášení. Integrované R3 QA, zbývající úpravy a R4 zůstávají otevřené.
+
 **Integrační stav:** #344 a #352 jsou sloučeny do `main`; detailní kontrakt [R3-FE-02-MY-PLAN.md](R3-FE-02-MY-PLAN.md) a původní implementační checkpointy jsou zachovány. Tato roadmapa pouze upřesňuje navazující priority.
 
 ### Řízení iterací a exit H1-synthetic — 2026-11-09
@@ -42,7 +44,7 @@ Platí [pravidla milníků](../AGENTS.md#outcome-based-milestone-governance-bind
 
 **H1-real.0 — nový přípravný milník (zahájen 2026-11-10, po výslovném požadavku „pokračuj další HW iterací“):** Nejprve **readiness a default-deny vstupní hranice**, ne opět další syntetické importní demo. [Bezpečnostní kontrakt](HUMANWIKI-H1-REAL-ENTRY.md). **Akceptační krok této iterace:** nová funkce `denyHumanWikiH1RealImport` vždy odmítne volání *před čtením předaného requestu*, a to i při klientských `verified=true` a zapnuté env proměnné; metadata-only CLI vypíše šest nesplněných důkazů bez čtení soukromých souborů. **Nyní je napojena na skutečný deny-only `POST /api/humanwiki/import` handler**, který vždy vrací `404` bez čtení těla požadavku; integrační testy ověřují přístup k `Request` a falešné klientské souhlasy. Handler nesmí parsovat ani uložit upload, ale Next.js/runtime může převzít část přenosu před jeho zavoláním. To stále není importér ani důkaz o povolení reálné ingestace; před přidáním povolovací větve musí být odděleně ověřena identita, Area ACL, souhlas a nezávislý witness. Rozpočet přípravy **1–3 PR**; její úspěch není dokončením H1-real ani povolením uploadu. **Stav: deny-only serverová trasa a testy v PR k review, `real_import_enabled=false`**, další krok bude skutečný backendový ověřovací řetězec identity/Area ACL a evidence zdrojového souhlasu + nezávislého svědka, vyžadující oddělená bezpečnostní review a výslovný souhlas vlastníka před prvním reálným exportem.
 
-**R3-FE-4 + integrované R3 QA** = další milník, rozpočet 1–3 PR, akceptace: průchozí tok seznam → autorizovaný detail/úprava → zpět včetně offline/revokace.
+**R3-FE-4 + integrované R3 QA** = další milník, rozpočet 1–3 PR, akceptace: průchozí tok seznam → autorizovaný detail/úprava → zpět včetně offline/revokace. **Rozhodnutí vlastníka 2026-11-10:** rozšířit původní rozpočet o jeden PR pro autorizované přejmenování projektu v hlavním UI včetně bezpečného backendu a obnovy nejistého zápisu. Zbývající části milníku ani release gate tím nejsou uzavřeny.
 
 ### HumanWiki — Context Bootstrap & Continuous Learning (přidáno 2026-11-08)
 
