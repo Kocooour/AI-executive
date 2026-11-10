@@ -88,9 +88,11 @@ test("signed fresh external checkpoint matches a content-free local head, never 
     assert.equal(result.withdrawalComplete,false);
     assert.equal(result.claimsCreated,0);
     assert.equal(seen.length,1);
-    assert.deepEqual(Object.keys(seen[0]).sort(),["nonce","registryId"]);
+    assert.deepEqual(Object.keys(seen[0]).sort(),["nonce","registryId","signal"]);
     assert.equal(seen[0].registryId,registryId);
     assert.match(seen[0].nonce,/^[a-zA-Z0-9_-]{43}$/);
+    assert.ok(seen[0].signal instanceof AbortSignal);
+    assert.equal(seen[0].signal.aborted,false);
     assert.equal(JSON.stringify(result).includes(privateScope.ownerUserId),false);
     assert.equal(JSON.stringify(result).includes(privateScope.privateAreaId),false);
     assert.throws(()=>denyHumanWikiH1RealImport({},{}),HumanWikiH1RealEntryBlockedError);
@@ -183,5 +185,61 @@ test("empty ledger can be attested but still has no import or independent witnes
     assert.equal(result.ok,true);
     assert.equal(result.importAuthorized,false);
     assert.equal(result.independentWitnessVerified,false);
+  });
+});
+
+test("forged key-options and prototype-spoofed KeyObjects cannot authenticate a receipt", async () => {
+  await fixture(async ({db}) => {
+    const current = head(db);
+    const {publicKey:attackerPublic,privateKey:attackerPrivate} =
+      generateKeyPairSync("ed25519");
+    const forgeReceipt = ({registryId,nonce}) =>
+      receipt(registryId,nonce,current,attackerPrivate);
+    let invoked=0;
+    const provider = args => {invoked++;return forgeReceipt(args);};
+    const duckTyped = {
+      type:"public",asymmetricKeyType:"ed25519",key:attackerPublic,
+    };
+    denied(await verifyHumanWikiFreshWitnessPreflight({
+      ...options(db,provider),witnessPublicKey:duckTyped,
+    }));
+    // Object.create can make instanceof KeyObject true without a native handle.
+    const prototypeSpoof = Object.create(Object.getPrototypeOf(attackerPublic));
+    Object.defineProperties(prototypeSpoof,{
+      type:{value:"public"},asymmetricKeyType:{value:"ed25519"},
+      key:{value:attackerPublic},
+    });
+    denied(await verifyHumanWikiFreshWitnessPreflight({
+      ...options(db,provider),witnessPublicKey:prototypeSpoof,
+    }));
+    // Reject before attempting any remote I/O: neither fake key is pinned.
+    assert.equal(invoked,0);
+    denied(await verifyHumanWikiFreshWitnessPreflight({
+      ...options(db,provider),witnessPublicKey:attackerPrivate,
+    }));
+  });
+});
+
+test("deadline aborts cooperative unfinished witness I/O and fails closed", async () => {
+  await fixture(async ({db}) => {
+    let receivedSignal;
+    let abortObserved=false;
+    let callbackStarted=false;
+    const result=await verifyHumanWikiFreshWitnessPreflight(options(db,({signal})=>{
+      callbackStarted=true;
+      receivedSignal=signal;
+      return new Promise((_,reject)=>{
+        signal.addEventListener("abort",()=>{
+          abortObserved=true;
+          reject(signal.reason);
+        },{once:true});
+      });
+    }));
+    denied(result);
+    assert.equal(callbackStarted,true);
+    assert.ok(receivedSignal instanceof AbortSignal);
+    assert.equal(receivedSignal.aborted,true);
+    assert.equal(abortObserved,true);
+    assert.match(String(receivedSignal.reason),/witness_timeout/);
   });
 });
