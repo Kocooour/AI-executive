@@ -109,11 +109,13 @@ export function LumiAppRoot({ targetMyPlan, targetScopes, targetDetails, targetN
     setAreaChooserOpen(false);
     window.requestAnimationFrame(()=>{
       const opener=areaChooserOpener.current;
-      const candidates=document.querySelectorAll<HTMLElement>(
-        '[data-target-private-capture-fab]:not([disabled]), [data-testid="target-private-area-open"]:not([disabled])');
       const focusable=(element:HTMLElement)=>element.isConnected&&
         element.getClientRects().length>0;
-      const fallback=Array.from(candidates).find(focusable);
+      const fabCandidates=document.querySelectorAll<HTMLElement>(
+        '[data-target-private-capture-fab]:not([disabled])');
+      const fallback=Array.from(fabCandidates).find(focusable) ??
+        Array.from(document.querySelectorAll<HTMLElement>(
+          '[data-testid="target-private-area-open"]:not([disabled])')).find(focusable);
       if(opener&&focusable(opener))opener.focus();
       else fallback?.focus();
       areaChooserOpener.current=null;
