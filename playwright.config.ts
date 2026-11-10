@@ -44,6 +44,7 @@ const taskPreviewTest = process.env.LUMI_TASK_PREVIEW_E2E === "true";
 const notePreviewTest = process.env.LUMI_NOTE_PREVIEW_E2E === "true";
 const indexDetailPreviewTest = process.env.LUMI_INDEX_DETAIL_PREVIEW_E2E === "true";
 const focusFallbackTest = process.env.LUMI_TARGET_DETAIL_FOCUS_E2E === "true";
+const noteEditRecoveryTest = process.env.LUMI_TARGET_NOTE_EDIT_E2E === "true";
 
 export default defineConfig({
   testDir: "e2e",
@@ -109,6 +110,19 @@ export default defineConfig({
         AI_EXECUTIVE_TARGET_STAGING_HTTP_GLOBAL_NOTES_ENABLED: "true",
         AI_EXECUTIVE_TARGET_STAGING_HTTP_NOTES_ENABLED: "true",
         AI_EXECUTIVE_TARGET_UI_DETAILS_ENABLED: "true",
+      } : {}),
+      // Opt-in targeted real-React note editor recovery check with mocked
+      // server responses. No staging DB or production note is read/written.
+      ...(noteEditRecoveryTest ? {
+        AI_EXECUTIVE_TARGET_STAGING_HTTP_ENABLED: "true",
+        AI_EXECUTIVE_TARGET_UI_ENABLED: "true",
+        AI_EXECUTIVE_TARGET_UI_SCOPES_ENABLED: "true",
+        AI_EXECUTIVE_TARGET_STAGING_HTTP_GLOBAL_NOTES_ENABLED: "true",
+        AI_EXECUTIVE_TARGET_STAGING_HTTP_NOTES_ENABLED: "true",
+        AI_EXECUTIVE_TARGET_UI_DETAILS_ENABLED: "true",
+        AI_EXECUTIVE_TARGET_STAGING_HTTP_WRITE_ENABLED: "true",
+        AI_EXECUTIVE_TARGET_STAGING_HTTP_NOTES_WRITE_ENABLED: "true",
+        AI_EXECUTIVE_TARGET_UI_NOTE_EDIT_ENABLED: "true",
       } : {}),
       AI_EXECUTIVE_PASSWORD_HASH: passwordHash,
       AI_EXECUTIVE_SESSION_SECRET: sessionSecret,
