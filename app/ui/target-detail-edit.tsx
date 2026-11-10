@@ -271,13 +271,14 @@ function ConflictKept({api,kind,current}:{
 }
 
 /** Inline delete with an explicit confirm step; the safe choice (cancel) has the focus. */
-function DeleteControl<T extends TaskPreview|NotePreview>({api,label,confirmText,base,onDelete}:{
-  api:DetailEditApi;label:string;confirmText:string;base:T;onDelete:(base:T)=>void;
+function DeleteControl<T extends TaskPreview|NotePreview>({api,label,confirmText,base,revision,onDelete}:{
+  api:DetailEditApi;label:string;confirmText:string;base:T;revision:string|null;
+  onDelete:(base:T,revision:string|null)=>void;
 }){
   const {copy}=api;
   // Pin the item and confirmation wording at the moment the user starts confirming.
   // A background refresh must never substitute a newly changed item underneath this dialog.
-  const [confirmation,setConfirmation]=useState<{base:T;text:string}|null>(null);
+  const [confirmation,setConfirmation]=useState<{base:T;text:string;revision:string|null}|null>(null);
   const asking=confirmation!==null;
   const trigger=useRef<HTMLButtonElement|null>(null);
   const cancel=useRef<HTMLButtonElement|null>(null);
@@ -290,7 +291,7 @@ function DeleteControl<T extends TaskPreview|NotePreview>({api,label,confirmText
   const off=busy(api.state)||!api.online;
   if(confirmation===null)
     return <button type="button" ref={trigger} className="targetDetailEditDanger"
-      data-testid="target-detail-edit-delete" disabled={off} onClick={()=>setConfirmation({base,text:confirmText})}>{label}</button>;
+      data-testid="target-detail-edit-delete" disabled={off} onClick={()=>setConfirmation({base,text:confirmText,revision})}>{label}</button>;
   return <div role="group" aria-label={confirmation.text} className="targetDetailEditConfirm"
     data-testid="target-detail-edit-confirm" onKeyDown={escapeTo(close)}>
     <p>{confirmation.text}</p>
@@ -298,7 +299,9 @@ function DeleteControl<T extends TaskPreview|NotePreview>({api,label,confirmText
       <button type="button" ref={cancel} data-testid="target-detail-edit-confirm-cancel"
         onClick={close}>{copy.confirmCancel}</button>
       <button type="button" className="targetDetailEditDanger" data-testid="target-detail-edit-confirm-yes"
-        disabled={off} onClick={()=>{const approved=confirmation.base;setConfirmation(null);onDelete(approved);}}>{copy.confirmDelete}</button>
+        disabled={off} onClick={()=>{
+          const approved=confirmation;setConfirmation(null);onDelete(approved.base,approved.revision);
+        }}>{copy.confirmDelete}</button>
     </div>
   </div>;
 }
@@ -351,7 +354,9 @@ function TitleEditor({api,task}:{api:DetailEditApi;task:TaskPreview}){
   </form>;
 }
 
-export function TaskEdits({api,task}:{api:DetailEditApi;task:TaskPreview}){
+export function TaskEdits({api,task,expectedRevision}:{
+  api:DetailEditApi;task:TaskPreview;expectedRevision:string|null;
+}){
   const {copy,capability,abilities,state,online}=api;
   const flags={
     ...api.flags,
@@ -386,9 +391,11 @@ export function TaskEdits({api,task}:{api:DetailEditApi;task:TaskPreview}){
       {whenButton("today",copy.whenToday)}{whenButton("tomorrow",copy.whenTomorrow)}
     </div>}
     <ConflictKept api={api} kind="title" current={{title:task.title,body:""}}/>
-    {flags.taskDelete&&<DeleteControl api={api} label={copy.deleteTask}
-      confirmText={copy.confirmDeleteTask(task.title)} base={task}
-      onDelete={base=>api.run({kind:"taskDelete",taskId:base.id,areaId:base.areaId,base})}/>}
+    {flags.taskDelete&&expectedRevision!==null&&<DeleteControl api={api} label={copy.deleteTask}
+      confirmText={copy.confirmDeleteTask(task.title)} base={task} revision={expectedRevision}
+      onDelete={(base,baseRevision)=>{
+        if(baseRevision!==null)api.run({kind:"taskDelete",taskId:base.id,areaId:base.areaId,base,baseRevision});
+      }}/>}
     <Feedback api={api}/>
   </div>;
 }
@@ -467,7 +474,7 @@ export function NoteEdits({api,note}:{api:DetailEditApi;note:NotePreview}){
     {flags.noteEdit&&!(state.kind==="conflict"&&api.draft.kept)&&<div className="targetDetailEditRow"><NoteEditor api={api} note={note}/></div>}
     <ConflictKept api={api} kind="note" current={{title:note.title,body:note.body}}/>
     {flags.noteDelete&&<DeleteControl api={api} label={copy.deleteNote}
-      confirmText={copy.confirmDeleteNote(note.title)} base={note}
+      confirmText={copy.confirmDeleteNote(note.title)} base={note} revision={null}
       onDelete={base=>api.run({kind:"noteDelete",noteId:base.id,areaId:base.areaId,base})}/>}
     <Feedback api={api}/>
   </div>;
