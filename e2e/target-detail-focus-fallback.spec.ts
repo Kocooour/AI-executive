@@ -56,3 +56,55 @@ test('a slow list failure does not steal focus after closing the detail',async({
   await expect(page.getByTestId('target-scope-list')).toHaveAttribute('data-state','error');
   await expect(scope).toBeFocused();
 });
+
+for(const width of [390,1280])test(`return when a successful note-list refresh removes the opener at ${width}px`,async({page,context})=>{
+  await page.setViewportSize({width,height:844});
+  const headers={'content-type':'application/json','cache-control':'no-store'};
+  let openerStillAuthorized=true;
+  await page.route('**/api/target-staging/session',route=>route.fulfill({
+    status:200,headers,body:JSON.stringify({generation:'A'.repeat(43)}),
+  }));
+  await page.route('**/api/target-staging/note-index/global**',route=>{
+    const scope=new URL(route.request().url()).searchParams.get('scope');
+    // A valid 200 response can be empty OR contain other authorized notes.
+    // Neither case allows the old note's row to be focused again.
+    const notes=openerStillAuthorized
+      ? [{id:'n',title:'Note n',projectId:null,areaId:'area',areaKind:'private',revision:1}]
+      : width===390 ? []
+      : [{id:'other',title:'Other note',projectId:null,areaId:'area',areaKind:'private',revision:1}];
+    return route.fulfill({status:200,headers,body:JSON.stringify({
+      scope,notes,hasMore:false,nextCursor:null,
+    })});
+  });
+  await page.route('**/api/target-staging/notes/*',route=>route.fulfill({
+    status:200,headers,body:JSON.stringify({note:{
+      id:'n',title:'Note n',body:'Synthetic body',
+      projectId:null,areaId:'area',areaKind:'private',revision:1,
+    }}),
+  }));
+  await page.goto('/?view=Notes');
+  const list=page.getByTestId('target-scope-list');
+  const row=page.getByRole('button',{name:/Otevřít.*Note n/});
+  await row.click();
+  await expect(page.getByText('Synthetic body')).toBeVisible();
+
+  // Reconnect forces a full, independently authorized 200 list refresh while
+  // the detail remains open. The note row no longer exists in the current list.
+  await context.setOffline(true);
+  await expect(list).toHaveAttribute('data-state','error');
+  openerStillAuthorized=false;
+  await context.setOffline(false);
+  await expect(list).toHaveAttribute('data-state','ready');
+  await expect(row).toHaveCount(0);
+  if(width===1280)await expect(page.getByRole('button',{name:/Otevřít.*Other note/})).toBeVisible();
+  await expect(page.getByTestId('target-detail')).toBeVisible();
+
+  await page.getByTestId('target-detail').getByRole('button',{name:/Zavřít|Zpět/}).click();
+  await expect(page.getByTestId('target-detail')).toHaveCount(0);
+  const status=list.getByRole('status');
+  await expect(status).toBeFocused();
+  // A later list update or unrelated keyboard action must not steal focus.
+  const scope=page.locator('[data-scope-option=personal]');
+  await scope.focus();
+  await expect(scope).toBeFocused();
+});
