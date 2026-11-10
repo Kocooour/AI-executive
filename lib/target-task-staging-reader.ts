@@ -72,6 +72,7 @@ import { readAuthorizedTargetNoteSyncPage, type TargetNoteSyncPage } from "./tar
 import { evaluateTargetAreaPolicy } from "./target-area-policy";
 import {readTargetNoteEditCommandStatus,readTargetNoteEditRecovery,
   type TargetNoteEditCommandStatus,type TargetNoteEditRecovery} from "./target-note-command-status";
+import {readTargetNoteCreateRecovery,type TargetNoteCreateRecovery} from "./target-note-create-status";
 import { readTargetNoteDeleteCommandStatus, type TargetNoteDeleteCommandStatus } from "./target-note-delete-command-status";
 import { validTargetStagingNoteDeleteRequest, type TargetStagingNoteDeleteRequest } from "./target-note-delete-writer";
 import {
@@ -999,6 +1000,19 @@ export function readPreflightedTargetNoteEditRecovery(
       if(!preflight(db))return denied();
       const actor=verifiedActor(db,access,true);
       return actor?readTargetNoteEditRecovery(db,actor,commandId):denied();
+    },denied));
+}
+
+/** R3-CAPTURE-2: private CREATE UUID status from a preflighted pinned snapshot. */
+export function readPreflightedTargetNoteCreateRecovery(
+  store:TargetStagingReadStore,access:TargetStagingReadCredential,commandId:string,
+):TargetNoteCreateRecovery{
+  const denied=():TargetNoteCreateRecovery=>({ok:false,reason:"unavailable"});
+  return withPreflightedStore<TargetNoteCreateRecovery>(store,denied,(db,preflight)=>
+    inReadSnapshot(db,()=>{
+      if(!preflight(db))return denied();
+      const actor=verifiedActor(db,access,true);
+      return actor?readTargetNoteCreateRecovery(db,actor,commandId):denied();
     },denied));
 }
 
