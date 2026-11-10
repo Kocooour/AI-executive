@@ -1,0 +1,67 @@
+/** R3-CAPTURE-1: real target Notes shell with a mocked Area read response.
+ * Server ACL is separately proven against real pinned staging SQLite in
+ * tests/target-private-note-area-http.test.mjs. No create or external writes. */
+import {expect,test} from "./fixtures";
+import type {Page,Route} from "@playwright/test";
+test.skip(process.env.LUMI_PRIVATE_NOTE_AREAS_E2E!=="true",
+  "Private note Area chooser is only enabled in the isolated focused browser job");
+const headers={"content-type":"application/json","cache-control":"no-store"};
+const reply=(route:Route,body:unknown,status=200)=>route.fulfill({
+  status,headers,body:JSON.stringify(body),
+});
+const generation="A".repeat(43);
+const choices=[{id:"personal-a",title:"Osobní"},{id:"personal-b",title:"Rodina"}];
+async function setup(page:Page,handler:(route:Route)=>Promise<void>){
+  let writes=0;
+  page.on("request",req=>{
+    if(req.method()!=="GET"&&req.url().includes("/api/target-staging/notes"))writes++;
+  });
+  await page.route("**/api/target-staging/session",route=>
+    reply(route,{generation}));
+  await page.route("**/api/target-staging/note-index/global**",route=>{
+    const scope=new URL(route.request().url()).searchParams.get("scope");
+    return reply(route,{scope,notes:[],hasMore:false,nextCursor:null});
+  });
+  await page.route("**/api/target-staging/notes/create-targets",handler);
+  await page.goto("/?view=Notes");
+  await expect(page.getByTestId("target-scope-list")).toHaveAttribute("data-state","ready");
+  return ()=>writes;
+}
+for(const width of [390,1280]){
+  test(`authorized private Area choices show no shared/foreign data at ${width}px`,async({page})=>{
+    await page.setViewportSize({width,height:844});
+    const writes=await setup(page,route=>reply(route,{areas:choices}));
+    await page.getByTestId("target-private-area-open").click();
+    const modal=page.getByTestId("target-private-note-areas");
+    await expect(modal).toBeVisible();
+    await expect(modal.getByRole("note")).toContainText(
+      /nic se neukládá|nothing is saved/);
+    const select=page.getByTestId("target-private-area-select");
+    await expect(select.getByRole("option")).toHaveCount(3);
+    await expect(select.getByRole("option",{name:"Rodina"})).toBeVisible();
+    await expect(modal).not.toContainText("Shared");
+    await select.selectOption("personal-b");
+    await expect(page.getByTestId("target-private-area-selected")).toContainText("Rodina");
+    await modal.getByRole("button",{name:"Zavřít"}).click();
+    await expect(modal).toHaveCount(0);
+    expect(writes()).toBe(0);
+  });
+}
+test("read refusal keeps private area titles hidden and dispatches no write",async({page})=>{
+  const writes=await setup(page,route=>reply(route,{error:"Staging unavailable"},503));
+  await page.getByTestId("target-private-area-open").click();
+  const modal=page.getByTestId("target-private-note-areas");
+  await expect(modal).toContainText("Dostupné Oblasti nelze ověřit");
+  await expect(page.getByTestId("target-private-area-select")).toHaveCount(0);
+  expect(writes()).toBe(0);
+});
+test("malformed response cannot populate the chooser or silently choose a destination",async({page})=>{
+  const writes=await setup(page,route=>reply(route,{
+    areas:[...choices,{id:"team",title:"Shared",areaKind:"shared"}],
+  }));
+  await page.getByTestId("target-private-area-open").click();
+  await expect(page.getByTestId("target-private-note-areas")).toContainText(
+    "Dostupné Oblasti nelze ověřit");
+  await expect(page.getByTestId("target-private-area-select")).toHaveCount(0);
+  expect(writes()).toBe(0);
+});
