@@ -1,0 +1,27 @@
+# R3-CAPTURE-1 — autorizovaný výběr soukromé Oblasti pro poznámku
+
+**Milník:** R3-CAPTURE (1–3 navazující PR, skutečný konzument cílové ACL). **Přijetí aktuální iterace:** přihlášený uživatel otevře v cílové obrazovce Poznámky náhled „Oblasti pro novou poznámku“, uvidí **pouze své aktuálně zapisovatelné soukromé Oblasti** získané ze skutečné autorizované cílové databáze, výslovně jednu vybere a může náhled zavřít. Při ztrátě oprávnění, změně identity, neplatném restore, offline nebo chybě čtení se cíle skryjí. Žádná poznámka se nevytvoří. Není to další syntetický CRUD demonstrátor: backend čte skutečný ACL model z izolovaného stagingového SQLite a v hlavním UI je skutečný default-off konzument.
+
+## Serverový kontrakt
+
+`GET /api/target-staging/notes/create-targets` je **read-only** a ve výchozím stavu `404`. Vyžaduje všechny standardní HTTP/NOTES/WRITE/NOTES_WRITE/NOTES_CREATE příznaky a přihlášenou skutečně nakonfigurovanou owner cookie nebo živou durable staging session cookie. Nesmí přijímat query, actorId, workspace, read scope, areaId ani body. Návratový JSON `{ "areas": [{ "id": "…", "title": "…" }] }` má pouze řazený allowlist konkrétních soukromých Oblastí aktuální identity. Žádné cizí či sdílené Oblasti, členství, role, obsah poznámek, revize, actor ID, interní ochranné důkazy nebo přístupové tokeny.
+
+Child proces řeší identitu ze **živé** session, vytváří jednorázový podepsaný read credential a čte přes **kanonicky preflighted, fd-pinned read-only snapshot** a existující `eligibleGlobalTaskAreas(...,"personal")`. Ze stejného snapshotu vydává interní `TargetReadLinearization` všech Oblastí, včetně prázdných. HTTP musí před uvolněním titulků ověřit znovu **živou session a každou Area policy revizi** (`verifyStagingReadBeforeRelease`). Když došlo k revokaci, vrací `401` bez výpisu, při zastaralém witness `409` bez výpisu; neověřená cesta, journal, schema, restore nebo worker výstup jsou `503` (content-free). Odpověď je `Cache-Control: no-store`, má omezenou velikost a přesný DTO allowlist. Úspěšný seznam **nikdy neuděluje právo k zápisu**: existující `POST /api/target-staging/notes` musí znovu atomicky ověřit Area, restore, ACL, session a idempotenci.
+
+## UI a brány
+
+Pouze když je opravdu zapnuté cílové `Notes` a **samostatný** `AI_EXECUTIVE_TARGET_UI_PRIVATE_NOTE_AREAS_ENABLED=true` spolu se všemi nutnými HTTP/WRITE příznaky, hlavní obrazovka nabídne tlačítko „Oblasti pro novou poznámku“. Zobrazí dialog s prázdnou volbou a načtenými autorizovanými názvy. Nic nepředvybírá: default `areaId=""`. Při revokaci/obnově runtime generace, zavření okna, ztrátě viditelnosti nebo offline se výběr a titulky odstraní z paměti. Fetch je vždy `same-origin`, `no-store`, bez přesměrování a bez úložiště draftů. Existující legacy Quick Capture zůstává v jednotném cílovém režimu **zakázané**; žádné skryté přepnutí do staré DB. Dialog explicitně říká, že zatím **nic neukládá** a neobsahuje tlačítko Submit. Default-off server page vůbec nenatahuje nový konzument.
+
+## Akceptační testy
+
+1. **Skutečný SQLite/HTTP** `tests/target-private-note-area-http.test.mjs`: owner Alice i durable Bob vidí jen vlastní private Areas, včetně prázdných; sdílené a cizí Area se nikdy nevydají. Unauthenticated, revoked, flag off, podvržený query scope a restore mismatch odmítnuty. Celá odpověď nemá audit/obsah/identity data; nic se nezapisuje.
+2. **Strict client a wiring** `tests/target-private-note-area-choices.test.mjs` ověřuje tvar, řazení, UTF-8 limity, odmítnutí nepovolených klíčů, chybějící no-store a závaznou kombinaci flagů. `tests/target-client-runtime-wiring.test.mjs` hlídá provider a runtime.
+3. **Skutečné React UI v izolovaném Chromium** `e2e/target-private-note-areas.spec.ts`: 390px mobil a 1280px desktop, serverové odpovědi nahrazeny pouze fiktivními Area názvy; odmítnutí a neplatná data nesmí zpřístupnit volbu. Žádný `POST` nevznikne. Spouští jen scoped workflow, **ne celou release Browser E2E sadu**.
+
+Cílený CI workflow používá port `3121`, `LUMI_PRIVATE_NOTE_AREAS_E2E=true` pouze v throwaway Playwright serveru; worktree a lokální DB nejsou sdílené. Ručně: `LUMI_PRIVATE_NOTE_AREAS_E2E=true E2E_SKIP_BUILD=1 E2E_PORT=3121 pnpm exec playwright test e2e/target-private-note-areas.spec.ts --project=desktop` po `pnpm build` a instalaci Chromium.
+
+## Co stále není hotové
+
+- **Skutečné vytvoření poznámky v Quick Capture.** Je potřeba integrovaná write UI command+receipt recovery pro nejistý výsledek, odlišit první definitivní odmítnutí a pozdější konflikt, neskladovat soukromý obsah a přesně chránit idempotenci i přes reload a odmountování. Neprovádět automatický nový UUID ani retry po timeoutu.
+- Vytváření úkolů, projektů, sdílených poznámek, pozvánky, R4 cutover a produkční zapnutí.
+- Toto není doložení serverové autorizace uživatele v produkci; jde o stagingovou integraci. Pro produkční release platí plná Browser E2E na přesném SHA, archivní backup/restore a výslovná R4 brána.
