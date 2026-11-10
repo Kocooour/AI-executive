@@ -40,4 +40,3 @@ try {
     } else throw new Error("Unavailable");
   } finally { authority.close(); }
 } catch { process.exitCode = 1; }
-

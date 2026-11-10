@@ -158,4 +158,3 @@ export async function PATCH(request: Request,
     return answer(503, "Staging unavailable");
   }
 }
-
