@@ -32,6 +32,8 @@ import {
 } from "../../lib/target-detail-route";
 import {detailCopy,type DetailCopy,type DetailLanguage} from "../../lib/target-detail-copy";
 import TargetNoteEditor from "./target-note-editor";
+import TargetProjectTitleEditor from "./target-project-title-editor";
+import {TARGET_PROJECT_TITLE_UPDATED} from "../../lib/target-project-title-edit-ui-gate";
 import "./target-details.css";
 
 type State=
@@ -118,9 +120,9 @@ function UnavailablePanel({language}:{language:DetailLanguage}){
   </Shell>;
 }
 
-function Content({content,route,copy,gates,more,onMore,noteEdit,onCommitted,onAccessRefused,language}:{
+function Content({content,route,copy,gates,more,onMore,noteEdit,projectEdit,onCommitted,onAccessRefused,language}:{
   content:TargetDetailContent;route:TargetDetailRoute;copy:DetailCopy;gates:TargetDetailGates;
-  more:boolean;onMore:()=>void;noteEdit:boolean;onCommitted:()=>void;
+  more:boolean;onMore:()=>void;noteEdit:boolean;projectEdit:boolean;onCommitted:()=>void;
   onAccessRefused:()=>void;language:DetailLanguage;
 }){
   const area=(kind:"private"|"shared")=>kind==="shared"?copy.areaShared:copy.areaPrivate;
@@ -159,6 +161,9 @@ function Content({content,route,copy,gates,more,onMore,noteEdit,onCommitted,onAc
   return <article className="targetDetailContent" data-area-kind={page.project.areaKind}>
     <p className="eyebrow">{copy.kindProject} · {area(page.project.areaKind)}</p>
     <h2>{page.project.title}</h2>
+    {projectEdit&&<TargetProjectTitleEditor project={page.project} language={language}
+      onCommitted={onCommitted}
+      onAccessRefused={()=>{window.dispatchEvent(new Event(TARGET_PROJECT_TITLE_UPDATED));onAccessRefused();}}/>}
     <h3>{copy.tasksHeading}</h3>
     {page.tasks.length===0&&!page.hasMore
       ?<p className="targetDetailMuted">{copy.tasksEmpty}</p>
@@ -179,8 +184,8 @@ function Content({content,route,copy,gates,more,onMore,noteEdit,onCommitted,onAc
   </article>;
 }
 
-function DetailBody({route,language,gates,noteEdit}:{
-  route:TargetDetailRoute;language:DetailLanguage;gates:TargetDetailGates;noteEdit:boolean;
+function DetailBody({route,language,gates,noteEdit,projectEdit}:{
+  route:TargetDetailRoute;language:DetailLanguage;gates:TargetDetailGates;noteEdit:boolean;projectEdit:boolean;
 }){
   const copy=detailCopy[language];
   const {gate,onRefusal,retry}=useTargetGate();
@@ -290,6 +295,7 @@ function DetailBody({route,language,gates,noteEdit}:{
   useEffect(()=>{if(state.kind==="ready")focusPendingRow();},[state]);
 
   const reload=useCallback(()=>{
+    panelRef.current?.focus({preventScroll:true});
     retryAttempt.current=0;
     sessionRef.current?.resume();
     setNonce(value=>value+1);
@@ -355,19 +361,19 @@ function DetailBody({route,language,gates,noteEdit}:{
         <button type="button" onClick={reload}>{copy.retry}</button>}
       {content&&state.kind==="ready"&&
         <Content content={content} route={route} copy={copy} gates={gates}
-          more={state.more} onMore={()=>{void more();}} noteEdit={noteEdit}
+          more={state.more} onMore={()=>{void more();}} noteEdit={noteEdit} projectEdit={projectEdit}
           onCommitted={reload} onAccessRefused={invalidateAndReload}
           language={language}/>}
-      {content&&!(noteEdit&&content.kind==="note")&&<p className="targetDetailNote">{copy.readOnlyNote}</p>}
+      {content&&!((noteEdit&&content.kind==="note")||(projectEdit&&content.kind==="project"))&&<p className="targetDetailNote">{copy.readOnlyNote}</p>}
     </>}
   </Shell>;
 }
 
-export default function TargetDetailPanel({route,language="cs",gates,noteEdit=false}:{
+export default function TargetDetailPanel({route,language="cs",gates,noteEdit=false,projectEdit=false}:{
   /** null: the address asked for something that cannot be opened. */
-  route:TargetDetailRoute|null;language?:DetailLanguage;gates:TargetDetailGates;noteEdit?:boolean;
+  route:TargetDetailRoute|null;language?:DetailLanguage;gates:TargetDetailGates;noteEdit?:boolean;projectEdit?:boolean;
 }){
   if(route===null)return <UnavailablePanel language={language}/>;
   // Keyed by target: another item is a new session, never a reuse of old content.
-  return <DetailBody key={detailRouteKey(route)} route={route} language={language} gates={gates} noteEdit={noteEdit&&gates.note}/>;
+  return <DetailBody key={detailRouteKey(route)} route={route} language={language} gates={gates} noteEdit={noteEdit&&gates.note} projectEdit={projectEdit&&gates.project}/>;
 }

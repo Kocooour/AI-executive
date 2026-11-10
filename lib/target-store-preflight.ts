@@ -5,7 +5,8 @@ import path from "node:path";
 import { createHash } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import {
-  TARGET_SCHEMA_SQL, TARGET_STORE_FILENAME, TARGET_STORE_SCHEMA_VERSION,
+  TARGET_SCHEMA_SQL, TARGET_SCHEMA_V25_SQL, TARGET_STORE_FILENAME, TARGET_STORE_SCHEMA_VERSION,
+  TARGET_STORE_LEGACY_SCHEMA_VERSION, isSupportedTargetSchemaVersion,
   TARGET_STAGING_AUDIT_MAX_EVENTS, TARGET_STAGING_MAX_RECEIPTS, TARGET_STAGING_SESSION_MAX_ROWS,
   TARGET_STAGING_RECEIPT_PREFIX, TARGET_STAGING_DELETE_RECEIPT_PREFIX,
   TARGET_STAGING_TEMPORAL_STATUS_RECEIPT_PREFIX, TARGET_STAGING_TEMPORAL_DUE_ON_RECEIPT_PREFIX,
@@ -61,7 +62,9 @@ const CONTROL_METADATA_KEYS = new Set([
 function matchesCanonicalSchema(actual: DatabaseSync): boolean {
   const expected = new DatabaseSync(":memory:");
   try {
-    expected.exec(TARGET_SCHEMA_SQL);
+    const version = (actual.prepare("SELECT value FROM metadata WHERE key='schema_version'").get() as {value: string} | undefined)?.value;
+    if (!isSupportedTargetSchemaVersion(version)) return false;
+    expected.exec(version === String(TARGET_STORE_LEGACY_SCHEMA_VERSION) ? TARGET_SCHEMA_V25_SQL : TARGET_SCHEMA_SQL);
     const schema = (db: DatabaseSync) => db.prepare(
       "SELECT type, name, tbl_name, sql FROM sqlite_schema ORDER BY type, name, tbl_name",
     ).all();
@@ -309,7 +312,7 @@ export function inspectIsolatedTargetStore(
               row.key.startsWith(TARGET_STAGING_NOTE_RECEIPT_PREFIX) ||
               row.key.startsWith(TARGET_STAGING_NOTE_DELETE_RECEIPT_PREFIX) ||
               row.key.startsWith(TARGET_STAGING_NOTE_LIFECYCLE_RECEIPT_PREFIX))) ||
-          meta.get("schema_version") !== String(TARGET_STORE_SCHEMA_VERSION) ||
+          !isSupportedTargetSchemaVersion(meta.get("schema_version")) ||
           meta.get("activated") !== "false" || meta.get("write_protocol") !== "per-item-only" ||
           typeof meta.get("anchor_seq") !== "string" ||
           !/^(0|[1-9][0-9]{0,14})$/.test(meta.get("anchor_seq") as string) ||
@@ -339,6 +342,18 @@ export function inspectIsolatedTargetStore(
             typeof row.expected_revision !== "string" || !sha256Hex.test(row.expected_revision) ||
             !allowedGenerations.has(row.restore_generation) ||
             !meta.has(row.receipt_key))) fail("audit_invalid");
+      if (meta.get("schema_version") === String(TARGET_STORE_SCHEMA_VERSION)) {
+        const projectAudit = all("SELECT receipt_key, request_digest, expected_revision, restore_generation FROM project_title_audit") as
+          { receipt_key: unknown; request_digest: unknown; expected_revision: unknown; restore_generation: unknown }[];
+        if (projectAudit.length > TARGET_STAGING_AUDIT_MAX_EVENTS || projectAudit.some(row =>
+          typeof row.receipt_key !== "string" || !sha256Hex.test(row.receipt_key) ||
+          typeof row.request_digest !== "string" || !sha256Hex.test(row.request_digest) ||
+          typeof row.expected_revision !== "string" || !sha256Hex.test(row.expected_revision) ||
+          !allowedGenerations.has(row.restore_generation)) || count(`SELECT COUNT(*) AS n FROM project_title_audit a
+            LEFT JOIN projects p ON p.id=a.project_id LEFT JOIN project_tombstones t ON t.id=a.project_id
+            WHERE (p.id IS NULL AND t.id IS NULL) OR (p.id IS NOT NULL AND a.revision_after>p.revision)
+              OR (t.id IS NOT NULL AND a.revision_after>=t.revision)`) !== 0) fail("audit_invalid");
+      }
       // R2c.1 delete audit: bounded, content-free, backed by a delete receipt and
       // by the tombstone (same Area, revision and change sequence) it describes.
       const deleteAudit = all("SELECT receipt_key, expected_revision, restore_generation FROM task_delete_audit") as

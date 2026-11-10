@@ -80,6 +80,8 @@ export function createStagingReadRunner(
           process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_ENABLED || "",
         AI_EXECUTIVE_TARGET_STAGING_HTTP_WRITE_ENABLED:
           process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_WRITE_ENABLED || "",
+        AI_EXECUTIVE_TARGET_STAGING_HTTP_PROJECT_TITLE_WRITE_ENABLED:
+          process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_PROJECT_TITLE_WRITE_ENABLED || "",
         AI_EXECUTIVE_TARGET_STAGING_HTTP_TEMPORAL_ENABLED:
           process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_TEMPORAL_ENABLED || "",
         AI_EXECUTIVE_TARGET_STAGING_HTTP_TEMPORAL_WRITE_ENABLED:
@@ -2048,6 +2050,14 @@ export async function readStagingAuthorizedProjectTasksInChild(
   const result = parseStagingProjectTasks(payload, projectId);
   if (payload !== null && !result) logStagingFailure("project_tasks", "invalid_child_dto");
   return result;
+}
+
+/** Same bounded DTO as project detail, with v26 checked in the pinned snapshot. */
+export async function readStagingProjectTitlePreviewInChild(
+  config: StagingPersonalReadConfig, projectId: string,
+): Promise<StagingProjectTasksResult | null> {
+  const payload = await runChild(config, "target-staging-project-title-preview-child.mjs", [projectId, "1", "0"]);
+  return parseStagingProjectTasks(payload, projectId);
 }
 
 /** Staging relation child DTO: explicit allowlist prevents linked data leaks. */

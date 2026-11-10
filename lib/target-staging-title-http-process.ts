@@ -108,6 +108,7 @@ async function run(config: StagingPersonalReadConfig, scriptName: string,
             AI_EXECUTIVE_DATA_DIR: process.env.AI_EXECUTIVE_DATA_DIR || "",
             AI_EXECUTIVE_TARGET_STAGING_HTTP_ENABLED: process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_ENABLED || "",
             AI_EXECUTIVE_TARGET_STAGING_HTTP_WRITE_ENABLED: process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_WRITE_ENABLED || "",
+            AI_EXECUTIVE_TARGET_STAGING_HTTP_PROJECT_TITLE_WRITE_ENABLED: process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_PROJECT_TITLE_WRITE_ENABLED || "",
             AI_EXECUTIVE_TARGET_STAGING_HTTP_TEMPORAL_ENABLED: process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_TEMPORAL_ENABLED || "",
             AI_EXECUTIVE_TARGET_STAGING_HTTP_TEMPORAL_WRITE_ENABLED: process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_TEMPORAL_WRITE_ENABLED || "",
             AI_EXECUTIVE_TARGET_STAGING_HTTP_TEMPORAL_DUE_ON_WRITE_ENABLED: process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_TEMPORAL_DUE_ON_WRITE_ENABLED || "",
@@ -248,4 +249,28 @@ export async function deleteStagingNoteInChild(
 ): Promise<DeleteWrite | null> {
   const value = await run(config, "target-staging-note-delete-child.mjs", JSON.stringify(request));
   return parseDeleteWrite(value);
+}
+
+/** Content-free actor-scoped project rename receipt lookup. */
+export async function readProjectTitleRecoveryInChild(
+  config:StagingPersonalReadConfig,commandId:string,
+):Promise<import("./target-project-title-command-status").TargetProjectTitleRecovery|null>{
+  const value=await run(config,"target-staging-project-title-recovery-child.mjs",JSON.stringify({commandId}));
+  if(!value||typeof value!=="object"||Array.isArray(value))return null;
+  const v=value as Record<string,unknown>,keys=Object.keys(v).sort().join(",");
+  if(v.ok===true&&v.status==="not_recorded"&&keys==="ok,status")
+    return {ok:true,status:"not_recorded"};
+  if(v.ok===true&&v.status==="committed"&&keys==="areaId,ok,projectId,status"&&
+    typeof v.projectId==="string"&&typeof v.areaId==="string")
+    return {ok:true,status:"committed",projectId:v.projectId,areaId:v.areaId};
+  if(v.ok===false&&v.reason==="unavailable"&&keys==="ok,reason")
+    return {ok:false,reason:"unavailable"};
+  return null;
+}
+
+/** Bounded project rename worker; request content is passed only via stdin. */
+export async function writeProjectTitleInChild(
+  config: StagingPersonalReadConfig, request: import("./target-project-title-writer").ProjectTitleCommand,
+): Promise<Write | null> {
+  return parseWrite(await run(config, "target-staging-project-title-write-child.mjs", JSON.stringify(request)));
 }

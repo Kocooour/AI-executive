@@ -1,3 +1,5 @@
+import { readPreflightedProjectTitlePreview } from "./target-task-staging-reader";
+import { writeTargetProjectTitle, validProjectTitleCommand, type ProjectTitleCommand, type ProjectTitleResult } from "./target-project-title-writer";
 /**
  * R2 staging-only process-local session issuance and revocation.
  *
@@ -40,7 +42,7 @@ import {
   previewPreflightedTargetTaskTitleEdit, readPreflightedIsolatedTargetTask,
   readPreflightedIsolatedPersonalTargetTask, readPreflightedPersonalTargetTaskWithRevision,
   readPreflightedTargetTaskTitleCommandStatus, readPreflightedTargetTaskDeleteCommandStatus,
-  readPreflightedTargetNoteEditCommandStatus,readPreflightedTargetNoteEditRecovery, readPreflightedTargetNoteDeleteCommandStatus,
+  readPreflightedTargetNoteEditCommandStatus,readPreflightedTargetNoteEditRecovery,readPreflightedProjectTitleRecovery, readPreflightedTargetNoteDeleteCommandStatus,
   listPreflightedPrivateProjectsAtOffset, readPreflightedPrivateProjectDetail,
   readPreflightedPrivateTaskTitleAudit,
   readPreflightedScopedTaskPage, readPreflightedSharedTargetTask, readPreflightedChangeFeedPage,
@@ -88,6 +90,7 @@ import type { FeedClaims } from "./target-staging-feed-cursor";
 import type { TargetPrivateTaskTitleAuditResult } from "./target-task-read-model";
 import type { TargetStagingTaskTitleCommandStatusResult, TargetTemporalStatusReceiptResult, TargetTemporalStatusReceiptSnapshot, TargetTemporalDueOnReceiptResult, TargetTemporalDueOnReceiptSnapshot } from "./target-task-staging-reader";
 import type {TargetNoteEditCommandStatus,TargetNoteEditRecovery} from "./target-note-command-status";
+import type {TargetProjectTitleRecovery} from "./target-project-title-command-status";
 import type { TargetNoteDeleteCommandStatus } from "./target-note-delete-command-status";
 import { validTargetTaskTitleEditPreviewRequest } from "./target-task-write-preflight";
 import { writePreflightedTargetTaskTitle, validTargetStagingTaskTitleWriteRequest } from "./target-task-staging-writer";
@@ -637,6 +640,14 @@ export class TargetStagingSessionAuthority {
     }
   }
 
+  readProjectTitlePreview(actorUserId: string, projectId: string): TargetAuthorizedProjectTasksResult | null {
+    if (this.#closed) return null;
+    try {
+      const credential = this.#oneShotReadCredential(actorUserId);
+      return credential ? readPreflightedProjectTitlePreview(this.#store, credential, projectId) : null;
+    } catch { return null; }
+  }
+
   /** Content-free project -> task/note structural links for an authorized actor. */
   readAuthorizedProjectStructuralRelations(
     actorUserId: string, projectId: string, limit: number, offset: number,
@@ -983,6 +994,13 @@ export class TargetStagingSessionAuthority {
     );
   }
 
+  updateProjectTitle(sessionToken: string, request: ProjectTitleCommand, durableSessionTokenHash?: string): ProjectTitleResult {
+    const credential = this.#credential(sessionToken, true);
+    if (!credential) return {ok:false,reason:"unauthorized"};
+    if (!validProjectTitleCommand(request)) return {ok:false,reason:"invalid_request"};
+    return writeTargetProjectTitle(this.#store, credential, request, durableSessionTokenHash);
+  }
+
   /**
    * R2d.3h.1: staging-only complete/reopen. Never derive an actor from input;
    * require a live writable authority session, then recheck ACL and optional
@@ -1234,6 +1252,13 @@ export class TargetStagingSessionAuthority {
       return {ok:false, reason:"invalid_request"};
     return changePreflightedTargetNoteLifecycle(
       this.#store,credential,request,durableSessionTokenHash,privateCreateOnly);
+  }
+
+  /** Read-only actor-scoped project rename receipt lookup, no title released. */
+  projectTitleRecovery(sessionToken:string,commandId:string):TargetProjectTitleRecovery{
+    const credential=this.#credential(sessionToken,true);
+    return credential?readPreflightedProjectTitleRecovery(this.#store,credential,commandId)
+      :{ok:false,reason:"unavailable"};
   }
 
   /** Read-only actor-scoped recovery of a note edit after browser reload. */

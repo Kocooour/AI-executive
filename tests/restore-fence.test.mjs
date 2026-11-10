@@ -75,6 +75,7 @@ const exempt = {
   "PUT /api/store": "carries the generation in its body and is checked in replaceSnapshot",
   "POST /api/backups": "creates, restores and lists backups itself",
   "POST /api/backups/import": "is the import itself",
+  "POST /api/humanwiki/import": "deny-only HumanWiki entry: always returns 404 before inspecting request properties or body; no data read or persisted write, so the legacy backup restore fence does not apply",
   "POST /api/client-errors": "a browser's error report; no owner data",
   "POST /api/auth/login": "authentication", "POST /api/auth/logout": "authentication",
   "POST /api/auth/passkeys/login/options": "authentication", "POST /api/auth/passkeys/login/verify": "authentication",
@@ -110,6 +111,10 @@ const exempt = {
   "POST /api/target-staging/notes/[noteId]/delete/status": "read-only exact note-delete receipt reconciliation on isolated staging SQLite; current actor, Area ACL, generation and session checks, no persisted mutation",
   "PATCH /api/target-staging/notes/[noteId]/edit": "writes only isolated staging SQLite outside the legacy backup scope; staging anchor validates the server restore generation and the transactional note writer rechecks client generation, durable session, ACL, parent and note revisions before atomic commit",
   "DELETE /api/target-staging/notes/[noteId]": "writes only isolated staging SQLite outside legacy backup scope; staging anchor verifies live restore state and the pinned delete writer checks client restore generation, durable session, Area ACL, note and parent CAS before atomic tombstone, audit and receipt commit",
+  "POST /api/target-staging/notes": "creates owner-private standalone notes only in separate isolated staging SQLite, outside the legacy backup scope; the staging anchor and pinned writer verify restore generation, live session, private Area ACL, idempotency and content-free journal before atomic commit",
+  "POST /api/target-staging/notes/edit-recovery": "read-only receipt recovery of an actor-scoped note edit command in separate isolated staging SQLite, outside the legacy backup scope; verifies staging restore generation, current live session and writable note Area ACL before releasing only committed or not-recorded status; never mutates stored data",
+  "POST /api/target-staging/project-title/recovery": "read-only actor-scoped receipt recovery from isolated staging SQLite with current session, generation and project write ACL; no legacy backup data is modified or returned",
+  "PATCH /api/target-staging/projects/[projectId]/title": "renames projects only in separate isolated staging SQLite, outside the legacy backup scope; the staging anchor and pinned writer verify restore generation, live session, current Area editor/admin or private-owner ACL, project revision CAS, idempotent audit and journal before atomic commit",
 
 };
 
