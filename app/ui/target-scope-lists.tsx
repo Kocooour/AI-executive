@@ -113,7 +113,11 @@ export default function TargetScopeLists({kind,language="cs",detail=false}:{
   });
 
   // R3-FE-4a: after a detail closed, focus returns to the row that opened it.
-  useEffect(()=>{if(state.kind==="ready")focusPendingRow();},[state]);
+  useEffect(()=>{
+    if(state.kind==="ready")focusPendingRow();
+    else if(state.kind==="error"&&!document.querySelector('[data-testid="target-detail"]'))
+      focusPendingRow(statusRef.current,true);
+  },[state]);
 
   // Privacy: titles never stay on screen while the tab is hidden or offline.
   useEffect(()=>{
@@ -199,7 +203,7 @@ export default function TargetScopeLists({kind,language="cs",detail=false}:{
   const rows:GlobalIndexItem[]=page?page.items:[];
   const groups=groupIndexRowsByArea(rows);
   return <section className="targetScopeList" data-testid="target-scope-list"
-    data-scope={scope} data-kind={kind}
+    data-scope={scope} data-kind={kind} data-state={state.kind}
     aria-label={kind==="project"?copy.projectsRegion:copy.notesRegion}>
     <p ref={statusRef} role="status" tabIndex={-1} className="targetScopeStatus">
       {state.kind==="error"?copy.hidden
