@@ -58,9 +58,11 @@ export function reserveNoteEditReload(generation:string,commandId:string):boolea
     return verified.kind==="blocked"&&verified.commandId===commandId;
   }catch{return false;}
 }
-/** Only an authorized, positively confirmed committed result may remove a
- * marker. An unconfirmed, denied or missing receipt retains the write barrier. */
-export function confirmNoteEditReload(generation:string,commandId:string):boolean{
+/** Clear only after a positive committed receipt, or after the FIRST send
+ * gets an unambiguous server rejection (409/400) without any prior timeout or
+ * ambiguous reply. The caller must enforce this precondition; never release an
+ * uncertain command merely because a subsequent lookup says not_recorded. */
+function removeExactNoteEditMarker(generation:string,commandId:string):boolean{
   if(!GENERATION.test(generation)||!UUID.test(commandId))return false;
   try{
     const target=storage();if(!target)return false;
@@ -70,4 +72,13 @@ export function confirmNoteEditReload(generation:string,commandId:string):boolea
     target.removeItem(KEY);
     return target.getItem(KEY)===null;
   }catch{return false;}
+}
+
+/** The server positively acknowledged a commit, either via PATCH or recovery. */
+export function confirmNoteEditReload(generation:string,commandId:string):boolean{
+  return removeExactNoteEditMarker(generation,commandId);
+}
+/** A first, non-ambiguous PATCH was rejected without committing. */
+export function rejectFreshNoteEditReload(generation:string,commandId:string):boolean{
+  return removeExactNoteEditMarker(generation,commandId);
 }
