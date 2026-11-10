@@ -1,15 +1,19 @@
 /** R3-FE-4b: recover ONE exact in-memory idempotent project title edit per project.
  * This coordinator outlives a disposable inspector but not the authenticated
- * target runtime/generation. No browser storage, offline queue, or new UUID
- * after ambiguous writes. A transport deadline can only make a write UNCERTAIN.
+ * target runtime/generation. A content-free tab barrier covers reload; only
+ * a sealed memory-only command may survive an explicitly coded session_expired
+ * and it cannot be disclosed until the new SERVER-verified actor matches.
  */
 import {
   saveProjectTitleEdit,type ProjectTitleEditCommand,type ProjectTitleEditSaveResult,type ProjectTitleEditPreview,
 } from "./target-staging-project-title-edit-client";
 import {TARGET_PROJECT_TITLE_UPDATED} from "./target-project-title-edit-ui-gate";
+import {projectTitleReloadMarker,confirmProjectTitleReload,rejectFirstProjectTitleReload}
+  from "./target-project-title-reload";
 import type {TargetClientRuntime} from "./target-client-runtime";
 
-export type ProjectTitleEditRuntime=Pick<TargetClientRuntime,"generation"|"known"|"register">;
+export type ProjectTitleEditRuntime=Pick<TargetClientRuntime,"generation"|"known"|"register">&
+  Partial<Pick<TargetClientRuntime,"subscribeSecurityClear"|"reportRefusal">>;
 export const TARGET_PROJECT_TITLE_EDIT_WRITE_TIMEOUT_MS=20_000;
 export type TrackedProjectTitleEditPhase="saving"|"uncertain"|"conflict"|"denied"|"saved";
 export type TrackedProjectTitleEdit={
@@ -19,6 +23,8 @@ export type TrackedProjectTitleEdit={
 type Entry={
   command:ProjectTitleEditCommand;
   phase:TrackedProjectTitleEditPhase;
+  principalBinding:string|null;
+  wasUncertain:boolean;
   controller:AbortController|null;
   pending:Promise<ProjectTitleEditSaveResult>|null;
   cancel:()=>void;
@@ -37,6 +43,61 @@ type Bucket={
   disposed:boolean;
 };
 const buckets=new WeakMap<ProjectTitleEditRuntime,Bucket>();
+const BINDING=/^[A-Za-z0-9_-]{43}$/;
+type SealedEntry={command:ProjectTitleEditCommand;principalBinding:string};
+type SealedBucket={entries:Map<string,SealedEntry>;unsubscribe:()=>void};
+const sealed=new WeakMap<ProjectTitleEditRuntime,SealedBucket>();
+function clearSealed(runtime:ProjectTitleEditRuntime):void{
+  const state=sealed.get(runtime);if(!state)return;
+  sealed.delete(runtime);state.entries.clear();state.unsubscribe();
+}
+function retainExpired(runtime:ProjectTitleEditRuntime,id:string,entry:Entry):void{
+  const binding=entry.principalBinding;
+  // Do not retain private content when the server-issued actor proof or
+  // runtime security-clear subscription is unavailable.
+  if(!binding||!BINDING.test(binding)||!runtime.subscribeSecurityClear)return;
+  let state=sealed.get(runtime);
+  if(!state){
+    state={entries:new Map(),unsubscribe:()=>{}};
+    sealed.set(runtime,state);
+    state.unsubscribe=runtime.subscribeSecurityClear(()=>clearSealed(runtime));
+    if(sealed.get(runtime)!==state)return;
+  }
+  state.entries.set(id,{command:entry.command,principalBinding:binding});
+}
+/** Only the existence of a sealed write can be observed pre-reauth. No title. */
+export const hasSealedProjectTitleEdit=(runtime:ProjectTitleEditRuntime,id:string):boolean=>
+  sealed.get(runtime)?.entries.has(id)===true;
+/** The only way to unseal a command after expiry: separately authenticated
+ * GET preview must give the SAME HMAC actor/project/restore binding, and the
+ * tab barrier must still match the original UUID. No client actor claim.
+ * A mismatch erases private sealed data but never unlocks the global barrier. */
+export function resumeSealedProjectTitleEdit(
+  runtime:ProjectTitleEditRuntime,generation:string,id:string,preview:ProjectTitleEditPreview,
+):"resumed"|"blocked"|"missing"{
+  const state=sealed.get(runtime),held=state?.entries.get(id);
+  if(!held)return "missing";
+  if(!runtime.known()||runtime.generation()!==generation)return "blocked";
+  const marker=projectTitleReloadMarker(generation);
+  if(marker.kind!=="blocked"||marker.commandId!==held.command.commandId||
+     marker.principalBinding!==held.principalBinding||
+     held.principalBinding!==preview.principalBinding||
+     held.command.writeAreaId!==preview.writeAreaId||
+     held.command.restoreGeneration.toLowerCase()!==preview.restoreGeneration.toLowerCase()){
+    state?.entries.delete(id);
+    if(state?.entries.size===0)clearSealed(runtime);
+    return "blocked";
+  }
+  const bucket=current(runtime,generation);
+  if(!bucket||bucket.entries.has(id))return "blocked";
+  bucket.entries.set(id,{command:held.command,phase:"uncertain",
+    principalBinding:held.principalBinding,wasUncertain:true,
+    controller:null,pending:null,cancel:()=>{}});
+  state?.entries.delete(id);
+  if(state?.entries.size===0)clearSealed(runtime);
+  changed(bucket,id);
+  return "resumed";
+}
 const denied=():ProjectTitleEditSaveResult=>({outcome:"denied"});
 const changed=(bucket:Bucket,id:string):void=>{
   if(bucket.disposed)return;
@@ -45,9 +106,12 @@ const changed=(bucket:Bucket,id:string):void=>{
 /** The runtime owns cleanup, including when NO detail is mounted. Its
  * registered disposables are synchronously disposed on signout, refusal,
  * generation rotation and runtime.dispose(). */
-function purge(runtime:ProjectTitleEditRuntime,bucket:Bucket):void{
+function purge(runtime:ProjectTitleEditRuntime,bucket:Bucket,reason:"expired"|"rotation"|"reset"="reset"):void{
   if(bucket.disposed)return;
   bucket.disposed=true;
+  if(reason==="expired")for(const [id,entry] of bucket.entries)
+    if(entry.phase==="saving"||entry.phase==="uncertain"||entry.wasUncertain)
+      retainExpired(runtime,id,entry);
   for(const entry of bucket.entries.values())entry.cancel();
   bucket.entries.clear();
   bucket.drafts.clear();
@@ -74,7 +138,7 @@ function current(runtime:ProjectTitleEditRuntime,generation:string):Bucket|null{
   buckets.set(runtime,next);
   // Register BEFORE retaining any project title. Registration immediately
   // disposes on an already-disposed runtime.
-  const unregister=runtime.register({dispose:()=>purge(runtime,next)});
+  const unregister=runtime.register({dispose:(reason)=>purge(runtime,next,reason)});
   if(next.disposed||!runtime.known()||runtime.generation()!==generation){
     purge(runtime,next);
     unregister();
@@ -129,6 +193,7 @@ export function runTrackedProjectTitleEdit(
   runtime:ProjectTitleEditRuntime,generation:string,id:string,command:ProjectTitleEditCommand,
   send:typeof saveProjectTitleEdit=saveProjectTitleEdit,
   timeoutMs=TARGET_PROJECT_TITLE_EDIT_WRITE_TIMEOUT_MS,
+  principalBinding?:string,
 ):Promise<ProjectTitleEditSaveResult>{
   const bucket=current(runtime,generation);
   if(!bucket)return Promise.resolve(denied());
@@ -140,7 +205,8 @@ export function runTrackedProjectTitleEdit(
   if(existing?.phase==="denied")return Promise.resolve(denied());
   if(existing?.phase==="conflict")return Promise.resolve({outcome:"conflict"});
   const entry:Entry=existing??{
-    command,phase:"uncertain",controller:null,pending:null,cancel:()=>{},
+    command,phase:"uncertain",principalBinding:BINDING.test(principalBinding??"")?principalBinding!:null,
+    wasUncertain:false,controller:null,pending:null,cancel:()=>{},
   };
   bucket.entries.set(id,entry);
   const controller=new AbortController();
@@ -170,9 +236,23 @@ export function runTrackedProjectTitleEdit(
     clearTimeout(timer);
     if(buckets.get(runtime)!==bucket||bucket.disposed||
       bucket.entries.get(id)!==entry)return result;
+    if(result.outcome==="expired"){
+      entry.wasUncertain=true;
+      retainExpired(runtime,id,entry);
+      // A coded expired session must discard every ordinary runtime-bound
+      // read/draft before an independently verified new login can unseal.
+      void runtime.reportRefusal?.("session_expired");
+      return {outcome:"uncertain"} as ProjectTitleEditSaveResult;
+    }
+    const firstDispatch=!existing;
+    if(result.outcome==="uncertain")entry.wasUncertain=true;
+    if(result.outcome==="saved"&&entry.principalBinding)
+      confirmProjectTitleReload(entry.command.commandId,entry.principalBinding);
+    else if(result.outcome==="conflict"&&firstDispatch&&entry.principalBinding)
+      rejectFirstProjectTitleReload(entry.command.commandId,entry.principalBinding);
     entry.phase=result.outcome==="saved"?"saved":
       result.outcome==="denied"?"denied":
-      result.outcome==="conflict"?"conflict":"uncertain";
+      result.outcome==="conflict"&&!entry.wasUncertain?"conflict":"uncertain";
     entry.controller=null;
     entry.pending=null;
     entry.cancel=()=>{};
