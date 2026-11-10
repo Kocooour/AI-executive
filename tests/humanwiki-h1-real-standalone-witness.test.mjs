@@ -16,8 +16,16 @@ import {
   createWitnessHttpsServer, readProtectedWitnessFile,
 } from "../services/humanwiki-witness/server.mjs";
 import {
-  humanWikiWitnessChallengePayload,
+  humanWikiWitnessChallengePayload, verifyHumanWikiFreshWitnessPreflight,
 } from "../lib/humanwiki-consent-witness-preflight.mjs";
+import {
+  bootstrapHumanWikiConsentPrivateLedger,
+  withHumanWikiConsentPrivateLedger,
+  withHumanWikiConsentPrivateLedgerAsync,
+} from "../lib/humanwiki-consent-private-store.mjs";
+import {
+  appendHumanWikiConsentIntent, humanWikiConsentIntentLocalHead,
+} from "../lib/humanwiki-consent-intents.mjs";
 
 const EMPTY="0".repeat(64);
 const registryId=randomUUID();
@@ -142,6 +150,7 @@ test("real HTTPS server signs only its latest head, refuses all uploads and malf
       hostname:"127.0.0.1",servername:"localhost",port,
       path:opts.path??"/v1/humanwiki/high-water/challenge",
       method:opts.method??"POST",ca:readFileSync(cert),
+      ...(opts.signal?{signal:opts.signal}:{}),
       headers:{
         "content-type":opts.contentType??"application/json",
         "content-length":Buffer.byteLength(body),
@@ -166,13 +175,57 @@ test("real HTTPS server signs only its latest head, refuses all uploads and malf
     assert.equal(initial.headers["cache-control"],"no-store");
     checkSignature(JSON.parse(initial.body));
     assert.equal(JSON.parse(initial.body).sequence,0);
+
+    // Real TLS round-trip from the *actual Lumi HMAC ledger verifier* to
+    // this separately provisioned witness store. The two databases have
+    // independent roots/keys. A stale remote witness must remain default-deny.
+    const localLedger=fixture();
+    const ledgerKey=Buffer.alloc(32,0x38);
+    bootstrapHumanWikiConsentPrivateLedger(localLedger);
+    const remoteProvider=async({registryId:id,nonce:challenge,signal})=>{
+      const response=await request({registryId:id,nonce:challenge},{signal});
+      if(response.status!==200)throw Error("witness_unavailable");
+      return JSON.parse(response.body);
+    };
+    const verifyLocal=()=>withHumanWikiConsentPrivateLedgerAsync(localLedger,
+      db=>verifyHumanWikiFreshWitnessPreflight({
+        db,ledgerKey,registryId,witnessPublicKey:publicKey,
+        getFreshReceipt:remoteProvider,
+      }));
+    const genesis=await verifyLocal();
+    assert.equal(genesis.ok,true);
+    assert.equal(genesis.importAuthorized,false);
+    assert.equal(genesis.independentWitnessVerified,false);
+    assert.equal(genesis.withdrawalComplete,false);
+
+    const current=withHumanWikiConsentPrivateLedger(localLedger,"write",db=>{
+      const appended=appendHumanWikiConsentIntent(db,ledgerKey,{
+        ownerUserId:"owner-test",privateAreaId:"personal-unassigned",
+      },{
+        commandId:randomUUID(),sourceType:"chatgpt_user_export",
+        decision:"withdrawal_requested",purpose:"humanwiki_context_bootstrap",
+        retentionDays:null,expectedRevision:0,explicitConfirmation:true,
+      });
+      assert.equal(appended.ok,true);
+      const head=humanWikiConsentIntentLocalHead(db,ledgerKey);
+      assert.equal(head.ok,true);
+      return head;
+    });
+    const stale=await verifyLocal();
+    assert.equal(stale.ok,false);
+    assert.equal(stale.importAuthorized,false);
     publishWitnessCheckpoint(dir,registryId,privateKey,{
-      sequence:1,previousDigest:EMPTY,digest:"c".repeat(64)});
+      sequence:current.sequence,previousDigest:EMPTY,digest:current.digest});
+    const restored=await verifyLocal();
+    assert.equal(restored.ok,true);
+    assert.equal(restored.importAuthorized,false);
+    assert.equal(restored.independentWitnessVerified,false);
+    assert.equal(restored.withdrawalComplete,false);
     const advanced=await request(good);
     assert.equal(advanced.status,200);
     checkSignature(JSON.parse(advanced.body));
     assert.equal(JSON.parse(advanced.body).sequence,1);
-    assert.equal(JSON.parse(advanced.body).digest,"c".repeat(64));
+    assert.equal(JSON.parse(advanced.body).digest,current.digest);
     for(const [payload,options] of [
       [{...good,sourceContents:"private"}],
       [{...good,registryId:randomUUID()}],
@@ -188,7 +241,7 @@ test("real HTTPS server signs only its latest head, refuses all uploads and malf
       const result=await request(payload,options);
       assert.equal(result.status,404);
       assert.equal(result.headers["cache-control"],"no-store");
-      assert.ok(!result.body.includes("c".repeat(64)));
+      assert.ok(!result.body.includes(current.digest));
     }
   }finally{await new Promise(resolve=>server.close(resolve));}
 });
