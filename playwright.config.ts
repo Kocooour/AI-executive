@@ -46,6 +46,7 @@ const indexDetailPreviewTest = process.env.LUMI_INDEX_DETAIL_PREVIEW_E2E === "tr
 const focusFallbackTest = process.env.LUMI_TARGET_DETAIL_FOCUS_E2E === "true";
 const noteEditRecoveryTest = process.env.LUMI_TARGET_NOTE_EDIT_E2E === "true";
 const privateNoteAreasTest = process.env.LUMI_PRIVATE_NOTE_AREAS_E2E === "true";
+const privateNoteCreateTest = process.env.LUMI_PRIVATE_NOTE_CREATE_E2E === "true";
 
 export default defineConfig({
   testDir: "e2e",
@@ -135,6 +136,21 @@ export default defineConfig({
         AI_EXECUTIVE_TARGET_STAGING_HTTP_NOTES_ENABLED: "true",
         AI_EXECUTIVE_TARGET_STAGING_HTTP_PRIVATE_NOTE_AREAS_ENABLED: "true",
         AI_EXECUTIVE_TARGET_UI_PRIVATE_NOTE_AREAS_ENABLED: "true",
+      } : {}),
+      // R3-CAPTURE-2: separate, isolated synthetic CREATE browser run.
+      // It NEVER turns on a live host and does not alter read-only chooser CI.
+      ...(privateNoteCreateTest ? {
+        AI_EXECUTIVE_TARGET_STAGING_HTTP_ENABLED: "true",
+        AI_EXECUTIVE_TARGET_UI_ENABLED: "true",
+        AI_EXECUTIVE_TARGET_UI_SCOPES_ENABLED: "true",
+        AI_EXECUTIVE_TARGET_STAGING_HTTP_GLOBAL_NOTES_ENABLED: "true",
+        AI_EXECUTIVE_TARGET_STAGING_HTTP_NOTES_ENABLED: "true",
+        AI_EXECUTIVE_TARGET_STAGING_HTTP_PRIVATE_NOTE_AREAS_ENABLED: "true",
+        AI_EXECUTIVE_TARGET_STAGING_HTTP_WRITE_ENABLED: "true",
+        AI_EXECUTIVE_TARGET_STAGING_HTTP_NOTES_WRITE_ENABLED: "true",
+        AI_EXECUTIVE_TARGET_STAGING_HTTP_NOTES_CREATE_ENABLED: "true",
+        AI_EXECUTIVE_TARGET_UI_PRIVATE_NOTE_AREAS_ENABLED: "true",
+        AI_EXECUTIVE_TARGET_UI_PRIVATE_NOTE_CREATE_ENABLED: "true",
       } : {}),
       AI_EXECUTIVE_PASSWORD_HASH: passwordHash,
       AI_EXECUTIVE_SESSION_SECRET: sessionSecret,

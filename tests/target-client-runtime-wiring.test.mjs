@@ -33,7 +33,7 @@ test("the server page mounts the provider only behind the flag and reads it per 
   assert.doesNotMatch(page,/^"use client"/m);
   assert.match(page,/export const dynamic = "force-dynamic"/);
   assert.match(page,/targetUiEnabled\(\)/);
-  assert.match(page,/targetData\s*\n?\s*\?\s*<TargetDataProvider><LumiAppRoot targetMyPlan=\{config\?\.myPlan\} targetScopes=\{config\?\.scopes\} targetDetails=\{config\?\.details\} targetNoteEdit=\{Boolean\(config\?\.details\.note\) && targetNoteEditUiEnabled\(process\.env\)\} targetPrivateNoteAreas=\{Boolean\(config\?\.scopes\.notes\)&&targetPrivateNoteAreaUiEnabled\(process\.env\)\} \/><\/TargetDataProvider>\s*\n?\s*:\s*<LumiAppRoot \/>/);
+  assert.match(page,/targetData\s*\n?\s*\?\s*<TargetDataProvider><LumiAppRoot targetMyPlan=\{config\?\.myPlan\} targetScopes=\{config\?\.scopes\} targetDetails=\{config\?\.details\} targetNoteEdit=\{Boolean\(config\?\.details\.note\) && targetNoteEditUiEnabled\(process\.env\)\} targetPrivateNoteAreas=\{Boolean\(config\?\.scopes\.notes\)&&targetPrivateNoteAreaUiEnabled\(process\.env\)\} targetPrivateNoteCreate=\{Boolean\(config\?\.scopes\.notes\)&&targetPrivateNoteCreateUiEnabled\(process\.env\)\} \/><\/TargetDataProvider>\s*\n?\s*:\s*<LumiAppRoot \/>/);
   // The page itself never creates a runtime nor fetches.
   assert.doesNotMatch(page,/createTargetClientRuntime|fetch\(|target-client-runtime/);
 });
