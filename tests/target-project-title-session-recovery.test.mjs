@@ -192,6 +192,6 @@ test("UI does not send principal proof as a command token and remains default-of
   assert.match(editor,/resumeSealedProjectTitleEdit\(runtime,bound\.current,project\.id,result\.preview\)/);
   assert.match(editor,/confirmProjectTitleReload\(marker\.commandId,marker\.principalBinding\)/);
   assert.match(editor,/const command=d\.command\?\?\{expectedRevision:/);
-  assert.match(gate,/return false;/);
+  assert.match(gate,/TARGET_PROJECT_TITLE_EDIT_UI_FLAGS\.every\(flag=>env\[flag\]==='true'\)/);
   assert.doesNotMatch(editor,/sessionStorage\.setItem/);
 });

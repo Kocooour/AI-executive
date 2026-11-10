@@ -12,7 +12,8 @@ const signal=()=>new AbortController().signal;
 const source=path=>readFileSync(new URL('../'+path,import.meta.url),'utf8');
 test('editing is independently default-off and wired only inside project detail',()=>{
  const flags=Object.fromEntries(TARGET_PROJECT_TITLE_EDIT_UI_FLAGS.map(flag=>[flag,'true']));
- assert.equal(targetProjectTitleEditUiEnabled(flags),false);
+ assert.equal(targetProjectTitleEditUiEnabled(flags),true,
+   'all independently default-off staging/re-auth flags are required');
  for(const flag of TARGET_PROJECT_TITLE_EDIT_UI_FLAGS)assert.equal(targetProjectTitleEditUiEnabled({...flags,[flag]:undefined}),false,flag);
  assert.match(source('app/page.tsx'),/targetProjectTitleEditUiEnabled\(process\.env\)/);
  assert.match(source('app/ui/target-detail-panel.tsx'),/projectEdit&&<TargetProjectTitleEditor/);
