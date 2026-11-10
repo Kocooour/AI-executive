@@ -27,7 +27,7 @@ async function setup(page:Page,patch:Patch,params:{
     const scope=new URL(route.request().url()).searchParams.get("scope");
     return response(route,{scope,projects:[{
       id:PROJECT,title:params.committed?.()?"Renamed project":ORIGINAL,
-      areaId:"private-area",areaKind:"private",revision:1,
+      areaId:"private-area",areaKind:"private",
     }],hasMore:false,nextCursor:null});
   });
   await page.route(new RegExp("/api/target-staging/projects/"+PROJECT+"/tasks\\?"),route=>
