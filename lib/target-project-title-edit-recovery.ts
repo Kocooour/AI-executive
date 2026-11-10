@@ -68,6 +68,12 @@ function retainExpired(runtime:ProjectTitleEditRuntime,id:string,entry:Entry):vo
 /** Only the existence of a sealed write can be observed pre-reauth. No title. */
 export const hasSealedProjectTitleEdit=(runtime:ProjectTitleEditRuntime,id:string):boolean=>
   sealed.get(runtime)?.entries.has(id)===true;
+/** Erase private held title on lost ACL/actor mismatch, but keep the tab lock. */
+export function forgetSealedProjectTitleEdit(runtime:ProjectTitleEditRuntime,id:string):void{
+  const state=sealed.get(runtime);if(!state)return;
+  state.entries.delete(id);
+  if(state.entries.size===0)clearSealed(runtime);
+}
 /** The only way to unseal a command after expiry: separately authenticated
  * GET preview must give the SAME HMAC actor/project/restore binding, and the
  * tab barrier must still match the original UUID. No client actor claim.
