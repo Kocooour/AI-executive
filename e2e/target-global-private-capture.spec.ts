@@ -127,8 +127,16 @@ test("focus-trapped desktop detail opens private capture after closing the detai
   await expect(action).toBeFocused();
   await action.press("Enter");
   await expect(detail).toHaveCount(0);
-  await expect(page.getByTestId("target-private-note-areas")).toBeVisible();
+  const modal=page.getByTestId("target-private-note-areas");
+  await expect(modal).toBeVisible();
+  await expect(modal.getByRole("button",{name:"Zavřít"})).toBeFocused();
   await expect(page).not.toHaveURL(/noteId=/);
+  await page.keyboard.press("Escape");
+  await expect(modal).toHaveCount(0);
+  const fab=page.locator('[data-target-private-capture-fab="desktop"]');
+  await expect(fab).toBeFocused();
+  await fab.click();
+  await expect(modal).toBeVisible();
   await expect(page.getByTestId("target-private-area-select")).toHaveValue("");
   await fill(page);
   await page.getByTestId("target-private-create-save").click();
