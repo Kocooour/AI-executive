@@ -13,9 +13,9 @@ test("page and root pass the server-derived edit flags to the panel; absent flag
   assert.match(rootSource,/<TargetDetailPanel route=\{detailRoute\} language=\{language\} gates=\{detailGates\} edits=\{targetEdits\} noteEdit=\{targetNoteEdit && detailGates\.note\} \/>/);
 });
 
-test("the panel shows the 4a read-only note unless edits exist for the shown kind",()=>{
+test("the panel shows a read-only note only when neither legacy nor 4b edits are active",()=>{
   const panel=read("app/ui/target-detail-panel.tsx");
-  assert.match(panel,/content&&!\(edit&&kindHasEdits\(content\.kind,edits\)\)&&/);
+  assert.match(panel,/content&&!\(noteEdit&&content\.kind==="note"\)&&!\(edit&&kindHasEdits\(content\.kind,edits\)\)&&/);
   assert.match(panel,/<TaskEdits api=\{edit\} task=\{task\} expectedRevision=\{content\.expectedRevision\?\?null\}\/>/);
   assert.match(panel,/<NoteEdits api=\{edit\} note=\{note\}\/>/);
   assert.match(panel,/useTargetTick\(revalidate\);/);
