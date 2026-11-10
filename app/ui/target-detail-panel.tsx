@@ -190,6 +190,8 @@ function DetailBody({route,language,gates,edits}:{
   const [state,setState]=useState<State>({kind:"idle"});
   const [nonce,setNonce]=useState(0);
   const epoch=useRef(0);
+  // A confirmed irreversible delete invalidates any GET already in flight.
+  const deletedRef=useRef(false);
   const sessionRef=useRef(session);
   sessionRef.current=session;
   const stateRef=useRef(state);
@@ -273,7 +275,7 @@ function DetailBody({route,language,gates,edits}:{
     const live=sessionRef.current;
     if(current.kind!=="ready"||current.more||!live)return;
     // A deleted item is gone: never re-read it (that would replace the confirmation by a 404).
-    if(editRef.current?.deleted)return;
+    if(deletedRef.current||editRef.current?.deleted)return;
     const id=++epoch.current;
     const wanted=current.content.kind==="project"?current.content.page.tasks.length:0;
     void (async()=>{
@@ -282,11 +284,11 @@ function DetailBody({route,language,gates,edits}:{
       for(let guard=0;guard<20&&result.ok===true&&result.content.kind==="project"&&
         result.content.page.hasMore&&result.content.page.tasks.length<wanted;guard++)
         result=await live.loadMore();
-      if(epoch.current!==id)return;
+      if(epoch.current!==id||deletedRef.current)return;
       if(result.ok===true)setState({kind:"ready",content:result.content,more:false});
       else if(result.reason==="superseded")return;
       else setState({kind:"error",reason:result.reason==="not-ready"?"stale":result.reason});
-    })().catch(()=>{if(epoch.current===id)setState({kind:"error",reason:"unavailable"});});
+    })().catch(()=>{if(epoch.current===id&&!deletedRef.current)setState({kind:"error",reason:"unavailable"});});
   },[]);
   useTargetTick(revalidate);
 
@@ -322,7 +324,9 @@ function DetailBody({route,language,gates,edits}:{
   const edit=useDetailEdits({
     route,language,edits,content,sessionKey:session,
     removed:state.kind==="error"?state.reason:null,
-    readFetch,onRefusal,revalidate,onClose:()=>closeTargetDetail(route),
+    readFetch,onRefusal,revalidate,
+    onDeleted:()=>{deletedRef.current=true;epoch.current++;},
+    onClose:()=>closeTargetDetail(route),
   });
   editRef.current=edit;
 
