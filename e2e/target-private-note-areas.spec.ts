@@ -38,7 +38,7 @@ for(const width of [390,1280]){
       /nic se neukládá|nothing is saved/);
     const select=page.getByTestId("target-private-area-select");
     await expect(select.getByRole("option")).toHaveCount(3);
-    await expect(select.getByRole("option",{name:"Rodina"})).toBeVisible();
+    await expect(select.getByRole("option",{name:"Rodina"})).toHaveCount(1);
     await expect(modal).not.toContainText("Shared");
     await select.selectOption("personal-b");
     await expect(page.getByTestId("target-private-area-selected")).toContainText("Rodina");
