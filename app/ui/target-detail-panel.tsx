@@ -49,9 +49,10 @@ const humanDate=(day:string,locale:string)=>{
 
 const FOCUSABLE='a[href],button:not([disabled]),input:not([disabled]),select:not([disabled]),textarea:not([disabled]),[tabindex]:not([tabindex="-1"])';
 
-function Shell({route,label,language,children,panelRef}:{
+function Shell({route,label,language,children,panelRef,onPrivateCapture}:{
   route:TargetDetailRoute|null;label:string;language:DetailLanguage;
   children:React.ReactNode;panelRef:React.RefObject<HTMLElement|null>;
+  onPrivateCapture?:()=>void;
 }){
   const copy=detailCopy[language];
   const close=useCallback(()=>closeTargetDetail(route),[route]);
@@ -103,17 +104,21 @@ function Shell({route,label,language,children,panelRef}:{
           <span className="inspectorCloseAccessible">{copy.close}</span></span>
         <span className="inspectorBackLabel">{copy.back}</span>
       </button>
+      {onPrivateCapture&&<button type="button" data-testid="target-detail-capture"
+        onClick={onPrivateCapture}>
+        ＋ {language==="cs"?"Nová soukromá poznámka":"New private note"}
+      </button>}
       {children}
     </aside>
   </div>;
 }
 
 /** Calm answer for a malformed address or a kind that is switched off. */
-function UnavailablePanel({language}:{language:DetailLanguage}){
+function UnavailablePanel({language,onPrivateCapture}:{language:DetailLanguage;onPrivateCapture?:()=>void}){
   const copy=detailCopy[language];
   const ref=useRef<HTMLElement|null>(null);
   useEffect(()=>{ref.current?.focus({preventScroll:true});},[]);
-  return <Shell route={null} label={copy.failures["not-available"]} language={language} panelRef={ref}>
+  return <Shell route={null} label={copy.failures["not-available"]} language={language} panelRef={ref} onPrivateCapture={onPrivateCapture}>
     <p role="status" data-testid="target-detail-unavailable">{copy.failures["not-available"]}</p>
   </Shell>;
 }
@@ -179,8 +184,9 @@ function Content({content,route,copy,gates,more,onMore,noteEdit,onCommitted,onAc
   </article>;
 }
 
-function DetailBody({route,language,gates,noteEdit}:{
+function DetailBody({route,language,gates,noteEdit,onPrivateCapture}:{
   route:TargetDetailRoute;language:DetailLanguage;gates:TargetDetailGates;noteEdit:boolean;
+  onPrivateCapture?:()=>void;
 }){
   const copy=detailCopy[language];
   const {gate,onRefusal,retry}=useTargetGate();
@@ -340,7 +346,7 @@ function DetailBody({route,language,gates,noteEdit}:{
       error={gate.kind==="refused"?{kind:"signed_out",action:"verify",message:copy.failures["signed-out"]}:undefined}
       language={language} onAction={retry}/>;
 
-  return <Shell route={route} label={gateView?kindLabel:label} language={language} panelRef={panelRef}>
+  return <Shell route={route} label={gateView?kindLabel:label} language={language} panelRef={panelRef} onPrivateCapture={onPrivateCapture}>
     {gateView}
     {!gateView&&<>
       <p role="status" className="targetDetailStatus">
@@ -363,11 +369,13 @@ function DetailBody({route,language,gates,noteEdit}:{
   </Shell>;
 }
 
-export default function TargetDetailPanel({route,language="cs",gates,noteEdit=false}:{
+export default function TargetDetailPanel({route,language="cs",gates,noteEdit=false,onPrivateCapture}:{
   /** null: the address asked for something that cannot be opened. */
   route:TargetDetailRoute|null;language?:DetailLanguage;gates:TargetDetailGates;noteEdit?:boolean;
+  onPrivateCapture?:()=>void;
 }){
-  if(route===null)return <UnavailablePanel language={language}/>;
+  if(route===null)return <UnavailablePanel language={language} onPrivateCapture={onPrivateCapture}/>;
   // Keyed by target: another item is a new session, never a reuse of old content.
-  return <DetailBody key={detailRouteKey(route)} route={route} language={language} gates={gates} noteEdit={noteEdit&&gates.note}/>;
+  return <DetailBody key={detailRouteKey(route)} route={route} language={language} gates={gates}
+    noteEdit={noteEdit&&gates.note} onPrivateCapture={onPrivateCapture}/>;
 }
