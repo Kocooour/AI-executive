@@ -24,10 +24,8 @@ export function privateNoteCreateMarker(generation:string):CreateMarker{
     const store=storage();if(!store)return {kind:"unavailable"};
     const raw=store.getItem(KEY);if(raw===null)return {kind:"clear"};
     const marker=decode(raw);if(!marker)return {kind:"unavailable"};
-    if(marker.generation!==generation){
-      store.removeItem(KEY);
-      return store.getItem(KEY)===null?{kind:"clear"}:{kind:"unavailable"};
-    }
+    // An earlier CREATE may still commit after session expiry or account
+    // rotation; never clear its unresolved UUID on the client alone.
     return {kind:"blocked",commandId:marker.commandId};
   }catch{return {kind:"unavailable"};}
 }
@@ -51,6 +49,20 @@ export function confirmPrivateNoteCreate(generation:string,commandId:string):boo
     const parsed=saved===null?null:decode(saved);
     if(!parsed||parsed.generation!==generation||parsed.commandId!==commandId)
       return false;
+    store.removeItem(KEY);
+    return store.getItem(KEY)===null;
+  }catch{return false;}
+}
+
+/** Only call after a current authenticated, actor-scoped receipt confirms that
+ * this exact UUID committed. A generation change is NOT proof of cancellation
+ * or permission for a new create. */
+export function confirmRecoveredPrivateNoteCreate(generation:string,commandId:string):boolean{
+  if(!GENERATION.test(generation)||!UUID.test(commandId))return false;
+  try{
+    const store=storage();if(!store)return false;
+    const raw=store.getItem(KEY),saved=raw===null?null:decode(raw);
+    if(!saved||saved.commandId!==commandId)return false;
     store.removeItem(KEY);
     return store.getItem(KEY)===null;
   }catch{return false;}
