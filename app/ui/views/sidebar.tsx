@@ -13,7 +13,9 @@ import { TargetSidebarContext } from "../target-sidebar-context";
 // R3-FE-4a: loaded only when the server page enabled target scopes with the project index.
 const TargetSidebarProjects = dynamic(() => import("../target-sidebar-projects"), { ssr: false });
 
-export function Sidebar({ app, targetPlan = false }: { app: LumiApp; targetPlan?: boolean }) {
+export function Sidebar({ app, targetPlan = false, onTargetCapture }: {
+  app: LumiApp; targetPlan?: boolean; onTargetCapture?:()=>void;
+}) {
   const targetSidebar = useContext(TargetSidebarContext);
   const {
     setSettingsSection,
@@ -250,17 +252,16 @@ export function Sidebar({ app, targetPlan = false }: { app: LumiApp; targetPlan?
               inspector open it is hidden to keep the inspector unobstructed,
               so provide a fixed, keyboard-accessible sidebar entry instead.
               Legacy sidebar controls remain unchanged when preview is off. */}
-          {!app.captureDisabled && <>
-          {mobileDesignV1Preview && app.selected && (
+          {mobileDesignV1Preview && app.selected && (!app.captureDisabled || onTargetCapture) && (
             <button type="button" className="desktopInspectorCapture"
               data-desktop-inspector-capture
-              aria-label={tr("quickCapture")}
+              data-target-private-capture-fab={onTargetCapture?"sidebar":undefined}
+              aria-label={onTargetCapture?(language==="cs"?"Nová soukromá poznámka":"New private note"):tr("quickCapture")}
               disabled={Boolean(app.capture || app.assistantOpen || app.moreOpen || app.confirmRequest)}
-              onClick={() => openCapture()}>
-              ＋ {tr("new")}
+              onClick={onTargetCapture ?? (()=>openCapture())}>
+              ＋ {onTargetCapture?(language==="cs"?"Nová poznámka":"New note"):tr("new")}
             </button>
-          )}
-          </>}
+          )
           {!mobileDesignV1Preview && (
             <>
               {!app.captureDisabled && <button onClick={() => openCapture()} aria-label={tr("addTask")}>
