@@ -1,7 +1,8 @@
 "use client";
 /** R3-FE-4b: authorized, CAS-protected note editing. An already-sent PATCH
  * belongs to the runtime/generation-scoped recovery coordinator, NOT to this
- * disposable inspector. No local storage, background sync, or optimistic text. */
+ * disposable inspector. Only a content-free reload UUID/generation marker
+ * persists in the tab; no stored note text, offline sync, or optimistic text. */
 import {useEffect,useRef,useState,type FormEvent} from "react";
 import {useTargetGeneration,useTargetRuntime} from "./target-data-provider";
 import {readStagingNotePreview,type NotePreview} from "../../lib/target-staging-note-preview-client";
