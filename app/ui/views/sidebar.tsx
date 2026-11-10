@@ -13,9 +13,8 @@ import { TargetSidebarContext } from "../target-sidebar-context";
 // R3-FE-4a: loaded only when the server page enabled target scopes with the project index.
 const TargetSidebarProjects = dynamic(() => import("../target-sidebar-projects"), { ssr: false });
 
-export function Sidebar({ app, targetPlan = false, onTargetCapture, targetInspectorOpen = false }: {
+export function Sidebar({ app, targetPlan = false, onTargetCapture }: {
   app: LumiApp; targetPlan?: boolean; onTargetCapture?:()=>void;
-  targetInspectorOpen?:boolean;
 }) {
   const targetSidebar = useContext(TargetSidebarContext);
   const {
@@ -249,19 +248,15 @@ export function Sidebar({ app, targetPlan = false, onTargetCapture, targetInspec
         )}
         </div>
         <footer className="sidebarActions">
-          {/* The FAB is the normal desktop entry point. With a nonmodal
-              inspector open it is hidden to keep the inspector unobstructed,
-              so provide a fixed, keyboard-accessible sidebar entry instead.
-              Legacy sidebar controls remain unchanged when preview is off. */}
-          {mobileDesignV1Preview && (app.selected || (onTargetCapture && targetInspectorOpen)) &&
-            (!app.captureDisabled || onTargetCapture) && (
+          {/* Legacy inspector retains its previous sidebar capture entry.
+              Target details are aria-modal focus traps: the target capture
+              entry belongs INSIDE their dialog, not in an unreachable sidebar. */}
+          {mobileDesignV1Preview && app.selected && !onTargetCapture && !app.captureDisabled && (
             <button type="button" className="desktopInspectorCapture"
-              data-desktop-inspector-capture
-              data-target-private-capture-fab={onTargetCapture?"sidebar":undefined}
-              aria-label={onTargetCapture?(language==="cs"?"Nová soukromá poznámka":"New private note"):tr("quickCapture")}
+              data-desktop-inspector-capture aria-label={tr("quickCapture")}
               disabled={Boolean(app.capture || app.assistantOpen || app.moreOpen || app.confirmRequest)}
-              onClick={onTargetCapture ?? (()=>openCapture())}>
-              ＋ {onTargetCapture?(language==="cs"?"Nová poznámka":"New note"):tr("new")}
+              onClick={()=>openCapture()}>
+              ＋ {tr("new")}
             </button>
           )}
           {!mobileDesignV1Preview && (
