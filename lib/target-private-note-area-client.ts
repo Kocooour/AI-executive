@@ -10,7 +10,7 @@ const encoder=new TextEncoder();
 const valid=(v:unknown,max:number):v is string=>{
   if(typeof v!=="string"||v.trim().length===0||
     !v.isWellFormed()||encoder.encode(v).length>max||
-    /[\\u0000-\\u001f\\u007f]/u.test(v))return false;
+    /[\u0000-\u001f\u007f]/u.test(v))return false;
   return true;
 };
 function earlier(a:string,b:string){
