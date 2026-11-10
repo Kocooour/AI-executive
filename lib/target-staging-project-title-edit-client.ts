@@ -13,7 +13,9 @@ export type ProjectTitleEditFailure="denied"|"conflict"|"unavailable"|"offline"|
 export type ProjectTitleEditPreviewResult={ok:true;preview:ProjectTitleEditPreview}|
   {ok:false;reason:ProjectTitleEditFailure};
 export type ProjectTitleEditSaveResult=
-  {outcome:"saved";replayed:boolean}|{outcome:"conflict"|"denied"|"uncertain"|"expired"};
+  {outcome:"saved";replayed:boolean}|
+  {outcome:"denied";definitiveNoWrite?:true}|
+  {outcome:"conflict"|"uncertain"|"expired"};
 
 const uuid=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const hex=/^[0-9a-f]{64}$/;
@@ -119,8 +121,32 @@ export async function saveProjectTitleEdit(projectId:string,command:ProjectTitle
       }catch{/* malformed refusal is an ordinary denial */}
       return {outcome:"denied"};
     }
-    if(response.status===403||response.status===404)return {outcome:"denied"};
-    if(response.status===409||response.status===400)return {outcome:"conflict"};
+    if(response.status===403||response.status===404){
+      // A route-issued, exact no-store refusal for these two statuses happens
+      // before mutation in the project PATCH route. Unlike a coded/generic
+      // 401, this can release a FIRST-dispatch tab lock without asserting a
+      // commit. An invalid, redirected or unrecognised response stays denied
+      // but never carries the no-write proof.
+      let definitiveNoWrite=false;
+      try{
+        const body=await strictJson(response,512);
+        definitiveNoWrite=record(body)&&Object.keys(body).join(",")==="error"&&
+          ((response.status===404&&body.error==="Not found")||
+           (response.status===403&&body.error==="Cross-origin request rejected"));
+      }catch{/* missing or untrusted reply cannot clear an uncertain command */}
+      return definitiveNoWrite?{outcome:"denied",definitiveNoWrite:true}:{outcome:"denied"};
+    }
+    if(response.status===409){
+      // Only this exact pre-COMMIT CAS refusal is a definitive conflict.
+      // Malformed/proxy 409s must not unlock an ambiguous attempt.
+      try{
+        const body=await strictJson(response,512);
+        if(record(body)&&Object.keys(body).join(",")==="error"&&
+          body.error==="Revision conflict")return {outcome:"conflict"};
+      }catch{/* keep the command uncertain */}
+      return {outcome:"uncertain"};
+    }
+    if(response.status===400)return {outcome:"conflict"};
     if(response.status!==200)return {outcome:"uncertain"};
     const result=await strictJson(response);
     if(!record(result))return {outcome:"uncertain"};
