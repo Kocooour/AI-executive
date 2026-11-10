@@ -43,6 +43,7 @@ export default function TargetPrivateNoteAreaChooser({
   useEffect(()=>{
     const controller=new AbortController();
     let mounted=true;
+    let timeout:ReturnType<typeof setTimeout>|null=null;
     setChosen("");
     setState({kind:"loading",generation});
     if(!runtime||!runtime.known()||runtime.generation()!==generation){
@@ -56,7 +57,12 @@ export default function TargetPrivateNoteAreaChooser({
     if(!available()){
       setState({kind:"unavailable",generation});
     }else{
+      timeout=setTimeout(()=>{
+        controller.abort();
+        if(mounted)setState({kind:"unavailable",generation});
+      },8000);
       void loadPrivateNoteAreaChoices(controller.signal).then(result=>{
+        if(timeout!==null)clearTimeout(timeout);
         if(!mounted||controller.signal.aborted||!runtime.known()||
           runtime.generation()!==generation||!available())return;
         if(result.ok)setState({kind:"ready",generation,areas:result.areas});
@@ -64,8 +70,11 @@ export default function TargetPrivateNoteAreaChooser({
           setState({kind:"signed-out",generation});
           void runtime.reportRefusal();
         }else setState({kind:"unavailable",generation});
-      }).catch(()=>{if(mounted&&!controller.signal.aborted)
-        setState({kind:"unavailable",generation});});
+      }).catch(()=>{
+        if(timeout!==null)clearTimeout(timeout);
+        if(mounted&&!controller.signal.aborted)
+          setState({kind:"unavailable",generation});
+      });
     }
     const onWake=()=>{
       setState({kind:"unavailable",generation});
@@ -77,7 +86,9 @@ export default function TargetPrivateNoteAreaChooser({
     window.addEventListener("offline",onWake);
     window.addEventListener("online",onWake);
     return ()=>{
-      mounted=false;controller.abort();unregister();
+      mounted=false;
+      if(timeout!==null)clearTimeout(timeout);
+      controller.abort();unregister();
       document.removeEventListener("visibilitychange",onWake);
       window.removeEventListener("offline",onWake);
       window.removeEventListener("online",onWake);
