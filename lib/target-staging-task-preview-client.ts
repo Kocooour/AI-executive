@@ -37,11 +37,7 @@ function parsedTask(v:unknown,id:string):TaskPreview|null{
   return v as TaskPreview;
 }
 export function parseTaskPreview(value:unknown,id:string):TaskPreview|null{
-  if(!validId(id)||!record(value))return null;
-  const keys=Object.keys(value).sort().join("|");
-  if((keys!=="task"&&keys!=="expectedRevision|task")||
-    (keys==="expectedRevision|task"&&
-      (typeof value.expectedRevision!=="string"||!/^[a-f0-9]{64}$/.test(value.expectedRevision))))
+  if(!validId(id)||!record(value)||Object.keys(value).join("|")!=="task")
     return null;
   return parsedTask(value.task,id);
 }
@@ -129,12 +125,15 @@ export async function readStagingTaskPreview(
     return {ok:false,reason:"invalid-response"};
   }
   try{
+    // The server sets this ONLY for a currently writable actor; it comes from the
+    // same pinned SQLite snapshot as the strict, unchanged `{task}` JSON payload.
+    const revision=response.headers.get("x-lumi-task-revision");
+    if(revision!==null&&!/^[a-f0-9]{64}$/.test(revision))
+      return {ok:false,reason:"invalid-response"};
     const body=await boundedJson(response,signal);
     if(signal.aborted)return {ok:false,reason:"aborted"};
     const task=parseTaskPreview(body,taskId);
-    return task?{ok:true,task,
-      ...(record(body)&&typeof body.expectedRevision==="string"
-        ?{expectedRevision:body.expectedRevision}:{})}
+    return task?{ok:true,task,...(revision!==null?{expectedRevision:revision}:{})}
       :{ok:false,reason:"invalid-response"};
   }catch{return {ok:false,reason:signal.aborted?"aborted":"invalid-response"};}
 }
