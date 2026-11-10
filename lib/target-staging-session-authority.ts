@@ -40,7 +40,7 @@ import {
   previewPreflightedTargetTaskTitleEdit, readPreflightedIsolatedTargetTask,
   readPreflightedIsolatedPersonalTargetTask, readPreflightedPersonalTargetTaskWithRevision,
   readPreflightedTargetTaskTitleCommandStatus, readPreflightedTargetTaskDeleteCommandStatus,
-  readPreflightedTargetNoteEditCommandStatus, readPreflightedTargetNoteDeleteCommandStatus,
+  readPreflightedTargetNoteEditCommandStatus,readPreflightedTargetNoteEditRecovery, readPreflightedTargetNoteDeleteCommandStatus,
   listPreflightedPrivateProjectsAtOffset, readPreflightedPrivateProjectDetail,
   readPreflightedPrivateTaskTitleAudit,
   readPreflightedScopedTaskPage, readPreflightedSharedTargetTask, readPreflightedChangeFeedPage,
@@ -53,6 +53,7 @@ import {
   readPreflightedPersonalWhenPage,
   readPreflightedMyPlanDayTaskPage,
   readPreflightedAttentionCandidatePage,readPreflightedStoreSnapshot,
+  readPreflightedPrivateNoteAreaTargets,
   type TargetAttentionProfilePage,
   readPreflightedMyPlanTwoDayTaskPage,
   readPreflightedGlobalTaskPage,
@@ -73,7 +74,7 @@ import {
   readPreflightedAuthorizedNoteSync,
 } from "./target-task-staging-reader";
 import type { TargetStagingReadStore, TargetPreflightedPrivateProjectDetail, TargetPreflightedSharedTaskDetail,
-  TargetPreflightedPersonalTaskDetail } from "./target-task-staging-reader";
+  TargetPreflightedPersonalTaskDetail,TargetPrivateNoteAreaTargets } from "./target-task-staging-reader";
 import type { TargetPrivateProjectPage } from "./target-project-read-model";
 import type { TargetAuthorizedProjectTasksResult } from "./target-project-task-read-model";
 import type { TargetAuthorizedStructuralRelationsResult } from "./target-project-structural-relations";
@@ -87,7 +88,7 @@ import type { TargetChangeFeedResult } from "./target-change-feed-read-model";
 import type { FeedClaims } from "./target-staging-feed-cursor";
 import type { TargetPrivateTaskTitleAuditResult } from "./target-task-read-model";
 import type { TargetStagingTaskTitleCommandStatusResult, TargetTemporalStatusReceiptResult, TargetTemporalStatusReceiptSnapshot, TargetTemporalDueOnReceiptResult, TargetTemporalDueOnReceiptSnapshot } from "./target-task-staging-reader";
-import type { TargetNoteEditCommandStatus } from "./target-note-command-status";
+import type {TargetNoteEditCommandStatus,TargetNoteEditRecovery} from "./target-note-command-status";
 import type { TargetNoteDeleteCommandStatus } from "./target-note-delete-command-status";
 import { validTargetTaskTitleEditPreviewRequest } from "./target-task-write-preflight";
 import { writePreflightedTargetTaskTitle, validTargetStagingTaskTitleWriteRequest } from "./target-task-staging-writer";
@@ -401,6 +402,17 @@ export class TargetStagingSessionAuthority {
     const signature = createHmac("sha256", this.#key).update(TOKEN_DOMAIN)
       .update(payload).digest("base64url");
     return { signingKey: this.#key, sessionToken: `${payload}.${signature}` };
+  }
+
+  /** R3-CAPTURE-1: signed actor + pinned private writable Area witnesses.
+   * Live release guard belongs to the HTTP route; never trust scope alone. */
+  readPrivateNoteAreaTargets(actorUserId:string):TargetPrivateNoteAreaTargets|null{
+    if(this.#closed)return null;
+    try{
+      const credential=this.#oneShotReadCredential(actorUserId);
+      return credential
+        ?readPreflightedPrivateNoteAreaTargets(this.#store,credential):null;
+    }catch{return null;}
   }
 
   /** R2-ID.2b: one shared / my-plan page plus its read-linearization record,
@@ -1219,20 +1231,28 @@ export class TargetStagingSessionAuthority {
   }
 
   /** v19 staging-only authenticated note creation or movement.
-   * No HTTP route exists for this method. All ACL and session checks are
+   * HTTP may use the privateCreateOnly restriction. All ACL and session checks are
    * independently repeated under the pinned BEGIN IMMEDIATE writer lock.
    */
   changeNoteLifecycle(
     sessionToken: string,
     request: TargetStagingNoteLifecycleRequest,
     durableSessionTokenHash?: string,
+    privateCreateOnly = false,
   ): TargetStagingNoteLifecycleResult {
     const credential = this.#credential(sessionToken, true);
     if (!credential) return { ok:false, reason:"unauthorized" };
     if (!validTargetStagingNoteLifecycleRequest(request))
       return {ok:false, reason:"invalid_request"};
     return changePreflightedTargetNoteLifecycle(
-      this.#store,credential,request,durableSessionTokenHash);
+      this.#store,credential,request,durableSessionTokenHash,privateCreateOnly);
+  }
+
+  /** Read-only actor-scoped recovery of a note edit after browser reload. */
+  noteEditRecovery(sessionToken:string,commandId:string):TargetNoteEditRecovery{
+    const credential=this.#credential(sessionToken,true);
+    return credential?readPreflightedTargetNoteEditRecovery(this.#store,credential,commandId)
+      :{ok:false,reason:"unavailable"};
   }
 
   /** Read-only status of the exact note edit for its current authorized writer. */

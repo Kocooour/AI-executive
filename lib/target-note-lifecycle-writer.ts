@@ -1,5 +1,6 @@
 /** Staging-only authorized, pinned note create/move journal writer.
- * Default-unused: there is no new route, UI hook or production activation.
+ * The default-off HTTP route supports private standalone note creation only;
+ * no UI integration, HTTP move/shared-create route or production activation exists.
  * A new user-visible sharing boundary must be explicitly confirmed.
  */
 import { createHash } from "node:crypto";
@@ -96,6 +97,7 @@ export function changePreflightedTargetNoteLifecycle(
   credential: TargetStagingReadCredential,
   request: TargetStagingNoteLifecycleRequest,
   durableSessionTokenHash?: string,
+  privateCreateOnly = false,
 ): TargetStagingNoteLifecycleResult {
   if (!validTargetStagingNoteLifecycleRequest(request))
     return { ok:false, reason:"invalid_request" };
@@ -116,6 +118,12 @@ export function changePreflightedTargetNoteLifecycle(
       return { ok:false, reason:"resync_required" };
     const dest = destination(db,request.areaId,request.projectId);
     if (!dest || !canWriteIsolatedTargetArea(db,actor,request.areaId))
+      return { ok:false, reason:"unavailable" };
+    // The HTTP Quick Capture boundary may only create standalone PRIVATE notes.
+    // Enforce this under the same BEGIN IMMEDIATE lock as the Area ACL, never
+    // from a stale preflight or caller-supplied workspace/scope hint.
+    if (privateCreateOnly && (request.kind !== "create" ||
+        request.projectId !== null || dest.kind !== "private"))
       return { ok:false, reason:"unavailable" };
 
     // A completed command may have created the note or already moved it into

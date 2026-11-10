@@ -79,3 +79,13 @@
   .targetDetailEditActions button,.targetDetailEditRow>button{flex:1 1 140px;justify-self:stretch;}
 }
 .targetDetailEditLabel{align-self:center;font-size:14px;font-weight:600;}
+
+/* R3-FE-4b: conservative native note editing inside an authorized detail. */
+.targetNoteEdit{display:grid;gap:12px;margin-top:8px;min-width:0;}
+.targetNoteEdit label{display:grid;gap:5px;font-size:14px;font-weight:600;}
+.targetNoteEdit input,.targetNoteEdit textarea{box-sizing:border-box;width:100%;min-width:0;
+  padding:10px;border:1px solid var(--line,#9da99e);border-radius:10px;
+  background:var(--surface,#fff);color:inherit;font:inherit;line-height:1.4;}
+.targetNoteEdit textarea{resize:vertical;max-height:50vh;}
+.targetNoteEditActions{display:flex;gap:8px;flex-wrap:wrap;}
+.targetNoteEdit [role="alert"]{color:var(--muted,#5f5f62);}

@@ -174,18 +174,25 @@ test("focus management: the panel takes focus on open and Escape/close/backdrop 
   assert.match(state,/export function focusPendingRow/);
 });
 
-test("no create endpoint exists for tasks, projects or notes: the documented 4b/backend gap",()=>{
+test("4b introduces only a separately gated private standalone note-create HTTP route; task/project create and target UI remain unavailable",()=>{
   for(const file of ["app/api/target-staging/tasks/route.ts","app/api/target-staging/projects/route.ts"]){
     const source=read(file);
     assert.match(source,/export async function GET/,file);
     assert.doesNotMatch(source,/export async function (POST|PUT|PATCH|DELETE)/,file);
   }
-  assert.equal(existsSync(path.join(root,"app/api/target-staging/notes/route.ts")),false);
-  const create=walk("app/api/target-staging").filter(file=>/route\.ts$/.test(file) &&
-    /export async function POST/.test(read(file)) && /create/i.test(file));
-  assert.deepEqual(create,[]);
+  const noteRoute=read("app/api/target-staging/notes/route.ts");
+  assert.match(noteRoute,/export async function POST/);
+  assert.match(noteRoute,/AI_EXECUTIVE_TARGET_STAGING_HTTP_NOTES_CREATE_ENABLED/);
+  assert.match(noteRoute,/AI_EXECUTIVE_TARGET_STAGING_HTTP_NOTES_WRITE_ENABLED/);
+  assert.match(noteRoute,/projectId: null/);
+  const writer=read("lib/target-note-lifecycle-writer.ts");
+  assert.match(writer,/privateCreateOnly/);
+  assert.match(writer,/dest\.kind !== "private"/);
+  const shell=read("app/ui/use-lumi-app.tsx");
+  assert.match(shell,/if \(blockLegacyWrite\(\)\) return;/);
+  const doc=read("docs/R3-BE-04B-PRIVATE-NOTE-CREATE.md");
+  assert.match(doc,/Quick Capture.*vypnut/);
 });
-
 test("page: the provider mounts through the shared rule and the config reaches the root",()=>{
   const page=read("app/page.tsx");
   assert.match(page,/targetDataNeeded\(config\)/);
@@ -340,7 +347,7 @@ test("the refusal budget is shared per runtime (gate hook and My Plan)",()=>{
 test("mount rule: page.tsx wiring is checked literally, independent of targetDataNeeded",()=>{
   const page=read("app/page.tsx");
   assert.match(page,/const config = targetUiEnabled\(\) \? targetUiConfig\(process\.env\) : null;/);
-  assert.match(page,/const targetData = targetDataNeeded\(config\);\s*return targetData\s*\?\s*<TargetDataProvider><LumiAppRoot targetMyPlan=\{config\?\.myPlan\} targetScopes=\{config\?\.scopes\} targetDetails=\{config\?\.details\} targetEdits=\{config\?\.edits\} \/><\/TargetDataProvider>\s*:\s*<LumiAppRoot \/>;/);
+  assert.match(page,/const targetData = targetDataNeeded\(config\);\s*return targetData\s*\?\s*<TargetDataProvider><LumiAppRoot targetMyPlan=\{config\?\.myPlan\} targetScopes=\{config\?\.scopes\} targetDetails=\{config\?\.details\} targetEdits=\{config\?\.edits\} targetNoteEdit=\{Boolean\(config\?\.details\.note\) && targetNoteEditUiEnabled\(process\.env\)\} targetPrivateNoteAreas=\{Boolean\(config\?\.scopes\.notes\)&&targetPrivateNoteAreaUiEnabled\(process\.env\)\} \/><\/TargetDataProvider>\s*:\s*<LumiAppRoot \/>;/);
   // The rule itself, literally: details are no consumer of their own.
   assert.match(read("lib/target-ui-config.ts"),/return config!==null&&\(config\.myPlan\.enabled\|\|config\.scopes\.projects\|\|config\.scopes\.notes\);/);
 });

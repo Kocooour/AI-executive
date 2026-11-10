@@ -18,6 +18,10 @@ import { makeSyntheticDerivativeFixture, previewSyntheticDerivativeImpact } from
 import { bindSyntheticDerivativeRevision, recheckSyntheticDerivativeRevision } from "../scripts/humanwiki-synthetic/derivative-revision.mjs";
 import { bindSyntheticEpochFence, recheckSyntheticEpochFence, rehearseSyntheticFenceWindow, makeSyntheticEpochFenceFixture } from "../scripts/humanwiki-synthetic/epoch-fence-rehearsal.mjs";
 import { previewSyntheticHumanWikiAcceptance } from "../scripts/humanwiki-synthetic/acceptance-matrix.mjs";
+import { previewSyntheticClaimProposals } from "../scripts/humanwiki-synthetic/claim-proposal-preview.mjs";
+import { bindSyntheticProposalReview, rehearseSyntheticProposalReview, rehearseSyntheticProposalReviewRevisionTransition } from "../scripts/humanwiki-synthetic/proposal-review-rehearsal.mjs";
+import { previewSyntheticProposalLifecycleHolds, rehearseSyntheticProposalLifecycleIntent } from "../scripts/humanwiki-synthetic/proposal-lifecycle-holds.mjs";
+import { previewSyntheticProposalRegrantTimeline, rehearseSyntheticProposalRegrantScenario, bindSyntheticProposalRegrant } from "../scripts/humanwiki-synthetic/proposal-regrant-rehearsal.mjs";
 import { ensurePrivateCheckpointDirectory, writeCheckpointAtomic } from "../scripts/humanwiki-synthetic/checkpoint.mjs";
 
 const fixture = name => JSON.parse(readFileSync(new URL(`../scripts/humanwiki-synthetic/fixtures/${name}.json`, import.meta.url), "utf8"));
@@ -2280,4 +2284,1028 @@ test("HumanWiki matrix verifies stale-source triage after unrelated fictional me
   assert.equal(report.actual_imports_performed, 0);
   assert.equal(report.review_outcomes_written, 0);
   assert.equal(JSON.stringify(bundles), before);
+});
+
+test("HumanWiki fictional claim draft is a source-linked topic candidate, never a confirmed fact", () => {
+  const bundles = [fixture("chatgpt"), fixture("claude")];
+  const initial = JSON.stringify(bundles);
+  const report = previewSyntheticClaimProposals(bundles);
+  assert.equal(report.synthetic_fixture_only, true);
+  assert.equal(report.mode, "manually_curated_fictional_claim_proposal_preview");
+  assert.equal(report.stages_checked, 7);
+  assert.equal(report.source_segments_checked, 6);
+  assert.equal(report.draft_proposals_count, 1);
+  assert.equal(report.withheld_segments_count, 5);
+  assert.deepEqual(report.withheld_reason_counts, {
+    owner_question_not_an_assertion: 1,
+    assistant_output_not_owner_evidence: 2,
+    third_party_quote_not_owner_evidence: 2,
+  });
+  const [proposal] = report.draft_proposals;
+  assert.deepEqual(proposal.source_locator, {
+    source_id: "fixture-chatgpt-01",
+    conversation_id: "chat-synthetic-01",
+    message_id: "m-01",
+    segment: 0,
+  });
+  assert.equal(proposal.draft_id, "toy-garden-topic-draft-01");
+  assert.equal(proposal.draft_type, "fictional_project_topic_suggestion");
+  assert.equal(proposal.fictional_relation, "may_be_planning");
+  assert.equal(proposal.provenance, "owner_statement");
+  assert.equal(proposal.speaker, "user");
+  assert.equal(proposal.review, "proposed");
+  assert.equal(proposal.freshness, "current");
+  assert.equal(proposal.disputed, false);
+  assert.equal(proposal.sensitivity, "unclassified");
+  assert.equal(proposal.scope, "owner_private_unassigned");
+  assert.equal(proposal.independent_evidence, false);
+  assert.equal(proposal.requires_explicit_human_claim_review, true);
+  assert.equal(proposal.claim_confirmed, false);
+  assert.equal(proposal.canonical_claim_written, false);
+  assert.equal(proposal.canonical_task_written, false);
+  assert.equal(proposal.usable_as_personal_fact, false);
+  assert.equal(report.actual_claims_created, 0);
+  assert.equal(report.claims_confirmed, 0);
+  assert.equal(report.actual_tasks_created, 0);
+  assert.equal(report.review_outcomes_written, 0);
+  assert.equal(report.data_release_authorized, false);
+  assert.equal(JSON.stringify(bundles), initial, "lab preview must not mutate inputs");
+});
+
+test("HumanWiki fictional assistant and quote claims never become owner's biography", () => {
+  const report = previewSyntheticClaimProposals([fixture("chatgpt"), fixture("claude")]);
+  const excludes = report.withheld_entries;
+  assert.equal(excludes.length, 5);
+  assert.equal(new Set(excludes.map(item =>
+    JSON.stringify(item.source_locator))).size, 5);
+  assert.ok(excludes.every(item => item.eligible_for_claim_proposal === false));
+  assert.deepEqual(excludes.filter(item => item.provenance === "assistant_generated")
+    .map(item => item.reason_code), [
+    "assistant_output_not_owner_evidence", "assistant_output_not_owner_evidence",
+  ]);
+  assert.equal(excludes.filter(item =>
+    item.provenance === "quoted_third_party").length, 2);
+  assert.ok(excludes.filter(item => item.provenance === "quoted_third_party")
+    .every(item => item.reason_code === "third_party_quote_not_owner_evidence"));
+  const ownerQuestion = excludes.find(item =>
+    item.source_locator.source_id === "fixture-claude-01" &&
+    item.source_locator.message_id === "c-01");
+  assert.ok(ownerQuestion);
+  assert.equal(ownerQuestion.provenance, "owner_statement");
+  assert.equal(ownerQuestion.reason_code, "owner_question_not_an_assertion");
+  assert.equal(report.draft_proposals.some(item =>
+    item.source_locator.source_id === "fixture-claude-01"), false);
+  assert.equal(report.model_extraction_performed, false);
+  assert.equal(report.auto_identity_resolution_performed, false);
+  assert.equal(report.source_evidence_authenticated, false);
+  assert.equal(report.external_model_egress_performed, false);
+});
+
+test("HumanWiki fictional proposal preview is fixture-order invariant and content-free", () => {
+  const a = fixture("chatgpt"), b = fixture("claude");
+  const normal = previewSyntheticClaimProposals([a, b]);
+  const reverse = previewSyntheticClaimProposals([b, a]);
+  assert.deepEqual(reverse, normal);
+  assert.equal(normal.source_text_disclosed, false);
+  assert.equal(normal.explicit_claim_review_completed, false);
+  assert.equal(normal.h1_real_import_enabled, false);
+  assert.equal(normal.real_import_enabled, false);
+  assert.equal(normal.h1_real_entry_gates.length, 6);
+  assert.ok(normal.h1_real_entry_gates.every(x =>
+    x.result === "not_verified_blocked"));
+  const encoded = JSON.stringify(normal);
+  for (const forbidden of [
+    "I am planning a fictional garden", "silver spaceship.",
+    "Ada said the blue gate", "Could a fictional garden",
+    "content_sha256", "toy_graph_digest", "toy_restore_digest",
+  ]) assert.ok(!encoded.includes(forbidden), forbidden);
+});
+
+test("HumanWiki claim proposal preview refuses altered or missing fictional provenance", () => {
+  const a = fixture("chatgpt"), b = fixture("claude");
+  const invalid = [
+    null, [], {}, [a], [a, a], [a, b, b],
+    [{ ...a, synthetic_fixture: false }, b],
+    [{ ...a, source_id: "real-export-id" }, b],
+  ];
+  for (const bundles of invalid) {
+    assert.throws(() => previewSyntheticClaimProposals(bundles),
+      /Synthetic (import|acceptance|overlap|claim proposal):/);
+  }
+  for (const edit of [
+    bundles => { bundles[0].conversations[0].mapping.a.message.author.role = "assistant"; },
+    bundles => { bundles[1].conversations[0].chat_messages[0].sender = "assistant"; },
+    bundles => { bundles[0].conversations[0].mapping.a.message.content.parts[0] += " edited"; },
+    bundles => { bundles[1].conversations[0].chat_messages[0].content[0].text += " edited"; },
+    bundles => { bundles[0].conversations[0].mapping.a.message.create_time = "2026-01-01T10:00:10Z"; },
+  ]) {
+    const bundles = [structuredClone(a), structuredClone(b)];
+    edit(bundles);
+    assert.throws(() => previewSyntheticClaimProposals(bundles),
+      /Synthetic claim proposal: fixture contract not satisfied|Synthetic acceptance: fixture contract not satisfied/);
+  }
+});
+
+test("HumanWiki mock draft remains proposed even when re-run or other source order changes", () => {
+  const bundles = [fixture("chatgpt"), fixture("claude")];
+  const first = previewSyntheticClaimProposals(bundles);
+  const second = previewSyntheticClaimProposals(bundles);
+  assert.deepEqual(first, second);
+  assert.equal(new Set(first.draft_proposals.map(x => x.draft_id)).size, 1);
+  assert.equal(first.draft_proposals.every(x =>
+    x.review === "proposed" && x.canonical_claim_written === false), true);
+  assert.equal(first.actual_claims_created, 0);
+  assert.equal(first.actual_tasks_created, 0);
+  assert.equal(first.review_outcomes_written, 0);
+  assert.equal(first.external_model_egress_performed, false);
+  assert.equal(first.data_release_authorized, false);
+});
+
+test("HumanWiki toy proposal CLI is content-free, deterministic, no-write and no-argument", () => {
+  const cli = fileURLToPath(new URL("../scripts/humanwiki-synthetic/claim-proposal-preview-cli.mjs", import.meta.url));
+  const root = mkdtempSync(path.join(os.tmpdir(), "lumi-humanwiki-claim-proposal-"));
+  const run = (args, timezone) => spawnSync(process.execPath, [cli, ...args], {
+    encoding: "utf8", env: { ...process.env, TMPDIR: root, TZ: timezone },
+  });
+  try {
+    const utc = run([], "UTC");
+    const prague = run([], "Europe/Prague");
+    assert.equal(utc.status, 0, utc.stderr);
+    assert.equal(prague.status, 0, prague.stderr);
+    assert.equal(utc.stdout, prague.stdout);
+    const summary = JSON.parse(utc.stdout);
+    assert.equal(summary.source_segments_checked, 6);
+    assert.equal(summary.draft_proposals_count, 1);
+    assert.equal(summary.withheld_segments_count, 5);
+    assert.deepEqual(summary.withheld_reason_counts, {
+      owner_question_not_an_assertion: 1,
+      assistant_output_not_owner_evidence: 2,
+      third_party_quote_not_owner_evidence: 2,
+    });
+    assert.equal(summary.candidates_require_explicit_human_review, true);
+    assert.equal(summary.model_extraction_performed, false);
+    assert.equal(summary.source_locators_disclosed, false);
+    assert.equal(summary.source_digests_disclosed, false);
+    assert.equal(summary.actual_claims_created, 0);
+    assert.equal(summary.actual_tasks_created, 0);
+    assert.equal(summary.external_model_egress_performed, false);
+    assert.equal(summary.real_import_enabled, false);
+    assert.equal(summary.data_release_authorized, false);
+    for (const forbidden of [
+      "fixture-chatgpt-01", "fixture-claude-01", "m-01", "c-01",
+      "fictional_garden", "silver spaceship", '"source_locator":',
+      "content_sha256", "toy_graph_digest", "toy_restore_digest",
+    ]) assert.ok(!utc.stdout.includes(forbidden), forbidden);
+    const denied = run(["../../private-conversation.json"], "UTC");
+    assert.equal(denied.status, 2);
+    assert.equal(denied.stdout, "");
+    assert.deepEqual(readdirSync(root), []);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("HumanWiki fictional proposal review choices remain nonpersistent, proposed, unclassified", () => {
+  const bundles = [fixture("chatgpt"), fixture("claude")];
+  const before = JSON.stringify(bundles);
+  const token = bindSyntheticProposalReview(bundles);
+  assert.deepEqual(Object.keys(token).sort(), ["draft_id", "schema", "toy_digest"]);
+  assert.equal(token.schema, "fictional_humanwiki_proposal_review_binding_v1");
+  assert.equal(token.draft_id, "toy-garden-topic-draft-01");
+  assert.match(token.toy_digest, /^[0-9a-f]{64}$/);
+
+  const expectations = [
+    [[], "no_review_intent_submitted", "none"],
+    [[{ draft_id: token.draft_id, choice: "inspect" }],
+      "would_open_source_for_explicit_review_only", "inspect"],
+    [[{ draft_id: token.draft_id, choice: "defer" }],
+      "would_defer_draft_without_review_outcome", "defer"],
+    [[{ draft_id: token.draft_id, choice: "shelve" }],
+      "would_shelve_draft_without_review_outcome", "shelve"],
+  ];
+  for (const [intents, status, choice] of expectations) {
+    const r = rehearseSyntheticProposalReview(bundles, token, intents);
+    assert.equal(r.synthetic_fixture_only, true);
+    assert.equal(r.review_gate_status, status);
+    assert.equal(r.review_intent, choice);
+    assert.equal(r.current_review, "proposed");
+    assert.equal(r.current_sensitivity, "unclassified");
+    assert.equal(r.current_scope, "owner_private_unassigned");
+    assert.equal(r.missing_real_gates.length, 6);
+    assert.equal(r.actual_human_review_completed, false);
+    assert.equal(r.reviewer_identity_authenticated, false);
+    assert.equal(r.source_consent_verified, false);
+    assert.equal(r.sensitivity_classified, false);
+    assert.equal(r.atomic_commit_performed, false);
+    assert.equal(r.durable_review_event_written, false);
+    assert.equal(r.claim_confirmed, false);
+    assert.equal(r.claims_created, 0);
+    assert.equal(r.review_outcomes_written, 0);
+    assert.equal(r.actual_tasks_created, 0);
+    assert.equal(r.external_model_egress_performed, false);
+    assert.equal(r.data_release_authorized, false);
+    assert.equal(r.real_import_enabled, false);
+    assert.ok(!JSON.stringify(r).includes("fictional_garden"));
+    assert.ok(!JSON.stringify(r).includes("fixture-chatgpt-01"));
+    assert.ok(!JSON.stringify(r).includes("toy_digest"));
+  }
+  assert.equal(JSON.stringify(bundles), before, "no mutation, persistence or review commit");
+});
+
+test("HumanWiki fictional proposal review refuses confirm/share/task creation and extra fields", () => {
+  const bundles = [fixture("chatgpt"), fixture("claude")];
+  const token = bindSyntheticProposalReview(bundles);
+  for (const choice of ["confirm", "approve", "reject", "share",
+    "create_task", "delete", "publish", "edit", "", null, true, 0]) {
+    assert.throws(() => rehearseSyntheticProposalReview(bundles, token, [
+      { draft_id: token.draft_id, choice },
+    ]), /Synthetic proposal review: invalid fictional review intent/);
+  }
+  for (const bad of [
+    null, 0, false, "inspect", {}, [null],
+    [{ draft_id: "other-draft", choice: "inspect" }],
+    [{ draft_id: token.draft_id, choice: "inspect", extra: "private" }],
+    [{ draft_id: token.draft_id, choice: ["inspect"] }],
+    [{ draft_id: token.draft_id, choice: "inspect" },
+      { draft_id: token.draft_id, choice: "shelve" }],
+    [Object.assign(Object.create(null), { draft_id: token.draft_id,
+      choice: "inspect", secret: "cannot add data" })],
+  ]) assert.throws(() => rehearseSyntheticProposalReview(bundles, token, bad),
+    /Synthetic proposal review: invalid (review intent list|fictional review intent)/);
+});
+
+test("HumanWiki review binding rejects malformed and forged toy tokens", () => {
+  const bundles = [fixture("chatgpt"), fixture("claude")];
+  const token = bindSyntheticProposalReview(bundles);
+  for (const wrong of [
+    null, undefined, {}, false, [], "fake",
+    { ...token, extra: "leak" },
+    { ...token, schema: "fictional_humanwiki_proposal_review_binding_v2" },
+    { ...token, schema: ["fictional_humanwiki_proposal_review_binding_v1"] },
+    { ...token, draft_id: "other-draft" },
+    { ...token, toy_digest: "token" },
+    { ...token, toy_digest: token.toy_digest.toUpperCase() },
+    { ...token, toy_digest: new String(token.toy_digest) },
+  ]) assert.throws(() => rehearseSyntheticProposalReview(bundles, wrong),
+    /Synthetic proposal review: malformed fictional review binding/);
+  const stale = { ...token, toy_digest: "0".repeat(64) };
+  const r = rehearseSyntheticProposalReview(bundles, stale);
+  assert.equal(r.review_gate_status, "would_block_stale_fictional_binding");
+  assert.equal(r.review_intent, "not_evaluated");
+  assert.equal(r.claims_created, 0);
+  assert.equal(r.data_release_authorized, false);
+});
+
+test("HumanWiki stale fictional proposal binding short-circuits before reading submitted intent", () => {
+  const bundles = [fixture("chatgpt"), fixture("claude")];
+  const token = bindSyntheticProposalReview(bundles);
+  const stale = { ...token, toy_digest: "0".repeat(64) };
+  const poisonedIntents = new Proxy([{}], {
+    get() { throw new Error("must never inspect stale intents"); },
+  });
+  const r = rehearseSyntheticProposalReview(bundles, stale, poisonedIntents);
+  assert.equal(r.review_gate_status, "would_block_stale_fictional_binding");
+  assert.equal(r.review_intent, "not_evaluated");
+  assert.equal(r.review_outcomes_written, 0);
+  assert.equal(r.actual_human_review_completed, false);
+  assert.equal(r.real_import_enabled, false);
+});
+
+test("HumanWiki review remains pinned to exact fake sources and stable across order", () => {
+  const a = fixture("chatgpt"), b = fixture("claude");
+  const token = bindSyntheticProposalReview([a, b]);
+  assert.deepEqual(bindSyntheticProposalReview([b, a]), token);
+  assert.deepEqual(
+    rehearseSyntheticProposalReview([b, a], token,
+      [{ draft_id: token.draft_id, choice: "defer" }]),
+    rehearseSyntheticProposalReview([a, b], token,
+      [{ draft_id: token.draft_id, choice: "defer" }]));
+  for (const edit of [
+    sources => { sources[0].conversations[0].mapping.a.message.content.parts[0] += " edited"; },
+    sources => { sources[0].conversations[0].mapping.b.message.author.role = "user"; },
+    sources => { sources[1].conversations[0].chat_messages[0].created_at = "2026-02-03T10:00:00Z"; },
+  ]) {
+    const sources = [structuredClone(a), structuredClone(b)];
+    edit(sources);
+    assert.throws(() => bindSyntheticProposalReview(sources),
+      /Synthetic (acceptance|claim proposal):/);
+    assert.throws(() => rehearseSyntheticProposalReview(sources, token),
+      /Synthetic (acceptance|claim proposal):/);
+  }
+  const report = rehearseSyntheticProposalReview([a, b], token);
+  report.missing_real_gates.pop();
+  assert.equal(rehearseSyntheticProposalReview([a, b], token).missing_real_gates.length, 6,
+    "review must never mutate the canonical list of missing production gates");
+});
+
+test("HumanWiki proposal review CLI is status-only, deterministic, no-write and rejects extra args", () => {
+  const cli = fileURLToPath(new URL("../scripts/humanwiki-synthetic/proposal-review-rehearsal-cli.mjs", import.meta.url));
+  const root = mkdtempSync(path.join(os.tmpdir(), "lumi-humanwiki-proposal-review-"));
+  const run = (args, tz) => spawnSync(process.execPath, [cli, ...args], {
+    encoding: "utf8", env: { ...process.env, TMPDIR: root, TZ: tz },
+  });
+  try {
+    const utc = run([], "UTC"), prague = run([], "Europe/Prague");
+    assert.equal(utc.status, 0, utc.stderr);
+    assert.equal(prague.status, 0, prague.stderr);
+    assert.equal(utc.stdout, prague.stdout);
+    const result = JSON.parse(utc.stdout);
+    assert.equal(result.no_intent, "no_review_intent_submitted");
+    assert.equal(result.inspect, "would_open_source_for_explicit_review_only");
+    assert.equal(result.defer, "would_defer_draft_without_review_outcome");
+    assert.equal(result.shelve, "would_shelve_draft_without_review_outcome");
+    assert.equal(result.stale, "would_block_stale_fictional_binding");
+    assert.equal(result.valid_fictional_a_to_b_source_revision, true);
+    assert.equal(result.a_to_b_revised_non_candidate_message, true);
+    assert.equal(result.a_to_b_original_candidate_preserved, true);
+    assert.equal(result.a_to_b_stale_a_binding, "would_block_stale_fictional_binding");
+    assert.equal(result.a_to_b_stale_intent_not_evaluated, true);
+    assert.equal(result.a_to_b_fresh_b_binding, "would_open_source_for_explicit_review_only");
+    assert.equal(result.confirm_choice_rejected, true);
+    assert.equal(result.real_entry_gates_unverified, 6);
+    assert.equal(result.current_review, "proposed");
+    assert.equal(result.current_sensitivity, "unclassified");
+    assert.equal(result.actual_human_review_completed, false);
+    assert.equal(result.durable_review_event_written, false);
+    assert.equal(result.claims_created, 0);
+    assert.equal(result.review_outcomes_written, 0);
+    assert.equal(result.actual_tasks_created, 0);
+    assert.equal(result.data_release_authorized, false);
+    assert.equal(result.real_import_enabled, false);
+    assert.equal(result.source_text_disclosed, false);
+    assert.equal(result.source_locators_disclosed, false);
+    assert.equal(result.toy_token_hash_disclosed, false);
+    for (const forbidden of [
+      "fixture-chatgpt-01", "fixture-claude-01", "toy-garden-topic-draft-01",
+      "fictional_garden", "silver spaceship", "blue gate",
+      '"source_locator":', '"toy_digest":', "content_sha256",
+    ]) assert.ok(!utc.stdout.includes(forbidden), forbidden);
+    const denied = run(["../../private-export.json"], "UTC");
+    assert.equal(denied.status, 2);
+    assert.equal(denied.stdout, "");
+    assert.deepEqual(readdirSync(root), []);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("HumanWiki proposal-review A to B uses independently valid fictional source revision", () => {
+  const bundles = [fixture("chatgpt"), fixture("claude")];
+  const original = JSON.stringify(bundles);
+  const boundA = bindSyntheticProposalReview(bundles);
+  const changed = structuredClone(bundles);
+  const candidateA = bundles[0].conversations[0].mapping.a.message;
+  const selectedId = previewSyntheticClaimProposals(bundles).draft_proposals[0]
+    .source_locator.message_id;
+  const unselected = changed[0].conversations[0].mapping.b.message;
+  assert.equal(selectedId, candidateA.id);
+  assert.notEqual(unselected.id, selectedId,
+    "the change must affect a different message in the same source");
+  unselected.content.parts[0] += " (independent fictional revision B)";
+  assert.notEqual(JSON.stringify(changed), JSON.stringify(bundles));
+  assert.deepEqual(changed[0].conversations[0].mapping.a.message, candidateA,
+    "candidate message and its locator remain unchanged in B");
+
+  // B is a structurally VALID synthetic source, not just a replacement digest.
+  const reviewB = previewSyntheticReviewQueue(changed);
+  assert.equal(reviewB.segments_total, 6);
+  assert.equal(reviewB.duplicate_groups, 0);
+  assert.equal(reviewB.claims_created, 0);
+  assert.equal(reviewB.review_outcomes_written, 0);
+  const candidateB = reviewB.entries.find(entry =>
+    entry.locator.source_id === "fixture-chatgpt-01" &&
+    entry.locator.message_id === selectedId && entry.locator.segment === 0);
+  assert.ok(candidateB);
+  assert.equal(candidateB.provenance, "owner_statement");
+  assert.equal(candidateB.speaker, "user");
+  assert.equal(candidateB.review, "proposed");
+  assert.equal(candidateB.sensitivity, "unclassified");
+  assert.equal(candidateB.scope, "owner_private_unassigned");
+  assert.equal(candidateB.eligible_for_automatic_confirmation, false);
+
+  const transition = rehearseSyntheticProposalReviewRevisionTransition(bundles);
+  assert.equal(transition.mode, "fictional_proposal_review_a_to_b_transition_no_write");
+  assert.equal(transition.valid_independent_revision_b, true);
+  assert.equal(transition.changed_source_is_candidate_source, true);
+  assert.equal(transition.revised_message_is_not_candidate, true);
+  assert.equal(transition.unchanged_candidate_preserved, true);
+  assert.equal(transition.revisions_have_distinct_toy_digests, true);
+  assert.equal(transition.stale_a_on_b, "would_block_stale_fictional_binding");
+  assert.equal(transition.stale_intent_not_evaluated, true);
+  assert.equal(transition.fresh_b_on_b, "would_open_source_for_explicit_review_only");
+  assert.equal(transition.original_a_on_a, "would_defer_draft_without_review_outcome");
+  assert.equal(transition.claims_created, 0);
+  assert.equal(transition.review_outcomes_written, 0);
+  assert.equal(transition.actual_human_review_completed, false);
+  assert.equal(transition.atomic_commit_performed, false);
+  assert.equal(transition.data_release_authorized, false);
+  assert.equal(transition.real_import_enabled, false);
+  assert.equal(transition.missing_real_gates.length, 6);
+  assert.equal(transition.current_review, "proposed");
+  assert.equal(transition.current_sensitivity, "unclassified");
+
+  // The controlled B is internal only: production/public helpers must still
+  // reject altered inputs even though the standalone toy parser considers B valid.
+  assert.throws(() => bindSyntheticProposalReview(changed),
+    /Synthetic (acceptance|claim proposal):/);
+  assert.throws(() => rehearseSyntheticProposalReview(changed, boundA),
+    /Synthetic (acceptance|claim proposal):/);
+  assert.equal(JSON.stringify(bundles), original);
+});
+
+test("HumanWiki internal A-to-B exercise is stable, read-only and discloses no tokens", () => {
+  const a = fixture("chatgpt"), b = fixture("claude");
+  const before = JSON.stringify([a, b]);
+  const first = rehearseSyntheticProposalReviewRevisionTransition([a, b]);
+  const reordered = rehearseSyntheticProposalReviewRevisionTransition([b, a]);
+  assert.deepEqual(reordered, first);
+  assert.equal(JSON.stringify([a, b]), before);
+  const serialized = JSON.stringify(first);
+  for (const forbidden of [
+    "fixture-chatgpt-01", "fixture-claude-01",
+    "toy-garden-topic-draft-01", "fictional_garden",
+    "silver spaceship", "blue gate",
+    '"source_locator":', '"toy_digest":',
+    "content_sha256", "m-01", "m-02",
+  ]) assert.ok(!serialized.includes(forbidden), forbidden);
+  assert.deepEqual(rehearseSyntheticProposalReviewRevisionTransition([a, b]), first);
+  const modified = structuredClone(a);
+  modified.conversations[0].mapping.b.message.content.parts[0] += " edited";
+  assert.throws(() =>
+    rehearseSyntheticProposalReviewRevisionTransition([modified, b]),
+    /Synthetic (acceptance|claim proposal):/,
+    "top-level input pinning must not be bypassed by the internal B branch");
+});
+
+test("HumanWiki proposal lifecycle applies six independent hypothetical source policies", () => {
+  const bundles = [fixture("chatgpt"), fixture("claude")];
+  const before = JSON.stringify(bundles);
+  const report = previewSyntheticProposalLifecycleHolds(bundles);
+  assert.equal(report.synthetic_fixture_only, true);
+  assert.equal(report.mode, "fictional_proposal_source_lifecycle_hold_matrix_no_write");
+  assert.equal(report.source_segments_checked, 6);
+  assert.equal(report.scenario_count, 6);
+  assert.deepEqual(report.scenarios.map(s => s.scenario), [
+    "active", "pause", "disconnect", "revoke", "erase", "unrelated_disconnect",
+  ]);
+  assert.deepEqual(report.scenarios.map(s => s.candidate_pending_visible), [
+    true, true, false, false, false, true,
+  ]);
+  assert.deepEqual(report.scenarios.map(s => s.review_intent_evaluated), [
+    true, true, false, false, false, true,
+  ]);
+  assert.deepEqual(report.scenarios.map(s => s.review_intent_status), [
+    "would_open_source_for_explicit_review_only",
+    "would_open_source_for_explicit_review_only",
+    "not_evaluated", "not_evaluated", "not_evaluated",
+    "would_open_source_for_explicit_review_only",
+  ]);
+  assert.deepEqual(report.scenarios.map(s => s.visible_segments_in_toy_policy), [
+    6, 6, 3, 3, 3, 3,
+  ]);
+  assert.equal(report.scenarios.every(s => s.binding_still_matches_toy_content), true);
+  assert.equal(report.real_entry_gates_unverified, 6);
+  assert.equal(report.initial_candidate_review, "proposed");
+  assert.equal(report.initial_candidate_sensitivity, "unclassified");
+  assert.equal(report.initial_candidate_scope, "owner_private_unassigned");
+  assert.equal(JSON.stringify(bundles), before, "no real lifecycle change may occur");
+});
+
+test("HumanWiki pause retains pending proposal without treating it as permission to refresh source", () => {
+  const report = previewSyntheticProposalLifecycleHolds([fixture("chatgpt"), fixture("claude")]);
+  const paused = report.scenarios.find(s => s.scenario === "pause");
+  const active = report.scenarios.find(s => s.scenario === "active");
+  assert.ok(paused);
+  assert.ok(active);
+  assert.equal(active.new_source_reads_allowed_by_policy, true);
+  assert.equal(paused.candidate_review_status,
+    "would_keep_existing_proposal_pending_without_source_refresh");
+  assert.equal(paused.candidate_pending_visible, true);
+  assert.equal(paused.new_source_reads_allowed_by_policy, false);
+  assert.equal(paused.affected_source_pending_review_allowed, true);
+  assert.equal(paused.affected_source_derivatives_would_be_invalidated, false);
+  assert.equal(paused.affected_source_requires_independent_witness, false);
+  assert.equal(paused.visible_segments_in_toy_policy, 6);
+  assert.equal(paused.suppressed_segments_in_toy_policy, 0);
+  assert.equal(report.actual_source_reads_performed, 0);
+  assert.equal(report.actual_human_review_completed, false);
+});
+
+test("HumanWiki source disconnect and consent revocation or erasure hold candidate despite unchanged version binding", () => {
+  const report = previewSyntheticProposalLifecycleHolds([fixture("chatgpt"), fixture("claude")]);
+  const statuses = new Map([
+    ["disconnect", "would_withhold_candidate_after_source_disconnect"],
+    ["revoke", "would_withhold_candidate_after_import_consent_revocation"],
+    ["erase", "would_withhold_candidate_after_source_erasure_request"],
+  ]);
+  for (const [scenario, status] of statuses) {
+    const entry = report.scenarios.find(s => s.scenario === scenario);
+    assert.ok(entry, scenario);
+    assert.equal(entry.candidate_review_status, status);
+    assert.equal(entry.candidate_pending_visible, false);
+    assert.equal(entry.review_intent_evaluated, false,
+      "a source policy hold must be applied before examining review intent");
+    assert.equal(entry.binding_still_matches_toy_content, true);
+    assert.equal(entry.new_source_reads_allowed_by_policy, false);
+    assert.equal(entry.affected_source_pending_review_allowed, false);
+    assert.equal(entry.affected_source_derivatives_would_be_invalidated, true);
+    assert.equal(entry.visible_segments_in_toy_policy, 3);
+    assert.equal(entry.suppressed_segments_in_toy_policy, 3);
+  }
+  assert.equal(report.scenarios.find(s => s.scenario === "disconnect")
+    .affected_source_requires_independent_witness, false);
+  assert.equal(report.scenarios.find(s => s.scenario === "revoke")
+    .affected_source_requires_independent_witness, true);
+  assert.equal(report.scenarios.find(s => s.scenario === "revoke")
+    .affected_source_requires_retention_recheck, true);
+  assert.equal(report.scenarios.find(s => s.scenario === "erase")
+    .affected_source_requires_independent_witness, true);
+  assert.equal(report.scenarios.find(s => s.scenario === "erase")
+    .affected_source_requires_retention_recheck, false);
+});
+
+test("HumanWiki unrelated fictional source disconnect cannot hide owner's independent candidate", () => {
+  const bundles = [fixture("chatgpt"), fixture("claude")];
+  const report = previewSyntheticProposalLifecycleHolds(bundles);
+  const other = report.scenarios.find(s => s.scenario === "unrelated_disconnect");
+  assert.ok(other);
+  assert.equal(other.candidate_review_status,
+    "would_offer_existing_proposal_for_explicit_review_only");
+  assert.equal(other.candidate_pending_visible, true);
+  assert.equal(other.review_intent_evaluated, true);
+  assert.equal(other.affected_source_pending_review_allowed, false);
+  assert.equal(other.affected_source_derivatives_would_be_invalidated, true);
+  assert.equal(other.new_source_reads_allowed_by_policy, true);
+  assert.equal(other.visible_segments_in_toy_policy, 3);
+  assert.equal(other.suppressed_segments_in_toy_policy, 3);
+  assert.equal(report.actual_invalidation_performed, 0);
+});
+
+test("HumanWiki hypothetical lifecycle review never writes, and rejects mutated fiction", () => {
+  const bundles = [fixture("chatgpt"), fixture("claude")];
+  const result = previewSyntheticProposalLifecycleHolds(bundles);
+  assert.equal(result.actual_source_reads_performed, 0);
+  assert.equal(result.actual_human_review_completed, false);
+  assert.equal(result.reviewer_identity_authenticated, false);
+  assert.equal(result.source_consent_verified, false);
+  assert.equal(result.durable_lifecycle_events_written, 0);
+  assert.equal(result.actual_deletions_performed, 0);
+  assert.equal(result.independent_witness_contacted, false);
+  assert.equal(result.atomic_commit_performed, false);
+  assert.equal(result.claims_created, 0);
+  assert.equal(result.review_outcomes_written, 0);
+  assert.equal(result.actual_tasks_created, 0);
+  assert.equal(result.actual_invalidation_performed, 0);
+  assert.equal(result.data_release_authorized, false);
+  assert.equal(result.real_import_enabled, false);
+  assert.deepEqual(previewSyntheticProposalLifecycleHolds([...bundles].reverse()), result);
+  const changed = structuredClone(bundles);
+  changed[0].conversations[0].mapping.b.message.content.parts[0] += " changed";
+  assert.throws(() => previewSyntheticProposalLifecycleHolds(changed),
+    /Synthetic (acceptance|claim proposal):/);
+  for (const invalid of [null, [], [bundles[0]], [bundles[1], bundles[1]],
+    [{ ...bundles[0], synthetic_fixture: false }, bundles[1]]]) {
+    assert.throws(() => previewSyntheticProposalLifecycleHolds(invalid),
+      /Synthetic (acceptance|claim proposal|import|overlap):/);
+  }
+});
+
+test("HumanWiki lifecycle hold CLI uses fixed fiction and emits only deterministic non-content statuses", () => {
+  const cli = fileURLToPath(new URL("../scripts/humanwiki-synthetic/proposal-lifecycle-holds-cli.mjs", import.meta.url));
+  const dir = mkdtempSync(path.join(os.tmpdir(), "lumi-humanwiki-source-lifecycle-"));
+  const run = (args, tz) => spawnSync(process.execPath, [cli, ...args], {
+    encoding: "utf8", env: { ...process.env, TMPDIR: dir, TZ: tz },
+  });
+  try {
+    const a = run([], "UTC"), b = run([], "Europe/Prague");
+    assert.equal(a.status, 0, a.stderr);
+    assert.equal(b.status, 0, b.stderr);
+    assert.equal(a.stdout, b.stdout);
+    const parsed = JSON.parse(a.stdout);
+    assert.equal(parsed.scenario_count, 6);
+    assert.equal(parsed.scenarios.length, 6);
+    assert.equal(parsed.scenarios.filter(s => !s.candidate_pending_visible).length, 3);
+    assert.equal(parsed.actual_source_reads_performed, 0);
+    assert.equal(parsed.claims_created, 0);
+    assert.equal(parsed.durable_lifecycle_events_written, 0);
+    assert.equal(parsed.real_import_enabled, false);
+    assert.equal(parsed.source_text_disclosed, false);
+    assert.equal(parsed.source_locators_disclosed, false);
+    assert.equal(parsed.proposal_identifiers_disclosed, false);
+    assert.equal(parsed.toy_binding_digest_disclosed, false);
+    for (const forbidden of [
+      "fixture-chatgpt-01", "fixture-claude-01",
+      "toy-garden-topic-draft-01", "fictional_garden",
+      "I am planning a fictional garden", "silver spaceship",
+      '"source_locator":', '"toy_digest":', '"source_id":',
+      "content_sha256", "m-01", "c-01",
+    ]) assert.ok(!a.stdout.includes(forbidden), forbidden);
+    const refused = run(["../../private-export.json"], "UTC");
+    assert.equal(refused.status, 2);
+    assert.equal(refused.stdout, "");
+    assert.deepEqual(readdirSync(dir), []);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("HumanWiki lifecycle gate actually consumes caller's valid intent for permitted sources", () => {
+  const bundles = [fixture("chatgpt"), fixture("claude")];
+  const before = JSON.stringify(bundles);
+  const candidate = previewSyntheticClaimProposals(bundles).draft_proposals[0];
+  for (const [scenario, expected] of [
+    ["active", "would_offer_existing_proposal_for_explicit_review_only"],
+    ["pause", "would_keep_existing_proposal_pending_without_source_refresh"],
+    ["unrelated_disconnect", "would_offer_existing_proposal_for_explicit_review_only"],
+  ]) {
+    let arrayReads = 0;
+    let choiceReads = 0;
+    const entry = { draft_id: candidate.draft_id };
+    Object.defineProperty(entry, "choice", {
+      configurable: true, enumerable: true,
+      get() { choiceReads++; return "inspect"; },
+    });
+    const providedIntent = new Proxy([entry], {
+      get(target, key, receiver) {
+        arrayReads++;
+        return Reflect.get(target, key, receiver);
+      },
+    });
+    const report = rehearseSyntheticProposalLifecycleIntent(bundles, scenario, providedIntent);
+    assert.ok(arrayReads > 0, scenario + ": passed array must be inspected");
+    assert.ok(choiceReads > 0, scenario + ": caller's choice must be inspected");
+    assert.equal(report.candidate_review_status, expected);
+    assert.equal(report.review_intent_evaluated, true);
+    assert.equal(report.review_intent_status, "would_open_source_for_explicit_review_only");
+    assert.equal(report.claims_created, 0);
+    assert.equal(report.review_outcomes_written, 0);
+    assert.equal(report.atomic_commit_performed, false);
+    assert.equal(report.data_release_authorized, false);
+  }
+  const validDeferral = rehearseSyntheticProposalLifecycleIntent(bundles, "active",
+    [{ draft_id: candidate.draft_id, choice: "defer" }]);
+  assert.equal(validDeferral.review_intent_evaluated, true);
+  assert.equal(validDeferral.review_intent_status, "would_defer_draft_without_review_outcome");
+  assert.equal(validDeferral.review_outcomes_written, 0);
+  assert.equal(JSON.stringify(bundles), before);
+});
+
+test("HumanWiki lifecycle policy blocks before reading any submitted intent, even malformed or hostile", () => {
+  const bundles = [fixture("chatgpt"), fixture("claude")];
+  const candidate = previewSyntheticClaimProposals(bundles).draft_proposals[0];
+  for (const scenario of ["disconnect", "revoke", "erase"]) {
+    let accessed = 0;
+    const poisoned = new Proxy([{}], {
+      get() { accessed++; throw new Error("blocked intent was read"); },
+      ownKeys() { accessed++; throw new Error("blocked intent was inspected"); },
+      getOwnPropertyDescriptor() {
+        accessed++; throw new Error("blocked intent inspected descriptor");
+      },
+    });
+    const report = rehearseSyntheticProposalLifecycleIntent(bundles, scenario, poisoned);
+    assert.equal(accessed, 0, scenario + ": lifecycle must run before intent validation");
+    assert.equal(report.review_intent_evaluated, false);
+    assert.equal(report.review_intent_status, "not_evaluated");
+    assert.equal(report.candidate_pending_visible, false);
+    assert.equal(report.binding_still_matches_toy_content, true);
+    assert.equal(report.claims_created, 0);
+    assert.equal(report.review_outcomes_written, 0);
+    assert.equal(report.data_release_authorized, false);
+    assert.equal(report.real_import_enabled, false);
+    // A bad choice would be rejected if it reached the downstream validator,
+    // yet it remains unread under the source-specific lifecycle hold.
+    const denied = rehearseSyntheticProposalLifecycleIntent(bundles, scenario, [
+      { draft_id: candidate.draft_id, choice: "confirm" },
+    ]);
+    assert.equal(denied.review_intent_status, "not_evaluated");
+  }
+});
+
+test("HumanWiki permitted source rejects invalid caller intents after lifecycle check", () => {
+  const bundles = [fixture("chatgpt"), fixture("claude")];
+  const candidate = previewSyntheticClaimProposals(bundles).draft_proposals[0];
+  for (const scenario of ["active", "pause", "unrelated_disconnect"]) {
+    for (const invalid of [
+      null, undefined, "inspect", [], {},
+      [{ draft_id: candidate.draft_id, choice: "confirm" }],
+      [{ draft_id: candidate.draft_id, choice: "share" }],
+      [{ draft_id: candidate.draft_id, choice: "inspect", extra: "ignored?" }],
+      [{ draft_id: "unrelated-draft", choice: "inspect" }],
+    ]) {
+      assert.throws(
+        () => rehearseSyntheticProposalLifecycleIntent(bundles, scenario, invalid),
+        /Synthetic proposal review: invalid (review intent list|fictional review intent)|Synthetic proposal lifecycle: fixture contract/,
+        scenario + ": invalid caller-supplied intent must not be accepted");
+    }
+  }
+  assert.throws(() => rehearseSyntheticProposalLifecycleIntent(bundles, "not-a-scenario",
+    new Proxy([], { get() { throw new Error("bad scenario inspected user input"); } })),
+  /Synthetic proposal lifecycle: fixture contract not satisfied/);
+  const changed = structuredClone(bundles);
+  changed[0].conversations[0].mapping.b.message.content.parts[0] += " tampered";
+  assert.throws(
+    () => rehearseSyntheticProposalLifecycleIntent(changed, "active",
+      [{ draft_id: candidate.draft_id, choice: "inspect" }]),
+    /Synthetic (acceptance|claim proposal):/,
+    "fixed fictional fixture validation remains mandatory");
+});
+
+test("HumanWiki toy consent regrant timeline retains holds despite identical source bytes", () => {
+  const bundles = [fixture("chatgpt"), fixture("claude")];
+  const original = JSON.stringify(bundles);
+  const report = previewSyntheticProposalRegrantTimeline(bundles);
+  assert.equal(report.synthetic_fixture_only, true);
+  assert.equal(report.mode, "fictional_proposal_regrant_aba_fence_no_write");
+  assert.equal(report.scenario_count, 7);
+  assert.deepEqual(report.scenarios.map(x => x.scenario), [
+    "initial_active", "revoked", "reappeared_without_regrant",
+    "fresh_toy_regrant_old_binding", "fresh_toy_regrant_new_binding",
+    "source_epoch_rollback", "source_and_witness_rollback_counterexample",
+  ]);
+  assert.deepEqual(report.scenarios.map(x => x.decision), [
+    "would_evaluate_fresh_fictional_intent_no_release",
+    "would_hold_revoked_source_without_inspecting_intent",
+    "would_require_fresh_explicit_toy_regrant",
+    "would_block_pre_regrant_binding_even_with_same_content",
+    "would_evaluate_fresh_fictional_intent_no_release",
+    "would_block_replayed_pre_revocation_generation",
+    "unsafe_replay_if_independent_witness_also_rolled_back",
+  ]);
+  assert.deepEqual(report.scenarios.map(x => x.review_intent_inspected),
+    [true, false, false, false, true, false, false]);
+  assert.equal(report.content_only_binding_stays_identical, true);
+  assert.equal(report.old_issued_binding_rejected_after_regrant, true);
+  assert.equal(report.fresh_issued_binding_accepted_for_no_write_review, true);
+  assert.equal(report.remembered_revocation_blocks_rollback, true);
+  assert.equal(report.synthetic_regrant_is_not_real_consent, true);
+  assert.ok(report.scenarios.every(x => x.source_content_unchanged &&
+    x.claims_created === 0 && x.review_outcomes_written === 0 &&
+    x.data_release_authorized === false && x.real_import_enabled === false));
+  assert.equal(report.scenarios.at(-1).real_witness_required_to_detect_this, true);
+  assert.equal(report.scenarios.at(-1).toy_untrusted_replay_would_appear_valid, true);
+  assert.equal(JSON.stringify(bundles), original);
+});
+
+test("HumanWiki revoked/reappeared/old-binding/rollback toy frames never inspect submitted intents", () => {
+  const bundles = [fixture("chatgpt"), fixture("claude")];
+  const issuedBeforeRevocation = bindSyntheticProposalRegrant(bundles, "initial_active");
+  for (const scenario of [
+    "revoked", "reappeared_without_regrant",
+    "fresh_toy_regrant_old_binding", "source_epoch_rollback",
+    "source_and_witness_rollback_counterexample",
+  ]) {
+    let accesses = 0;
+    const poison = new Proxy([{}], {
+      get() { accesses++; throw new Error("regrant fence read forbidden intent"); },
+      ownKeys() { accesses++; throw new Error("regrant fence enumerated intent"); },
+      getOwnPropertyDescriptor() { accesses++; throw new Error("regrant fence inspected descriptor"); },
+    });
+    const r = rehearseSyntheticProposalRegrantScenario(
+      bundles, scenario, issuedBeforeRevocation, poison);
+    assert.equal(accesses, 0, scenario);
+    assert.equal(r.review_intent_inspected, false);
+    assert.equal(r.actual_new_consent_recorded, false);
+    assert.equal(r.claims_created, 0);
+    assert.equal(r.review_outcomes_written, 0);
+    assert.equal(r.data_release_authorized, false);
+    assert.equal(r.real_import_enabled, false);
+  }
+});
+
+test("HumanWiki fictional fresh regrant consumes actual valid intent but never confirms claim", () => {
+  const bundles = [fixture("chatgpt"), fixture("claude")];
+  const candidate = previewSyntheticClaimProposals(bundles).draft_proposals[0];
+  for (const scenario of ["initial_active", "fresh_toy_regrant_new_binding"]) {
+    const issuedBinding = bindSyntheticProposalRegrant(bundles, scenario);
+    let intentReads = 0, choiceReads = 0;
+    const entry = { draft_id: candidate.draft_id };
+    Object.defineProperty(entry, "choice", { enumerable: true, configurable: true,
+      get() { choiceReads++; return "inspect"; },
+    });
+    const intents = new Proxy([entry], {
+      get(target, key, receiver) {
+        intentReads++;
+        return Reflect.get(target, key, receiver);
+      },
+    });
+    const r = rehearseSyntheticProposalRegrantScenario(
+      bundles, scenario, issuedBinding, intents);
+    assert.ok(intentReads > 0, scenario + " should consume passed array");
+    assert.ok(choiceReads > 0, scenario + " should consume passed choice");
+    assert.equal(r.review_intent_inspected, true);
+    assert.equal(r.hypothetical_review_intent_status,
+      "would_open_source_for_explicit_review_only");
+    assert.equal(r.candidate_review, "proposed");
+    assert.equal(r.candidate_sensitivity, "unclassified");
+    assert.equal(r.candidate_scope, "owner_private_unassigned");
+    assert.equal(r.user_consent_actually_verified, false);
+    assert.equal(r.actual_new_consent_recorded, false);
+    assert.equal(r.actual_human_review_completed, false);
+    assert.equal(r.data_release_authorized, false);
+  }
+});
+
+test("HumanWiki regrant-fence admitted toy frames reject confirm/share and malformed intents", () => {
+  const bundles = [fixture("chatgpt"), fixture("claude")];
+  const draftId = previewSyntheticClaimProposals(bundles).draft_proposals[0].draft_id;
+  for (const scenario of ["initial_active", "fresh_toy_regrant_new_binding"]) {
+    const issuedBinding = bindSyntheticProposalRegrant(bundles, scenario);
+    for (const bad of [
+      null, [], {},
+      [{ draft_id: draftId, choice: "confirm" }],
+      [{ draft_id: draftId, choice: "share" }],
+      [{ draft_id: draftId, choice: "create_task" }],
+      [{ draft_id: "another-draft", choice: "inspect" }],
+      [{ draft_id: draftId, choice: "inspect", consent_granted: true }],
+    ]) assert.throws(() => rehearseSyntheticProposalRegrantScenario(
+      bundles, scenario, issuedBinding, bad),
+      /Synthetic proposal review: invalid (review intent list|fictional review intent)|Synthetic proposal lifecycle: fixture contract not satisfied/);
+  }
+  const postponed = rehearseSyntheticProposalRegrantScenario(bundles,
+    "fresh_toy_regrant_new_binding",
+    bindSyntheticProposalRegrant(bundles, "fresh_toy_regrant_new_binding"),
+    [{ draft_id: draftId, choice: "defer" }]);
+  assert.equal(postponed.hypothetical_review_intent_status,
+    "would_defer_draft_without_review_outcome");
+  assert.equal(postponed.actual_human_review_completed, false);
+  assert.equal(postponed.review_outcomes_written, 0);
+});
+
+test("HumanWiki regrant toy scenarios reject altered and unknown fictional inputs", () => {
+  const a = fixture("chatgpt"), b = fixture("claude");
+  const baseline = previewSyntheticProposalRegrantTimeline([a, b]);
+  assert.deepEqual(previewSyntheticProposalRegrantTimeline([b, a]), baseline);
+  const altered = structuredClone(a);
+  altered.conversations[0].mapping.b.message.content.parts[0] += " a different content revision";
+  for (const bundles of [[], [a], [a, a], [altered, b], [a, b, b]]) {
+    assert.throws(() => previewSyntheticProposalRegrantTimeline(bundles),
+      /Synthetic (acceptance|claim proposal|import|overlap|proposal regrant):/);
+  }
+  const neverRead = new Proxy([], { get() { throw new Error("should not read bad scenario intent"); } });
+  assert.throws(() => rehearseSyntheticProposalRegrantScenario([a, b],
+    "unrecognized_lifecycle_state", bindSyntheticProposalRegrant([a, b], "initial_active"),
+    neverRead),
+  /Synthetic proposal regrant: fictional fixture contract not satisfied/);
+  const text = JSON.stringify(baseline);
+  for (const forbidden of [
+    "fixture-chatgpt-01", "fixture-claude-01", "toy-garden-topic-draft-01",
+    "fictional_garden", '"source_locator":', '"toy_digest":',
+    "content_sha256", "I am planning a fictional garden",
+  ]) assert.ok(!text.includes(forbidden), forbidden);
+});
+
+test("HumanWiki regrant ABA CLI is content-free, deterministic, no-write and no-argument", () => {
+  const cli = fileURLToPath(new URL("../scripts/humanwiki-synthetic/proposal-regrant-rehearsal-cli.mjs", import.meta.url));
+  const directory = mkdtempSync(path.join(os.tmpdir(), "lumi-humanwiki-regrant-"));
+  const run = (args, timezone) => spawnSync(process.execPath, [cli, ...args], {
+    encoding: "utf8", env: { ...process.env, TMPDIR: directory, TZ: timezone },
+  });
+  try {
+    const utc = run([], "UTC"), prague = run([], "Europe/Prague");
+    assert.equal(utc.status, 0, utc.stderr);
+    assert.equal(prague.status, 0, prague.stderr);
+    assert.equal(utc.stdout, prague.stdout);
+    const report = JSON.parse(utc.stdout);
+    assert.equal(report.scenario_count, 7);
+    assert.equal(report.content_only_binding_stays_identical, true);
+    assert.equal(report.old_issued_binding_rejected_after_regrant, true);
+    assert.equal(report.fresh_issued_binding_accepted_for_no_write_review, true);
+    assert.equal(report.remembered_revocation_blocks_rollback, true);
+    assert.equal(report.synthetic_regrant_is_not_real_consent, true);
+    assert.equal(report.real_entry_gates_unverified, 6);
+    assert.equal(report.actual_new_consent_recorded, false);
+    assert.equal(report.claims_created, 0);
+    assert.equal(report.review_outcomes_written, 0);
+    assert.equal(report.data_release_authorized, false);
+    assert.equal(report.real_import_enabled, false);
+    assert.equal(report.source_text_disclosed, false);
+    assert.equal(report.source_locators_disclosed, false);
+    assert.equal(report.toy_binding_digest_disclosed, false);
+    assert.equal(report.decisions.filter(x => x.review_intent_inspected).length, 2);
+    for (const forbidden of [
+      "fixture-chatgpt-01", "fixture-claude-01",
+      "toy-garden-topic-draft-01", "fictional_garden", "silver spaceship",
+      '"source_locator":', '"toy_digest":', '"source_id":', "content_sha256",
+    ]) assert.ok(!utc.stdout.includes(forbidden), forbidden);
+    const rejected = run(["../../private-export.json"], "UTC");
+    assert.equal(rejected.status, 2);
+    assert.equal(rejected.stdout, "");
+    assert.deepEqual(readdirSync(directory), []);
+  } finally { rmSync(directory, { recursive: true, force: true }); }
+});
+
+test("HumanWiki A token is truly issued and rejected against B after toy revocation/regrant", () => {
+  const bundles = [fixture("chatgpt"), fixture("claude")];
+  const before = JSON.stringify(bundles);
+  // Issue A while state is fictional active. Retain the SAME object as
+  // the only prior binding; do not fabricate a mismatched epoch number.
+  const bindingA = bindSyntheticProposalRegrant(bundles, "initial_active");
+  const bindingB = bindSyntheticProposalRegrant(bundles, "fresh_toy_regrant_new_binding");
+  assert.notStrictEqual(bindingA, bindingB);
+  assert.deepEqual(Object.keys(bindingA).sort(),
+    ["proposal_binding", "schema", "toy_consent_epoch", "toy_epoch"]);
+  assert.equal(bindingA.schema, bindingB.schema);
+  assert.deepEqual(bindingA.proposal_binding, bindingB.proposal_binding,
+    "content-bound token is unchanged across toy regrant");
+  assert.notEqual(bindingA.toy_epoch, bindingB.toy_epoch);
+  assert.notEqual(bindingA.toy_consent_epoch, bindingB.toy_consent_epoch);
+  assert.ok(bindingA.toy_epoch < bindingB.toy_epoch);
+  const id = bindingA.proposal_binding.draft_id;
+  const a = rehearseSyntheticProposalRegrantScenario(bundles, "initial_active", bindingA,
+    [{ draft_id: id, choice: "inspect" }]);
+  assert.equal(a.review_intent_inspected, true);
+  assert.equal(a.data_release_authorized, false);
+  const revocation = rehearseSyntheticProposalRegrantScenario(bundles, "revoked",
+    bindingA, new Proxy([{}], { get() { throw Error("revocation inspected intent"); } }));
+  assert.equal(revocation.review_intent_inspected, false);
+  const returnedWithoutGrant = rehearseSyntheticProposalRegrantScenario(bundles,
+    "reappeared_without_regrant", bindingA, new Proxy([{}], {
+      get() { throw Error("source replay inspected intent"); },
+    }));
+  assert.equal(returnedWithoutGrant.decision, "would_require_fresh_explicit_toy_regrant");
+
+  // Review A token AGAINST a separately fixed post-regrant B state.
+  // Getter is hostile: a stale binding must be rejected first.
+  let intentAccesses = 0;
+  const poison = new Proxy([{}], {
+    get() { intentAccesses++; throw Error("old A token inspected supplied intent"); },
+    ownKeys() { intentAccesses++; throw Error("old A token enumerated intent"); },
+  });
+  const staleA = rehearseSyntheticProposalRegrantScenario(bundles,
+    "fresh_toy_regrant_old_binding", bindingA, poison);
+  assert.equal(intentAccesses, 0);
+  assert.equal(staleA.decision, "would_block_pre_regrant_binding_even_with_same_content");
+  assert.equal(staleA.review_intent_inspected, false);
+  const alsoStale = rehearseSyntheticProposalRegrantScenario(bundles,
+    "fresh_toy_regrant_new_binding", bindingA, poison);
+  assert.equal(alsoStale.decision, staleA.decision,
+    "rechecking current B state cannot accept A even under a different scenario label");
+  assert.equal(intentAccesses, 0);
+
+  // Fresh B token succeeds in the same B state, without real release.
+  const freshB = rehearseSyntheticProposalRegrantScenario(bundles,
+    "fresh_toy_regrant_new_binding", bindingB,
+    [{ draft_id: id, choice: "inspect" }]);
+  assert.equal(freshB.decision, "would_evaluate_fresh_fictional_intent_no_release");
+  assert.equal(freshB.hypothetical_review_intent_status,
+    "would_open_source_for_explicit_review_only");
+  assert.equal(freshB.review_intent_inspected, true);
+  assert.equal(freshB.actual_new_consent_recorded, false);
+  assert.equal(freshB.actual_human_review_completed, false);
+  assert.equal(freshB.claims_created, 0);
+  assert.equal(freshB.review_outcomes_written, 0);
+  assert.equal(freshB.data_release_authorized, false);
+  assert.equal(freshB.real_import_enabled, false);
+  assert.equal(JSON.stringify(bundles), before);
+});
+
+test("HumanWiki remembered revocation snapshot blocks old source epoch even with valid old token", () => {
+  const bundles = [fixture("chatgpt"), fixture("claude")];
+  const bindingA = bindSyntheticProposalRegrant(bundles, "initial_active");
+  const bindingB = bindSyntheticProposalRegrant(bundles, "fresh_toy_regrant_new_binding");
+  let accesses = 0;
+  const hostile = new Proxy([{}], {
+    get() { accesses++; throw Error("rolled back state inspected intent"); },
+    ownKeys() { accesses++; throw Error("rolled back state enumerated intent"); },
+  });
+  const replay = rehearseSyntheticProposalRegrantScenario(bundles,
+    "source_epoch_rollback", bindingA, hostile);
+  assert.equal(replay.decision, "would_block_replayed_pre_revocation_generation");
+  assert.equal(replay.review_intent_inspected, false);
+  assert.equal(accesses, 0);
+  const doublyRolledBack = rehearseSyntheticProposalRegrantScenario(bundles,
+    "source_and_witness_rollback_counterexample", bindingA, hostile);
+  assert.equal(doublyRolledBack.decision, "unsafe_replay_if_independent_witness_also_rolled_back");
+  assert.equal(doublyRolledBack.real_witness_required_to_detect_this, true);
+  assert.equal(doublyRolledBack.data_release_authorized, false);
+  assert.equal(accesses, 0);
+  assert.throws(() => rehearseSyntheticProposalRegrantScenario(bundles,
+    "source_and_witness_rollback_counterexample", bindingB, hostile),
+  /Synthetic proposal regrant: fictional fixture contract not satisfied/,
+  "witness-rollback counterexample must be explicitly about the old A binding");
+});
+
+test("HumanWiki regrant-issued binding fails closed on tampering, invalid shape and unissued state", () => {
+  const bundles = [fixture("chatgpt"), fixture("claude")];
+  const a = bindSyntheticProposalRegrant(bundles, "initial_active");
+  const id = a.proposal_binding.draft_id;
+  for (const state of ["revoked", "reappeared_without_regrant",
+    "fresh_toy_regrant_old_binding", "source_epoch_rollback", "other"]) {
+    assert.throws(() => bindSyntheticProposalRegrant(bundles, state),
+      /Synthetic proposal regrant: fictional fixture contract not satisfied/);
+  }
+  for (const bad of [
+    null, undefined, {}, [], "token", false,
+    { ...a, extra: "ignored" },
+    { ...a, schema: "fictional_humanwiki_regrant_epoch_binding_v2" },
+    { ...a, toy_epoch: -1 },
+    { ...a, toy_epoch: 1.5 },
+    { ...a, toy_epoch: "10" },
+    { ...a, toy_consent_epoch: 0 },
+    { ...a, toy_consent_epoch: null },
+    { ...a, proposal_binding: { ...a.proposal_binding, toy_digest: "0".repeat(64) } },
+    { ...a, proposal_binding: { ...a.proposal_binding, draft_id: "made-up" } },
+    { ...a, proposal_binding: { ...a.proposal_binding, extra: true } },
+  ]) assert.throws(() => rehearseSyntheticProposalRegrantScenario(bundles,
+    "initial_active", bad, [{ draft_id: id, choice: "inspect" }]),
+  /Synthetic proposal regrant: fictional fixture contract not satisfied/);
+  const b = bindSyntheticProposalRegrant(bundles, "fresh_toy_regrant_new_binding");
+  const stale = rehearseSyntheticProposalRegrantScenario(bundles,
+    "initial_active", b, new Proxy([{}], { get() { throw Error("must not read"); } }));
+  assert.equal(stale.decision, "would_block_pre_regrant_binding_even_with_same_content");
+  assert.equal(stale.review_intent_inspected, false);
 });

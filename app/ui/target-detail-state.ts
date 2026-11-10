@@ -66,7 +66,7 @@ export function expectFocusReturn(route:TargetDetailRoute):void{
   pendingFocus={key:origins.get(detailRouteKey(route))??"",expires:Date.now()+3000};
 }
 /** Focus the originating row if it exists (call again after rows render). */
-export function focusPendingRow(fallback?:HTMLElement|null):boolean{
+export function focusPendingRow(fallback?:HTMLElement|null,allowMissingRow=false):boolean{
   const pending=pendingFocus;
   if(!pending)return false;
   if(Date.now()>pending.expires){pendingFocus=null;return false;}
@@ -78,7 +78,7 @@ export function focusPendingRow(fallback?:HTMLElement|null):boolean{
       return true;
     }
   }
-  if(fallback?.isConnected&&!pending.key){fallback.focus();pendingFocus=null;return true;}
+  if(fallback?.isConnected&&(!pending.key||allowMissingRow)){fallback.focus();pendingFocus=null;return true;}
   return false;
 }
 export {detailRowKey};

@@ -1,6 +1,6 @@
 "use client";
 import dynamic from "next/dynamic";
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { TargetSidebarContext } from "./target-sidebar-context";
 import { LegacyWritesContext } from "./legacy-writes-context";
 import { useLumiApp } from "./use-lumi-app";
@@ -42,16 +42,19 @@ const TargetScopeLists = dynamic(() => import("./target-scope-lists"), { ssr: fa
 
 // R3-FE-4a: authorized details inside the main app; loaded only when a detail flag is on.
 const TargetDetailPanel = dynamic(() => import("./target-detail-panel"), { ssr: false });
+// R3-CAPTURE-1: read-only, real actor-private Area catalogue in target Notes.
+const TargetPrivateNoteAreaChooser = dynamic(() => import("./target-private-note-area-chooser"), { ssr: false });
 
 export type TargetDetailsProps = { task: boolean; project: boolean; note: boolean };
 export type TargetScopesProps = { enabled: boolean; projects: boolean; notes: boolean };
 export type TargetEditsProps = TargetUiEdits;
 export type TargetMyPlanProps = { enabled: boolean; statusWrite: boolean; whenWrite: boolean };
 
-export function LumiAppRoot({ targetMyPlan, targetScopes, targetDetails, targetEdits }: { targetMyPlan?: TargetMyPlanProps; targetScopes?: TargetScopesProps; targetDetails?: TargetDetailsProps; targetEdits?: TargetEditsProps } = {}) {
+export function LumiAppRoot({ targetMyPlan, targetScopes, targetDetails, targetEdits, targetNoteEdit = false, targetPrivateNoteAreas = false }: { targetMyPlan?: TargetMyPlanProps; targetScopes?: TargetScopesProps; targetDetails?: TargetDetailsProps; targetEdits?: TargetEditsProps; targetNoteEdit?: boolean; targetPrivateNoteAreas?: boolean } = {}) {
   // Owner decision 2026-11-09: with target scopes on, the single global scope governs the
   // sidebar projects, the inspector and quick capture (see docs/R3-FE-04A-DETAILS.md).
   const scopesOn = Boolean(targetScopes?.enabled);
+  const [areaChooserOpen,setAreaChooserOpen]=useState(false);
   const detailGates = { task: Boolean(targetDetails?.task), project: Boolean(targetDetails?.project), note: Boolean(targetDetails?.note) };
   const shellInput = { scopesOn, projectsList: Boolean(targetScopes?.projects), notesList: Boolean(targetScopes?.notes),
     myPlan: Boolean(targetMyPlan?.enabled), v1Shell: mobileDesignV1Preview };
@@ -72,6 +75,8 @@ export function LumiAppRoot({ targetMyPlan, targetScopes, targetDetails, targetE
   } = app;
   const planActive = mobileDesignV1Preview && app.mobilePlanPreviewActive && view === "Today";
   const { scopeList, targetPlan, active: activeTargetView } = activeTargetViewFor({ ...shellInput, view, planActive });
+  // Never keep the chooser active when leaving the target Notes view.
+  useEffect(()=>{setAreaChooserOpen(false);},[view,scopesOn,targetPrivateNoteAreas]);
   const detailSearch = useTargetSearch(detailsOn);
   const activation: DetailActivation = detailsOn
     ? detailActivation({ search: detailSearch, gates: detailGates, activeTargetView }) : { state: "none" };
@@ -86,7 +91,14 @@ export function LumiAppRoot({ targetMyPlan, targetScopes, targetDetails, targetE
     previousRoute.current = detailRoute;
     if (previous !== null && !isParentOf(previous, detailRoute)) expectFocusReturn(previous);
     const frame = window.requestAnimationFrame(() => {
-      focusPendingRow(document.querySelector<HTMLElement>(".appPane .pageTitleRow h1"));
+      // A successful refresh can also remove the originating row (e.g. revoked
+      // access). When the detail has fully closed, offer its list status as a
+      // neutral fallback regardless of ready/loading/error; the row wins if
+      // still present. Do not consume a pending nested-detail return here.
+      const listStatus = activation.state === "none"
+        ? document.querySelector<HTMLElement>(".targetScopeList .targetScopeStatus")
+        : null;
+      focusPendingRow(listStatus ?? document.querySelector<HTMLElement>(".appPane .pageTitleRow h1"), Boolean(listStatus));
     });
     return () => window.cancelAnimationFrame(frame);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -203,6 +215,9 @@ export function LumiAppRoot({ targetMyPlan, targetScopes, targetDetails, targetE
             </div>
           </div>
           {scopeSwitcher && <TargetScopeSwitcher language={language} variant={scopeList === null ? "plan" : "lists"} />}
+          {scopeList==="note"&&targetPrivateNoteAreas&&<button type="button"
+            className="targetScopeAreaChooserButton" data-testid="target-private-area-open"
+            onClick={()=>setAreaChooserOpen(true)}>{language==="cs"?"Oblasti pro novou poznámku":"Areas for a new note"}</button>}
           <HeldBack app={app} />
           <CalendarView app={app} />
           <HomeView app={app} />
@@ -223,8 +238,10 @@ export function LumiAppRoot({ targetMyPlan, targetScopes, targetDetails, targetE
       <MobileNav app={app} targetPlan={Boolean(targetMyPlan?.enabled)} />
       <DesktopCaptureFab app={app} />
       <CaptureDialog app={app} />
+      {scopeList==="note"&&targetPrivateNoteAreas&&areaChooserOpen&&
+        <TargetPrivateNoteAreaChooser language={language} onClose={()=>setAreaChooserOpen(false)} />}
       {!(scopesOn && targetView) && <DetailPanel app={app} />}
-      {detailPanel && <TargetDetailPanel route={detailRoute} language={language} gates={detailGates} edits={targetEdits} />}
+      {detailPanel && <TargetDetailPanel route={detailRoute} language={language} gates={detailGates} edits={targetEdits} noteEdit={targetNoteEdit && detailGates.note} />}
       <AssistantPanel app={app} />
       <DeferPopover app={app} />
       <ConfirmDialog app={app} />

@@ -33,6 +33,7 @@ import {
 import {detailCopy,type DetailCopy,type DetailLanguage} from "../../lib/target-detail-copy";
 import type {TargetUiEdits} from "../../lib/target-ui-config";
 import {NoteEdits,TaskEdits,kindHasEdits,useDetailEdits,type DetailEditApi} from "./target-detail-edit";
+import TargetNoteEditor from "./target-note-editor";
 import "./target-details.css";
 
 type State=
@@ -119,9 +120,10 @@ function UnavailablePanel({language}:{language:DetailLanguage}){
   </Shell>;
 }
 
-function Content({content,route,copy,gates,more,onMore,edit}:{
+function Content({content,route,copy,gates,more,onMore,edit,noteEdit,onCommitted,onAccessRefused,language}:{
   content:TargetDetailContent;route:TargetDetailRoute;copy:DetailCopy;gates:TargetDetailGates;
   more:boolean;onMore:()=>void;edit:DetailEditApi|null;
+  noteEdit:boolean;onCommitted:()=>void;onAccessRefused:()=>void;language:DetailLanguage;
 }){
   const area=(kind:"private"|"shared")=>kind==="shared"?copy.areaShared:copy.areaPrivate;
   if(content.kind==="task"){
@@ -153,6 +155,8 @@ function Content({content,route,copy,gates,more,onMore,edit}:{
         ?<p className="targetDetailMuted">{copy.noteBodyEmpty}</p>
         :<div className="targetDetailNoteBody" data-testid="target-detail-note-body">{note.body}</div>}
       {edit&&<NoteEdits api={edit} note={note}/>}
+      {noteEdit&&!edit?.flags.noteEdit&&<TargetNoteEditor note={note} language={language}
+        onCommitted={onCommitted} onAccessRefused={onAccessRefused}/>}
     </article>;
   }
   const {page}=content;
@@ -179,8 +183,8 @@ function Content({content,route,copy,gates,more,onMore,edit}:{
   </article>;
 }
 
-function DetailBody({route,language,gates,edits}:{
-  route:TargetDetailRoute;language:DetailLanguage;gates:TargetDetailGates;edits?:TargetUiEdits;
+function DetailBody({route,language,gates,edits,noteEdit}:{
+  route:TargetDetailRoute;language:DetailLanguage;gates:TargetDetailGates;edits?:TargetUiEdits;noteEdit:boolean;
 }){
   const copy=detailCopy[language];
   const {gate,onRefusal,retry}=useTargetGate();
@@ -300,6 +304,18 @@ function DetailBody({route,language,gates,edits}:{
     sessionRef.current?.resume();
     setNonce(value=>value+1);
   },[]);
+  // A denied edit GET/PATCH may signal a revoked Area membership. Hide the
+  // entire previously authorized note immediately, not only its edit button.
+  // A new server read can still show a viewer-authorized note after a role
+  // downgrade. Supersede all earlier reads so no stale content reappears.
+  const invalidateAndReload=useCallback(()=>{
+    epoch.current++;
+    sessionRef.current?.suspend();
+    setState({kind:"loading"});
+    retryAttempt.current=0;
+    sessionRef.current?.resume();
+    setNonce(value=>value+1);
+  },[]);
   async function more(){
     if(state.kind!=="ready"||state.more||!session||
       document.visibilityState==="hidden"||!navigator.onLine)return;
@@ -358,20 +374,22 @@ function DetailBody({route,language,gates,edits}:{
         <button type="button" onClick={reload}>{copy.retry}</button>}
       {content&&state.kind==="ready"&&
         <Content content={content} route={route} copy={copy} gates={gates}
-          more={state.more} onMore={()=>{void more();}} edit={edit}/>}
-      {content&&!(edit&&kindHasEdits(content.kind,edits))&&
+          more={state.more} onMore={()=>{void more();}} edit={edit}
+          noteEdit={noteEdit} onCommitted={reload} onAccessRefused={invalidateAndReload}
+          language={language}/>}
+      {content&&!(noteEdit&&content.kind==="note")&&!(edit&&kindHasEdits(content.kind,edits))&&
         <p className="targetDetailNote">{copy.readOnlyNote}</p>}
     </>}
   </Shell>;
 }
 
-export default function TargetDetailPanel({route,language="cs",gates,edits}:{
+export default function TargetDetailPanel({route,language="cs",gates,edits,noteEdit=false}:{
   /** null: the address asked for something that cannot be opened. */
   route:TargetDetailRoute|null;language?:DetailLanguage;gates:TargetDetailGates;
   /** R3-FE-4b: which edits exist at all (server-derived flags); absent = read-only as in 4a. */
-  edits?:TargetUiEdits;
+  edits?:TargetUiEdits;noteEdit?:boolean;
 }){
   if(route===null)return <UnavailablePanel language={language}/>;
   // Keyed by target: another item is a new session, never a reuse of old content.
-  return <DetailBody key={detailRouteKey(route)} route={route} language={language} gates={gates} edits={edits}/>;
+  return <DetailBody key={detailRouteKey(route)} route={route} language={language} gates={gates} edits={edits} noteEdit={noteEdit&&gates.note}/>;
 }

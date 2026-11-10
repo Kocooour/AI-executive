@@ -10,7 +10,7 @@ test("page and root pass the server-derived edit flags to the panel; absent flag
   assert.match(read("app/page.tsx"),/targetEdits=\{config\?\.edits\}/);
   const rootSource=read("app/ui/lumi-app-root.tsx");
   assert.match(rootSource,/targetEdits\?: TargetEditsProps/);
-  assert.match(rootSource,/<TargetDetailPanel route=\{detailRoute\} language=\{language\} gates=\{detailGates\} edits=\{targetEdits\} \/>/);
+  assert.match(rootSource,/<TargetDetailPanel route=\{detailRoute\} language=\{language\} gates=\{detailGates\} edits=\{targetEdits\} noteEdit=\{targetNoteEdit && detailGates\.note\} \/>/);
 });
 
 test("the panel shows the 4a read-only note unless edits exist for the shown kind",()=>{
@@ -127,4 +127,15 @@ test("delete CAS is passed from the same rendered detail, pinned with confirmati
   assert.match(edit,/flags\.taskDelete&&expectedRevision!==null&&<DeleteControl/);
   assert.match(write,/ctx\.context\.expectedRevision!==input\.baseRevision/);
   assert.match(write,/seen\.expectedRevision!==input\.baseRevision/);
+});
+
+test("merged editor gates preserve independent note editor without presenting duplicate writers",()=>{
+  const panel=read("app/ui/target-detail-panel.tsx");
+  const rootSource=read("app/ui/lumi-app-root.tsx");
+  const page=read("app/page.tsx");
+  assert.match(panel,/noteEdit&&!edit\?\.flags\.noteEdit&&<TargetNoteEditor/);
+  assert.match(panel,/\{edit&&<NoteEdits api=\{edit\} note=\{note\}\/>\}/);
+  assert.doesNotMatch(rootSource,/targetPrivateNoteAreas=\{Boolean\(config\?\.scopes\.notes\)/); // server-only gate
+  assert.match(page,/targetNoteEdit=\{Boolean\(config\?\.details\.note\) && targetNoteEditUiEnabled\(process\.env\)\}/);
+  assert.match(page,/targetPrivateNoteAreas=\{Boolean\(config\?\.scopes\.notes\)&&targetPrivateNoteAreaUiEnabled\(process\.env\)\}/);
 });
