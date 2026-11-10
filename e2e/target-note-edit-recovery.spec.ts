@@ -158,6 +158,11 @@ test(`full reload loses private draft; receipt unlocks without another PATCH at 
   expect(before).toEqual({commandId:committedId,generation});
   await page.reload(); // sessionStorage survives, React draft/CAS does not
   await expect(page.getByTestId("target-scope-list")).toHaveAttribute("data-state","ready");
+  // The URL may restore note A's inspector across reload (notably at 390px).
+  // Verify the lost private draft is absent, then navigate using the real
+  // close control before opening another row underneath the modal backdrop.
+  await expect(page.getByText("Private draft that must not persist")).toHaveCount(0);
+  if(await page.getByTestId("target-detail").isVisible())await close(page);
   await open(page,"note-b");
   const form=page.getByTestId("target-note-edit");
   await expect(form.getByRole("button",{name:"Ověřit předchozí zápis"})).toBeVisible();
