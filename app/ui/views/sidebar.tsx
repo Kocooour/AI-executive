@@ -261,7 +261,7 @@ export function Sidebar({ app, targetPlan = false, onTargetCapture }: {
               onClick={onTargetCapture ?? (()=>openCapture())}>
               ＋ {onTargetCapture?(language==="cs"?"Nová poznámka":"New note"):tr("new")}
             </button>
-          )
+          )}
           {!mobileDesignV1Preview && (
             <>
               {!app.captureDisabled && <button onClick={() => openCapture()} aria-label={tr("addTask")}>
