@@ -119,7 +119,7 @@ test("uncertain PATCH then retry 409 retains tab marker; other notes stay readab
   await expect(form.getByRole("button",{name:"Ověřit uložením znovu"})).toBeVisible();
   await form.getByRole("button",{name:"Ověřit uložením znovu"}).click();
   await expect(form.getByRole("button",{name:"Zahodit koncept a načíst aktuální obsah"})).toBeVisible();
-  expect(sent).toEqual([id.commandId,id.commandId],"retry must preserve UUID");
+  expect(sent).toEqual([id.commandId,id.commandId]); // exact UUID retry
   expect((await marker(page))).not.toBeNull();
   await close(page);
   await open(page,"note-b");
@@ -162,6 +162,6 @@ test("full reload loses private draft, read-only receipt check unlocks without a
   await form.getByRole("button",{name:"Ověřit předchozí zápis"}).click();
   await expect.poll(()=>marker(page)).toBeNull();
   expect(statusCount).toBe(1);
-  expect(patchCount).toBe(1,"recovery must not synthesize or replay a PATCH");
+  expect(patchCount).toBe(1); // read-only receipt never sends a PATCH
   await expect(form.getByRole("button",{name:"Upravit poznámku"})).toBeVisible();
 });
