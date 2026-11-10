@@ -177,6 +177,9 @@ test("BFCache lifecycle and real back navigation never revive private draft or A
   await expect(page.getByTestId("target-private-create-form")
     .getByRole("textbox",{name:"Název"})).toHaveValue("");
   await fill(page);
+  await page.evaluate(()=>{
+    (window as Window & {__lumiBfcacheRestored?:boolean}).__lumiBfcacheRestored=false;
+  });
   // Real back navigation separately tests the full reload fallback and true
   // BFCache restore when the browser actually admits this page to its cache.
   await page.goto("/robots.txt");
