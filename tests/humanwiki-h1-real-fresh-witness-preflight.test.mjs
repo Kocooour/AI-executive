@@ -28,14 +28,14 @@ const makeCommand = (changes = {}) => ({
   retentionDays:90, expectedRevision:0, explicitConfirmation:true, ...changes,
 });
 
-function fixture(fn) {
+async function fixture(fn) {
   const dir = mkdtempSync(path.join(os.tmpdir(), "lumi-h1-witness-"));
   const file = path.join(dir, "intents.sqlite");
   let db = new DatabaseSync(file);
   try {
     db.exec("PRAGMA journal_mode=DELETE; PRAGMA synchronous=FULL");
     createHumanWikiConsentIntentSchema(db);
-    return fn({
+    return await fn({
       get db() {return db;}, file, dir,
       reopen() {if (db.isOpen) db.close();db = new DatabaseSync(file);return db;},
     });
