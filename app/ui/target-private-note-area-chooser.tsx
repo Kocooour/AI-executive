@@ -60,7 +60,7 @@ export default function TargetPrivateNoteAreaChooser({
         if(!mounted||controller.signal.aborted||!runtime.known()||
           runtime.generation()!==generation||!available())return;
         if(result.ok)setState({kind:"ready",generation,areas:result.areas});
-        else if(result.reason==="signed-out"){
+        else if(result.ok===false&&result.reason==="signed-out"){
           setState({kind:"signed-out",generation});
           void runtime.reportRefusal();
         }else setState({kind:"unavailable",generation});
