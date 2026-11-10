@@ -24,8 +24,8 @@ import {
   type MyPlanWhenCommand,
 } from "./target-staging-my-plan-when-client";
 import {prepareConfirmedWhenUndo} from "./target-staging-my-plan-when-undo";
-import {readStagingTaskPreview} from "./target-staging-task-preview-client";
-import {readStagingNotePreview} from "./target-staging-note-preview-client";
+import {readStagingTaskPreview,type TaskPreview} from "./target-staging-task-preview-client";
+import {readStagingNotePreview,type NotePreview} from "./target-staging-note-preview-client";
 import {
   buildNoteDeleteCommand,buildNoteEditCommand,buildTaskDeleteCommand,buildTaskTitleCommand,
   checkNoteDeleteReceipt,checkNoteEditReceipt,checkTaskDeleteReceipt,checkTaskTitleReceipt,
@@ -138,9 +138,9 @@ export type WriteInput=
   |{kind:"taskTitle";taskId:string;areaId:string;title:string;baseTitle:string}
   |{kind:"taskStatus";taskId:string;areaId:string;status:"open"|"completed"}
   |{kind:"taskWhen";taskId:string;areaId:string;whenOn:string|null}
-  |{kind:"taskDelete";taskId:string;areaId:string}
+  |{kind:"taskDelete";taskId:string;areaId:string;base:TaskPreview}
   |{kind:"noteEdit";noteId:string;areaId:string;title:string;body:string;baseTitle:string;baseBody:string}
-  |{kind:"noteDelete";noteId:string;areaId:string};
+  |{kind:"noteDelete";noteId:string;areaId:string;base:NotePreview};
 
 type Deps={fetch:typeof fetch;signal:AbortSignal;hooks:ExecHooks};
 
@@ -282,9 +282,18 @@ async function whenReceipt(command:MyPlanWhenCommand,f:typeof fetch,signal:Abort
     ?{kind:"unknown",reason:r.reason==="stale"?"conflict":r.reason==="unchanged"?"invalid-request":r.reason as EditFailure}:r;
 }
 
+/** Delete has no server Undo: it must refer to the exact authorized snapshot the user confirmed.
+ * The fresh server CAS guards changes between this read and the final mutation. */
+export const sameDeleteSnapshot=(current:TaskPreview|NotePreview,base:TaskPreview|NotePreview):boolean=>
+  JSON.stringify(current)===JSON.stringify(base);
+
 async function runTaskDelete(input:Extract<WriteInput,{kind:"taskDelete"}>,d:Deps):Promise<Outcome>{
   const ctx=await readTaskWriteContext(input.taskId,input.areaId,d.fetch,d.signal);
   if(ctx.ok===false)return outcomeForFailure(ctx.reason);
+  const seen=await readStagingTaskPreview(input.taskId,d.signal,d.fetch);
+  if(seen.ok===false)return outcomeForRead(seen.reason);
+  if(!sameDeleteSnapshot(seen.task,input.base)||seen.task.areaId!==input.areaId)
+    return {t:"conflict"};
   const command=buildTaskDeleteCommand(input.taskId,ctx.context);
   if(!command)return {t:"error",reason:"invalid"};
   const result=await dispatchTaskDelete(command,d.fetch,d.signal,()=>d.hooks.onDispatch(
@@ -307,6 +316,10 @@ async function runNoteEdit(input:Extract<WriteInput,{kind:"noteEdit"}>,d:Deps):P
 async function runNoteDelete(input:Extract<WriteInput,{kind:"noteDelete"}>,d:Deps):Promise<Outcome>{
   const ctx=await readNoteWriteContext(input.noteId,input.areaId,d.fetch,d.signal);
   if(ctx.ok===false)return outcomeForFailure(ctx.reason);
+  const seen=await readStagingNotePreview(input.noteId,d.signal,d.fetch);
+  if(seen.ok===false)return outcomeForRead(seen.reason);
+  if(!sameDeleteSnapshot(seen.note,input.base)||seen.note.areaId!==input.areaId)
+    return {t:"conflict"};
   const command=buildNoteDeleteCommand(input.noteId,ctx.context);
   if(!command)return {t:"error",reason:"invalid"};
   const result=await dispatchNoteDelete(command,d.fetch,d.signal,()=>d.hooks.onDispatch(
