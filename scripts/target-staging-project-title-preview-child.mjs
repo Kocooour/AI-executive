@@ -17,6 +17,8 @@ try {
       !/^(?:0|[1-9][0-9]{0,6})$/.test(rawOffset || "") ||
       Number(rawOffset) > 1_000_000 ||
       process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_ENABLED !== "true" ||
+      process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_WRITE_ENABLED !== "true" ||
+      process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_PROJECT_TITLE_WRITE_ENABLED !== "true" ||
       !stagingDirectory || !path.isAbsolute(stagingDirectory) ||
       !expectedRestoreGeneration || !ownerUserId) {
     process.exitCode = 1;
