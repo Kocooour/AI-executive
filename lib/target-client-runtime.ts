@@ -7,8 +7,9 @@
  * lifecycle (hidden / pagehide / offline -> suspend, visible / pageshow /
  * online -> resume). resume() never fetches data. No persistence API is used and
  * nothing from a response other than the opaque generation is kept or logged. */
+export type TargetRuntimeDisposeReason="expired"|"rotation"|"reset";
 export type TargetRuntimeDisposable={
-  dispose():void;suspend?():void;resume?():void;
+  dispose(reason?:TargetRuntimeDisposeReason):void;suspend?():void;resume?():void;
 };
 export type TargetRuntimeRefreshResult="ok"|"signed_out"|"unavailable";
 /** Last completed verification, for UI copy only (never an auth decision). */
@@ -94,26 +95,35 @@ export function createTargetClientRuntime(config:TargetClientRuntimeConfig={}){
     for(const fn of [...outcomeSubscribers])guarded(fn);
   }
   const registered=new Set<TargetRuntimeDisposable>();
+  // Cross-login recovery may retain *sealed* content for session_expired only.
+  // Every explicit sign-out, revocation, feature-off and runtime disposal
+  // synchronously clears that sealed content. Ordinary feature sessions never
+  // outlive any generation change.
+  const securityClearListeners=new Set<()=>void>();
+  function clearSecurity(){
+    for(const fn of [...securityClearListeners])guarded(fn);
+  }
 
   const guarded=(fn:()=>void)=>{try{fn();}catch{/* one feature must not break others */}};
-  function disposeAll(){
+  function disposeAll(reason:TargetRuntimeDisposeReason="reset"){
     const all=[...registered];
     registered.clear();
-    for(const item of all)guarded(()=>item.dispose());
+    for(const item of all)guarded(()=>item.dispose(reason));
   }
-  function set(next:string,unknown:boolean){
+  function set(next:string,unknown:boolean,reason:TargetRuntimeDisposeReason="rotation"){
     unknownState=unknown;
     if(next===value)return;
     value=next;
-    disposeAll();
+    disposeAll(reason);
     for(const fn of [...subscribers])guarded(fn);
   }
   /** Any refusal or sign-out: an unrecoverable, never-reused value. */
-  function bumpUnknown(){
+  function bumpUnknown(reason:TargetRuntimeDisposeReason="reset"){
     localBumps++;
     controller?.abort();
+    if(reason!=="expired")clearSecurity();
     if(unknownState&&value!=="")return;
-    set(unknownToken(),true);
+    set(unknownToken(),true,reason);
   }
 
   async function readGeneration(response:Response,signal:AbortSignal):Promise<string|null> {
@@ -154,6 +164,39 @@ export function createTargetClientRuntime(config:TargetClientRuntimeConfig={}){
     return generation;
   }
 
+  // Strictly bounded coded 401 parsing: only an actual server-issued
+  // session_expired response may preserve a sealed command across login.
+  // A code-less owner 401, forged/malformed body or revoked/restored session
+  // clears sealed data like an explicit sign-out.
+  async function expired401(response:Response,signal:AbortSignal):Promise<boolean>{
+    if(response.status!==401||response.redirected||
+      response.headers.get("content-type")?.split(";")[0].trim().toLowerCase()!=="application/json"||
+      response.headers.get("cache-control")?.toLowerCase().split(",").some(x=>x.trim()==="no-store")!==true||
+      !response.body)return false;
+    const reader=response.body.getReader(),decoder=new TextDecoder("utf-8",{fatal:true});
+    let body="",bytes=0;
+    try{
+      for(;;){
+        if(signal.aborted)return false;
+        const part=await reader.read();
+        if(part.done)break;
+        bytes+=part.value.byteLength;
+        if(bytes>512)return false;
+        body+=decoder.decode(part.value,{stream:true});
+      }
+      body+=decoder.decode();
+      const value:unknown=JSON.parse(body);
+      return Boolean(value&&typeof value==="object"&&!Array.isArray(value)&&
+        Object.keys(value).sort().join(",")==="code,error"&&
+        (value as {code?:unknown}).code==="session_expired"&&
+        (value as {error?:unknown}).error==="Authentication required");
+    }catch{return false;}
+    finally{
+      void reader.cancel().catch(()=>{});
+      try{reader.releaseLock();}catch{/* already released */}
+    }
+  }
+
   async function run():Promise<TargetRuntimeRefreshResult> {
     const bumps=localBumps;
     const own=new AbortController();
@@ -167,8 +210,10 @@ export function createTargetClientRuntime(config:TargetClientRuntimeConfig={}){
       // A sign-out/refusal observed meanwhile outranks this older answer.
       if(disposed||bumps!==localBumps||own.signal.aborted)return "unavailable";
       if(response.status===401||response.status===403){
-        void response.body?.cancel().catch(()=>{});
-        bumpUnknown();
+        const expired=response.status===401&&await expired401(response,own.signal);
+        if(disposed||bumps!==localBumps||own.signal.aborted)return "unavailable";
+        if(response.status===403)void response.body?.cancel().catch(()=>{});
+        bumpUnknown(expired?"expired":"reset");
         outcome("signed_out");
         return "signed_out";
       }
@@ -322,6 +367,13 @@ export function createTargetClientRuntime(config:TargetClientRuntimeConfig={}){
       outcomeSubscribers.add(fn);
       return ()=>{outcomeSubscribers.delete(fn);};
     },
+    /** Security-sensitive handoffs are erased on explicit signout/revocation.
+     * A mere generation rotation is NOT proof of a different identity. */
+    subscribeSecurityClear(fn:()=>void):()=>void{
+      if(disposed){guarded(fn);return ()=>{};}
+      securityClearListeners.add(fn);
+      return ()=>{securityClearListeners.delete(fn);};
+    },
     register(item:TargetRuntimeDisposable):()=>void{
       if(disposed){guarded(()=>item.dispose());return ()=>{};}
       registered.add(item);
@@ -329,14 +381,16 @@ export function createTargetClientRuntime(config:TargetClientRuntimeConfig={}){
       return ()=>{registered.delete(item);};
     },
     /** Features call this on 401 / session_revoked from any target request. */
-    reportRefusal(_kind:"unauthorized"|"session_revoked"|string="unauthorized"):Promise<TargetRuntimeRefreshResult>{
+    reportRefusal(kind:"unauthorized"|"session_revoked"|string="unauthorized"):Promise<TargetRuntimeRefreshResult>{
       if(disposed)return Promise.resolve("unavailable");
-      bumpUnknown();
+      bumpUnknown(kind==="session_expired"?"expired":"reset");
       return refresh();
     },
     dispose():void{
       if(disposed)return;
       disposed=true;
+      clearSecurity();
+      securityClearListeners.clear();
       syncPoll(); // active() is false once disposed: the interval is cleared
       controller?.abort();
       windowEvents.forEach(([name,fn])=>win?.removeEventListener?.(name,fn));
