@@ -5,7 +5,7 @@ import { TargetSidebarContext } from "./target-sidebar-context";
 import { LegacyWritesContext } from "./legacy-writes-context";
 import { useLumiApp } from "./use-lumi-app";
 import { closeTargetDetail, expectFocusReturn, focusPendingRow, useTargetSearch } from "./target-detail-state";
-import { writeTargetScope } from "./target-scope-state";
+import { writeTargetReadingScope } from "../../lib/target-reading-scope-nav";
 import { scopeFromSearch } from "../../lib/view-url";
 import { detailActivation, detailRouteKey, isParentOf, isTargetAddress, viewOfSearch, type DetailActivation } from "../../lib/target-detail-route";
 import { activeTargetViewFor, detailsActive, targetViewsFor } from "../../lib/target-shell-views";
@@ -123,7 +123,7 @@ export function LumiAppRoot({ targetMyPlan, targetScopes, targetDetails, targetN
     // Shared, show the authorized Personal read scope after successful CREATE
     // rather than an empty Shared Notes list. A scope is never write consent.
     if(targetCapture&&scopeFromSearch(window.location.search)==="shared")
-      writeTargetScope("personal");
+      writeTargetReadingScope("personal");
     // Never append a client-fabricated row. Re-read the authorized Notes index.
     if(targetCapture&&view!=="Notes")app.setView("Notes");
   }
