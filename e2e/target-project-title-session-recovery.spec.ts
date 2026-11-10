@@ -51,7 +51,7 @@ async function setup(page:Page,patch:Patch,params:{
   await expect(page.getByTestId("target-scope-list")).toHaveAttribute("data-state","ready");
 }
 async function open(page:Page){
-  await page.getByRole("button",{name:/Otevřít.*Synthetic project/}).click();
+  await page.getByTestId("target-scope-list").getByRole("button",{name:/Otevřít.*Synthetic project/}).click();
   await expect(page.getByTestId("target-detail")).toBeVisible();
 }
 async function edit(page:Page,value:string){
