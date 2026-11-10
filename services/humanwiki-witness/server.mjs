@@ -94,6 +94,12 @@ export function readProtectedWitnessFile(file) {
   if(typeof file!=="string"||!path.isAbsolute(file)||
       path.normalize(file)!==file||
       typeof process.getuid!=="function")throw Error("witness_unavailable");
+  // Restrict the containing directory too: a 0600 leaf file is not safe
+  // against replacement if another account can rename it from the parent.
+  const parent=path.dirname(file),folder=lstatSync(parent);
+  if(!folder.isDirectory()||folder.isSymbolicLink()||
+      folder.uid!==process.getuid()||(folder.mode&0o077)!==0||
+      realpathSync(parent)!==parent)throw Error("witness_unavailable");
   const st=lstatSync(file);
   if(!st.isFile()||st.isSymbolicLink()||st.nlink!==1||
       st.uid!==process.getuid()||(st.mode&0o177)!==0||
