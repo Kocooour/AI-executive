@@ -39,9 +39,12 @@ const durable = await import("../lib/target-staging-durable-session.ts");
 const journalLib = await import("../lib/target-staging-anchor-journal.ts");
 const witnessLib = await import("../lib/target-staging-anchor-witness.ts");
 const restoreLib = await import("../lib/target-staging-restore.ts");
+const {upgradeTargetStagingV25} = await import("../lib/target-staging-schema-upgrade.ts");
 const identityLib = await import("../lib/target-staging-http-identity.ts");
 const feedCursor = await import("../lib/target-staging-feed-cursor.ts");
 const writePreflight = await import("../lib/target-task-write-preflight.ts");
+const {readAuthorizedProjectTasksPage} = await import("../lib/target-project-task-read-model.ts");
+const requireProjectPage = (db, generation) => readAuthorizedProjectTasksPage(db, {actorUserId:"alice", projectId:"project", limit:1, offset:0, restoreGeneration:generation});
 const noteWritePreflight = await import("../lib/target-note-write-contract.ts");
 const { compactTargetStagingChangeLog } = await import("../lib/target-staging-change-log-compaction.ts");
 const { TargetStagingSessionAuthority } = await import("../lib/target-staging-session-authority.ts");
@@ -726,13 +729,44 @@ test("a wrong configured generation refuses; a backup of another store refuses",
   assert.equal(durable.checkTargetStagingAnchorLive(fx.store), "unavailable");
 });
 
+test("v25 backup remains restorable after a v26 project title command", () => {
+  const fx = makeFixture();
+  fx.db.exec("DROP TABLE project_title_audit; UPDATE metadata SET value='25' WHERE key='schema_version'");
+  fx.db.prepare("INSERT INTO projects(id,area_id,title) VALUES ('project',?,'Before')").run(fx.stage.unassignedAreaId);
+  assert.equal(preflight(fx).ok, true);
+  const backup = backupOf(fx);
+  assert.deepEqual(upgradeTargetStagingV25(fx.store), {ok:true,status:"upgraded"});
+  const projectRead = requireProjectPage(fx.db, fx.stage.restoreGeneration);
+  const command = {projectId:'project',commandId:randomUUID(),title:'After',
+    expectedRevision:projectRead.page.revision,writeAreaId:fx.stage.unassignedAreaId,
+    restoreGeneration:fx.stage.restoreGeneration};
+  assert.deepEqual(fx.authority.updateProjectTitle(writableToken(fx),command),{ok:true});
+  copyBack(fx, backup);
+  const result = restoreLib.restoreTargetStagingFromBackup(fx.store);
+  assert.equal(result.ok,true,JSON.stringify(result));
+  assert.equal(fx.db.prepare("SELECT value FROM metadata WHERE key='schema_version'").get().value,'25');
+  assert.equal(fx.db.prepare("SELECT title FROM projects WHERE id='project'").get().title,'Before');
+  assert.equal(preflight(fx).ok,true);
+  const newStore={...fx.store,expectedRestoreGeneration:result.restoreGeneration};
+  assert.deepEqual(upgradeTargetStagingV25(newStore),{ok:true,status:"upgraded"});
+  useStore(fx, result.restoreGeneration);
+  const restoredPage = requireProjectPage(fx.db, result.restoreGeneration);
+  assert.equal(restoredPage.ok, true);
+  const freshCommand = {projectId:'project',commandId:randomUUID(),title:'After restore',
+    expectedRevision:restoredPage.page.revision,writeAreaId:fx.stage.unassignedAreaId,
+    restoreGeneration:result.restoreGeneration};
+  assert.deepEqual(fx.authority.updateProjectTitle(writableToken(fx),freshCommand),{ok:true});
+  assert.equal(fx.db.prepare("SELECT title FROM projects WHERE id='project'").get().title,'After restore');
+  assert.equal(preflight(fx).ok,true);
+});
+
 test("a backup of another schema version is refused with its own reason, nothing changes", () => {
   const fx = makeFixture();
   assert.equal(titleWrite(fx, "t1", "x").ok, true);
   const backup = backupOf(fx);
   assert.equal(titleWrite(fx, "t2", "y").ok, true);
   copyBack(fx, backup);
-  fx.db.prepare("UPDATE metadata SET value=? WHERE key='schema_version'").run(String(TARGET_STORE_SCHEMA_VERSION - 1));
+  fx.db.prepare("UPDATE metadata SET value=? WHERE key='schema_version'").run(String(TARGET_STORE_SCHEMA_VERSION - 2));
   const before = worldHash(fx);
   assert.deepEqual(restoreLib.restoreTargetStagingFromBackup(fx.store), { ok: false, reason: "unsupported_backup" });
   assert.equal(worldHash(fx), before);

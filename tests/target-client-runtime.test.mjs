@@ -264,6 +264,42 @@ test("reportRefusal bumps to unknown, then refreshes",async()=>{
   runtime.dispose();
 });
 
+test("only a strictly coded session_expired retains sealed data; revocation clears it",async()=>{
+  const accepted=setup([json({generation:G1}),
+    json({error:"Authentication required",code:"session_expired"},401),
+    json({generation:G2})]);
+  await settle();
+  const reasons=[],security=[];
+  accepted.runtime.register({dispose:reason=>reasons.push(reason)});
+  accepted.runtime.subscribeSecurityClear(()=>security.push("clear"));
+  assert.equal(await accepted.runtime.refresh(),"signed_out");
+  assert.deepEqual(reasons,["expired"]);
+  assert.deepEqual(security,[],"coded expiry is NOT permission to erase the sealed command");
+  assert.equal(await accepted.runtime.refresh(),"ok");
+  assert.equal(accepted.runtime.generation(),G2);
+  assert.deepEqual(security,[],"a new auth epoch requires actor proof, not premature erasure");
+  accepted.runtime.dispose();
+  assert.deepEqual(security,["clear"]);
+
+  for(const refused of [
+    json({error:"Authentication required",code:"session_revoked"},401),
+    json({error:"Authentication required"},401),
+    json({error:"Authentication required",code:"session_expired",extra:true},401),
+    json({error:"Authentication required",code:"session_expired"},401,{"cache-control":"private"}),
+    json({error:"Authentication required",code:"session_expired"},403),
+  ]){
+    const {runtime}=setup([json({generation:G1}),refused]);
+    await settle();
+    const clears=[],drops=[];
+    runtime.subscribeSecurityClear(()=>clears.push("cleared"));
+    runtime.register({dispose:reason=>drops.push(reason)});
+    assert.equal(await runtime.refresh(),"signed_out");
+    assert.deepEqual(drops,["reset"]);
+    assert.deepEqual(clears,["cleared"],"bad or revoked session erases private sealed data");
+    runtime.dispose();
+  }
+});
+
 test("401 and 403 refresh results are signed_out and leave an unknown generation; 404 and 5xx never keep data bound",async()=>{
   for(const status of [401,403]){
     const {runtime}=setup([json({generation:G1}),json({error:"x"},status)]);

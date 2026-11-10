@@ -46,7 +46,7 @@ export type TargetDetailsProps = { task: boolean; project: boolean; note: boolea
 export type TargetScopesProps = { enabled: boolean; projects: boolean; notes: boolean };
 export type TargetMyPlanProps = { enabled: boolean; statusWrite: boolean; whenWrite: boolean };
 
-export function LumiAppRoot({ targetMyPlan, targetScopes, targetDetails, targetNoteEdit = false }: { targetMyPlan?: TargetMyPlanProps; targetScopes?: TargetScopesProps; targetDetails?: TargetDetailsProps; targetNoteEdit?: boolean } = {}) {
+export function LumiAppRoot({ targetMyPlan, targetScopes, targetDetails, targetNoteEdit = false, targetProjectEdit = false }: { targetMyPlan?: TargetMyPlanProps; targetScopes?: TargetScopesProps; targetDetails?: TargetDetailsProps; targetNoteEdit?: boolean; targetProjectEdit?: boolean } = {}) {
   // Owner decision 2026-11-09: with target scopes on, the single global scope governs the
   // sidebar projects, the inspector and quick capture (see docs/R3-FE-04A-DETAILS.md).
   const scopesOn = Boolean(targetScopes?.enabled);
@@ -229,7 +229,7 @@ export function LumiAppRoot({ targetMyPlan, targetScopes, targetDetails, targetN
       <DesktopCaptureFab app={app} />
       <CaptureDialog app={app} />
       {!(scopesOn && targetView) && <DetailPanel app={app} />}
-      {detailPanel && <TargetDetailPanel route={detailRoute} language={language} gates={detailGates} noteEdit={targetNoteEdit && detailGates.note} />}
+      {detailPanel && <TargetDetailPanel route={detailRoute} language={language} gates={detailGates} noteEdit={targetNoteEdit && detailGates.note} projectEdit={targetProjectEdit && detailGates.project} />}
       <AssistantPanel app={app} />
       <DeferPopover app={app} />
       <ConfirmDialog app={app} />
