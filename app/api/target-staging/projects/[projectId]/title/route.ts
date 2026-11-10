@@ -21,7 +21,8 @@ const answer = (status: number, error: string): Response =>
   Response.json({ error }, { status, headers });
 const enabled = () =>
   process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_ENABLED === "true" &&
-  process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_WRITE_ENABLED === "true";
+  process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_WRITE_ENABLED === "true" &&
+  process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_PROJECT_TITLE_WRITE_ENABLED === "true";
 function config(): StagingPersonalReadConfig | null {
   const stagingDirectory = process.env.AI_EXECUTIVE_TARGET_STAGING_DIRECTORY;
   const expectedRestoreGeneration = process.env.AI_EXECUTIVE_TARGET_STAGING_RESTORE_GENERATION;
