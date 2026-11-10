@@ -52,7 +52,12 @@ export function LumiAppRoot({ targetMyPlan, targetScopes, targetDetails, targetN
   // Owner decision 2026-11-09: with target scopes on, the single global scope governs the
   // sidebar projects, the inspector and quick capture (see docs/R3-FE-04A-DETAILS.md).
   const scopesOn = Boolean(targetScopes?.enabled);
+  // All staging, Area and write flags must be on before the global FAB opens
+  // the R3 private-note creator; no implicit legacy-write fallback.
+  const targetCapture=Boolean(scopesOn&&targetScopes?.notes&&targetPrivateNoteAreas&&
+    targetPrivateNoteCreate&&mobileDesignV1Preview);
   const [areaChooserOpen,setAreaChooserOpen]=useState(false);
+  const areaChooserOpener=useRef<HTMLElement|null>(null);
   const [noteListRevision,setNoteListRevision]=useState(0);
   const detailGates = { task: Boolean(targetDetails?.task), project: Boolean(targetDetails?.project), note: Boolean(targetDetails?.note) };
   const shellInput = { scopesOn, projectsList: Boolean(targetScopes?.projects), notesList: Boolean(targetScopes?.notes),
@@ -74,8 +79,35 @@ export function LumiAppRoot({ targetMyPlan, targetScopes, targetDetails, targetN
   } = app;
   const planActive = mobileDesignV1Preview && app.mobilePlanPreviewActive && view === "Today";
   const { scopeList, targetPlan, active: activeTargetView } = activeTargetViewFor({ ...shellInput, view, planActive });
-  // Never keep the chooser active when leaving the target Notes view.
-  useEffect(()=>{setAreaChooserOpen(false);},[view,scopesOn,targetPrivateNoteAreas]);
+  // Read-only Notes chooser remains view-scoped; a gated global capture does not.
+  useEffect(()=>{
+    if(!targetCapture)setAreaChooserOpen(false);
+  },[view,scopesOn,targetPrivateNoteAreas,targetCapture]);
+  function openAreaChooser(){
+    if(!targetPrivateNoteAreas||areaChooserOpen||app.offlineView||app.capture||
+      app.moreOpen||app.assistantOpen||app.confirmRequest||
+      document.querySelector('[aria-modal="true"]'))return;
+    areaChooserOpener.current=document.activeElement instanceof HTMLElement
+      ?document.activeElement:null;
+    setAreaChooserOpen(true);
+  }
+  function closeAreaChooser(){
+    setAreaChooserOpen(false);
+    window.requestAnimationFrame(()=>{
+      const opener=areaChooserOpener.current;
+      const fallback=document.querySelector<HTMLElement>(
+        '[data-target-private-capture-fab]:not([disabled]), [data-testid="target-private-area-open"]');
+      if(opener?.isConnected)opener.focus();
+      else fallback?.focus();
+      areaChooserOpener.current=null;
+    });
+  }
+  function createdPrivateNote(){
+    closeAreaChooser();
+    setNoteListRevision(v=>v+1);
+    // Never append a client-fabricated row. Re-read the authorized Notes index.
+    if(targetCapture&&view!=="Notes")app.setView("Notes");
+  }
   const detailSearch = useTargetSearch(detailsOn);
   const activation: DetailActivation = detailsOn
     ? detailActivation({ search: detailSearch, gates: detailGates, activeTargetView }) : { state: "none" };
@@ -129,7 +161,8 @@ export function LumiAppRoot({ targetMyPlan, targetScopes, targetDetails, targetN
     <main className={`appShell view-${view.toLowerCase()}${legacyInspector || detailPanel ? " inspectorOpen" : ""}${view === "Projects" && app.openProject ? " projectPageOpen" : ""}`} data-design-system={mobileDesignV1Preview ? "lumi-v1" : undefined} data-workspace-tone={app.activeWorkspaceTone}
       data-my-plan-preview={mobileDesignV1Preview && app.mobilePlanPreviewActive && view === "Today" ? "true" : undefined}>
       <TargetSidebarContext.Provider value={scopesOn && targetScopes?.projects ? { projects: true, openable: detailsOn && detailGates.project } : undefined}>
-        <Sidebar app={app} targetPlan={Boolean(targetMyPlan?.enabled)} />
+        <Sidebar app={app} targetPlan={Boolean(targetMyPlan?.enabled)}
+          onTargetCapture={targetCapture?openAreaChooser:undefined} />
       </TargetSidebarContext.Provider>
       <section className="appPane">
         {app.offlineView && (
@@ -216,7 +249,7 @@ export function LumiAppRoot({ targetMyPlan, targetScopes, targetDetails, targetN
           {scopeSwitcher && <TargetScopeSwitcher language={language} variant={scopeList === null ? "plan" : "lists"} />}
           {scopeList==="note"&&targetPrivateNoteAreas&&<button type="button"
             className="targetScopeAreaChooserButton" data-testid="target-private-area-open"
-            onClick={()=>setAreaChooserOpen(true)}>{targetPrivateNoteCreate
+            onClick={openAreaChooser}>{targetPrivateNoteCreate
               ?(language==="cs"?"Nová soukromá poznámka":"New private note")
               :(language==="cs"?"Oblasti pro novou poznámku":"Areas for a new note")}</button>}
           <HeldBack app={app} />
@@ -236,14 +269,14 @@ export function LumiAppRoot({ targetMyPlan, targetScopes, targetDetails, targetN
           {view === "Today" && !targetPlan && <TodayFooter app={app} />}
         </div>
       </section>
-      <MobileNav app={app} targetPlan={Boolean(targetMyPlan?.enabled)} />
-      <DesktopCaptureFab app={app} />
+      <MobileNav app={app} targetPlan={Boolean(targetMyPlan?.enabled)}
+        onTargetCapture={targetCapture?openAreaChooser:undefined} />
+      <DesktopCaptureFab app={app} onTargetCapture={targetCapture?openAreaChooser:undefined}
+        targetCaptureOpen={areaChooserOpen} />
       <CaptureDialog app={app} />
-      {scopeList==="note"&&targetPrivateNoteAreas&&areaChooserOpen&&
+      {targetPrivateNoteAreas&&areaChooserOpen&&(scopeList==="note"||targetCapture)&&
         <TargetPrivateNoteAreaChooser language={language} createEnabled={targetPrivateNoteCreate}
-          onClose={()=>setAreaChooserOpen(false)} onCreated={()=>{
-            setAreaChooserOpen(false);setNoteListRevision(v=>v+1);
-          }} />}
+          onClose={closeAreaChooser} onCreated={createdPrivateNote} />}
       {!(scopesOn && targetView) && <DetailPanel app={app} />}
       {detailPanel && <TargetDetailPanel route={detailRoute} language={language} gates={detailGates} noteEdit={targetNoteEdit && detailGates.note} />}
       <AssistantPanel app={app} />
