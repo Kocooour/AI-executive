@@ -84,10 +84,14 @@ export function LumiAppRoot({ targetMyPlan, targetScopes, targetDetails, targetN
     previousRoute.current = detailRoute;
     if (previous !== null && !isParentOf(previous, detailRoute)) expectFocusReturn(previous);
     const frame = window.requestAnimationFrame(() => {
-      // When the list cannot offer the original row yet, focus its status now.
-      // A late response must not move focus away from the user's next action.
-      const pendingListStatus = document.querySelector<HTMLElement>(".targetScopeList:not([data-state=ready]) .targetScopeStatus");
-      focusPendingRow(pendingListStatus ?? document.querySelector<HTMLElement>(".appPane .pageTitleRow h1"), Boolean(pendingListStatus));
+      // A successful refresh can also remove the originating row (e.g. revoked
+      // access). When the detail has fully closed, offer its list status as a
+      // neutral fallback regardless of ready/loading/error; the row wins if
+      // still present. Do not consume a pending nested-detail return here.
+      const listStatus = activation.state === "none"
+        ? document.querySelector<HTMLElement>(".targetScopeList .targetScopeStatus")
+        : null;
+      focusPendingRow(listStatus ?? document.querySelector<HTMLElement>(".appPane .pageTitleRow h1"), Boolean(listStatus));
     });
     return () => window.cancelAnimationFrame(frame);
     // eslint-disable-next-line react-hooks/exhaustive-deps
