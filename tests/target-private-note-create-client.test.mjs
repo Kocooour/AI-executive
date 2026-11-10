@@ -5,7 +5,7 @@ import {validPrivateNoteCreateCommand,privateNoteCreatePreflight,
   sendPrivateNoteCreate,recoverPrivateNoteCreate} from
   "../lib/target-private-note-create-client.ts";
 import {privateNoteCreateMarker,reservePrivateNoteCreate,
-  confirmPrivateNoteCreate} from "../lib/target-note-create-reload.ts";
+  confirmPrivateNoteCreate,confirmRecoveredPrivateNoteCreate} from "../lib/target-note-create-reload.ts";
 import {runPrivateNoteCreate,trackedPrivateNoteCreate,
   releaseTrackedPrivateNoteCreate} from "../lib/target-private-note-create-coordinator.ts";
 import {targetPrivateNoteCreateUiEnabled,TARGET_PRIVATE_NOTE_CREATE_UI_FLAGS} from
@@ -93,7 +93,15 @@ test("tab marker stores ONLY exact opaque UUID and generation; no new command af
     assert.equal(confirmPrivateNoteCreate(generation,first.commandId),true);
     assert.deepEqual(privateNoteCreateMarker(generation),{kind:"clear"});
     assert.equal(reservePrivateNoteCreate(generation,second.commandId),true);
-    assert.deepEqual(privateNoteCreateMarker("B".repeat(43)),{kind:"clear"});
+    const other="B".repeat(43);
+    assert.deepEqual(privateNoteCreateMarker(other),
+      {kind:"blocked",commandId:second.commandId},
+      "an in-flight CREATE may commit after session rotation");
+    assert.equal(reservePrivateNoteCreate(other,command().commandId),false);
+    assert.equal(confirmPrivateNoteCreate(other,second.commandId),false);
+    assert.equal(confirmRecoveredPrivateNoteCreate(other,randomUUID()),false);
+    assert.equal(confirmRecoveredPrivateNoteCreate(other,second.commandId),true);
+    assert.equal(privateNoteCreateMarker(other).kind,"clear");
   }finally{if(prior===undefined)delete globalThis.sessionStorage;
     else globalThis.sessionStorage=prior;}
 });
@@ -130,4 +138,38 @@ test("runtime coordinator survives owner UI unmount, clears positive receipt, ne
     dispose?.();
   }finally{if(prior===undefined)delete globalThis.sessionStorage;
     else globalThis.sessionStorage=prior;}
+});
+
+test("an ambiguous CREATE stays blocked after authentication rotation",async()=>{
+  const original=globalThis.sessionStorage;globalThis.sessionStorage=storage();
+  const first=command(),other="B".repeat(43);
+  const runtime=gen=>({known:()=>true,generation:()=>gen,register:()=>()=>{}});
+  try{
+    assert.equal(await runPrivateNoteCreate(runtime(generation),generation,first,
+      async()=> "uncertain"),"uncertain");
+    assert.deepEqual(privateNoteCreateMarker(other),
+      {kind:"blocked",commandId:first.commandId});
+    let posts=0;
+    assert.equal(await runPrivateNoteCreate(runtime(other),other,command(),
+      async()=>{posts++;return "saved";}),"conflict");
+    assert.equal(posts,0);
+    const signal=new AbortController().signal;
+    for(const reply of [
+      response({status:"not_recorded"}),
+      response({error:"Not found"},404),
+      response({error:"session_revoked"},401),
+    ]){
+      assert.notEqual(await recoverPrivateNoteCreate(first.commandId,signal,
+        async()=>reply),"committed");
+      assert.equal(privateNoteCreateMarker(other).kind,"blocked");
+    }
+    assert.equal(await recoverPrivateNoteCreate(first.commandId,signal,
+      async()=>response({status:"committed"})),"committed");
+    assert.equal(confirmRecoveredPrivateNoteCreate(other,first.commandId),true);
+    assert.equal(privateNoteCreateMarker(other).kind,"clear");
+    assert.equal(await runPrivateNoteCreate(runtime(other),other,command(),
+      async()=>{posts++;return "saved";}),"saved");
+    assert.equal(posts,1);
+  }finally{if(original===undefined)delete globalThis.sessionStorage;
+    else globalThis.sessionStorage=original;}
 });
