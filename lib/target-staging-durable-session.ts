@@ -322,6 +322,47 @@ export function readTargetStagingAuthEpochLive(
 }
 
 /**
+ * H1-real.2: one LIVE, pinned, read-only owner/private-Area authorization probe.
+ * Not an import grant, not a bearer token, not a consent check and not a
+ * reusable cacheable capability. Callers MUST separately authenticate the
+ * owner's HTTP cookie and derive both IDs from trusted server configuration.
+ *
+ * The existing pinned staging transaction validates schema, restore generation,
+ * append-only anti-rollback journal, directory/inode binding and SQLite read
+ * isolation. The same transaction checks that the configured actor exists,
+ * the exact Area is PRIVATE in that actor's PERSONAL workspace, and the
+ * ordinary Area read ACL permits it. Never return IDs, titles or source data.
+ */
+export function verifyHumanWikiOwnerPrivateAreaLive(
+  store: TargetStagingReadStore,
+  ownerUserId: string,
+  privateAreaId: string,
+): boolean {
+  if (typeof ownerUserId !== "string" || !USER_ID.test(ownerUserId) ||
+      typeof privateAreaId !== "string" || !privateAreaId ||
+      privateAreaId.trim() !== privateAreaId ||
+      privateAreaId === "all" || privateAreaId === "my-plan" ||
+      Buffer.byteLength(privateAreaId, "utf8") > 256 ||
+      /[\u0000-\u001f\u007f]/u.test(privateAreaId)) return false;
+
+  return withLiveStagingReadTransaction<boolean>(store, db => {
+    const area = db.prepare(`SELECT a.kind, a.owner_user_id AS owner,
+        w.kind AS workspace_kind, w.owner_user_id AS workspace_owner
+      FROM areas a JOIN workspaces w ON w.id = a.workspace_id
+      WHERE a.id = ?`).get(privateAreaId) as {
+      kind: string; owner: string; workspace_kind: string; workspace_owner: string;
+    } | undefined;
+    if (!area || area.kind !== "private" || area.workspace_kind !== "personal" ||
+        area.owner !== ownerUserId || area.workspace_owner !== ownerUserId) return false;
+
+    const decision = evaluateTargetAreaPolicy(db, {
+      actorUserId: ownerUserId, areaId: privateAreaId, permission: "read",
+    });
+    return decision.allowed === true && decision.effectiveAreaId === privateAreaId;
+  }, false);
+}
+
+/**
  * One short read transaction on the LIVE staging store, opened exclusively via
  * the pinned read-only helper (never by path): directory fd, uid/mode, fd-relative
  * open, dev/ino/nlink identity re-proven after the first statement and after the
