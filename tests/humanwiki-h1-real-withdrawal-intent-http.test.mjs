@@ -1,13 +1,18 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
-import { chmodSync, lstatSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, mkdtempSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { after, test } from "node:test";
+import { DatabaseSync } from "node:sqlite";
 import { createSessionToken, sessionCookieName } from "../lib/auth.ts";
 import { bootstrapIsolatedTargetStore } from "../lib/target-store-bootstrap.ts";
 import { GET, POST } from "../app/api/humanwiki/withdrawal-intent/route.ts";
 import { POST as importPost } from "../app/api/humanwiki/import/route.ts";
+import { createHumanWikiConsentIntentSchema } from "../lib/humanwiki-consent-intents.mjs";
+import {
+  bootstrapHumanWikiConsentPrivateLedger, withHumanWikiConsentPrivateLedger,
+} from "../lib/humanwiki-consent-private-store.mjs";
 
 const root = mkdtempSync(path.join(os.tmpdir(), "lumi-h1-real4-withdrawal-"));
 const store = bootstrapIsolatedTargetStore({
@@ -80,6 +85,21 @@ test("owner-private withdrawal request persists, is source-specific and never au
   config();
   const token=createSessionToken();
   await failure(await GET(ownerRequest("GET",token)));
+  const missingRequest=command();
+  await failure(await POST(ownerRequest("POST",token,missingRequest)));
+  assert.equal(existsSync(ledgerFilename),false,
+    "ordinary HTTP must never bootstrap a new or lost consent ledger");
+  const initialized=bootstrapHumanWikiConsentPrivateLedger(ledger);
+  assert.deepEqual(initialized,{
+    ok:true,importAuthorized:false,withdrawalComplete:false,
+  });
+  assert.throws(()=>bootstrapHumanWikiConsentPrivateLedger(ledger),
+    "even operator provisioning must not overwrite an existing ledger");
+  const firstRead=await GET(ownerRequest("GET",token));
+  assert.equal(firstRead.status,200);
+  assert.deepEqual((await firstRead.json()).sourceRevisions,{
+    chatgpt_user_export:0,claude_user_export:0,
+  });
   const request=command();
   const response=await POST(ownerRequest("POST",token,request));
   assert.equal(response.status,200);
@@ -190,4 +210,80 @@ test("owner-only GET rejects queries, and ledger symlinks or loose filesystem mo
   process.env.AI_EXECUTIVE_HUMANWIKI_CONSENT_LEDGER_DIRECTORY=isolated;
   await failure(await POST(ownerRequest("POST",token,command({expectedRevision:1}))));
   config();
+});
+
+test("after ledger loss, normal HTTP must fail closed instead of silently resetting revisions",async()=>{
+  config();
+  const token=createSessionToken();
+  const lost=mkdtempSync(path.join(root,"lost-ledger-"));
+  const file=path.join(lost,"humanwiki-consent-intents.sqlite");
+  process.env.AI_EXECUTIVE_HUMANWIKI_CONSENT_LEDGER_DIRECTORY=lost;
+  bootstrapHumanWikiConsentPrivateLedger(lost);
+  assert.equal((await POST(ownerRequest("POST",token,command()))).status,200);
+  assert.equal((await (await GET(ownerRequest("GET",token))).json())
+    .sourceRevisions.chatgpt_user_export,1);
+  unlinkSync(file);
+  assert.equal(existsSync(file),false);
+  await failure(await GET(ownerRequest("GET",token)));
+  await failure(await POST(ownerRequest("POST",token,command({expectedRevision:0}))));
+  assert.equal(existsSync(file),false,
+    "a lost ledger must stay missing until an explicit operator recovery");
+  config();
+});
+
+test("incomplete or altered immutable trigger schema blocks reads and writes",async()=>{
+  config();
+  const token=createSessionToken();
+  const partial=mkdtempSync(path.join(root,"partial-ledger-"));
+  const file=path.join(partial,"humanwiki-consent-intents.sqlite");
+  bootstrapHumanWikiConsentPrivateLedger(partial);
+  const db=new DatabaseSync(file);
+  try {
+    db.exec("DROP TRIGGER humanwiki_consent_intent_no_delete");
+  } finally {db.close();}
+  process.env.AI_EXECUTIVE_HUMANWIKI_CONSENT_LEDGER_DIRECTORY=partial;
+  await failure(await GET(ownerRequest("GET",token)));
+  await failure(await POST(ownerRequest("POST",token,command())));
+  assert.throws(()=>bootstrapHumanWikiConsentPrivateLedger(partial),
+    "operator bootstrap must refuse to mask partial initialization");
+  const changed=new DatabaseSync(file);
+  try {
+    changed.exec(`CREATE TRIGGER humanwiki_consent_intent_no_delete
+      BEFORE DELETE ON humanwiki_consent_intent_events
+      BEGIN SELECT 1; END;`);
+  } finally {changed.close();}
+  await failure(await GET(ownerRequest("GET",token)));
+  await failure(await POST(ownerRequest("POST",token,command())));
+  config();
+});
+
+test("SQLite schema bootstrap is transactional under an injected mid-DDL failure",()=>{
+  const dir=mkdtempSync(path.join(root,"interrupted-schema-"));
+  const db=new DatabaseSync(path.join(dir,"partial.sqlite"));
+  try {
+    let tableCreated=false;
+    const injected={
+      exec(sql){
+        if(sql.startsWith("CREATE INDEX "))throw Error("simulated crash mid-schema");
+        if(sql.startsWith("CREATE TABLE "))tableCreated=true;
+        return db.exec(sql);
+      },
+      prepare(sql){return db.prepare(sql);},
+    };
+    assert.throws(()=>createHumanWikiConsentIntentSchema(injected),
+      /simulated crash mid-schema/);
+    assert.equal(tableCreated,true);
+    assert.deepEqual(db.prepare(`SELECT name FROM sqlite_master
+      WHERE name IN ('humanwiki_consent_intent_events',
+        'humanwiki_consent_intent_scope_idx',
+        'humanwiki_consent_intent_no_update',
+        'humanwiki_consent_intent_no_delete')`).all(),[],
+      "transaction rollback must remove even the previously created table");
+    createHumanWikiConsentIntentSchema(db);
+    assert.equal(db.prepare(`SELECT COUNT(*) AS n FROM sqlite_master WHERE
+      name IN ('humanwiki_consent_intent_events',
+        'humanwiki_consent_intent_scope_idx',
+        'humanwiki_consent_intent_no_update',
+        'humanwiki_consent_intent_no_delete')`).get().n,4);
+  }finally{db.close();}
 });
