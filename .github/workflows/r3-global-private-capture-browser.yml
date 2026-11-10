@@ -8,6 +8,9 @@ on:
       - "app/ui/views/desktop-capture-fab.tsx"
       - "app/ui/views/sidebar.tsx"
       - "app/ui/target-private-note-area-chooser.tsx"
+      - "app/ui/target-detail-panel.tsx"
+      - "app/ui/target-scope-state.ts"
+      - "lib/target-reading-scope-nav.ts"
       - "e2e/target-global-private-capture.spec.ts"
       - "playwright.config.ts"
   workflow_dispatch:
