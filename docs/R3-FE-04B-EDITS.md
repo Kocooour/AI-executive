@@ -1,6 +1,6 @@
 # R3-FE-4b — úpravy v autorizovaném detailu
 
-**Stav:** default-off, bez produkční aktivace. Druhý ze tří plánovaných PR milníku „R3-FE-4 + integrované R3 QA“ ([ROADMAP](ROADMAP.md)); navazuje na [R3-FE-4a](R3-FE-04A-DETAILS.md) (detaily jen pro čtení) a používá jeho bariéru zápisů do legacy dat, frontu čtení, stavový automat probuzení a pravidla ID. Žádná změna serverových tras, schématu ani oprávnění: UI volá už existující, izolované stagingové trasy.
+**Stav:** default-off, bez produkční aktivace. Druhý ze tří plánovaných PR milníku „R3-FE-4 + integrované R3 QA“ ([ROADMAP](ROADMAP.md)); navazuje na [R3-FE-4a](R3-FE-04A-DETAILS.md) (detaily jen pro čtení) a používá jeho bariéru zápisů do legacy dat, frontu čtení, stavový automat probuzení a pravidla ID. Nevzniká nová serverová trasa, tabulka ani nové oprávnění. Stávající read-only detail úkolu byl kompatibilně rozšířen o volitelný neprůhledný CAS token pro aktuálně oprávněné editory; UI stále používá izolované stagingové trasy.
 
 ## Co přibylo
 
@@ -67,7 +67,7 @@ Vázané na generaci detailu, zrušené při `reset()` a při dalším zápisu. 
 
 ## Smazání
 
-Vložené potvrzení (ne nativní dialog, ne druhý modální): text s názvem, bezpečná volba „Nemazat“ má fokus, **Esc** potvrzení zruší dřív než panel a vrátí fokus na tlačítko. Při otevření potvrzení se zároveň zmrazí původní snapshot a potvrzovací text; změna stejné položky v jiné záložce nebo během potvrzování vyvolá konflikt před mazáním, nikoli nevratnou ztrátu nových úprav. Po potvrzeném smazání se místo obsahu zobrazí „Úkol/Poznámka byla smazána…“ s tlačítkem Zavřít (fokus), detail se znovu nečte (404 by větu přepsal), starší rozběhnuté GET odpovědi se zneplatní a seznamy se obnoví.
+Vložené potvrzení (ne nativní dialog, ne druhý modální): text s názvem, bezpečná volba „Nemazat“ má fokus, **Esc** potvrzení zruší dřív než panel a vrátí fokus na tlačítko. Při otevření potvrzení se zároveň zmrazí původní snapshot a potvrzovací text; pro úkol se také uchová **CAS revize získaná ve stejném autorizovaném SQLite snapshotu jako detail**. Server ji vydává pouze u oprávněného editora s aktivními write flagy. Mazání úkolu bez revize se nenabídne; při potvrzení se token porovná s novým preflightem i opětovným autorizovaným detailem. Zachytí se tím i skryté změny přiřazení nebo změna a vrácení hodnoty, které viditelný náhled neodhalí. Následný serverový CAS pod transakcí uzavírá interval do odeslání DELETE. Změna stejné položky v jiné záložce nebo během potvrzování vyvolá konflikt před mazáním, nikoli nevratnou ztrátu nových úprav. Po potvrzeném smazání se místo obsahu zobrazí „Úkol/Poznámka byla smazána…“ s tlačítkem Zavřít (fokus), detail se znovu nečte (404 by větu přepsal), starší rozběhnuté GET odpovědi se zneplatní a seznamy se obnoví.
 
 ## Obnovení seznamů po potvrzeném zápisu
 
