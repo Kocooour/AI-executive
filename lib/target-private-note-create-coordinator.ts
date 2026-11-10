@@ -74,6 +74,11 @@ export function runPrivateNoteCreate(
       confirmPrivateNoteCreate(generation,command.commandId);
     e.phase=result==="saved"?"saved":"uncertain";
     for(const listener of e.listeners)listener();
+    if(result==="saved"){
+      e.listeners.clear();
+      if(state.get(runtime)===e)state.delete(runtime);
+      unregister();
+    }
     // The command body is not retained in coordinator state; its closure
     // becomes collectable once this pending promise settles.
     return result;
