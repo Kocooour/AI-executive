@@ -8,7 +8,7 @@ export type PrivateNoteAreaRead=
 
 const encoder=new TextEncoder();
 const valid=(v:unknown,max:number):v is string=>{
-  if(typeof v!=="string"||v.length===0||v.trim()!==v||
+  if(typeof v!=="string"||v.trim().length===0||
     !v.isWellFormed()||encoder.encode(v).length>max||
     /[\\u0000-\\u001f\\u007f]/u.test(v))return false;
   return true;
@@ -28,7 +28,7 @@ export function parsePrivateNoteAreaChoices(value:unknown):PrivateNoteAreaChoice
     if(!raw||typeof raw!=="object"||Array.isArray(raw))return null;
     const a=raw as Record<string,unknown>;
     if(Object.keys(a).sort().join(",")!=="id,title"||
-      !valid(a.id,512)||!valid(a.title,4096)||
+      !valid(a.id,512)||a.id!==a.id.trim()||!valid(a.title,4096)||
       (choices.length>0&&!earlier(choices[choices.length-1].id,a.id)))return null;
     choices.push({id:a.id,title:a.title});
   }
