@@ -13,9 +13,9 @@ const reply=(route:Route,body:unknown,status=200)=>route.fulfill({
 });
 async function setup(page:Page,
   handler:(route:Route,command:any)=>Promise<void>,
-  receipt:()=>string=()=>"not_recorded"){
+  receipt:()=>string=()=>"not_recorded",session:()=>string=()=>generation){
   const created:any[]=[];
-  await page.route("**/api/target-staging/session",route=>reply(route,{generation}));
+  await page.route("**/api/target-staging/session",route=>reply(route,{generation:session()}));
   await page.route("**/api/target-staging/note-index/global**",route=>{
     const scope=new URL(route.request().url()).searchParams.get("scope");
     return reply(route,{scope,notes:[],hasMore:false,nextCursor:null});
@@ -120,5 +120,31 @@ test("revoked receipt cannot unlock or send another POST",async({page})=>{
   await expect(modal.getByTestId("target-private-create-unresolved")).toBeVisible();
   await expect(modal.getByTestId("target-private-create-form")).toHaveCount(0);
   expect(posts).toBe(1);
+  expect(writes).toHaveLength(1);
+});
+
+test("rotated session preserves unresolved note CREATE until the current actor verifies receipt",async({page})=>{
+  let epoch=generation,receiptStatus="not_recorded";
+  const writes=await setup(page,route=>reply(route,{error:"Staging unavailable"},503),
+    ()=>receiptStatus,()=>epoch);
+  await openAndFill(page);
+  await page.getByTestId("target-private-create-save").click();
+  await expect(page.getByTestId("target-private-create-unresolved")).toBeVisible();
+  expect(writes).toHaveLength(1);
+  epoch="B".repeat(43);
+  await page.reload();
+  await expect(page.getByTestId("target-scope-list")).toHaveAttribute("data-state","ready");
+  await page.getByTestId("target-private-area-open").click();
+  const modal=page.getByTestId("target-private-note-areas");
+  await expect(modal.getByTestId("target-private-create-unresolved")).toBeVisible();
+  await expect(modal.getByTestId("target-private-create-form")).toHaveCount(0);
+  await modal.getByTestId("target-private-create-receipt").click();
+  await expect(modal.getByTestId("target-private-create-unresolved")).toBeVisible();
+  expect(writes).toHaveLength(1);
+  // Real receipts are authenticated and Area ACL-scoped; this synthetic
+  // status only tests the UI's positive-confirmation state transition.
+  receiptStatus="committed";
+  await modal.getByTestId("target-private-create-receipt").click();
+  await expect(modal).toHaveCount(0);
   expect(writes).toHaveLength(1);
 });
