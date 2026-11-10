@@ -1,6 +1,6 @@
 # HumanWiki H1-real.0 — výchozí blokace vstupního importu
 
-**Stav:** implementovaný `default-deny` kontrakt pro *budoucí* vstupní hranici, bez HTTP trasy, uploadu, DB, importéru či produkčního zapnutí. Nejde o H1-real bootstrap ani o oprávnění nahrát skutečné exporty.
+**Stav:** implementovaný `default-deny` kontrakt pro *budoucí* vstupní hranici, s **deny-only HTTP trasou**, bez čtení těla požadavku, uploadu, DB, importéru či produkčního zapnutí. Nejde o H1-real bootstrap ani o oprávnění nahrát skutečné exporty.
 
 ## Proč tato iterace
 
@@ -8,14 +8,16 @@
 
 ## Konkrétní výstup a kontrola
 
+- **Serverové napojení:** `POST /api/humanwiki/import` (`app/api/humanwiki/import/route.ts`) je skutečná Next.js serverová trasa, která zavolá pouze blokovací funkci a vrátí obecné `404 Not found` s `Cache-Control: no-store`. Handler před odmítnutím nikdy nečte URL, hlavičky ani tělo, nepoužívá `request.json()`, `formData()`, `text()` či stream. Příznaky prostředí, klientská tvrzení o souhlasu ani podvržená identita žádný import nepovolí. **Nejde o upload API.** Next.js/runtime může přijmout části přenosu před vyvoláním handleru; testy prokazují nečtení v handleru, ne platformově nulové síťové bufferování.
 - `lib/humanwiki-h1-real-entry.mjs`: `humanWikiH1RealEntryReadiness()` vrací **šest nesplněných** předpokladů, bez identity či obsahu. `denyHumanWikiH1RealImport(request, claims)` vždy vyhodí `HUMANWIKI_H1_REAL_IMPORT_BLOCKED`, a to **před** čtením jakékoli vlastnosti požadavku, obsahu, přílohy či tvrzení o souhlasu. Žádná `allow` větev neexistuje.
 - `node scripts/humanwiki/h1-real-entry-cli.mjs`: **bez argumentů**, deterministicky vypíše jen jejich stav. Pokus předat cestu k exportu je odmítnut **před přístupem k souboru**. Nikam nezapisuje ani neodesílá data.
+- `tests/humanwiki-h1-real-route.test.mjs`: čtyři route integrační regrese přímo volají skutečný serverový `POST(Request)`, ověřují `404`, nepoužitý `request.bodyUsed`, nezměněné tělo i při neplatném multipart/JSON, nulový přístup k nepřístupnému Proxy requestu a odmítnutí všech spoofed flagů.
 - `tests/humanwiki-h1-real-entry.test.mjs`: přesně šest blokátorů, negativní testy s nepřístupným `Proxy` požadavku a souhlasu, pokus o zapnutí přes environment i klientem poskytnuté údaje, CLI bez argumentů/obsahu, žádné dočasné soubory.
 
 **Reprodukovatelný akceptační krok této dílčí iterace:**
 
 ```bash
-node --test tests/humanwiki-h1-real-entry.test.mjs
+node --experimental-loader ./tests/ts-loader.mjs --test tests/humanwiki-h1-real-entry.test.mjs tests/humanwiki-h1-real-route.test.mjs
 node scripts/humanwiki/h1-real-entry-cli.mjs
 node scripts/humanwiki/h1-real-entry-cli.mjs /path/to/private-export.json # musí selhat bez čtení
 ```
@@ -42,4 +44,4 @@ Podklady: [rozhodnutí HumanWiki 2026-11-08](decisions/2026-11-08-humanwiki-know
 - **Žádné sdílení, Context Graph zápisy, klasifikace nebo volání externího modelu** z této funkce. Žádné tvrzení o úplném profilu, dokončené revokaci či reálném bezpečnostním svědkovi.
 - Pozdější rozhraní pro skutečné ověření nesmí přebírat `verified` flagy od klienta jako důkaz; musí spojit vlastní serverovou autorizační kontrolu, evidenci specifického souhlasu, revokační registry a atomickou release bariéru. Teprve po samostatném bezpečnostním review a schválení vznikne případná povolovací větev.
 
-**Další H1-real práce:** napojit skutečnou autoritu identity/Area ACL a odděleně implementovat souhlasovou evidenci a revokační witness. Do jejich dokončení všechny reálné importy zůstávají zablokované; tato iterace sama tyto závislosti nesplnila.
+**Další H1-real práce:** existující serverová trasa je záměrně **pouze zamítací**. Jakákoli její budoucí změna na upload/import vyžaduje skutečné serverové ověření identity a Area ACL, odděleně evidovaný zdrojově specifický souhlas, nezávislý revokační witness, transakční release guard a nové bezpečnostní review. Do jejich dokončení všechny reálné importy zůstávají zablokované; tato iterace sama tyto závislosti nesplnila.
