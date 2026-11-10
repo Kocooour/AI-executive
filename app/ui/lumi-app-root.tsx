@@ -149,6 +149,9 @@ export function LumiAppRoot({ targetMyPlan, targetScopes, targetDetails, targetN
     if (!detailsOn) return;
     const previous = previousRoute.current;
     previousRoute.current = detailRoute;
+    // Capture is taking ownership of focus. Do not schedule the detail's old
+    // row-focus restoration into the new private modal (rAF may run later).
+    if(captureAfterDetailClose)return;
     if (previous !== null && !isParentOf(previous, detailRoute)) expectFocusReturn(previous);
     const frame = window.requestAnimationFrame(() => {
       // A successful refresh can also remove the originating row (e.g. revoked
