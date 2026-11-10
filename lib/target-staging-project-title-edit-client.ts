@@ -13,7 +13,7 @@ export type ProjectTitleEditFailure="denied"|"conflict"|"unavailable"|"offline"|
 export type ProjectTitleEditPreviewResult={ok:true;preview:ProjectTitleEditPreview}|
   {ok:false;reason:ProjectTitleEditFailure};
 export type ProjectTitleEditSaveResult=
-  {outcome:"saved";replayed:boolean}|{outcome:"conflict"|"denied"|"uncertain"};
+  {outcome:"saved";replayed:boolean}|{outcome:"conflict"|"denied"|"uncertain"|"expired"};
 
 const uuid=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const hex=/^[0-9a-f]{64}$/;
@@ -108,8 +108,18 @@ export async function saveProjectTitleEdit(projectId:string,command:ProjectTitle
       body:JSON.stringify(command),signal,
     });
     if(signal.aborted)return {outcome:"uncertain"};
-    if(response.status===401||response.status===403||response.status===404)
+    if(response.status===401){
+      // Only the specifically coded durable-session expiry may be re-bound
+      // after a separate server-verified SAME-actor preflight.
+      try{
+        const coded=await strictJson(response,512);
+        if(record(coded)&&Object.keys(coded).sort().join(",")==="code,error"&&
+          coded.code==="session_expired"&&coded.error==="Authentication required")
+          return {outcome:"expired"};
+      }catch{/* malformed refusal is an ordinary denial */}
       return {outcome:"denied"};
+    }
+    if(response.status===403||response.status===404)return {outcome:"denied"};
     if(response.status===409||response.status===400)return {outcome:"conflict"};
     if(response.status!==200)return {outcome:"uncertain"};
     const result=await strictJson(response);
