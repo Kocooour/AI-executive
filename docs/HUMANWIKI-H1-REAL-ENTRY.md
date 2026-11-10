@@ -38,6 +38,25 @@ Povolený dotaz vrací `200` se `Cache-Control: no-store`, bez osobních identif
 
 **Další brána:** skutečný, transakčně konzistentní actor + Osobní Area ACL read a nezávislý source-specific consent/witness. Tato iterace tyto brány neplní a neopravňuje zpracovat reálný export.
 
+## H1-real.2 — živá owner-private Area ACL, pouze preflight (2026-11-10)
+
+**Integrační krok:** Nový serverový `GET /api/humanwiki/private-area-preflight` požaduje **skutečnou podepsanou owner cookie** (bez dev bypassu) a explicitně zapnuté `AI_EXECUTIVE_HUMANWIKI_PRIVATE_AREA_PREFLIGHT_ENABLED=true`; jinak vrátí obecné `404` bez soukromých dat. Výchozí stav je **vypnuto**. Identita a volená soukromá Oblast pocházejí **výhradně** z důvěryhodné serverové konfigurace `AI_EXECUTIVE_TARGET_STAGING_OWNER_USER_ID` a `AI_EXECUTIVE_HUMANWIKI_PRIVATE_AREA_ID`, nikoli z URL, hlaviček či přání klienta.
+
+`verifyHumanWikiOwnerPrivateAreaLive` používá již existující **pinned, read-only transakci nad živým staging SQLite** z `lib/target-staging-durable-session.ts`. Neověřuje hypotetický JSON ani fiktivní seznam: kontroluje skutečný databázový záznam identity, přesnou privátní Oblast v osobním workspace se shodným vlastníkem a `evaluateTargetAreaPolicy(...,permission:"read")`. Sdílí existující kontroly podkladového fd/inode, konfigurace restore generation, schématu, append-only žurnálu a rollback anchor. Při nedostupném či nesprávném úložišti, chybné generaci, jiné identitě, jiné Oblasti či selhaném ACL je odpověď **pouze obecné `404`**. Přístup k živé SQLite je omezován samostatným rate limiterem; před vypuštěním odpovědi se opakuje ověření cookie i konfigurace.
+
+Pouze při úspěšném ověření vrací `200` a bez identifikátorů:
+`result=owner_private_area_read_verified_for_preflight_only`, `actual_import_authorized=false`, `real_source_consent_verified=false`, `independent_revocation_witness_verified=false`, `h1_real_ready=false`, `claims_created=0`. **Jednorázový výsledek není autorizací importu ani trvalou zárukou pro následný zápis**; pozdější ingestace musí znovu atomicky ověřit živý actor/Area, souhlas, nezávislý revokační witness a CAS přímo při použití. Existující `POST /api/humanwiki/import` zůstává nedotčený, **vždy `404` před čtením těla**.
+
+**Reprodukovatelná akceptace:**
+
+```bash
+node --experimental-loader ./tests/ts-loader.mjs --test tests/humanwiki-h1-real-private-area-preflight-http.test.mjs
+```
+
+Testy bootstrapují izolovanou dočasnou **reálnou staging SQLite** se skutečnou privátní Oblastí a validním staging anti-rollback žurnálem. Prověřují úspěch autentizovaného vlastníka, nevydání tajných ID, chybějící/expirující/podvrženou cookie, chybnou Oblast či vlastníka, nedostupný store či chybnou restore generation, dev bypass, falešné klientské claimy, nesprávné feature flagy a stálou blokaci importního POST. Produkční i původní legacy data se neotevírají ani nemění.
+
+**Zbývající bezpečnostní brány:** Tento live preflight ověřuje pouze přístup k jedné konkrétní privátní staging Oblasti v okamžiku čtení. Neřeší reálnou evidence/retenci souhlasů pro ChatGPT a Claude, provázání zdrojových objektů s oblastmi, autorizaci v čase zápisu, monotónní revokaci nezávislou na obnově, citlivost, lidské review, CAS při použití, Context Graph ani R3/R4 release. Původních **šest H1-real gate zůstává `not_verified_blocked`**. Žádné právo importovat reálný obsah ani mail nevzniká.
+
 ## Šest bran vyžadovaných před první reálnou ingestací
 
 | Brána | Důkaz, který musí být v budoucím H1-real skutečně ověřen na serveru |
