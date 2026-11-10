@@ -141,7 +141,7 @@ function Content({content,route,copy,gates,more,onMore,edit}:{
               {content.parentTitle}</button>
           :<strong>{content.parentTitle}</strong>}
       </p>}
-      {edit&&<TaskEdits api={edit} task={task}/>}
+      {edit&&<TaskEdits api={edit} task={task} expectedRevision={content.expectedRevision??null}/>} 
     </article>;
   }
   if(content.kind==="note"){
