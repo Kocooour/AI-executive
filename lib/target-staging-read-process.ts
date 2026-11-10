@@ -196,10 +196,10 @@ export function parsePrivateNoteAreaTargets(value:unknown):PrivateNoteAreaTarget
     if(Object.keys(a).sort().join(",")!=="id,title"||
       typeof a.id!=="string"||a.id.length===0||a.id.trim()!==a.id||
       Buffer.byteLength(a.id,"utf8")>512||
-      /[\\u0000-\\u001f\\u007f]/u.test(a.id)||
+      /[\u0000-\u001f\u007f]/u.test(a.id)||
       typeof a.title!=="string"||!a.title.trim()||!a.title.isWellFormed()||
       Buffer.byteLength(a.title,"utf8")>4096||
-      /[\\u0000-\\u001f\\u007f]/u.test(a.title))return null;
+      /[\u0000-\u001f\u007f]/u.test(a.title))return null;
     const id=Buffer.from(a.id);
     if(previous&&Buffer.compare(previous,id)>=0)return null;
     previous=id;
