@@ -37,7 +37,21 @@ test('server preflight and writes use authenticated no-store requests and fail c
  let seen;assert.deepEqual(await saveProjectTitleEdit(id,command,signal(),async(url,init)=>{seen={url,init};return reply({ok:true})}),{outcome:'saved',replayed:false});
  assert.deepEqual(JSON.parse(seen.init.body),command);assert.equal(seen.init.headers['x-lumi-target-protocol'],'1');
  assert.deepEqual(await saveProjectTitleEdit(id,command,signal(),async()=>reply({ok:true,replayed:true})),{outcome:'saved',replayed:true});
- assert.deepEqual(await saveProjectTitleEdit(id,command,signal(),async()=>reply({},409)),{outcome:'conflict'});
- assert.deepEqual(await saveProjectTitleEdit(id,command,signal(),async()=>reply({},404)),{outcome:'denied'});
+ assert.deepEqual(await saveProjectTitleEdit(id,command,signal(),async()=>reply({error:'Revision conflict'},409)),{outcome:'conflict'});
+ assert.deepEqual(await saveProjectTitleEdit(id,command,signal(),async()=>reply({},409)),{outcome:'uncertain'},
+   'unrecognized 409 does not prove that the PATCH never committed');
+ assert.deepEqual(await saveProjectTitleEdit(id,command,signal(),async()=>reply({error:'Not found'},404)),
+   {outcome:'denied',definitiveNoWrite:true});
+ assert.deepEqual(await saveProjectTitleEdit(id,command,signal(),async()=>reply({error:'Cross-origin request rejected'},403)),
+   {outcome:'denied',definitiveNoWrite:true});
+ for(const refusal of [
+   reply({},404),reply({error:'Not found',extra:1},404),
+   reply({error:'Authentication required'},403),
+   Response.json({error:'Not found'},{status:404,headers:{'cache-control':'private'}}),
+   Response.json({error:'Not found'},{status:404,headers:{'content-type':'text/plain','cache-control':'no-store'}}),
+ ]){
+   assert.deepEqual(await saveProjectTitleEdit(id,command,signal(),async()=>refusal),
+     {outcome:'denied'},'untrusted or non-canonical denial must not unlock an uncertain command');
+ }
  assert.deepEqual(await saveProjectTitleEdit(id,command,signal(),async()=>{throw Error('offline')}),{outcome:'uncertain'});
 });
