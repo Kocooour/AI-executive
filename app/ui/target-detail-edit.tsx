@@ -288,7 +288,7 @@ function DeleteControl<T extends TaskPreview|NotePreview>({api,label,confirmText
   },[asking,restore]);
   const close=()=>{setConfirmation(null);setRestore(true);};
   const off=busy(api.state)||!api.online;
-  if(!asking)
+  if(confirmation===null)
     return <button type="button" ref={trigger} className="targetDetailEditDanger"
       data-testid="target-detail-edit-delete" disabled={off} onClick={()=>setConfirmation({base,text:confirmText})}>{label}</button>;
   return <div role="group" aria-label={confirmation.text} className="targetDetailEditConfirm"
