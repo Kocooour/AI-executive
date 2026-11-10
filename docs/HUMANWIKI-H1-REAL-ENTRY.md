@@ -57,6 +57,10 @@ Testy bootstrapují izolovanou dočasnou **reálnou staging SQLite** se skutečn
 
 **Zbývající bezpečnostní brány:** Tento live preflight ověřuje pouze přístup k jedné konkrétní privátní staging Oblasti v okamžiku čtení. Neřeší reálnou evidence/retenci souhlasů pro ChatGPT a Claude, provázání zdrojových objektů s oblastmi, autorizaci v čase zápisu, monotónní revokaci nezávislou na obnově, citlivost, lidské review, CAS při použití, Context Graph ani R3/R4 release. Původních **šest H1-real gate zůstává `not_verified_blocked`**. Žádné právo importovat reálný obsah ani mail nevzniká.
 
+## H1-real.3a — interní SQLite evidence záměrů souhlasu (2026-11-10)
+
+[Samostatný kontrakt, akceptace a limity](HUMANWIKI-H1-REAL-CONSENT-INTENT.md). Per-source append-only a HMAC-protected ledger pro ChatGPT/Claude eviduje **požadavky** na povolení/odvolání s účelem, retencí a CAS, ne účinný souhlas. Bez HTTP, identity/Area autorizace při zápisu, konkrétního exportu a externího anti-rollback witness je přístup k importu nadále vždy zablokován. Obnova staré DB je bez nezávislého witness neprokazatelná.
+
 ## Šest bran vyžadovaných před první reálnou ingestací
 
 | Brána | Důkaz, který musí být v budoucím H1-real skutečně ověřen na serveru |
