@@ -72,11 +72,12 @@ test('project rename enforces role and CAS, persists audit, supports retry, and 
  assert.equal(response.status,200);assert.deepEqual(await response.json(),{status:'not_recorded'});
  response=await write(bob,cmd);assert.equal(response.status,200,await response.clone().text());
  response=await receipt(bob,cmd.commandId);assert.equal(response.status,200);
- assert.deepEqual(await response.json(),{status:'committed'});
+ assert.deepEqual(await response.json(),{status:'committed',principalBinding:page.principalBinding});
  response=await receipt(carol,cmd.commandId);assert.deepEqual(await response.json(),{status:'not_recorded'});
  response=await receipt(dave,cmd.commandId);assert.deepEqual(await response.json(),{status:'not_recorded'});
  response=await receipt(cookie('bob'),cmd.commandId);
- assert.equal(response.status,200);assert.deepEqual(await response.json(),{status:'committed'});
+ assert.equal(response.status,200);
+ assert.deepEqual(await response.json(),{status:'committed',principalBinding:page.principalBinding});
  response=await write(bob,cmd);assert.deepEqual(await response.json(),{ok:true,replayed:true});
  assert.equal((await write(bob,{...cmd,title:'Other'})).status,409);
  assert.equal((await write(bob,{...cmd,commandId:randomUUID()})).status,409);
