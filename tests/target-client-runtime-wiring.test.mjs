@@ -90,8 +90,9 @@ test("only the runtime (and its server route) reference the session endpoint; no
     "app/ui/target-scope-lists.tsx","app/ui/use-target-gate.ts",
     // R3-FE-4a: the lazily loaded authorized detail panel and the compact sidebar project list.
     "app/ui/target-detail-panel.tsx","app/ui/target-sidebar-projects.tsx","app/ui/use-target-revalidation.ts",
-    // R3-FE-4b: note editor depends on the runtime generation, not a second provider.
-    "app/ui/target-note-editor.tsx",
+    // R3-FE-4b: the lazily loaded detail edit controls use the existing runtime
+    // to enforce the same generation-scoped note PATCH recovery barrier as the note editor.
+    "app/ui/target-detail-edit.tsx","app/ui/target-note-editor.tsx",
     // R3-CAPTURE-1: live private Area chooser uses the existing runtime.
     "app/ui/target-private-note-area-chooser.tsx",
   ].sort());
