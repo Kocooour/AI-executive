@@ -104,8 +104,9 @@ for(const width of [390,1280]){
   });
 }
 
-test("uncertain PATCH then retry 409 retains tab marker; other notes stay readable",async({page})=>{
-  await page.setViewportSize({width:390,height:844});
+for(const width of [390,1280]){
+test(`uncertain PATCH then retry 409 retains tab marker; other notes stay readable at ${width}px`,async({page})=>{
+  await page.setViewportSize({width,height:844});
   const sent:string[]=[];
   await setup(page,async(route,command)=>{
     sent.push(String(command.commandId));
@@ -130,8 +131,11 @@ test("uncertain PATCH then retry 409 retains tab marker; other notes stay readab
   expect((await marker(page))).not.toBeNull();
   expect(sent).toHaveLength(2);
 });
+}
 
-test("full reload loses private draft, read-only receipt check unlocks without another PATCH",async({page})=>{
+for(const width of [390,1280]){
+test(`full reload loses private draft; receipt unlocks without another PATCH at ${width}px`,async({page})=>{
+  await page.setViewportSize({width,height:844});
   let committedId="";
   let patchCount=0;
   let statusCount=0;
@@ -165,3 +169,4 @@ test("full reload loses private draft, read-only receipt check unlocks without a
   expect(patchCount).toBe(1); // read-only receipt never sends a PATCH
   await expect(form.getByRole("button",{name:"Upravit poznámku"})).toBeVisible();
 });
+}
