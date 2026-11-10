@@ -6,6 +6,7 @@ import {resolveStagingHttpIdentity,stagingAnchorRefusal,stagingUnauthenticatedRe
   stagingChildSessionConfig,admitStagingIdentity,stagingIdentityRefusal,
   verifyStagingIdentityBeforeRelease,verifyStagingReadBeforeRelease} from "../../../../../lib/target-staging-http-identity";
 import {readProjectTitleRecoveryInChild} from "../../../../../lib/target-staging-title-http-process";
+import {projectTitlePrincipalBinding} from "../../../../../lib/target-project-title-identity";
 import {readStagingProjectTitlePreviewInChild} from "../../../../../lib/target-staging-read-process";
 import {targetProtocolRefusal} from "../../../../../lib/target-staging-write-contract";
 
@@ -69,7 +70,10 @@ export async function POST(request:Request):Promise<Response>{
       });
     if(released!=="ok")return released==="stale"?answer(404,"Not found"):stagingIdentityRefusal(released);
     if(!unchanged(base))return answer(503,"Staging unavailable");
-    return Response.json({status:"committed"},{headers});
+    const principalBinding=projectTitlePrincipalBinding(
+      project.page.linearization.actorUserId,result.projectId,base.expectedRestoreGeneration);
+    if(!principalBinding)return answer(503,"Staging unavailable");
+    return Response.json({status:"committed",principalBinding},{headers});
   }catch(error){
     if(error instanceof HttpInputError)return answer(error.status,error.message);
     logStagingFailure("target-staging/project-title-recovery","route_exception",error);
