@@ -24,6 +24,20 @@ node scripts/humanwiki/h1-real-entry-cli.mjs /path/to/private-export.json # mus�
 
 Výsledek vždy `blocked_not_enabled`, `real_data_accepted=false`, `real_data_read=false`, `claims_created=0`, `external_model_egress=false`. Tento krok **není** úplná H1-real akceptace „export → návrh → lidská revize → Context Graph → autorizované citované zobrazení“.
 
+## H1-real.1 — autentizovaný read-only náhled připravenosti (2026-11-10)
+
+Nová serverová trasa `GET /api/humanwiki/readiness` vrací pouze seznam šesti **stále nesplněných** bran. Pro otevření vyžaduje současně:
+
+- **`AI_EXECUTIVE_HUMANWIKI_READINESS_ENABLED=true`**, který je výchozím stavem vypnutý;
+- skutečně nakonfigurovanou produkční autentizaci (existující `getAuthState`) a **podepsanou, neexpirovanou owner cookie**. Vývojový bypass `AI_EXECUTIVE_AUTH_ENABLED=false` je odmítnut; integrační token, tvrzení v hlavičkách o identitě ani uživatelem dodané `verified` nejsou autentizací;
+- opakovanou kontrolu autentizace těsně před uvolněním výstupu. Nepřihlášeným, neověřeným, po rotaci session secretu a při neplatném nastavení se vrací pouze obecné `404`, nikdy seznam bran.
+
+Povolený dotaz vrací `200` se `Cache-Control: no-store`, bez osobních identifikátorů, uložených souhlasů, hodnot Areas nebo jakéhokoli citlivého obsahu. **Kontrola cookie sama není ověření přístupu ke konkrétní Osobní Oblasti**; `real_actor_or_area_verified=false` a všech šest gate `not_verified_blocked` zůstávají nezměněny. Trasa nečte evidenci souhlasu, neprovádí revokaci, neimportuje a nic neukládá. Nejde o globální rozhodnutí o skutečné připravenosti ani o přepínač do režimu importu.
+
+**Integrační akceptace:** `tests/humanwiki-h1-real-readiness-http.test.mjs` volá skutečný `GET` handler se správně podepsanou owner cookie a ověřuje `200 + šest blokátorů`. Bez flagu či cookie, s padělaným/expirujícím tokenem, po rotaci secretu, při chybějící konfiguraci, s podvrženými hlavičkami nebo se zapnutým dev-bypassem očekává `404`. Další test ukazuje, že ani autentizovaná odpověď `200` a falešný `AI_EXECUTIVE_HUMANWIKI_REAL_IMPORT_ENABLED=true` neodemknou původní deny-only `POST /api/humanwiki/import`: ten stále odpoví `404` bez přečtení těla.
+
+**Další brána:** skutečný, transakčně konzistentní actor + Osobní Area ACL read a nezávislý source-specific consent/witness. Tato iterace tyto brány neplní a neopravňuje zpracovat reálný export.
+
 ## Šest bran vyžadovaných před první reálnou ingestací
 
 | Brána | Důkaz, který musí být v budoucím H1-real skutečně ověřen na serveru |
