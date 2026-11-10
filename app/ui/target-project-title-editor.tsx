@@ -6,15 +6,18 @@ import {useTargetGeneration,useTargetRuntime} from './target-data-provider';
 import {queuedTargetFetch} from '../../lib/target-read-queue';
 import {loadProjectTasksPage,type ProjectTasksProject} from '../../lib/target-staging-project-tasks-client';
 import {loadProjectTitleEditPreview,validProjectTitleEditText,type ProjectTitleEditCommand,type ProjectTitleEditPreview} from '../../lib/target-staging-project-title-edit-client';
-import {forgetTrackedProjectTitleEdit,runTrackedProjectTitleEdit,subscribeTrackedProjectTitleEdit,trackedProjectTitleEdit,projectTitleDraft,setProjectTitleDraft,forgetProjectTitleDraft,projectTitleDraftConflicts,type TrackedProjectTitleEditPhase} from '../../lib/target-project-title-edit-recovery';
+import {forgetTrackedProjectTitleEdit,runTrackedProjectTitleEdit,subscribeTrackedProjectTitleEdit,trackedProjectTitleEdit,projectTitleDraft,setProjectTitleDraft,forgetProjectTitleDraft,projectTitleDraftConflicts,hasSealedProjectTitleEdit,resumeSealedProjectTitleEdit,forgetSealedProjectTitleEdit,type TrackedProjectTitleEditPhase} from '../../lib/target-project-title-edit-recovery';
 import type {DetailLanguage} from '../../lib/target-detail-copy';
+import {projectTitleReloadMarker,reserveProjectTitleReload,confirmProjectTitleReload}
+  from '../../lib/target-project-title-reload';
+import {recoverProjectTitleReceipt} from '../../lib/target-project-title-receipt-client';
 
 const readFetch=queuedTargetFetch();
 type Draft={preview:ProjectTitleEditPreview; original:string; title:string; command:ProjectTitleEditCommand|null; phase:'edit'|'saving'|'uncertain'|'conflict'};
-type Mode={kind:'idle'|'checking'|'denied'|'recovery'}|{kind:'draft';draft:Draft};
+type Mode={kind:'idle'|'checking'|'denied'|'recovery'|'reload'}|{kind:'draft';draft:Draft};
 const words={
- cs:{edit:'Upravit název',checking:'Ověřuji oprávnění k úpravě…',denied:'Úprava není dostupná pro tento přístup.',recover:'Obnovit stav posledního ukládání',recovering:'Předchozí uložení není potvrzené. Ověřte přístup a pokračujte stejným příkazem.',title:'Název projektu',save:'Uložit změny',cancel:'Zahodit úpravy',saving:'Ukládám…',invalid:'Vyplňte název v povolené délce bez mezer na začátku a konci.',uncertain:'Výsledek ukládání není jistý. Zopakujte přesně stejný příkaz.',retry:'Ověřit uložením znovu',conflict:'Projekt nebo oprávnění se změnily. Koncept se neuložil.',offline:'Bez připojení nelze změny bezpečně uložit.',refresh:'Zahodit koncept a načíst aktuální obsah'},
- en:{edit:'Edit title',checking:'Checking edit access…',denied:'Editing is not available for this access.',recover:'Recover previous save',recovering:'A previous save remains unconfirmed. Verify access before retrying the same command.',title:'Project title',save:'Save changes',cancel:'Discard changes',saving:'Saving…',invalid:'Enter a title within the limit without leading or trailing spaces.',uncertain:'The save outcome is uncertain. Retry the exact same command.',retry:'Retry the same command',conflict:'The project or access changed. Your draft was not saved.',offline:'Changes cannot be saved safely while offline.',refresh:'Discard draft and reload'},
+ cs:{edit:'Upravit název',checking:'Ověřuji oprávnění k úpravě…',denied:'Úprava není dostupná pro tento přístup.',recover:'Obnovit stav posledního ukládání',recovering:'Předchozí uložení není potvrzené. Ověřte přístup a pokračujte stejným příkazem.',title:'Název projektu',save:'Uložit změny',cancel:'Zahodit úpravy',saving:'Ukládám…',invalid:'Vyplňte název v povolené délce bez mezer na začátku a konci.',uncertain:'Výsledek ukládání není jistý. Zopakujte přesně stejný příkaz.',retry:'Ověřit uložením znovu',conflict:'Projekt nebo oprávnění se změnily. Koncept se neuložil.',offline:'Bez připojení nelze změny bezpečně uložit.',refresh:'Zahodit koncept a načíst aktuální obsah',reload:'Předchozí přejmenování není po obnovení stránky potvrzené. Nový zápis je zablokovaný, ale projekt lze dál číst.',receipt:'Ověřit předchozí zápis',notRecorded:'Server ještě nepotvrdil původní zápis. Nový příkaz se nespustí.',storageUnavailable:'Úložiště této záložky není dostupné. Přejmenování nelze bezpečně zahájit.',differentActor:'Nelze ověřit, že jste se přihlásili stejným účtem. Starý příkaz se neobnoví.'},
+ en:{edit:'Edit title',checking:'Checking edit access…',denied:'Editing is not available for this access.',recover:'Recover previous save',recovering:'A previous save remains unconfirmed. Verify access before retrying the same command.',title:'Project title',save:'Save changes',cancel:'Discard changes',saving:'Saving…',invalid:'Enter a title within the limit without leading or trailing spaces.',uncertain:'The save outcome is uncertain. Retry the exact same command.',retry:'Retry the same command',conflict:'The project or access changed. Your draft was not saved.',offline:'Changes cannot be saved safely while offline.',refresh:'Discard draft and reload',reload:'The previous rename remains unconfirmed after a reload. New changes are blocked, but the project stays readable.',receipt:'Check previous save',notRecorded:'The server has not confirmed the original write. No new command will be issued.',storageUnavailable:'This tab storage is unavailable. A rename cannot safely begin.',differentActor:'The newly signed-in identity cannot be verified as the original writer. The old command remains blocked.'},
 };
 const editorPhase=(phase:TrackedProjectTitleEditPhase):Draft['phase']=>phase==='saving'?'saving':phase==='uncertain'?'uncertain':'conflict';
 export default function TargetProjectTitleEditor({project,language,onCommitted,onAccessRefused}:{
@@ -35,7 +38,7 @@ export default function TargetProjectTitleEditor({project,language,onCommitted,o
  useEffect(()=>()=>{seq.current++;controller.current?.abort();},[]);
  useEffect(()=>{if(alive)return;seq.current++;controller.current?.abort();setMode({kind:'idle'});setMessage('');},[alive]);
  function refuse(){
-   if(runtime){forgetTrackedProjectTitleEdit(runtime,bound.current,project.id);forgetProjectTitleDraft(runtime,bound.current,project.id);}
+   if(runtime){forgetTrackedProjectTitleEdit(runtime,bound.current,project.id);forgetProjectTitleDraft(runtime,bound.current,project.id);forgetSealedProjectTitleEdit(runtime,project.id);}
    seq.current++;controller.current?.abort();setMode({kind:'denied'});setMessage(copy.denied);onAccessRefused();
  }
  useEffect(()=>{
@@ -51,6 +54,8 @@ export default function TargetProjectTitleEditor({project,language,onCommitted,o
    const existing=trackedProjectTitleEdit(runtime,bound.current,project.id);
    if(existing){if(existing.phase==='saved'){forgetTrackedProjectTitleEdit(runtime,bound.current,project.id);onCommitted();}
      else if(existing.phase==='denied')refuse();else{setMode({kind:'recovery'});void recover();}}
+   else if(hasSealedProjectTitleEdit(runtime,project.id)){setMode({kind:'recovery'});void recoverSealed();}
+   else if(projectTitleReloadMarker(bound.current).kind!=='clear'){setMode({kind:'reload'});}
    else if(projectTitleDraft(runtime,bound.current,project.id)){setMode({kind:'recovery'});void recoverDraft();}
    return unsubscribe;
    // Runtime generation and project identity are the recovery boundary.
@@ -75,6 +80,52 @@ export default function TargetProjectTitleEditor({project,language,onCommitted,o
    else if(latest.phase==='denied')refuse();
    else setMode({kind:'draft',draft:{preview:result.preview,original:project.title,title:latest.command.title,command:latest.command,phase:editorPhase(latest.phase)}});
  }
+ /** After session_expired, the old command may be disclosed ONLY after a
+  * fresh authenticated, writable GET has proved the original same actor.
+  * A mismatch drops its private title but preserves the global tab barrier. */
+ async function recoverSealed(){
+   if(!runtime||!alive)return;
+   if(!stillBound()){setMode({kind:'recovery'});setMessage(copy.offline);return;}
+   const seqId=++seq.current;controller.current?.abort();
+   const ctrl=new AbortController();controller.current=ctrl;
+   setMode({kind:'checking'});setMessage('');
+   const result=await loadProjectTitleEditPreview(project.id,ctrl.signal,readFetch);
+   if(seqId!==seq.current||ctrl.signal.aborted||!stillBound())return;
+   if(!result.ok){if(result.reason==='denied')refuse();
+     else{setMode({kind:'recovery'});setMessage(copy.recovering);}return;}
+   if(result.preview.writeAreaId!==project.areaId){refuse();return;}
+   const resolved=resumeSealedProjectTitleEdit(runtime,bound.current,project.id,result.preview);
+   if(resolved==='resumed'){
+     const held=trackedProjectTitleEdit(runtime,bound.current,project.id);
+     if(!held){setMode({kind:'reload'});return;}
+     setMode({kind:'draft',draft:{
+       preview:result.preview,original:project.title,title:held.command.title,
+       command:held.command,phase:'uncertain',
+     }});
+   }else{setMode({kind:'reload'});setMessage(copy.differentActor);}
+ }
+ /** On reload, only a content-free correlation UUID and server-scoped proof
+  * survived. A not_recorded or denied result must NEVER unlock new writes. */
+ async function reconcileReload(){
+   if(!runtime||!alive)return;
+   if(!stillBound()){setMessage(copy.offline);return;}
+   const marker=projectTitleReloadMarker(bound.current);
+   if(marker.kind==='clear'){setMode({kind:'idle'});setMessage('');return;}
+   if(marker.kind!=='blocked'){setMode({kind:'reload'});setMessage(copy.storageUnavailable);return;}
+   const n=++seq.current;controller.current?.abort();
+   const ctrl=new AbortController();controller.current=ctrl;
+   setMode({kind:'checking'});setMessage('');
+   const status=await recoverProjectTitleReceipt(marker.commandId,ctrl.signal);
+   if(n!==seq.current||ctrl.signal.aborted||!stillBound())return;
+   if(status.status==='committed'&&status.principalBinding===marker.principalBinding&&
+      confirmProjectTitleReload(marker.commandId,marker.principalBinding)){
+     setMode({kind:'idle'});onCommitted();return;
+   }
+   setMode({kind:'reload'});
+   setMessage(status.status==='not_recorded'?copy.notRecorded:
+     status.status==='denied'?copy.denied:
+     status.status==='committed'?copy.differentActor:copy.offline);
+ }
  async function recoverDraft(){
    if(!runtime||!alive)return;
    const stored=projectTitleDraft(runtime,bound.current,project.id);
@@ -97,6 +148,12 @@ export default function TargetProjectTitleEditor({project,language,onCommitted,o
  async function begin(){
    if(!runtime||!alive)return;
    if(trackedProjectTitleEdit(runtime,bound.current,project.id)){void recover();return;}
+   if(hasSealedProjectTitleEdit(runtime,project.id)){void recoverSealed();return;}
+   const marker=projectTitleReloadMarker(bound.current);
+   if(marker.kind!=='clear'){
+     setMode({kind:'reload'});
+     setMessage(marker.kind==='unavailable'?copy.storageUnavailable:'');return;
+   }
    if(projectTitleDraft(runtime,bound.current,project.id)){void recoverDraft();return;}
    if(!stillBound()){setMessage(copy.offline);return;}
    const id=++seq.current;controller.current?.abort();const current=new AbortController();controller.current=current;
@@ -134,8 +191,17 @@ export default function TargetProjectTitleEditor({project,language,onCommitted,o
    const command=d.command??{expectedRevision:d.preview.expectedRevision,
      writeAreaId:d.preview.writeAreaId,restoreGeneration:d.preview.restoreGeneration,
      commandId:crypto.randomUUID(),title:d.title};
+   // Reserve a tab-global, content-free marker BEFORE dispatch. On a reload
+   // the exact private command is gone; no new UUID may supersede it.
+   if(!reserveProjectTitleReload(bound.current,command.commandId,d.preview.principalBinding)){
+     setMode({kind:'reload'});
+     setMessage(projectTitleReloadMarker(bound.current).kind==='unavailable'
+       ?copy.storageUnavailable:copy.reload);
+     return;
+   }
    setMode({kind:'draft',draft:{...d,command,phase:'saving'}});setMessage('');
-   void runTrackedProjectTitleEdit(runtime,bound.current,project.id,command);
+   void runTrackedProjectTitleEdit(runtime,bound.current,project.id,command,
+     undefined,undefined,d.preview.principalBinding);
    forgetProjectTitleDraft(runtime,bound.current,project.id);
  }
  if(!alive)return null;
@@ -143,7 +209,11 @@ export default function TargetProjectTitleEditor({project,language,onCommitted,o
    {mode.kind==='idle'&&<button ref={editRef} type="button" onClick={()=>void begin()}>{copy.edit}</button>}
    {mode.kind==='checking'&&<p role="status">{copy.checking}</p>}
    {mode.kind==='denied'&&<p role="status">{copy.denied}</p>}
-   {mode.kind==='recovery'&&<><p role="status">{copy.recovering}</p><button type="button" onClick={()=>{if(runtime&&trackedProjectTitleEdit(runtime,bound.current,project.id))void recover();else void recoverDraft();}}>{copy.recover}</button></>}
+   {mode.kind==='recovery'&&<><p role="status">{copy.recovering}</p><button type="button" onClick={()=>{
+     if(runtime&&trackedProjectTitleEdit(runtime,bound.current,project.id))void recover();
+     else if(runtime&&hasSealedProjectTitleEdit(runtime,project.id))void recoverSealed();
+     else void recoverDraft();}}>{copy.recover}</button></>}
+   {mode.kind==='reload'&&<><p role="status">{copy.reload}</p><button type="button" onClick={()=>void reconcileReload()}>{copy.receipt}</button></>}
    {message&&<p role="alert">{message}</p>}</div>;
  const d=mode.draft,conflict=d.phase==='conflict'||(d.command===null&&(project.title!==d.original||project.areaId!==d.preview.writeAreaId));
  const busy=d.phase==='saving',uncertain=d.phase==='uncertain',locked=busy||uncertain||conflict;
