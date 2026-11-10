@@ -84,7 +84,10 @@ export function LumiAppRoot({ targetMyPlan, targetScopes, targetDetails, targetN
     previousRoute.current = detailRoute;
     if (previous !== null && !isParentOf(previous, detailRoute)) expectFocusReturn(previous);
     const frame = window.requestAnimationFrame(() => {
-      focusPendingRow(document.querySelector<HTMLElement>(".appPane .pageTitleRow h1"));
+      // When the list cannot offer the original row yet, focus its status now.
+      // A late response must not move focus away from the user's next action.
+      const pendingListStatus = document.querySelector<HTMLElement>(".targetScopeList:not([data-state=ready]) .targetScopeStatus");
+      focusPendingRow(pendingListStatus ?? document.querySelector<HTMLElement>(".appPane .pageTitleRow h1"), Boolean(pendingListStatus));
     });
     return () => window.cancelAnimationFrame(frame);
     // eslint-disable-next-line react-hooks/exhaustive-deps
