@@ -290,7 +290,7 @@ export function readPreflightedPrivateNoteAreaTargets(
         if(!row||typeof row.title!=="string"||
           row.title.trim().length===0||!row.title.isWellFormed()||
           Buffer.byteLength(row.title,"utf8")>4096||
-          /[\\u0000-\\u001f\\u007f]/u.test(row.title))return null;
+          /[\u0000-\u001f\u007f]/u.test(row.title))return null;
         areas.push({id:witness.areaId,title:row.title});
       }
       return {areas,linearization:{actorUserId:actor,
