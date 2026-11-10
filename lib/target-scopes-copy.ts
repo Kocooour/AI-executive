@@ -28,6 +28,7 @@ export type ScopesCopy={
   loadMore:string;
   loadingMore:string;
   readOnlyNote:string;
+  openDetailNote:string;
   notesTitleOnlyNote:string;
   gateChecking:string;
   gateFeatureOff:string;
@@ -64,6 +65,7 @@ export const scopesCopy:Record<ScopesLanguage,ScopesCopy>={
     reload:"Znovu ověřit a načíst",
     loadMore:"Načíst další",
     loadingMore:"Načítám další…",
+    openDetailNote:"Výběrem položky otevřete detail.",
     readOnlyNote:"Seznam je zatím jen ke čtení. Otevření detailu projektu a úpravy přijdou v další verzi.",
     notesTitleOnlyNote:"Poznámky zobrazují jen názvy. Seznam je zatím jen ke čtení; otevření poznámky přijde v další verzi.",
     gateChecking:"Ověřuji přihlášení k serveru…",
@@ -107,6 +109,7 @@ export const scopesCopy:Record<ScopesLanguage,ScopesCopy>={
     reload:"Verify and load again",
     loadMore:"Load more",
     loadingMore:"Loading more…",
+    openDetailNote:"Select an item to open its details.",
     readOnlyNote:"This list is read-only for now. Opening a project and editing will arrive in a later version.",
     notesTitleOnlyNote:"Notes show titles only. This list is read-only for now; opening a note will arrive in a later version.",
     gateChecking:"Checking your sign-in with the server…",

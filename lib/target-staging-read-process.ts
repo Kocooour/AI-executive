@@ -2050,6 +2050,14 @@ export async function readStagingAuthorizedProjectTasksInChild(
   return result;
 }
 
+/** Same bounded DTO as project detail, with v26 checked in the pinned snapshot. */
+export async function readStagingProjectTitlePreviewInChild(
+  config: StagingPersonalReadConfig, projectId: string,
+): Promise<StagingProjectTasksResult | null> {
+  const payload = await runChild(config, "target-staging-project-title-preview-child.mjs", [projectId, "1", "0"]);
+  return parseStagingProjectTasks(payload, projectId);
+}
+
 /** Staging relation child DTO: explicit allowlist prevents linked data leaks. */
 export function parseStagingStructuralRelations(
   value: unknown, projectId: string, limit: number,

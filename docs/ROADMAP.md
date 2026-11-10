@@ -32,6 +32,8 @@
 
 **Otevřené brány R4:** inventura dat, zařízení a integrací, ověřená archivní záloha/restore a **výslovný souhlas s přesným rozsahem případného cutoveru/resetu**. Dále produkční audit/retence, AI bundle live HTTP guard až při zavedení provider routy, host/SSRF/VAPID politika před skutečným push, integrita write-route/receipts a release Browser E2E; viz [bezpečnostní matice](R2D-SECURITY-MATRIX.md#zbývající-brány-před-r3-a-r4). Legacy testovací data nestaví migraci na kritickou cestu, ale nezrušují inventuru ani souhlas.
 
+**Backendový krok R3-FE-4:** tento změnový soubor přidává default-off stagingový zápis názvu projektu a explicitní nedestruktivní upgrade v25 → v26 ([kontrakt a postup](R3-PROJECT-TITLE-BE.md)). Rozpracovaný editor hlavního UI je pevně vypnutý i při zapnutí jeho příznaku: runtime neumí bezpečně uchovat nevyřízený příkaz přes vypršení session a ověřit stejnou identitu po přihlášení. Integrované R3 QA, zbývající úpravy a R4 zůstávají otevřené.
+
 **Integrační stav:** #344 a #352 jsou sloučeny do `main`; detailní kontrakt [R3-FE-02-MY-PLAN.md](R3-FE-02-MY-PLAN.md) a původní implementační checkpointy jsou zachovány. Tato roadmapa pouze upřesňuje navazující priority.
 
 ### Řízení iterací a exit H1-synthetic — 2026-11-09
@@ -40,7 +42,7 @@ Platí [pravidla milníků](../AGENTS.md#outcome-based-milestone-governance-bind
 
 **H1-synthetic — uzavřeno po sloučení #355** (pouze fiktivní metadata; `claims_created=0`, `real_import_enabled=false`). Vlastníkem schválená jednorázová výjimka pro poslední bezpečnostní syntetický krok (check/use epoch, ABA) byla využita a PR #355 je v `main`. Další čistě syntetická PR bez nového výslovného rozhodnutí nevytvářet. **H1-real** = samostatný milník s akceptačním tokem export → návrh znalosti → lidské review → Context Graph → citované zobrazení; skutečný import vyžaduje ACL, klasifikaci citlivosti, souhlas, revokaci a R3/R4 brány.
 
-**R3-FE-4 + integrované R3 QA** = další milník, rozpočet 1–3 PR, akceptace: průchozí tok seznam → autorizovaný detail/úprava → zpět včetně offline/revokace.
+**R3-FE-4 + integrované R3 QA** = další milník, rozpočet 1–3 PR, akceptace: průchozí tok seznam → autorizovaný detail/úprava → zpět včetně offline/revokace. **Rozhodnutí vlastníka 2026-11-10:** rozšířit původní rozpočet o jeden PR pro autorizované přejmenování projektu v hlavním UI včetně bezpečného backendu a obnovy nejistého zápisu. Zbývající části milníku ani release gate tím nejsou uzavřeny.
 
 ### HumanWiki — Context Bootstrap & Continuous Learning (přidáno 2026-11-08)
 

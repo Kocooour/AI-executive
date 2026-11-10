@@ -232,3 +232,10 @@ export async function deleteStagingNoteInChild(
   const value = await run(config, "target-staging-note-delete-child.mjs", JSON.stringify(request));
   return parseDeleteWrite(value);
 }
+
+/** Bounded project rename worker; request content is passed only via stdin. */
+export async function writeProjectTitleInChild(
+  config: StagingPersonalReadConfig, request: import("./target-project-title-writer").ProjectTitleCommand,
+): Promise<Write | null> {
+  return parseWrite(await run(config, "target-staging-project-title-write-child.mjs", JSON.stringify(request)));
+}

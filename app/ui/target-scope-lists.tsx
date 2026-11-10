@@ -1,4 +1,5 @@
 "use client";
+import {TARGET_PROJECT_TITLE_UPDATED} from "../../lib/target-project-title-edit-ui-gate";
 /** R3-FE-3: read-only Projects / Notes lists of the main app in target mode.
  * Rows are exactly what the server global index returned for the selected
  * scope (Vše / Osobní / Sdílené) from the dedicated project-index / note-index
@@ -114,6 +115,13 @@ export default function TargetScopeLists({kind,language="cs",detail=false}:{
 
   // R3-FE-4a: after a detail closed, focus returns to the row that opened it.
   useEffect(()=>{if(state.kind==="ready")focusPendingRow();},[state]);
+
+  useEffect(()=>{
+    const updated=()=>{if(kind!=="project")return;epoch.current++;sessionRef.current?.suspend();setState({kind:"idle"});
+      if(document.visibilityState!=="hidden"&&navigator.onLine){sessionRef.current?.resume();setNonce(value=>value+1);}};
+    window.addEventListener(TARGET_PROJECT_TITLE_UPDATED,updated);
+    return ()=>window.removeEventListener(TARGET_PROJECT_TITLE_UPDATED,updated);
+  },[kind]);
 
   // Privacy: titles never stay on screen while the tab is hidden or offline.
   useEffect(()=>{
@@ -232,6 +240,6 @@ export default function TargetScopeLists({kind,language="cs",detail=false}:{
     {page&&page.hasMore&&state.kind==="ready"&&<button type="button" disabled={state.more}
       onClick={()=>{statusRef.current?.focus();void more();}}>
       {state.more?copy.loadingMore:copy.loadMore}</button>}
-    {page&&<p className="targetScopeNote">{kind==="note"?copy.notesTitleOnlyNote:copy.readOnlyNote}</p>}
+    {page&&<p className="targetScopeNote">{detail?copy.openDetailNote:kind==="note"?copy.notesTitleOnlyNote:copy.readOnlyNote}</p>}
   </section>;
 }

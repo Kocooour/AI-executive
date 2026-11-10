@@ -1,3 +1,5 @@
+import { readPreflightedProjectTitlePreview } from "./target-task-staging-reader";
+import { writeTargetProjectTitle, validProjectTitleCommand, type ProjectTitleCommand, type ProjectTitleResult } from "./target-project-title-writer";
 /**
  * R2 staging-only process-local session issuance and revocation.
  *
@@ -637,6 +639,14 @@ export class TargetStagingSessionAuthority {
     }
   }
 
+  readProjectTitlePreview(actorUserId: string, projectId: string): TargetAuthorizedProjectTasksResult | null {
+    if (this.#closed) return null;
+    try {
+      const credential = this.#oneShotReadCredential(actorUserId);
+      return credential ? readPreflightedProjectTitlePreview(this.#store, credential, projectId) : null;
+    } catch { return null; }
+  }
+
   /** Content-free project -> task/note structural links for an authorized actor. */
   readAuthorizedProjectStructuralRelations(
     actorUserId: string, projectId: string, limit: number, offset: number,
@@ -981,6 +991,13 @@ export class TargetStagingSessionAuthority {
     return writePreflightedTargetTaskTitle(
       this.#store, credential, request, privateOnly, durableSessionTokenHash,
     );
+  }
+
+  updateProjectTitle(sessionToken: string, request: ProjectTitleCommand, durableSessionTokenHash?: string): ProjectTitleResult {
+    const credential = this.#credential(sessionToken, true);
+    if (!credential) return {ok:false,reason:"unauthorized"};
+    if (!validProjectTitleCommand(request)) return {ok:false,reason:"invalid_request"};
+    return writeTargetProjectTitle(this.#store, credential, request, durableSessionTokenHash);
   }
 
   /**

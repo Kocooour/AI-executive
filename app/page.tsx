@@ -2,6 +2,7 @@ import { LumiAppRoot } from "./ui/lumi-app-root";
 import { TargetDataProvider } from "./ui/target-data-provider";
 import { targetUiEnabled } from "../lib/target-staging-session-generation";
 import { targetDataNeeded, targetUiConfig } from "../lib/target-ui-config";
+import { targetProjectTitleEditUiEnabled } from "../lib/target-project-title-edit-ui-gate";
 import { targetNoteEditUiEnabled } from "../lib/target-note-edit-ui-gate";
 
 // R3-FE-1/2: the flags are read per request. When they are off (default) the app is
@@ -17,6 +18,6 @@ export default function Page() {
   // list or the plan, so they are no consumer either.
   const targetData = targetDataNeeded(config);
   return targetData
-    ? <TargetDataProvider><LumiAppRoot targetMyPlan={config?.myPlan} targetScopes={config?.scopes} targetDetails={config?.details} targetNoteEdit={Boolean(config?.details.note) && targetNoteEditUiEnabled(process.env)} /></TargetDataProvider>
+    ? <TargetDataProvider><LumiAppRoot targetMyPlan={config?.myPlan} targetScopes={config?.scopes} targetDetails={config?.details} targetNoteEdit={Boolean(config?.details.note) && targetNoteEditUiEnabled(process.env)} targetProjectEdit={Boolean(config?.details.project) && targetProjectTitleEditUiEnabled(process.env)} /></TargetDataProvider>
     : <LumiAppRoot />;
 }
