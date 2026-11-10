@@ -31,7 +31,25 @@ const base='http://localhost:3001/api/target-staging/projects/proj/';const ctx={
 const headers=c=>({cookie:c,origin:'http://localhost:3001','content-type':'application/json','x-lumi-target-protocol':'1'});
 const read=async c=>detail(new Request(base+'tasks',{headers:headers(c)}),ctx);
 const write=async(c,command)=>PATCH(new Request(base+'title',{method:'PATCH',headers:headers(c),body:JSON.stringify(command)}),ctx);
+test('generic staging write flags do not expose project title preview or rename',async()=>{
+ const old=process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_PROJECT_TITLE_WRITE_ENABLED;
+ delete process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_PROJECT_TITLE_WRITE_ENABLED;
+ try {
+   // Generic staging HTTP/write remains enabled for unrelated commands.
+   const cmd={commandId:randomUUID(),title:'Bypass',expectedRevision:'0'.repeat(64),
+     writeAreaId:'team-area',restoreGeneration:stage.restoreGeneration};
+   const before=db.prepare("SELECT title FROM projects WHERE id='proj'").get().title;
+   assert.equal((await preview(new Request(base+'title'),ctx)).status,404);
+   assert.equal((await write('',cmd)).status,404);
+   assert.equal(db.prepare("SELECT title FROM projects WHERE id='proj'").get().title,before);
+   assert.equal(db.prepare('SELECT COUNT(*) AS n FROM project_title_audit').get().n,0);
+ } finally {
+   if(old===undefined)delete process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_PROJECT_TITLE_WRITE_ENABLED;
+   else process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_PROJECT_TITLE_WRITE_ENABLED=old;
+ }
+});
 test('project rename enforces role and CAS, persists audit, supports retry, and rejects revoked access',async()=>{
+ process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_PROJECT_TITLE_WRITE_ENABLED='true';
  assert.deepEqual(inspectIsolatedTargetStore({...store,mode:'r2-model'}), {ok:true,mode:'r2-model',issues:[]});
  const bob=cookie('bob'), carol=cookie('carol'), dave=cookie('dave');
  let response=await preview(new Request(base+'title',{headers:headers(bob)}),ctx);assert.equal(response.status,200);const page=await response.json();
