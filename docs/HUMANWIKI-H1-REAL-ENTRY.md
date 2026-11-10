@@ -61,6 +61,10 @@ Testy bootstrapují izolovanou dočasnou **reálnou staging SQLite** se skutečn
 
 [Samostatný kontrakt, akceptace a limity](HUMANWIKI-H1-REAL-CONSENT-INTENT.md). Per-source append-only a HMAC-protected ledger pro ChatGPT/Claude eviduje **požadavky** na povolení/odvolání s účelem, retencí a CAS, ne účinný souhlas. Bez HTTP, identity/Area autorizace při zápisu, konkrétního exportu a externího anti-rollback witness je přístup k importu nadále vždy zablokován. Obnova staré DB je bez nezávislého witness neprokazatelná.
 
+## H1-real.3b — čerstvě podepsaný high-water preflight (2026-11-10)
+
+[Bezpečnostní kontrakt](HUMANWIKI-H1-REAL-WITNESS-PREFLIGHT.md). Nový server-side verifier čte lokálně ověřený globální HMAC head, vytvoří čerstvý nonce a proti konfigurací připnutému Ed25519 veřejnému klíči kontroluje podepsanou aktuální high-water odpověď z **budoucí nezávislé recovery domény**. Nedostupnost, tampering, starší DB, nesoulad sekvence/digestu, jiné registry ID, cizí podpis nebo souběžná změna odpověď fail-closed odmítnou. Současné testy používají synteticky generovaný podpisový klíč a callback, nikoli skutečného externího svědka; integrace pro produkci **neexistuje**. Také kladný výsledek deklaruje pouze `for_preflight_only`, nikoli ověřenou nezávislost, dokončení revokace nebo importní souhlas. Všech šest H1-real bran zůstává nedokončených.
+
 ## Šest bran vyžadovaných před první reálnou ingestací
 
 | Brána | Důkaz, který musí být v budoucím H1-real skutečně ověřen na serveru |
