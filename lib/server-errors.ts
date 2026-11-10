@@ -146,6 +146,9 @@ export const serverErrorKeys: Record<string, string> = {
 // Server messages a user does not meet in normal use: requests the app never sends, broken or
 // tampered data, configuration errors, internal markers. They are shown as they are.
 export const developerOnly: ReadonlySet<string> = new Set([
+  // H1-real.0 deny-only POST route intentionally has no client/UI consumer.
+  // A generic 404 conceals the otherwise nonexistent import capability.
+  "Not found",
   // UI-04c internal pure day helper: the caller provides a trusted ISO day;
   // malformed input is a programmer error, never sent by an API or shown in UI.
   "Invalid preview day",
