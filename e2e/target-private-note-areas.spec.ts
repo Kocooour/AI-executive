@@ -116,7 +116,7 @@ for(const width of [390,1280]){
       await expect(modal).not.toContainText("Osobní");
       await expect(select).toHaveCount(0);
       await expect(page.getByTestId("target-private-area-selected")).toHaveCount(0);
-      expect(areaReads).toBe(1,"a private catalogue GET must wait for fresh session verification");
+      expect(areaReads).toBe(1); // no catalogue GET before fresh session verification
 
       holdSession=false;
       for(const route of pending.splice(0)){
@@ -135,7 +135,7 @@ for(const width of [390,1280]){
         await expect(modal).not.toContainText("Rodina");
         await expect(select).toHaveCount(0);
         await expect(page.getByTestId("target-private-area-selected")).toHaveCount(0);
-        expect(areaReads).toBe(1,"revocation must not re-fetch private Areas");
+        expect(areaReads).toBe(1); // revocation must not re-fetch private Areas
       }
       expect(writes()).toBe(0);
     });
