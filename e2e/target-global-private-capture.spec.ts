@@ -71,6 +71,9 @@ test("desktop shortcut opens private creator, not legacy capture",async({page})=
   await page.setViewportSize({width:1280,height:844});
   await setup(page);
   await page.goto("/?view=Calendar");
+  // The shortcut deliberately does not intercept editable/search inputs.
+  // Focus a neutral heading, as when invoked outside a text editor.
+  await page.locator(".pageTitleRow h1").focus();
   await page.keyboard.press("Control+Shift+Period");
   await expect(page.getByTestId("target-private-note-areas")).toBeVisible();
   await expect(page.locator(".captureModal")).toHaveCount(1);
