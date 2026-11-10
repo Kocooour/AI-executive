@@ -138,7 +138,7 @@ export type WriteInput=
   |{kind:"taskTitle";taskId:string;areaId:string;title:string;baseTitle:string}
   |{kind:"taskStatus";taskId:string;areaId:string;status:"open"|"completed"}
   |{kind:"taskWhen";taskId:string;areaId:string;whenOn:string|null}
-  |{kind:"taskDelete";taskId:string;areaId:string;base:TaskPreview}
+  |{kind:"taskDelete";taskId:string;areaId:string;base:TaskPreview;baseRevision:string}
   |{kind:"noteEdit";noteId:string;areaId:string;title:string;body:string;baseTitle:string;baseBody:string}
   |{kind:"noteDelete";noteId:string;areaId:string;base:NotePreview};
 
@@ -288,11 +288,18 @@ export const sameDeleteSnapshot=(current:TaskPreview|NotePreview,base:TaskPrevie
   JSON.stringify(current)===JSON.stringify(base);
 
 async function runTaskDelete(input:Extract<WriteInput,{kind:"taskDelete"}>,d:Deps):Promise<Outcome>{
+  // The displayed detail and its opaque task CAS came from ONE backend snapshot.
+  // A new preflight must not silently adopt an intervening assignment/revision change
+  // that isn't represented by the user-visible preview. The writer CAS guards the
+  // remaining interval between these reads and DELETE under BEGIN IMMEDIATE.
+  if(!/^[a-f0-9]{64}$/.test(input.baseRevision))return {t:"error",reason:"invalid"};
   const ctx=await readTaskWriteContext(input.taskId,input.areaId,d.fetch,d.signal);
   if(ctx.ok===false)return outcomeForFailure(ctx.reason);
+  if(ctx.context.expectedRevision!==input.baseRevision)return {t:"conflict"};
   const seen=await readStagingTaskPreview(input.taskId,d.signal,d.fetch);
   if(seen.ok===false)return outcomeForRead(seen.reason);
-  if(!sameDeleteSnapshot(seen.task,input.base)||seen.task.areaId!==input.areaId)
+  if(seen.expectedRevision!==input.baseRevision||
+    !sameDeleteSnapshot(seen.task,input.base)||seen.task.areaId!==input.areaId)
     return {t:"conflict"};
   const command=buildTaskDeleteCommand(input.taskId,ctx.context);
   if(!command)return {t:"error",reason:"invalid"};
