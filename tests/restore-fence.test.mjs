@@ -75,6 +75,7 @@ const exempt = {
   "PUT /api/store": "carries the generation in its body and is checked in replaceSnapshot",
   "POST /api/backups": "creates, restores and lists backups itself",
   "POST /api/backups/import": "is the import itself",
+  "POST /api/humanwiki/import": "deny-only HumanWiki entry: always returns 404 before inspecting request properties or body; no data read or persisted write, so the legacy backup restore fence does not apply",
   "POST /api/client-errors": "a browser's error report; no owner data",
   "POST /api/auth/login": "authentication", "POST /api/auth/logout": "authentication",
   "POST /api/auth/passkeys/login/options": "authentication", "POST /api/auth/passkeys/login/verify": "authentication",
