@@ -98,8 +98,10 @@ test("review regressions: delete carries the visible snapshot, revocation invali
   const edit=read("app/ui/target-detail-edit.tsx");
   const write=read("lib/target-detail-write.ts");
   const panel=read("app/ui/target-detail-panel.tsx");
-  assert.match(edit,/kind:"taskDelete",taskId:task\.id,areaId:task\.areaId,base:task/);
-  assert.match(edit,/kind:"noteDelete",noteId:note\.id,areaId:note\.areaId,base:note/);
+  assert.match(edit,/kind:"taskDelete",taskId:base\.id,areaId:base\.areaId,base/);
+  assert.match(edit,/kind:"noteDelete",noteId:base\.id,areaId:base\.areaId,base/);
+  assert.match(edit,/setConfirmation\(\{base,text:confirmText\}\)/);
+  assert.match(edit,/const approved=confirmation\.base/);
   assert.match(write,/sameDeleteSnapshot\(seen\.task,input\.base\)/);
   assert.match(write,/sameDeleteSnapshot\(seen\.note,input\.base\)/);
   assert.match(edit,/const checked=verifiedContent===content&&currentContent/);
