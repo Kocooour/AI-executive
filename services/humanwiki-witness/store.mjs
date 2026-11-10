@@ -218,11 +218,23 @@ export function witnessChallengeReceipt(directory,registryId,privateKey,nonce) {
       !/^[A-Za-z0-9_-]{43}$/.test(nonce)||
       Buffer.from(nonce,"base64url").toString("base64url")!==nonce)
     throw Error("witness_unavailable");
-  const head=witnessCurrentHead(directory,registryId,privateKey);
-  return {
-    version:"humanwiki_h1_real_fresh_high_water_preflight_v1",
-    registryId,nonce,sequence:head.sequence,digest:head.digest,
-    signature:sign(null,humanWikiWitnessChallengePayload(
-      registryId,nonce,head.sequence,head.digest),privateKey).toString("base64url"),
-  };
+  // Hold a SQLite snapshot while validating and signing the latest head,
+  // so a concurrent publisher cannot commit between read and signature.
+  return openExisting(directory,"read",db=>{
+    db.exec("BEGIN");
+    try {
+      const head=verifyRows(db,registryId,pub);
+      const result={
+        version:"humanwiki_h1_real_fresh_high_water_preflight_v1",
+        registryId,nonce,sequence:head.sequence,digest:head.digest,
+        signature:sign(null,humanWikiWitnessChallengePayload(
+          registryId,nonce,head.sequence,head.digest),privateKey).toString("base64url"),
+      };
+      db.exec("COMMIT");
+      return result;
+    } catch(error) {
+      try {db.exec("ROLLBACK");}catch{/* fail closed */}
+      throw error;
+    }
+  });
 }
