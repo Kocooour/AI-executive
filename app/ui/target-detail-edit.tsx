@@ -81,6 +81,7 @@ export function useDetailEdits(params:{
   readFetch:typeof fetch;
   onRefusal:()=>void;
   revalidate:()=>void;
+  onDeleted:()=>void;
   onClose:()=>void;
 }):DetailEditApi|null{
   const {route,language,edits,content,sessionKey,removed,readFetch}=params;
@@ -97,7 +98,8 @@ export function useDetailEdits(params:{
     onCommitted:info=>{
       const current=live.current;
       // The open detail is queued FIRST (the user is looking at it); the lists follow.
-      if(!info.deleted)current.revalidate();
+      if(info.deleted)current.onDeleted();
+      else current.revalidate();
       emitTargetChange({
         kind:current.route.kind==="note"?"note":"task",id:current.route.id,
         change:info.deleted?"deleted":"updated",
@@ -110,6 +112,13 @@ export function useDetailEdits(params:{
   const [draft,setDraftState]=useState<EditDraft>(EMPTY_DRAFT);
   const [capability,setCapability]=useState<Capability>("off");
   const [abilities,setAbilities]=useState<Abilities>(NO_ABILITIES);
+  // Positive writer proof applies only to the exact detail response that was probed.
+  // This also hides stale controls synchronously on a new read, before effects run.
+  const [verifiedContent,setVerifiedContent]=useState<TargetDetailContent|null>(null);
+  const currentContent=enabled&&content&&(content.kind==="task"||content.kind==="note");
+  const checked=verifiedContent===content&&currentContent;
+  const shownCapability:Capability=checked?capability:currentContent?"checking":"off";
+  const shownAbilities=checked?abilities:NO_ABILITIES;
 
   // New detail generation / scope / session: feedback and Undo are cleared; a possibly committed
   // write stays reconcilable. The unmount does the same and ignores any late response.
@@ -132,10 +141,10 @@ export function useDetailEdits(params:{
   // derived from scope, Area kind or any guess about the role.
   useEffect(()=>{
     if(!enabled||!content||(content.kind!=="task"&&content.kind!=="note")){
-      setCapability("off");setAbilities(NO_ABILITIES);return;
+      setVerifiedContent(null);setCapability("off");setAbilities(NO_ABILITIES);return;
     }
     const abort=new AbortController();
-    setCapability(old=>old==="writable"?old:"checking");
+    setVerifiedContent(null);setAbilities(NO_ABILITIES);setCapability("checking");
     const probes:Promise<{context:boolean;when:boolean;signedOut:boolean;whenOn:string|null}>[]=[];
     const signal=abort.signal;
     const outcome=(kind:"context"|"when",whenOn:string|null=null)=>(r:{ok:boolean;reason?:string})=>({
@@ -157,7 +166,8 @@ export function useDetailEdits(params:{
         whenOn:results.find(r=>r.when)?.whenOn??null};
       setAbilities(next);
       setCapability(next.context||next.when?"writable":"readonly");
-    }).catch(()=>{if(!signal.aborted){setAbilities(NO_ABILITIES);setCapability("readonly");}});
+      setVerifiedContent(content);
+    }).catch(()=>{if(!signal.aborted){setAbilities(NO_ABILITIES);setCapability("readonly");setVerifiedContent(content);}});
     return ()=>abort.abort();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   },[enabled,content,routed,flags.taskTitle,flags.taskStatus,flags.taskDelete,flags.taskWhen]);
@@ -175,13 +185,13 @@ export function useDetailEdits(params:{
   const setDraft=useCallback((update:(old:EditDraft)=>EditDraft)=>setDraftState(update),[]);
   const run=useCallback((input:WriteInput)=>{void controller.run(input);},[controller]);
   const api=useMemo<DetailEditApi>(()=>({
-    flags,copy,capability,abilities,state,online,draft,setDraft,run,
+    flags,copy,capability:shownCapability,abilities:shownAbilities,state,online,draft,setDraft,run,
     undo:()=>{void controller.undo();},
     reconcile:()=>{void controller.reconcile();},
     dismiss:()=>controller.dismiss(),
     deleted:state.kind==="committed"&&state.deleted,
     closeAfterDelete:()=>live.current.onClose(),
-  }),[flags,copy,capability,abilities,state,online,draft,setDraft,run,controller]);
+  }),[flags,copy,shownCapability,shownAbilities,state,online,draft,setDraft,run,controller]);
   return enabled?api:null;
 }
 const NO_EDITS:TargetUiEdits={
@@ -375,7 +385,7 @@ export function TaskEdits({api,task}:{api:DetailEditApi;task:TaskPreview}){
     <ConflictKept api={api} kind="title" current={{title:task.title,body:""}}/>
     {flags.taskDelete&&<DeleteControl api={api} label={copy.deleteTask}
       confirmText={copy.confirmDeleteTask(task.title)}
-      onDelete={()=>api.run({kind:"taskDelete",taskId:task.id,areaId:task.areaId})}/>}
+      onDelete={()=>api.run({kind:"taskDelete",taskId:task.id,areaId:task.areaId,base:task})}/>}
     <Feedback api={api}/>
   </div>;
 }
@@ -455,7 +465,7 @@ export function NoteEdits({api,note}:{api:DetailEditApi;note:NotePreview}){
     <ConflictKept api={api} kind="note" current={{title:note.title,body:note.body}}/>
     {flags.noteDelete&&<DeleteControl api={api} label={copy.deleteNote}
       confirmText={copy.confirmDeleteNote(note.title)}
-      onDelete={()=>api.run({kind:"noteDelete",noteId:note.id,areaId:note.areaId})}/>}
+      onDelete={()=>api.run({kind:"noteDelete",noteId:note.id,areaId:note.areaId,base:note})}/>}
     <Feedback api={api}/>
   </div>;
 }
