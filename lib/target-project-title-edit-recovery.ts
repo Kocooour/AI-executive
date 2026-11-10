@@ -254,7 +254,12 @@ export function runTrackedProjectTitleEdit(
     if(result.outcome==="uncertain")entry.wasUncertain=true;
     if(result.outcome==="saved"&&entry.principalBinding)
       confirmProjectTitleReload(entry.command.commandId,entry.principalBinding);
-    else if(result.outcome==="conflict"&&firstDispatch&&entry.principalBinding)
+    else if(firstDispatch&&!entry.wasUncertain&&entry.principalBinding&&
+      (result.outcome==="conflict"||
+       (result.outcome==="denied"&&result.definitiveNoWrite===true)))
+      // Only a strictly recognized, pre-COMMIT refusal on the FIRST request
+      // can end the tab-wide uncertainty. Any earlier timeout/retry/expired
+      // session remains locked, even if its later attempt gets 403/404/409.
       rejectFirstProjectTitleReload(entry.command.commandId,entry.principalBinding);
     entry.phase=result.outcome==="saved"?"saved":
       result.outcome==="denied"?"denied":
