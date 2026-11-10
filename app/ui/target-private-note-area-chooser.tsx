@@ -8,7 +8,7 @@ import {handleOverlayKeys} from "./focus";
 import {useTargetGeneration,useTargetRuntime} from "./target-data-provider";
 import {useTargetTick,useTargetWake} from "./use-target-revalidation";
 import {validNoteEditText} from "../../lib/target-staging-note-edit-client";
-import {privateNoteCreateMarker,confirmPrivateNoteCreate} from "../../lib/target-note-create-reload";
+import {privateNoteCreateMarker,confirmRecoveredPrivateNoteCreate} from "../../lib/target-note-create-reload";
 import {privateNoteCreatePreflight,recoverPrivateNoteCreate,type PrivateNoteCreateCommand}
   from "../../lib/target-private-note-create-client";
 import {runPrivateNoteCreate,releaseTrackedPrivateNoteCreate,
@@ -232,7 +232,7 @@ export default function TargetPrivateNoteAreaChooser({
     clearTimeout(timer);
     if(seq!==writeSerial.current||controller.signal.aborted||!stillLive())return;
     if(receipt==="committed"&&
-      confirmPrivateNoteCreate(generation,current.commandId)){
+      confirmRecoveredPrivateNoteCreate(generation,current.commandId)){
       releaseTrackedPrivateNoteCreate(runtime,generation,current.commandId);
       setTitle("");setBody("");setWritePhase("saved");onCreated();
       return;
