@@ -40,7 +40,7 @@ import {
   previewPreflightedTargetTaskTitleEdit, readPreflightedIsolatedTargetTask,
   readPreflightedIsolatedPersonalTargetTask, readPreflightedPersonalTargetTaskWithRevision,
   readPreflightedTargetTaskTitleCommandStatus, readPreflightedTargetTaskDeleteCommandStatus,
-  readPreflightedTargetNoteEditCommandStatus, readPreflightedTargetNoteDeleteCommandStatus,
+  readPreflightedTargetNoteEditCommandStatus,readPreflightedTargetNoteEditRecovery, readPreflightedTargetNoteDeleteCommandStatus,
   listPreflightedPrivateProjectsAtOffset, readPreflightedPrivateProjectDetail,
   readPreflightedPrivateTaskTitleAudit,
   readPreflightedScopedTaskPage, readPreflightedSharedTargetTask, readPreflightedChangeFeedPage,
@@ -87,7 +87,7 @@ import type { TargetChangeFeedResult } from "./target-change-feed-read-model";
 import type { FeedClaims } from "./target-staging-feed-cursor";
 import type { TargetPrivateTaskTitleAuditResult } from "./target-task-read-model";
 import type { TargetStagingTaskTitleCommandStatusResult, TargetTemporalStatusReceiptResult, TargetTemporalStatusReceiptSnapshot, TargetTemporalDueOnReceiptResult, TargetTemporalDueOnReceiptSnapshot } from "./target-task-staging-reader";
-import type { TargetNoteEditCommandStatus } from "./target-note-command-status";
+import type {TargetNoteEditCommandStatus,TargetNoteEditRecovery} from "./target-note-command-status";
 import type { TargetNoteDeleteCommandStatus } from "./target-note-delete-command-status";
 import { validTargetTaskTitleEditPreviewRequest } from "./target-task-write-preflight";
 import { writePreflightedTargetTaskTitle, validTargetStagingTaskTitleWriteRequest } from "./target-task-staging-writer";
@@ -1234,6 +1234,13 @@ export class TargetStagingSessionAuthority {
       return {ok:false, reason:"invalid_request"};
     return changePreflightedTargetNoteLifecycle(
       this.#store,credential,request,durableSessionTokenHash,privateCreateOnly);
+  }
+
+  /** Read-only actor-scoped recovery of a note edit after browser reload. */
+  noteEditRecovery(sessionToken:string,commandId:string):TargetNoteEditRecovery{
+    const credential=this.#credential(sessionToken,true);
+    return credential?readPreflightedTargetNoteEditRecovery(this.#store,credential,commandId)
+      :{ok:false,reason:"unavailable"};
   }
 
   /** Read-only status of the exact note edit for its current authorized writer. */

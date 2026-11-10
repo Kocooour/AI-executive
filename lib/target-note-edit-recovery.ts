@@ -1,12 +1,14 @@
 /** R3-FE-4b: recover ONE exact in-memory idempotent note edit per note.
  * This coordinator outlives a disposable inspector but not the authenticated
- * target runtime/generation. No browser storage, offline queue, or new UUID
- * after ambiguous writes. A transport deadline can only make a write UNCERTAIN.
+ * target runtime/generation. Only the opaque UUID plus verified generation
+ * persist in tab storage; never private text, CAS, or an offline queue.
+ * A transport deadline can only make a write UNCERTAIN.
  */
 import {
   saveNoteEdit,type NoteEditCommand,type NoteEditSaveResult,
 } from "./target-staging-note-edit-client";
 import type {TargetClientRuntime} from "./target-client-runtime";
+import {confirmNoteEditReload,rejectFreshNoteEditReload} from "./target-note-edit-reload";
 
 export type NoteEditRuntime=Pick<TargetClientRuntime,"generation"|"known"|"register">;
 export const TARGET_NOTE_EDIT_WRITE_TIMEOUT_MS=20_000;
@@ -113,6 +115,10 @@ export function runTrackedNoteEdit(
   const bucket=current(runtime,generation);
   if(!bucket)return Promise.resolve(denied());
   const existing=bucket.entries.get(id);
+  // Only a brand-new command may have a definitive first-PATCH rejection.
+  // A later conflict following ANY ambiguous attempt cannot prove that an
+  // earlier PATCH will not commit; the tab reload barrier must survive.
+  const firstDispatch=existing===undefined;
   if(existing&&JSON.stringify(existing.command)!==JSON.stringify(command))
     return Promise.resolve({outcome:"conflict"});
   if(existing?.pending)return existing.pending;
@@ -150,6 +156,16 @@ export function runTrackedNoteEdit(
     clearTimeout(timer);
     if(buckets.get(runtime)!==bucket||bucket.disposed||
       bucket.entries.get(id)!==entry)return result;
+    // This happens while the runtime owns the request, even with NO editor
+    // mounted. Release only the exact UUID in the matching auth generation.
+    // A timed-out request has already settled as UNCERTAIN; a later 409 cannot
+    // enter this branch for the original attempt.
+    if(runtime.known()&&runtime.generation()===generation){
+      if(result.outcome==="saved")
+        confirmNoteEditReload(generation,entry.command.commandId);
+      else if(result.outcome==="conflict"&&firstDispatch)
+        rejectFreshNoteEditReload(generation,entry.command.commandId);
+    }
     entry.phase=result.outcome==="saved"?"saved":
       result.outcome==="denied"?"denied":
       result.outcome==="conflict"?"conflict":"uncertain";
