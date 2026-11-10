@@ -1,7 +1,8 @@
 /** R3-FE-4b: recover ONE exact in-memory idempotent note edit per note.
  * This coordinator outlives a disposable inspector but not the authenticated
- * target runtime/generation. No browser storage, offline queue, or new UUID
- * after ambiguous writes. A transport deadline can only make a write UNCERTAIN.
+ * target runtime/generation. Only the opaque UUID plus verified generation
+ * persist in tab storage; never private text, CAS, or an offline queue.
+ * A transport deadline can only make a write UNCERTAIN.
  */
 import {
   saveNoteEdit,type NoteEditCommand,type NoteEditSaveResult,
