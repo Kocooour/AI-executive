@@ -86,12 +86,8 @@ const exempt = {
   "POST /api/integrations/aifred/tools": "integration API token, no client copy",
   "POST /api/mail/gmail/callback": "OAuth completion page has no client generation; one-use state is tied to restore generation and checked before and after Google exchange",
   "POST /api/mail/gmail/messages": "read-only same-origin search with no persisted mutation; POST avoids search strings in URL logs",
-  // Baseline inventory correction (these handlers already exist in main).
-  // They never write the legacy backup scope; do not inject the wrong
-  // generation fence into staging-only and unconditional deny-only routes.
-  "POST /api/humanwiki/import": "unconditional deny-only 404 before inspecting request body; neither writes data nor admits any import",
-  "POST /api/target-staging/notes/edit-recovery": "content-free, read-only receipt lookup against isolated staging SQLite; verifies signed actor, live note/Area ACL and staging generation; writes no legacy backup data",
-  "POST /api/target-staging/notes": "creates only owner-private notes in separate isolated staging SQLite outside legacy backup scope; staging anchor, client restore generation, live signed session, Area write ACL and atomic note writer guard the commit",
+  // Staging-only routes below are outside the legacy backup scope. Each
+  // distinct route must appear exactly once with its reviewed rationale.
   "PATCH /api/target-staging/tasks/[taskId]/title": "writes only the separate isolated staging SQLite outside the legacy backup scope; the worker checks the staging restore generation and live ACL/revision atomically",
   "PATCH /api/target-staging/task-temporal/status": "writes only to separately isolated staging SQLite outside the legacy backup scope; the pinned writer validates the isolated restore generation, current Area write ACL, durable session, task CAS and journal atomically",
   "POST /api/target-staging/task-temporal/status/receipt": "read-only receipt reconciliation against isolated staging SQLite, with exact command and actor, current write ACL, staging generation and live task/Area/session guard; no legacy backup data is written",
