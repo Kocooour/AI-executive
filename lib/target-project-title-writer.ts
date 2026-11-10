@@ -76,7 +76,10 @@ export function writeTargetProjectTitle(store: TargetStagingReadStore, access: T
     if (!after || after.revision !== before.revision + 1) return failed();
     db.prepare(`INSERT INTO project_title_audit(receipt_key,request_digest,actor_user_id,project_id,area_id,policy_revision,revision_before,revision_after,expected_revision,restore_generation,committed_at_ms) VALUES (?,?,?,?,?,?,?,?,?,?,?)`).run(key,payload,actor,command.projectId,command.writeAreaId,before.policy_revision,before.revision,after.revision,command.expectedRevision,store.expectedRestoreGeneration,now);
     if (!sessionLive()) return {ok:false,reason:"session_revoked"};
-    context.commit({kind:"project_title",payload:{}});
-    return {ok:true};
+    // COMMIT may have persisted the rename even when journal confirmation is untrusted.
+    // Never acknowledge success in that case; callers must treat the reply as uncertain
+    // and retry the exact same idempotency key only after the store is trusted again.
+    const confirmed = context.commit({kind:"project_title",payload:{}});
+    return confirmed ? {ok:true} : failed();
   }, denied, failed);
 }
