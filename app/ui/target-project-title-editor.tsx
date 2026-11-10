@@ -91,7 +91,7 @@ export default function TargetProjectTitleEditor({project,language,onCommitted,o
    setMode({kind:'checking'});setMessage('');
    const result=await loadProjectTitleEditPreview(project.id,ctrl.signal,readFetch);
    if(seqId!==seq.current||ctrl.signal.aborted||!stillBound())return;
-   if(!result.ok){if(result.reason==='denied')refuse();
+   if(result.ok===false){if(result.reason==='denied')refuse();
      else{setMode({kind:'recovery'});setMessage(copy.recovering);}return;}
    if(result.preview.writeAreaId!==project.areaId){refuse();return;}
    const resolved=resumeSealedProjectTitleEdit(runtime,bound.current,project.id,result.preview);
