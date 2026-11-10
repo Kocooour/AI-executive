@@ -46,6 +46,7 @@ const indexDetailPreviewTest = process.env.LUMI_INDEX_DETAIL_PREVIEW_E2E === "tr
 const focusFallbackTest = process.env.LUMI_TARGET_DETAIL_FOCUS_E2E === "true";
 const noteEditRecoveryTest = process.env.LUMI_TARGET_NOTE_EDIT_E2E === "true";
 const projectTitleRecoveryTest = process.env.LUMI_TARGET_PROJECT_TITLE_E2E === "true";
+const privateNoteAreasTest = process.env.LUMI_PRIVATE_NOTE_AREAS_E2E === "true";
 
 export default defineConfig({
   testDir: "e2e",
@@ -124,6 +125,17 @@ export default defineConfig({
         AI_EXECUTIVE_TARGET_STAGING_HTTP_WRITE_ENABLED: "true",
         AI_EXECUTIVE_TARGET_STAGING_HTTP_NOTES_WRITE_ENABLED: "true",
         AI_EXECUTIVE_TARGET_UI_NOTE_EDIT_ENABLED: "true",
+      } : {}),
+      // Only the synthetic isolated Playwright instance exposes the read-only
+      // actor-private Quick Capture chooser; never the host production app.
+      ...(privateNoteAreasTest ? {
+        AI_EXECUTIVE_TARGET_STAGING_HTTP_ENABLED: "true",
+        AI_EXECUTIVE_TARGET_UI_ENABLED: "true",
+        AI_EXECUTIVE_TARGET_UI_SCOPES_ENABLED: "true",
+        AI_EXECUTIVE_TARGET_STAGING_HTTP_GLOBAL_NOTES_ENABLED: "true",
+        AI_EXECUTIVE_TARGET_STAGING_HTTP_NOTES_ENABLED: "true",
+        AI_EXECUTIVE_TARGET_STAGING_HTTP_PRIVATE_NOTE_AREAS_ENABLED: "true",
+        AI_EXECUTIVE_TARGET_UI_PRIVATE_NOTE_AREAS_ENABLED: "true",
       } : {}),
       // Explicit opt-in project title reauthentication on a throwaway server.
       // Browser routes are synthetic; no staging DB or production writes.

@@ -1,0 +1,15 @@
+/** R3-CAPTURE-1: private Area chooser only. This is NOT the create gate.
+ * In the absence of any switch the existing Lumi capture tree is untouched. */
+import type {TargetUiEnv} from "./target-ui-config";
+
+export const TARGET_PRIVATE_NOTE_AREA_UI_FLAGS=[
+  "AI_EXECUTIVE_TARGET_STAGING_HTTP_ENABLED",
+  "AI_EXECUTIVE_TARGET_UI_ENABLED",
+  "AI_EXECUTIVE_TARGET_UI_SCOPES_ENABLED",
+  "AI_EXECUTIVE_TARGET_STAGING_HTTP_GLOBAL_NOTES_ENABLED",
+  "AI_EXECUTIVE_TARGET_STAGING_HTTP_NOTES_ENABLED",
+  "AI_EXECUTIVE_TARGET_STAGING_HTTP_PRIVATE_NOTE_AREAS_ENABLED",
+  "AI_EXECUTIVE_TARGET_UI_PRIVATE_NOTE_AREAS_ENABLED",
+] as const;
+export const targetPrivateNoteAreaUiEnabled=(env:TargetUiEnv):boolean=>
+  TARGET_PRIVATE_NOTE_AREA_UI_FLAGS.every(flag=>env[flag]==="true");
