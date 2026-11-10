@@ -33,6 +33,7 @@ import {
   prepareConfirmedMyPlanUndo,keepConfirmedMyPlanUndoOnRefresh,
 } from "../../lib/target-staging-my-plan-undo";
 import {scopeFeedbackDecision} from "../../lib/target-my-plan-scope-feedback";
+import {subscribeTargetChange} from "../../lib/target-data-invalidation";
 import {myPlanCopy,type MyPlanCopy,type MyPlanLanguage} from "../../lib/target-my-plan-copy";
 
 type StatusAction=
@@ -778,6 +779,11 @@ export function TargetStagingMyPlanPreview({
     resetStatusFeedback();
     resetWhenFeedback();
   }
+  // R3-FE-4b: an edit committed in the detail panel re-reads the plan (GET only, through the same
+  // guards as the manual refresh: never while this screen's own write is pending/uncertain).
+  const refreshPlanRef=useRef(refreshPlan);
+  refreshPlanRef.current=refreshPlan;
+  useEffect(()=>subscribeTargetChange(()=>refreshPlanRef.current()),[]);
   const actionPending=action.kind==="pending"||action.kind==="checking"||
     action.kind==="uncertain";
   const whenPending=whenAction.kind==="pending"||

@@ -1789,7 +1789,7 @@ export async function readStagingNotificationSettingsInChild(
 
 /** R2d.3g: exact detail child DTO; the guard/witness remain server-only. */
 export type StagingTemporalDetailResult =
-  | { ok: true; detail: TemporalTaskDetail }
+  | { ok: true; detail: TemporalTaskDetail; expectedRevision?:string }
   | { ok: false; reason: "inaccessible" };
 
 export function parseStagingTemporalDetail(value: unknown, taskId: string): StagingTemporalDetailResult | null {
@@ -1799,7 +1799,11 @@ export function parseStagingTemporalDetail(value: unknown, taskId: string): Stag
   if (Object.keys(result).sort().join(",") === "ok,reason" &&
       result.ok === false && result.reason === "inaccessible")
     return { ok: false, reason: "inaccessible" };
-  if (Object.keys(result).sort().join(",") !== "guard,linearization,ok,task" ||
+  const keys = Object.keys(result).sort().join(",");
+  const hasRevision = keys === "expectedRevision,guard,linearization,ok,task";
+  if ((keys !== "guard,linearization,ok,task" && !hasRevision) ||
+      (hasRevision && (typeof result.expectedRevision !== "string" ||
+        !REVISION.test(result.expectedRevision))) ||
       result.ok !== true || !result.task || typeof result.task !== "object" ||
       Array.isArray(result.task) || !result.guard ||
       typeof result.guard !== "object" || Array.isArray(result.guard)) return null;
@@ -1829,7 +1833,8 @@ export function parseStagingTemporalDetail(value: unknown, taskId: string): Stag
     taskRevision: g.taskRevision as number,
     parentRevision: g.parentRevision as number | null,
   };
-  return { ok: true, detail: { task: t, guard, linearization: framed.linearization } };
+  return { ok: true, detail: { task: t, guard, linearization: framed.linearization },
+    ...(hasRevision ? {expectedRevision:result.expectedRevision as string} : {}) };
 }
 
 export async function readStagingTemporalDetailInChild(

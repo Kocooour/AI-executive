@@ -9,6 +9,7 @@ import { projectAcceptsNewItems, projectTasks, summarizeProject } from "../../..
 import type { Entity } from "../../../lib/db";
 import { labelsFor } from "../project-labels";
 import type { LumiApp } from "../use-lumi-app";
+import { LegacyWriteGate } from "./legacy-write-gate";
 import { ProjectContext } from "./project-context";
 import { RecordMarks, heldBackReason } from "./held-back";
 import { SyncConflicts } from "./sync-conflicts";
@@ -115,7 +116,8 @@ export function ProjectPage({ app, project, renderRow, reorderPreview = false, o
     } catch (error) { reportPreviewActionError(error); }
     finally { actionInFlight.current = false; setActionBusy(false); }
   }
-  const projectActions = <div className="projectActions" data-project-actions>
+  // R3-FE-4b: in unified target mode the whole group is natively disabled (fieldset), with the calm hint.
+  const projectActions = <LegacyWriteGate><div className="projectActions" data-project-actions>
     <button type="button" disabled={projectDetailPreview && !canChangeStatus}
       onClick={() => projectDetailPreview
         ? void previewToggleStatus()
@@ -131,7 +133,7 @@ export function ProjectPage({ app, project, renderRow, reorderPreview = false, o
           confirmLabel: tr("delete"), danger: true })) void remove(project);
       }}>{tr("delete")}</button>
     {actionError && <p className="projectActionError" role="alert">{actionError}</p>}
-  </div>;
+  </div></LegacyWriteGate>;
 
   return (
     <article className="projectPage" aria-label={`${t.page}: ${project.title}`} data-project-page={project.id}
@@ -144,7 +146,8 @@ export function ProjectPage({ app, project, renderRow, reorderPreview = false, o
             className="projectTitleInput"
             aria-label={t.title}
             maxLength={1000}
-            readOnly={false}
+            readOnly={app.legacyWritesDisabled}
+            title={app.legacyReadOnlyHint}
             value={title}
             onFocus={() => { titleFocused.current = true; }}
             onChange={(event) => setTitle(event.target.value)}
@@ -217,6 +220,7 @@ export function ProjectPage({ app, project, renderRow, reorderPreview = false, o
             <span>{t.area}</span>
             <select
               aria-label={tr("area")}
+              disabled={app.legacyWritesDisabled}
               value={String(targets(project.id, "belongs_to_area")[0] || "")}
               onChange={async (event) => { await relate(project.id, event.target.value, "belongs_to_area"); }}
             >
@@ -230,7 +234,7 @@ export function ProjectPage({ app, project, renderRow, reorderPreview = false, o
           </label>
           <label className="projectDetailsField">
             <span>{t.deadline}</span>
-            <input type="date" aria-label={t.deadline} value={deadline}
+            <input type="date" aria-label={t.deadline} value={deadline} disabled={app.legacyWritesDisabled}
               onChange={(event) => void patch(project, { deadline: event.target.value }, "deadline changed")} />
           </label>
           <div className="projectOverview" aria-label={t.lastActivity}>

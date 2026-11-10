@@ -24,9 +24,16 @@ try {
       });
       if (!actor) process.exitCode = 1;
       else {
-        const detail = authority.readTemporalTaskDetail(actor.actor,taskId);
+        // A writable actor can receive the task CAS and the visible detail from ONE
+        // preflighted SQLite snapshot. Never combine a separate CAS GET with a detail GET.
+        // Read-only viewers keep the legacy detail-only DTO and are not given a write token.
+        const revisioned = process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_WRITE_ENABLED === "true" &&
+          process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_TEMPORAL_WRITE_ENABLED === "true"
+          ? authority.readTemporalStatusPreview(actor.actor,taskId) : null;
+        const detail = revisioned?.detail ?? authority.readTemporalTaskDetail(actor.actor,taskId);
         process.stdout.write(JSON.stringify(detail
-          ? {ok:true,...detail} : {ok:false,reason:"inaccessible"}));
+          ? {ok:true,...detail,...(revisioned ? {expectedRevision:revisioned.expectedRevision} : {})}
+          : {ok:false,reason:"inaccessible"}));
       }
     } finally {
       authority.close();

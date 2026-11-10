@@ -153,7 +153,7 @@ test("the panel reads only for a server-confirmed generation and routes 401 thro
   assert.match(panel,/useTargetWake\(\{/);
   assert.match(panel,/sessionRef\.current\?\.suspend\(\)/);
   // Revalidation tick: an open detail re-reads, a failure (404) replaces the content.
-  assert.match(panel,/useTargetTick\(\(\)=>\{/);
+  assert.match(panel,/useTargetTick\(revalidate\);/);
 });
 
 test("focus management: the panel takes focus on open and Escape/close/backdrop all close it",()=>{
@@ -347,7 +347,7 @@ test("the refusal budget is shared per runtime (gate hook and My Plan)",()=>{
 test("mount rule: page.tsx wiring is checked literally, independent of targetDataNeeded",()=>{
   const page=read("app/page.tsx");
   assert.match(page,/const config = targetUiEnabled\(\) \? targetUiConfig\(process\.env\) : null;/);
-  assert.match(page,/const targetData = targetDataNeeded\(config\);\s*return targetData\s*\?\s*<TargetDataProvider><LumiAppRoot targetMyPlan=\{config\?\.myPlan\} targetScopes=\{config\?\.scopes\} targetDetails=\{config\?\.details\} targetNoteEdit=\{Boolean\(config\?\.details\.note\) && targetNoteEditUiEnabled\(process\.env\)\} targetPrivateNoteAreas=\{Boolean\(config\?\.scopes\.notes\)&&targetPrivateNoteAreaUiEnabled\(process\.env\)\} \/><\/TargetDataProvider>\s*:\s*<LumiAppRoot \/>;/);
+  assert.match(page,/const targetData = targetDataNeeded\(config\);\s*return targetData\s*\?\s*<TargetDataProvider><LumiAppRoot targetMyPlan=\{config\?\.myPlan\} targetScopes=\{config\?\.scopes\} targetDetails=\{config\?\.details\} targetEdits=\{config\?\.edits\} targetNoteEdit=\{Boolean\(config\?\.details\.note\) && targetNoteEditUiEnabled\(process\.env\)\} targetPrivateNoteAreas=\{Boolean\(config\?\.scopes\.notes\)&&targetPrivateNoteAreaUiEnabled\(process\.env\)\} \/><\/TargetDataProvider>\s*:\s*<LumiAppRoot \/>;/);
   // The rule itself, literally: details are no consumer of their own.
   assert.match(read("lib/target-ui-config.ts"),/return config!==null&&\(config\.myPlan\.enabled\|\|config\.scopes\.projects\|\|config\.scopes\.notes\);/);
 });
