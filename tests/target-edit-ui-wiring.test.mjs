@@ -93,3 +93,18 @@ test("legacy write barrier: drag handles, project-page fields and plan time acti
 test("the config type and tests keep `edits` next to `details`",()=>{
   assert.match(read("lib/target-ui-config.ts"),/edits:TargetUiEdits;\n\};/);
 });
+
+test("review regressions: delete carries the visible snapshot, revocation invalidates controls, stale reads cannot override delete",()=>{
+  const edit=read("app/ui/target-detail-edit.tsx");
+  const write=read("lib/target-detail-write.ts");
+  const panel=read("app/ui/target-detail-panel.tsx");
+  assert.match(edit,/kind:"taskDelete",taskId:task\.id,areaId:task\.areaId,base:task/);
+  assert.match(edit,/kind:"noteDelete",noteId:note\.id,areaId:note\.areaId,base:note/);
+  assert.match(write,/sameDeleteSnapshot\(seen\.task,input\.base\)/);
+  assert.match(write,/sameDeleteSnapshot\(seen\.note,input\.base\)/);
+  assert.match(edit,/const checked=verifiedContent===content&&currentContent/);
+  assert.match(edit,/setVerifiedContent\(null\);setAbilities\(NO_ABILITIES\);setCapability\("checking"\)/);
+  assert.match(panel,/onDeleted:\(\)=>\{deletedRef\.current=true;epoch\.current\+\+;\}/);
+  assert.match(panel,/if\(epoch\.current!==id\|\|deletedRef\.current\)return;/);
+  assert.match(panel,/if\(epoch\.current===id&&!deletedRef\.current\)/);
+});
