@@ -76,6 +76,7 @@ const exempt = {
   "POST /api/backups": "creates, restores and lists backups itself",
   "POST /api/backups/import": "is the import itself",
   "POST /api/humanwiki/import": "deny-only HumanWiki entry: always returns 404 before inspecting request properties or body; no data read or persisted write, so the legacy backup restore fence does not apply",
+  "POST /api/humanwiki/withdrawal-intent": "writes only bounded metadata-only non-authorizing withdrawal requests to a dedicated SQLite registry outside the legacy backup scope; default-OFF, real signed owner cookie, live pinned owner-private staging Area ACL and restore generation verified before and after, HMAC-linked per-source CAS and read-only import fence; no legacy snapshot data mutated",
   "POST /api/client-errors": "a browser's error report; no owner data",
   "POST /api/auth/login": "authentication", "POST /api/auth/logout": "authentication",
   "POST /api/auth/passkeys/login/options": "authentication", "POST /api/auth/passkeys/login/verify": "authentication",
