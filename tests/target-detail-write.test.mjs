@@ -20,7 +20,7 @@ function harness(handlers,over={}){
   });
   return {server,controller,committed,refusals:()=>refusals,setOnline:v=>{online=v;}};
 }
-const preflight=()=>({[STATUS_PREFLIGHT]:()=>json(ctx()),[TASK_DETAIL]:()=>json({...taskBody("O"),expectedRevision:REV})});
+const preflight=()=>({[STATUS_PREFLIGHT]:()=>json(ctx()),[TASK_DETAIL]:()=>json(taskBody("O"),200,{"x-lumi-task-revision":REV})});
 const whenPreflight=(whenOn=null)=>json({expectedRevision:REV,expectedPrivateEpoch:1,expectedPlanRevision:null,whenOn,writeAreaId:"area1",restoreGeneration:GEN});
 
 test("reducer: every outcome of a pending write",()=>{
@@ -404,7 +404,7 @@ test("irreversible delete is bound to the detail snapshot, not a newly fetched C
     taskBody("O",{status:"completed",completedAtMs:123456}),
     taskBody("O",{dueOn:"2026-11-11"}),
   ]){
-    const h=harness({...preflight(),[TASK_DETAIL]:()=>json({...current,expectedRevision:REV}),
+    const h=harness({...preflight(),[TASK_DETAIL]:()=>json(current,200,{"x-lumi-task-revision":REV}),
       [TASK_DELETE]:()=>json({ok:true})});
     await h.controller.run({kind:"taskDelete",taskId:TASK,areaId:"area1",base:taskBase,baseRevision:REV});
     assert.equal(h.controller.getState().kind,"conflict");
@@ -430,7 +430,7 @@ test("task delete refuses a changed opaque revision even when every preview fiel
   const h=harness({
     ...preflight(),
     [STATUS_PREFLIGHT]:()=>json(ctx({expectedRevision:newer})),
-    [TASK_DETAIL]:()=>json({...unchanged,expectedRevision:newer}),
+    [TASK_DETAIL]:()=>json(unchanged,200,{"x-lumi-task-revision":newer}),
     [TASK_DELETE]:()=>json({ok:true}),
   });
   await h.controller.run({kind:"taskDelete",taskId:TASK,areaId:"area1",
@@ -446,7 +446,7 @@ test("task delete refuses a changed opaque revision even when every preview fiel
   assert.equal(missing.server.calls.length,0,"missing token must never fetch or dispatch");
 
   const changedAfterPreflight=harness({...preflight(),
-    [TASK_DETAIL]:()=>json({...unchanged,expectedRevision:newer}),
+    [TASK_DETAIL]:()=>json(unchanged,200,{"x-lumi-task-revision":newer}),
     [TASK_DELETE]:()=>json({ok:true})});
   await changedAfterPreflight.controller.run({kind:"taskDelete",taskId:TASK,areaId:"area1",
     base:unchanged.task,baseRevision:REV});
