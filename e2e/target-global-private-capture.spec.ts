@@ -109,3 +109,75 @@ test("uncertain global create never resends after reload",async({page})=>{
   await expect(page.getByTestId("target-private-create-form")).toHaveCount(0);
   expect(writes).toHaveLength(1);
 });
+
+test("focus-trapped desktop detail opens private capture after closing the detail",async({page})=>{
+  await page.setViewportSize({width:1280,height:844});
+  const writes=await setup(page);
+  const id="123e4567-e89b-42d3-a456-426614174001";
+  // The detail may have no readable record; the globally gated action still
+  // belongs in its focus trap and must not leak stale detail text into capture.
+  await page.route("**/api/target-staging/notes/"+id,route=>
+    reply(route,{error:"not-available"},404));
+  await page.goto("/?view=Notes&noteId="+id);
+  const detail=page.getByTestId("target-detail");
+  await expect(detail).toBeVisible();
+  const action=detail.getByTestId("target-detail-capture");
+  await expect(action).toBeVisible();
+  await action.focus();
+  await expect(action).toBeFocused();
+  await action.press("Enter");
+  await expect(detail).toHaveCount(0);
+  await expect(page.getByTestId("target-private-note-areas")).toBeVisible();
+  await expect(page).not.toHaveURL(/noteId=/);
+  await expect(page.getByTestId("target-private-area-select")).toHaveValue("");
+  await fill(page);
+  await page.getByTestId("target-private-create-save").click();
+  await expect(page.getByTestId("target-private-note-areas")).toHaveCount(0);
+  expect(writes).toHaveLength(1);
+});
+test("CREATE in Shared read filter reveals Personal Notes, never changes write Area",async({page})=>{
+  await page.setViewportSize({width:390,height:844});
+  const writes=await setup(page);
+  await page.goto("/?view=Calendar&scope=shared");
+  await page.locator('[data-target-private-capture-fab="mobile"]').click();
+  await fill(page);
+  await page.getByTestId("target-private-create-save").click();
+  await expect(page.getByTestId("target-private-note-areas")).toHaveCount(0);
+  await expect(page.getByTestId("target-scope-switcher")).toHaveAttribute("data-scope","personal");
+  await expect(page.getByTestId("target-scope-list")).toHaveAttribute("data-scope","personal");
+  await expect(page).toHaveURL(/view=Notes/);
+  await expect(page).toHaveURL(/scope=personal/);
+  expect(writes).toHaveLength(1);
+  expect(writes[0].areaId).toBe("private-a");
+});
+test("real cross-document BFCache restore clears private draft, Area and never posts",async({page})=>{
+  await page.setViewportSize({width:390,height:844});
+  const writes=await setup(page);
+  // Use the browser's actual PageTransitionEvent rather than injecting a fake
+  // pagehide/pageshow event. This must detect a genuine cached restoration.
+  await page.addInitScript(()=>{
+    (window as Window & {__lumiBfcacheRestored?:boolean}).__lumiBfcacheRestored=false;
+    window.addEventListener("pageshow",event=>{
+      if(event.persisted)
+        (window as Window & {__lumiBfcacheRestored?:boolean}).__lumiBfcacheRestored=true;
+    });
+  });
+  await page.goto("/?view=Calendar");
+  await page.locator('[data-target-private-capture-fab="mobile"]').click();
+  await fill(page);
+  await page.goto("/robots.txt");
+  await page.goBack({waitUntil:"domcontentloaded"});
+  expect(await page.evaluate(()=>
+    (window as Window & {__lumiBfcacheRestored?:boolean}).__lumiBfcacheRestored)).toBe(true);
+  // The restored component may still exist but must never revive a draft or
+  // Area from the old page. A fresh session check is required before display.
+  const modal=page.getByTestId("target-private-note-areas");
+  if(await modal.count()===0)
+    await page.locator('[data-target-private-capture-fab="mobile"]').click();
+  await expect(page.getByTestId("target-private-area-select")).toHaveValue("");
+  await expect(modal).not.toContainText("Citlivý text nezůstane po offline");
+  await page.getByTestId("target-private-area-select").selectOption("private-a");
+  await expect(page.getByTestId("target-private-create-form")
+    .getByRole("textbox",{name:"Název"})).toHaveValue("");
+  expect(writes).toHaveLength(0);
+});
