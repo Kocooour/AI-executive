@@ -271,11 +271,14 @@ function ConflictKept({api,kind,current}:{
 }
 
 /** Inline delete with an explicit confirm step; the safe choice (cancel) has the focus. */
-function DeleteControl({api,label,confirmText,onDelete}:{
-  api:DetailEditApi;label:string;confirmText:string;onDelete:()=>void;
+function DeleteControl<T extends TaskPreview|NotePreview>({api,label,confirmText,base,onDelete}:{
+  api:DetailEditApi;label:string;confirmText:string;base:T;onDelete:(base:T)=>void;
 }){
   const {copy}=api;
-  const [asking,setAsking]=useState(false);
+  // Pin the item and confirmation wording at the moment the user starts confirming.
+  // A background refresh must never substitute a newly changed item underneath this dialog.
+  const [confirmation,setConfirmation]=useState<{base:T;text:string}|null>(null);
+  const asking=confirmation!==null;
   const trigger=useRef<HTMLButtonElement|null>(null);
   const cancel=useRef<HTMLButtonElement|null>(null);
   const [restore,setRestore]=useState(false);
@@ -283,19 +286,19 @@ function DeleteControl({api,label,confirmText,onDelete}:{
     if(asking)cancel.current?.focus();
     else if(restore){trigger.current?.focus();setRestore(false);}
   },[asking,restore]);
-  const close=()=>{setAsking(false);setRestore(true);};
+  const close=()=>{setConfirmation(null);setRestore(true);};
   const off=busy(api.state)||!api.online;
   if(!asking)
     return <button type="button" ref={trigger} className="targetDetailEditDanger"
-      data-testid="target-detail-edit-delete" disabled={off} onClick={()=>setAsking(true)}>{label}</button>;
-  return <div role="group" aria-label={confirmText} className="targetDetailEditConfirm"
+      data-testid="target-detail-edit-delete" disabled={off} onClick={()=>setConfirmation({base,text:confirmText})}>{label}</button>;
+  return <div role="group" aria-label={confirmation.text} className="targetDetailEditConfirm"
     data-testid="target-detail-edit-confirm" onKeyDown={escapeTo(close)}>
-    <p>{confirmText}</p>
+    <p>{confirmation.text}</p>
     <div className="targetDetailEditActions">
       <button type="button" ref={cancel} data-testid="target-detail-edit-confirm-cancel"
         onClick={close}>{copy.confirmCancel}</button>
       <button type="button" className="targetDetailEditDanger" data-testid="target-detail-edit-confirm-yes"
-        disabled={off} onClick={()=>{setAsking(false);onDelete();}}>{copy.confirmDelete}</button>
+        disabled={off} onClick={()=>{const approved=confirmation.base;setConfirmation(null);onDelete(approved);}}>{copy.confirmDelete}</button>
     </div>
   </div>;
 }
@@ -384,8 +387,8 @@ export function TaskEdits({api,task}:{api:DetailEditApi;task:TaskPreview}){
     </div>}
     <ConflictKept api={api} kind="title" current={{title:task.title,body:""}}/>
     {flags.taskDelete&&<DeleteControl api={api} label={copy.deleteTask}
-      confirmText={copy.confirmDeleteTask(task.title)}
-      onDelete={()=>api.run({kind:"taskDelete",taskId:task.id,areaId:task.areaId,base:task})}/>}
+      confirmText={copy.confirmDeleteTask(task.title)} base={task}
+      onDelete={base=>api.run({kind:"taskDelete",taskId:base.id,areaId:base.areaId,base})}/>}
     <Feedback api={api}/>
   </div>;
 }
@@ -464,8 +467,8 @@ export function NoteEdits({api,note}:{api:DetailEditApi;note:NotePreview}){
     {flags.noteEdit&&!(state.kind==="conflict"&&api.draft.kept)&&<div className="targetDetailEditRow"><NoteEditor api={api} note={note}/></div>}
     <ConflictKept api={api} kind="note" current={{title:note.title,body:note.body}}/>
     {flags.noteDelete&&<DeleteControl api={api} label={copy.deleteNote}
-      confirmText={copy.confirmDeleteNote(note.title)}
-      onDelete={()=>api.run({kind:"noteDelete",noteId:note.id,areaId:note.areaId,base:note})}/>}
+      confirmText={copy.confirmDeleteNote(note.title)} base={note}
+      onDelete={base=>api.run({kind:"noteDelete",noteId:base.id,areaId:base.areaId,base})}/>}
     <Feedback api={api}/>
   </div>;
 }
