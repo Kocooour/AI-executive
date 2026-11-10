@@ -22,7 +22,7 @@ const whenWrite={
   AI_EXECUTIVE_TARGET_STAGING_HTTP_PERSONAL_WHEN_WRITE_ENABLED:T,
 };
 const off={enabled:false,statusWrite:false,whenWrite:false};
-const off3={enabled:false,projects:false,notes:false};
+const off3={enabled:false,projects:false,notes:false,noteDetail:false,noteEdit:false};
 
 test("default env: target UI off, no config at all",()=>{
   assert.equal(targetUiConfig({}),null);
@@ -80,9 +80,9 @@ const projectsFlag={AI_EXECUTIVE_TARGET_STAGING_HTTP_GLOBAL_PROJECTS_ENABLED:T};
 const notesFlag={AI_EXECUTIVE_TARGET_STAGING_HTTP_GLOBAL_NOTES_ENABLED:T};
 
 test("R3-FE-3: switcher needs all three flags exactly true, independent of My Plan",()=>{
-  assert.deepEqual(targetUiConfig(scopesOnly),{myPlan:off,scopes:{enabled:true,projects:false,notes:false}});
+  assert.deepEqual(targetUiConfig(scopesOnly),{myPlan:off,scopes:{enabled:true,projects:false,notes:false,noteDetail:false,noteEdit:false}});
   assert.deepEqual(targetUiConfig({...base,...scopesOnly}),
-    {myPlan:{...off,enabled:true},scopes:{enabled:true,projects:false,notes:false}});
+    {myPlan:{...off,enabled:true},scopes:{enabled:true,projects:false,notes:false,noteDetail:false,noteEdit:false}});
   assert.equal(TARGET_UI_SCOPES_FLAGS.length,3);
   for(const name of TARGET_UI_SCOPES_FLAGS){
     const env={...scopesOnly,...projectsFlag,...notesFlag};
@@ -96,9 +96,9 @@ test("R3-FE-3: switcher needs all three flags exactly true, independent of My Pl
 });
 
 test("R3-FE-3: Projects and Notes are enabled per view by their own dedicated-index flag",()=>{
-  assert.deepEqual(targetUiConfig({...scopesOnly,...projectsFlag}).scopes,{enabled:true,projects:true,notes:false});
-  assert.deepEqual(targetUiConfig({...scopesOnly,...notesFlag}).scopes,{enabled:true,projects:false,notes:true});
-  assert.deepEqual(targetUiConfig({...scopesOnly,...projectsFlag,...notesFlag}).scopes,{enabled:true,projects:true,notes:true});
+  assert.deepEqual(targetUiConfig({...scopesOnly,...projectsFlag}).scopes,{enabled:true,projects:true,notes:false,noteDetail:false,noteEdit:false});
+  assert.deepEqual(targetUiConfig({...scopesOnly,...notesFlag}).scopes,{enabled:true,projects:false,notes:true,noteDetail:false,noteEdit:false});
+  assert.deepEqual(targetUiConfig({...scopesOnly,...projectsFlag,...notesFlag}).scopes,{enabled:true,projects:true,notes:true,noteDetail:false,noteEdit:false});
   // A list flag alone, without the switcher flag, enables nothing.
   const noSwitcher={...scopesOnly,...projectsFlag,...notesFlag};
   delete noSwitcher.AI_EXECUTIVE_TARGET_UI_SCOPES_ENABLED;
@@ -107,7 +107,24 @@ test("R3-FE-3: Projects and Notes are enabled per view by their own dedicated-in
     assert.equal(targetUiConfig({...scopesOnly,AI_EXECUTIVE_TARGET_STAGING_HTTP_GLOBAL_PROJECTS_ENABLED:bad}).scopes.projects,false,bad);
   // The combined index flag is no longer used by the lists.
   assert.deepEqual(targetUiConfig({...scopesOnly,AI_EXECUTIVE_TARGET_STAGING_HTTP_GLOBAL_COMBINED_ENABLED:T}).scopes,
-    {enabled:true,projects:false,notes:false});
+    {enabled:true,projects:false,notes:false,noteDetail:false,noteEdit:false});
+});
+
+test("R3-FE-4: note detail and edit require their own UI and server flags",()=>{
+  const initial={...scopesOnly,...notesFlag};
+  const detail={...initial,AI_EXECUTIVE_TARGET_UI_NOTE_DETAIL_ENABLED:T,
+    AI_EXECUTIVE_TARGET_STAGING_HTTP_NOTES_ENABLED:T};
+  assert.equal(targetUiConfig(initial).scopes.noteDetail,false);
+  assert.equal(targetUiConfig(detail).scopes.noteDetail,true);
+  assert.equal(targetUiConfig(detail).scopes.noteEdit,false);
+  const edit={...detail,AI_EXECUTIVE_TARGET_UI_NOTE_EDIT_ENABLED:T,
+    AI_EXECUTIVE_TARGET_STAGING_HTTP_WRITE_ENABLED:T,
+    AI_EXECUTIVE_TARGET_STAGING_HTTP_NOTES_WRITE_ENABLED:T};
+  assert.equal(targetUiConfig(edit).scopes.noteEdit,true);
+  for(const name of ["AI_EXECUTIVE_TARGET_UI_NOTE_EDIT_ENABLED",
+    "AI_EXECUTIVE_TARGET_STAGING_HTTP_WRITE_ENABLED",
+    "AI_EXECUTIVE_TARGET_STAGING_HTTP_NOTES_WRITE_ENABLED"])
+    assert.equal(targetUiConfig({...edit,[name]:undefined}).scopes.noteEdit,false,name);
 });
 
 test("R3-FE-3: the My Plan flags alone never enable scopes (and vice versa)",()=>{

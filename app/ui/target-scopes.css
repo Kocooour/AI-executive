@@ -29,6 +29,19 @@
 .targetScopeGroup[data-area-kind="shared"]{background:#DBEAFE;}
 .targetScopeRow{min-height:44px;display:flex;align-items:center;padding:8px 12px;
   font-size:17px;font-weight:650;line-height:1.35;overflow-wrap:anywhere;}
+.targetScopeRow .targetScopeLink{display:block;width:100%;min-height:44px;padding:8px 0;
+  text-align:left;border:0;background:transparent;color:inherit;font:inherit;font-weight:inherit;cursor:pointer;}
+.targetScopeLink:focus-visible,.targetNoteDetail button:focus-visible{outline:3px solid #7c3aed;outline-offset:3px;}
+.targetNoteDetail{display:grid;gap:16px;justify-items:start;padding:4px 0 28px;max-width:720px;}
+.targetNoteDetail article{width:100%;overflow-wrap:anywhere;}
+.targetNoteDetail article pre{white-space:pre-wrap;font:inherit;overflow-wrap:anywhere;}
+.targetNoteDetail form{display:grid;gap:16px;}
+.targetNoteDetail label{display:grid;gap:6px;font-weight:600;}
+.targetNoteDetail input,.targetNoteDetail textarea{box-sizing:border-box;width:100%;padding:10px;
+  font:inherit;color:inherit;background:var(--surface,#fff);border:1px solid var(--line,#9da99e);border-radius:8px;}
+.targetNoteDetail textarea{min-height:220px;resize:vertical;}
+.targetNoteDetail button{font:inherit;min-height:44px;padding:8px 14px;border:1px solid var(--line,#9da99e);
+  border-radius:10px;background:var(--surface,#fff);color:inherit;cursor:pointer;margin-right:8px;}
 :root[data-theme="dark"] .targetScopeOption{--scope-color:#A78BFA;}
 :root[data-theme="dark"] .targetScopeOption[data-scope-option="personal"]{--scope-color:#4ADE80;}
 :root[data-theme="dark"] .targetScopeOption[data-scope-option="shared"]{--scope-color:#60A5FA;}

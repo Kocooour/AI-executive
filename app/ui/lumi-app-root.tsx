@@ -32,7 +32,7 @@ const TargetMyPlan = dynamic(() => import("./target-my-plan"), { ssr: false });
 const TargetScopeSwitcher = dynamic(() => import("./target-scope-switcher"), { ssr: false });
 const TargetScopeLists = dynamic(() => import("./target-scope-lists"), { ssr: false });
 
-export type TargetScopesProps = { enabled: boolean; projects: boolean; notes: boolean };
+export type TargetScopesProps = { enabled: boolean; projects: boolean; notes: boolean; noteDetail: boolean; noteEdit: boolean };
 export type TargetMyPlanProps = { enabled: boolean; statusWrite: boolean; whenWrite: boolean };
 
 export function LumiAppRoot({ targetMyPlan, targetScopes }: { targetMyPlan?: TargetMyPlanProps; targetScopes?: TargetScopesProps } = {}) {
@@ -148,7 +148,8 @@ export function LumiAppRoot({ targetMyPlan, targetScopes }: { targetMyPlan?: Tar
           {targetPlan && targetMyPlan
             ? <TargetMyPlan gates={targetMyPlan} language={language} scopeDriven={scopesOn} />
             : scopeList
-              ? <TargetScopeLists key={scopeList} kind={scopeList} language={language} />
+              ? <TargetScopeLists key={scopeList} kind={scopeList} language={language}
+                  noteDetail={targetScopes?.noteDetail} noteEdit={targetScopes?.noteEdit} />
               : <EntityList app={app} />}
           {view === "Today" && !targetPlan && <TodayFooter app={app} />}
         </div>

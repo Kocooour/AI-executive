@@ -25,7 +25,7 @@ export const TARGET_UI_SCOPES_PROJECTS_FLAG="AI_EXECUTIVE_TARGET_STAGING_HTTP_GL
 export const TARGET_UI_SCOPES_NOTES_FLAG="AI_EXECUTIVE_TARGET_STAGING_HTTP_GLOBAL_NOTES_ENABLED";
 export type TargetUiConfig={
   myPlan:{enabled:boolean;statusWrite:boolean;whenWrite:boolean};
-  scopes:{enabled:boolean;projects:boolean;notes:boolean};
+  scopes:{enabled:boolean;projects:boolean;notes:boolean;noteDetail:boolean;noteEdit:boolean};
 };
 
 export function targetUiConfig(env:TargetUiEnv):TargetUiConfig|null {
@@ -36,6 +36,15 @@ export function targetUiConfig(env:TargetUiEnv):TargetUiConfig|null {
     enabled:scopes,
     projects:scopes&&env[TARGET_UI_SCOPES_PROJECTS_FLAG]==="true",
     notes:scopes&&env[TARGET_UI_SCOPES_NOTES_FLAG]==="true",
+    noteDetail:scopes&&env[TARGET_UI_SCOPES_NOTES_FLAG]==="true"&&
+      env.AI_EXECUTIVE_TARGET_UI_NOTE_DETAIL_ENABLED==="true"&&
+      env.AI_EXECUTIVE_TARGET_STAGING_HTTP_NOTES_ENABLED==="true",
+    noteEdit:scopes&&env[TARGET_UI_SCOPES_NOTES_FLAG]==="true"&&
+      env.AI_EXECUTIVE_TARGET_UI_NOTE_DETAIL_ENABLED==="true"&&
+      env.AI_EXECUTIVE_TARGET_UI_NOTE_EDIT_ENABLED==="true"&&
+      env.AI_EXECUTIVE_TARGET_STAGING_HTTP_NOTES_ENABLED==="true"&&
+      env.AI_EXECUTIVE_TARGET_STAGING_HTTP_WRITE_ENABLED==="true"&&
+      env.AI_EXECUTIVE_TARGET_STAGING_HTTP_NOTES_WRITE_ENABLED==="true",
   },myPlan:{
     enabled,
     // Write affordances exist only inside an enabled My Plan; each write gate

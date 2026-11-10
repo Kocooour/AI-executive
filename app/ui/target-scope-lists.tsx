@@ -22,6 +22,8 @@ import {
 } from "../../lib/target-staging-global-index-lifecycle";
 import {groupIndexRowsByArea} from "../../lib/target-scope-rows";
 import {scopesCopy,type ScopesLanguage} from "../../lib/target-scopes-copy";
+import {noteHash,noteIdFromHash} from "../../lib/target-note-detail-navigation";
+import TargetNoteDetail from "./target-note-detail";
 import "./target-scopes.css";
 
 type Session=NonNullable<ReturnType<typeof useScopeSession>>;
@@ -36,8 +38,8 @@ function useScopeSession(kind:"project"|"note",scope:"all"|"personal"|"shared"){
   return useTargetSession(contextVersion=>createKindIndexReadSession(kind,{scope,contextVersion}),[kind,scope]);
 }
 
-export default function TargetScopeLists({kind,language="cs"}:{
-  kind:"project"|"note";language?:ScopesLanguage;
+export default function TargetScopeLists({kind,language="cs",noteDetail=false,noteEdit=false}:{
+  kind:"project"|"note";language?:ScopesLanguage;noteDetail?:boolean;noteEdit?:boolean;
 }){
   const copy=scopesCopy[language];
   const scope=useTargetScope();
@@ -45,14 +47,55 @@ export default function TargetScopeLists({kind,language="cs"}:{
   const session=useScopeSession(kind,scope);
   const [state,setState]=useState<State>({kind:"idle"});
   const [nonce,setNonce]=useState(0);
+  const [detailId,setDetailId]=useState<string|null>(()=>
+    typeof window!=="undefined"&&kind==="note"&&noteDetail?noteIdFromHash(window.location.hash):null);
+  const detailRef=useRef(detailId);detailRef.current=detailId;
   const epoch=useRef(0);
   const sessionRef=useRef(session);
   sessionRef.current=session;
   const statusRef=useRef<HTMLParagraphElement>(null);
+  const returnFocusId=useRef<string|null>(null);
   const wakeGate=useRef(initialGlobalIndexWakeGate());
   const refusalRef=useRef(onRefusal);
   refusalRef.current=onRefusal;
   const ready=gate.kind==="ready";
+
+  useEffect(()=>{
+    if(kind!=="note"||!noteDetail)return;
+    const follow=()=>{
+      const next=noteIdFromHash(window.location.hash);
+      if(detailRef.current&&!next)returnFocusId.current=detailRef.current;
+      setState({kind:"idle"});setDetailId(next);
+    };
+    window.addEventListener("popstate",follow);
+    window.addEventListener("hashchange",follow);
+    window.addEventListener("lumi-target-detail-changed",follow);
+    return ()=>{
+      window.removeEventListener("popstate",follow);
+      window.removeEventListener("hashchange",follow);
+      window.removeEventListener("lumi-target-detail-changed",follow);
+    };
+  },[kind,noteDetail]);
+
+  function openNote(id:string){
+    try{
+      returnFocusId.current=id;
+      window.history.pushState({...window.history.state,targetNoteFromList:true},"",
+        `${window.location.pathname}${window.location.search}${noteHash(id)}`);
+      setState({kind:"idle"});
+      setDetailId(id);
+    }catch{/* A blocked history entry leaves the safe list intact. */}
+  }
+  function closeNote(){
+    returnFocusId.current=detailId;
+    if(window.history.state?.targetNoteFromList){window.history.back();return;}
+    try{
+      window.history.replaceState(window.history.state,"",
+        `${window.location.pathname}${window.location.search}`);
+    }catch{/* The detail can still be concealed locally. */}
+    setState({kind:"idle"});
+    setDetailId(null);
+  }
 
   useEffect(()=>{
     if(state.kind==="error"&&state.reason==="signed-out")refusalRef.current();
@@ -61,7 +104,7 @@ export default function TargetScopeLists({kind,language="cs"}:{
   // First page of the selected scope; reruns for a new session (scope or
   // generation change) and for an explicit reload / wake.
   useEffect(()=>{
-    if(!session||!ready)return;
+    if(!session||!ready||detailId)return;
     const id=++epoch.current;
     if(document.visibilityState==="hidden"||!navigator.onLine){
       setState({kind:"error",reason:navigator.onLine?"hidden":"offline"});
@@ -75,7 +118,7 @@ export default function TargetScopeLists({kind,language="cs"}:{
       else setState({kind:"error",reason:result.reason==="busy"||result.reason==="not-ready"?"stale":result.reason});
     }).catch(()=>{if(epoch.current===id)setState({kind:"error",reason:"unavailable"});});
     return ()=>{epoch.current++;};
-  },[session,ready,nonce]);
+  },[session,ready,nonce,detailId]);
 
   // Privacy: titles never stay on screen while the tab is hidden or offline.
   useEffect(()=>{
@@ -134,6 +177,19 @@ export default function TargetScopeLists({kind,language="cs"}:{
     else setState({kind:"error",reason:result.reason==="busy"||result.reason==="not-ready"?"stale":result.reason});
   }
 
+  useEffect(()=>{
+    if(detailId||state.kind!=="ready"||state.session!==session||
+      state.rowKind!==kind||state.page.scope!==scope||!returnFocusId.current)return;
+    const wanted=returnFocusId.current;
+    const frame=requestAnimationFrame(()=>{
+      const row=[...document.querySelectorAll<HTMLButtonElement>(".targetScopeLink")]
+        .find(button=>button.dataset.noteId===wanted);
+      (row??statusRef.current)?.focus();
+      returnFocusId.current=null;
+    });
+    return ()=>cancelAnimationFrame(frame);
+  },[detailId,state,session,kind,scope]);
+
   if(gate.kind==="checking")
     return <div className="targetScopeGate" data-testid="target-scope-checking">
       <p role="status">{copy.gateChecking}</p>
@@ -154,6 +210,10 @@ export default function TargetScopeLists({kind,language="cs"}:{
         language={language} failure={gate.kind==="signed_out"?"signed-out":undefined}
         onAction={retry}/>
     </div>;
+
+  if(kind==="note"&&noteDetail&&detailId)
+    return <TargetNoteDetail key={detailId+":"+scope} noteId={detailId} scope={scope}
+      language={language} editEnabled={noteEdit} onBack={closeNote} onRefusal={onRefusal}/>;
 
   // Rows are shown only for the CURRENT session and scope: right after a scope
   // change the previous scope's rows are already gone from this render.
@@ -179,7 +239,11 @@ export default function TargetScopeLists({kind,language="cs"}:{
       :groups.map(group=><ul key={group.areaId} className="targetScopeGroup"
         data-area-kind={group.areaKind}
         aria-label={group.areaKind==="private"?copy.groupPersonal:copy.groupShared}>
-        {group.items.map(entry=><li key={entry.item.id} className="targetScopeRow">{entry.item.title}</li>)}
+        {group.items.map(entry=><li key={entry.item.id} className="targetScopeRow">
+          {kind==="note"&&noteDetail
+            ?<button className="targetScopeLink" data-note-id={entry.item.id} type="button" onClick={()=>openNote(entry.item.id)}>{entry.item.title}</button>
+            :entry.item.title}
+        </li>)}
       </ul>))}
     {page&&page.hasMore&&state.kind==="ready"&&<button type="button" disabled={state.more}
       onClick={()=>{statusRef.current?.focus();void more();}}>
