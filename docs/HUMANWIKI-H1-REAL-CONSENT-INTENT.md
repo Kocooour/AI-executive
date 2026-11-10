@@ -1,7 +1,7 @@
 # HumanWiki H1-real.3a — zdrojově oddělené záměry souhlasu (příprava)
 
 **Stav:** implementovaný lokální SQLite registr **záměrů**, nikoli účinný souhlas pro import.
-Navazuje na H1-real.2 ([PR #374](https://github.com/Kocooour/AI-executive/pull/374)), který ověřuje skutečnou owner-private Oblast; #374 je samostatnou závislostí před budoucím propojením zapisovače se serverovou autentizací. Tato iterace nepřidává HTTP route, tlačítko v UI, operátorský nástroj pro reálné údaje ani právo nahrát export.
+Navazuje na H1-real.2 ([sloučený PR #374](https://github.com/Kocooour/AI-executive/pull/374)), který ověřuje skutečnou owner-private Oblast; jeho read-only preflight však není write-time autorizací záměrů souhlasu. Tato iterace nepřidává HTTP route, tlačítko v UI, operátorský nástroj pro reálné údaje ani právo nahrát export.
 
 ## Rozsah
 
