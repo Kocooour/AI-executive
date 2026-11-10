@@ -4,7 +4,9 @@ import { useEffect, useRef, useState } from "react";
 import { TargetSidebarContext } from "./target-sidebar-context";
 import { LegacyWritesContext } from "./legacy-writes-context";
 import { useLumiApp } from "./use-lumi-app";
-import { expectFocusReturn, focusPendingRow, useTargetSearch } from "./target-detail-state";
+import { closeTargetDetail, expectFocusReturn, focusPendingRow, useTargetSearch } from "./target-detail-state";
+import { writeTargetScope } from "./target-scope-state";
+import { scopeFromSearch } from "../../lib/view-url";
 import { detailActivation, detailRouteKey, isParentOf, isTargetAddress, viewOfSearch, type DetailActivation } from "../../lib/target-detail-route";
 import { activeTargetViewFor, detailsActive, targetViewsFor } from "../../lib/target-shell-views";
 import { detailCopy } from "../../lib/target-detail-copy";
@@ -57,6 +59,7 @@ export function LumiAppRoot({ targetMyPlan, targetScopes, targetDetails, targetN
   const targetCapture=Boolean(scopesOn&&targetScopes?.notes&&targetPrivateNoteAreas&&
     targetPrivateNoteCreate&&mobileDesignV1Preview);
   const [areaChooserOpen,setAreaChooserOpen]=useState(false);
+  const [captureAfterDetailClose,setCaptureAfterDetailClose]=useState(false);
   const areaChooserOpener=useRef<HTMLElement|null>(null);
   const [noteListRevision,setNoteListRevision]=useState(0);
   const detailGates = { task: Boolean(targetDetails?.task), project: Boolean(targetDetails?.project), note: Boolean(targetDetails?.note) };
@@ -83,10 +86,21 @@ export function LumiAppRoot({ targetMyPlan, targetScopes, targetDetails, targetN
   useEffect(()=>{
     if(!targetCapture)setAreaChooserOpen(false);
   },[view,scopesOn,targetPrivateNoteAreas,targetCapture]);
-  function openAreaChooser(){
-    if(!targetPrivateNoteAreas||areaChooserOpen||app.offlineView||app.capture||
-      app.moreOpen||app.assistantOpen||app.confirmRequest||
-      document.querySelector('[aria-modal="true"]'))return;
+  function openAreaChooser(fromTargetDetail=false){
+    if(!targetPrivateNoteAreas||areaChooserOpen||captureAfterDetailClose||
+      app.offlineView||app.capture||app.moreOpen||app.assistantOpen||
+      app.confirmRequest||document.visibilityState!=="visible"||!navigator.onLine)return;
+    // Other dialogs must never be bypassed. The target detail is the one
+    // exception: first close it as a history step, THEN mount capture.
+    if(document.querySelector('[aria-modal="true"]:not([data-testid="target-detail"])'))return;
+    if(detailPanel){
+      if(!fromTargetDetail||!targetCapture)return;
+      areaChooserOpener.current=null; // its button unmounts; use the live FAB on dismiss
+      setCaptureAfterDetailClose(true);
+      closeTargetDetail(detailRoute);
+      return;
+    }
+    if(document.querySelector('[aria-modal="true"]'))return;
     areaChooserOpener.current=document.activeElement instanceof HTMLElement
       ?document.activeElement:null;
     setAreaChooserOpen(true);
@@ -105,6 +119,11 @@ export function LumiAppRoot({ targetMyPlan, targetScopes, targetDetails, targetN
   function createdPrivateNote(){
     closeAreaChooser();
     setNoteListRevision(v=>v+1);
+    // Write Area is always explicit/private. If the user was reading only
+    // Shared, show the authorized Personal read scope after successful CREATE
+    // rather than an empty Shared Notes list. A scope is never write consent.
+    if(targetCapture&&scopeFromSearch(window.location.search)==="shared")
+      writeTargetScope("personal");
     // Never append a client-fabricated row. Re-read the authorized Notes index.
     if(targetCapture&&view!=="Notes")app.setView("Notes");
   }
@@ -114,6 +133,15 @@ export function LumiAppRoot({ targetMyPlan, targetScopes, targetDetails, targetN
   const detailPanel = detailsOn && activation.state !== "none";
   const detailRoute = activation.state === "route" ? activation.route : null;
   const detailKey = detailRoute !== null ? detailRouteKey(detailRoute) : activation.state;
+  useEffect(()=>{
+    if(!captureAfterDetailClose||detailPanel)return;
+    setCaptureAfterDetailClose(false);
+    if(targetCapture&&document.visibilityState==="visible"&&navigator.onLine&&
+      !app.offlineView&&!app.capture&&!app.moreOpen&&!app.assistantOpen&&
+      !app.confirmRequest&&!document.querySelector('[aria-modal="true"]'))
+      setAreaChooserOpen(true);
+  },[captureAfterDetailClose,detailPanel,targetCapture,app.offlineView,app.capture,
+    app.moreOpen,app.assistantOpen,app.confirmRequest]);
   // After a detail closed (Close, Back, Forward), focus returns to the row that opened it;
   // opening a deeper detail (project -> its task) never returns focus to the list.
   const previousRoute = useRef<typeof detailRoute>(null);
@@ -279,7 +307,9 @@ export function LumiAppRoot({ targetMyPlan, targetScopes, targetDetails, targetN
         <TargetPrivateNoteAreaChooser language={language} createEnabled={targetPrivateNoteCreate}
           onClose={closeAreaChooser} onCreated={createdPrivateNote} />}
       {!(scopesOn && targetView) && <DetailPanel app={app} />}
-      {detailPanel && <TargetDetailPanel route={detailRoute} language={language} gates={detailGates} noteEdit={targetNoteEdit && detailGates.note} />}
+      {detailPanel && <TargetDetailPanel route={detailRoute} language={language} gates={detailGates}
+        noteEdit={targetNoteEdit && detailGates.note}
+        onPrivateCapture={targetCapture?()=>openAreaChooser(true):undefined} />}
       <AssistantPanel app={app} />
       <DeferPopover app={app} />
       <ConfirmDialog app={app} />
