@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import {test} from "node:test";
 import {readFileSync} from "node:fs";
 import {
-  noteEditReloadMarker,reserveNoteEditReload,confirmNoteEditReload,
+  noteEditReloadMarker,reserveNoteEditReload,confirmNoteEditReload,rejectFreshNoteEditReload,
 } from "../lib/target-note-edit-reload.ts";
 import {
   recoverNoteEditAfterReload,NOTE_EDIT_RECOVERY_TIMEOUT_MS,
@@ -36,6 +36,15 @@ test("only UUID and server generation survive a simulated reload; changed UUID c
   assert.equal(confirmNoteEditReload(A,other),false);
   assert.deepEqual(noteEditReloadMarker(A),{kind:"blocked",commandId:id});
   assert.equal(confirmNoteEditReload(A,id),true);
+  assert.deepEqual(noteEditReloadMarker(A),{kind:"clear"});
+});
+
+test("definitive first-PATCH rejection can release only its own UUID",()=>{
+  data.clear();
+  assert.equal(reserveNoteEditReload(A,id),true);
+  assert.equal(rejectFreshNoteEditReload(A,other),false);
+  assert.deepEqual(noteEditReloadMarker(A),{kind:"blocked",commandId:id});
+  assert.equal(rejectFreshNoteEditReload(A,id),true);
   assert.deepEqual(noteEditReloadMarker(A),{kind:"clear"});
 });
 
@@ -122,5 +131,7 @@ test("UI wiring retains main shared detail and unrelated reads while only writes
   assert.match(editor,/reserveNoteEditReload\(boundGeneration\.current,command\.commandId\)/);
   assert.match(editor,/recoverNoteEditAfterReload\(marker\.commandId,signal\.signal\)/);
   assert.match(editor,/confirmNoteEditReload\(boundGeneration\.current,marker\.commandId\)/);
+  assert.match(editor,/rejectFreshNoteEditReload/);
+  assert.match(editor,/ambiguousCommands/);
   assert.doesNotMatch(panel,/noteEditReloadMarker/,"read-only detail is independent of write recovery");
 });
