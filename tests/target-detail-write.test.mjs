@@ -166,14 +166,14 @@ test("When: preflight reporting the same date is a quiet no-op (idle), not an er
 
 test("delete task / note edit / delete note commit without Undo and report `deleted` correctly",async()=>{
   const a=harness({...preflight(),[TASK_DELETE]:()=>json({ok:true})});
-  await a.controller.run({kind:"taskDelete",taskId:TASK,areaId:"area1"});
+  await a.controller.run({kind:"taskDelete",taskId:TASK,areaId:"area1",base:taskBody("O").task});
   assert.deepEqual(a.controller.getState(),{kind:"committed",write:"taskDelete",undoable:false,undone:false,deleted:true});
   assert.deepEqual(a.committed,[{write:"taskDelete",deleted:true}]);
   const b=harness({[NOTE_PREFLIGHT]:()=>json(ctx()),[NOTE_DETAIL]:()=>json(noteBody()),[NOTE_EDIT]:()=>json({ok:true})});
   await b.controller.run({kind:"noteEdit",noteId:NOTE,areaId:"area1",title:"T",body:"B",baseTitle:"T0",baseBody:"B0"});
   assert.deepEqual([b.controller.getState().kind,b.controller.getState().deleted],["committed",false]);
-  const c=harness({[NOTE_PREFLIGHT]:()=>json(ctx()),[NOTE_DELETE]:()=>json({ok:true})});
-  await c.controller.run({kind:"noteDelete",noteId:NOTE,areaId:"area1"});
+  const c=harness({[NOTE_PREFLIGHT]:()=>json(ctx()),[NOTE_DETAIL]:()=>json(noteBody()),[NOTE_DELETE]:()=>json({ok:true})});
+  await c.controller.run({kind:"noteDelete",noteId:NOTE,areaId:"area1",base:noteBody().note});
   assert.deepEqual([c.controller.getState().kind,c.controller.getState().deleted],["committed",true]);
 });
 
@@ -181,9 +181,9 @@ test("conflict (409) per kind: nothing is overwritten, no receipt, no retry",asy
   const cases=[
     [{kind:"taskTitle",taskId:TASK,areaId:"area1",title:"N",baseTitle:"O"},{...preflight(),[TITLE]:()=>json({error:"Revision conflict"},409)},TITLE],
     [{kind:"taskStatus",taskId:TASK,areaId:"area1",status:"completed"},{...preflight(),[STATUS_PATCH]:()=>json({error:"x"},409)},STATUS_PATCH],
-    [{kind:"taskDelete",taskId:TASK,areaId:"area1"},{...preflight(),[TASK_DELETE]:()=>json({error:"x",code:"stale_revision"},409)},TASK_DELETE],
+    [{kind:"taskDelete",taskId:TASK,areaId:"area1",base:taskBody("O").task},{...preflight(),[TASK_DELETE]:()=>json({error:"x",code:"stale_revision"},409)},TASK_DELETE],
     [{kind:"noteEdit",noteId:NOTE,areaId:"area1",title:"T",body:"B",baseTitle:"T0",baseBody:"B0"},{[NOTE_PREFLIGHT]:()=>json(ctx()),[NOTE_DETAIL]:()=>json(noteBody()),[NOTE_EDIT]:()=>json({error:"x"},409)},NOTE_EDIT],
-    [{kind:"noteDelete",noteId:NOTE,areaId:"area1"},{[NOTE_PREFLIGHT]:()=>json(ctx()),[NOTE_DELETE]:()=>json({error:"x"},409)},NOTE_DELETE],
+    [{kind:"noteDelete",noteId:NOTE,areaId:"area1",base:noteBody().note},{[NOTE_PREFLIGHT]:()=>json(ctx()),[NOTE_DETAIL]:()=>json(noteBody()),[NOTE_DELETE]:()=>json({error:"x"},409)},NOTE_DELETE],
   ];
   for(const [input,handlers,key] of cases){
     const h=harness(handlers);
@@ -395,4 +395,31 @@ test("optimistic concurrency on what the user saw: a changed title or note is a 
   await gone.controller.run({kind:"taskTitle",taskId:TASK,areaId:"area1",title:"Mine",baseTitle:"O"});
   assert.equal(gone.controller.getState().kind,"conflict");
   assert.equal(gone.server.count(TITLE),0);
+});
+
+test("irreversible delete is bound to the detail snapshot, not a newly fetched CAS alone",async()=>{
+  const taskBase=taskBody("O").task;
+  for(const current of [
+    taskBody("Edited in another tab"),
+    taskBody("O",{status:"completed",completedAtMs:123456}),
+    taskBody("O",{dueOn:"2026-11-11"}),
+  ]){
+    const h=harness({...preflight(),[TASK_DETAIL]:()=>json(current),
+      [TASK_DELETE]:()=>json({ok:true})});
+    await h.controller.run({kind:"taskDelete",taskId:TASK,areaId:"area1",base:taskBase});
+    assert.equal(h.controller.getState().kind,"conflict");
+    assert.equal(h.server.count(TASK_DELETE),0,"a task changed since opening must not be deleted");
+  }
+  const noteBase=noteBody().note;
+  for(const current of [
+    noteBody("Renamed elsewhere","B0",{revision:2}),
+    noteBody("T0","Edited elsewhere",{revision:2}),
+    noteBody("T0","B0",{revision:2}),
+  ]){
+    const h=harness({[NOTE_PREFLIGHT]:()=>json(ctx()),[NOTE_DETAIL]:()=>json(current),
+      [NOTE_DELETE]:()=>json({ok:true})});
+    await h.controller.run({kind:"noteDelete",noteId:NOTE,areaId:"area1",base:noteBase});
+    assert.equal(h.controller.getState().kind,"conflict");
+    assert.equal(h.server.count(NOTE_DELETE),0,"a note changed since opening must not be deleted");
+  }
 });
