@@ -277,7 +277,7 @@ export function LumiAppRoot({ targetMyPlan, targetScopes, targetDetails, targetN
           {scopeSwitcher && <TargetScopeSwitcher language={language} variant={scopeList === null ? "plan" : "lists"} />}
           {scopeList==="note"&&targetPrivateNoteAreas&&<button type="button"
             className="targetScopeAreaChooserButton" data-testid="target-private-area-open"
-            onClick={openAreaChooser}>{targetPrivateNoteCreate
+            onClick={()=>openAreaChooser()}>{targetPrivateNoteCreate
               ?(language==="cs"?"Nová soukromá poznámka":"New private note")
               :(language==="cs"?"Oblasti pro novou poznámku":"Areas for a new note")}</button>}
           <HeldBack app={app} />
