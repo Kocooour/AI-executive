@@ -20,7 +20,7 @@ function harness(handlers,over={}){
   });
   return {server,controller,committed,refusals:()=>refusals,setOnline:v=>{online=v;}};
 }
-const preflight=()=>({[STATUS_PREFLIGHT]:()=>json(ctx()),[TASK_DETAIL]:()=>json(taskBody("O"))});
+const preflight=()=>({[STATUS_PREFLIGHT]:()=>json(ctx()),[TASK_DETAIL]:()=>json({...taskBody("O"),expectedRevision:REV})});
 const whenPreflight=(whenOn=null)=>json({expectedRevision:REV,expectedPrivateEpoch:1,expectedPlanRevision:null,whenOn,writeAreaId:"area1",restoreGeneration:GEN});
 
 test("reducer: every outcome of a pending write",()=>{
@@ -166,7 +166,7 @@ test("When: preflight reporting the same date is a quiet no-op (idle), not an er
 
 test("delete task / note edit / delete note commit without Undo and report `deleted` correctly",async()=>{
   const a=harness({...preflight(),[TASK_DELETE]:()=>json({ok:true})});
-  await a.controller.run({kind:"taskDelete",taskId:TASK,areaId:"area1",base:taskBody("O").task});
+  await a.controller.run({kind:"taskDelete",taskId:TASK,areaId:"area1",base:taskBody("O").task,baseRevision:REV});
   assert.deepEqual(a.controller.getState(),{kind:"committed",write:"taskDelete",undoable:false,undone:false,deleted:true});
   assert.deepEqual(a.committed,[{write:"taskDelete",deleted:true}]);
   const b=harness({[NOTE_PREFLIGHT]:()=>json(ctx()),[NOTE_DETAIL]:()=>json(noteBody()),[NOTE_EDIT]:()=>json({ok:true})});
@@ -181,7 +181,7 @@ test("conflict (409) per kind: nothing is overwritten, no receipt, no retry",asy
   const cases=[
     [{kind:"taskTitle",taskId:TASK,areaId:"area1",title:"N",baseTitle:"O"},{...preflight(),[TITLE]:()=>json({error:"Revision conflict"},409)},TITLE],
     [{kind:"taskStatus",taskId:TASK,areaId:"area1",status:"completed"},{...preflight(),[STATUS_PATCH]:()=>json({error:"x"},409)},STATUS_PATCH],
-    [{kind:"taskDelete",taskId:TASK,areaId:"area1",base:taskBody("O").task},{...preflight(),[TASK_DELETE]:()=>json({error:"x",code:"stale_revision"},409)},TASK_DELETE],
+    [{kind:"taskDelete",taskId:TASK,areaId:"area1",base:taskBody("O").task,baseRevision:REV},{...preflight(),[TASK_DELETE]:()=>json({error:"x",code:"stale_revision"},409)},TASK_DELETE],
     [{kind:"noteEdit",noteId:NOTE,areaId:"area1",title:"T",body:"B",baseTitle:"T0",baseBody:"B0"},{[NOTE_PREFLIGHT]:()=>json(ctx()),[NOTE_DETAIL]:()=>json(noteBody()),[NOTE_EDIT]:()=>json({error:"x"},409)},NOTE_EDIT],
     [{kind:"noteDelete",noteId:NOTE,areaId:"area1",base:noteBody().note},{[NOTE_PREFLIGHT]:()=>json(ctx()),[NOTE_DETAIL]:()=>json(noteBody()),[NOTE_DELETE]:()=>json({error:"x"},409)},NOTE_DELETE],
   ];
@@ -404,9 +404,9 @@ test("irreversible delete is bound to the detail snapshot, not a newly fetched C
     taskBody("O",{status:"completed",completedAtMs:123456}),
     taskBody("O",{dueOn:"2026-11-11"}),
   ]){
-    const h=harness({...preflight(),[TASK_DETAIL]:()=>json(current),
+    const h=harness({...preflight(),[TASK_DETAIL]:()=>json({...current,expectedRevision:REV}),
       [TASK_DELETE]:()=>json({ok:true})});
-    await h.controller.run({kind:"taskDelete",taskId:TASK,areaId:"area1",base:taskBase});
+    await h.controller.run({kind:"taskDelete",taskId:TASK,areaId:"area1",base:taskBase,baseRevision:REV});
     assert.equal(h.controller.getState().kind,"conflict");
     assert.equal(h.server.count(TASK_DELETE),0,"a task changed since opening must not be deleted");
   }
@@ -422,4 +422,34 @@ test("irreversible delete is bound to the detail snapshot, not a newly fetched C
     assert.equal(h.controller.getState().kind,"conflict");
     assert.equal(h.server.count(NOTE_DELETE),0,"a note changed since opening must not be deleted");
   }
+});
+
+test("task delete refuses a changed opaque revision even when every preview field is identical",async()=>{
+  const newer="b".repeat(64);
+  const unchanged=taskBody("O");
+  const h=harness({
+    ...preflight(),
+    [STATUS_PREFLIGHT]:()=>json(ctx({expectedRevision:newer})),
+    [TASK_DETAIL]:()=>json({...unchanged,expectedRevision:newer}),
+    [TASK_DELETE]:()=>json({ok:true}),
+  });
+  await h.controller.run({kind:"taskDelete",taskId:TASK,areaId:"area1",
+    base:unchanged.task,baseRevision:REV});
+  assert.equal(h.controller.getState().kind,"conflict");
+  assert.equal(h.server.count(TASK_DELETE),0,"changed reassignment/ACL revision must block DELETE");
+  assert.equal(h.server.count(TASK_DETAIL),0,"the fresh CAS already proves the detail changed");
+
+  const missing=harness({...preflight(),[TASK_DELETE]:()=>json({ok:true})});
+  await missing.controller.run({kind:"taskDelete",taskId:TASK,areaId:"area1",
+    base:unchanged.task,baseRevision:""});
+  assert.equal(missing.controller.getState().kind,"error");
+  assert.equal(missing.server.calls.length,0,"missing token must never fetch or dispatch");
+
+  const changedAfterPreflight=harness({...preflight(),
+    [TASK_DETAIL]:()=>json({...unchanged,expectedRevision:newer}),
+    [TASK_DELETE]:()=>json({ok:true})});
+  await changedAfterPreflight.controller.run({kind:"taskDelete",taskId:TASK,areaId:"area1",
+    base:unchanged.task,baseRevision:REV});
+  assert.equal(changedAfterPreflight.controller.getState().kind,"conflict");
+  assert.equal(changedAfterPreflight.server.count(TASK_DELETE),0,"revision change during recheck blocks DELETE");
 });
