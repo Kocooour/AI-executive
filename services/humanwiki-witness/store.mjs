@@ -8,9 +8,9 @@
  * protected antirollback. A restored witness database must never be trusted
  * without independent reconciliation.
  */
-import { KeyObject, createPublicKey, sign, verify } from "node:crypto";
+import { KeyObject, createHash, createPublicKey, sign, verify } from "node:crypto";
 import {
-  constants, closeSync, fsyncSync, lstatSync, openSync, realpathSync,
+  constants, closeSync, fsyncSync, lstatSync, openSync, readFileSync, realpathSync, writeSync,
 } from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -19,6 +19,7 @@ import {
 } from "../../lib/humanwiki-consent-witness-preflight.mjs";
 
 const FILENAME = "witness-high-water.sqlite";
+const INSTALL_MARKER = "witness-installation.lock";
 const EMPTY = "0".repeat(64);
 const HEX = /^[0-9a-f]{64}$/;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -68,6 +69,18 @@ const publicKeyOf = privateKey => {
   return createPublicKey(privateKey);
 };
 const validRegistry = id => typeof id === "string" && UUID.test(id);
+const markerBytes = (registryId, publicKey) => Buffer.from(JSON.stringify({
+  schema:"humanwiki_witness_installation_v1",registryId,
+  publicKeySha256:createHash("sha256").update(
+    publicKey.export({format:"der",type:"spki"})).digest("hex"),
+})+"\n","utf8");
+function requireMarker(directory,registryId,publicKey) {
+  const file=path.join(directory,INSTALL_MARKER);
+  identity(file);
+  const actual=readFileSync(file);
+  if(!actual.equals(markerBytes(registryId,publicKey)))
+    throw Error("witness_unavailable");
+}
 const rowPayload = (registryId,sequence,previousDigest,digest) =>
   Buffer.from(["humanwiki_witness_monotonic_event_v1",registryId,
     String(sequence),previousDigest,digest,""].join("\n"),"utf8");
@@ -125,9 +138,10 @@ function verifyRows(db, registryId, publicKey) {
   const tail=rows[rows.length-1];
   return { sequence:tail.sequence,digest:tail.digest };
 }
-function openExisting(directory,mode,fn) {
+function openExisting(directory,mode,registryId,publicKey,fn) {
   if (!safeDirectory(directory) || !sidecarsAbsent(path.join(directory,FILENAME)))
     throw Error("witness_unavailable");
+  requireMarker(directory,registryId,publicKey);
   const file=path.join(directory,FILENAME),before=identity(file);
   const db=new DatabaseSync(file,{readOnly:mode==="read"});
   try {
@@ -145,6 +159,18 @@ export function bootstrapWitnessStore(directory,registryId,privateKey) {
   if (!validRegistry(registryId) || !safeDirectory(directory))throw Error("witness_unavailable");
   const file=path.join(directory,FILENAME);
   if (!sidecarsAbsent(file))throw Error("witness_unavailable");
+  // The independently durable install marker survives accidental database
+  // removal. If only the DB disappears, bootstrap stays impossible.
+  const marker=path.join(directory,INSTALL_MARKER);
+  const markerfd=openSync(marker,
+    constants.O_CREAT|constants.O_EXCL|constants.O_NOFOLLOW|constants.O_WRONLY,0o600);
+  try {
+    writeSync(markerfd,markerBytes(registryId,pub));
+    fsyncSync(markerfd);
+  } finally {closeSync(markerfd);}
+  const dfd=openSync(directory,
+    constants.O_RDONLY|constants.O_DIRECTORY|constants.O_NOFOLLOW);
+  try{fsyncSync(dfd);}finally{closeSync(dfd);}
   const fd=openSync(file,
     constants.O_CREAT|constants.O_EXCL|constants.O_NOFOLLOW|constants.O_RDWR,0o600);
   closeSync(fd);
@@ -166,6 +192,7 @@ export function bootstrapWitnessStore(directory,registryId,privateKey) {
   const after=identity(file);
   if(before.dev!==after.dev||before.ino!==after.ino||
       !sidecarsAbsent(file)||!safeDirectory(directory))throw Error("witness_unavailable");
+  requireMarker(directory,registryId,pub);
   return {ok:true,sequence:0,importAuthorized:false,withdrawalComplete:false};
 }
 function checkInitialJournal(db) {
@@ -175,7 +202,8 @@ function checkInitialJournal(db) {
 export function witnessCurrentHead(directory,registryId,privateKey) {
   const pub=publicKeyOf(privateKey);
   if(!validRegistry(registryId))throw Error("witness_unavailable");
-  return openExisting(directory,"read",db=>verifyRows(db,registryId,pub));
+  return openExisting(directory,"read",registryId,pub,
+    db=>verifyRows(db,registryId,pub));
 }
 /**
  * Operator-only local publish, NEVER exposed as an HTTP write route.
@@ -190,7 +218,7 @@ export function publishWitnessCheckpoint(directory,registryId,privateKey,
   if(!validRegistry(registryId)||!Number.isSafeInteger(sequence)||
       sequence<1||sequence>=MAX_EVENTS||!HEX.test(previousDigest)||
       !HEX.test(digest))throw Error("witness_unavailable");
-  return openExisting(directory,"write",db=>{
+  return openExisting(directory,"write",registryId,pub,db=>{
     db.exec("BEGIN IMMEDIATE");
     try{
       const current=verifyRows(db,registryId,pub);
@@ -220,7 +248,7 @@ export function witnessChallengeReceipt(directory,registryId,privateKey,nonce) {
     throw Error("witness_unavailable");
   // Hold a SQLite snapshot while validating and signing the latest head,
   // so a concurrent publisher cannot commit between read and signature.
-  return openExisting(directory,"read",db=>{
+  return openExisting(directory,"read",registryId,pub,db=>{
     db.exec("BEGIN");
     try {
       const head=verifyRows(db,registryId,pub);
