@@ -73,6 +73,77 @@ test("a project rename tab lock stores only UUID and opaque binding; no private 
   assert.equal(confirmProjectTitleReload(CMD,A),true);
   assert.deepEqual(projectTitleReloadMarker(B),{kind:"clear"});
 });
+test("canonical FIRST 404 rejection releases a tab lock and allows a different project",async()=>{
+  clean();
+  const rt=runtime();
+  const otherId="another-project",otherCommand={...command,
+    commandId:"b3333333-3333-4333-8333-333333333333",title:"Rename second project"};
+  assert.equal(reserveProjectTitleReload(A,CMD,A),true);
+  const first=await runTrackedProjectTitleEdit(rt,A,PROJECT,command,
+    (id,cmd,signal)=>saveProjectTitleEdit(id,cmd,signal,
+      async()=>reply({error:"Not found"},404)),100,A);
+  assert.deepEqual(first,{outcome:"denied",definitiveNoWrite:true});
+  assert.deepEqual(projectTitleReloadMarker(A),{kind:"clear"},
+    "an authenticated, exact first pre-COMMIT refusal must not strand the tab");
+  assert.equal(reserveProjectTitleReload(A,otherCommand.commandId,A),true);
+  let calls=0;
+  const next=await runTrackedProjectTitleEdit(rt,A,otherId,otherCommand,
+    async()=>{calls++;return {outcome:"saved",replayed:false};},100,A);
+  assert.deepEqual(next,{outcome:"saved",replayed:false});
+  assert.equal(calls,1);
+  assert.deepEqual(projectTitleReloadMarker(A),{kind:"clear"});
+  clean();rt.securityReset();
+});
+test("canonical first 403 origin refusal is definitive but non-canonical denials are not",async()=>{
+  for(const [status,body,expected] of [
+    [403,{error:"Cross-origin request rejected"},true],
+    [404,{error:"Not found"},true],
+    [404,{error:"Not found",other:"extra"},false],
+    [403,{error:"Authentication required"},false],
+    [401,{error:"Authentication required"},false],
+  ]){
+    clean();const rt=runtime();
+    assert.equal(reserveProjectTitleReload(A,CMD,A),true);
+    const result=await runTrackedProjectTitleEdit(rt,A,PROJECT,command,
+      (id,cmd,signal)=>saveProjectTitleEdit(id,cmd,signal,
+        async()=>reply(body,status)),100,A);
+    assert.equal(result.outcome,"denied");
+    assert.equal(projectTitleReloadMarker(A).kind,expected?"clear":"blocked",
+      `first refusal ${status} should ${expected?"release":"retain"} the tab marker`);
+    rt.securityReset();
+  }
+  clean();
+});
+test("a later 403/404/409 after an uncertain PATCH never releases its tab lock",async()=>{
+  for(const [status,body] of [
+    [403,{error:"Cross-origin request rejected"}],
+    [404,{error:"Not found"}],
+    [409,{error:"Revision conflict"}],
+  ]){
+    clean();const rt=runtime();
+    assert.equal(reserveProjectTitleReload(A,CMD,A),true);
+    assert.deepEqual(await runTrackedProjectTitleEdit(rt,A,PROJECT,command,
+      async()=>({outcome:"uncertain"}),100,A),{outcome:"uncertain"});
+    const response=await runTrackedProjectTitleEdit(rt,A,PROJECT,command,
+      (id,cmd,signal)=>saveProjectTitleEdit(id,cmd,signal,
+        async()=>reply(body,status)),100,A);
+    assert.ok(["denied","conflict"].includes(response.outcome));
+    assert.deepEqual(projectTitleReloadMarker(A),{kind:"blocked",commandId:CMD,principalBinding:A},
+      `second ${status} must never release an earlier ambiguous commit`);
+    assert.equal(reserveProjectTitleReload(A,"b3333333-3333-4333-8333-333333333333",A),false);
+    rt.securityReset();
+  }
+  clean();
+});
+test("malformed first 409 cannot release an uncertain rename marker",async()=>{
+  clean();const rt=runtime();
+  assert.equal(reserveProjectTitleReload(A,CMD,A),true);
+  const result=await runTrackedProjectTitleEdit(rt,A,PROJECT,command,
+    (id,cmd,signal)=>saveProjectTitleEdit(id,cmd,signal,async()=>reply({},409)),100,A);
+  assert.deepEqual(result,{outcome:"uncertain"});
+  assert.equal(projectTitleReloadMarker(A).kind,"blocked");
+  clean();rt.securityReset();
+});
 test("expired in-flight command is sealed until fresh SERVER actor proof matches",async()=>{
   clean();const rt=runtime();
   assert.equal(reserveProjectTitleReload(A,CMD,A),true);
