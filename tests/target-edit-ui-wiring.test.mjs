@@ -16,11 +16,11 @@ test("page and root pass the server-derived edit flags to the panel; absent flag
 test("the panel shows the 4a read-only note unless edits exist for the shown kind",()=>{
   const panel=read("app/ui/target-detail-panel.tsx");
   assert.match(panel,/content&&!\(edit&&kindHasEdits\(content\.kind,edits\)\)&&/);
-  assert.match(panel,/<TaskEdits api=\{edit\} task=\{task\}\/>/);
+  assert.match(panel,/<TaskEdits api=\{edit\} task=\{task\} expectedRevision=\{content\.expectedRevision\?\?null\}\/>/);
   assert.match(panel,/<NoteEdits api=\{edit\} note=\{note\}\/>/);
   assert.match(panel,/useTargetTick\(revalidate\);/);
   // A deleted item is never re-read (it would replace the confirmation by a 404).
-  assert.match(panel,/if\(editRef\.current\?\.deleted\)return;/);
+  assert.match(panel,/if\(deletedRef\.current\|\|editRef\.current\?\.deleted\)return;/);
 });
 
 test("edit UI never persists or logs user text and has no native dialogs",()=>{
@@ -98,10 +98,10 @@ test("review regressions: delete carries the visible snapshot, revocation invali
   const edit=read("app/ui/target-detail-edit.tsx");
   const write=read("lib/target-detail-write.ts");
   const panel=read("app/ui/target-detail-panel.tsx");
-  assert.match(edit,/kind:"taskDelete",taskId:base\.id,areaId:base\.areaId,base/);
+  assert.match(edit,/kind:"taskDelete",taskId:base\.id,areaId:base\.areaId,base,baseRevision/);
   assert.match(edit,/kind:"noteDelete",noteId:base\.id,areaId:base\.areaId,base/);
-  assert.match(edit,/setConfirmation\(\{base,text:confirmText\}\)/);
-  assert.match(edit,/const approved=confirmation\.base/);
+  assert.match(edit,/setConfirmation\(\{base,text:confirmText,revision\}\)/);
+  assert.match(edit,/const approved=confirmation;/);
   assert.match(write,/sameDeleteSnapshot\(seen\.task,input\.base\)/);
   assert.match(write,/sameDeleteSnapshot\(seen\.note,input\.base\)/);
   assert.match(edit,/const checked=verifiedContent===content&&currentContent/);
@@ -109,4 +109,22 @@ test("review regressions: delete carries the visible snapshot, revocation invali
   assert.match(panel,/onDeleted:\(\)=>\{deletedRef\.current=true;epoch\.current\+\+;\}/);
   assert.match(panel,/if\(epoch\.current!==id\|\|deletedRef\.current\)return;/);
   assert.match(panel,/if\(epoch\.current===id&&!deletedRef\.current\)/);
+});
+
+test("delete CAS is passed from the same rendered detail, pinned with confirmation, and required on dispatch",()=>{
+  const read=readFileSync(path.join(root,"lib/target-staging-task-preview-client.ts"),"utf8");
+  const session=readFileSync(path.join(root,"lib/target-detail-session.ts"),"utf8");
+  const panel=readFileSync(path.join(root,"app/ui/target-detail-panel.tsx"),"utf8");
+  const edit=readFileSync(path.join(root,"app/ui/target-detail-edit.tsx"),"utf8");
+  const write=readFileSync(path.join(root,"lib/target-detail-write.ts"),"utf8");
+  const worker=readFileSync(path.join(root,"scripts/target-staging-temporal-detail-child.mjs"),"utf8");
+  assert.match(worker,/revisioned\?\.detail \?\? authority\.readTemporalTaskDetail/);
+  assert.match(worker,/readTemporalStatusPreview\(actor\.actor,taskId\)/);
+  assert.match(read,/expectedRevision\?:string/);
+  assert.match(session,/expectedRevision:read\.expectedRevision/);
+  assert.match(panel,/expectedRevision=\{content\.expectedRevision\?\?null\}/);
+  assert.match(edit,/const approved=confirmation;setConfirmation\(null\);onDelete\(approved\.base,approved\.revision\)/);
+  assert.match(edit,/flags\.taskDelete&&expectedRevision!==null&&<DeleteControl/);
+  assert.match(write,/ctx\.context\.expectedRevision!==input\.baseRevision/);
+  assert.match(write,/seen\.expectedRevision!==input\.baseRevision/);
 });
