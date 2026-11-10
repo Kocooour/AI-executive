@@ -7,7 +7,7 @@ export type TaskPreview={
 };
 export type TaskPreviewFailure="invalid-request"|"signed-out"|"not-found"|
   "stale"|"disabled"|"rate-limited"|"unavailable"|"offline"|"aborted"|"invalid-response";
-export type TaskPreviewResult={ok:true;task:TaskPreview}|{ok:false;reason:TaskPreviewFailure};
+export type TaskPreviewResult={ok:true;task:TaskPreview;expectedRevision?:string}|{ok:false;reason:TaskPreviewFailure};
 
 const encoder=new TextEncoder();
 const control=/[\u0000-\u001f\u007f]/u;
@@ -37,7 +37,11 @@ function parsedTask(v:unknown,id:string):TaskPreview|null{
   return v as TaskPreview;
 }
 export function parseTaskPreview(value:unknown,id:string):TaskPreview|null{
-  if(!validId(id)||!record(value)||Object.keys(value).join("|")!=="task")
+  if(!validId(id)||!record(value))return null;
+  const keys=Object.keys(value).sort().join("|");
+  if((keys!=="task"&&keys!=="expectedRevision|task")||
+    (keys==="expectedRevision|task"&&
+      (typeof value.expectedRevision!=="string"||!/^[a-f0-9]{64}$/.test(value.expectedRevision))))
     return null;
   return parsedTask(value.task,id);
 }
@@ -128,6 +132,9 @@ export async function readStagingTaskPreview(
     const body=await boundedJson(response,signal);
     if(signal.aborted)return {ok:false,reason:"aborted"};
     const task=parseTaskPreview(body,taskId);
-    return task?{ok:true,task}:{ok:false,reason:"invalid-response"};
+    return task?{ok:true,task,
+      ...(record(body)&&typeof body.expectedRevision==="string"
+        ?{expectedRevision:body.expectedRevision}:{})}
+      :{ok:false,reason:"invalid-response"};
   }catch{return {ok:false,reason:signal.aborted?"aborted":"invalid-response"};}
 }
