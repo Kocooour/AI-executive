@@ -116,7 +116,61 @@ test("missing or partly tampered ledger fails closed and cannot auto bootstrap",
   modified.close();
   assert.throws(()=>witnessCurrentHead(rogue,registryId,privateKey),
     "unexpected SQLite object must block witness signatures");
+
+  // SQLite LIKE treats '_' as a wildcard. Reject names that only LOOK like
+  // its reserved 'sqlite_' internal prefix but are user-defined triggers.
+  const masquerade=fixture();
+  bootstrapWitnessStore(masquerade,registryId,privateKey);
+  const fake=new DatabaseSync(path.join(masquerade,"witness-high-water.sqlite"));
+  fake.exec(`CREATE TRIGGER sqliteX_hidden_writer
+    AFTER INSERT ON witness_high_water_events BEGIN SELECT 1; END`);
+  fake.close();
+  assert.throws(()=>witnessCurrentHead(masquerade,registryId,privateKey),
+    "a sqliteX_ named trigger must not bypass the exact schema allowlist");
+  assert.throws(()=>publishWitnessCheckpoint(masquerade,registryId,privateKey,{
+    sequence:1,previousDigest:EMPTY,digest:"b".repeat(64)}));
 });
+
+test("checkpoint 10000 and successor append without reset; middle-row tamper fails audit",()=>{
+  const dir=fixture();
+  bootstrapWitnessStore(dir,registryId,privateKey);
+  let previous=EMPTY;
+  // Real offline SQLite commits with real Ed25519 signatures, not synthetic
+  // table injection. This would permanently fail at 10000 before the fix.
+  for(let sequence=1;sequence<=10001;sequence++){
+    const digest=sequence.toString(16).padStart(64,"0");
+    const saved=publishWitnessCheckpoint(dir,registryId,privateKey,{
+      sequence,previousDigest:previous,digest,
+    });
+    assert.equal(saved.sequence,sequence);
+    previous=digest;
+  }
+  assert.deepEqual(witnessCurrentHead(dir,registryId,privateKey),{
+    sequence:10001,digest:previous,
+  });
+  const receipt=witnessChallengeReceipt(dir,registryId,privateKey,nonce());
+  checkSignature(receipt);
+  assert.equal(receipt.sequence,10001);
+  assert.equal(receipt.digest,previous);
+
+  // A tamperer can temporarily drop a trigger, change a historical digest,
+  // then restore the exact same trigger DDL. The authenticated cumulative
+  // hash must still detect this even though the most recent signature is
+  // genuine and the expected schema exists again.
+  const db=new DatabaseSync(path.join(dir,"witness-high-water.sqlite"));
+  try {
+    const original=db.prepare(`SELECT sql FROM sqlite_master
+      WHERE name='witness_high_water_no_update'`).get().sql;
+    db.exec("DROP TRIGGER witness_high_water_no_update");
+    db.prepare(`UPDATE witness_high_water_events SET digest=?
+      WHERE sequence=5000`).run("f".repeat(64));
+    db.exec(original+";");
+  } finally {db.close();}
+  assert.throws(()=>witnessCurrentHead(dir,registryId,privateKey),
+    "historical modification must break the cumulative hash");
+  assert.throws(()=>witnessChallengeReceipt(dir,registryId,privateKey,nonce()));
+});
+
 test("protected private files reject symlinks and group-readable key material",()=>{
   const dir=fixture();
   const keyFile=path.join(dir,"key.pem");
