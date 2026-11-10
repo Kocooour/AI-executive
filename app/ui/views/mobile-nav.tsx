@@ -66,7 +66,7 @@ export function MobileNav({ app, targetPlan = false, onTargetCapture }: {
         data-target-private-capture-fab={onTargetCapture?"mobile":undefined}
         onClick={onTargetCapture ?? (()=>openCapture())}
         aria-label={onTargetCapture?(language==="cs"?"Nová soukromá poznámka":"New private note"):tr("quickCapture")}
-        title={onTargetCapture?(language==="cs"?"Nová soukromá poznámka":"New private note"):tr("quickCapture")}>＋</button>
+        title={onTargetCapture?(language==="cs"?"Nová soukromá poznámka":"New private note"):tr("quickCapture")}>＋</button>}
       {moreOpen && (
         <div className="mobileMoreBackdrop" onClick={() => setMoreOpen(false)}>
           <div id="mobile-more-dialog" className="mobileMore" role="dialog" aria-modal="true" aria-labelledby="mobile-more-title" ref={moreDialogRef} onClick={(e) => e.stopPropagation()} onKeyDown={(event) => handleOverlayKeys(event, () => setMoreOpen(false))}>
