@@ -39,7 +39,11 @@ after(() => {
 });
 const endpoint = "https://lumi.invalid/api/humanwiki/withdrawal-intent";
 const allowedOrigin = "https://lumi.invalid";
+// Per-case proxy IP prevents unrelated negative probes from exhausting a
+// shared rate-limit bucket before filesystem and ACL assertions execute.
+let clientIpSuffix = 10;
 const config = () => {
+  clientIpSuffix++;
   process.env.NODE_ENV="production";
   process.env.AI_EXECUTIVE_AUTH_ENABLED="true";
   process.env.AI_EXECUTIVE_PASSWORD_HASH=hash;
@@ -61,6 +65,7 @@ const command = (extra={}) => ({
 const ownerRequest = (method, token, data, headers={}) =>
   new Request(endpoint,{method,headers:{
     ...(token?{cookie:sessionCookieName+"="+token}:{}),
+    "x-forwarded-for":"198.51.100."+clientIpSuffix,
     ...(method==="POST"?{"content-type":"application/json",origin:allowedOrigin}:{}),
     ...headers,
   },...(method==="POST"?{body:typeof data==="string"?data:JSON.stringify(data)}:{})});
@@ -95,6 +100,9 @@ test("owner-private withdrawal request persists, is source-specific and never au
   const retry=await POST(ownerRequest("POST",token,request));
   assert.equal((await retry.json()).replayed,true);
   assert.equal((await GET(ownerRequest("GET",token))).status,200);
+  await failure(await POST(ownerRequest("POST",token,{
+    ...request,sourceType:"claude_user_export",
+  })));
   const claude=await POST(ownerRequest("POST",token,command({sourceType:"claude_user_export"})));
   assert.equal(claude.status,200);
   assert.equal((await claude.json()).revision,1);
