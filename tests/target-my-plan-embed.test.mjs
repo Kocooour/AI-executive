@@ -121,7 +121,7 @@ test("flag off: the root loads the target screen lazily and only for target mode
   // The plan switches only in the v1 shell's "Můj plán" entry (view Today); decided by a pure helper (lib/target-shell-views.ts).
   assert.match(rootSource,/const \{ scopeList, targetPlan, active: activeTargetView \} = activeTargetViewFor\(\{ \.\.\.shellInput, view, planActive \}\)/);
   assert.match(read("lib/target-shell-views.ts"),/const targetPlan=input\.myPlan&&input\.v1Shell&&input\.planActive&&input\.view==="Today"/);
-  assert.match(rootSource,/targetPlan && targetMyPlan\s*\n\s*\? <TargetMyPlan gates=\{targetMyPlan\} language=\{language\} scopeDriven=\{scopesOn\} taskDetail=\{detailGates\.task\} \/>\s*\n\s*: scopeList\s*\n\s*\? <TargetScopeLists key=\{scopeList\} kind=\{scopeList\} language=\{language\}\s*\n\s*detail=\{scopeList === "project" \? detailGates\.project : detailGates\.note\} \/>\s*\n\s*: <EntityList app=\{app\} \/>/);
+  assert.match(rootSource,/targetPlan && targetMyPlan\s*\n\s*\? <TargetMyPlan gates=\{targetMyPlan\} language=\{language\} scopeDriven=\{scopesOn\} taskDetail=\{detailGates\.task\} \/>\s*\n\s*: scopeList\s*\n\s*\? <TargetScopeLists key=\{scopeList==="note"\?scopeList\+":"\+noteListRevision:scopeList\} kind=\{scopeList\} language=\{language\}\s*\n\s*detail=\{scopeList === "project" \? detailGates\.project : detailGates\.note\} \/>\s*\n\s*: <EntityList app=\{app\} \/>/);
   // Legacy pieces that would claim legacy data are suppressed in target mode.
   assert.match(rootSource,/!targetPlan && <TodayTop/);
   assert.match(rootSource,/!targetPlan && <TodayFooter/);
