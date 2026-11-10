@@ -38,13 +38,19 @@ export function validEditId(value:unknown):value is string{
 }
 export const validEditCommandId=(value:unknown):value is string=>
   typeof value==="string"&&uuid.test(value);
+/** Temporal task writers use a restricted Area ID; note writers instead accept canonical
+ * note/Area IDs up to 512 UTF-8 bytes, including whitespace inside and Unicode. */
 export const validEditAreaId=(value:unknown):value is string=>
   typeof value==="string"&&areaRule.test(value);
+export const validNoteEditAreaId=(value:unknown):value is string=>
+  typeof value==="string"&&value.length>0&&value.trim()===value&&
+    value!=="."&&value!==".."&&!control.test(value)&&wellFormed(value)&&
+    encoder.encode(value).length<=512;
 
-export function validWriteContext(value:unknown):value is WriteContext{
+export function validWriteContext(value:unknown,kind:"task"|"note"="task"):value is WriteContext{
   return object(value)&&exact(value,["expectedRevision","writeAreaId","restoreGeneration"])&&
     typeof value.expectedRevision==="string"&&revision.test(value.expectedRevision)&&
-    validEditAreaId(value.writeAreaId)&&
+    (kind==="note"?validNoteEditAreaId(value.writeAreaId):validEditAreaId(value.writeAreaId))&&
     typeof value.restoreGeneration==="string"&&uuid.test(value.restoreGeneration);
 }
 
@@ -91,8 +97,9 @@ const writeOptions=(method:"PATCH"|"POST"|"DELETE",body:unknown,signal?:AbortSig
 /** Read-only preflight. The Area equality check is a stale-page guard, not authorization. */
 export async function readWriteContext(
   url:string,areaId:string,fetchImpl:typeof fetch=fetch,signal?:AbortSignal,
+  kind:"task"|"note"="task",
 ):Promise<ContextResult>{
-  if(!validEditAreaId(areaId))return {ok:false,reason:"invalid-request"};
+  if(!(kind==="note"?validNoteEditAreaId(areaId):validEditAreaId(areaId)))return {ok:false,reason:"invalid-request"};
   if(signal?.aborted)return {ok:false,reason:"aborted"};
   let response:Response;
   try{response=await fetchImpl(url,readOptions(signal));}
@@ -103,7 +110,7 @@ export async function readWriteContext(
   try{
     const body:unknown=await response.json();
     if(signal?.aborted)return {ok:false,reason:"aborted"};
-    if(!validWriteContext(body))return {ok:false,reason:"invalid-response"};
+    if(!validWriteContext(body,kind))return {ok:false,reason:"invalid-response"};
     // A different Area than the one on screen means the page is stale: refuse as a conflict.
     if(body.writeAreaId!==areaId)return {ok:false,reason:"conflict"};
     return {ok:true,context:body};
@@ -122,7 +129,7 @@ export const readNoteWriteContext=(
   noteId:string,areaId:string,fetchImpl:typeof fetch=fetch,signal?:AbortSignal,
 ):Promise<ContextResult>=>validEditId(noteId)
   ?readWriteContext(
-    "/api/target-staging/notes/"+encodeURIComponent(noteId)+"/edit",areaId,fetchImpl,signal)
+    "/api/target-staging/notes/"+encodeURIComponent(noteId)+"/edit",areaId,fetchImpl,signal,"note")
   :Promise.resolve({ok:false,reason:"invalid-request"});
 
 export type EditReceipt=
@@ -250,7 +257,7 @@ const noteEditTransport:Transport<NoteEditCommand>={
   valid:c=>shape(c,["commandId","noteId","title","body","expectedRevision","writeAreaId","restoreGeneration"])&&
     validEditCommandId(c.commandId)&&validEditId(c.noteId)&&validNoteTitle(c.title)&&validNoteBody(c.body)&&
     validWriteContext(
-      {expectedRevision:c.expectedRevision,writeAreaId:c.writeAreaId,restoreGeneration:c.restoreGeneration}),
+      {expectedRevision:c.expectedRevision,writeAreaId:c.writeAreaId,restoreGeneration:c.restoreGeneration},"note"),
   method:"PATCH",
   url:c=>"/api/target-staging/notes/"+encodeURIComponent(c.noteId)+"/edit",
   receiptUrl:c=>"/api/target-staging/notes/"+encodeURIComponent(c.noteId)+"/edit/status",
@@ -272,7 +279,7 @@ export type NoteDeleteCommand=WriteContext&{commandId:string;noteId:string};
 const noteDeleteTransport:Transport<NoteDeleteCommand>={
   valid:c=>shape(c,["commandId","noteId","expectedRevision","writeAreaId","restoreGeneration"])&&
     validEditCommandId(c.commandId)&&validEditId(c.noteId)&&validWriteContext(
-      {expectedRevision:c.expectedRevision,writeAreaId:c.writeAreaId,restoreGeneration:c.restoreGeneration}),
+      {expectedRevision:c.expectedRevision,writeAreaId:c.writeAreaId,restoreGeneration:c.restoreGeneration},"note"),
   method:"DELETE",
   url:c=>"/api/target-staging/notes/"+encodeURIComponent(c.noteId),
   receiptUrl:c=>"/api/target-staging/notes/"+encodeURIComponent(c.noteId)+"/delete/status",
