@@ -111,6 +111,7 @@ export function LumiAppRoot({ targetMyPlan, targetScopes, targetDetails, targetN
   const detailSearch = useTargetSearch(detailsOn);
   const activation: DetailActivation = detailsOn
     ? detailActivation({ search: detailSearch, gates: detailGates, activeTargetView }) : { state: "none" };
+  const detailPanel = detailsOn && activation.state !== "none";
   const detailRoute = activation.state === "route" ? activation.route : null;
   const detailKey = detailRoute !== null ? detailRouteKey(detailRoute) : activation.state;
   // After a detail closed (Close, Back, Forward), focus returns to the row that opened it;
@@ -150,7 +151,6 @@ export function LumiAppRoot({ targetMyPlan, targetScopes, targetDetails, targetN
     );
   }
   const scopeSwitcher = scopeList !== null || (scopesOn && targetPlan);
-  const detailPanel = detailsOn && activation.state !== "none";
   // The legacy inspector is never fed legacy records in a target view.
   const targetView = scopeList !== null || targetPlan;
   const legacyInspector = Boolean(app.selected) && !(scopesOn && targetView);
@@ -162,7 +162,8 @@ export function LumiAppRoot({ targetMyPlan, targetScopes, targetDetails, targetN
       data-my-plan-preview={mobileDesignV1Preview && app.mobilePlanPreviewActive && view === "Today" ? "true" : undefined}>
       <TargetSidebarContext.Provider value={scopesOn && targetScopes?.projects ? { projects: true, openable: detailsOn && detailGates.project } : undefined}>
         <Sidebar app={app} targetPlan={Boolean(targetMyPlan?.enabled)}
-          onTargetCapture={targetCapture?openAreaChooser:undefined} />
+          onTargetCapture={targetCapture?openAreaChooser:undefined}
+          targetInspectorOpen={detailPanel} />
       </TargetSidebarContext.Provider>
       <section className="appPane">
         {app.offlineView && (
