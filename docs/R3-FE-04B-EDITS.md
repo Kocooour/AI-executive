@@ -67,7 +67,7 @@ Vázané na generaci detailu, zrušené při `reset()` a při dalším zápisu. 
 
 ## Smazání
 
-Vložené potvrzení (ne nativní dialog, ne druhý modální): text s názvem, bezpečná volba „Nemazat“ má fokus, **Esc** potvrzení zruší dřív než panel a vrátí fokus na tlačítko. Po potvrzeném smazání se místo obsahu zobrazí „Úkol/Poznámka byla smazána…“ s tlačítkem Zavřít (fokus), detail se znovu nečte (404 by větu přepsal) a seznamy se obnoví.
+Vložené potvrzení (ne nativní dialog, ne druhý modální): text s názvem, bezpečná volba „Nemazat“ má fokus, **Esc** potvrzení zruší dřív než panel a vrátí fokus na tlačítko. Při otevření potvrzení se zároveň zmrazí původní snapshot a potvrzovací text; změna stejné položky v jiné záložce nebo během potvrzování vyvolá konflikt před mazáním, nikoli nevratnou ztrátu nových úprav. Po potvrzeném smazání se místo obsahu zobrazí „Úkol/Poznámka byla smazána…“ s tlačítkem Zavřít (fokus), detail se znovu nečte (404 by větu přepsal), starší rozběhnuté GET odpovědi se zneplatní a seznamy se obnoví.
 
 ## Obnovení seznamů po potvrzeném zápisu
 
