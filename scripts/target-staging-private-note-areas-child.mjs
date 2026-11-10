@@ -12,9 +12,7 @@ try{
   if(process.argv.length!==2||
     process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_ENABLED!=="true"||
     process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_NOTES_ENABLED!=="true"||
-    process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_WRITE_ENABLED!=="true"||
-    process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_NOTES_WRITE_ENABLED!=="true"||
-    process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_NOTES_CREATE_ENABLED!=="true"||
+    process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_PRIVATE_NOTE_AREAS_ENABLED!=="true"||
     !stagingDirectory||!path.isAbsolute(stagingDirectory)||
     !expectedRestoreGeneration||!ownerUserId)throw Error("Unavailable");
   const authority=new TargetStagingSessionAuthority({

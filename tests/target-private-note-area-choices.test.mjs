@@ -5,12 +5,22 @@ import {parsePrivateNoteAreaChoices,loadPrivateNoteAreaChoices} from
   "../lib/target-private-note-area-client.ts";
 import {targetPrivateNoteAreaUiEnabled,TARGET_PRIVATE_NOTE_AREA_UI_FLAGS} from
   "../lib/target-private-note-area-ui-gate.ts";
+import {MAX_SCOPED_READ_AREAS,MAX_PRIVATE_NOTE_AREA_CATALOG_BYTES} from
+  "../lib/target-staging-read-limits.ts";
 const response=(body,status=200,h={"content-type":"application/json","cache-control":"no-store"})=>
   new Response(JSON.stringify(body),{status,headers:h});
 const areas=[{id:"area-a",title:"Osobní"},{id:"area-b",title:"Rodina"}];
 
 test("the Area catalog accepts only bounded, ordered, precisely shaped private choices",()=>{
   assert.deepEqual(parsePrivateNoteAreaChoices({areas}),areas);
+  const large=Array.from({length:101},(_,i)=>({
+    id:"area-"+String(i).padStart(4,"0"),title:"X".repeat(4096),
+  }));
+  assert.deepEqual(parsePrivateNoteAreaChoices({areas:large}),large);
+  const all=Array.from({length:MAX_SCOPED_READ_AREAS},(_,i)=>({
+    id:"area-"+String(i).padStart(4,"0"),title:'"'.repeat(4096),
+  }));
+  assert.deepEqual(parsePrivateNoteAreaChoices({areas:all}),all);
   for(const invalid of [
     {},{areas:[],owner:"alice"},{areas:null},
     {areas:[areas[1],areas[0]]},{areas:[areas[0],areas[0]]},
@@ -18,7 +28,10 @@ test("the Area catalog accepts only bounded, ordered, precisely shaped private c
     {areas:[{id:" area-a",title:"F"}]},
     {areas:[{id:"area-a",title:"\0"}]},
     {areas:[{id:"area-a",title:"\ud800"}]},
-    {areas:Array.from({length:101},(_,i)=>({id:"area-"+i,title:"X"}))},
+    {areas:[{id:"area-a",title:"X".repeat(4097)}]},
+    {areas:Array.from({length:MAX_SCOPED_READ_AREAS+1},(_,i)=>({
+      id:"area-"+String(i).padStart(4,"0"),title:"X",
+    }))},
   ])assert.equal(parsePrivateNoteAreaChoices(invalid),null,JSON.stringify(invalid).slice(0,150));
 });
 
@@ -35,6 +48,18 @@ test("fetch is same-origin no-store and fails closed on response and network err
   assert.deepEqual(await loadPrivateNoteAreaChoices(abort.signal,fetchImpl),
     {ok:true,areas});
   assert.equal(count,1);
+  const largeBody=Array.from({length:250},(_,i)=>({
+    id:"area-"+String(i).padStart(4,"0"),title:"X".repeat(4096),
+  }));
+  assert.ok(JSON.stringify({areas:largeBody}).length>600_000);
+  assert.deepEqual(await loadPrivateNoteAreaChoices(abort.signal,
+    async()=>response({areas:largeBody})),{ok:true,areas:largeBody});
+  const overCap=new Response("{}",{
+    headers:{"content-type":"application/json","cache-control":"no-store",
+      "content-length":String(MAX_PRIVATE_NOTE_AREA_CATALOG_BYTES+1)},
+  });
+  assert.deepEqual(await loadPrivateNoteAreaChoices(abort.signal,async()=>overCap),
+    {ok:false,reason:"unavailable"});
   for(const [result,expected] of [
     [response({areas},401),"signed-out"],
     [response({areas},409),"stale"],

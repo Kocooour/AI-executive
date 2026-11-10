@@ -19,10 +19,8 @@ const uuid=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]
 const actor=/^[A-Za-z0-9_.:@-]{1,120}$/;
 const flags=[
   "AI_EXECUTIVE_TARGET_STAGING_HTTP_ENABLED",
-  "AI_EXECUTIVE_TARGET_STAGING_HTTP_WRITE_ENABLED",
   "AI_EXECUTIVE_TARGET_STAGING_HTTP_NOTES_ENABLED",
-  "AI_EXECUTIVE_TARGET_STAGING_HTTP_NOTES_WRITE_ENABLED",
-  "AI_EXECUTIVE_TARGET_STAGING_HTTP_NOTES_CREATE_ENABLED",
+  "AI_EXECUTIVE_TARGET_STAGING_HTTP_PRIVATE_NOTE_AREAS_ENABLED",
 ] as const;
 const enabled=()=>flags.every(f=>process.env[f]==="true");
 function config(){

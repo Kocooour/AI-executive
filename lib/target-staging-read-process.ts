@@ -31,7 +31,7 @@ import { SCOPED_HOME_KEYS, type AuthorizedScopedHomeSummary, type TargetHomeScop
 import { isReadableStagingProjectId } from "./target-project-id";
 import type { TargetReadableNote } from "./target-note-access";
 import type { TargetNoteReadLiveGuard } from "./target-staging-durable-session";
-import { MAX_SCOPED_READ_AREAS } from "./target-staging-read-limits";
+import { MAX_SCOPED_READ_AREAS, MAX_PRIVATE_NOTE_AREA_CATALOG_BYTES } from "./target-staging-read-limits";
 import { FEED_PAGE_LIMIT } from "./target-change-feed-read-model";
 import { NOTE_SYNC_CURSOR_LENGTH } from "./target-note-sync-cursor";
 import type { TargetNoteSyncPage } from "./target-note-sync-read-model";
@@ -73,11 +73,18 @@ export function createStagingReadRunner(
       const cwd = process.cwd();
       const loader = path.join(cwd, "scripts/target-staging-ts-loader.mjs");
       const script = path.join(cwd, "scripts", scriptName);
+      // Do not weaken output limits for other staging read workers.
+      const outputLimit = scriptName === "target-staging-private-note-areas-child.mjs"
+        ? MAX_PRIVATE_NOTE_AREA_CATALOG_BYTES : MAX_OUTPUT_BYTES;
       const environment = {
         NODE_ENV: process.env.NODE_ENV || "production",
         AI_EXECUTIVE_DATA_DIR: process.env.AI_EXECUTIVE_DATA_DIR || "",
         AI_EXECUTIVE_TARGET_STAGING_HTTP_ENABLED:
           process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_ENABLED || "",
+        AI_EXECUTIVE_TARGET_STAGING_HTTP_NOTES_ENABLED:
+          process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_NOTES_ENABLED || "",
+        AI_EXECUTIVE_TARGET_STAGING_HTTP_PRIVATE_NOTE_AREAS_ENABLED:
+          process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_PRIVATE_NOTE_AREAS_ENABLED || "",
         AI_EXECUTIVE_TARGET_STAGING_HTTP_WRITE_ENABLED:
           process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_WRITE_ENABLED || "",
         AI_EXECUTIVE_TARGET_STAGING_HTTP_TEMPORAL_ENABLED:
@@ -141,7 +148,7 @@ export function createStagingReadRunner(
         }, timeoutMs);
         child.stdout.on("data", (chunk: Buffer) => {
           bytes += chunk.length;
-          if (bytes > MAX_OUTPUT_BYTES) {
+          if (bytes > outputLimit) {
             failureReason ??= "output_limit";
             child.kill("SIGKILL");
           } else {

@@ -15,6 +15,7 @@ const envNames=[
   "AI_EXECUTIVE_TARGET_STAGING_HTTP_NOTES_ENABLED",
   "AI_EXECUTIVE_TARGET_STAGING_HTTP_NOTES_WRITE_ENABLED",
   "AI_EXECUTIVE_TARGET_STAGING_HTTP_NOTES_CREATE_ENABLED",
+  "AI_EXECUTIVE_TARGET_STAGING_HTTP_PRIVATE_NOTE_AREAS_ENABLED",
   "AI_EXECUTIVE_TARGET_STAGING_DIRECTORY",
   "AI_EXECUTIVE_TARGET_STAGING_RESTORE_GENERATION",
   "AI_EXECUTIVE_TARGET_STAGING_OWNER_USER_ID",
@@ -30,16 +31,19 @@ Object.assign(process.env,{
     ":"+Buffer.alloc(64,2).toString("base64url"),
   AI_EXECUTIVE_SESSION_SECRET:"r3-capture-areas-test-owner-secret-long-enough",
   AI_EXECUTIVE_TARGET_STAGING_HTTP_ENABLED:"true",
-  AI_EXECUTIVE_TARGET_STAGING_HTTP_WRITE_ENABLED:"true",
+  AI_EXECUTIVE_TARGET_STAGING_HTTP_WRITE_ENABLED:"false",
   AI_EXECUTIVE_TARGET_STAGING_HTTP_NOTES_ENABLED:"true",
-  AI_EXECUTIVE_TARGET_STAGING_HTTP_NOTES_WRITE_ENABLED:"true",
-  AI_EXECUTIVE_TARGET_STAGING_HTTP_NOTES_CREATE_ENABLED:"true",
+  AI_EXECUTIVE_TARGET_STAGING_HTTP_NOTES_WRITE_ENABLED:"false",
+  AI_EXECUTIVE_TARGET_STAGING_HTTP_NOTES_CREATE_ENABLED:"false",
+  AI_EXECUTIVE_TARGET_STAGING_HTTP_PRIVATE_NOTE_AREAS_ENABLED:"true",
 });
 const {bootstrapIsolatedTargetStore}=await import("../lib/target-store-bootstrap.ts");
 const {issueDurableTargetStagingSession,revokeDurableTargetStagingSession,
   TARGET_STAGING_SESSION_COOKIE}=await import("../lib/target-staging-durable-session.ts");
 const {createSessionToken,sessionCookieName}=await import("../lib/auth.ts");
 const {GET}=await import("../app/api/target-staging/notes/create-targets/route.ts");
+const {POST}=await import("../app/api/target-staging/notes/route.ts");
+const {inspectIsolatedTargetStore}=await import("../lib/target-store-preflight.ts");
 const {parsePrivateNoteAreaTargets}=await import("../lib/target-staging-read-process.ts");
 after(()=>{
   for(const [key,value] of Object.entries(previous))
@@ -63,10 +67,16 @@ function fixture(){
     db.prepare("INSERT INTO areas(id,title,kind,workspace_id,owner_user_id,system_key) VALUES ('bob-private','Secret','private','bob-space','bob','unassigned')").run();
     db.prepare("INSERT INTO workspaces(id,kind,owner_user_id) VALUES ('team','shared','alice')").run();
     db.prepare("INSERT INTO areas(id,title,kind,workspace_id,owner_user_id) VALUES ('team-area','Shared','shared','team','alice')").run();
+    db.prepare("INSERT INTO area_members(area_id,user_id,role) VALUES ('team-area','alice','admin')").run();
     db.prepare("INSERT INTO area_members(area_id,user_id,role) VALUES ('team-area','bob','editor')").run();
   }finally{db.close();}
   const store={stagingDirectory:stage.directory,
     expectedRestoreGeneration:stage.restoreGeneration};
+  const canonical=inspectIsolatedTargetStore({
+    stagingDirectory:stage.directory,expectedOwnerUserId:"alice",
+    expectedRestoreGeneration:stage.restoreGeneration,mode:"r2-model",
+  });
+  assert.equal(canonical.ok,true,JSON.stringify(canonical));
   Object.assign(process.env,{
     AI_EXECUTIVE_TARGET_STAGING_DIRECTORY:stage.directory,
     AI_EXECUTIVE_TARGET_STAGING_RESTORE_GENERATION:stage.restoreGeneration,
@@ -93,7 +103,19 @@ async function check(response,status){
 }
 test("real owner and durable actor see only their writable private Areas, never shared or foreign",async()=>{
   const fx=fixture();
+  // Read-only chooser operates while all note-write and note-create HTTP flags are off.
+  assert.equal(process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_WRITE_ENABLED,"false");
+  assert.equal(process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_NOTES_WRITE_ENABLED,"false");
+  assert.equal(process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_NOTES_CREATE_ENABLED,"false");
   const alice=await check(await get(owner()),200);
+  const forbiddenWrite=await POST(new Request("http://localhost:3001/api/target-staging/notes",{
+    method:"POST",headers:{cookie:owner(),"origin":"http://localhost:3001",
+      "x-lumi-target-protocol":"1","content-type":"application/json"},
+    body:JSON.stringify({noteId:randomUUID(),commandId:randomUUID(),
+      areaId:fx.stage.unassignedAreaId,restoreGeneration:fx.stage.restoreGeneration,
+      title:"Should never create",body:"No write"}),
+  }));
+  assert.equal(forbiddenWrite.status,404,"chooser flag must never enable notes POST");
   assert.deepEqual(Object.keys(alice),["areas"]);
   assert.ok(alice.areas.some(a=>a.id===fx.stage.unassignedAreaId));
   assert.ok(alice.areas.some(a=>a.id==="alice-family"&&a.title==="Rodina"));
@@ -111,9 +133,9 @@ test("feature gate, login, malformed query and expired identity fail without Are
   const fx=fixture();
   assert.equal((await check(await get(),401)).error,"Authentication required");
   assert.equal((await check(await get(owner(),url+"?scope=shared"),400)).error,"Invalid request");
-  process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_NOTES_CREATE_ENABLED="false";
+  process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_PRIVATE_NOTE_AREAS_ENABLED="false";
   assert.equal((await check(await get(owner()),404)).error,"Not found");
-  process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_NOTES_CREATE_ENABLED="true";
+  process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_PRIVATE_NOTE_AREAS_ENABLED="true";
   const bob=cookie(fx,"bob");
   const revoked=revokeDurableTargetStagingSession(fx.store,bob.id);
   assert.equal(revoked.ok,true,JSON.stringify(revoked));

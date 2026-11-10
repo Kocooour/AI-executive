@@ -1,6 +1,9 @@
 /** R3-CAPTURE-1: no-store, strict private Area chooser transport.
  * Titles/ids live in memory only and are discarded on identity changes.
  * The GET result is a UI hint, NEVER a write authorization grant. */
+import {
+  MAX_SCOPED_READ_AREAS, MAX_PRIVATE_NOTE_AREA_CATALOG_BYTES,
+} from "./target-staging-read-limits";
 export type PrivateNoteAreaChoice={id:string;title:string};
 export type PrivateNoteAreaRead=
   |{ok:true;areas:PrivateNoteAreaChoice[]}
@@ -22,7 +25,7 @@ export function parsePrivateNoteAreaChoices(value:unknown):PrivateNoteAreaChoice
   if(!value||typeof value!=="object"||Array.isArray(value))return null;
   const data=value as Record<string,unknown>;
   if(Object.keys(data).join(",")!=="areas"||!Array.isArray(data.areas)||
-    data.areas.length>100)return null;
+    data.areas.length>MAX_SCOPED_READ_AREAS)return null;
   const choices:PrivateNoteAreaChoice[]=[];
   for(const raw of data.areas){
     if(!raw||typeof raw!=="object"||Array.isArray(raw))return null;
@@ -37,7 +40,7 @@ export function parsePrivateNoteAreaChoices(value:unknown):PrivateNoteAreaChoice
 async function readBounded(response:Response,signal:AbortSignal){
   const declared=response.headers.get("content-length");
   if(declared!==null&&(!/^(?:0|[1-9][0-9]*)$/.test(declared)||
-    !Number.isSafeInteger(Number(declared))||Number(declared)>600_000))
+    !Number.isSafeInteger(Number(declared))||Number(declared)>MAX_PRIVATE_NOTE_AREA_CATALOG_BYTES))
     throw Error("invalid length");
   if(!response.body)throw Error("empty body");
   const reader=response.body.getReader(),decoder=new TextDecoder("utf-8",{fatal:true});
@@ -49,7 +52,7 @@ async function readBounded(response:Response,signal:AbortSignal){
       if(signal.aborted)throw Error("aborted");
       if(chunk.done){done=true;break;}
       bytes+=chunk.value.length;
-      if(bytes>600_000)throw Error("large");
+      if(bytes>MAX_PRIVATE_NOTE_AREA_CATALOG_BYTES)throw Error("large");
       text+=decoder.decode(chunk.value,{stream:true});
     }
     text+=decoder.decode();
