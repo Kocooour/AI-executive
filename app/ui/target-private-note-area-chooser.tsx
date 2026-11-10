@@ -303,7 +303,7 @@ export default function TargetPrivateNoteAreaChooser({
       {createEnabled&&writePhase==="saved"&&<p role="status">
         {language==="cs"?"Vytvoření potvrzeno.":"Creation confirmed."}
       </p>}
-      {createEnabled&&writeMessage&&<p role="alert">{writeMessage}</p>
+      {createEnabled&&writeMessage&&<p role="alert">{writeMessage}</p>}
       <div className="captureActions">
         {!ready&&<button type="button" onClick={()=>{
           // An explicit retry is also forbidden to bypass the wake/session gate.
