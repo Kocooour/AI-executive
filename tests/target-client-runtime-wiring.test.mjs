@@ -33,7 +33,7 @@ test("the server page mounts the provider only behind the flag and reads it per 
   assert.doesNotMatch(page,/^"use client"/m);
   assert.match(page,/export const dynamic = "force-dynamic"/);
   assert.match(page,/targetUiEnabled\(\)/);
-  assert.match(page,/targetData\s*\n?\s*\?\s*<TargetDataProvider><LumiAppRoot targetMyPlan=\{config\?\.myPlan\} targetScopes=\{config\?\.scopes\} targetDetails=\{config\?\.details\} targetNoteEdit=\{Boolean\(config\?\.details\.note\) && targetNoteEditUiEnabled\(process\.env\)\} \/><\/TargetDataProvider>\s*\n?\s*:\s*<LumiAppRoot \/>/);
+  assert.match(page,/targetData\s*\n?\s*\?\s*<TargetDataProvider><LumiAppRoot targetMyPlan=\{config\?\.myPlan\} targetScopes=\{config\?\.scopes\} targetDetails=\{config\?\.details\} targetNoteEdit=\{Boolean\(config\?\.details\.note\) && targetNoteEditUiEnabled\(process\.env\)\} targetProjectEdit=\{Boolean\(config\?\.details\.project\) && targetProjectTitleEditUiEnabled\(process\.env\)\} \/><\/TargetDataProvider>\s*\n?\s*:\s*<LumiAppRoot \/>/);
   // The page itself never creates a runtime nor fetches.
   assert.doesNotMatch(page,/createTargetClientRuntime|fetch\(|target-client-runtime/);
 });
@@ -92,6 +92,8 @@ test("only the runtime (and its server route) reference the session endpoint; no
     "app/ui/target-detail-panel.tsx","app/ui/target-sidebar-projects.tsx","app/ui/use-target-revalidation.ts",
     // R3-FE-4b: note editor depends on the runtime generation, not a second provider.
     "app/ui/target-note-editor.tsx",
+    // R3-FE-4b: the gated project title editor reuses the same generation-bound runtime.
+    "app/ui/target-project-title-editor.tsx",
   ].sort());
 });
 
