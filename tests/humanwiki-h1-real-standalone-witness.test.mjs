@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { generateKeyPairSync, randomUUID, verify } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { chmodSync, existsSync, lstatSync, mkdtempSync, readFileSync,
-  rmSync, renameSync, writeFileSync } from "node:fs";
+  rmSync, renameSync, symlinkSync, writeFileSync } from "node:fs";
 import https from "node:https";
 import os from "node:os";
 import path from "node:path";
@@ -65,11 +65,7 @@ test("offline publish requires exactly the next checkpoint and correct predecess
     {sequence:2,previousDigest:EMPTY,digest:"b".repeat(64)},
     {sequence:3,previousDigest:"a".repeat(64),digest:"b".repeat(64)},
     {sequence:2,previousDigest:"a".repeat(64),digest:"BAD"},
-    {sequence:2,previousDigest:"a".repeat(64),digest:"b".repeat(64),source:"private"},
   ]){
-    // The library ignores extra control fields (the CLI passes only its
-    // strict triple); the last example is otherwise a valid second publish.
-    if("source" in next)continue;
     assert.throws(()=>publishWitnessCheckpoint(dir,registryId,privateKey,next));
   }
   assert.equal(publishWitnessCheckpoint(dir,registryId,privateKey,{
@@ -115,7 +111,6 @@ test("protected private files reject symlinks and group-readable key material",(
   assert.throws(()=>readProtectedWitnessFile(keyFile),/witness_unavailable/);
   writeFileSync(otherFile,"public",{mode:0o600});
   const symlink=path.join(dir,"shortcut.pem");
-  const {symlinkSync}=await import("node:fs");
   symlinkSync(otherFile,symlink);
   assert.throws(()=>readProtectedWitnessFile(symlink),/witness_unavailable/);
 });
