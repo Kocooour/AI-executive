@@ -73,8 +73,13 @@ export default function TargetPrivateNoteAreaChooser({
   },[createEnabled,runtime,generation,writePhase]);
   useTargetTick(()=>setNonce(v=>v+1));
   const hidePrivate=()=>{
+    // Only short-lived read preflight/receipt requests belong to this modal;
+    // the already-dispatched CREATE belongs to the runtime coordinator.
+    beforePost.current?.abort();
     setChosen("");
     setState({kind:"unavailable",generation});
+    if(writePhase==="preflight")setWritePhase("idle");
+    if(writePhase==="receipt")setWritePhase("uncertain");
   };
   // Never display a cached private Area while a tab is hidden, offline, or
   // being frozen into BFCache. Flush synchronously at pagehide: waiting for
