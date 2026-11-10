@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
-import {mkdtempSync,mkdirSync,rmSync,writeFileSync,existsSync,readFileSync} from 'node:fs';
+import {mkdtempSync,mkdirSync,rmSync,writeFileSync,existsSync,readFileSync,copyFileSync,renameSync} from 'node:fs';
 import {spawn} from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
@@ -128,4 +128,45 @@ test('session revoked in another process before the pending write prevents every
    assert.equal(db.prepare("SELECT title FROM projects WHERE id='revoked-race'").get().title,'Before');
    assert.equal(db.prepare("SELECT COUNT(*) AS n FROM project_title_audit WHERE project_id='revoked-race'").get().n,0);
  } finally {worker.kill();}
+});
+
+test('untrusted post-COMMIT journal confirmation never acknowledges a project title as saved',()=>{
+ const isolated=bootstrapIsolatedTargetStore({stagingDirectory:path.join(root,'unconfirmed-title'),ownerUserId:'alice'});
+ const isolatedStore={stagingDirectory:isolated.directory,expectedRestoreGeneration:isolated.restoreGeneration};
+ const connection=new DatabaseSync(isolated.databasePath);
+ connection.prepare("INSERT INTO projects(id,area_id,title) VALUES ('unconfirmed',?,'Before')").run(isolated.unassignedAreaId);
+ const local=new TargetStagingSessionAuthority(isolatedStore);
+ try {
+   const token=local.issueWritable('alice').sessionToken;
+   const preview=readAuthorizedProjectTasksPage(connection,{actorUserId:'alice',projectId:'unconfirmed',
+     limit:1,offset:0,restoreGeneration:isolated.restoreGeneration});
+   assert.equal(preview.ok,true);
+   const cmd={projectId:'unconfirmed',commandId:randomUUID(),title:'Committed but unconfirmed',
+     expectedRevision:preview.page.revision,writeAreaId:isolated.unassignedAreaId,
+     restoreGeneration:isolated.restoreGeneration};
+   const original=DatabaseSync.prototype.exec;
+   let swapped=false;
+   try {
+     DatabaseSync.prototype.exec=function(sql,...args){
+       const returned=original.call(this,sql,...args);
+       if(!swapped&&sql==='COMMIT'){
+         // Swap the committed canonical inode before the journal confirm.
+         // The transaction's COMMIT happened, but the pinned write context
+         // must not claim a trusted journal acknowledgement.
+         swapped=true;
+         copyFileSync(isolated.databasePath,isolated.databasePath+'.copy');
+         renameSync(isolated.databasePath+'.copy',isolated.databasePath);
+       }
+       return returned;
+     };
+     assert.deepEqual(local.updateProjectTitle(token,cmd),{ok:false,reason:'write_failed'});
+   } finally {DatabaseSync.prototype.exec=original;}
+   assert.equal(swapped,true);
+   const current=new DatabaseSync(isolated.databasePath,{readOnly:true});
+   try {
+     assert.equal(current.prepare("SELECT title FROM projects WHERE id='unconfirmed'").get().title,
+       'Committed but unconfirmed');
+     assert.equal(current.prepare('SELECT COUNT(*) AS n FROM project_title_audit').get().n,1);
+   } finally {current.close();}
+ } finally {local.close();connection.close();}
 });
