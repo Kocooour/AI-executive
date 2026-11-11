@@ -200,9 +200,11 @@ test('successful detached write invalidates project lists even without a mounted
 test('unsent draft recovery detects title ABA, Area change and restore',async()=>{
  const {projectTitleDraftConflicts}=await import('../lib/target-project-title-edit-recovery.ts');
  const draft={original:'Before',title:'Draft',writeAreaId:'area',expectedRevision:'a'.repeat(64),restoreGeneration:gen,principalBinding:'A'.repeat(43)};
- const same={writeAreaId:'area',expectedRevision:draft.expectedRevision,restoreGeneration:gen};
+ const same={writeAreaId:'area',expectedRevision:draft.expectedRevision,restoreGeneration:gen,
+    principalBinding:draft.principalBinding};
  assert.equal(projectTitleDraftConflicts(draft,same,'Before'),false);
  assert.equal(projectTitleDraftConflicts(draft,{...same,expectedRevision:'b'.repeat(64)},'Before'),true);
  assert.equal(projectTitleDraftConflicts(draft,{...same,restoreGeneration:rotated},'Before'),true);
  assert.equal(projectTitleDraftConflicts(draft,{...same,writeAreaId:'other'},'Before'),true);
+  assert.equal(projectTitleDraftConflicts(draft,{...same,principalBinding:'B'.repeat(43)},'Before'),true);
 });

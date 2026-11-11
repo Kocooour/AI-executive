@@ -34,9 +34,9 @@ const headers=c=>({cookie:c,origin:'http://localhost:3001','content-type':'appli
 const read=async c=>detail(new Request(base+'tasks',{headers:headers(c)}),ctx);
 const write=async(c,command)=>PATCH(new Request(base+'title',{method:'PATCH',headers:headers(c),body:JSON.stringify(command)}),ctx);
 const receipt=async(c,commandId)=>recover(new Request('http://localhost:3001/api/target-staging/project-title/recovery',{method:'POST',headers:headers(c),body:JSON.stringify({commandId})}));
-const cancelWrite=async(c,commandId,restoreGeneration=stage.restoreGeneration)=>
+const cancelWrite=async(c,commandId,principalBinding='P'.repeat(43),restoreGeneration=stage.restoreGeneration)=>
  cancel(new Request(base+'title/cancel',{method:'POST',headers:headers(c),
-  body:JSON.stringify({commandId,restoreGeneration})}),ctx);
+  body:JSON.stringify({commandId,restoreGeneration,principalBinding})}),ctx);
 test('generic staging write flags do not expose project title preview or rename',async()=>{
  const old=process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_PROJECT_TITLE_WRITE_ENABLED;
  delete process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_PROJECT_TITLE_WRITE_ENABLED;
@@ -104,15 +104,19 @@ test('cancel fence serializes before lost PATCH and permanently rejects old UUID
   const oldTitle=db.prepare("SELECT title FROM projects WHERE id='proj'").get().title;
   const old={commandId:randomUUID(),title:'Must never write after cancellation',
     expectedRevision:p.snapshotRevision,writeAreaId:p.writeAreaId,restoreGeneration:p.restoreGeneration};
-  const first=await cancelWrite(alice,old.commandId);
+  const bob=cookie('bob');
+  const switched=await cancelWrite(bob,old.commandId,p.principalBinding);
+  assert.equal(switched.status,404,'B cannot cancel A command using A proof');
+  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM metadata WHERE key LIKE 'r3:project-title-cancel-v1:%'").get().n,0);
+  const first=await cancelWrite(alice,old.commandId,p.principalBinding);
   assert.equal(first.status,200,await first.clone().text());
-  assert.deepEqual(await first.json(),{status:'cancelled'});
+  assert.deepEqual(await first.json(),{status:'cancelled',principalBinding:p.principalBinding});
   // The committed fence must leave the strict store preflight readable.
   assert.deepEqual(inspectIsolatedTargetStore({...store,mode:'r2-model'}),
     {ok:true,mode:'r2-model',issues:[]});
   const reread=await preview(new Request(base+'title',{headers:headers(alice)}),ctx);
   assert.equal(reread.status,200,'the pinned store remains readable after cancellation');
-  const duplicate=await cancelWrite(cookie('alice'),old.commandId);
+  const duplicate=await cancelWrite(cookie('alice'),old.commandId,p.principalBinding);
   assert.deepEqual(await duplicate.json(),{status:'cancelled'});
   const tooLate=await write(alice,old);
   assert.equal(tooLate.status,409);
@@ -120,14 +124,14 @@ test('cancel fence serializes before lost PATCH and permanently rejects old UUID
   assert.equal(db.prepare("SELECT title FROM projects WHERE id='proj'").get().title,oldTitle);
   assert.equal((await receipt(alice,old.commandId)).status,200);
   assert.deepEqual(await (await receipt(alice,old.commandId)).json(),{status:'not_recorded'});
-  assert.equal((await cancelWrite(cookie('carol'),old.commandId)).status,404,
+  assert.equal((await cancelWrite(cookie('carol'),old.commandId,p.principalBinding)).status,404,
     'viewer cannot cancel another actor or issue a fence');
   const fresh={...old,commandId:randomUUID(),title:'New title after safe cancellation'};
   const success=await write(alice,fresh);
   assert.equal(success.status,200,await success.clone().text());
   assert.equal(db.prepare("SELECT title FROM projects WHERE id='proj'").get().title,fresh.title);
-  const already=await cancelWrite(alice,fresh.commandId);
-  assert.deepEqual(await already.json(),{status:'committed'});
+  const already=await cancelWrite(alice,fresh.commandId,p.principalBinding);
+  assert.deepEqual(await already.json(),{status:'committed',principalBinding:p.principalBinding});
   assert.equal(inspectIsolatedTargetStore({...store,mode:'r2-model'}).ok,true);
 });
 
@@ -137,7 +141,7 @@ test('simultaneous PATCH and cancel are ordered by pinned write transaction',asy
   const p=await (await preview(new Request(base+'title',{headers:headers(alice)}),ctx)).json();
   const command={commandId:randomUUID(),title:'Race winner title',
     expectedRevision:p.snapshotRevision,writeAreaId:p.writeAreaId,restoreGeneration:p.restoreGeneration};
-  const [rename,fence]=await Promise.all([write(alice,command),cancelWrite(alice,command.commandId)]);
+  const [rename,fence]=await Promise.all([write(alice,command),cancelWrite(alice,command.commandId,p.principalBinding)]);
   assert.equal(fence.status,200,await fence.clone().text());
   const status=(await fence.json()).status;
   if(status==='cancelled'){

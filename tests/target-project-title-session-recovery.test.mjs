@@ -322,6 +322,11 @@ test("cancel acknowledgements must be exact, bounded no-store JSON",async()=>{
   const signal=new AbortController().signal;
   const good=async()=>reply({status:"cancelled",principalBinding:A});
   assert.equal(await cancelProjectTitleReload(PROJECT,CMD,STAGE,A,signal,good),"cancelled");
+  let observedBody;
+  assert.equal(await cancelProjectTitleReload(PROJECT,CMD,STAGE,A,signal,async(_url,init)=>{
+    observedBody=JSON.parse(init.body);return reply({status:"cancelled",principalBinding:A});
+  }),"cancelled");
+  assert.deepEqual(observedBody,{commandId:CMD,restoreGeneration:STAGE,principalBinding:A});
   const committed=async()=>reply({status:"committed",principalBinding:A});
   assert.equal(await cancelProjectTitleReload(PROJECT,CMD,STAGE,A,signal,committed),"committed");
   for(const answer of [

@@ -179,7 +179,8 @@ test('post-COMMIT untrusted cancellation must not acknowledge a safe unlock',asy
  const local=new TargetStagingSessionAuthority(isolatedStore);
  try{
    const token=local.issueWritable('alice').sessionToken;
-   const command={projectId:'cancel-race',commandId:randomUUID(),restoreGeneration:isolated.restoreGeneration};
+   const command={projectId:'cancel-race',commandId:randomUUID(),
+     restoreGeneration:isolated.restoreGeneration,principalBinding:'A'.repeat(43)};
    const original=DatabaseSync.prototype.exec;let swapped=false;
    try{
      DatabaseSync.prototype.exec=function(sql,...args){
@@ -191,7 +192,7 @@ test('post-COMMIT untrusted cancellation must not acknowledge a safe unlock',asy
        }
        return result;
      };
-     assert.deepEqual(local.cancelProjectTitle(token,command),{ok:false,reason:'write_failed'});
+     assert.deepEqual(local.cancelProjectTitle(token,command,'alice'),{ok:false,reason:'write_failed'});
    }finally{DatabaseSync.prototype.exec=original;}
    assert.equal(swapped,true);
    const {projectTitleCancelKey}=await import('../lib/target-project-title-cancel.ts');
