@@ -207,12 +207,18 @@ test("UUID-only recovery is a strict, no-store request with no private command c
     assert.equal(init.method,"POST");assert.equal(init.cache,"no-store");
     assert.equal(init.credentials,"same-origin");
     assert.equal(init.headers["x-lumi-target-protocol"],"1");
-    return json({status:"committed"});
-  }),"committed");
+    return json({status:"committed",taskId:cmd.taskId});
+  }),{status:"committed",taskId:cmd.taskId});
   assert.equal(await checkPrivateTaskCreateRecovery(cmd.commandId,signal,
     async()=>json({status:"not_recorded"})),"not_recorded");
   assert.equal(await checkPrivateTaskCreateRecovery(cmd.commandId,signal,
-    async()=>json({status:"committed",title:cmd.title})),"unavailable");
+    async()=>json({status:"committed",title:cmd.title,taskId:cmd.taskId})),"unavailable");
+  assert.equal(await checkPrivateTaskCreateRecovery(cmd.commandId,signal,
+    async()=>json({status:"committed"})),"unavailable");
+  assert.equal(await checkPrivateTaskCreateRecovery(cmd.commandId,signal,
+    async()=>json({status:"committed",taskId:cmd.taskId.toUpperCase()})),"unavailable");
+  assert.equal(await checkPrivateTaskCreateRecovery(cmd.commandId,signal,
+    async()=>json({status:"not_recorded",taskId:cmd.taskId})),"unavailable");
   assert.equal(await checkPrivateTaskCreateRecovery(cmd.commandId,signal,
     async()=>json({error:"Not found"},404)),"denied");
 });
@@ -220,11 +226,13 @@ test("reload UUID recovery never unlocks on not_recorded or refusal; committed d
   const original=runtime(),cmd=command();
   assert.equal(await runPrivateTaskCreate(original,gen,cmd,async()=>"uncertain"),"uncertain");
   const reload=runtime();
+  const events=[];
+  const unsub=subscribePrivateTaskCreate(reload,gen,change=>events.push(change));
   const signal=new AbortController().signal;
   let probes=0;
   const check=async(id)=>{
     probes++;assert.equal(id,cmd.commandId);return probes===1?"not_recorded":
-      probes===2?"denied":"committed";
+      probes===2?"denied":{status:"committed",taskId:cmd.taskId};
   };
   assert.equal(await recoverPrivateTaskCreate(reload,gen,signal,check),"not_recorded");
   assert.equal(privateTaskCreateMarker(gen).kind,"blocked");
@@ -233,6 +241,9 @@ test("reload UUID recovery never unlocks on not_recorded or refusal; committed d
   assert.equal(await recoverPrivateTaskCreate(reload,gen,signal,check),"committed");
   assert.deepEqual(privateTaskCreateMarker(gen),{kind:"clear"});
   assert.equal(probes,3);
+  assert.deepEqual(events,[{generation:gen,confirmedTaskId:cmd.taskId}],
+    "the app shell receives the verified opaque navigation target after reload");
+  unsub();
 }));
 test("main shell wiring preserves note-only default, no Search tab, distinct task consent and feedback",()=>{
   const root=readFileSync(new URL("../app/ui/lumi-app-root.tsx",import.meta.url),"utf8");
