@@ -116,7 +116,8 @@ test("runtime preserves exact payload only in memory; no second POST after uncer
     assert.equal(privateTaskCreateMarker(generation).kind,"blocked");
     assert.equal(await checkPrivateTaskCreate(runtime,generation,new AbortController().signal,
       async exact=>{assert.deepEqual(exact,cmd);return "committed";}),"committed");
-    assert.equal(privateTaskCreateMarker(generation).kind,"clear");
+    assert.deepEqual(privateTaskCreateMarker(generation),
+      {kind:"blocked",commandId:cmd.commandId});
     assert.equal(trackedPrivateTaskCreate(runtime,generation),null);
     assert.equal(store.toString().includes(cmd.title),false);
     // A committed receipt is not yet a user-visible completion: it must
@@ -126,6 +127,7 @@ test("runtime preserves exact payload only in memory; no second POST after uncer
       async()=>{posts++;return "saved";}),"conflict");
     assert.equal(posts,1,"no second POST until the success notice was delivered");
     assert.equal(consumePrivateTaskCreateCompletion(runtime,generation),true);
+    assert.equal(privateTaskCreateMarker(generation).kind,"clear");
     assert.equal(await runPrivateTaskCreate(runtime,generation,command(),
       async()=>{posts++;return "saved";}),"saved");
     assert.equal(posts,2);
@@ -170,6 +172,7 @@ test("late successful POST is delivered after modal unmount, once, without a dra
     assert.equal(modalEvents,0,"unmounted task editor cannot receive events");
     assert.equal(hasPrivateTaskCreateCompletion(runtime,generation),true);
     assert.equal(consumePrivateTaskCreateCompletion(runtime,generation),true);
+    assert.equal(privateTaskCreateMarker(generation).kind,"clear");
     assert.equal(consumePrivateTaskCreateCompletion(runtime,generation),false,
       "completion is consumed exactly once");
     assert.equal(store.toString().includes(cmd.title),false);
@@ -189,8 +192,9 @@ test("pending completion blocks new POST across delayed and failed bridge verifi
       async()=>{posts++;return "saved";}),"saved");
     assert.equal(posts,1);
     assert.deepEqual(notices,[true]);
-    assert.deepEqual(privateTaskCreateMarker(generation),{kind:"clear"},
-      "the pending-delivery fence must work even after the tab marker cleared");
+    assert.deepEqual(privateTaskCreateMarker(generation),
+      {kind:"blocked",commandId:prior.commandId},
+      "the opaque tab marker must survive the success reply and future reload");
 
     // Simulate the always-mounted bridge's session refresh not finishing.
     let completeRefresh;
@@ -243,6 +247,7 @@ test("pending success blocks a reopened capture before the bridge subscribes",as
       async()=>{posts++;return "saved";}),"conflict");
     assert.equal(posts,1);
     assert.equal(consumePrivateTaskCreateCompletion(runtime,generation),true);
+    assert.equal(privateTaskCreateMarker(generation).kind,"clear");
     assert.equal(await runPrivateTaskCreate(runtime,generation,command(),
       async()=>{posts++;return "saved";}),"saved");
     assert.equal(posts,2);
@@ -262,7 +267,7 @@ test("acknowledged CREATE delivered after root listener mounts late",async()=>{
     unsub();
   });
 });
-test("committed receipt never unlocks or notifies when storage removal fails",async()=>{
+test("committed receipt remains durable and delivery fails closed on storage failure",async()=>{
   await withStorage(async store=>{
     const runtime={known:()=>true,generation:()=>generation,register:()=>()=>{}};
     const cmd=command();
@@ -270,19 +275,23 @@ test("committed receipt never unlocks or notifies when storage removal fails",as
     const un=subscribePrivateTaskCreateCompletion(runtime,()=>notifications++);
     assert.equal(await runPrivateTaskCreate(runtime,generation,cmd,
       async()=> "uncertain"),"uncertain");
-    const realRemove=store.removeItem;
-    store.removeItem=()=>{throw Error("sessionStorage unavailable");};
-    assert.equal(await checkPrivateTaskCreate(runtime,generation,
-      new AbortController().signal,async()=> "committed"),"unavailable");
-    assert.deepEqual(privateTaskCreateMarker(generation),
-      {kind:"blocked",commandId:cmd.commandId});
-    assert.equal(hasPrivateTaskCreateCompletion(runtime,generation),false);
-    assert.equal(notifications,0);
-    store.removeItem=realRemove;
     assert.equal(await checkPrivateTaskCreate(runtime,generation,
       new AbortController().signal,async()=> "committed"),"committed");
     assert.equal(notifications,1);
+    const realRemove=store.removeItem;
+    store.removeItem=()=>{throw Error("sessionStorage unavailable");};
+    assert.equal(consumePrivateTaskCreateCompletion(runtime,generation),false);
+    assert.deepEqual(privateTaskCreateMarker(generation),
+      {kind:"blocked",commandId:cmd.commandId});
+    assert.equal(hasPrivateTaskCreateCompletion(runtime,generation),true);
+    let posts=0;
+    assert.equal(await runPrivateTaskCreate(runtime,generation,command(),
+      async()=>{posts++;return "saved";}),"conflict");
+    assert.equal(posts,0);
+    store.removeItem=realRemove;
     assert.equal(consumePrivateTaskCreateCompletion(runtime,generation),true);
+    assert.equal(privateTaskCreateMarker(generation).kind,"clear");
+    assert.equal(consumePrivateTaskCreateCompletion(runtime,generation),false);
     un();
   });
 });
@@ -305,6 +314,59 @@ test("identity rotation during receipt reconciliation cannot deliver or clear ma
     assert.equal(consumePrivateTaskCreateCompletion(runtime,generation),true);
   });
 });
+test("confirmed HTTP success survives reload before user-visible verification",async()=>{
+  await withStorage(async store=>{
+    const original=command();
+    let posts=0;
+    const firstRuntime={known:()=>true,generation:()=>generation,register:()=>()=>{}};
+    assert.equal(await runPrivateTaskCreate(firstRuntime,generation,original,
+      async()=>{posts++;return "saved";}),"saved");
+    assert.equal(posts,1);
+    assert.equal(hasPrivateTaskCreateCompletion(firstRuntime,generation),true);
+    // Hidden tab or stalled verification leaves the opaque tab guard intact.
+    assert.deepEqual(privateTaskCreateMarker(generation),
+      {kind:"blocked",commandId:original.commandId});
+    // Full page reload loses the runtime WeakMap but preserves sessionStorage.
+    const reloaded={known:()=>true,generation:()=>generation,register:()=>()=>{}};
+    assert.equal(hasPrivateTaskCreateCompletion(reloaded,generation),false);
+    assert.equal(await runPrivateTaskCreate(reloaded,generation,command(),
+      async()=>{posts++;return "saved";}),"conflict");
+    assert.equal(posts,1);
+    assert.equal(await checkPrivateTaskCreate(reloaded,generation,
+      new AbortController().signal),"unavailable");
+    assert.deepEqual(privateTaskCreateMarker(generation),
+      {kind:"blocked",commandId:original.commandId});
+    // Identity rotation is not permission to submit a replacement either.
+    const other="B".repeat(43);
+    const rotated={known:()=>true,generation:()=>other,register:()=>()=>{}};
+    assert.equal(await runPrivateTaskCreate(rotated,other,command(),
+      async()=>{posts++;return "saved";}),"conflict");
+    assert.equal(posts,1);
+    for(const secret of [original.title,original.areaId,original.taskId,
+      original.restoreGeneration])
+      assert.equal(store.toString().includes(secret),false);
+  });
+});
+test("committed status stays blocked through reload before delivery",async()=>{
+  await withStorage(async ()=>{
+    const old={known:()=>true,generation:()=>generation,register:()=>()=>{}};
+    const exact=command();
+    assert.equal(await runPrivateTaskCreate(old,generation,exact,
+      async()=> "uncertain"),"uncertain");
+    assert.equal(await checkPrivateTaskCreate(old,generation,
+      new AbortController().signal,async original=>{
+        assert.deepEqual(original,exact);
+        return "committed";
+      }),"committed");
+    assert.deepEqual(privateTaskCreateMarker(generation),
+      {kind:"blocked",commandId:exact.commandId});
+    const reloaded={known:()=>true,generation:()=>generation,register:()=>()=>{}};
+    let posts=0;
+    assert.equal(await runPrivateTaskCreate(reloaded,generation,command(),
+      async()=>{posts++;return "saved";}),"conflict");
+    assert.equal(posts,0);
+  });
+});
 test("task completion hook is separate from unmounted editor and defers while hidden",async()=>{
   const {readFileSync}=await import("node:fs");
   const {fileURLToPath}=await import("node:url");
@@ -323,6 +385,9 @@ test("task completion hook is separate from unmounted editor and defers while hi
   assert.match(editor,/hasPrivateTaskCreateCompletion/);
   assert.match(editor,/target-task-create-awaiting-confirmation/);
   assert.match(editor,/marker.kind!=="clear"\|\|pendingConfirmation/);
+  assert.match(editor,/marker.kind!=="clear"&&!pendingConfirmation/);
+  const coordinator=src("lib/target-private-task-create-coordinator.ts");
+  assert.match(coordinator,/!confirmPrivateTaskCreate\(generation,acknowledged.commandId\)/);
   assert.match(src("lib/target-private-task-create-coordinator.ts"),
     /entries.has\(runtime\)\|\|hasPrivateTaskCreateCompletion\(runtime,generation\)/);
 });
