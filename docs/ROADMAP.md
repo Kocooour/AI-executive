@@ -1,5 +1,7 @@
 # Lumi — aktuální roadmapa vývoje
 
+**R3-FE-6 — další UI iterace, draft 2026-11-11:** po sloučených #390 a #393 integruje [Quick Capture samostatného soukromého úkolu](R3-FE-06-PRIVATE-TASK-CAPTURE.md) do hlavního UI s výslovným výběrem Oblasti, jedním idempotentním POST a fail-closed recovery. Vypnuté ve výchozím nastavení. **Před zapnutím zbývá vyřešit bezpečné obnovení původního příkazu po reloadu** bez ukládání textu; současný marker zůstává bezpečně blokovaný. Třetí/poslední PR milníku; další scope vyžaduje rozhodnutí vlastníka. Otevřené UI vyhledávání #391 mění stejný shell — nutná integrační kontrola před merge. Neprobíhá R4 ani produkční cutover.
+
 **Aktualizováno 2026-11-09 podle `main` @ `33054ef`.** R2d staging dokončeno; #341/#344/#352 jsou sloučené v R3, další hlavní detaily a integrace zbývají. **H1-synthetic je uzavřeno po sloučení #355** (navázalo na #354). Zatím bez reálného importu a claims. Nový model zůstává default-off, R4 a souhlas s reálným importem nejsou splněny. [Čistý start](decisions/2026-10-26-cisty-start-d3.md) dle [LUMI-FR-013](PRODUCT.md#lumi-fr-013). Starší checkpointy níže jsou historické.
 
 ## Aktuální pozice
