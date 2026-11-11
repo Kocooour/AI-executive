@@ -283,21 +283,22 @@ test("exact content-free child DTO parsing rejects all extra properties",()=>{
     assert.equal(parseTaskCreateStatusReply(reply),null);
 });
 
-test("opaque task recovery enforces current Area ACL, restore generation and exact record",async()=>{
-  const fx=fixture(),cmd=command(fx);
+test("opaque recovery stays content-free and actor-bound on real SQLite",async()=>{
+  const fx=fixture(),cmd=command(fx),bob=session(fx,"bob");
   assert.deepEqual(await checked(await recoverOpaque(cmd),200),{status:"not_recorded"});
   assert.deepEqual(await checked(await create(cmd),201),{ok:true,taskId:cmd.taskId});
-  const database=new DatabaseSync(fx.stage.databasePath);
+  assert.deepEqual(await checked(await recoverOpaque(cmd),200),{status:"committed"});
+  assert.deepEqual(await checked(await recoverOpaque(cmd,bob),200),
+    {status:"not_recorded"},"another actor has no matching receipt");
+  assert.deepEqual(await checked(await recoverOpaque({...cmd,commandId:randomUUID()}),200),
+    {status:"not_recorded"},"random UUID never exposes a title or task ID");
+  const db=new DatabaseSync(fx.stage.databasePath,{readOnly:true});
   try{
-    assert.deepEqual(await checked(await recoverOpaque(cmd),200),{status:"committed"});
-    // Revoke private ownership: the receipt cannot reveal the old title,
-    // original Area or even whether a CREATE existed.
-    const original=database.prepare("SELECT owner_user_id FROM areas WHERE id=?")
-      .get(cmd.areaId);
-    assert.ok(original);
-    database.prepare("UPDATE areas SET owner_user_id='bob' WHERE id=?").run(cmd.areaId);
-    assert.deepEqual(await checked(await recoverOpaque(cmd),404),{error:"Not found"});
-    database.prepare("UPDATE areas SET owner_user_id='alice' WHERE id=?").run(cmd.areaId);
-    assert.deepEqual(await checked(await recoverOpaque(cmd),200),{status:"committed"});
-  }finally{database.close();}
+    const rows=db.prepare("SELECT key,value FROM metadata WHERE key LIKE ?")
+      .all("r3:private-task-create-recovery-v1:%");
+    assert.equal(rows.length,1);
+    assert.equal(JSON.stringify(rows).includes(cmd.title),false);
+    assert.equal(JSON.stringify(rows).includes(cmd.commandId),false);
+    assert.equal(JSON.stringify(rows).includes(cmd.taskId),true);
+  }finally{db.close();}
 });
