@@ -172,7 +172,7 @@ test("denial is observable and cannot become a success",async()=>{
 
 test('unsent draft survives detail unmount and offline in same generation but is erased on identity change',async()=>{
   const {projectTitleDraft,setProjectTitleDraft,forgetProjectTitleDraft}=await import('../lib/target-project-title-edit-recovery.ts');
-  const runtime=fakeRuntime(),draft={original:'Before',title:'Unsaved private',writeAreaId:'area',expectedRevision:'a'.repeat(64),restoreGeneration:gen};
+  const runtime=fakeRuntime(),draft={original:'Before',title:'Unsaved private',writeAreaId:'area',expectedRevision:'a'.repeat(64),restoreGeneration:gen,principalBinding:'A'.repeat(43)};
   setProjectTitleDraft(runtime,gen,id,draft);
   assert.deepEqual(projectTitleDraft(runtime,gen,id),draft);
   // Inspector unmount and network status do not dispose runtime; callers must
@@ -199,7 +199,7 @@ test('successful detached write invalidates project lists even without a mounted
 
 test('unsent draft recovery detects title ABA, Area change and restore',async()=>{
  const {projectTitleDraftConflicts}=await import('../lib/target-project-title-edit-recovery.ts');
- const draft={original:'Before',title:'Draft',writeAreaId:'area',expectedRevision:'a'.repeat(64),restoreGeneration:gen};
+ const draft={original:'Before',title:'Draft',writeAreaId:'area',expectedRevision:'a'.repeat(64),restoreGeneration:gen,principalBinding:'A'.repeat(43)};
  const same={writeAreaId:'area',expectedRevision:draft.expectedRevision,restoreGeneration:gen};
  assert.equal(projectTitleDraftConflicts(draft,same,'Before'),false);
  assert.equal(projectTitleDraftConflicts(draft,{...same,expectedRevision:'b'.repeat(64)},'Before'),true);

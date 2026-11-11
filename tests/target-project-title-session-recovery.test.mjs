@@ -8,6 +8,7 @@ import {
 import {
   hasSealedProjectTitleEdit,resumeSealedProjectTitleEdit,forgetSealedProjectTitleEdit,
   runTrackedProjectTitleEdit,trackedProjectTitleEdit,
+  setProjectTitleDraft,projectTitleDraft,hasSealedProjectTitleDraft,resumeSealedProjectTitleDraft,
 } from "../lib/target-project-title-edit-recovery.ts";
 import {
   recoverProjectTitleReceipt,PROJECT_TITLE_RECEIPT_TIMEOUT_MS,
@@ -152,6 +153,22 @@ test("malformed first 409 cannot release an uncertain rename marker",async()=>{
   assert.deepEqual(result,{outcome:"uncertain"});
   assert.equal(projectTitleReloadMarker(A).kind,"blocked");
   clean();rt.securityReset();
+});
+test("unsent draft is sealed on expiry and only resumes after same actor proof",()=>{
+  clean();const rt=runtime();
+  const draft={original:"Before",title:"Unsent private draft",writeAreaId:command.writeAreaId,
+    expectedRevision:command.expectedRevision,restoreGeneration:STAGE,principalBinding:A};
+  setProjectTitleDraft(rt,A,PROJECT,draft);
+  rt.expire();
+  assert.equal(projectTitleDraft(rt,A,PROJECT),null);
+  assert.equal(hasSealedProjectTitleDraft(rt,PROJECT),true);
+  rt.relogin(B);
+  assert.equal(resumeSealedProjectTitleDraft(rt,B,PROJECT,{...preview,principalBinding:OTHER}),"blocked");
+  assert.equal(hasSealedProjectTitleDraft(rt,PROJECT),false);
+  const second=runtime();setProjectTitleDraft(second,A,PROJECT,draft);second.expire();second.relogin(B);
+  assert.equal(resumeSealedProjectTitleDraft(second,B,PROJECT,preview),"resumed");
+  assert.deepEqual(projectTitleDraft(second,B,PROJECT),draft);
+  second.securityReset();clean();
 });
 test("expired in-flight command is sealed until fresh SERVER actor proof matches",async()=>{
   clean();const rt=runtime();

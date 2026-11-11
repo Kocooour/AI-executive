@@ -29,7 +29,7 @@ type Entry={
   pending:Promise<ProjectTitleEditSaveResult>|null;
   cancel:()=>void;
 };
-export type ProjectTitleDraft={original:string;title:string;writeAreaId:string;expectedRevision:string;restoreGeneration:string};
+export type ProjectTitleDraft={original:string;title:string;writeAreaId:string;expectedRevision:string;restoreGeneration:string;principalBinding:string};
 export function projectTitleDraftConflicts(draft:ProjectTitleDraft,preview:ProjectTitleEditPreview,currentTitle:string):boolean{
   return draft.original!==currentTitle||draft.writeAreaId!==preview.writeAreaId||
     draft.expectedRevision!==preview.expectedRevision||
@@ -45,25 +45,35 @@ type Bucket={
 const buckets=new WeakMap<ProjectTitleEditRuntime,Bucket>();
 const BINDING=/^[A-Za-z0-9_-]{43}$/;
 type SealedEntry={command:ProjectTitleEditCommand;principalBinding:string};
-type SealedBucket={entries:Map<string,SealedEntry>;unsubscribe:()=>void};
+type SealedBucket={entries:Map<string,SealedEntry>;drafts:Map<string,ProjectTitleDraft>;unsubscribe:()=>void};
 const sealed=new WeakMap<ProjectTitleEditRuntime,SealedBucket>();
 function clearSealed(runtime:ProjectTitleEditRuntime):void{
   const state=sealed.get(runtime);if(!state)return;
-  sealed.delete(runtime);state.entries.clear();state.unsubscribe();
+  sealed.delete(runtime);state.entries.clear();state.drafts.clear();state.unsubscribe();
+}
+function ensureSealed(runtime:ProjectTitleEditRuntime):SealedBucket|null{
+  if(!runtime.subscribeSecurityClear)return null;
+  let state=sealed.get(runtime);
+  if(!state){
+    state={entries:new Map(),drafts:new Map(),unsubscribe:()=>{}};
+    sealed.set(runtime,state);
+    state.unsubscribe=runtime.subscribeSecurityClear(()=>clearSealed(runtime));
+    if(sealed.get(runtime)!==state)return null;
+  }
+  return state;
 }
 function retainExpired(runtime:ProjectTitleEditRuntime,id:string,entry:Entry):void{
   const binding=entry.principalBinding;
   // Do not retain private content when the server-issued actor proof or
   // runtime security-clear subscription is unavailable.
-  if(!binding||!BINDING.test(binding)||!runtime.subscribeSecurityClear)return;
-  let state=sealed.get(runtime);
-  if(!state){
-    state={entries:new Map(),unsubscribe:()=>{}};
-    sealed.set(runtime,state);
-    state.unsubscribe=runtime.subscribeSecurityClear(()=>clearSealed(runtime));
-    if(sealed.get(runtime)!==state)return;
-  }
-  state.entries.set(id,{command:entry.command,principalBinding:binding});
+  if(!binding||!BINDING.test(binding))return;
+  ensureSealed(runtime)?.entries.set(id,{command:entry.command,principalBinding:binding});
+}
+function retainExpiredDraft(runtime:ProjectTitleEditRuntime,id:string,draft:ProjectTitleDraft):void{
+  // The title remains memory-only. Server identity/Area proof is required
+  // before any UI reads it following a coded session expiry.
+  if(!BINDING.test(draft.principalBinding))return;
+  ensureSealed(runtime)?.drafts.set(id,{...draft});
 }
 /** Only the existence of a sealed write can be observed pre-reauth. No title. */
 export const hasSealedProjectTitleEdit=(runtime:ProjectTitleEditRuntime,id:string):boolean=>
@@ -72,7 +82,7 @@ export const hasSealedProjectTitleEdit=(runtime:ProjectTitleEditRuntime,id:strin
 export function forgetSealedProjectTitleEdit(runtime:ProjectTitleEditRuntime,id:string):void{
   const state=sealed.get(runtime);if(!state)return;
   state.entries.delete(id);
-  if(state.entries.size===0)clearSealed(runtime);
+  if(state.entries.size===0&&state.drafts.size===0)clearSealed(runtime);
 }
 /** The only way to unseal a command after expiry: separately authenticated
  * GET preview must give the SAME HMAC actor/project/restore binding, and the
@@ -91,7 +101,7 @@ export function resumeSealedProjectTitleEdit(
      held.command.writeAreaId!==preview.writeAreaId||
      held.command.restoreGeneration.toLowerCase()!==preview.restoreGeneration.toLowerCase()){
     state?.entries.delete(id);
-    if(state?.entries.size===0)clearSealed(runtime);
+    if(state&&state.entries.size===0&&state.drafts.size===0)clearSealed(runtime);
     return "blocked";
   }
   const bucket=current(runtime,generation);
@@ -100,7 +110,34 @@ export function resumeSealedProjectTitleEdit(
     principalBinding:held.principalBinding,wasUncertain:true,
     controller:null,pending:null,cancel:()=>{}});
   state?.entries.delete(id);
-  if(state?.entries.size===0)clearSealed(runtime);
+  if(state&&state.entries.size===0&&state.drafts.size===0)clearSealed(runtime);
+  changed(bucket,id);
+  return "resumed";
+}
+/** Only existence is visible until a new authenticated preview and project read. */
+export const hasSealedProjectTitleDraft=(runtime:ProjectTitleEditRuntime,id:string):boolean=>
+  sealed.get(runtime)?.drafts.has(id)===true;
+export function forgetSealedProjectTitleDraft(runtime:ProjectTitleEditRuntime,id:string):void{
+  const state=sealed.get(runtime);if(!state)return;
+  state.drafts.delete(id);
+  if(state.entries.size===0&&state.drafts.size===0)clearSealed(runtime);
+}
+export function resumeSealedProjectTitleDraft(
+  runtime:ProjectTitleEditRuntime,generation:string,id:string,preview:ProjectTitleEditPreview,
+):"resumed"|"blocked"|"missing"{
+  const state=sealed.get(runtime),draft=state?.drafts.get(id);
+  if(!draft)return "missing";
+  if(!runtime.known()||runtime.generation()!==generation)return "blocked";
+  if(draft.principalBinding!==preview.principalBinding||
+     draft.writeAreaId!==preview.writeAreaId||
+     draft.restoreGeneration.toLowerCase()!==preview.restoreGeneration.toLowerCase()){
+    forgetSealedProjectTitleDraft(runtime,id);
+    return "blocked";
+  }
+  const bucket=current(runtime,generation);
+  if(!bucket)return "blocked";
+  bucket.drafts.set(id,{...draft});
+  forgetSealedProjectTitleDraft(runtime,id);
   changed(bucket,id);
   return "resumed";
 }
@@ -118,6 +155,8 @@ function purge(runtime:ProjectTitleEditRuntime,bucket:Bucket,reason:"expired"|"r
   if(reason==="expired")for(const [id,entry] of bucket.entries)
     if(entry.phase==="saving"||entry.phase==="uncertain"||entry.wasUncertain)
       retainExpired(runtime,id,entry);
+  if(reason==="expired")for(const [id,draft] of bucket.drafts)
+    retainExpiredDraft(runtime,id,draft);
   for(const entry of bucket.entries.values())entry.cancel();
   bucket.entries.clear();
   bucket.drafts.clear();
