@@ -6,7 +6,7 @@ import {useTargetGeneration,useTargetRuntime} from './target-data-provider';
 import {queuedTargetFetch} from '../../lib/target-read-queue';
 import {loadProjectTasksPage,type ProjectTasksProject} from '../../lib/target-staging-project-tasks-client';
 import {loadProjectTitleEditPreview,validProjectTitleEditText,type ProjectTitleEditCommand,type ProjectTitleEditPreview} from '../../lib/target-staging-project-title-edit-client';
-import {forgetTrackedProjectTitleEdit,runTrackedProjectTitleEdit,subscribeTrackedProjectTitleEdit,trackedProjectTitleEdit,projectTitleDraft,setProjectTitleDraft,forgetProjectTitleDraft,projectTitleDraftConflicts,hasSealedProjectTitleEdit,resumeSealedProjectTitleEdit,forgetSealedProjectTitleEdit,type TrackedProjectTitleEditPhase} from '../../lib/target-project-title-edit-recovery';
+import {forgetTrackedProjectTitleEdit,runTrackedProjectTitleEdit,subscribeTrackedProjectTitleEdit,trackedProjectTitleEdit,projectTitleDraft,setProjectTitleDraft,forgetProjectTitleDraft,projectTitleDraftConflicts,hasSealedProjectTitleEdit,resumeSealedProjectTitleEdit,forgetSealedProjectTitleEdit,hasSealedProjectTitleDraft,resumeSealedProjectTitleDraft,forgetSealedProjectTitleDraft,type TrackedProjectTitleEditPhase} from '../../lib/target-project-title-edit-recovery';
 import type {DetailLanguage} from '../../lib/target-detail-copy';
 import {projectTitleReloadMarker,reserveProjectTitleReload,confirmProjectTitleReload}
   from '../../lib/target-project-title-reload';
@@ -37,8 +37,12 @@ export default function TargetProjectTitleEditor({project,language,onCommitted,o
  },[mode.kind]);
  useEffect(()=>()=>{seq.current++;controller.current?.abort();},[]);
  useEffect(()=>{if(alive)return;seq.current++;controller.current?.abort();setMode({kind:'idle'});setMessage('');},[alive]);
+ function sessionExpired(){
+  void runtime?.reportRefusal("session_expired");
+  setMode({kind:'recovery'});setMessage(copy.recovering);
+ }
  function refuse(){
-   if(runtime){forgetTrackedProjectTitleEdit(runtime,bound.current,project.id);forgetProjectTitleDraft(runtime,bound.current,project.id);forgetSealedProjectTitleEdit(runtime,project.id);}
+   if(runtime){forgetTrackedProjectTitleEdit(runtime,bound.current,project.id);forgetProjectTitleDraft(runtime,bound.current,project.id);forgetSealedProjectTitleEdit(runtime,project.id);forgetSealedProjectTitleDraft(runtime,project.id);}
    seq.current++;controller.current?.abort();setMode({kind:'denied'});setMessage(copy.denied);onAccessRefused();
  }
  useEffect(()=>{
@@ -54,7 +58,8 @@ export default function TargetProjectTitleEditor({project,language,onCommitted,o
    const existing=trackedProjectTitleEdit(runtime,bound.current,project.id);
    if(existing){if(existing.phase==='saved'){forgetTrackedProjectTitleEdit(runtime,bound.current,project.id);onCommitted();}
      else if(existing.phase==='denied')refuse();else{setMode({kind:'recovery'});void recover();}}
-   else if(hasSealedProjectTitleEdit(runtime,project.id)){setMode({kind:'recovery'});void recoverSealed();}
+   else if(hasSealedProjectTitleEdit(runtime,project.id)){setMode({kind:'checking'});void recoverSealed();}
+   else if(hasSealedProjectTitleDraft(runtime,project.id)){setMode({kind:'checking'});void recoverSealedDraft();}
    else if(projectTitleReloadMarker(bound.current).kind!=='clear'){setMode({kind:'reload'});}
    else if(projectTitleDraft(runtime,bound.current,project.id)){setMode({kind:'recovery'});void recoverDraft();}
    return unsubscribe;
@@ -72,7 +77,7 @@ export default function TargetProjectTitleEditor({project,language,onCommitted,o
    setMode({kind:'checking'});setMessage('');
    const result=await loadProjectTitleEditPreview(project.id,current.signal,readFetch);
    if(id!==seq.current||current.signal.aborted||!stillBound())return;
-   if(result.ok===false){if(result.reason==='denied')refuse();else{setMode({kind:'recovery'});setMessage(copy.recovering);}return;}
+   if(result.ok===false){if(result.reason==='expired')sessionExpired();else if(result.reason==='denied')refuse();else{setMode({kind:'recovery'});setMessage(copy.recovering);}return;}
    if(result.preview.writeAreaId!==project.areaId||result.preview.writeAreaId!==tracked.command.writeAreaId||result.preview.restoreGeneration.toLowerCase()!==tracked.command.restoreGeneration.toLowerCase()){refuse();return;}
    const latest=trackedProjectTitleEdit(runtime,bound.current,project.id);
    if(!latest||latest.command.commandId!==tracked.command.commandId)return;
@@ -91,7 +96,7 @@ export default function TargetProjectTitleEditor({project,language,onCommitted,o
    setMode({kind:'checking'});setMessage('');
    const result=await loadProjectTitleEditPreview(project.id,ctrl.signal,readFetch);
    if(seqId!==seq.current||ctrl.signal.aborted||!stillBound())return;
-   if(result.ok===false){if(result.reason==='denied')refuse();
+   if(result.ok===false){if(result.reason==='expired')sessionExpired();else if(result.reason==='denied')refuse();
      else{setMode({kind:'recovery'});setMessage(copy.recovering);}return;}
    if(result.preview.writeAreaId!==project.areaId){refuse();return;}
    const resolved=resumeSealedProjectTitleEdit(runtime,bound.current,project.id,result.preview);
@@ -126,6 +131,36 @@ export default function TargetProjectTitleEditor({project,language,onCommitted,o
      status.status==='denied'?copy.denied:
      status.status==='committed'?copy.differentActor:copy.offline);
  }
+ /** Restore an unsent draft only after fresh authorized project and actor proofs. */
+ async function recoverSealedDraft(){
+  if(!runtime||!alive||!hasSealedProjectTitleDraft(runtime,project.id))return;
+  if(!stillBound()){setMode({kind:'recovery'});setMessage(copy.offline);return;}
+  const n=++seq.current;controller.current?.abort();const ctrl=new AbortController();controller.current=ctrl;
+  setMode({kind:'checking'});setMessage('');
+  const preview=await loadProjectTitleEditPreview(project.id,ctrl.signal,readFetch);
+  if(n!==seq.current||ctrl.signal.aborted||!stillBound())return;
+  if(preview.ok===false){
+   if(preview.reason==='expired')sessionExpired();
+   else if(preview.reason==='denied')refuse();
+   else{setMode({kind:'recovery'});setMessage(copy.recovering);}return;
+  }
+  const fresh=await loadProjectTasksPage({projectId:project.id,limit:1,signal:ctrl.signal},readFetch);
+  if(n!==seq.current||ctrl.signal.aborted||!stillBound())return;
+  if(fresh.ok===false){
+   if(fresh.reason==='signed-out'||fresh.reason==='not-found')refuse();
+   else{setMode({kind:'recovery'});setMessage(copy.recovering);}return;
+  }
+  if(fresh.page.project.areaId!==preview.preview.writeAreaId||
+     project.areaId!==preview.preview.writeAreaId){refuse();return;}
+  if(resumeSealedProjectTitleDraft(runtime,bound.current,project.id,preview.preview)!=='resumed'){
+   setMode({kind:'denied'});setMessage(copy.differentActor);return;
+  }
+  const draft=projectTitleDraft(runtime,bound.current,project.id);
+  if(!draft){setMode({kind:'idle'});return;}
+  const conflict=projectTitleDraftConflicts(draft,preview.preview,fresh.page.project.title)||project.title!==draft.original;
+  setMode({kind:'draft',draft:{preview:preview.preview,original:draft.original,title:draft.title,
+   command:null,phase:conflict?'conflict':'edit'}});
+ }
  async function recoverDraft(){
    if(!runtime||!alive)return;
    const stored=projectTitleDraft(runtime,bound.current,project.id);
@@ -135,7 +170,7 @@ export default function TargetProjectTitleEditor({project,language,onCommitted,o
    setMode({kind:'checking'});setMessage('');
    const result=await loadProjectTitleEditPreview(project.id,current.signal,readFetch);
    if(id!==seq.current||current.signal.aborted||!stillBound())return;
-   if(result.ok===false){if(result.reason==='denied')refuse();else{setMode({kind:'recovery'});setMessage(copy.recovering);}return;}
+   if(result.ok===false){if(result.reason==='expired')sessionExpired();else if(result.reason==='denied')refuse();else{setMode({kind:'recovery'});setMessage(copy.recovering);}return;}
    // Only reveal the stored title after a fresh writer ACL and same Area check.
    if(result.preview.writeAreaId!==stored.writeAreaId||result.preview.writeAreaId!==project.areaId){refuse();return;}
    const fresh=await loadProjectTasksPage({projectId:project.id,limit:1,signal:current.signal},readFetch);
@@ -149,6 +184,7 @@ export default function TargetProjectTitleEditor({project,language,onCommitted,o
    if(!runtime||!alive)return;
    if(trackedProjectTitleEdit(runtime,bound.current,project.id)){void recover();return;}
    if(hasSealedProjectTitleEdit(runtime,project.id)){void recoverSealed();return;}
+   if(hasSealedProjectTitleDraft(runtime,project.id)){void recoverSealedDraft();return;}
    const marker=projectTitleReloadMarker(bound.current);
    if(marker.kind!=='clear'){
      setMode({kind:'reload'});
@@ -160,7 +196,7 @@ export default function TargetProjectTitleEditor({project,language,onCommitted,o
    setMode({kind:'checking'});setMessage('');
    const result=await loadProjectTitleEditPreview(project.id,current.signal,readFetch);
    if(id!==seq.current||current.signal.aborted||!stillBound())return;
-   if(result.ok===false){if(result.reason==='denied')refuse();else{setMode({kind:'idle'});setMessage(copy.offline);}return;}
+   if(result.ok===false){if(result.reason==='expired')sessionExpired();else if(result.reason==='denied')refuse();else{setMode({kind:'idle'});setMessage(copy.offline);}return;}
    // The edit token must be associated with the same visible project/Area;
    // any later concurrent change is still rejected by transactional CAS.
    const fresh=await loadProjectTasksPage({projectId:project.id,limit:1,signal:current.signal},readFetch);
@@ -212,7 +248,8 @@ export default function TargetProjectTitleEditor({project,language,onCommitted,o
    {mode.kind==='recovery'&&<><p role="status">{copy.recovering}</p><button type="button" onClick={()=>{
      if(runtime&&trackedProjectTitleEdit(runtime,bound.current,project.id))void recover();
      else if(runtime&&hasSealedProjectTitleEdit(runtime,project.id))void recoverSealed();
-     else void recoverDraft();}}>{copy.recover}</button></>}
+     else if(runtime&&hasSealedProjectTitleDraft(runtime,project.id))void recoverSealedDraft();
+      else void recoverDraft();}}>{copy.recover}</button></>}
    {mode.kind==='reload'&&<><p role="status">{copy.reload}</p><button type="button" onClick={()=>void reconcileReload()}>{copy.receipt}</button></>}
    {message&&<p role="alert">{message}</p>}</div>;
  const d=mode.draft,conflict=d.phase==='conflict'||(d.command===null&&(project.title!==d.original||project.areaId!==d.preview.writeAreaId));
