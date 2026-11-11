@@ -7,10 +7,10 @@ import TargetPrivateNoteAreaChooser from "./target-private-note-area-chooser";
 import TargetPrivateTaskAreaChooser from "./target-private-task-area-chooser";
 
 export default function TargetPrivateQuickCapture({
-  language="cs",onClose,onNoteCreated,onTaskCreated,initialKind="choose",
+  language="cs",onClose,onNoteCreated,initialKind="choose",
 }:{
   language?:"cs"|"en";onClose:()=>void;onNoteCreated:()=>void;
-  onTaskCreated:()=>void;initialKind?:"choose"|"note";
+  initialKind?:"choose"|"note";
 }){
   const [kind,setKind]=useState<"choose"|"note"|"task">(initialKind);
   const initialRef=useRef<HTMLButtonElement>(null);
@@ -18,7 +18,7 @@ export default function TargetPrivateQuickCapture({
   if(kind==="note")return <TargetPrivateNoteAreaChooser language={language}
     createEnabled onClose={onClose} onCreated={onNoteCreated}/>;
   if(kind==="task")return <TargetPrivateTaskAreaChooser language={language}
-    onClose={onClose} onCreated={onTaskCreated}/>;
+    onClose={onClose}/>;
   const cs=language==="cs";
   return <div className="captureOverlay" onClick={onClose}>
     <div className="captureModal" role="dialog" aria-modal="true"
