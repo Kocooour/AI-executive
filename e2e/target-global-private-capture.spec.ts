@@ -214,6 +214,10 @@ test("BFCache lifecycle and real back navigation never revive private draft or A
   await page.goBack({waitUntil:"domcontentloaded"});
   const restored=await page.evaluate(()=>
     (window as Window & {__lumiBfcacheRestored?:boolean}).__lumiBfcacheRestored);
+  // Release-only browser gate MUST prove a real BFCache cache hit; the regular
+  // PR test separately exercises the persisted event path and reload fallback.
+  if(process.env.LUMI_REAL_BFCACHE_E2E==="true")
+    expect(restored,"real BFCache restore was not observed (pageshow.persisted never fired); this release browser run cannot certify BFCache privacy").toBe(true);
   if(restored){
     await expect(modal).toBeVisible();
   }else{
