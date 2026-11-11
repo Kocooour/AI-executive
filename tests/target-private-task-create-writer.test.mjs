@@ -100,6 +100,10 @@ test("trusted writable owner creates once, exact replay adds nothing and change 
   assert.deepEqual(f.authority.createPrivateTask(write.sessionToken,{
     ...cmd,commandId:randomUUID(),
   }),rejected("unavailable"),"another command must not overwrite an existing ID");
+  assert.deepEqual(f.authority.createPrivateTask(write.sessionToken,{
+    ...cmd,taskId:randomUUID(),
+  }),rejected("idempotency_conflict"),
+  "same command UUID with a new task ID MUST NOT create a second task");
   assert.deepEqual(state(f),after);
   assert.deepEqual(inspectIsolatedTargetStore({stagingDirectory:f.stage.directory}),
     {ok:true,mode:"stage",issues:[]});
