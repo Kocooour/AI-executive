@@ -107,3 +107,64 @@ test('aborting active read releases the slot even when fetch ignores abort',asyn
  await tick();
  assert.equal(cancelled,true,'late response stream must not leak into another session');
 });
+
+test('repeated aborts never exceed two physical reads while transports ignore cancellation',async()=>{
+ const pending=[];
+ const started=[];
+ let physical=0,peak=0;
+ const q=queuedTargetFetch(url=>{
+   const name=String(url);started.push(name);
+   physical++;peak=Math.max(peak,physical);
+   return new Promise(resolve=>pending.push(()=>{
+     physical--;resolve(new Response("finished"));
+   }));
+ });
+ const firstController=new AbortController();
+ const first=q("/zombie-1",{signal:firstController.signal});
+ await tick();
+ firstController.abort();
+ await assert.rejects(first);
+ assert.deepEqual(targetReadQueueState(),{active:0,waiting:0});
+
+ const secondController=new AbortController();
+ const second=q("/zombie-2",{signal:secondController.signal});
+ await tick();
+ secondController.abort();
+ await assert.rejects(second);
+ assert.equal(physical,2,'both ignored-abort HTTP operations remain physically active');
+
+ // A third request must fail promptly rather than dispatching a new server
+ // child, even though both previous logical queue slots were released.
+ await assert.rejects(q("/blocked"),/Target read capacity exhausted/);
+ assert.deepEqual(started,["/zombie-1","/zombie-2"]);
+ assert.equal(peak,2);
+ assert.deepEqual(targetReadQueueState(),{active:0,waiting:0});
+
+ // When the underlying HTTP promise actually settles, a physical slot is
+ // available again. Its late content must not be delivered to either actor.
+ pending[0]();
+ await tick();
+ const healthy=q("/healthy");
+ await tick();
+ assert.deepEqual(started,["/zombie-1","/zombie-2","/healthy"]);
+ assert.equal(physical,2);
+ pending[2]();
+ assert.equal((await healthy).status,200);
+ pending[1]();
+ await tick();
+ assert.equal(physical,0);
+ assert.equal(peak,2);
+ assert.deepEqual(targetReadQueueState(),{active:0,waiting:0});
+});
+
+test('abort before the dispatch microtask never starts an HTTP read',async()=>{
+ let started=0;
+ const q=queuedTargetFetch(async()=>{started++;return new Response("not expected");});
+ const controller=new AbortController();
+ const pending=q("/pre-aborted",{signal:controller.signal});
+ controller.abort();
+ await assert.rejects(pending);
+ await tick();
+ assert.equal(started,0);
+ assert.deepEqual(targetReadQueueState(),{active:0,waiting:0});
+});
