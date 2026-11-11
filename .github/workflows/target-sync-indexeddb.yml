@@ -46,6 +46,6 @@ jobs:
       - name: Focused note checkpoint and error classification unit tests
         run: node --experimental-loader ./tests/ts-loader.mjs --test tests/target-note-sync-persistent.test.mjs tests/server-errors.test.mjs tests/target-note-lifecycle-journal.test.mjs tests/target-note-sync-read-model.test.mjs tests/target-note-sync-pages.test.mjs
       - name: Install focused browser
-        run: pnpm exec playwright install --with-deps chromium
+        run: pnpm exec playwright install chromium
       - name: Run isolated IndexedDB scenarios
         run: pnpm exec playwright test --config e2e/playwright.indexeddb.config.ts

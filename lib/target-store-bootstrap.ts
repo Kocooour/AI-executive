@@ -87,6 +87,8 @@ export const TARGET_STAGING_MAX_RECEIPTS = 4096;
  * cap is also bounded by the tombstone and delete-audit caps below.
  */
 export const TARGET_STAGING_DELETE_RECEIPT_PREFIX = "r2:task-delete-receipt-v1:";
+/** Staging-only actor+command receipt for private standalone task CREATE. */
+export const TARGET_STAGING_PRIVATE_TASK_CREATE_RECEIPT_PREFIX = "r3:private-task-create-receipt-v1:";
 /** R2d.3h staging-only complete/reopen receipts; audited by the append-only anchor journal. */
 export const TARGET_STAGING_TEMPORAL_STATUS_RECEIPT_PREFIX = "r2:task-temporal-status-receipt-v1:";
 /** R2d.3i.1 isolated task dueOn mutation receipts; capped independently from status writes. */
