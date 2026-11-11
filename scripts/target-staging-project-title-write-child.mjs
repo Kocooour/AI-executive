@@ -17,7 +17,9 @@ try {
   if (!available) throw new Error("Unavailable");
   const input = await readTitleCommand(process.stdin);
   if (!input || typeof input !== "object" || Array.isArray(input) ||
-      Object.keys(input).sort().join(",") !== "commandId,expectedRevision,projectId,restoreGeneration,title,writeAreaId") {
+      Object.keys(input).sort().join(",") !== "command,expectedActorUserId" ||
+      typeof input.expectedActorUserId !== "string" ||
+      !/^[A-Za-z0-9_.:@-]{1,120}$/.test(input.expectedActorUserId)) {
     throw new Error("Invalid input");
   }
   const authority = new TargetStagingSessionAuthority({
@@ -27,10 +29,11 @@ try {
     const resolved = resolveChildActor({ stagingDirectory, expectedRestoreGeneration, ownerUserId });
     // An unresolvable durable session produces no output; the HTTP parent
     // re-verifies the live session and answers 401, never a task result.
-    if (!resolved) throw new Error("Unavailable");
+    if (!resolved || resolved.actor !== input.expectedActorUserId) throw new Error("Unavailable");
     const issued = authority.issueWritable(resolved.actor);
     if (!issued) throw new Error("Unavailable");
-    const result = authority.updateProjectTitle(issued.sessionToken, input, resolved.sessionTokenHash);
+    const result = authority.updateProjectTitle(issued.sessionToken, input.command,
+      input.expectedActorUserId, resolved.sessionTokenHash);
     if (result.ok) process.stdout.write(JSON.stringify(result.replayed
       ? { ok: true, replayed: true } : { ok: true }));
     else if (result.reason === "resync_required" || result.reason === "write_area_mismatch" ||

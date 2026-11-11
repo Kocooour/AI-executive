@@ -73,7 +73,7 @@ export async function GET(request: Request, context: { params: Promise<{ project
   const access = result.page.linearization.areas[0]?.access;
   if (access !== "private-owner" && access !== "editor" && access !== "admin") return answer(404, "Not found");
   // Only release a same-actor comparison proof AFTER verified live Area ACL.
-  // This opaque proof is not an authorization credential and is never read by PATCH.
+  // This opaque proof is not an authorization grant; PATCH re-checks it.
   const principalBinding=projectTitlePrincipalBinding(
     result.page.linearization.actorUserId,projectId,base.expectedRestoreGeneration);
   if(!principalBinding)return answer(503,"Staging unavailable");
@@ -89,7 +89,7 @@ export async function GET(request: Request, context: { params: Promise<{ project
   }
 }
 
-/** Single title command (private owner or shared editor/admin; ACL re-checked in the write TX); no actor/scope/Area or project ID in JSON. */
+/** Single title command; no actor/scope/project ID in JSON. The principal binding is a comparison proof, NOT a write grant. */
 export async function PATCH(request: Request,
   context: { params: Promise<{ projectId: string }> }): Promise<Response> {
   if (!enabled()) return answer(404, "Not found");
@@ -125,19 +125,38 @@ export async function PATCH(request: Request,
     const legacy = legacySnapshotRefusal(input);
     if (legacy) return legacy;
     if (!input || typeof input !== "object" || Array.isArray(input) ||
-        Object.keys(input).sort().join(",") !== "commandId,expectedRevision,restoreGeneration,title,writeAreaId") {
+        Object.keys(input).sort().join(",") !== "commandId,expectedRevision,principalBinding,restoreGeneration,title,writeAreaId") {
       return answer(400, "Invalid request");
     }
     const fields = input as Record<string, unknown>;
     const command = { projectId, commandId: fields.commandId,
       title: fields.title, expectedRevision: fields.expectedRevision,
-      writeAreaId: fields.writeAreaId, restoreGeneration: fields.restoreGeneration };
+      writeAreaId: fields.writeAreaId, restoreGeneration: fields.restoreGeneration,
+      principalBinding: fields.principalBinding };
     if (!validProjectTitleCommand(command)) return answer(400, "Invalid request");
     // Recheck after potentially slow body read, before dispatching a mutation.
     const liveBeforeWrite = verifyStagingIdentityBeforeRelease(request, identity, bound);
     if (liveBeforeWrite !== "ok") return stagingIdentityRefusal(liveBeforeWrite);
     if (!unchanged(bound)) return answer(503, "Staging unavailable");
-    const result = await writeProjectTitleInChild(bound, command);
+    // A and B may both be shared editors with the SAME content/CAS revision.
+    // Identify the actor from a fresh, pinned, authorized reader bound to the
+    // immutable HTTP session, then compare the original preview's HMAC.
+    const read=await readStagingProjectTitlePreviewInChild(bound,projectId);
+    if(!read)return answer(503,"Staging unavailable");
+    const release=read.ok===true?verifyStagingReadBeforeRelease(request,identity,bound,base.ownerUserId,
+      read.page.linearization,{projectId,areaId:read.page.project.areaId,
+        taskIds:read.page.tasks.map(t=>t.id)})
+      :verifyStagingIdentityBeforeRelease(request,identity,bound);
+    if(release!=="ok"&&release!=="stale")return stagingIdentityRefusal(release);
+    if(release==="stale"||read.ok===false)return answer(404,"Not found");
+    const access=read.page.linearization.areas[0]?.access;
+    if(access!=="private-owner"&&access!=="editor"&&access!=="admin")return answer(404,"Not found");
+    const actorId=read.page.linearization.actorUserId;
+    const verifiedBinding=projectTitlePrincipalBinding(actorId,projectId,base.expectedRestoreGeneration);
+    if(!verifiedBinding)return answer(503,"Staging unavailable");
+    if(verifiedBinding!==command.principalBinding)return answer(404,"Not found");
+    if(!unchanged(base))return answer(503,"Staging unavailable");
+    const result = await writeProjectTitleInChild(bound, command, actorId);
     // A durable session is verified INSIDE the write transaction, so no
     // post-commit check is made for it (a committed write must not be reported
     // as refused). The owner cookie keeps its existing post-write re-check.
@@ -163,7 +182,9 @@ export async function PATCH(request: Request,
           result.reason === "unchanged") return answer(409, "Revision conflict");
       return answer(503, "Staging unavailable");
     }
-    return Response.json(result.replayed ? { ok: true, replayed: true } : { ok: true }, { headers });
+    return Response.json(result.replayed
+      ? {ok:true,replayed:true,principalBinding:verifiedBinding}
+      : {ok:true,principalBinding:verifiedBinding}, {headers});
   } catch (error) {
     if (error instanceof HttpInputError) return answer(error.status, error.message);
     logStagingFailure("target-staging/projects/[projectId]/title", "route_exception", error);

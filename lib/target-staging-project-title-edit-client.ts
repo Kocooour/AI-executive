@@ -6,7 +6,7 @@ import {readableProjectId} from "./target-staging-project-tasks-client";
 export type ProjectTitleEditPreview={
   expectedRevision:string;writeAreaId:string;restoreGeneration:string;principalBinding:string;currentTitle:string;
 };
-export type ProjectTitleEditCommand=Omit<ProjectTitleEditPreview,"principalBinding"|"currentTitle">&{
+export type ProjectTitleEditCommand=Omit<ProjectTitleEditPreview,"currentTitle">&{
   commandId:string;title:string;
 };
 export type ProjectTitleEditFailure="denied"|"expired"|"conflict"|"unavailable"|"offline"|"invalid-response";
@@ -46,14 +46,15 @@ export function parseProjectTitleEditPreview(value:unknown):ProjectTitleEditPrev
 }
 export function validProjectTitleEditCommand(value:unknown):value is ProjectTitleEditCommand{
   if(!record(value)||Object.keys(value).sort().join(",")!==
-    "commandId,expectedRevision,restoreGeneration,title,writeAreaId")return false;
+    "commandId,expectedRevision,principalBinding,restoreGeneration,title,writeAreaId")return false;
   return typeof value.commandId==="string"&&uuid.test(value.commandId)&&
     typeof value.title==="string"&&validProjectTitleEditText(value.title)&&
     typeof value.expectedRevision==="string"&&hex.test(value.expectedRevision)&&
     typeof value.restoreGeneration==="string"&&uuid.test(value.restoreGeneration)&&
-    typeof value.writeAreaId==="string"&&area.test(value.writeAreaId);
+    typeof value.writeAreaId==="string"&&area.test(value.writeAreaId)&&
+    typeof value.principalBinding==="string"&&binding.test(value.principalBinding);
 }
-async function strictJson(response:Response,maxBytes=8192):Promise<unknown>{
+async function strictJson(response:Response,maxBytes=8192,signal?:AbortSignal):Promise<unknown>{
   if(response.redirected||response.headers.get("content-type")?.split(";")[0].trim().toLowerCase()!=="application/json"||
       response.headers.get("cache-control")?.trim().toLowerCase()!=="no-store"||!response.body)
     throw Error("invalid response");
@@ -61,10 +62,14 @@ async function strictJson(response:Response,maxBytes=8192):Promise<unknown>{
   if(length!==null&&(!/^(0|[1-9][0-9]*)$/.test(length)||
     !Number.isSafeInteger(Number(length))||Number(length)>maxBytes))throw Error("oversized");
   const reader=response.body.getReader(),decoder=new TextDecoder("utf-8",{fatal:true});
+  const abort=()=>{void reader.cancel().catch(()=>{});};
+  signal?.addEventListener("abort",abort,{once:true});
   let text="",bytes=0,done=false;
   try{
     for(;;){
+      if(signal?.aborted)throw Error("aborted");
       const part=await reader.read();
+      if(signal?.aborted)throw Error("aborted");
       if(part.done){done=true;break;}
       bytes+=part.value.byteLength;
       if(bytes>maxBytes)throw Error("oversized");
@@ -73,6 +78,7 @@ async function strictJson(response:Response,maxBytes=8192):Promise<unknown>{
     text+=decoder.decode();
     return JSON.parse(text) as unknown;
   }finally{
+    signal?.removeEventListener("abort",abort);
     if(!done)void reader.cancel().catch(()=>{});
     reader.releaseLock();
   }
@@ -87,25 +93,51 @@ const failure=(status:number):ProjectTitleEditFailure =>
   status===401||status===403||status===404?"denied":
   status===409?"conflict":"unavailable";
 
+/** A dead preview must never strand the editor or the shared read queue. */
+export const PROJECT_TITLE_PREVIEW_TIMEOUT_MS=8_000;
 export async function loadProjectTitleEditPreview(projectId:string,signal:AbortSignal,
-  fetchImpl:typeof fetch=fetch):Promise<ProjectTitleEditPreviewResult>{
+  fetchImpl:typeof fetch=fetch,timeoutMs=PROJECT_TITLE_PREVIEW_TIMEOUT_MS,
+):Promise<ProjectTitleEditPreviewResult>{
   if(!readableProjectId(projectId))return {ok:false,reason:"denied"};
-  try{
-    const response=await fetchImpl("/api/target-staging/projects/"+
-      encodeURIComponent(projectId)+"/title",{
-      method:"GET",credentials:"same-origin",cache:"no-store",redirect:"error",
-      headers:{accept:"application/json"},signal,
-    });
-    if(signal.aborted)return {ok:false,reason:"offline"};
-    if(response.status===401&&await codedExpiry(response))return {ok:false,reason:"expired"};
-    if(response.status!==200)return {ok:false,reason:failure(response.status)};
-    let parsed:unknown;
-    try{parsed=await strictJson(response);}
-    catch{return {ok:false,reason:"invalid-response"};}
-    const preview=parseProjectTitleEditPreview(parsed);
-    return preview?{ok:true,preview}:{ok:false,reason:"invalid-response"};
-  }catch{return {ok:false,reason:signal.aborted?"offline":"unavailable"};}
+  if(signal.aborted)return {ok:false,reason:"offline"};
+  const own=new AbortController();
+  let resolveStopped:(value:ProjectTitleEditPreviewResult)=>void=()=>{};
+  const stopped=new Promise<ProjectTitleEditPreviewResult>(resolve=>{resolveStopped=resolve;});
+  const stop=()=>{
+    own.abort();
+    resolveStopped({ok:false,reason:signal.aborted?"offline":"unavailable"});
+  };
+  signal.addEventListener("abort",stop,{once:true});
+  const duration=Number.isSafeInteger(timeoutMs)&&timeoutMs>0&&timeoutMs<=PROJECT_TITLE_PREVIEW_TIMEOUT_MS
+    ?timeoutMs:PROJECT_TITLE_PREVIEW_TIMEOUT_MS;
+  const timer=setTimeout(stop,duration);
+  const request=(async():Promise<ProjectTitleEditPreviewResult>=>{
+    try{
+      if(own.signal.aborted)return {ok:false,reason:signal.aborted?"offline":"unavailable"};
+      const response=await fetchImpl("/api/target-staging/projects/"+
+        encodeURIComponent(projectId)+"/title",{
+        method:"GET",credentials:"same-origin",cache:"no-store",redirect:"error",
+        headers:{accept:"application/json"},signal:own.signal,
+      });
+      if(own.signal.aborted){
+        void response.body?.cancel().catch(()=>{});
+        return {ok:false,reason:signal.aborted?"offline":"unavailable"};
+      }
+      if(response.status===401&&await codedExpiry(response))
+        return own.signal.aborted?{ok:false,reason:"unavailable"}:{ok:false,reason:"expired"};
+      if(response.status!==200)return {ok:false,reason:failure(response.status)};
+      let parsed:unknown;
+      try{parsed=await strictJson(response,8192,own.signal);}
+      catch{return {ok:false,reason:"invalid-response"};}
+      if(own.signal.aborted)return {ok:false,reason:signal.aborted?"offline":"unavailable"};
+      const preview=parseProjectTitleEditPreview(parsed);
+      return preview?{ok:true,preview}:{ok:false,reason:"invalid-response"};
+    }catch{return {ok:false,reason:signal.aborted?"offline":"unavailable"};}
+  })();
+  try{return await Promise.race([request,stopped]);}
+  finally{clearTimeout(timer);signal.removeEventListener("abort",stop);}
 }
+
 export async function saveProjectTitleEdit(projectId:string,command:ProjectTitleEditCommand,
   signal:AbortSignal,fetchImpl:typeof fetch=fetch):Promise<ProjectTitleEditSaveResult>{
   if(!readableProjectId(projectId)||!validProjectTitleEditCommand(command))
@@ -161,10 +193,11 @@ export async function saveProjectTitleEdit(projectId:string,command:ProjectTitle
     if(response.status!==200)return {outcome:"uncertain"};
     const result=await strictJson(response);
     if(!record(result))return {outcome:"uncertain"};
-    if(Object.keys(result).join(",")==="ok"&&result.ok===true)
+    if(Object.keys(result).sort().join(",")==="ok,principalBinding"&&result.ok===true&&
+       result.principalBinding===command.principalBinding)
       return {outcome:"saved",replayed:false};
-    if(Object.keys(result).sort().join(",")==="ok,replayed"&&
-      result.ok===true&&result.replayed===true)
+    if(Object.keys(result).sort().join(",")==="ok,principalBinding,replayed"&&
+      result.ok===true&&result.replayed===true&&result.principalBinding===command.principalBinding)
       return {outcome:"saved",replayed:true};
     return {outcome:"uncertain"};
   }catch{return {outcome:"uncertain"};}

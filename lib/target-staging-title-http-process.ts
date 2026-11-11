@@ -293,6 +293,8 @@ export async function cancelProjectTitleInChild(
 /** Bounded project rename worker; request content is passed only via stdin. */
 export async function writeProjectTitleInChild(
   config: StagingPersonalReadConfig, request: import("./target-project-title-writer").ProjectTitleCommand,
+  expectedActorUserId:string,
 ): Promise<Write | null> {
-  return parseWrite(await run(config, "target-staging-project-title-write-child.mjs", JSON.stringify(request)));
+  return parseWrite(await run(config, "target-staging-project-title-write-child.mjs",
+    JSON.stringify({command:request,expectedActorUserId})));
 }

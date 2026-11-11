@@ -14,33 +14,39 @@ import { TARGET_STORE_SCHEMA_VERSION } from "./target-store-bootstrap";
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const hash = /^[0-9a-f]{64}$/;
 const area = /^[A-Za-z0-9_.:@-]{1,120}$/;
+const actorId = /^[A-Za-z0-9_.:@-]{1,120}$/;
+const binding = /^[A-Za-z0-9_-]{43}$/;
 function validTitle(value: unknown): value is string {
   if (typeof value !== "string" || value.length === 0 || value.trim() !== value ||
       value.includes("\0") || Buffer.byteLength(value, "utf8") > 4096) return false;
   try { return decodeURIComponent(encodeURIComponent(value)) === value; }
   catch { return false; }
 }
-export type ProjectTitleCommand = { commandId: string; projectId: string; title: string; expectedRevision: string; writeAreaId: string; restoreGeneration: string };
+export type ProjectTitleCommand = { commandId: string; projectId: string; title: string; expectedRevision: string; writeAreaId: string; restoreGeneration: string; principalBinding: string };
 export type ProjectTitleResult = {ok: true; replayed?: true} | {ok: false; reason: "invalid_request" | "unauthorized" | "unavailable" | "session_revoked" | "resync_required" | "write_area_mismatch" | "stale_revision" | "idempotency_conflict" | "unchanged" | "write_failed" | "cancelled"};
 export function validProjectTitleCommand(input: unknown): input is ProjectTitleCommand {
   if (!input || typeof input !== "object" || Array.isArray(input)) return false;
   const v = input as Record<string, unknown>;
-  return Object.keys(v).sort().join(",") === "commandId,expectedRevision,projectId,restoreGeneration,title,writeAreaId" &&
+  return Object.keys(v).sort().join(",") === "commandId,expectedRevision,principalBinding,projectId,restoreGeneration,title,writeAreaId" &&
     typeof v.commandId === "string" && uuid.test(v.commandId) && isReadableStagingProjectId(v.projectId) &&
     typeof v.expectedRevision === "string" && hash.test(v.expectedRevision) &&
     typeof v.restoreGeneration === "string" && uuid.test(v.restoreGeneration) &&
-    typeof v.writeAreaId === "string" && area.test(v.writeAreaId) && validTitle(v.title);
+    typeof v.writeAreaId === "string" && area.test(v.writeAreaId) &&
+    typeof v.principalBinding === "string" && binding.test(v.principalBinding) && validTitle(v.title);
 }
 export function writeTargetProjectTitle(store: TargetStagingReadStore, access: TargetStagingReadCredential,
-  command: ProjectTitleCommand, durableSessionTokenHash?: string): ProjectTitleResult {
+  command: ProjectTitleCommand, expectedActorUserId: string, durableSessionTokenHash?: string): ProjectTitleResult {
   if (!validProjectTitleCommand(command)) return {ok:false, reason:"invalid_request"};
+  if (!actorId.test(expectedActorUserId)) return {ok:false,reason:"unauthorized"};
   if (durableSessionTokenHash !== undefined && !isTargetStagingSessionTokenHash(durableSessionTokenHash)) return {ok:false,reason:"unauthorized"};
   const denied = (): ProjectTitleResult => ({ok:false,reason:"unauthorized"});
   const failed = (): ProjectTitleResult => ({ok:false,reason:"write_failed"});
   return withPinnedTargetStagingWrite<ProjectTitleResult>(store, context => {
     const {db} = context;
     const actor = verifiedActor(db, access, true);
-    if (!actor) return denied();
+    // The caller proved this principal binding using a trusted HTTP preview.
+    // Re-check the pinned actor inside the same write transaction as the CAS.
+    if (!actor || actor !== expectedActorUserId) return denied();
     const sessionLive = () => durableSessionTokenHash === undefined ||
       lookupLiveTargetStagingSession(db, durableSessionTokenHash, Date.now())?.userId === actor;
     if (!sessionLive()) return {ok:false,reason:"session_revoked"};

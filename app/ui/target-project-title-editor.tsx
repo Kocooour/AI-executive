@@ -279,6 +279,7 @@ export default function TargetProjectTitleEditor({project,language,onCommitted,o
    if(!retry&&!validProjectTitleEditText(d.title)){setMessage(copy.invalid);return;}
    // The server-only principal comparison proof is NEVER part of a mutation body.
    const command=d.command??{expectedRevision:d.preview.expectedRevision,
+     principalBinding:d.preview.principalBinding,
      writeAreaId:d.preview.writeAreaId,restoreGeneration:d.preview.restoreGeneration,
      commandId:crypto.randomUUID(),title:d.title};
    // Reserve a tab-global, content-free marker BEFORE dispatch. On a reload

@@ -1019,11 +1019,12 @@ export class TargetStagingSessionAuthority {
     );
   }
 
-  updateProjectTitle(sessionToken: string, request: ProjectTitleCommand, durableSessionTokenHash?: string): ProjectTitleResult {
+  updateProjectTitle(sessionToken: string, request: ProjectTitleCommand,
+    expectedActorUserId: string, durableSessionTokenHash?: string): ProjectTitleResult {
     const credential = this.#credential(sessionToken, true);
     if (!credential) return {ok:false,reason:"unauthorized"};
     if (!validProjectTitleCommand(request)) return {ok:false,reason:"invalid_request"};
-    return writeTargetProjectTitle(this.#store, credential, request, durableSessionTokenHash);
+    return writeTargetProjectTitle(this.#store, credential, request, expectedActorUserId, durableSessionTokenHash);
   }
 
   /** Durable cancellation of a command which may have been lost after reload. */

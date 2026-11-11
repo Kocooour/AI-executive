@@ -36,7 +36,22 @@ export function queuedTargetFetch(fetchImpl:typeof fetch=fetch):typeof fetch{
     }else active++;
     try{
       if(signal?.aborted)throw abortError(signal);
-      return await fetchImpl(input,init);
+      // Abort must release the queue slot even when fetch ignores its signal.
+      // A late HTTP response is discarded, never handed to a newer session.
+      const pending=Promise.resolve().then(()=>fetchImpl(input,init));
+      if(!signal)return await pending;
+      let onAbort=()=>{};
+      const stopped=new Promise<never>((_,reject)=>{
+        onAbort=()=>reject(abortError(signal));
+        signal.addEventListener("abort",onAbort,{once:true});
+      });
+      try{return await Promise.race([pending,stopped]);}
+      catch(error){
+        if(signal.aborted)void pending.then(response=>{
+          try{void response.body?.cancel().catch(()=>{});}catch{/* discard late response */}
+        },()=>{});
+        throw error;
+      }finally{signal.removeEventListener("abort",onAbort);}
     }finally{release();}
   }) as typeof fetch;
 }
