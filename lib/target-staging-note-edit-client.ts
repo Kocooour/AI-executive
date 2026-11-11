@@ -13,7 +13,8 @@ export type NoteEditFailure="denied"|"conflict"|"unavailable"|"offline"|"invalid
 export type NoteEditPreviewResult={ok:true;preview:NoteEditPreview}|
   {ok:false;reason:NoteEditFailure};
 export type NoteEditSaveResult=
-  {outcome:"saved";replayed:boolean}|{outcome:"conflict"|"denied"|"uncertain"};
+  {outcome:"saved";replayed:boolean}|{outcome:"conflict"|"uncertain"}|
+  {outcome:"denied";rejectedBeforeCommit?:true};
 
 const uuid=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const hex=/^[0-9a-f]{64}$/;
@@ -106,8 +107,12 @@ export async function saveNoteEdit(noteId:string,command:NoteEditCommand,
       body:JSON.stringify(command),signal,
     });
     if(signal.aborted)return {outcome:"uncertain"};
-    if(response.status===401||response.status===403||response.status===404)
-      return {outcome:"denied"};
+    // A 401 can follow a committed owner-cookie write when the post-child
+    // identity check fails. Only 403/404 are definitive pre-commit refusals
+    // in this route; preserve the marker for an ambiguous 401.
+    if(response.status===401)return {outcome:"denied"};
+    if(response.status===403||response.status===404)
+      return {outcome:"denied",rejectedBeforeCommit:true};
     if(response.status===409||response.status===400)return {outcome:"conflict"};
     if(response.status!==200)return {outcome:"uncertain"};
     const result=await strictJson(response);

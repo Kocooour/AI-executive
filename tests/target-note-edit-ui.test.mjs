@@ -94,6 +94,10 @@ test("PATCH uses the exact command; ambiguous outcomes never count as success",a
   assert.deepEqual(await saveNoteEdit(id,command,signal(),async()=>reply({error:"Revision conflict"},409)),
     {outcome:"conflict"});
   assert.deepEqual(await saveNoteEdit(id,command,signal(),async()=>reply({error:"Not found"},404)),
+    {outcome:"denied",rejectedBeforeCommit:true});
+  assert.deepEqual(await saveNoteEdit(id,command,signal(),async()=>reply({error:"Forbidden"},403)),
+    {outcome:"denied",rejectedBeforeCommit:true});
+  assert.deepEqual(await saveNoteEdit(id,command,signal(),async()=>reply({error:"Authentication required"},401)),
     {outcome:"denied"});
   assert.deepEqual(await saveNoteEdit(id,command,signal(),async()=>reply({error:"Staging unavailable"},503)),
     {outcome:"uncertain"});
