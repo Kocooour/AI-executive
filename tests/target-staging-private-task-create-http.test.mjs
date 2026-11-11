@@ -145,8 +145,8 @@ test("live actor and private Area ACL deny foreign and shared writes, without an
   assert.equal((await checked(await create(own,bob),201)).taskId,own.taskId);
   assert.deepEqual(await checked(await recover(own,bob),200),{status:"committed"});
   assert.deepEqual(await checked(await recover(own),404),{error:"Not found"});
-  assert.deepEqual(await checked(await recover(own,bob+"broken"),401),
-    {error:"Authentication required"});
+  assert.equal((await checked(await recover(own,bob+"broken"),401)).code,
+    "session_revoked");
   for(const area of [fx.stage.unassignedAreaId,"team-area","missing"]){
     const foreign=command(fx,{areaId:area});
     const before=persistence(fx,foreign.taskId);
