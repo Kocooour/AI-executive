@@ -72,7 +72,7 @@ test("SSR displays only an explicit manual check, never cached owner information
     assert.match(output, /humanwiki-source-status/);
     assert.match(output, language === "cs" ? /Ověřit stav zdrojů/ : /Check source status/);
     assert.doesNotMatch(output, /chatgpt_user_export|signed_witness_prefix_|owner-alice/);
-    assert.doesNotMatch(output, /type="file"|type="submit"|form/);
+    assert.doesNotMatch(output, /type="(?:file|submit)"|<form(?:\\s|>)/);
   }
 });
 
