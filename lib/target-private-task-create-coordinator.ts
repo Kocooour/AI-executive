@@ -1,7 +1,7 @@
 /** Auth-runtime-scoped task CREATE. POST may finish after the modal unmounts.
  * The exact command remains only in RAM until the runtime is disposed.
  * A later status probe reuses the original payload; no retry/new UUID. */
-import {sendPrivateTaskCreate,recoverPrivateTaskCreate,
+import {sendPrivateTaskCreate,recoverPrivateTaskCreate,validPrivateTaskCreateCommand,
   type PrivateTaskCreateCommand,type TaskCreateOutcome,type TaskCreateReceipt}
   from "./target-private-task-create-client";
 import {privateTaskCreateMarker,reservePrivateTaskCreate,confirmPrivateTaskCreate}
@@ -36,6 +36,9 @@ export function runPrivateTaskCreate(runtime:TaskCreateRuntime,generation:string
   command:PrivateTaskCreateCommand,send:typeof sendPrivateTaskCreate=sendPrivateTaskCreate,
   timeoutMs=TASK_CREATE_DEADLINE_MS):Promise<TaskCreateOutcome>{
   if(!runtime.known()||runtime.generation()!==generation)return Promise.resolve("denied");
+  // Reject malformed commands BEFORE reserving a persistent ambiguity marker:
+  // no HTTP request can have been dispatched for such an input.
+  if(!validPrivateTaskCreateCommand(command))return Promise.resolve("conflict");
   if(entries.has(runtime)||privateTaskCreateMarker(generation).kind!=="clear"||
     !reservePrivateTaskCreate(generation,command.commandId))return Promise.resolve("conflict");
   const controller=new AbortController();
