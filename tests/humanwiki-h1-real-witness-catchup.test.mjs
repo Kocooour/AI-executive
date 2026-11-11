@@ -252,7 +252,7 @@ test("operator CLI is default-off and rejects export paths without reading data"
 /**
  * Synthetic test-only preload: preserve the production CLI's pinned HTTPS
  * URL validation and provider signature checks, while routing the request
- * over a REAL mutually verified TLS connection to a loopback witness.
+ * over a REAL server-certificate-verified TLS connection to a loopback witness.
  * This exists only as a child-process --import file in the isolated test.
  * No test override, custom port, or unverified TLS exception enters Lumi code.
  */
@@ -293,7 +293,7 @@ globalThis.fetch = async (target, init) => {
 // Node 24 currently warns when a child imports node:sqlite. Keep unexpected
 // stderr fatal: do NOT globally hide warnings or mute the operator CLI.
 const assertCleanOperatorStderr = stderr => {
-  const onlySqliteWarning = /^\(node:\d+\) ExperimentalWarning: SQLite is an experimental feature and might change at any time\n\(Use \x60node --trace-warnings ...\x60 to show where the warning was created\)\n$/;
+  const onlySqliteWarning = /^\(node:\d+\) ExperimentalWarning: SQLite is an experimental feature and might change at any time\n\(Use \x60node --trace-warnings \.\.\.\x60 to show where the warning was created\)\n$/;
   assert.ok(stderr === "" || onlySqliteWarning.test(stderr),
     "unexpected operator CLI stderr: " + stderr);
 };
