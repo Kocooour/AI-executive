@@ -7,6 +7,8 @@ export type TaskCreateOutcome="saved"|"conflict"|"denied"|"uncertain";
 export type TaskCreateReceipt="committed"|"not_recorded"|"denied"|"unavailable";
 const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const AREA=/^[A-Za-z0-9_.:@-]{1,120}$/;
+export const validPrivateTaskCreateArea=(id:unknown):id is string=>
+  typeof id==="string"&&AREA.test(id);
 function record(v:unknown):v is Record<string,unknown>{
   return v!==null&&typeof v==="object"&&!Array.isArray(v);
 }
