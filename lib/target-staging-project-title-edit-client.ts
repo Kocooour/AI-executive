@@ -4,7 +4,7 @@
 import {readableProjectId} from "./target-staging-project-tasks-client";
 
 export type ProjectTitleEditPreview={
-  expectedRevision:string;writeAreaId:string;restoreGeneration:string;principalBinding:string;
+  expectedRevision:string;writeAreaId:string;restoreGeneration:string;principalBinding:string;currentTitle:string;
 };
 export type ProjectTitleEditCommand=Omit<ProjectTitleEditPreview,"principalBinding">&{
   commandId:string;title:string;
@@ -33,14 +33,16 @@ export function validProjectTitleEditText(title:string):boolean{
 }
 export function parseProjectTitleEditPreview(value:unknown):ProjectTitleEditPreview|null{
   if(!record(value)||Object.keys(value).sort().join(",")!==
-    "principalBinding,restoreGeneration,snapshotRevision,writeAreaId")return null;
+    "currentTitle,principalBinding,restoreGeneration,snapshotRevision,writeAreaId")return null;
   if(typeof value.snapshotRevision!=="string"||!hex.test(value.snapshotRevision)||
     typeof value.restoreGeneration!=="string"||!uuid.test(value.restoreGeneration)||
     !(typeof value.writeAreaId==="string"&&area.test(value.writeAreaId))||
-    typeof value.principalBinding!=="string"||!binding.test(value.principalBinding))return null;
+    typeof value.principalBinding!=="string"||!binding.test(value.principalBinding)||
+     typeof value.currentTitle!=="string"||!value.currentTitle.trim()||
+     !wellFormed(value.currentTitle)||encoder.encode(value.currentTitle).length>4096)return null;
   return {expectedRevision:value.snapshotRevision,
     restoreGeneration:value.restoreGeneration,writeAreaId:value.writeAreaId,
-    principalBinding:value.principalBinding};
+    principalBinding:value.principalBinding,currentTitle:value.currentTitle};
 }
 export function validProjectTitleEditCommand(value:unknown):value is ProjectTitleEditCommand{
   if(!record(value)||Object.keys(value).sort().join(",")!==

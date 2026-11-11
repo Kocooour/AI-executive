@@ -28,7 +28,7 @@ const command={
   title:"Secret private project",
 };
 const preview={expectedRevision:command.expectedRevision,
-  restoreGeneration:STAGE,writeAreaId:command.writeAreaId,principalBinding:A};
+  restoreGeneration:STAGE,writeAreaId:command.writeAreaId,principalBinding:A,currentTitle:"Before"};
 const data=new Map();
 const original=Object.getOwnPropertyDescriptor(globalThis,"sessionStorage");
 Object.defineProperty(globalThis,"sessionStorage",{configurable:true,value:{

@@ -4,9 +4,9 @@
 import {useEffect,useRef,useState,type FormEvent} from 'react';
 import {useTargetGeneration,useTargetRuntime} from './target-data-provider';
 import {queuedTargetFetch} from '../../lib/target-read-queue';
-import {loadProjectTasksPage,type ProjectTasksProject} from '../../lib/target-staging-project-tasks-client';
+import {type ProjectTasksProject} from '../../lib/target-staging-project-tasks-client';
 import {loadProjectTitleEditPreview,validProjectTitleEditText,type ProjectTitleEditCommand,type ProjectTitleEditPreview} from '../../lib/target-staging-project-title-edit-client';
-import {forgetTrackedProjectTitleEdit,runTrackedProjectTitleEdit,subscribeTrackedProjectTitleEdit,trackedProjectTitleEdit,projectTitleDraft,setProjectTitleDraft,forgetProjectTitleDraft,projectTitleDraftConflicts,hasSealedProjectTitleEdit,resumeSealedProjectTitleEdit,forgetSealedProjectTitleEdit,hasSealedProjectTitleDraft,resumeSealedProjectTitleDraft,forgetSealedProjectTitleDraft,type TrackedProjectTitleEditPhase} from '../../lib/target-project-title-edit-recovery';
+import {forgetTrackedProjectTitleEdit,runTrackedProjectTitleEdit,subscribeTrackedProjectTitleEdit,trackedProjectTitleEdit,projectTitleDraft,setProjectTitleDraft,forgetProjectTitleDraft,projectTitleDraftConflicts,hasSealedProjectTitleEdit,resumeSealedProjectTitleEdit,forgetSealedProjectTitleEdit,hasSealedProjectTitleDraft,resumeSealedProjectTitleDraft,forgetSealedProjectTitleDraft,projectTitleTrackedPrincipalBinding,type TrackedProjectTitleEditPhase} from '../../lib/target-project-title-edit-recovery';
 import type {DetailLanguage} from '../../lib/target-detail-copy';
 import {projectTitleReloadMarker,reserveProjectTitleReload,confirmProjectTitleReload}
   from '../../lib/target-project-title-reload';
@@ -79,7 +79,11 @@ export default function TargetProjectTitleEditor({project,language,onCommitted,o
    const result=await loadProjectTitleEditPreview(project.id,current.signal,readFetch);
    if(id!==seq.current||current.signal.aborted||!stillBound())return;
    if(result.ok===false){if(result.reason==='expired')sessionExpired();else if(result.reason==='denied')refuse();else{setMode({kind:'recovery'});setMessage(copy.recovering);}return;}
-   if(result.preview.writeAreaId!==project.areaId||result.preview.writeAreaId!==tracked.command.writeAreaId||result.preview.restoreGeneration.toLowerCase()!==tracked.command.restoreGeneration.toLowerCase()){refuse();return;}
+   if(result.preview.writeAreaId!==project.areaId||result.preview.writeAreaId!==tracked.command.writeAreaId||
+       result.preview.restoreGeneration.toLowerCase()!==tracked.command.restoreGeneration.toLowerCase()||
+       result.preview.principalBinding!==projectTitleTrackedPrincipalBinding(runtime,bound.current,project.id)){
+      refuse();return;
+    }
    const latest=trackedProjectTitleEdit(runtime,bound.current,project.id);
    if(!latest||latest.command.commandId!==tracked.command.commandId)return;
    if(latest.phase==='saved'){forgetTrackedProjectTitleEdit(runtime,bound.current,project.id);onCommitted();}
@@ -203,21 +207,16 @@ export default function TargetProjectTitleEditor({project,language,onCommitted,o
    else if(preview.reason==='denied')refuse();
    else{setMode({kind:'recovery'});setMessage(copy.recovering);}return;
   }
-  const fresh=await loadProjectTasksPage({projectId:project.id,limit:1,signal:ctrl.signal},readFetch);
-  if(n!==seq.current||ctrl.signal.aborted||!stillBound())return;
-  if(fresh.ok===false){
-   if(fresh.reason==='session-expired')sessionExpired();
-   else if(fresh.reason==='signed-out'||fresh.reason==='not-found')refuse();
-   else{setMode({kind:'recovery'});setMessage(copy.recovering);}return;
-  }
-  if(fresh.page.project.areaId!==preview.preview.writeAreaId||
-     project.areaId!==preview.preview.writeAreaId){refuse();return;}
+  // Preview already contains the authorized project title and actor proof
+  // from ONE pinned server snapshot. A second GET could switch from A to B.
+  if(project.areaId!==preview.preview.writeAreaId){refuse();return;}
   if(resumeSealedProjectTitleDraft(runtime,bound.current,project.id,preview.preview)!=='resumed'){
    setMode({kind:'idle'});setMessage(copy.denied);return;
   }
   const draft=projectTitleDraft(runtime,bound.current,project.id);
   if(!draft){setMode({kind:'idle'});return;}
-  const conflict=projectTitleDraftConflicts(draft,preview.preview,fresh.page.project.title)||project.title!==draft.original;
+  const conflict=projectTitleDraftConflicts(draft,preview.preview,preview.preview.currentTitle)||
+    project.title!==draft.original;
   setMode({kind:'draft',draft:{preview:preview.preview,original:draft.original,title:draft.title,
    command:null,phase:conflict?'conflict':'edit'}});
  }
@@ -232,13 +231,10 @@ export default function TargetProjectTitleEditor({project,language,onCommitted,o
    if(id!==seq.current||current.signal.aborted||!stillBound())return;
    if(result.ok===false){if(result.reason==='expired')sessionExpired();else if(result.reason==='denied')refuse();else{setMode({kind:'recovery'});setMessage(copy.recovering);}return;}
    // Only reveal the stored title after a fresh writer ACL and same Area check.
-   if(result.preview.writeAreaId!==stored.writeAreaId||result.preview.writeAreaId!==project.areaId){refuse();return;}
-   const fresh=await loadProjectTasksPage({projectId:project.id,limit:1,signal:current.signal},readFetch);
-   if(id!==seq.current||current.signal.aborted||!stillBound())return;
-   if(fresh.ok===false){if(fresh.reason==='session-expired')sessionExpired();
-   else if(fresh.reason==='signed-out'||fresh.reason==='not-found')refuse();else{setMode({kind:'recovery'});setMessage(copy.recovering);}return;}
-   if(fresh.page.project.areaId!==stored.writeAreaId){refuse();return;}
-   const conflict=projectTitleDraftConflicts(stored,result.preview,fresh.page.project.title)||project.title!==stored.original;
+   if(result.preview.writeAreaId!==stored.writeAreaId||result.preview.writeAreaId!==project.areaId||
+      result.preview.principalBinding!==stored.principalBinding){refuse();return;}
+   const conflict=projectTitleDraftConflicts(stored,result.preview,result.preview.currentTitle)||
+     project.title!==stored.original;
    setMode({kind:'draft',draft:{preview:result.preview,original:stored.original,title:stored.title,command:null,phase:conflict?'conflict':'edit'}});
  }
  async function begin(){
@@ -262,19 +258,13 @@ export default function TargetProjectTitleEditor({project,language,onCommitted,o
    }
    // The edit token must be associated with the same visible project/Area;
    // any later concurrent change is still rejected by transactional CAS.
-   const fresh=await loadProjectTasksPage({projectId:project.id,limit:1,signal:current.signal},readFetch);
-   if(id!==seq.current||current.signal.aborted||!stillBound())return;
-   if(fresh.ok===false){
-     if(fresh.reason==='session-expired')sessionExpired();
-   else if(fresh.reason==='signed-out'||fresh.reason==='not-found')refuse();
-     else {setMode({kind:'idle'});setMessage(copy.conflict);onAccessRefused();}
-     return;
-   }
-   if(fresh.page.project.title!==project.title||fresh.page.project.areaId!==project.areaId||
-      fresh.page.project.areaId!==result.preview.writeAreaId){
+   if(result.preview.currentTitle!==project.title||
+      result.preview.writeAreaId!==project.areaId){
      setMode({kind:'idle'});setMessage(copy.conflict);onAccessRefused();return;
    }
-   setProjectTitleDraft(runtime,bound.current,project.id,{original:project.title,title:project.title,...result.preview});
+   setProjectTitleDraft(runtime,bound.current,project.id,{original:project.title,title:project.title,
+     writeAreaId:result.preview.writeAreaId,expectedRevision:result.preview.expectedRevision,
+     restoreGeneration:result.preview.restoreGeneration,principalBinding:result.preview.principalBinding});
    setMode({kind:'draft',draft:{preview:result.preview,original:project.title,title:project.title,command:null,phase:'edit'}});
  }
  function discard(){
@@ -321,7 +311,9 @@ export default function TargetProjectTitleEditor({project,language,onCommitted,o
  const busy=d.phase==='saving',uncertain=d.phase==='uncertain',locked=busy||uncertain||conflict;
  return <form className="targetNoteEdit" data-testid="target-project-title-edit" onSubmit={(event:FormEvent<HTMLFormElement>)=>{event.preventDefault();if(!locked)commit(d);}}>
    <label>{copy.title}<input ref={inputRef} type="text" value={d.title} readOnly={locked} maxLength={4096}
-     onChange={event=>{const title=event.target.value;if(runtime)setProjectTitleDraft(runtime,bound.current,project.id,{original:d.original,title,...d.preview});setMode({kind:'draft',draft:{...d,title,command:null}});}}/></label>
+     onChange={event=>{const title=event.target.value;if(runtime)setProjectTitleDraft(runtime,bound.current,project.id,{original:d.original,title,
+       writeAreaId:d.preview.writeAreaId,expectedRevision:d.preview.expectedRevision,
+       restoreGeneration:d.preview.restoreGeneration,principalBinding:d.preview.principalBinding});setMode({kind:'draft',draft:{...d,title,command:null}});}}/></label>
    {message&&<p role="alert">{message}</p>}{busy&&<p role="status">{copy.saving}</p>}{conflict&&<p role="alert">{copy.conflict}</p>}{uncertain&&<p role="alert">{copy.uncertain}</p>}
    <div className="targetNoteEditActions">{!locked&&<><button type="submit">{copy.save}</button><button type="button" onClick={discard}>{copy.cancel}</button></>}
    {uncertain&&<button type="button" onClick={()=>commit(d)}>{copy.retry}</button>}{conflict&&<button type="button" onClick={discard}>{copy.refresh}</button>}</div>

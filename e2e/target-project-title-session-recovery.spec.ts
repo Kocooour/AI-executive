@@ -39,6 +39,7 @@ async function setup(page:Page,patch:Patch,params:{
     if(route.request().method()==="GET")return response(route,{
       snapshotRevision:"a".repeat(64),restoreGeneration:STAGE,
       writeAreaId:"private-area",principalBinding:params.binding(),
+      currentTitle:params.committed?.()?"Renamed project":ORIGINAL,
     });
     const body=JSON.parse(route.request().postData()??"{}") as Record<string,unknown>;
     // The opaque principal proof is a READ-side comparison, never a PATCH token.

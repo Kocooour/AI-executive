@@ -61,7 +61,7 @@ test('project rename enforces role and CAS, persists audit, supports retry, and 
  assert.deepEqual(inspectIsolatedTargetStore({...store,mode:'r2-model'}), {ok:true,mode:'r2-model',issues:[]});
  const bob=cookie('bob'), carol=cookie('carol'), dave=cookie('dave');
  let response=await preview(new Request(base+'title',{headers:headers(bob)}),ctx);assert.equal(response.status,200);const page=await response.json();
- assert.deepEqual(Object.keys(page).sort(),['principalBinding','restoreGeneration','snapshotRevision','writeAreaId']);
+ assert.deepEqual(Object.keys(page).sort(),['currentTitle','principalBinding','restoreGeneration','snapshotRevision','writeAreaId']);
  assert.match(page.principalBinding,/^[A-Za-z0-9_-]{43}$/);
  const sameActor=await preview(new Request(base+'title',{headers:headers(cookie('bob'))}),ctx);
  assert.equal((await sameActor.json()).principalBinding,page.principalBinding,

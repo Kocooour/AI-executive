@@ -31,7 +31,8 @@ type Entry={
 };
 export type ProjectTitleDraft={original:string;title:string;writeAreaId:string;expectedRevision:string;restoreGeneration:string;principalBinding:string};
 export function projectTitleDraftConflicts(draft:ProjectTitleDraft,preview:ProjectTitleEditPreview,currentTitle:string):boolean{
-  return draft.original!==currentTitle||draft.writeAreaId!==preview.writeAreaId||
+  return draft.original!==currentTitle||draft.principalBinding!==preview.principalBinding||
+    draft.writeAreaId!==preview.writeAreaId||
     draft.expectedRevision!==preview.expectedRevision||
     draft.restoreGeneration.toLowerCase()!==preview.restoreGeneration.toLowerCase();
 }
@@ -190,6 +191,9 @@ function current(runtime:ProjectTitleEditRuntime,generation:string):Bucket|null{
     return null;
   }
   return next;
+}
+export function projectTitleTrackedPrincipalBinding(runtime:ProjectTitleEditRuntime,generation:string,id:string):string|null{
+  return current(runtime,generation)?.entries.get(id)?.principalBinding??null;
 }
 export function trackedProjectTitleEdit(runtime:ProjectTitleEditRuntime,generation:string,id:string):
   TrackedProjectTitleEdit|null{

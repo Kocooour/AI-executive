@@ -77,7 +77,11 @@ export async function GET(request: Request, context: { params: Promise<{ project
   const principalBinding=projectTitlePrincipalBinding(
     result.page.linearization.actorUserId,projectId,base.expectedRestoreGeneration);
   if(!principalBinding)return answer(503,"Staging unavailable");
+  // The title and actor proof come from ONE authenticated, authorized,
+  // live-rechecked project snapshot. The editor must not combine a title
+  // from a second request that might belong to another account.
   return Response.json({snapshotRevision:result.page.revision,writeAreaId:result.page.project.areaId,
+    currentTitle:result.page.project.title,
     restoreGeneration:base.expectedRestoreGeneration,principalBinding}, {headers});
   } catch (error) {
     logStagingFailure("target-staging/projects/[projectId]/title", "preview_exception", error);

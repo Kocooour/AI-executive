@@ -4,8 +4,8 @@ import {readFileSync} from 'node:fs';
 import {targetProjectTitleEditUiEnabled,TARGET_PROJECT_TITLE_EDIT_UI_FLAGS} from '../lib/target-project-title-edit-ui-gate.ts';
 import {parseProjectTitleEditPreview,validProjectTitleEditText,validProjectTitleEditCommand,loadProjectTitleEditPreview,saveProjectTitleEdit} from '../lib/target-staging-project-title-edit-client.ts';
 const generation='b7ab0e6e-d01f-44ed-babe-e9b69e84dbaa',id='project';
-const server={snapshotRevision:'a'.repeat(64),restoreGeneration:generation,writeAreaId:'area',principalBinding:'P'.repeat(43)};
-const preview={expectedRevision:server.snapshotRevision,restoreGeneration:generation,writeAreaId:'area',principalBinding:'P'.repeat(43)};
+const server={snapshotRevision:'a'.repeat(64),restoreGeneration:generation,writeAreaId:'area',principalBinding:'P'.repeat(43),currentTitle:'Original'};
+const preview={expectedRevision:server.snapshotRevision,restoreGeneration:generation,writeAreaId:'area',principalBinding:'P'.repeat(43),currentTitle:'Original'};
 const command={expectedRevision:preview.expectedRevision,restoreGeneration:preview.restoreGeneration,writeAreaId:preview.writeAreaId,commandId:'f3d18d63-9073-48f7-8d25-6c81f23b9a01',title:'Updated'};
 const reply=(data,status=200)=>Response.json(data,{status,headers:{'cache-control':'no-store'}});
 const signal=()=>new AbortController().signal;
@@ -20,7 +20,7 @@ test('editing is independently default-off and wired only inside project detail'
 });
 test('preflight and command enforce exact schemas and safe titles',()=>{
  assert.deepEqual(parseProjectTitleEditPreview(server),preview);
- for(const invalid of [{...server,actorId:'x'},{...server,writeAreaId:'../hidden'},{...server,restoreGeneration:'bad'},{...server,snapshotRevision:'bad'},{...server,principalBinding:'bad'}])assert.equal(parseProjectTitleEditPreview(invalid),null);
+ for(const invalid of [{...server,actorId:'x'},{...server,writeAreaId:'../hidden'},{...server,restoreGeneration:'bad'},{...server,snapshotRevision:'bad'},{...server,principalBinding:'bad'},{...server,currentTitle:''}])assert.equal(parseProjectTitleEditPreview(invalid),null);
  assert.equal(validProjectTitleEditCommand(command),true);
  assert.equal(validProjectTitleEditCommand({...command,commandId:'bad'}),false);
  assert.equal(validProjectTitleEditText(' valid '),false);
