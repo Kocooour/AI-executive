@@ -50,7 +50,7 @@ export type TargetScopesProps = { enabled: boolean; projects: boolean; notes: bo
 export type TargetEditsProps = TargetUiEdits;
 export type TargetMyPlanProps = { enabled: boolean; statusWrite: boolean; whenWrite: boolean };
 
-export function LumiAppRoot({ targetMyPlan, targetScopes, targetDetails, targetEdits, targetNoteEdit = false, targetPrivateNoteAreas = false, targetPrivateNoteCreate = false }: { targetMyPlan?: TargetMyPlanProps; targetScopes?: TargetScopesProps; targetDetails?: TargetDetailsProps; targetEdits?: TargetEditsProps; targetNoteEdit?: boolean; targetPrivateNoteAreas?: boolean; targetPrivateNoteCreate?: boolean } = {}) {
+export function LumiAppRoot({ targetMyPlan, targetScopes, targetDetails, targetEdits, targetNoteEdit = false, targetProjectEdit = false, targetPrivateNoteAreas = false, targetPrivateNoteCreate = false }: { targetMyPlan?: TargetMyPlanProps; targetScopes?: TargetScopesProps; targetDetails?: TargetDetailsProps; targetEdits?: TargetEditsProps; targetNoteEdit?: boolean; targetProjectEdit?: boolean; targetPrivateNoteAreas?: boolean; targetPrivateNoteCreate?: boolean } = {}) {
   // Owner decision 2026-11-09: with target scopes on, the single global scope governs the
   // sidebar projects, the inspector and quick capture (see docs/R3-FE-04A-DETAILS.md).
   const scopesOn = Boolean(targetScopes?.enabled);
@@ -247,7 +247,7 @@ export function LumiAppRoot({ targetMyPlan, targetScopes, targetDetails, targetE
             setAreaChooserOpen(false);setNoteListRevision(v=>v+1);
           }} />}
       {!(scopesOn && targetView) && <DetailPanel app={app} />}
-      {detailPanel && <TargetDetailPanel route={detailRoute} language={language} gates={detailGates} edits={targetEdits} noteEdit={targetNoteEdit && detailGates.note} />}
+      {detailPanel && <TargetDetailPanel route={detailRoute} language={language} gates={detailGates} edits={targetEdits} noteEdit={targetNoteEdit && detailGates.note} projectEdit={targetProjectEdit && detailGates.project} />}
       <AssistantPanel app={app} />
       <DeferPopover app={app} />
       <ConfirmDialog app={app} />

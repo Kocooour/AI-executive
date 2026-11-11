@@ -1,3 +1,6 @@
+import type {TargetProjectTitleRecovery} from "./target-project-title-command-status";
+import {cancelTargetProjectTitle,validProjectTitleCancelCommand,type ProjectTitleCancelCommand,type ProjectTitleCancelResult} from "./target-project-title-cancel";
+import { writeTargetProjectTitle, validProjectTitleCommand, type ProjectTitleCommand, type ProjectTitleResult } from "./target-project-title-writer";
 /**
  * R2 staging-only process-local session issuance and revocation.
  *
@@ -41,7 +44,7 @@ import {
   readPreflightedIsolatedPersonalTargetTask, readPreflightedPersonalTargetTaskWithRevision,
   readPreflightedTargetTaskTitleCommandStatus, readPreflightedTargetTaskDeleteCommandStatus,
   readPreflightedTargetNoteEditCommandStatus,readPreflightedTargetNoteEditRecovery,
-  readPreflightedTargetNoteCreateRecovery,readPreflightedTargetNoteDeleteCommandStatus,
+  readPreflightedTargetNoteCreateRecovery,readPreflightedProjectTitleRecovery,readPreflightedTargetNoteDeleteCommandStatus,
   listPreflightedPrivateProjectsAtOffset, readPreflightedPrivateProjectDetail,
   readPreflightedPrivateTaskTitleAudit,
   readPreflightedScopedTaskPage, readPreflightedSharedTargetTask, readPreflightedChangeFeedPage,
@@ -997,6 +1000,22 @@ export class TargetStagingSessionAuthority {
     );
   }
 
+  updateProjectTitle(sessionToken: string, request: ProjectTitleCommand, durableSessionTokenHash?: string): ProjectTitleResult {
+    const credential = this.#credential(sessionToken, true);
+    if (!credential) return {ok:false,reason:"unauthorized"};
+    if (!validProjectTitleCommand(request)) return {ok:false,reason:"invalid_request"};
+    return writeTargetProjectTitle(this.#store, credential, request, durableSessionTokenHash);
+  }
+
+  /** Durable cancellation of a command which may have been lost after reload. */
+  cancelProjectTitle(sessionToken:string,request:ProjectTitleCancelCommand,
+    durableSessionTokenHash?:string):ProjectTitleCancelResult{
+    const credential=this.#credential(sessionToken,true);
+    if(!credential)return {ok:false,reason:"unauthorized"};
+    if(!validProjectTitleCancelCommand(request))return {ok:false,reason:"invalid_request"};
+    return cancelTargetProjectTitle(this.#store,credential,request,durableSessionTokenHash);
+  }
+
   /**
    * R2d.3h.1: staging-only complete/reopen. Never derive an actor from input;
    * require a live writable authority session, then recheck ACL and optional
@@ -1248,6 +1267,12 @@ export class TargetStagingSessionAuthority {
       return {ok:false, reason:"invalid_request"};
     return changePreflightedTargetNoteLifecycle(
       this.#store,credential,request,durableSessionTokenHash,privateCreateOnly);
+  }
+
+  projectTitleRecovery(sessionToken:string,commandId:string):TargetProjectTitleRecovery{
+    const credential=this.#credential(sessionToken,true);
+    return credential?readPreflightedProjectTitleRecovery(this.#store,credential,commandId)
+      :{ok:false,reason:"unavailable"};
   }
 
   /** Read-only actor-scoped recovery of a note edit after browser reload. */
