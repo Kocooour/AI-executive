@@ -60,19 +60,32 @@ const reply=(body,status=200)=>Response.json(body,{status,headers});
 function clean(){data.clear();}
 test("a project rename tab lock stores only UUID and opaque binding; no private content",()=>{
   clean();
-  assert.deepEqual(projectTitleReloadMarker(A),{kind:"clear"});
+  assert.deepEqual(projectTitleReloadMarker(A,A),{kind:"clear"});
   assert.equal(reserveProjectTitleReload(A,CMD,A),true);
   assert.equal(reserveProjectTitleReload(B,CMD,A),true);
   assert.equal(reserveProjectTitleReload(B,"b3333333-3333-4333-8333-333333333333",A),false);
   const payload=[...data.values()].map(JSON.parse);
-  assert.deepEqual(payload,[{generation:A,commandId:CMD,principalBinding:A}]);
+  assert.deepEqual(payload,[{version:2,entries:[{commandId:CMD,principalBinding:A}]}]);
   for(const forbidden of [command.title,PROJECT,command.writeAreaId,"expectedRevision"])
     assert.equal(JSON.stringify(payload).includes(forbidden),false);
-  assert.deepEqual(projectTitleReloadMarker(B),{kind:"blocked",commandId:CMD,principalBinding:A},
+  assert.deepEqual(projectTitleReloadMarker(B,A),{kind:"blocked",commandId:CMD,principalBinding:A},
     "new login must NEVER silently clear an unresolved write");
   assert.equal(confirmProjectTitleReload(CMD,OTHER),false);
   assert.equal(confirmProjectTitleReload(CMD,A),true);
-  assert.deepEqual(projectTitleReloadMarker(B),{kind:"clear"});
+  assert.deepEqual(projectTitleReloadMarker(B,A),{kind:"clear"});
+});
+test("other actor can proceed without disclosing or deleting previous actor's lock",()=>{
+ clean();reserveProjectTitleReload(A,CMD,A);
+ const another="b3333333-3333-4333-8333-333333333333";
+ assert.deepEqual(projectTitleReloadMarker(B),{kind:"unavailable"});
+ assert.deepEqual(projectTitleReloadMarker(B,OTHER),{kind:"clear"});
+ assert.equal(reserveProjectTitleReload(B,another,OTHER),true);
+ assert.equal(projectTitleReloadMarker(B,OTHER).kind,"blocked");
+ assert.deepEqual(projectTitleReloadMarker(B,A),{kind:"blocked",commandId:CMD,principalBinding:A});
+ assert.equal(confirmProjectTitleReload(another,OTHER),true);
+ assert.equal(projectTitleReloadMarker(B,A).kind,"blocked");
+ assert.equal(confirmProjectTitleReload(CMD,A),true);
+ clean();
 });
 test("canonical FIRST 404 rejection releases a tab lock and allows a different project",async()=>{
   clean();
@@ -84,7 +97,7 @@ test("canonical FIRST 404 rejection releases a tab lock and allows a different p
     (id,cmd,signal)=>saveProjectTitleEdit(id,cmd,signal,
       async()=>reply({error:"Not found"},404)),100,A);
   assert.deepEqual(first,{outcome:"denied",definitiveNoWrite:true});
-  assert.deepEqual(projectTitleReloadMarker(A),{kind:"clear"},
+  assert.deepEqual(projectTitleReloadMarker(A,A),{kind:"clear"},
     "an authenticated, exact first pre-COMMIT refusal must not strand the tab");
   assert.equal(reserveProjectTitleReload(A,otherCommand.commandId,A),true);
   let calls=0;
@@ -92,7 +105,7 @@ test("canonical FIRST 404 rejection releases a tab lock and allows a different p
     async()=>{calls++;return {outcome:"saved",replayed:false};},100,A);
   assert.deepEqual(next,{outcome:"saved",replayed:false});
   assert.equal(calls,1);
-  assert.deepEqual(projectTitleReloadMarker(A),{kind:"clear"});
+  assert.deepEqual(projectTitleReloadMarker(A,A),{kind:"clear"});
   clean();rt.securityReset();
 });
 test("canonical first 403 origin refusal is definitive but non-canonical denials are not",async()=>{
@@ -109,7 +122,7 @@ test("canonical first 403 origin refusal is definitive but non-canonical denials
       (id,cmd,signal)=>saveProjectTitleEdit(id,cmd,signal,
         async()=>reply(body,status)),100,A);
     assert.equal(result.outcome,"denied");
-    assert.equal(projectTitleReloadMarker(A).kind,expected?"clear":"blocked",
+    assert.equal(projectTitleReloadMarker(A,A).kind,expected?"clear":"blocked",
       `first refusal ${status} should ${expected?"release":"retain"} the tab marker`);
     rt.securityReset();
   }
@@ -129,7 +142,7 @@ test("a later 403/404/409 after an uncertain PATCH never releases its tab lock",
       (id,cmd,signal)=>saveProjectTitleEdit(id,cmd,signal,
         async()=>reply(body,status)),100,A);
     assert.ok(["denied","conflict"].includes(response.outcome));
-    assert.deepEqual(projectTitleReloadMarker(A),{kind:"blocked",commandId:CMD,principalBinding:A},
+    assert.deepEqual(projectTitleReloadMarker(A,A),{kind:"blocked",commandId:CMD,principalBinding:A},
       `second ${status} must never release an earlier ambiguous commit`);
     assert.equal(reserveProjectTitleReload(A,"b3333333-3333-4333-8333-333333333333",A),false);
     rt.securityReset();
@@ -142,7 +155,7 @@ test("malformed first 400 cannot release an uncertain rename marker",async()=>{
  assert.deepEqual(await runTrackedProjectTitleEdit(rt,A,PROJECT,command,
    (id,cmd,signal)=>saveProjectTitleEdit(id,cmd,signal,async()=>reply({},400)),100,A),
    {outcome:"uncertain"});
- assert.equal(projectTitleReloadMarker(A).kind,"blocked");
+ assert.equal(projectTitleReloadMarker(A,A).kind,"blocked");
  clean();rt.securityReset();
 });
 test("malformed first 409 cannot release an uncertain rename marker",async()=>{
@@ -151,7 +164,7 @@ test("malformed first 409 cannot release an uncertain rename marker",async()=>{
   const result=await runTrackedProjectTitleEdit(rt,A,PROJECT,command,
     (id,cmd,signal)=>saveProjectTitleEdit(id,cmd,signal,async()=>reply({},409)),100,A);
   assert.deepEqual(result,{outcome:"uncertain"});
-  assert.equal(projectTitleReloadMarker(A).kind,"blocked");
+  assert.equal(projectTitleReloadMarker(A,A).kind,"blocked");
   clean();rt.securityReset();
 });
 test("unsent draft is sealed on expiry and only resumes after same actor proof",()=>{
@@ -186,7 +199,7 @@ test("expired in-flight command is sealed until fresh SERVER actor proof matches
   rt.relogin(B);
   assert.equal(resumeSealedProjectTitleEdit(rt,B,PROJECT,{...preview,principalBinding:OTHER}),"blocked");
   assert.equal(hasSealedProjectTitleEdit(rt,PROJECT),false);
-  assert.deepEqual(projectTitleReloadMarker(B),{kind:"blocked",commandId:CMD,principalBinding:A});
+  assert.deepEqual(projectTitleReloadMarker(B,A),{kind:"blocked",commandId:CMD,principalBinding:A});
   clean();
 });
 test("same actor may replay only exact old command after reauthentication",async()=>{
@@ -204,7 +217,7 @@ test("same actor may replay only exact old command after reauthentication",async
     async(id,original)=>{calls.push({id,original});return {outcome:"saved",replayed:true};},
     100,A),{outcome:"saved",replayed:true});
   assert.deepEqual(calls,[{id:PROJECT,original:command}]);
-  assert.deepEqual(projectTitleReloadMarker(B),{kind:"clear"});
+  assert.deepEqual(projectTitleReloadMarker(B,A),{kind:"clear"});
 });
 test("explicit revocation erases memory without unblocking an uncertain write",async()=>{
   clean();const rt=runtime();
@@ -215,7 +228,7 @@ test("explicit revocation erases memory without unblocking an uncertain write",a
   assert.equal(hasSealedProjectTitleEdit(rt,PROJECT),false);
   rt.relogin(B);
   assert.equal(resumeSealedProjectTitleEdit(rt,B,PROJECT,preview),"missing");
-  assert.deepEqual(projectTitleReloadMarker(B),{kind:"blocked",commandId:CMD,principalBinding:A});
+  assert.deepEqual(projectTitleReloadMarker(B,A),{kind:"blocked",commandId:CMD,principalBinding:A});
   clean();
 });
 test("ACL downgrade and restore-generation mismatch cannot disclose the sealed title",async()=>{
@@ -226,7 +239,7 @@ test("ACL downgrade and restore-generation mismatch cannot disclose the sealed t
     rt.relogin(B);
     assert.equal(resumeSealedProjectTitleEdit(rt,B,PROJECT,invalid),"blocked");
     assert.equal(hasSealedProjectTitleEdit(rt,PROJECT),false);
-    assert.equal(projectTitleReloadMarker(B).kind,"blocked");
+    assert.equal(projectTitleReloadMarker(B,A).kind,"blocked");
   }
   clean();
 });
@@ -254,7 +267,7 @@ test("not-recorded, missing ACL, and malformed acknowledgements cannot clear a t
   ]){
     const got=await recoverProjectTitleReceipt(CMD,new AbortController().signal,handler);
     assert.equal(got.status,expected);
-    assert.equal(projectTitleReloadMarker(B).kind,"blocked");
+    assert.equal(projectTitleReloadMarker(B,A).kind,"blocked");
   }
   clean();
 });

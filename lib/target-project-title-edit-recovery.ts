@@ -94,7 +94,7 @@ export function resumeSealedProjectTitleEdit(
   const state=sealed.get(runtime),held=state?.entries.get(id);
   if(!held)return "missing";
   if(!runtime.known()||runtime.generation()!==generation)return "blocked";
-  const marker=projectTitleReloadMarker(generation);
+  const marker=projectTitleReloadMarker(generation,preview.principalBinding);
   if(marker.kind!=="blocked"||marker.commandId!==held.command.commandId||
      marker.principalBinding!==held.principalBinding||
      held.principalBinding!==preview.principalBinding||
