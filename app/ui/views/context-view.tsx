@@ -2,8 +2,9 @@
 import { type ContextClaimItem, type ContextInboxProposal, type ContextInboxTaskDraft } from "../types";
 import type { LumiApp } from "../use-lumi-app";
 import { ClaimEvidence, ContextSources, CoverageBadge } from "./context-evidence";
+import { HumanWikiSourceStatusPanel } from "../humanwiki-source-status-panel";
 
-export function ContextView({ app }: { app: LumiApp }) {
+export function ContextView({ app, humanWikiSourceStatusEnabled = false }: { app: LumiApp; humanWikiSourceStatusEnabled?: boolean }) {
   const {
     approveContextInbox,
     calendarWorkspaceSelection,
@@ -103,6 +104,7 @@ export function ContextView({ app }: { app: LumiApp }) {
     <>
           {view === "Context" && (
             <div className="contextWorkspace">
+              {humanWikiSourceStatusEnabled && <HumanWikiSourceStatusPanel key={app.activeWorkspaceId} language={language} />}
               <section className="contextOverview">
                 <div className="sectionHeading">
                   <div>
