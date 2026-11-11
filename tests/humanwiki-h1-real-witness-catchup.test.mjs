@@ -4,6 +4,8 @@ import { mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { after, test } from "node:test";
+import { spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import {
   bootstrapHumanWikiConsentPrivateLedger, withHumanWikiConsentPrivateLedger,
   withHumanWikiConsentPrivateLedgerAsync,
@@ -179,4 +181,27 @@ test("local HMAC tamper and missing witness data fail closed without writes", as
       witnessPublicKey: f.publicKey, getFreshReceipt: f.provider,
     }));
   refused(local);
+});
+
+test("operator CLI is default-off and rejects export paths without reading data", () => {
+  const cli = fileURLToPath(new URL(
+    "../scripts/humanwiki/witness-catchup-operator.mjs", import.meta.url));
+  const disabled = spawnSync(process.execPath, [cli], {
+    env: { ...process.env,
+      AI_EXECUTIVE_HUMANWIKI_WITNESS_CATCHUP_OPERATOR_ENABLED: "false" },
+    encoding: "utf8",
+  });
+  assert.notEqual(disabled.status, 0);
+  assert.equal(disabled.stdout, "");
+  assert.match(disabled.stderr, /catch-up blocked/);
+
+  const invalidArgument = spawnSync(process.execPath,
+    [cli, "/nonexistent/private-export.json"], {
+      env: { ...process.env,
+        AI_EXECUTIVE_HUMANWIKI_WITNESS_CATCHUP_OPERATOR_ENABLED: "true" },
+      encoding: "utf8",
+    });
+  assert.notEqual(invalidArgument.status, 0);
+  assert.equal(invalidArgument.stdout, "");
+  assert.match(invalidArgument.stderr, /catch-up blocked/);
 });
