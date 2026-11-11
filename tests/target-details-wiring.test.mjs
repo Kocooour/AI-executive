@@ -138,7 +138,8 @@ test("the panel reads only for a server-confirmed generation and routes 401 thro
   assert.match(panel,/const \{gate,onRefusal,retry\}=useTargetGate\(\)/);
   assert.match(panel,/const ready=gate\.kind==="ready"/);
   assert.match(panel,/if\(!session\|\|!ready\)return;/);
-  assert.match(panel,/state\.reason==="signed-out"\)refusalRef\.current\(\)/);
+  assert.match(panel,/state\.reason==="signed-out"\|\|state\.reason==="session-expired"/);
+  assert.match(panel,/refusalRef\.current\(state\.reason==="session-expired"\?"session_expired":"session_revoked"\)/);
   // Privacy: hidden, pagehide, offline and BFCache remove the content; returning waits for the runtime's fresh verification.
   const hooks=read("app/ui/use-target-revalidation.ts");
   for(const event of ["visibilitychange","offline","pagehide","pageshow","online"])
@@ -326,7 +327,7 @@ test("focus: deeper opens never return focus to the list; the panel owns focus; 
   const panel=read("app/ui/target-detail-panel.tsx");
   assert.doesNotMatch(panel,/expectFocusReturn/);
   assert.match(rootSource,/if \(previous !== null && !isParentOf\(previous, detailRoute\)\) expectFocusReturn\(previous\)/);
-  assert.match(panel,/state\.kind==="error"\?\(state\.reason==="hidden"\?copy\.hidden:copy\.failures\[state\.reason\]\)/);
+  assert.match(panel,/state\.kind==="error"\?\(state\.reason==="hidden"\?copy\.hidden:copy\.failures\[state\.reason==="session-expired"\?"signed-out":state\.reason\]\)/);
 });
 
 test("sidebar target titles are not clipped by the legacy 18 px icon-slot rule",()=>{
