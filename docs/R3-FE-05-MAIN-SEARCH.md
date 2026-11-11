@@ -19,4 +19,8 @@
 
 ## Ověření
 
-`node --experimental-loader ./tests/ts-loader.mjs --test tests/target-main-title-search-ui.test.mjs tests/target-staging-title-search-session.test.mjs` (dle existence názvu session testu), následně přesné PR Checks/typecheck/build a cílené UI review. Ověřit ručně nebo browserově 390/1280 px, hidden/offline, rychlé změny input/scope/identity, Back a 401. Bez skutečného zapnutí release flagů.
+Jednotkové testy: `node --experimental-loader ./tests/ts-loader.mjs --test tests/target-main-title-search-ui.test.mjs` a navazující staging search/session testy. PR Checks/typecheck/build běží nad přesným HEAD.
+
+**Povinné cílené browserové ověření R3-FE-05:** `.github/workflows/focused-r3-main-title-search-browser.yml` spouští **dva izolované Playwright joby** (`LUMI_TARGET_MAIN_SEARCH_MODE=on/off`) nad `e2e/target-main-title-search.spec.ts`, vždy na **390 a 1280 px**. Test skutečně spustí hlavní React obrazovku, založí validní lokální legacy úkol a nesynchronizovatelný záznam s dlouhým názvem do IndexedDB a ověří jejich reálné zobrazení před přechodem do Hledání. V cílovém režimu musí být oba názvy a řádky nepřítomné před dotazem i po Enter, stránkování a změně rozsahu; test kontroluje i bezautomatické načítání, serverové odpovědi a vymazání při neúspěšné revalidaci stejné generace. V režimu vypnutého UI flagu musí staré Hledání nad stejnými lokálními záznamy zůstat funkční a nesmí vzniknout target runtime ani HTTP dotaz.
+
+HTTP cílové search/session odpovědi jsou syntetické a zachycené Playwrightem před přístupem ke staging backendu. Běží pouze lokální dočasná testovací instance s novým heslem/session secret a dočasnou databází; žádné produkční zapnutí ani změny reálných dat. Plná neomezená Browser E2E sada je až release gate nad přesným produkčním SHA.
