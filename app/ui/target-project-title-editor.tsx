@@ -11,13 +11,14 @@ import type {DetailLanguage} from '../../lib/target-detail-copy';
 import {projectTitleReloadMarker,reserveProjectTitleReload,confirmProjectTitleReload}
   from '../../lib/target-project-title-reload';
 import {recoverProjectTitleReceipt} from '../../lib/target-project-title-receipt-client';
+import {cancelProjectTitleReload} from '../../lib/target-project-title-cancel-client';
 
 const readFetch=queuedTargetFetch();
 type Draft={preview:ProjectTitleEditPreview; original:string; title:string; command:ProjectTitleEditCommand|null; phase:'edit'|'saving'|'uncertain'|'conflict'};
 type Mode={kind:'idle'|'checking'|'denied'|'recovery'|'reload'}|{kind:'draft';draft:Draft};
 const words={
- cs:{edit:'Upravit název',checking:'Ověřuji oprávnění k úpravě…',denied:'Úprava není dostupná pro tento přístup.',recover:'Obnovit stav posledního ukládání',recovering:'Předchozí uložení není potvrzené. Ověřte přístup a pokračujte stejným příkazem.',title:'Název projektu',save:'Uložit změny',cancel:'Zahodit úpravy',saving:'Ukládám…',invalid:'Vyplňte název v povolené délce bez mezer na začátku a konci.',uncertain:'Výsledek ukládání není jistý. Zopakujte přesně stejný příkaz.',retry:'Ověřit uložením znovu',conflict:'Projekt nebo oprávnění se změnily. Koncept se neuložil.',offline:'Bez připojení nelze změny bezpečně uložit.',refresh:'Zahodit koncept a načíst aktuální obsah',reload:'Předchozí přejmenování není po obnovení stránky potvrzené. Nový zápis je zablokovaný, ale projekt lze dál číst.',receipt:'Ověřit předchozí zápis',notRecorded:'Server ještě nepotvrdil původní zápis. Nový příkaz se nespustí.',storageUnavailable:'Úložiště této záložky není dostupné. Přejmenování nelze bezpečně zahájit.',differentActor:'Nelze ověřit, že jste se přihlásili stejným účtem. Starý příkaz se neobnoví.'},
- en:{edit:'Edit title',checking:'Checking edit access…',denied:'Editing is not available for this access.',recover:'Recover previous save',recovering:'A previous save remains unconfirmed. Verify access before retrying the same command.',title:'Project title',save:'Save changes',cancel:'Discard changes',saving:'Saving…',invalid:'Enter a title within the limit without leading or trailing spaces.',uncertain:'The save outcome is uncertain. Retry the exact same command.',retry:'Retry the same command',conflict:'The project or access changed. Your draft was not saved.',offline:'Changes cannot be saved safely while offline.',refresh:'Discard draft and reload',reload:'The previous rename remains unconfirmed after a reload. New changes are blocked, but the project stays readable.',receipt:'Check previous save',notRecorded:'The server has not confirmed the original write. No new command will be issued.',storageUnavailable:'This tab storage is unavailable. A rename cannot safely begin.',differentActor:'The newly signed-in identity cannot be verified as the original writer. The old command remains blocked.'},
+ cs:{edit:'Upravit název',checking:'Ověřuji oprávnění k úpravě…',denied:'Úprava není dostupná pro tento přístup.',recover:'Obnovit stav posledního ukládání',recovering:'Předchozí uložení není potvrzené. Ověřte přístup a pokračujte stejným příkazem.',title:'Název projektu',save:'Uložit změny',cancel:'Zahodit úpravy',saving:'Ukládám…',invalid:'Vyplňte název v povolené délce bez mezer na začátku a konci.',uncertain:'Výsledek ukládání není jistý. Zopakujte přesně stejný příkaz.',retry:'Ověřit uložením znovu',conflict:'Projekt nebo oprávnění se změnily. Koncept se neuložil.',offline:'Bez připojení nelze změny bezpečně uložit.',refresh:'Zahodit koncept a načíst aktuální obsah',reload:'Předchozí přejmenování není po obnovení stránky potvrzené. Nový zápis je zablokovaný, ale projekt lze dál číst.',receipt:'Ověřit předchozí zápis',cancelPending:'Bezpečně ukončit nevyřízený zápis',notRecorded:'Server ještě nepotvrdil původní zápis. Nový příkaz se nespustí.',storageUnavailable:'Úložiště této záložky není dostupné. Přejmenování nelze bezpečně zahájit.',differentActor:'Nelze ověřit, že jste se přihlásili stejným účtem. Starý příkaz se neobnoví.'},
+ en:{edit:'Edit title',checking:'Checking edit access…',denied:'Editing is not available for this access.',recover:'Recover previous save',recovering:'A previous save remains unconfirmed. Verify access before retrying the same command.',title:'Project title',save:'Save changes',cancel:'Discard changes',saving:'Saving…',invalid:'Enter a title within the limit without leading or trailing spaces.',uncertain:'The save outcome is uncertain. Retry the exact same command.',retry:'Retry the same command',conflict:'The project or access changed. Your draft was not saved.',offline:'Changes cannot be saved safely while offline.',refresh:'Discard draft and reload',reload:'The previous rename remains unconfirmed after a reload. New changes are blocked, but the project stays readable.',receipt:'Check previous save',cancelPending:'Safely cancel pending save',notRecorded:'The server has not confirmed the original write. No new command will be issued.',storageUnavailable:'This tab storage is unavailable. A rename cannot safely begin.',differentActor:'The newly signed-in identity cannot be verified as the original writer. The old command remains blocked.'},
 };
 const editorPhase=(phase:TrackedProjectTitleEditPhase):Draft['phase']=>phase==='saving'?'saving':phase==='uncertain'?'uncertain':'conflict';
 export default function TargetProjectTitleEditor({project,language,onCommitted,onAccessRefused}:{
@@ -158,6 +159,38 @@ export default function TargetProjectTitleEditor({project,language,onCommitted,o
      status.status==='committed'?copy.differentActor:copy.offline);
  }
  /** Restore an unsent draft only after fresh authorized project and actor proofs. */
+ /** A durable server fence (not an absent receipt) proves that a late PATCH
+  * cannot commit. The original actor's opaque marker is unlocked only then. */
+ async function cancelPending(){
+  if(!runtime||!alive||!stillBound()){setMessage(copy.offline);return;}
+  const n=++seq.current;controller.current?.abort();const ctrl=new AbortController();controller.current=ctrl;
+  setMode({kind:'checking'});setMessage('');
+  const preview=await loadProjectTitleEditPreview(project.id,ctrl.signal,readFetch);
+  if(n!==seq.current||ctrl.signal.aborted||!stillBound())return;
+  if(preview.ok===false){
+   if(preview.reason==='expired')sessionExpired();
+   else if(preview.reason==='denied')refuse();
+   else{setMode({kind:'reload'});setMessage(copy.offline);}return;
+  }
+  const marker=projectTitleReloadMarker(bound.current,preview.preview.principalBinding);
+  if(marker.kind!=='blocked'){setMode({kind:'idle'});setMessage(copy.storageUnavailable);return;}
+  const outcome=await cancelProjectTitleReload(project.id,marker.commandId,
+    preview.preview.restoreGeneration,ctrl.signal);
+  if(n!==seq.current||ctrl.signal.aborted||!stillBound())return;
+  if(outcome==='cancelled'&&
+     confirmProjectTitleReload(marker.commandId,marker.principalBinding)){
+    setMode({kind:'idle'});setMessage('');onCommitted();return;
+  }
+  if(outcome==='committed'){
+    const receipt=await recoverProjectTitleReceipt(marker.commandId,ctrl.signal);
+    if(n!==seq.current||ctrl.signal.aborted||!stillBound())return;
+    if(receipt.status==='committed'&&receipt.principalBinding===marker.principalBinding&&
+       confirmProjectTitleReload(marker.commandId,marker.principalBinding)){
+      setMode({kind:'idle'});setMessage('');onCommitted();return;
+    }
+  }
+  setMode({kind:'reload'});setMessage(copy.offline);
+ }
  async function recoverSealedDraft(){
   if(!runtime||!alive||!hasSealedProjectTitleDraft(runtime,project.id))return;
   if(!stillBound()){setMode({kind:'recovery'});setMessage(copy.offline);return;}
@@ -281,7 +314,8 @@ export default function TargetProjectTitleEditor({project,language,onCommitted,o
      else if(runtime&&hasSealedProjectTitleEdit(runtime,project.id))void recoverSealed();
      else if(runtime&&hasSealedProjectTitleDraft(runtime,project.id))void recoverSealedDraft();
       else void recoverDraft();}}>{copy.recover}</button></>}
-   {mode.kind==='reload'&&<><p role="status">{copy.reload}</p><button type="button" onClick={()=>void reconcileReload()}>{copy.receipt}</button></>}
+   {mode.kind==='reload'&&<><p role="status">{copy.reload}</p><button type="button" onClick={()=>void reconcileReload()}>{copy.receipt}</button>
+    {message===copy.notRecorded&&<button type="button" onClick={()=>void cancelPending()}>{copy.cancelPending}</button>}</>}
    {message&&<p role="alert">{message}</p>}</div>;
  const d=mode.draft,conflict=d.phase==='conflict'||(d.command===null&&(project.title!==d.original||project.areaId!==d.preview.writeAreaId));
  const busy=d.phase==='saving',uncertain=d.phase==='uncertain',locked=busy||uncertain||conflict;
