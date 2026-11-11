@@ -13,7 +13,7 @@ import {privateNoteCreatePreflight} from "../../lib/target-private-note-create-c
 import {validPrivateTaskAreaId,validPrivateTaskTitle,type PrivateTaskCreateCommand} from
   "../../lib/target-private-task-create-client";
 import {privateTaskCreateMarker,trackedPrivateTaskCreate,
-  runPrivateTaskCreate,checkTrackedPrivateTaskCreate} from
+  runPrivateTaskCreate,checkTrackedPrivateTaskCreate,subscribePrivateTaskCreate} from
   "../../lib/target-private-task-create-coordinator";
 
 type Areas={kind:"loading"|"unavailable"|"signed-out";generation:string}|
@@ -55,8 +55,8 @@ const text={
 } as const;
 
 export default function TargetPrivateTaskAreaChooser({
-  language="cs",onClose,onCreated,
-}:{language?:"cs"|"en";onClose:()=>void;onCreated:()=>void}){
+  language="cs",onClose,
+}:{language?:"cs"|"en";onClose:()=>void}){
   const c=text[language],runtime=useTargetRuntime(),generation=useTargetGeneration();
   const [nonce,setNonce]=useState(0);
   const [areas,setAreas]=useState<Areas>({kind:"loading",generation:""});
@@ -69,24 +69,34 @@ export default function TargetPrivateTaskAreaChooser({
   const previewRef=useRef<AbortController|null>(null);
   const mounted=useRef(true);
   const serial=useRef(0);
-  const delivered=useRef(false),deferred=useRef(false);
-  const closeRef=useRef<HTMLButtonElement>(null);
+   const closeRef=useRef<HTMLButtonElement>(null);
   useEffect(()=>{closeRef.current?.focus();},[]);
-  useEffect(()=>()=>{mounted.current=false;serial.current++;previewRef.current?.abort();},[]);
+  useEffect(()=>{
+    mounted.current=true;
+    return ()=>{mounted.current=false;serial.current++;previewRef.current?.abort();};
+  },[]);
+  useEffect(()=>{
+    if(!runtime||!runtime.known()||runtime.generation()!==generation)return;
+    return subscribePrivateTaskCreate(runtime,generation,change=>{
+      if(!mounted.current)return;
+      setRevision(v=>v+1);
+      if(change.confirmedTaskId){
+        setName("");setPhase("saved");setMessage("");
+      }else if(privateTaskCreateMarker(generation).kind==="blocked"){
+        setPhase("uncertain");setMessage(c.uncertain);
+      }
+    });
+  },[runtime,generation,language]);
   useEffect(()=>{
     setName("");setDraftGeneration(generation);setChosen("");
-    setMessage("");setPhase("idle");delivered.current=false;deferred.current=false;
+    setMessage("");setPhase("idle");
   },[generation]);
   function live(){
     return runtime?.known()===true&&runtime.generation()===generation&&
       document.visibilityState==="visible"&&navigator.onLine;
   }
-  function complete(){
-    if(delivered.current)return;
-    if(!live()){deferred.current=true;return;}
-    delivered.current=true;deferred.current=false;onCreated();
-  }
   function hide(){
+    serial.current++;
     previewRef.current?.abort();
     setChosen("");setName("");setDraftGeneration(generation);
     setAreas({kind:"unavailable",generation});
@@ -98,8 +108,7 @@ export default function TargetPrivateTaskAreaChooser({
     ready:()=>{
       if(live()){
         setNonce(v=>v+1);
-        if(deferred.current&&privateTaskCreateMarker(generation).kind==="clear")complete();
-      }else hide();
+       }else hide();
     },
     signedOut:()=>{hide();setAreas({kind:"signed-out",generation});},
   });
@@ -153,10 +162,13 @@ export default function TargetPrivateTaskAreaChooser({
     const timer=setTimeout(()=>controller.abort(),8000);
     // The note Area preview is a READ of owner-private write-capable Areas.
     // The separate task writer rechecks both identity and ACL at COMMIT.
-    const preflight=await privateNoteCreatePreflight(selected.id,controller.signal);
+    const preflight=await privateNoteCreatePreflight(selected.id,controller.signal)
+      .catch(()=>null);
     clearTimeout(timer);
-    if(current!==serial.current||controller.signal.aborted||!live())return;
-    if(!preflight.ok){
+    if(current!==serial.current||!mounted.current||!live())return;
+    // A genuine timeout is retryable. An aborted, superseded operation was
+    // already invalidated by hide()/unmount and must not update this form.
+    if(!preflight?.ok||controller.signal.aborted){
       setPhase("idle");setMessage(c.access);setNonce(v=>v+1);return;
     }
     const command:PrivateTaskCreateCommand={
@@ -168,7 +180,7 @@ export default function TargetPrivateTaskAreaChooser({
       if(!mounted.current||runtime.generation()!==generation)return;
       setRevision(v=>v+1);
       if(outcome==="saved"&&privateTaskCreateMarker(generation).kind==="clear"){
-        setName("");setPhase("saved");complete();return;
+        setName("");setPhase("saved");return;
       }
       setPhase("uncertain");setMessage(c.uncertain);
     });
@@ -180,12 +192,14 @@ export default function TargetPrivateTaskAreaChooser({
     previewRef.current?.abort();previewRef.current=controller;
     setPhase("receipt");setMessage("");
     const timer=setTimeout(()=>controller.abort(),8000);
-    const result=await checkTrackedPrivateTaskCreate(runtime,generation,controller.signal);
+    const result=await checkTrackedPrivateTaskCreate(runtime,generation,controller.signal)
+      .catch(()=>"unavailable" as const);
     clearTimeout(timer);
-    if(current!==serial.current||controller.signal.aborted||!live())return;
+    if(current!==serial.current||!mounted.current||!live())return;
     setRevision(v=>v+1);
-    if(result==="committed"&&privateTaskCreateMarker(generation).kind==="clear"){
-      setName("");setPhase("saved");complete();return;
+    if(result==="committed"&&!controller.signal.aborted&&
+      privateTaskCreateMarker(generation).kind==="clear"){
+      setName("");setPhase("saved");return;
     }
     setPhase("uncertain");
     setMessage(result==="not_recorded"?c.notRecorded:c.receiptFailed);
@@ -207,8 +221,9 @@ export default function TargetPrivateTaskAreaChooser({
             {items.map(item=><option key={item.id} value={item.id}>{item.title}</option>)}
           </select>
         </label>)}
-      {blocked&&phase==="saving"&&<p role="status">{c.saving}</p>}
-      {blocked&&phase!=="saving"&&<section data-testid="target-private-task-unresolved">
+      {blocked&&(phase==="saving"||tracked?.phase==="saving")&&
+        <p role="status">{c.saving}</p>}
+      {blocked&&phase!=="saving"&&tracked?.phase!=="saving"&&<section data-testid="target-private-task-unresolved">
         <p role="alert">{marker.kind==="unavailable"?c.storage:c.blocked}</p>
         {marker.kind==="blocked"&&!tracked&&<p role="note">{c.lost}</p>}
         {marker.kind==="blocked"&&tracked&&<button type="button"
