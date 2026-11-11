@@ -228,7 +228,7 @@ export default function TargetPrivateTaskAreaChooser({
         {marker.kind==="blocked"&&!tracked&&<p role="note">{c.lost}</p>}
         {marker.kind==="blocked"&&tracked&&<button type="button"
           data-testid="target-private-task-receipt"
-          disabled={!ready||tracked.phase==="saving"||phase==="receipt"}
+          disabled={!ready||phase==="receipt"}
           onClick={()=>{void checkReceipt();}}>{c.receipt}</button>}
       </section>}
       {ready&&selected&&!blocked&&<form data-testid="target-private-task-form"
