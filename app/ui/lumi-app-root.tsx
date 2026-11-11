@@ -287,7 +287,7 @@ export function LumiAppRoot({ targetMyPlan, targetScopes, targetDetails, targetE
               {view === "Today" && !targetPlan && <TodayHeaderMeta app={app} />}
             </div>
           </div>
-          {scopeSwitcher && <TargetScopeSwitcher language={language} variant={scopeList === null ? "plan" : "lists"} />}
+          {scopeSwitcher && <TargetScopeSwitcher language={language} variant={targetPlan ? "plan" : "lists"} />}
           {scopeList==="note"&&targetPrivateNoteAreas&&<button type="button"
             className="targetScopeAreaChooserButton" data-testid="target-private-area-open"
             onClick={()=>openAreaChooser()}>{targetPrivateNoteCreate
