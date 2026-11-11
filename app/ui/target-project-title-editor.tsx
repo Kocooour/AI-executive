@@ -60,7 +60,7 @@ export default function TargetProjectTitleEditor({project,language,onCommitted,o
      else if(existing.phase==='denied')refuse();else{setMode({kind:'recovery'});void recover();}}
    else if(hasSealedProjectTitleEdit(runtime,project.id)){setMode({kind:'checking'});void recoverSealed();}
    else if(hasSealedProjectTitleDraft(runtime,project.id)){setMode({kind:'checking'});void recoverSealedDraft();}
-   else if(projectTitleReloadMarker(bound.current).kind!=='clear'){setMode({kind:'reload'});}
+   else if(projectTitleReloadMarker(bound.current).kind!=='clear'){setMode({kind:'checking'});void checkReloadForActor();}
    else if(projectTitleDraft(runtime,bound.current,project.id)){setMode({kind:'recovery'});void recoverDraft();}
    return unsubscribe;
    // Runtime generation and project identity are the recovery boundary.
@@ -109,17 +109,43 @@ export default function TargetProjectTitleEditor({project,language,onCommitted,o
      }});
    }else{setMode({kind:'reload'});setMessage(copy.differentActor);}
  }
- /** On reload, only a content-free correlation UUID and server-scoped proof
-  * survived. A not_recorded or denied result must NEVER unlock new writes. */
+ /** A stale tab marker must never be disclosed to a DIFFERENT actor. */
+ async function checkReloadForActor(){
+   if(!runtime||!alive||!stillBound())return;
+   const n=++seq.current;controller.current?.abort();const ctrl=new AbortController();controller.current=ctrl;
+   setMode({kind:'checking'});setMessage('');
+   const result=await loadProjectTitleEditPreview(project.id,ctrl.signal,readFetch);
+   if(n!==seq.current||ctrl.signal.aborted||!stillBound())return;
+   if(result.ok===false){
+     if(result.reason==='expired')sessionExpired();
+     else if(result.reason==='denied')refuse();
+     else{setMode({kind:'idle'});setMessage(copy.offline);}
+     return;
+   }
+   const own=projectTitleReloadMarker(bound.current,result.preview.principalBinding);
+   if(own.kind==='blocked'){setMode({kind:'reload'});setMessage('');}
+   else if(own.kind==='clear'){setMode({kind:'idle'});setMessage('');}
+   else{setMode({kind:'idle'});setMessage(copy.storageUnavailable);}
+ }
+ /** On reload, no receipt is even queried until the CURRENT actor's fresh
+  * server-issued project binding selects their own content-free marker. */
  async function reconcileReload(){
    if(!runtime||!alive)return;
    if(!stillBound()){setMessage(copy.offline);return;}
-   const marker=projectTitleReloadMarker(bound.current);
-   if(marker.kind==='clear'){setMode({kind:'idle'});setMessage('');return;}
-   if(marker.kind!=='blocked'){setMode({kind:'reload'});setMessage(copy.storageUnavailable);return;}
    const n=++seq.current;controller.current?.abort();
    const ctrl=new AbortController();controller.current=ctrl;
    setMode({kind:'checking'});setMessage('');
+   const preview=await loadProjectTitleEditPreview(project.id,ctrl.signal,readFetch);
+   if(n!==seq.current||ctrl.signal.aborted||!stillBound())return;
+   if(preview.ok===false){
+     if(preview.reason==='expired')sessionExpired();
+     else if(preview.reason==='denied')refuse();
+     else{setMode({kind:'reload'});setMessage(copy.offline);}
+     return;
+   }
+   const marker=projectTitleReloadMarker(bound.current,preview.preview.principalBinding);
+   if(marker.kind==='clear'){setMode({kind:'idle'});setMessage('');return;}
+   if(marker.kind!=='blocked'){setMode({kind:'idle'});setMessage(copy.storageUnavailable);return;}
    const status=await recoverProjectTitleReceipt(marker.commandId,ctrl.signal);
    if(n!==seq.current||ctrl.signal.aborted||!stillBound())return;
    if(status.status==='committed'&&status.principalBinding===marker.principalBinding&&
@@ -185,11 +211,6 @@ export default function TargetProjectTitleEditor({project,language,onCommitted,o
    if(trackedProjectTitleEdit(runtime,bound.current,project.id)){void recover();return;}
    if(hasSealedProjectTitleEdit(runtime,project.id)){void recoverSealed();return;}
    if(hasSealedProjectTitleDraft(runtime,project.id)){void recoverSealedDraft();return;}
-   const marker=projectTitleReloadMarker(bound.current);
-   if(marker.kind!=='clear'){
-     setMode({kind:'reload'});
-     setMessage(marker.kind==='unavailable'?copy.storageUnavailable:'');return;
-   }
    if(projectTitleDraft(runtime,bound.current,project.id)){void recoverDraft();return;}
    if(!stillBound()){setMessage(copy.offline);return;}
    const id=++seq.current;controller.current?.abort();const current=new AbortController();controller.current=current;
@@ -197,6 +218,13 @@ export default function TargetProjectTitleEditor({project,language,onCommitted,o
    const result=await loadProjectTitleEditPreview(project.id,current.signal,readFetch);
    if(id!==seq.current||current.signal.aborted||!stillBound())return;
    if(result.ok===false){if(result.reason==='expired')sessionExpired();else if(result.reason==='denied')refuse();else{setMode({kind:'idle'});setMessage(copy.offline);}return;}
+   // A new authenticated actor may edit independently without clearing an
+   // older actor's unresolved marker. Each write still has strict CAS.
+   const barrier=projectTitleReloadMarker(bound.current,result.preview.principalBinding);
+   if(barrier.kind!=='clear'){
+     setMode(barrier.kind==='blocked'?{kind:'reload'}:{kind:'idle'});
+     setMessage(barrier.kind==='unavailable'?copy.storageUnavailable:'');return;
+   }
    // The edit token must be associated with the same visible project/Area;
    // any later concurrent change is still rejected by transactional CAS.
    const fresh=await loadProjectTasksPage({projectId:project.id,limit:1,signal:current.signal},readFetch);
@@ -231,7 +259,7 @@ export default function TargetProjectTitleEditor({project,language,onCommitted,o
    // the exact private command is gone; no new UUID may supersede it.
    if(!reserveProjectTitleReload(bound.current,command.commandId,d.preview.principalBinding)){
      setMode({kind:'reload'});
-     setMessage(projectTitleReloadMarker(bound.current).kind==='unavailable'
+     setMessage(projectTitleReloadMarker(bound.current,d.preview.principalBinding).kind==='unavailable'
        ?copy.storageUnavailable:copy.reload);
      return;
    }
