@@ -40,6 +40,12 @@ const {POST:STATUS}=await import("../app/api/target-staging/tasks/create-status/
 const {GET:GET_TASK}=await import("../app/api/target-staging/tasks/[taskId]/route.ts");
 const {parseTaskCreateReply,parseTaskCreateStatusReply}=
   await import("../lib/target-staging-task-create-process.ts");
+const {readStagingTemporalDetailInChild}=
+  await import("../lib/target-staging-read-process.ts");
+const {resolveStagingHttpIdentity,stagingChildSessionConfig}=
+  await import("../lib/target-staging-http-identity.ts");
+const {releasePrivateTaskCreateCommittedStatus}=
+  await import("../lib/target-private-task-create-http.ts");
 
 after(()=>{
   for(const [key,value] of Object.entries(original)){
@@ -193,6 +199,20 @@ test("create status cannot confirm a deleted task or resurrect its tombstone",as
   const fx=fixture(),cmd=command(fx);
   assert.deepEqual(await checked(await create(cmd),201),{ok:true,taskId:cmd.taskId});
   assert.deepEqual(await checked(await recover(cmd),200),{status:"committed"});
+  // Deterministically freeze the actual worker's pre-delete snapshot. The
+  // following response is released only AFTER a real SQLite DELETE commits.
+  const statusRequest=request(base+"/create-status",cmd);
+  const identity=resolveStagingHttpIdentity(statusRequest);
+  assert.ok(identity);
+  const preDelete=await readStagingTemporalDetailInChild({
+    stagingDirectory:fx.stage.directory,
+    expectedRestoreGeneration:fx.stage.restoreGeneration,
+    ownerUserId:"alice",
+    ...stagingChildSessionConfig(identity),
+  },cmd.taskId);
+  assert.equal(preDelete?.ok,true,"real pre-delete worker must see the task");
+  assert.deepEqual(await checked(releasePrivateTaskCreateCommittedStatus(
+    statusRequest,identity,fx.store,"alice",cmd,preDelete),200),{status:"committed"});
   const {TargetStagingSessionAuthority}=await import("../lib/target-staging-session-authority.ts");
   const authority=new TargetStagingSessionAuthority(fx.store);
   try{
@@ -208,12 +228,35 @@ test("create status cannot confirm a deleted task or resurrect its tombstone",as
   }finally{authority.close();}
   const afterDelete=persistence(fx,cmd.taskId);
   assert.equal(afterDelete.task,undefined);
+  assert.deepEqual(await checked(releasePrivateTaskCreateCommittedStatus(
+    statusRequest,identity,fx.store,"alice",cmd,preDelete),404),
+    {error:"Not found"},"a pre-delete snapshot must fail the live task guard");
   assert.deepEqual(await checked(await recover(cmd),404),{error:"Not found"});
   assert.deepEqual(await checked(await create(cmd),404),{error:"Not found"});
   assert.deepEqual(await checked(await create({...cmd,commandId:randomUUID()}),404),
     {error:"Not found"});
   assert.deepEqual(persistence(fx,cmd.taskId),afterDelete,
     "failed recovery/retries must not alter receipt, journal or tombstones");
+});
+test("revocation between status snapshot and release fails closed",async()=>{
+  const fx=fixture(),bob=session(fx,"bob"),cmd=command(fx,{areaId:"bob-private"});
+  assert.deepEqual(await checked(await create(cmd,bob),201),{ok:true,taskId:cmd.taskId});
+  const statusRequest=request(base+"/create-status",cmd,bob);
+  const identity=resolveStagingHttpIdentity(statusRequest);
+  assert.ok(identity);
+  const observed=await readStagingTemporalDetailInChild({
+    stagingDirectory:fx.stage.directory,
+    expectedRestoreGeneration:fx.stage.restoreGeneration,
+    ownerUserId:"alice",
+    ...stagingChildSessionConfig(identity),
+  },cmd.taskId);
+  assert.equal(observed?.ok,true);
+  const live=durable.verifyDurableTargetStagingSessionLive(fx.store,identity.tokenHash);
+  assert.ok(live?.sessionId);
+  assert.equal(durable.revokeDurableTargetStagingSession(fx.store,live.sessionId).ok,true);
+  assert.equal((await checked(releasePrivateTaskCreateCommittedStatus(
+    statusRequest,identity,fx.store,"alice",cmd,observed),401)).code,
+    "session_revoked","recovery must recheck the live session before releasing");
 });
 test("exact content-free child DTO parsing rejects all extra properties",()=>{
   assert.deepEqual(parseTaskCreateReply({ok:true,replayed:true}),{ok:true,replayed:true});
