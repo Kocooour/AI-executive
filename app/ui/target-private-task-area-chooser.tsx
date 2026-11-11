@@ -13,7 +13,8 @@ import {privateNoteCreatePreflight} from "../../lib/target-private-note-create-c
 import {validPrivateTaskAreaId,validPrivateTaskTitle,type PrivateTaskCreateCommand} from
   "../../lib/target-private-task-create-client";
 import {privateTaskCreateMarker,trackedPrivateTaskCreate,
-  runPrivateTaskCreate,checkTrackedPrivateTaskCreate,subscribePrivateTaskCreate} from
+  runPrivateTaskCreate,checkTrackedPrivateTaskCreate,
+  recoverPrivateTaskCreate,subscribePrivateTaskCreate} from
   "../../lib/target-private-task-create-coordinator";
 
 type Areas={kind:"loading"|"unavailable"|"signed-out";generation:string}|
@@ -32,7 +33,7 @@ const text={
     uncertain:"Uložení není potvrzené. Nový pokus by mohl vytvořit duplicitu.",
     blocked:"Předchozí vytvoření úkolu není potvrzené. Další úkol nelze nyní vytvořit.",
     storage:"Úložiště záložky není dostupné; bezpečné vytvoření je zablokované.",
-    lost:"Původní příkaz už není v paměti. Kvůli ochraně soukromí se jeho text neukládá; automatické ověření po reloadu není možné. Zápis zůstává zablokovaný.",
+    lost:"Text původního příkazu není uložen. Výsledek lze bezpečně ověřit podle neprůhledného ID; do potvrzení je nový zápis zablokovaný.",
     receipt:"Ověřit původní zápis",notRecorded:"Server dosud nepotvrdil zápis. To nevylučuje pozdější dokončení; další příkaz je blokovaný.",
     receiptFailed:"Zápis nelze bezpečně potvrdit. Ověření opakujte po obnovení oprávnění.",
     success:"Vytvoření úkolu bylo potvrzeno."},
@@ -48,7 +49,7 @@ const text={
     uncertain:"Creation is not confirmed. A new attempt could duplicate the task.",
     blocked:"A previous task create is unconfirmed; new creation is blocked.",
     storage:"Tab storage is unavailable; safe creation is blocked.",
-    lost:"The original command is no longer in memory. Its text was not stored for privacy; recovery after reload is unavailable. New creation remains blocked.",
+    lost:"The original private command text was not stored. Check the original create with its opaque ID; new creation remains blocked until confirmed.",
     receipt:"Check original create",notRecorded:"The server has not confirmed this create. It could still commit later; new creation is blocked.",
     receiptFailed:"The create could not be verified. Retry verification after access is restored.",
     success:"Task creation confirmed."},
@@ -186,13 +187,15 @@ export default function TargetPrivateTaskAreaChooser({
     });
   }
   async function checkReceipt(){
-    if(!runtime||!live()||!blocked||!tracked||
-      tracked.phase==="saving"||phase==="receipt")return;
+    if(!runtime||!live()||!blocked||
+      tracked?.phase==="saving"||phase==="receipt")return;
     const current=++serial.current,controller=new AbortController();
     previewRef.current?.abort();previewRef.current=controller;
     setPhase("receipt");setMessage("");
     const timer=setTimeout(()=>controller.abort(),8000);
-    const result=await checkTrackedPrivateTaskCreate(runtime,generation,controller.signal)
+    const result=await (tracked
+      ?checkTrackedPrivateTaskCreate(runtime,generation,controller.signal)
+      :recoverPrivateTaskCreate(runtime,generation,controller.signal))
       .catch(()=>"unavailable" as const);
     clearTimeout(timer);
     if(current!==serial.current||!mounted.current||!live())return;
@@ -226,7 +229,7 @@ export default function TargetPrivateTaskAreaChooser({
       {blocked&&phase!=="saving"&&tracked?.phase!=="saving"&&<section data-testid="target-private-task-unresolved">
         <p role="alert">{marker.kind==="unavailable"?c.storage:c.blocked}</p>
         {marker.kind==="blocked"&&!tracked&&<p role="note">{c.lost}</p>}
-        {marker.kind==="blocked"&&tracked&&<button type="button"
+        {marker.kind==="blocked"&&<button type="button"
           data-testid="target-private-task-receipt"
           disabled={!ready||phase==="receipt"}
           onClick={()=>{void checkReceipt();}}>{c.receipt}</button>}
