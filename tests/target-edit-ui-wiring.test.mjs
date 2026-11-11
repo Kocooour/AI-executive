@@ -10,7 +10,14 @@ test("page and root pass the server-derived edit flags to the panel; absent flag
   assert.match(read("app/page.tsx"),/targetEdits=\{config\?\.edits\}/);
   const rootSource=read("app/ui/lumi-app-root.tsx");
   assert.match(rootSource,/targetEdits\?: TargetEditsProps/);
-  assert.match(rootSource,/<TargetDetailPanel route=\{detailRoute\} language=\{language\} gates=\{detailGates\} edits=\{targetEdits\} noteEdit=\{targetNoteEdit && detailGates\.note\} \/>/);
+  // Keep the server-derived edit and legacy note gates intact when the private
+  // Quick Capture button is injected into the target detail panel.
+  assert.match(rootSource,/<TargetDetailPanel route=\\{detailRoute\\} language=\\{language\\} gates=\\{detailGates\\} edits=\\{targetEdits\\} noteEdit=\\{targetNoteEdit && detailGates\\.note\\} onPrivateCapture=\\{targetCapture\\?\\(\\)=>openAreaChooser\\(true\\):undefined\\} \\/>/);
+  assert.match(rootSource,/const targetCapture=Boolean\\(scopesOn&&targetScopes\\?\\.notes&&targetPrivateNoteAreas&&\\s*targetPrivateNoteCreate&&mobileDesignV1Preview\\)/);
+  // A click event on a global FAB must never stand in for an explicit
+  // in-detail action (openAreaChooser(true)).
+  assert.match(rootSource,/onTargetCapture=\\{targetCapture\\?\\(\\)=>openAreaChooser\\(\\):undefined\\}/);
+  assert.doesNotMatch(rootSource,/onTargetCapture=\\{targetCapture\\?openAreaChooser:undefined\\}/);
 });
 
 test("the panel shows a read-only note only when neither legacy nor 4b edits are active",()=>{
