@@ -20,7 +20,14 @@ node --experimental-loader ./tests/ts-loader.mjs --test \
 
 Testy: striktní parser přijme jen platný owner-only neautorizující výsledek; zamítá alternativní zdroje, privileged flagy, neznámé statusy, změněné revize, extra IDs/claims a podobné payloady. React SSR vykreslí **jen** tlačítko a vysvětlení, nikdy původní owner data. Integrační invariant přes source inspection vynucuje dvojitý server opt-in, připojení pouze na `view=Context`, workspace-key remount, abort/visibility/pagehide/offline a přenos bez cachování.
 
-**Zbývá před releasem:** cílená skutečná browser akceptace v izolovaném desktop/mobil stagingu, včetně logout/login identity swap, tab visibility/BFCache, offline a VoiceOver; plný Browser E2E nad přesným SHA je až předprodukční release gate podle `AGENTS.md`. CI nepoužívá reálné exporty ani produkční witness.
+**Cílená skutečná browser akceptace v PR:** [Playwright scénáře](../e2e/humanwiki-context-source-status.spec.ts) montují skutečný React/Next UI na izolovaném syntetickém serveru, oba server-only opt-in příznaky jsou zapnuté **pouze** pro tento profil (`LUMI_HUMANWIKI_SOURCE_STATUS_E2E=true`). Odpovědi API jsou mockovány pomocí `page.route`, bez reálných osobních dat či witness hostu. Desktop: explicitní kliknutí → jediný GET + skutečný výsledek; 404 a privilegovaný/malformed JSON → obecná nedostupnost. Mobil (390 px): Více → Kontext → změna pohledu a návrat → stav smazán, žádné automatické znovunačtení. Pozdní odpověď po `blur`/abort, opuštění obrazovky i po odebrání přihlašovací cookie a reloadu nesmí obnovit údaje. Samostatný [workflow](../.github/workflows/humanwiki-context-source-status-browser.yml) spouští jen tento Playwright soubor, nikoli full Browser E2E.
+
+```sh
+LUMI_HUMANWIKI_SOURCE_STATUS_E2E=true NEXT_PUBLIC_LUMI_DESIGN_V1_PREVIEW=1 E2E_PORT=3124 \\
+  pnpm exec playwright test e2e/humanwiki-context-source-status.spec.ts --project=desktop
+```
+
+**Zbývá před releasem:** příslušný **úspěšný** focused browser běh na přesném HEAD (dokud neběží / neprošel, PR není merge-ready), kompletní logout/login identity-switch v live stagingu, BFCache a VoiceOver; plný Browser E2E nad přesným SHA je až předprodukční release gate podle `AGENTS.md`. CI nepoužívá reálné exporty ani produkční witness.
 
 ## Co se tím nedokončuje
 
