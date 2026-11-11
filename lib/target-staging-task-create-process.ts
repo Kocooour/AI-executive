@@ -1,0 +1,51 @@
+/** Bounded child result adapter: no title or actor data ever returned to HTTP. */
+import {runStagingWriteChild} from "./target-staging-title-http-process";
+import type {StagingPersonalReadConfig} from "./target-staging-read-process";
+import type {PrivateTaskCreateCommand} from "./target-private-task-create-writer";
+
+export type TaskCreateReply =
+  | {ok:true;replayed?:true}
+  | {ok:false;reason:"unavailable" | "session_revoked" | "resync_required" |
+      "idempotency_conflict" | "write_failed"};
+export type TaskCreateStatusReply =
+  | {ok:true;status:"committed" | "not_recorded"}
+  | {ok:false;reason:"unavailable" | "idempotency_conflict"};
+
+const createErrors=new Set(["unavailable","session_revoked","resync_required",
+  "idempotency_conflict","write_failed"]);
+export function parseTaskCreateReply(value:unknown):TaskCreateReply|null{
+  if(!value||typeof value!=="object"||Array.isArray(value))return null;
+  const r=value as Record<string,unknown>;
+  const keys=Object.keys(r).sort().join(",");
+  if(r.ok===true&&keys==="ok")return {ok:true};
+  if(r.ok===true&&keys==="ok,replayed"&&r.replayed===true)
+    return {ok:true,replayed:true};
+  if(r.ok===false&&keys==="ok,reason"&&
+    typeof r.reason==="string"&&createErrors.has(r.reason))
+    return {ok:false,reason:r.reason as Exclude<TaskCreateReply,{ok:true}>["reason"]};
+  return null;
+}
+export function parseTaskCreateStatusReply(value:unknown):TaskCreateStatusReply|null{
+  if(!value||typeof value!=="object"||Array.isArray(value))return null;
+  const r=value as Record<string,unknown>;
+  const keys=Object.keys(r).sort().join(",");
+  if(r.ok===true&&keys==="ok,status"&&
+    (r.status==="committed"||r.status==="not_recorded"))
+    return {ok:true,status:r.status};
+  if(r.ok===false&&keys==="ok,reason"&&
+    (r.reason==="unavailable"||r.reason==="idempotency_conflict"))
+    return {ok:false,reason:r.reason};
+  return null;
+}
+export async function createPrivateTaskInChild(
+  config:StagingPersonalReadConfig,request:PrivateTaskCreateCommand,
+):Promise<TaskCreateReply|null>{
+  return parseTaskCreateReply(await runStagingWriteChild(
+    config,"target-staging-task-create-child.mjs",JSON.stringify(request)));
+}
+export async function readPrivateTaskCreateStatusInChild(
+  config:StagingPersonalReadConfig,request:PrivateTaskCreateCommand,
+):Promise<TaskCreateStatusReply|null>{
+  return parseTaskCreateStatusReply(await runStagingWriteChild(
+    config,"target-staging-task-create-status-child.mjs",JSON.stringify(request)));
+}

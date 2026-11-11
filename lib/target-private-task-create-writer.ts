@@ -65,6 +65,37 @@ function receiptDigest(r: PrivateTaskCreateCommand): string {
     r.restoreGeneration.toLowerCase(), r.title,
   ])).digest("hex");
 }
+/** Read-only, exact-command reconciliation. A missing receipt is not a proof
+ * that an in-flight HTTP write cannot subsequently commit. No title or task
+ * identifier is exposed in the response. */
+export type PrivateTaskCreateStatus =
+  | {ok:true;status:"committed" | "not_recorded"}
+  | {ok:false;reason:"unavailable" | "idempotency_conflict"};
+
+export function readPrivateTaskCreateStatus(
+  db: import("node:sqlite").DatabaseSync,
+  actor: string,
+  request: PrivateTaskCreateCommand,
+): PrivateTaskCreateStatus {
+  const denied = (): PrivateTaskCreateStatus => ({ok:false,reason:"unavailable"});
+  if (!validPrivateTaskCreateCommand(request)) return denied();
+  const generation = (db.prepare("SELECT value FROM metadata WHERE key='restore_generation'")
+    .get() as {value:string}|undefined)?.value;
+  if (!generation || generation.toLowerCase() !== request.restoreGeneration.toLowerCase() ||
+      !canWriteIsolatedTargetArea(db,actor,request.areaId,true)) return denied();
+  const row = db.prepare("SELECT value FROM metadata WHERE key=?")
+    .get(receiptKey(actor,request)) as {value:string}|undefined;
+  if (!row) return {ok:true,status:"not_recorded"};
+  if (row.value !== receiptDigest(request))
+    return {ok:false,reason:"idempotency_conflict"};
+  const task = db.prepare(
+    "SELECT id,area_id,project_id FROM tasks WHERE id=? COLLATE NOCASE",
+  ).get(request.taskId) as {id:string;area_id:string|null;project_id:string|null}|undefined;
+  if (!task || task.id !== request.taskId ||
+      task.area_id !== request.areaId || task.project_id !== null) return denied();
+  return {ok:true,status:"committed"};
+}
+
 const denied = (): PrivateTaskCreateResult => ({ ok: false, reason: "unauthorized" });
 const failed = (): PrivateTaskCreateResult => ({ ok: false, reason: "write_failed" });
 
