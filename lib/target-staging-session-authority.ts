@@ -48,7 +48,7 @@ import {
   listPreflightedPrivateProjectsAtOffset, readPreflightedPrivateProjectDetail,
   readPreflightedPrivateTaskTitleAudit,
   readPreflightedScopedTaskPage, readPreflightedSharedTargetTask, readPreflightedChangeFeedPage,
-  readPreflightedAuthorizedProjectTasks, readPreflightedAuthorizedProjectIndex,
+  readPreflightedAuthorizedProjectTasks, readPreflightedProjectTitlePreview, readPreflightedAuthorizedProjectIndex,
   readPreflightedMyPlanHomeSummary,
   readPreflightedScopedHomeSummary,
   readPreflightedTemporalTaskPage, readPreflightedTemporalTaskDetail,
@@ -648,6 +648,25 @@ export class TargetStagingSessionAuthority {
       const credential = this.#oneShotReadCredential(actorUserId);
       return credential
         ? readPreflightedAuthorizedProjectTasks(this.#store, credential, projectId, limit, offset)
+        : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /** R3: canonical v26-only project rename preview. Both the schema check
+   * and the actor's Area ACL, title and CAS revision are read from the SAME
+   * pinned/preflighted SQLite snapshot. A v25 store must return null even
+   * though ordinary project/task reads remain available. This is not a write
+   * authorization; PATCH independently rechecks the current actor and ACL. */
+  readProjectTitlePreview(
+    actorUserId: string, projectId: string,
+  ): TargetAuthorizedProjectTasksResult | null {
+    if (this.#closed) return null;
+    try {
+      const credential = this.#oneShotReadCredential(actorUserId);
+      return credential
+        ? readPreflightedProjectTitlePreview(this.#store, credential, projectId)
         : null;
     } catch {
       return null;

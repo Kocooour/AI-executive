@@ -156,20 +156,50 @@ test('simultaneous PATCH and cancel are ordered by pinned write transaction',asy
   assert.equal(inspectIsolatedTargetStore({...store,mode:'r2-model'}).ok,true);
 });
 
-test('strict preflight rejects malformed cancellation metadata and preserves good fences',()=>{
-  const row=db.prepare("SELECT key,value FROM metadata WHERE key LIKE 'r3:project-title-cancel-v1:%' LIMIT 1").get();
-  assert.ok(row,'a committed fence is required from the earlier cancellation tests');
-  assert.equal(row.value,'1');
+test('strict preflight independently rejects malformed project-title cancellation metadata',async()=>{
+  // The fixture and its confirmed fence belong to THIS test; earlier tests
+  // may fail or run in a different order without hiding a metadata regression.
+  const isolated=bootstrapIsolatedTargetStore({
+    stagingDirectory:path.join(root,'cancel-preflight-independent'),ownerUserId:'alice',
+  });
+  const isolatedStore={stagingDirectory:isolated.directory,
+    expectedRestoreGeneration:isolated.restoreGeneration};
+  const localDb=new DatabaseSync(isolated.databasePath);
+  const {TargetStagingSessionAuthority}=await import('../lib/target-staging-session-authority.ts');
+  const authority=new TargetStagingSessionAuthority(isolatedStore);
   try{
-    db.prepare("UPDATE metadata SET value='0' WHERE key=?").run(row.key);
-    const bad=inspectIsolatedTargetStore({...store,mode:'r2-model'});
-    assert.equal(bad.ok,false);
-    assert.ok(bad.issues.includes('metadata_invalid'),JSON.stringify(bad));
-  }finally{db.prepare("UPDATE metadata SET value='1' WHERE key=?").run(row.key);}
-  const key='r3:project-title-cancel-v1:not-a-sha256';
-  try{
-    db.prepare("INSERT INTO metadata(key,value) VALUES (?,'1')").run(key);
-    assert.ok(inspectIsolatedTargetStore({...store,mode:'r2-model'}).issues.includes('metadata_invalid'));
-  }finally{db.prepare("DELETE FROM metadata WHERE key=?").run(key);}
-  assert.equal(inspectIsolatedTargetStore({...store,mode:'r2-model'}).ok,true);
+    localDb.prepare("INSERT INTO projects(id,area_id,title) VALUES ('fenced',?,'Before')")
+      .run(isolated.unassignedAreaId);
+    const session=authority.issueWritable('alice');
+    assert.ok(session);
+    const page=authority.readProjectTitlePreview('alice','fenced');
+    assert.equal(page?.ok,true,'independent v26 preview has a writable actor');
+    const command={projectId:'fenced',commandId:randomUUID(),
+      restoreGeneration:isolated.restoreGeneration,principalBinding:'A'.repeat(43)};
+    assert.deepEqual(authority.cancelProjectTitle(session.sessionToken,command,'alice'),
+      {ok:true,status:'cancelled'});
+    const check=()=>inspectIsolatedTargetStore({...isolatedStore,mode:'r2-model'});
+    assert.equal(check().ok,true,'a committed tombstone leaves the store readable');
+    const row=localDb.prepare("SELECT key,value FROM metadata WHERE key LIKE 'r3:project-title-cancel-v1:%'").get();
+    assert.ok(row,'this test itself committed the fence');
+    assert.equal(row.value,'1');
+    try{
+      localDb.prepare("UPDATE metadata SET value='0' WHERE key=?").run(row.key);
+      const invalid=check();
+      assert.equal(invalid.ok,false);
+      assert.ok(invalid.issues.includes('metadata_invalid'),JSON.stringify(invalid));
+    }finally{localDb.prepare("UPDATE metadata SET value='1' WHERE key=?").run(row.key);}
+    const badKey='r3:project-title-cancel-v1:not-a-sha256';
+    try{
+      localDb.prepare("INSERT INTO metadata(key,value) VALUES (?,'1')").run(badKey);
+      const invalid=check();
+      assert.equal(invalid.ok,false);
+      assert.ok(invalid.issues.includes('metadata_invalid'),JSON.stringify(invalid));
+    }finally{localDb.prepare("DELETE FROM metadata WHERE key=?").run(badKey);}
+    assert.equal(check().ok,true,'restored canonical tombstone remains valid');
+    assert.equal(authority.readProjectTitlePreview('alice','fenced')?.ok,true);
+  }finally{
+    authority.close();
+    localDb.close();
+  }
 });
