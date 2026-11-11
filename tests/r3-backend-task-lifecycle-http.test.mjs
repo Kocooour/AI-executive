@@ -221,6 +221,18 @@ test("shared editor has a live right, viewer/foreign task cannot infer content; 
   assert.equal(canWrite.status,200);
   const rev=(await canWrite.json()).snapshotRevision;
   const input={commandId:randomUUID(),expectedRevision:rev,title:"Edited by Bob"};
+  // Even with an editor's valid CAS supplied verbatim, a viewer must never
+  // delete the shared task or leave a tombstone / audit / feed side effect.
+  const beforeViewerDelete={
+    audit:count("task_delete_audit"),tombstones:count("task_tombstones"),
+    changes:count("change_log"),
+  };
+  assert.equal((await del(id,{commandId:randomUUID(),expectedRevision:rev},carolCookie)).status,404);
+  assert.deepEqual({
+    audit:count("task_delete_audit"),tombstones:count("task_tombstones"),
+    changes:count("change_log"),
+  },beforeViewerDelete);
+  assert.equal(db.prepare("SELECT title FROM tasks WHERE id=?").get(id).title,previousTitle);
   assert.equal((await title(id,input,carolCookie)).status,404);
   assert.equal((await title(id,input,ownerCookie)).status,200);
   assert.equal(db.prepare("SELECT title FROM tasks WHERE id=?").get(id).title,"Edited by Bob");
