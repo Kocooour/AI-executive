@@ -107,12 +107,22 @@ export async function GET(request: Request): Promise<Response> {
             plan.independentWitnessVerified !== false ||
             plan.withdrawalComplete !== false ||
             plan.consentVerified !== false) throw Error("unavailable");
+        // The verified H1-real.7 planner proposes only the NEXT global
+        // checkpoint. Its successor sequence uniquely identifies the signed
+        // witness prefix; a null proposal means the entire local head matches.
+        // This sequence is INTERNAL and must never appear in owner HTTP JSON.
+        const witnessedThroughSequence = plan.checkpoint === null
+          ? before.sequence : plan.checkpoint.sequence - 1;
+        if (!Number.isSafeInteger(witnessedThroughSequence) ||
+            witnessedThroughSequence < 0 ||
+            witnessedThroughSequence > before.sequence) throw Error("unavailable");
         const source = humanWikiConsentIntentSourceStates(db, config.ledgerKey, {
           ownerUserId: config.staging.ownerUserId,
           privateAreaId: config.areaId,
-        });
+        }, witnessedThroughSequence);
         const after = humanWikiConsentIntentLocalHead(db, config.ledgerKey);
         if (!source.ok || !after.ok ||
+            typeof source.ownerEventsCoveredBySignedPrefix !== "boolean" ||
             source.sequence !== before.sequence || source.digest !== before.digest ||
             after.sequence !== before.sequence || after.digest !== before.digest)
           throw Error("unavailable");
@@ -120,9 +130,12 @@ export async function GET(request: Request): Promise<Response> {
         // Projection includes no remote sequence/digest, opaque scope tokens,
         // actor/Area identity, HMAC key, timestamp or signed receipt.
         return {
-          witnessState: plan.checkpoint === null
-            ? "signed_remote_head_matches_local"
-            : "signed_remote_prefix_requires_catchup",
+          // A global ledger may contain other owners' events. Do not reveal
+          // foreign-only catch-up lag through an owner-private HTTP response.
+          // Signed prefix coverage is NOT a source-specific durable ACK.
+          witnessState: source.ownerEventsCoveredBySignedPrefix
+            ? "signed_witness_prefix_covers_owner_intents"
+            : "signed_witness_prefix_lags_owner_intents",
           sources: source.sources,
         };
       },
