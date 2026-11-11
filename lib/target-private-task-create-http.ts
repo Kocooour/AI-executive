@@ -64,6 +64,8 @@ export function releasePrivateTaskCreateCommittedStatus(
   if(live!=="ok"&&live!=="stale")return stagingIdentityRefusal(live);
   if(!detail)return answer(503,"Staging unavailable");
   if(live==="stale"||detail.ok===false||
+    detail.detail.task.id!==command.taskId||
+    detail.detail.guard.taskId!==command.taskId||
     detail.detail.task.projectId!==null||
     detail.detail.task.areaId!==command.areaId||
     detail.detail.task.areaKind!=="private"||
