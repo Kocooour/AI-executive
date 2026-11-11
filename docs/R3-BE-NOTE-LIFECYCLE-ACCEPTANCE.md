@@ -21,4 +21,4 @@ Test kontroluje:
 - odvolání živé durable session: 401 pro čtení, preflight, zápis a create, žádná změna původní poznámky ani vedlejší vytvoření nového noteId, receipt, auditu, anchoru nebo journalu;
 - zachování legacy sentinel souboru v oddělené cestě.
 
-Všechny testovací flagy žijí pouze uvnitř izolovaného testovacího procesu a jsou po dokončení obnoveny. Žádná produkční aktivace, reálné uživatelské údaje, deployment ani povolení R4. Před release nadále chybí kompletní integrovaná R3 QA včetně skutečného UI a **plné Browser E2E na přesném release SHA**. Otevřené PR #370, #380, #383 a #384 nejsou součástí tohoto kroku. Je nutné samostatné code review a zelené PR Checks.
+Všechny testovací flagy žijí pouze uvnitř izolovaného testovacího procesu a jsou po dokončení obnoveny. Žádná produkční aktivace, reálné uživatelské údaje, deployment ani povolení R4. Před release nadále chybí kompletní integrovaná R3 QA včetně skutečného UI a **plné Browser E2E na přesném release SHA**. Rozpracovaná PR #370, #380 a #383 ani již sloučená oprava #384 nejsou součástí tohoto kroku. Je nutné samostatné code review a zelené PR Checks.
