@@ -163,7 +163,8 @@ export function runTrackedNoteEdit(
     if(runtime.known()&&runtime.generation()===generation){
       if(result.outcome==="saved")
         confirmNoteEditReload(generation,entry.command.commandId);
-      else if(result.outcome==="conflict"&&firstDispatch)
+      else if(firstDispatch&&(result.outcome==="conflict"||
+        (result.outcome==="denied"&&result.rejectedBeforeCommit===true)))
         rejectFreshNoteEditReload(generation,entry.command.commandId);
     }
     entry.phase=result.outcome==="saved"?"saved":
