@@ -98,6 +98,8 @@ test("only the runtime (and its server route) reference the session endpoint; no
     "app/ui/target-private-note-area-chooser.tsx",
     // R3-FE Quick Capture: task creator is another runtime-scoped consumer.
     "app/ui/target-private-task-creator.tsx",
+    // R3-FE: the runtime verifies delayed CREATE success outside modal lifetime.
+    "app/ui/target-private-task-completion.tsx",
   ].sort());
 });
 
