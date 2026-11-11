@@ -32,10 +32,10 @@ node --experimental-loader ./tests/ts-loader.mjs --test tests/target-private-tas
 
 Test používá skutečnou izolovanou SQLite, podepsané writable/read-only tokeny, dvě identity, cizí/sdílenou Oblast, durable session revokaci, skutečné smazání s tombstonem, idempotentní replay, konflikt, přísný tvar požadavku, JSON a journal audit a legacy sentinel bez změn. Plné PR Checks zahrnují Typecheck a produkční build; browserové E2E až před produkčním nasazením.
 
-## Nesplněné kroky před používáním
+## Zbývající kroky před používáním
 
-- Chybí **default-off HTTP `POST /api/target-staging/tasks`** a samostatný child proces s bezpečným předáním obsahu přes stdin, současnou session/Area kontrolou a přesným DTO zpět.
-- Chybí read-only recovery/status pro ztracenou HTTP odpověď, klientské pending/uncertain/cancel/Undo a FE Quick Capture pro úkol.
+- Default-off HTTP `POST /api/target-staging/tasks`, oddělený child proces a read-only exact-command status již doplňuje [R3-BE-4c.2](R3-BE-04C-PRIVATE-TASK-CREATE-HTTP.md); stále nejde o produkční funkci.
+- Chybí klientské pending/uncertain/cancel/Undo a FE Quick Capture pro úkol; stav `not_recorded` nikdy nedokazuje nepřítomnost právě probíhajícího zápisu.
 - Create do sdíleného projektu/Oblasti vyžaduje samostatnou autorizaci a výslovné rozhodnutí o zveřejnění.
 - Stagingový pinned-fd model není produkční VFS a nepovoluje R4 cutover. Reálná data, import HumanWiki ani produkční migrace se tímto PR nezapínají.
 
