@@ -19,6 +19,7 @@ import type { TargetStagingReadStore } from "./target-task-staging-reader";
 import {
   TARGET_STAGING_MAX_RECEIPTS, TARGET_STAGING_AUDIT_MAX_EVENTS,
   TARGET_STAGING_PRIVATE_TASK_CREATE_RECEIPT_PREFIX,
+  TARGET_STAGING_PRIVATE_TASK_CREATE_RECOVERY_PREFIX,
 } from "./target-store-bootstrap";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -54,10 +55,37 @@ export function validPrivateTaskCreateCommand(value: unknown): value is PrivateT
     r.title.isWellFormed() && Buffer.byteLength(r.title, "utf8") <= 4096 &&
     !/[\u0000-\u001f\u007f]/u.test(r.title);
 }
-function receiptKey(actor: string, r: PrivateTaskCreateCommand): string {
-  return PRIVATE_TASK_CREATE_RECEIPT_PREFIX + createHash("sha256").update(
-    JSON.stringify([actor, r.commandId.toLowerCase()]),
+function commandHash(actor: string, commandId: string): string {
+  return createHash("sha256").update(
+    JSON.stringify([actor,commandId.toLowerCase()]),
   ).digest("hex");
+}
+function receiptKey(actor: string, r: PrivateTaskCreateCommand): string {
+  return PRIVATE_TASK_CREATE_RECEIPT_PREFIX + commandHash(actor,r.commandId);
+}
+function recoveryKey(actor:string,commandId:string):string{
+  return TARGET_STAGING_PRIVATE_TASK_CREATE_RECOVERY_PREFIX+commandHash(actor,commandId);
+}
+const HEX=/^[0-9a-f]{64}$/;
+function recoveryValue(r:PrivateTaskCreateCommand):string{
+  return JSON.stringify({taskId:r.taskId,areaId:r.areaId,
+    restoreGeneration:r.restoreGeneration.toLowerCase()});
+}
+function parseRecoveryValue(value:string):{
+  taskId:string;areaId:string;restoreGeneration:string;
+}|null{
+  try{
+    if(value.length>300)return null;
+    const data:unknown=JSON.parse(value);
+    if(!data||typeof data!=="object"||Array.isArray(data))return null;
+    const r=data as Record<string,unknown>;
+    return Object.keys(r).sort().join(",")==="areaId,restoreGeneration,taskId"&&
+      typeof r.taskId==="string"&&UUID.test(r.taskId)&&
+      r.taskId===r.taskId.toLowerCase()&&
+      typeof r.areaId==="string"&&AREA.test(r.areaId)&&
+      typeof r.restoreGeneration==="string"&&UUID.test(r.restoreGeneration)
+      ?{taskId:r.taskId,areaId:r.areaId,restoreGeneration:r.restoreGeneration}:null;
+  }catch{return null;}
 }
 function receiptDigest(r: PrivateTaskCreateCommand): string {
   return createHash("sha256").update(JSON.stringify([
@@ -96,6 +124,39 @@ export function readPrivateTaskCreateStatus(
   return {ok:true,status:"committed"};
 }
 
+/** No client title/Area/task ID is required after reload. The server looks
+ * up an actor+command-keyed immutable witness and checks the CURRENT private
+ * Area and task before the HTTP layer performs its own live-read fence.
+ * A missing receipt is not proof that the original POST cannot later commit. */
+export type PrivateTaskCreateRecovery=
+  |{ok:true;status:"not_recorded"}
+  |{ok:true;status:"committed";taskId:string;areaId:string}
+  |{ok:false;reason:"unavailable"};
+export function readPrivateTaskCreateRecovery(
+  db:import("node:sqlite").DatabaseSync,actor:string,commandId:string,
+):PrivateTaskCreateRecovery{
+  const denied=():PrivateTaskCreateRecovery=>({ok:false,reason:"unavailable"});
+  if(!UUID.test(commandId))return denied();
+  const receipt=db.prepare("SELECT value FROM metadata WHERE key=?")
+    .get(PRIVATE_TASK_CREATE_RECEIPT_PREFIX+commandHash(actor,commandId))
+    as {value:string}|undefined;
+  const witness=db.prepare("SELECT value FROM metadata WHERE key=?")
+    .get(recoveryKey(actor,commandId)) as {value:string}|undefined;
+  if(!receipt&&!witness)return {ok:true,status:"not_recorded"};
+  if(!receipt||!witness||typeof receipt.value!=="string"||
+    !HEX.test(receipt.value)||typeof witness.value!=="string")return denied();
+  const data=parseRecoveryValue(witness.value);
+  const generation=(db.prepare("SELECT value FROM metadata WHERE key='restore_generation'")
+    .get() as {value:string}|undefined)?.value;
+  if(!data||!generation||data.restoreGeneration.toLowerCase()!==generation.toLowerCase()||
+    !canWriteIsolatedTargetArea(db,actor,data.areaId,true))return denied();
+  const task=db.prepare("SELECT id,area_id,project_id FROM tasks WHERE id=? COLLATE NOCASE")
+    .get(data.taskId) as {id:string;area_id:string|null;project_id:string|null}|undefined;
+  if(!task||task.id!==data.taskId||task.area_id!==data.areaId||
+    task.project_id!==null)return denied();
+  return {ok:true,status:"committed",taskId:data.taskId,areaId:data.areaId};
+}
+
 const denied = (): PrivateTaskCreateResult => ({ ok: false, reason: "unauthorized" });
 const failed = (): PrivateTaskCreateResult => ({ ok: false, reason: "write_failed" });
 
@@ -129,6 +190,7 @@ export function createPreflightedPrivateTask(
     if (!canWriteIsolatedTargetArea(db, actor, request.areaId, true))
       return {ok:false, reason:"unavailable"};
     const key = receiptKey(actor, request), digest = receiptDigest(request);
+    const witnessKey=recoveryKey(actor,request.commandId);
     const prior = db.prepare("SELECT value FROM metadata WHERE key=?")
       .get(key) as {value:string}|undefined;
     if (prior) {
@@ -137,6 +199,12 @@ export function createPreflightedPrivateTask(
       // Its exact digest is checked before considering whether the original
       // task is still present in this actor's private Area.
       if (prior.value !== digest) return {ok:false,reason:"idempotency_conflict"};
+      const witness=db.prepare("SELECT value FROM metadata WHERE key=?")
+        .get(witnessKey) as {value:string}|undefined;
+      // Older, default-off task receipts may predate recovery; exact-command
+      // replay remains valid, but corrupted witnesses can never be trusted.
+      if(witness&&witness.value!==recoveryValue(request))
+        return {ok:false,reason:"idempotency_conflict"};
       // Never acknowledge a creation after its task was deleted, transferred,
       // or became invisible. Receipts alone are not live write authority.
       const item = db.prepare(
@@ -157,9 +225,12 @@ export function createPreflightedPrivateTask(
     if (used) return {ok:false,reason:"unavailable"};
     const receipts = (db.prepare("SELECT COUNT(*) AS n FROM metadata WHERE key LIKE ?")
       .get(PRIVATE_TASK_CREATE_RECEIPT_PREFIX+"%") as {n:number}).n;
+    const recoveryReceipts = (db.prepare("SELECT COUNT(*) AS n FROM metadata WHERE key LIKE ?")
+      .get(TARGET_STAGING_PRIVATE_TASK_CREATE_RECOVERY_PREFIX+"%") as {n:number}).n;
     const events = (db.prepare("SELECT COUNT(*) AS n FROM change_log")
       .get() as {n:number}).n;
     if (!Number.isSafeInteger(receipts) || receipts >= TARGET_STAGING_MAX_RECEIPTS ||
+        !Number.isSafeInteger(recoveryReceipts) || recoveryReceipts >= TARGET_STAGING_MAX_RECEIPTS ||
         !Number.isSafeInteger(events) || events >= TARGET_STAGING_AUDIT_MAX_EVENTS)
       return failed();
 
@@ -178,6 +249,10 @@ export function createPreflightedPrivateTask(
         row.project_id !== null || row.area_id !== request.areaId) return failed();
     // No content is stored in the receipt, journal or downstream task change log.
     db.prepare("INSERT INTO metadata(key,value) VALUES (?,?)").run(key,digest);
+    // The metadata companion is committed in the SAME pinned transaction.
+    // It holds only IDs + restore generation, never private title or body.
+    db.prepare("INSERT INTO metadata(key,value) VALUES (?,?)")
+      .run(witnessKey,recoveryValue(request));
     if (!sessionLive() || !context.stillPinned()) return {ok:false,reason:"session_revoked"};
     // Atomic SQLite commit / content-free external anchor journal boundary.
     // A false post-commit confirm means the client must reconcile; never claim
