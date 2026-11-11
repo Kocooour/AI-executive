@@ -247,16 +247,19 @@ test("reload UUID recovery never unlocks on not_recorded or refusal; committed d
 }));
 test("main shell wiring preserves note-only default, no Search tab, distinct task consent and feedback",()=>{
   const root=readFileSync(new URL("../app/ui/lumi-app-root.tsx",import.meta.url),"utf8");
+  const notice=readFileSync(new URL("../app/ui/target-private-task-created-notice.tsx",import.meta.url),"utf8");
   const page=readFileSync(new URL("../app/page.tsx",import.meta.url),"utf8");
   const quick=readFileSync(new URL("../app/ui/target-private-quick-capture.tsx",import.meta.url),"utf8");
   const form=readFileSync(new URL("../app/ui/target-private-task-area-chooser.tsx",import.meta.url),"utf8");
   assert.match(page,/targetPrivateTaskCreateUiEnabled\(process\.env\)/);
   assert.match(root,/taskCaptureReady\s*\?\s*<TargetPrivateQuickCapture/);
   assert.match(root,/onClick=\{\(\)=>openAreaChooser\(false,"note"\)\}/);
-  assert.match(root,/target-private-task-created/);
-  assert.match(root,/target-private-task-open/);
-  assert.match(root,/subscribePrivateTaskCreate\(/);
-  assert.match(root,/openTargetDetail\(\{kind:"task"/);
+  assert.match(notice,/target-private-task-created/);
+  assert.match(notice,/target-private-task-open/);
+  assert.match(notice,/subscribePrivateTaskCreate\(/);
+  assert.match(notice,/openTargetDetail\(\{kind:"task"/);
+  assert.match(root,/taskCaptureReady&&<TargetPrivateTaskCreatedNotice/);
+  assert.doesNotMatch(root,/target-data-provider|useTargetRuntime|useTargetGeneration/);
   assert.match(page,/config\?\.myPlan\.enabled&&config\?\.details\.task/);
   assert.match(quick,/onClick=\{\(\)=>setKind\("task"\)\}/);
   assert.match(quick,/onClick=\{\(\)=>setKind\("note"\)\}/);
