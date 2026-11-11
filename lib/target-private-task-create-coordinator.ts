@@ -21,6 +21,17 @@ const entries=new WeakMap<Runtime,Entry>();
 // Only a positive, exact server confirmation carries an opaque task ID.
 export type TaskCreateChange={generation:string;confirmedTaskId:string|null};
 const observers=new WeakMap<Runtime,Set<(change:TaskCreateChange)=>void>>();
+// A dynamically loaded observer may subscribe after a very fast server
+// confirmation. Retain only the latest opaque ID in this runtime's memory;
+// never persist an ID, title or Area or cross an auth-generation boundary.
+const lastConfirmed=new WeakMap<Runtime,{generation:string;taskId:string}>();
+export function lastConfirmedPrivateTask(
+  runtime:Runtime,generation:string,
+):string|null{
+  if(!runtime.known()||runtime.generation()!==generation)return null;
+  const last=lastConfirmed.get(runtime);
+  return last?.generation===generation?last.taskId:null;
+}
 export function subscribePrivateTaskCreate(
   runtime:Runtime,generation:string,listener:(change:TaskCreateChange)=>void,
 ):()=>void{
@@ -32,6 +43,8 @@ export function subscribePrivateTaskCreate(
 }
 function notify(runtime:Runtime,change:TaskCreateChange):void{
   if(!runtime.known()||runtime.generation()!==change.generation)return;
+  if(change.confirmedTaskId)
+    lastConfirmed.set(runtime,{generation:change.generation,taskId:change.confirmedTaskId});
   for(const listener of [...(observers.get(runtime)??[])])
     try{listener(change);}catch{/* A UI listener must not affect the write. */}
 }
