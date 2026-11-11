@@ -50,7 +50,7 @@ export function validPrivateTaskCreateCommand(value: unknown): value is PrivateT
 }
 function receiptKey(actor: string, r: PrivateTaskCreateCommand): string {
   return PRIVATE_TASK_CREATE_RECEIPT_PREFIX + createHash("sha256").update(
-    JSON.stringify([actor, r.taskId.toLowerCase(), r.commandId.toLowerCase()]),
+    JSON.stringify([actor, r.commandId.toLowerCase()]),
   ).digest("hex");
 }
 function receiptDigest(r: PrivateTaskCreateCommand): string {
@@ -95,6 +95,11 @@ export function createPreflightedPrivateTask(
     const prior = db.prepare("SELECT value FROM metadata WHERE key=?")
       .get(key) as {value:string}|undefined;
     if (prior) {
+      // The receipt key is actor+COMMAND (not actor+task+command): recycling
+      // a command UUID with a different task ID can never create two tasks.
+      // Its exact digest is checked before considering whether the original
+      // task is still present in this actor's private Area.
+      if (prior.value !== digest) return {ok:false,reason:"idempotency_conflict"};
       // Never acknowledge a creation after its task was deleted, transferred,
       // or became invisible. Receipts alone are not live write authority.
       const item = db.prepare(
@@ -102,8 +107,7 @@ export function createPreflightedPrivateTask(
       ).get(request.taskId) as {id:string;area_id:string|null;project_id:string|null}|undefined;
       if (!item || item.area_id !== request.areaId || item.project_id !== null)
         return {ok:false,reason:"unavailable"};
-      return prior.value === digest
-        ? {ok:true,replayed:true} : {ok:false,reason:"idempotency_conflict"};
+      return {ok:true,replayed:true};
     }
     // No task-ID reuse or overwrite, even after a tombstone. Do not disclose
     // which of an existing task or foreign tombstone caused the denial.
