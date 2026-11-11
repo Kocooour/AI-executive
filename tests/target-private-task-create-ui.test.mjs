@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import {test} from "node:test";
 import {randomUUID} from "node:crypto";
 import {readFileSync} from "node:fs";
-import {validPrivateTaskTitle,validPrivateTaskCreateCommand,
+import {validPrivateTaskAreaId,validPrivateTaskTitle,validPrivateTaskCreateCommand,
   sendPrivateTaskCreate,checkPrivateTaskCreateReceipt} from
   "../lib/target-private-task-create-client.ts";
 import {privateTaskCreateMarker,reservePrivateTaskCreate,
@@ -58,6 +58,8 @@ test("R3-FE-6 task UI is default-off and requires every existing private Area/no
 test("task wire accepts exact 201/200 and content-free receipt; rejects malformed/extra responses",async()=>{
   const cmd=command(),signal=new AbortController().signal;
   assert.equal(validPrivateTaskCreateCommand(cmd),true);
+  assert.equal(validPrivateTaskAreaId(cmd.areaId),true);
+  assert.equal(validPrivateTaskAreaId("bad area"),false);
   assert.equal(validPrivateTaskCreateCommand({...cmd,projectId:"x"}),false);
   assert.equal(validPrivateTaskCreateCommand({...cmd,taskId:cmd.taskId.toUpperCase()}),false);
   assert.equal(validPrivateTaskCreateCommand({...cmd,title:" x "}),false);
@@ -99,7 +101,8 @@ test("task wire accepts exact 201/200 and content-free receipt; rejects malforme
   assert.equal(await checkPrivateTaskCreateReceipt(cmd,signal,
     async()=>json({error:"unauthorized"},401)),"denied");
   assert.equal(await checkPrivateTaskCreateReceipt(cmd,signal,
-    async()=>json({status:"committed"},200,{"cache-control":"public"})),"committed");
+    async()=>new Response(JSON.stringify({status:"committed"}),{status:200,
+      headers:{"content-type":"application/json"}})),"unavailable");
 });
 test("tab stores opaque UUID only; no title, Area or restore token; generation rotation cannot release it",()=>withStorage(storage=>{
   const cmd=command();
