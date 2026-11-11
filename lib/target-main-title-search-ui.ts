@@ -18,6 +18,16 @@ export function targetMainTitleSearchEnabled(env:Record<string,string|undefined>
   return TARGET_MAIN_TITLE_SEARCH_FLAGS.every(name=>env[name]==="true");
 }
 
+/** An authorized Search view must not mount either legacy IndexedDB task rows
+ * or local held-back titles. With the feature off, legacy Search is unchanged;
+ * other screens keep their existing legacy fallback behaviour. */
+export function mainTitleSearchLegacySurfaces(targetSearch:boolean,view:string):{
+  heldBack:boolean;entityList:boolean;
+}{
+  const showLegacy=!(targetSearch&&view==="Search");
+  return {heldBack:showLegacy,entityList:showLegacy};
+}
+
 /** A successful runtime revalidation can follow ACL revocation with exactly
  * the SAME login generation. Unsuccessful revalidation also makes previously
  * disclosed titles untrustworthy: purge on EITHER a verified tick or a failed
