@@ -314,6 +314,8 @@ test("read-only CREATE receipt confirms the exact owner commit but never text",a
   assert.equal(raw.status,0,"synthetic receipt child process failed: "+
     raw.stderr.slice(-1000)+" | stdout="+raw.stdout.slice(0,150));
   assert.deepEqual(JSON.parse(raw.stdout),{ok:true,status:"not_recorded"});
+  assert.deepEqual(parseNoteCreateRecoveryReply({ok:true,status:"not_recorded"}),
+    {ok:true,status:"not_recorded"},"strict adapter must accept a content-free not-recorded reply");
   const child=await readStagingNoteCreateRecoveryInChild({
     stagingDirectory:fx.stage.directory,
     expectedRestoreGeneration:fx.stage.restoreGeneration,ownerUserId:"alice",
@@ -373,6 +375,8 @@ test("revoked or missing session, disabled write flag, and malformed create-reco
 test("create-recovery child DTO is exact and content-free",()=>{
   const sample={ok:true,status:"committed",noteId:randomUUID(),areaId:"private"};
   const parsed=parseNoteCreateRecoveryReply(sample);
+  assert.deepEqual(parseNoteCreateRecoveryReply({ok:true,status:"not_recorded"}),
+    {ok:true,status:"not_recorded"});
   assert.deepEqual(parsed?.status,"committed",JSON.stringify({
     keys:Object.keys(sample).sort().join(","),noteId:sample.noteId,
     uuid:/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(sample.noteId),
