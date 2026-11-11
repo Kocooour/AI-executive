@@ -331,3 +331,14 @@ test("cancel acknowledgements must be exact, bounded no-store JSON",async()=>{
   ])assert.equal(await cancelProjectTitleReload(PROJECT,CMD,STAGE,signal,
       async()=>answer),"unavailable");
 });
+
+test("cancel transport times out and retains the unresolved marker when fetch ignores abort",async()=>{
+ clean();reserveProjectTitleReload(A,CMD,A);
+ let seen;
+ const status=await cancelProjectTitleReload(PROJECT,CMD,STAGE,
+   new AbortController().signal,async(_,init)=>{seen=init.signal;return new Promise(()=>{});},12);
+ assert.equal(status,"unavailable");
+ assert.equal(seen.aborted,true);
+ assert.equal(projectTitleReloadMarker(A,A).kind,"blocked");
+ clean();
+});
