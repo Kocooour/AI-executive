@@ -14,6 +14,7 @@ const {bootstrapIsolatedTargetStore}=await import('../lib/target-store-bootstrap
 const {issueDurableTargetStagingSession,TARGET_STAGING_SESSION_COOKIE}=await import('../lib/target-staging-durable-session.ts');
 const {GET:detail}=await import('../app/api/target-staging/projects/[projectId]/tasks/route.ts');
 const {POST:recover}=await import('../app/api/target-staging/project-title/recovery/route.ts');
+const {POST:cancel}=await import('../app/api/target-staging/projects/[projectId]/title/cancel/route.ts');
 const {GET:preview,PATCH}=await import('../app/api/target-staging/projects/[projectId]/title/route.ts');
 const {inspectIsolatedTargetStore}=await import('../lib/target-store-preflight.ts');
 const stage=bootstrapIsolatedTargetStore({stagingDirectory:path.join(root,'stage'),ownerUserId:'alice'});
@@ -33,6 +34,9 @@ const headers=c=>({cookie:c,origin:'http://localhost:3001','content-type':'appli
 const read=async c=>detail(new Request(base+'tasks',{headers:headers(c)}),ctx);
 const write=async(c,command)=>PATCH(new Request(base+'title',{method:'PATCH',headers:headers(c),body:JSON.stringify(command)}),ctx);
 const receipt=async(c,commandId)=>recover(new Request('http://localhost:3001/api/target-staging/project-title/recovery',{method:'POST',headers:headers(c),body:JSON.stringify({commandId})}));
+const cancelWrite=async(c,commandId,restoreGeneration=stage.restoreGeneration)=>
+ cancel(new Request(base+'title/cancel',{method:'POST',headers:headers(c),
+  body:JSON.stringify({commandId,restoreGeneration})}),ctx);
 test('generic staging write flags do not expose project title preview or rename',async()=>{
  const old=process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_PROJECT_TITLE_WRITE_ENABLED;
  delete process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_PROJECT_TITLE_WRITE_ENABLED;
@@ -44,6 +48,7 @@ test('generic staging write flags do not expose project title preview or rename'
    assert.equal((await preview(new Request(base+'title'),ctx)).status,404);
    assert.equal((await write('',cmd)).status,404);
    assert.equal((await receipt('',cmd.commandId)).status,404);
+   assert.equal((await cancelWrite('',cmd.commandId)).status,404);
    assert.equal(db.prepare("SELECT title FROM projects WHERE id='proj'").get().title,before);
    assert.equal(db.prepare('SELECT COUNT(*) AS n FROM project_title_audit').get().n,0);
  } finally {
@@ -88,4 +93,56 @@ test('project rename enforces role and CAS, persists audit, supports retry, and 
  db.prepare("DELETE FROM area_members WHERE area_id='team-area' AND user_id='bob'").run();
  assert.equal((await write(bob,cmd)).status,404);
  assert.equal((await receipt(bob,cmd.commandId)).status,404,'recovery requires current write ACL');
+});
+
+test('cancel fence serializes before lost PATCH and permanently rejects old UUID',async()=>{
+  process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_PROJECT_TITLE_WRITE_ENABLED='true';
+  const alice=cookie('alice');
+  const previewResponse=await preview(new Request(base+'title',{headers:headers(alice)}),ctx);
+  assert.equal(previewResponse.status,200);
+  const p=await previewResponse.json();
+  const oldTitle=db.prepare("SELECT title FROM projects WHERE id='proj'").get().title;
+  const old={commandId:randomUUID(),title:'Must never write after cancellation',
+    expectedRevision:p.snapshotRevision,writeAreaId:p.writeAreaId,restoreGeneration:p.restoreGeneration};
+  const first=await cancelWrite(alice,old.commandId);
+  assert.equal(first.status,200,await first.clone().text());
+  assert.deepEqual(await first.json(),{status:'cancelled'});
+  const duplicate=await cancelWrite(cookie('alice'),old.commandId);
+  assert.deepEqual(await duplicate.json(),{status:'cancelled'});
+  const tooLate=await write(alice,old);
+  assert.equal(tooLate.status,409);
+  assert.deepEqual(await tooLate.json(),{error:'Command cancelled'});
+  assert.equal(db.prepare("SELECT title FROM projects WHERE id='proj'").get().title,oldTitle);
+  assert.equal((await receipt(alice,old.commandId)).status,200);
+  assert.deepEqual(await (await receipt(alice,old.commandId)).json(),{status:'not_recorded'});
+  assert.equal((await cancelWrite(cookie('carol'),old.commandId)).status,404,
+    'viewer cannot cancel another actor or issue a fence');
+  const fresh={...old,commandId:randomUUID(),title:'New title after safe cancellation'};
+  const success=await write(alice,fresh);
+  assert.equal(success.status,200,await success.clone().text());
+  assert.equal(db.prepare("SELECT title FROM projects WHERE id='proj'").get().title,fresh.title);
+  const already=await cancelWrite(alice,fresh.commandId);
+  assert.deepEqual(await already.json(),{status:'committed'});
+  assert.equal(inspectIsolatedTargetStore({...store,mode:'r2-model'}).ok,true);
+});
+
+test('simultaneous PATCH and cancel are ordered by pinned write transaction',async()=>{
+  process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_PROJECT_TITLE_WRITE_ENABLED='true';
+  const alice=cookie('alice');
+  const p=await (await preview(new Request(base+'title',{headers:headers(alice)}),ctx)).json();
+  const command={commandId:randomUUID(),title:'Race winner title',
+    expectedRevision:p.snapshotRevision,writeAreaId:p.writeAreaId,restoreGeneration:p.restoreGeneration};
+  const [rename,fence]=await Promise.all([write(alice,command),cancelWrite(alice,command.commandId)]);
+  assert.equal(fence.status,200,await fence.clone().text());
+  const status=(await fence.json()).status;
+  if(status==='cancelled'){
+    assert.equal(rename.status,409);
+    assert.equal((await rename.json()).error,'Command cancelled');
+    assert.notEqual(db.prepare("SELECT title FROM projects WHERE id='proj'").get().title,command.title);
+  }else{
+    assert.equal(status,'committed');
+    assert.equal(rename.status,200);
+    assert.equal(db.prepare("SELECT title FROM projects WHERE id='proj'").get().title,command.title);
+  }
+  assert.equal(inspectIsolatedTargetStore({...store,mode:'r2-model'}).ok,true);
 });
