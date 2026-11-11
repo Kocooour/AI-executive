@@ -43,6 +43,9 @@ export function validPrivateTaskCreateCommand(value: unknown): value is PrivateT
   return Object.keys(r).sort().join(",") ===
       "areaId,commandId,restoreGeneration,taskId,title" &&
     typeof r.taskId === "string" && UUID.test(r.taskId) &&
+    // SQLite stores task IDs as case-sensitive TEXT. Reject aliases of the
+    // same logical UUID at this CREATE boundary, including after deletion.
+    r.taskId === r.taskId.toLowerCase() &&
     typeof r.commandId === "string" && UUID.test(r.commandId) &&
     typeof r.areaId === "string" && AREA.test(r.areaId) &&
     typeof r.restoreGeneration === "string" && UUID.test(r.restoreGeneration) &&
@@ -106,16 +109,19 @@ export function createPreflightedPrivateTask(
       // Never acknowledge a creation after its task was deleted, transferred,
       // or became invisible. Receipts alone are not live write authority.
       const item = db.prepare(
-        "SELECT id,area_id,project_id FROM tasks WHERE id=?",
+        "SELECT id,area_id,project_id FROM tasks WHERE id=? COLLATE NOCASE",
       ).get(request.taskId) as {id:string;area_id:string|null;project_id:string|null}|undefined;
-      if (!item || item.area_id !== request.areaId || item.project_id !== null)
+      if (!item || item.id !== request.taskId ||
+          item.area_id !== request.areaId || item.project_id !== null)
         return {ok:false,reason:"unavailable"};
       return {ok:true,replayed:true};
     }
     // No task-ID reuse or overwrite, even after a tombstone. Do not disclose
     // which of an existing task or foreign tombstone caused the denial.
     const used = db.prepare(
-      "SELECT 1 AS ok FROM tasks WHERE id=? UNION ALL SELECT 1 AS ok FROM task_tombstones WHERE id=? LIMIT 1",
+      // Reject pre-existing legacy/mixed-case ID aliases as well, because older
+      // writers may have stored UUID text without canonical casing.
+      "SELECT 1 AS ok FROM tasks WHERE id=? COLLATE NOCASE UNION ALL SELECT 1 AS ok FROM task_tombstones WHERE id=? COLLATE NOCASE LIMIT 1",
     ).get(request.taskId,request.taskId);
     if (used) return {ok:false,reason:"unavailable"};
     const receipts = (db.prepare("SELECT COUNT(*) AS n FROM metadata WHERE key LIKE ?")
