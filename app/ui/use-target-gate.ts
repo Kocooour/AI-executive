@@ -23,7 +23,8 @@ export function useTargetGate():{gate:TargetMyPlanGate;onRefusal:(reason?:"sessi
   },[generation]);
   const onRefusal=useCallback((reason:"session_revoked"|"session_expired"="session_revoked")=>{
     if(!runtime)return;
-    if(!refusalBudgetFor(runtime).admit()){setBlocked(true);return;}
+    // Coded expiry must always close the old runtime and seal drafts immediately.
+    if(reason!=="session_expired"&&!refusalBudgetFor(runtime).admit()){setBlocked(true);return;}
     ownBump.current=true;
     void runtime.reportRefusal(reason);
   },[runtime]);

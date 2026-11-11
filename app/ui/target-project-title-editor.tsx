@@ -107,7 +107,7 @@ export default function TargetProjectTitleEditor({project,language,onCommitted,o
        preview:result.preview,original:project.title,title:held.command.title,
        command:held.command,phase:'uncertain',
      }});
-   }else{setMode({kind:'reload'});setMessage(copy.differentActor);}
+   }else{setMode({kind:'idle'});setMessage(copy.denied);}
  }
  /** A stale tab marker must never be disclosed to a DIFFERENT actor. */
  async function checkReloadForActor(){
@@ -180,7 +180,7 @@ export default function TargetProjectTitleEditor({project,language,onCommitted,o
   if(fresh.page.project.areaId!==preview.preview.writeAreaId||
      project.areaId!==preview.preview.writeAreaId){refuse();return;}
   if(resumeSealedProjectTitleDraft(runtime,bound.current,project.id,preview.preview)!=='resumed'){
-   setMode({kind:'denied'});setMessage(copy.differentActor);return;
+   setMode({kind:'idle'});setMessage(copy.denied);return;
   }
   const draft=projectTitleDraft(runtime,bound.current,project.id);
   if(!draft){setMode({kind:'idle'});return;}

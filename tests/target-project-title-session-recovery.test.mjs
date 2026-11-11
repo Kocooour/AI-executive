@@ -74,6 +74,15 @@ test("a project rename tab lock stores only UUID and opaque binding; no private 
   assert.equal(confirmProjectTitleReload(CMD,A),true);
   assert.deepEqual(projectTitleReloadMarker(B,A),{kind:"clear"});
 });
+test("legacy single-marker storage fails closed without actor proof",()=>{
+ clean();data.set("lumi-target-project-title-unresolved-v1",
+   JSON.stringify({generation:A,commandId:CMD,principalBinding:A}));
+ assert.deepEqual(projectTitleReloadMarker(B),{kind:"unavailable"});
+ assert.equal(projectTitleReloadMarker(B,OTHER).kind,"clear");
+ assert.equal(projectTitleReloadMarker(B,A).kind,"blocked");
+ assert.equal(confirmProjectTitleReload(CMD,A),true);
+ clean();
+});
 test("other actor can proceed without disclosing or deleting previous actor's lock",()=>{
  clean();reserveProjectTitleReload(A,CMD,A);
  const another="b3333333-3333-4333-8333-333333333333";
