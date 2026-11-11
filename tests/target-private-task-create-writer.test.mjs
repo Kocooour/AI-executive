@@ -23,6 +23,7 @@ const { TARGET_STAGING_JOURNAL_FILENAME }=await import("../lib/target-staging-an
 const { PRIVATE_TASK_CREATE_RECEIPT_PREFIX, validPrivateTaskCreateCommand }=
   await import("../lib/target-private-task-create-writer.ts");
 const durable=await import("../lib/target-staging-durable-session.ts");
+const { withPinnedTargetStagingWrite }=await import("../lib/target-staging-pinned-write.ts");
 
 const fixtures=[];
 function fixture(){
@@ -186,4 +187,69 @@ test("revoked durable session and tombstoned IDs never create or resurrect tasks
     ...cmd,commandId:randomUUID(),
   }),rejected("unavailable"),"a different command cannot bypass tombstone ID lock");
   assert.deepEqual(state(f),afterDelete);
+});
+
+test("canonical UUID rejects mixed-case aliases of both live and tombstoned tasks",()=>{
+  const f=fixture(),write=f.authority.issueWritable("alice");
+  assert.ok(write);
+  const taskId="0123abcd-5678-4abc-8def-0123456789ab";
+  const cmd=request(f.stage,f.stage.unassignedAreaId,{taskId});
+  assert.deepEqual(f.authority.createPrivateTask(write.sessionToken,cmd),{ok:true});
+  const live=state(f);
+  const aliases=[taskId.toUpperCase(),taskId.replace("a","A")];
+  for(const id of aliases){
+    const attempt=request(f.stage,f.stage.unassignedAreaId,{taskId:id});
+    assert.equal(validPrivateTaskCreateCommand(attempt),false);
+    assert.deepEqual(f.authority.createPrivateTask(write.sessionToken,attempt),
+      rejected("invalid_request"),"a case alias must not create a second logical task");
+  }
+  assert.deepEqual(state(f),live,"rejected aliases must not modify journal or receipts");
+
+  const preview=f.authority.previewTaskTitleEdit(write.sessionToken,{taskId});
+  assert.equal(preview.ok,true);
+  assert.deepEqual(f.authority.deleteTask(write.sessionToken,{
+    taskId,commandId:randomUUID(),expectedRevision:preview.snapshotRevision,
+    writeAreaId:cmd.areaId,restoreGeneration:cmd.restoreGeneration,
+  },true),{ok:true});
+  const deleted=state(f);
+  assert.deepEqual(f.authority.createPrivateTask(write.sessionToken,{
+    ...cmd,commandId:randomUUID(),
+  }),rejected("unavailable"),"a canonical UUID must not bypass its tombstone");
+  for(const id of aliases){
+    assert.deepEqual(f.authority.createPrivateTask(write.sessionToken,{
+      ...cmd,taskId:id,commandId:randomUUID(),
+    }),rejected("invalid_request"),"case changes cannot resurrect a deleted task");
+  }
+  assert.deepEqual(state(f),deleted);
+});
+
+test("canonical UUID collides with legacy mixed-case live IDs and tombstones",()=>{
+  const f=fixture(),write=f.authority.issueWritable("alice");
+  assert.ok(write);
+  const lower="abcdef12-3456-4abc-8def-0123456789ab";
+  const legacy=lower.toUpperCase();
+  // An older writer could have persisted an uppercase UUID as TEXT. Preserve
+  // a valid journal, then verify the new CREATE guard checks it case-insensitively.
+  assert.equal(withPinnedTargetStagingWrite(f.store,context=>{
+    context.db.prepare("INSERT INTO tasks(id,area_id,title) VALUES (?,?,?)")
+      .run(legacy,f.stage.unassignedAreaId,"Legacy task");
+    return context.commit({kind:"task_create",payload:{}});
+  },()=>false,()=>false),true);
+  const cmd=request(f.stage,f.stage.unassignedAreaId,{taskId:lower});
+  const live=state(f);
+  assert.deepEqual(f.authority.createPrivateTask(write.sessionToken,cmd),
+    rejected("unavailable"),"lowercase ID must collide with an older uppercase row");
+  assert.deepEqual(state(f),live);
+  assert.equal(readTask(f.db,legacy).id,legacy);
+
+  const preview=f.authority.previewTaskTitleEdit(write.sessionToken,{taskId:legacy});
+  assert.equal(preview.ok,true);
+  assert.deepEqual(f.authority.deleteTask(write.sessionToken,{
+    taskId:legacy,commandId:randomUUID(),expectedRevision:preview.snapshotRevision,
+    writeAreaId:f.stage.unassignedAreaId,restoreGeneration:f.stage.restoreGeneration,
+  },true),{ok:true});
+  const tombstoned=state(f);
+  assert.deepEqual(f.authority.createPrivateTask(write.sessionToken,cmd),
+    rejected("unavailable"),"lowercase ID must collide with uppercase legacy tombstone");
+  assert.deepEqual(state(f),tombstoned);
 });
