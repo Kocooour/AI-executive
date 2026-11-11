@@ -7,7 +7,7 @@ import {validPrivateTaskAreaId,validPrivateTaskTitle,validPrivateTaskCreateComma
   "../lib/target-private-task-create-client.ts";
 import {privateTaskCreateMarker,reservePrivateTaskCreate,
   runPrivateTaskCreate,trackedPrivateTaskCreate,checkTrackedPrivateTaskCreate,
-  subscribePrivateTaskCreate,recoverPrivateTaskCreate}
+  subscribePrivateTaskCreate,recoverPrivateTaskCreate,lastConfirmedPrivateTask}
   from "../lib/target-private-task-create-coordinator.ts";
 import {TARGET_PRIVATE_TASK_CREATE_UI_FLAGS,targetPrivateTaskCreateUiEnabled}
   from "../lib/target-private-task-create-ui-gate.ts";
@@ -199,6 +199,15 @@ test("server success announces only exact confirmed task ID, once, to active run
   assert.equal(await runPrivateTaskCreate(rt,gen,command(),async()=> "saved"),"saved");
   assert.equal(events.length,1,"unsubscribed modal must not receive future events");
 }));
+test("late-mounted runtime notice can find the last positive task without storage",()=>withStorage(async()=>{
+  const rt=runtime(),cmd=command();
+  assert.equal(lastConfirmedPrivateTask(rt,gen),null);
+  assert.equal(await runPrivateTaskCreate(rt,gen,cmd,async()=> "saved"),"saved");
+  assert.equal(lastConfirmedPrivateTask(rt,gen),cmd.taskId);
+  assert.equal(lastConfirmedPrivateTask(rt,"B".repeat(43)),null,
+    "task IDs cannot cross auth generations");
+  assert.equal(privateTaskCreateMarker(gen).kind,"clear");
+}));
 test("UUID-only recovery is a strict, no-store request with no private command content",async()=>{
   const cmd=command(),signal=new AbortController().signal;
   assert.deepEqual(await checkPrivateTaskCreateRecovery(cmd.commandId,signal,async(url,init)=>{
@@ -257,6 +266,7 @@ test("main shell wiring preserves note-only default, no Search tab, distinct tas
   assert.match(notice,/target-private-task-created/);
   assert.match(notice,/target-private-task-open/);
   assert.match(notice,/subscribePrivateTaskCreate\(/);
+  assert.match(notice,/lastConfirmedPrivateTask\(/);
   assert.match(notice,/openTargetDetail\(\{kind:"task"/);
   assert.match(root,/taskCaptureReady&&<TargetPrivateTaskCreatedNotice/);
   assert.doesNotMatch(root,/target-data-provider|useTargetRuntime|useTargetGeneration/);
