@@ -227,6 +227,6 @@ test("nav labels never claim legacy data in target mode",()=>{
   // signal must still reach BOTH navigation components without changing labels.
   assert.match(rootSource,/<Sidebar app=\{app\} targetPlan=\{Boolean\(targetMyPlan\?\.enabled\)\}/);
   assert.match(rootSource,/<MobileNav app=\{app\} targetPlan=\{Boolean\(targetMyPlan\?\.enabled\)\}/);
-  assert.match(rootSource,/<Sidebar app=\{app\}[^>]*onTargetCapture=\{targetCapture\?openAreaChooser:undefined\}/s);
-  assert.match(rootSource,/<MobileNav app=\{app\}[^>]*onTargetCapture=\{targetCapture\?openAreaChooser:undefined\}/s);
+  assert.match(rootSource,/<Sidebar app=\{app\}[^>]*onTargetCapture=\{targetCapture\?\(\)=>openAreaChooser\(\):undefined\}/s);
+  assert.match(rootSource,/<MobileNav app=\{app\}[^>]*onTargetCapture=\{targetCapture\?\(\)=>openAreaChooser\(\):undefined\}/s);
 });
