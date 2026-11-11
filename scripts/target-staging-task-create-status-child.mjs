@@ -1,4 +1,4 @@
-/** R3-BE-4c.2: a strictly read-only, exact-command receipt probe. */
+/** R3-BE-4c: read-only exact-command or UUID-only receipt probe. */
 import path from "node:path";
 import {TargetStagingSessionAuthority} from "../lib/target-staging-session-authority.ts";
 import {validPrivateTaskCreateCommand} from "../lib/target-private-task-create-writer.ts";
@@ -14,7 +14,11 @@ try{
     process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_TASKS_CREATE_ENABLED!=="true"||
     !dir||!path.isAbsolute(dir)||!generation||!owner)throw Error("Unavailable");
   const input=await readTitleCommand(process.stdin,16*1024);
-  if(!validPrivateTaskCreateCommand(input))throw Error("Invalid");
+  const uuid=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+  const opaque=!!input&&typeof input==="object"&&!Array.isArray(input)&&
+    Object.keys(input).join(",")==="commandId"&&
+    typeof input.commandId==="string"&&uuid.test(input.commandId);
+  if(!opaque&&!validPrivateTaskCreateCommand(input))throw Error("Invalid");
   const auth=new TargetStagingSessionAuthority({
     stagingDirectory:dir,expectedRestoreGeneration:generation,
   });
@@ -26,7 +30,8 @@ try{
     const issued=auth.issueWritable(resolved.actor);
     if(!issued)throw Error("Unavailable");
     process.stdout.write(JSON.stringify(
-      auth.privateTaskCreateStatus(issued.sessionToken,input),
+      opaque?auth.privateTaskCreateRecovery(issued.sessionToken,input.commandId):
+        auth.privateTaskCreateStatus(issued.sessionToken,input),
     ));
   }finally{auth.close();}
 }catch{process.exitCode=1;}
