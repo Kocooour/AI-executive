@@ -1,5 +1,4 @@
 "use client";
-import {TARGET_PROJECT_TITLE_UPDATED} from "../../lib/target-project-title-edit-ui-gate";
 /** R3-FE-3: read-only Projects / Notes lists of the main app in target mode.
  * Rows are exactly what the server global index returned for the selected
  * scope (Vše / Osobní / Sdílené) from the dedicated project-index / note-index
@@ -26,6 +25,7 @@ import {scopesCopy,type ScopesLanguage} from "../../lib/target-scopes-copy";
 import {detailCopy} from "../../lib/target-detail-copy";
 import {detailRowKey,focusPendingRow,openTargetDetail} from "./target-detail-state";
 import {useTargetTick} from "./use-target-revalidation";
+import {subscribeTargetChange} from "../../lib/target-data-invalidation";
 import {detailIdOk} from "../../lib/target-detail-route";
 import {queuedTargetFetch} from "../../lib/target-read-queue";
 
@@ -96,7 +96,8 @@ export default function TargetScopeLists({kind,language="cs",detail=false}:{
   // Membership loss does not change the auth generation, so the rows are re-read from
   // the first page and re-walked to the page count the user had loaded (position kept);
   // the new rows replace the old ones only as a whole, any failure hides them as usual.
-  useTargetTick(()=>{
+  const tickRef=useRef<()=>void>(()=>{});
+  const revalidate=()=>{
     const current=stateRef.current;
     const live=sessionRef.current;
     if(current.kind!=="ready"||current.more||!live||current.session!==live)return;
@@ -111,7 +112,16 @@ export default function TargetScopeLists({kind,language="cs",detail=false}:{
       else if(result.reason==="superseded")return;
       else setState({kind:"error",reason:result.reason==="busy"||result.reason==="not-ready"?"stale":result.reason});
     })().catch(()=>{if(epoch.current===id)setState({kind:"error",reason:"unavailable"});});
-  });
+  };
+  tickRef.current=revalidate;
+  useTargetTick(revalidate);
+
+  // R3-FE-4b: an edit committed in the detail panel re-reads the rows (the same first-page walk as
+  // the tick; the old rows are replaced only by the complete new result).
+  useEffect(()=>subscribeTargetChange(()=>{
+    if(document.visibilityState==="hidden"||!navigator.onLine)return;
+    tickRef.current();
+  }),[]);
 
   // R3-FE-4a: after a detail closed, focus returns to the row that opened it.
   useEffect(()=>{
@@ -119,13 +129,6 @@ export default function TargetScopeLists({kind,language="cs",detail=false}:{
     else if(state.kind==="error"&&!document.querySelector('[data-testid="target-detail"]'))
       focusPendingRow(statusRef.current,true);
   },[state]);
-
-  useEffect(()=>{
-    const updated=()=>{if(kind!=="project")return;epoch.current++;sessionRef.current?.suspend();setState({kind:"idle"});
-      if(document.visibilityState!=="hidden"&&navigator.onLine){sessionRef.current?.resume();setNonce(value=>value+1);}};
-    window.addEventListener(TARGET_PROJECT_TITLE_UPDATED,updated);
-    return ()=>window.removeEventListener(TARGET_PROJECT_TITLE_UPDATED,updated);
-  },[kind]);
 
   // Privacy: titles never stay on screen while the tab is hidden or offline.
   useEffect(()=>{
@@ -244,6 +247,6 @@ export default function TargetScopeLists({kind,language="cs",detail=false}:{
     {page&&page.hasMore&&state.kind==="ready"&&<button type="button" disabled={state.more}
       onClick={()=>{statusRef.current?.focus();void more();}}>
       {state.more?copy.loadingMore:copy.loadMore}</button>}
-    {page&&<p className="targetScopeNote">{detail?copy.openDetailNote:kind==="note"?copy.notesTitleOnlyNote:copy.readOnlyNote}</p>}
+    {page&&<p className="targetScopeNote">{kind==="note"?copy.notesTitleOnlyNote:copy.readOnlyNote}</p>}
   </section>;
 }

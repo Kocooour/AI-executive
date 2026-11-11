@@ -1,0 +1,72 @@
+name: Focused R3 detail edit race browser
+
+# Only two synthetic, mounted-React race cases. This is NOT full release E2E.
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/r3-detail-edit-races-browser.yml"
+      - "app/ui/target-detail-edit.tsx"
+      - "app/ui/target-detail-panel.tsx"
+      - "app/ui/target-data-provider.tsx"
+      - "app/ui/use-target-revalidation.ts"
+      - "app/ui/lumi-app-root.tsx"
+      - "app/page.tsx"
+      - "lib/target-detail-session.ts"
+      - "lib/target-client-runtime.ts"
+      - "lib/target-staging-note-preview-client.ts"
+      - "lib/target-detail-write.ts"
+      - "e2e/target-detail-edit-races.spec.ts"
+      - "e2e/fixtures.ts"
+      - "e2e/auth.setup.ts"
+      - "playwright.config.ts"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: lumi-r3-detail-edit-races-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  chromium:
+    name: Detail edit race regressions (Chromium)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    env:
+      CI: "true"
+      NEXT_TELEMETRY_DISABLED: "1"
+      E2E_SKIP_BUILD: "1"
+      E2E_PORT: "3123"
+      # Active only in this isolated Playwright test server.
+      LUMI_TARGET_DETAIL_EDITS_E2E: "true"
+    steps:
+      - name: Checkout isolated PR code
+        uses: actions/checkout@v5
+      - name: Install pnpm
+        uses: pnpm/action-setup@v5
+        with:
+          version: 10.20.0
+      - name: Set up Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+          cache: pnpm
+      - name: Install locked dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Build isolated Next.js test server
+        run: pnpm build
+      - name: Install targeted Chromium
+        run: pnpm exec playwright install --with-deps chromium
+      - name: Run ONLY R3 detail edit race regressions
+        run: pnpm exec playwright test e2e/target-detail-edit-races.spec.ts --project=desktop
+      - name: Upload failure traces
+        if: failure()
+        uses: actions/upload-artifact@v6
+        with:
+          name: lumi-r3-detail-races-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            test-results/
+            playwright-report/
+          if-no-files-found: ignore
+          retention-days: 7

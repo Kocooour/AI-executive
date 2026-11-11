@@ -138,8 +138,7 @@ test("the panel reads only for a server-confirmed generation and routes 401 thro
   assert.match(panel,/const \{gate,onRefusal,retry\}=useTargetGate\(\)/);
   assert.match(panel,/const ready=gate\.kind==="ready"/);
   assert.match(panel,/if\(!session\|\|!ready\)return;/);
-  assert.match(panel,/state\.reason==="signed-out"\|\|state\.reason==="session-expired"/);
-  assert.match(panel,/refusalRef\.current\(state\.reason==="session-expired"\?"session_expired":"session_revoked"\)/);
+  assert.match(panel,/state\.reason==="signed-out"\)refusalRef\.current\(\)/);
   // Privacy: hidden, pagehide, offline and BFCache remove the content; returning waits for the runtime's fresh verification.
   const hooks=read("app/ui/use-target-revalidation.ts");
   for(const event of ["visibilitychange","offline","pagehide","pageshow","online"])
@@ -154,7 +153,7 @@ test("the panel reads only for a server-confirmed generation and routes 401 thro
   assert.match(panel,/useTargetWake\(\{/);
   assert.match(panel,/sessionRef\.current\?\.suspend\(\)/);
   // Revalidation tick: an open detail re-reads, a failure (404) replaces the content.
-  assert.match(panel,/useTargetTick\(\(\)=>\{/);
+  assert.match(panel,/useTargetTick\(revalidate\);/);
 });
 
 test("focus management: the panel takes focus on open and Escape/close/backdrop all close it",()=>{
@@ -327,7 +326,7 @@ test("focus: deeper opens never return focus to the list; the panel owns focus; 
   const panel=read("app/ui/target-detail-panel.tsx");
   assert.doesNotMatch(panel,/expectFocusReturn/);
   assert.match(rootSource,/if \(previous !== null && !isParentOf\(previous, detailRoute\)\) expectFocusReturn\(previous\)/);
-  assert.match(panel,/state\.kind==="error"\?\(state\.reason==="hidden"\?copy\.hidden:copy\.failures\[state\.reason==="session-expired"\?"signed-out":state\.reason\]\)/);
+  assert.match(panel,/state\.kind==="error"\?\(state\.reason==="hidden"\?copy\.hidden:copy\.failures\[state\.reason\]\)/);
 });
 
 test("sidebar target titles are not clipped by the legacy 18 px icon-slot rule",()=>{
@@ -348,7 +347,7 @@ test("the refusal budget is shared per runtime (gate hook and My Plan)",()=>{
 test("mount rule: page.tsx wiring is checked literally, independent of targetDataNeeded",()=>{
   const page=read("app/page.tsx");
   assert.match(page,/const config = targetUiEnabled\(\) \? targetUiConfig\(process\.env\) : null;/);
-  assert.match(page,/const targetData = targetDataNeeded\(config\);\s*return targetData\s*\?\s*<TargetDataProvider><LumiAppRoot targetMyPlan=\{config\?\.myPlan\} targetScopes=\{config\?\.scopes\} targetDetails=\{config\?\.details\} targetNoteEdit=\{Boolean\(config\?\.details\.note\) && targetNoteEditUiEnabled\(process\.env\)\} targetProjectEdit=\{Boolean\(config\?\.details\.project\) && targetProjectTitleEditUiEnabled\(process\.env\)\} targetPrivateNoteAreas=\{Boolean\(config\?\.scopes\.notes\)&&targetPrivateNoteAreaUiEnabled\(process\.env\)\} \/><\/TargetDataProvider>\s*:\s*<LumiAppRoot \/>;/);
+  assert.match(page,/const targetData = targetDataNeeded\(config\);\s*return targetData\s*\?\s*<TargetDataProvider><LumiAppRoot targetMyPlan=\{config\?\.myPlan\} targetScopes=\{config\?\.scopes\} targetDetails=\{config\?\.details\} targetEdits=\{config\?\.edits\} targetNoteEdit=\{Boolean\(config\?\.details\.note\) && targetNoteEditUiEnabled\(process\.env\)\} targetPrivateNoteAreas=\{Boolean\(config\?\.scopes\.notes\)&&targetPrivateNoteAreaUiEnabled\(process\.env\)\} targetPrivateNoteCreate=\{Boolean\(config\?\.scopes\.notes\)&&targetPrivateNoteCreateUiEnabled\(process\.env\)\} \/><\/TargetDataProvider>\s*:\s*<LumiAppRoot \/>;/);
   // The rule itself, literally: details are no consumer of their own.
   assert.match(read("lib/target-ui-config.ts"),/return config!==null&&\(config\.myPlan\.enabled\|\|config\.scopes\.projects\|\|config\.scopes\.notes\);/);
 });

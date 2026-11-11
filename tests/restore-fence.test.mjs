@@ -75,8 +75,6 @@ const exempt = {
   "PUT /api/store": "carries the generation in its body and is checked in replaceSnapshot",
   "POST /api/backups": "creates, restores and lists backups itself",
   "POST /api/backups/import": "is the import itself",
-  "POST /api/humanwiki/import": "deny-only HumanWiki entry: always returns 404 before inspecting request properties or body; no data read or persisted write, so the legacy backup restore fence does not apply",
-  "POST /api/humanwiki/withdrawal-intent": "writes only bounded metadata-only non-authorizing withdrawal requests to a dedicated SQLite registry outside the legacy backup scope; default-OFF, real signed owner cookie, live pinned owner-private staging Area ACL and restore generation verified before and after, HMAC-linked per-source CAS and read-only import fence; no legacy snapshot data mutated",
   "POST /api/client-errors": "a browser's error report; no owner data",
   "POST /api/auth/login": "authentication", "POST /api/auth/logout": "authentication",
   "POST /api/auth/passkeys/login/options": "authentication", "POST /api/auth/passkeys/login/verify": "authentication",
@@ -87,8 +85,15 @@ const exempt = {
   "POST /api/integrations/aifred/tools": "integration API token, no client copy",
   "POST /api/mail/gmail/callback": "OAuth completion page has no client generation; one-use state is tied to restore generation and checked before and after Google exchange",
   "POST /api/mail/gmail/messages": "read-only same-origin search with no persisted mutation; POST avoids search strings in URL logs",
-  // Staging-only routes below are outside the legacy backup scope. Each
-  // distinct route must appear exactly once with its reviewed rationale.
+  // Baseline inventory correction (these handlers already exist in main).
+  // They never write the legacy backup scope; do not inject the wrong
+  // generation fence into staging-only and unconditional deny-only routes.
+  "POST /api/humanwiki/import": "unconditional deny-only 404 before inspecting request body; neither writes data nor admits any import",
+  "POST /api/humanwiki/withdrawal-intent": "writes only bounded metadata-only non-authorizing withdrawal requests to a dedicated SQLite registry outside the legacy backup scope; default-OFF, real signed owner cookie, live pinned owner-private staging Area ACL and restore generation verified before and after, HMAC-linked per-source CAS and read-only import fence; no legacy snapshot data mutated",
+  "POST /api/target-staging/notes/edit-recovery": "content-free, read-only receipt lookup against isolated staging SQLite; verifies signed actor, live note/Area ACL and staging generation; writes no legacy backup data",
+  "POST /api/target-staging/notes/create-preview": "read-only validation of explicitly selected private Area against isolated staging SQLite with live signed identity and restore-generation checks; no note or legacy backup write",
+  "POST /api/target-staging/notes/create-recovery": "read-only command receipt reconciliation in isolated staging SQLite; exact actor, private note/Area ACL, session and restore generation checked before content-free release; no legacy backup write",
+  "POST /api/target-staging/notes": "creates only owner-private notes in separate isolated staging SQLite outside legacy backup scope; staging anchor, client restore generation, live signed session, Area write ACL and atomic note writer guard the commit",
   "PATCH /api/target-staging/tasks/[taskId]/title": "writes only the separate isolated staging SQLite outside the legacy backup scope; the worker checks the staging restore generation and live ACL/revision atomically",
   "PATCH /api/target-staging/task-temporal/status": "writes only to separately isolated staging SQLite outside the legacy backup scope; the pinned writer validates the isolated restore generation, current Area write ACL, durable session, task CAS and journal atomically",
   "POST /api/target-staging/task-temporal/status/receipt": "read-only receipt reconciliation against isolated staging SQLite, with exact command and actor, current write ACL, staging generation and live task/Area/session guard; no legacy backup data is written",
@@ -108,11 +113,6 @@ const exempt = {
   "POST /api/target-staging/notes/[noteId]/delete/status": "read-only exact note-delete receipt reconciliation on isolated staging SQLite; current actor, Area ACL, generation and session checks, no persisted mutation",
   "PATCH /api/target-staging/notes/[noteId]/edit": "writes only isolated staging SQLite outside the legacy backup scope; staging anchor validates the server restore generation and the transactional note writer rechecks client generation, durable session, ACL, parent and note revisions before atomic commit",
   "DELETE /api/target-staging/notes/[noteId]": "writes only isolated staging SQLite outside legacy backup scope; staging anchor verifies live restore state and the pinned delete writer checks client restore generation, durable session, Area ACL, note and parent CAS before atomic tombstone, audit and receipt commit",
-  "POST /api/target-staging/notes": "creates owner-private standalone notes only in separate isolated staging SQLite, outside the legacy backup scope; the staging anchor and pinned writer verify restore generation, live session, private Area ACL, idempotency and content-free journal before atomic commit",
-  "POST /api/target-staging/notes/edit-recovery": "read-only receipt recovery of an actor-scoped note edit command in separate isolated staging SQLite, outside the legacy backup scope; verifies staging restore generation, current live session and writable note Area ACL before releasing only committed or not-recorded status; never mutates stored data",
-  "POST /api/target-staging/project-title/recovery": "read-only actor-scoped receipt recovery from isolated staging SQLite with current session, generation and project write ACL; no legacy backup data is modified or returned",
-  "POST /api/target-staging/projects/[projectId]/title/cancel": "cancellation fence writes only the isolated staging SQLite, not the legacy backup scope; exact project/actor/restore generation and current Area ACL are checked in the same pinned BEGIN IMMEDIATE write transaction as PATCH, with durable session and anti-rollback witness journal; a late PATCH checks this tombstone before mutation",
-  "PATCH /api/target-staging/projects/[projectId]/title": "renames projects only in separate isolated staging SQLite, outside the legacy backup scope; the staging anchor and pinned writer verify restore generation, live session, current Area editor/admin or private-owner ACL, project revision CAS, idempotent audit and journal before atomic commit",
 
 };
 

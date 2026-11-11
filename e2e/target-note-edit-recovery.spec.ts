@@ -3,6 +3,9 @@
  * writes; this is NOT the full release Browser E2E suite. */
 import {expect,test} from "./fixtures";
 import type {Page,Route} from "@playwright/test";
+import {
+  NOTE_EDIT_COMMAND_HEADER,NOTE_EDIT_PRECOMMIT_HEADER,NOTE_EDIT_PRECOMMIT_VALUE,
+} from "../lib/target-note-edit-precommit";
 
 test.skip(process.env.LUMI_TARGET_NOTE_EDIT_E2E!=="true",
   "Focused target note editor requires explicit isolated browser opt-in");
@@ -16,9 +19,18 @@ const note=(id:string)=>({
   projectId:null,areaId:"private-area",areaKind:"private",revision:1,
 });
 const receiptKey="lumi-target-note-edit-unresolved-v2";
+const integrated=process.env.LUMI_TARGET_NOTE_EDIT_PROFILE==="combined"||
+  process.env.LUMI_TARGET_NOTE_EDIT_PROFILE==="4b";
 const reply=(route:Route,body:unknown,status=200)=>route.fulfill({
   status,headers,body:JSON.stringify(body),
 });
+const preCommitReply=(route:Route,body:unknown,status:400|403|404|409,commandId:string)=>{
+  expect(route.request().headers()[NOTE_EDIT_COMMAND_HEADER]).toBe(commandId);
+  return route.fulfill({status,
+    headers:{...headers,[NOTE_EDIT_PRECOMMIT_HEADER]:NOTE_EDIT_PRECOMMIT_VALUE,
+      [NOTE_EDIT_COMMAND_HEADER]:commandId},
+    body:JSON.stringify(body)});
+};
 type Patch=(route:Route,command:Record<string,unknown>)=>Promise<void>;
 async function setup(page:Page,patch:Patch,recover?:Patch){
   await page.route("**/api/target-staging/session",route=>
@@ -58,6 +70,11 @@ async function open(page:Page,id:"note-a"|"note-b"){
   await page.getByRole("button",{name:new RegExp("Otevřít.*"+title)}).click();
   await expect(page.getByTestId("target-detail")).toBeVisible();
   await expect(page.getByText(note(id).body)).toBeVisible();
+  if(integrated){
+    // 4b note-delete may coexist with the recovery-safe PATCH editor,
+    // but there must never be an independent, UUID-minting 4b note editor.
+    await expect(page.getByTestId("target-detail-edit-note")).toHaveCount(0);
+  }
 }
 async function close(page:Page){
   await page.getByTestId("target-detail").getByRole("button",{name:/Zavřít|Zpět/}).click();
@@ -88,12 +105,14 @@ for(const width of [390,1280]){
       return reply(route,{ok:true});
     });
     await open(page,"note-a");
+    if(integrated)await expect(page.getByTestId("target-detail-edit-delete")).toBeVisible();
     await editAndSave(page,"Conflicting draft");
+    if(integrated)await expect(page.getByTestId("target-detail-edit-delete")).toHaveCount(0);
     await expect.poll(()=>Boolean(pending.route)).toBe(true);
     const first=JSON.parse((await marker(page))??"null") as {commandId:string};
     expect(first?.commandId).toBeTruthy();
     await close(page); // unsubscribes the source editor before 409
-    await pending.route!.fulfill({status:409,headers,body:JSON.stringify({error:"Revision conflict"})});
+    await preCommitReply(pending.route!,{error:"Revision conflict"},409,first.commandId);
     await expect.poll(()=>marker(page)).toBeNull();
     await open(page,"note-b");
     await editAndSave(page,"Independent B");
@@ -111,10 +130,12 @@ test(`uncertain PATCH then retry 409 retains tab marker; other notes stay readab
   await setup(page,async(route,command)=>{
     sent.push(String(command.commandId));
     if(sent.length===1)return reply(route,{error:"Staging unavailable"},503);
-    return reply(route,{error:"Revision conflict"},409);
+    return preCommitReply(route,{error:"Revision conflict"},409,String(command.commandId));
   });
   await open(page,"note-a");
+  if(integrated)await expect(page.getByTestId("target-detail-edit-delete")).toBeVisible();
   await editAndSave(page,"Uncertain A");
+  if(integrated)await expect(page.getByTestId("target-detail-edit-delete")).toHaveCount(0);
   const form=page.getByTestId("target-note-edit");
   const id=JSON.parse((await marker(page))??"null") as {commandId:string};
   await expect(form.getByRole("button",{name:"Ověřit uložením znovu"})).toBeVisible();
@@ -126,6 +147,7 @@ test(`uncertain PATCH then retry 409 retains tab marker; other notes stay readab
   await open(page,"note-b");
   await expect(page.getByText("B private body")).toBeVisible();
   const other=page.getByTestId("target-note-edit");
+  if(integrated)await expect(page.getByTestId("target-detail-edit-delete")).toHaveCount(0);
   await expect(other.getByRole("button",{name:"Ověřit předchozí zápis"})).toBeVisible();
   await expect(other.getByRole("button",{name:"Uložit změny"})).toHaveCount(0);
   expect((await marker(page))).not.toBeNull();
@@ -154,6 +176,7 @@ test(`full reload loses private draft; receipt unlocks without another PATCH at 
   await expect(page.getByTestId("target-note-edit").getByRole("button",{
     name:"Ověřit uložením znovu",
   })).toBeVisible();
+  if(integrated)await expect(page.getByTestId("target-detail-edit-delete")).toHaveCount(0);
   const before=JSON.parse((await marker(page))??"null") as Record<string,unknown>;
   expect(before).toEqual({commandId:committedId,generation});
   await page.reload(); // sessionStorage survives, React draft/CAS does not
@@ -168,8 +191,10 @@ test(`full reload loses private draft; receipt unlocks without another PATCH at 
   await expect(form.getByRole("button",{name:"Ověřit předchozí zápis"})).toBeVisible();
   await expect(form.getByText("Private draft that must not persist")).toHaveCount(0);
   expect(patchCount).toBe(1);
+  if(integrated)await expect(page.getByTestId("target-detail-edit-delete")).toHaveCount(0);
   await form.getByRole("button",{name:"Ověřit předchozí zápis"}).click();
   await expect.poll(()=>marker(page)).toBeNull();
+  if(integrated)await expect(page.getByTestId("target-detail-edit-delete")).toBeVisible();
   expect(statusCount).toBe(1);
   expect(patchCount).toBe(1); // read-only receipt never sends a PATCH
   await expect(form.getByRole("button",{name:"Upravit poznámku"})).toBeVisible();

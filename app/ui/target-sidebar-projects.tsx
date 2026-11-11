@@ -1,5 +1,4 @@
 "use client";
-import {TARGET_PROJECT_TITLE_UPDATED} from "../../lib/target-project-title-edit-ui-gate";
 /** R3-FE-4a: in target mode the sidebar lists the project INDEX of the global
  * reading scope (owner decision 2026-11-09), never the legacy workspace
  * projects. Same session and lifecycle as the Projects list: a read exists
@@ -17,6 +16,7 @@ import {detailCopy,type DetailLanguage} from "../../lib/target-detail-copy";
 import {queuedTargetFetch} from "../../lib/target-read-queue";
 import {detailIdOk,detailRouteFromSearch} from "../../lib/target-detail-route";
 import {useTargetTick,useTargetWake} from "./use-target-revalidation";
+import {subscribeTargetChange} from "../../lib/target-data-invalidation";
 import {useTargetSearch} from "./target-detail-state";
 import "./target-details.css";
 
@@ -88,7 +88,7 @@ export default function TargetSidebarProjects({language="cs",openable,onOpen,onS
     signedOut:()=>{refusalRef.current();setState({kind:"error",reason:"failed"});},
   });
   // Passive revalidation on the runtime tick: the first page is re-read; failure hides it.
-  useTargetTick(()=>{
+  const revalidate=()=>{
     const live=sessionRef.current;
     if(!live||stateRef.current.kind!=="ready")return;
     const id=++epoch.current;
@@ -101,14 +101,15 @@ export default function TargetSidebarProjects({language="cs",openable,onOpen,onS
         setState({kind:"error",reason:"failed"});
       }
     }).catch(()=>{if(epoch.current===id)setState({kind:"error",reason:"failed"});});
-  });
-
-  useEffect(()=>{
-    const updated=()=>{epoch.current++;sessionRef.current?.suspend();setState({kind:"idle"});
-      if(document.visibilityState!=="hidden"&&navigator.onLine){sessionRef.current?.resume();setNonce(value=>value+1);}};
-    window.addEventListener(TARGET_PROJECT_TITLE_UPDATED,updated);
-    return ()=>window.removeEventListener(TARGET_PROJECT_TITLE_UPDATED,updated);
-  },[]);
+  };
+  useTargetTick(revalidate);
+  // R3-FE-4b: an edit committed in the detail panel re-reads this list through the read queue.
+  const revalidateRef=useRef(revalidate);
+  revalidateRef.current=revalidate;
+  useEffect(()=>subscribeTargetChange(()=>{
+    if(document.visibilityState==="hidden"||!navigator.onLine)return;
+    revalidateRef.current();
+  }),[]);
 
   // Titles are shown only for the CURRENT session and scope.
   const page=state.kind==="ready"&&state.page.scope===scope?state.page:null;

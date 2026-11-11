@@ -25,3 +25,9 @@ Cílený CI workflow používá port `3121`, `LUMI_PRIVATE_NOTE_AREAS_E2E=true` 
 - **Skutečné vytvoření poznámky v Quick Capture.** Je potřeba integrovaná write UI command+receipt recovery pro nejistý výsledek, odlišit první definitivní odmítnutí a pozdější konflikt, neskladovat soukromý obsah a přesně chránit idempotenci i přes reload a odmountování. Neprovádět automatický nový UUID ani retry po timeoutu.
 - Vytváření úkolů, projektů, sdílených poznámek, pozvánky, R4 cutover a produkční zapnutí.
 - Toto není doložení serverové autorizace uživatele v produkci; jde o stagingovou integraci. Pro produkční release platí plná Browser E2E na přesném SHA, archivní backup/restore a výslovná R4 brána.
+
+## Navazující skutečný zápis
+
+R3-CAPTURE-1 zůstává samostatně default-off read-only. Další bezpečnostně oddělené
+[R3-CAPTURE-2 — soukromá poznámka / skutečné vytvoření a obnova příkazu](R3-CAPTURE-PRIVATE-NOTE-CREATE.md)
+je explicitní create brána, nikoli rozšíření pravomoci read-only seznamu Oblastí.

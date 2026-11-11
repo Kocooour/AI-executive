@@ -15,9 +15,9 @@ import {
 import type {TargetDetailKind} from "./target-detail-route";
 
 export type TargetDetailFailure=
-  |"not-available"|"signed-out"|"session-expired"|"stale"|"rate-limited"|"unavailable"|"offline"|"invalid-response";
+  |"not-available"|"signed-out"|"stale"|"rate-limited"|"unavailable"|"offline"|"invalid-response";
 export type TargetDetailContent=
-  |{kind:"task";task:TaskPreview;parentTitle:string|null}
+  |{kind:"task";task:TaskPreview;parentTitle:string|null;expectedRevision?:string}
   |{kind:"project";page:ProjectTasksPage}
   |{kind:"note";note:NotePreview};
 export type TargetDetailResult=
@@ -29,7 +29,7 @@ type AnyFailure=TaskPreviewFailure|NotePreviewFailure|ProjectTasksFailure;
 export function detailFailure(reason:AnyFailure):TargetDetailFailure|"aborted"{
   switch(reason){
     case "not-found":case "invalid-request":case "disabled":return "not-available";
-    case "signed-out":case "session-expired":case "stale":case "rate-limited":case "unavailable":
+    case "signed-out":case "stale":case "rate-limited":case "unavailable":
     case "offline":case "invalid-response":return reason;
     default:return "aborted";
   }
@@ -93,12 +93,13 @@ export function createTargetDetailSession(
             {projectId:read.task.projectId,limit:1,signal:controller.signal},fetchImpl);
           if(!live())return {ok:false,reason:"superseded"};
           if(parent.ok===true)parentTitle=parent.page.project.title;
-          else if(parent.reason==="signed-out"||parent.reason==="session-expired"){
+          else if(parent.reason==="signed-out"){
             if(guard())active=null;
             return fail(parent.reason);
           }
         }
-        result={ok:true,content:{kind:"task",task:read.task,parentTitle}};
+        result={ok:true,content:{kind:"task",task:read.task,parentTitle,
+          ...(read.expectedRevision?{expectedRevision:read.expectedRevision}:{})}};
       }
     }else if(config.kind==="note"){
       const read=await readStagingNotePreview(config.id,controller.signal,fetchImpl);

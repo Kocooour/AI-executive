@@ -4657,7 +4657,21 @@ export function useLumiApp(options: { targetDetails?: boolean; targetUnified?: b
     await completeDrop(entity.id, `entity:${target.id}`, scope);
   }
 
-  const dragHandle = (entity: Entity, scope: string) => (
+  // R3-FE-4b: in unified target mode the legacy drag handle is a natively disabled control (not
+  // draggable, no pointer or keyboard reorder, calm hint) instead of an active one that only alerts.
+  const dragHandle = (entity: Entity, scope: string) => captureDisabled ? (
+    <button
+      type="button"
+      className="dragHandle"
+      disabled
+      draggable={false}
+      aria-label={`${tr("moveItemNamed")} ${entity.title}`}
+      title={detailCopy[language].legacyReadOnlyNotice}
+      data-legacy-write-disabled="true"
+    >
+      <span aria-hidden="true">⠿</span>
+    </button>
+  ) : (
     <button
       className="dragHandle"
       draggable

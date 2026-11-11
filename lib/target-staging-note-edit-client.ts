@@ -2,6 +2,9 @@
  * A lost/invalid write response is UNCERTAIN: only the exact same command
  * may be retried, never a new UUID for the same unresolved attempt. */
 import {validNotePreviewId} from "./target-staging-note-preview-client";
+import {
+  NOTE_EDIT_COMMAND_HEADER,NOTE_EDIT_PRECOMMIT_HEADER,NOTE_EDIT_PRECOMMIT_VALUE,
+} from "./target-note-edit-precommit";
 
 export type NoteEditPreview={
   expectedRevision:string;writeAreaId:string;restoreGeneration:string;
@@ -13,7 +16,8 @@ export type NoteEditFailure="denied"|"conflict"|"unavailable"|"offline"|"invalid
 export type NoteEditPreviewResult={ok:true;preview:NoteEditPreview}|
   {ok:false;reason:NoteEditFailure};
 export type NoteEditSaveResult=
-  {outcome:"saved";replayed:boolean}|{outcome:"conflict"|"denied"|"uncertain"};
+  {outcome:"saved";replayed:boolean}|{outcome:"conflict"|"uncertain"}|
+  {outcome:"denied";rejectedBeforeCommit?:true};
 
 const uuid=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const hex=/^[0-9a-f]{64}$/;
@@ -102,13 +106,27 @@ export async function saveNoteEdit(noteId:string,command:NoteEditCommand,
       encodeURIComponent(noteId)+"/edit",{
       method:"PATCH",credentials:"same-origin",cache:"no-store",redirect:"error",
       headers:{"content-type":"application/json",accept:"application/json",
-        "x-lumi-target-protocol":"1"},
+        "x-lumi-target-protocol":"1",[NOTE_EDIT_COMMAND_HEADER]:command.commandId},
       body:JSON.stringify(command),signal,
     });
     if(signal.aborted)return {outcome:"uncertain"};
-    if(response.status===401||response.status===403||response.status===404)
-      return {outcome:"denied"};
-    if(response.status===409||response.status===400)return {outcome:"conflict"};
+    // A 401 may be produced AFTER an owner-cookie write committed.
+    // Neither 400/409 nor 403/404 is definitive when supplied by a proxy/WAF.
+    // Trust only the application's exact-command, no-store precommit receipt.
+    if(response.status===401)return {outcome:"denied"};
+    if(response.status===400||response.status===403||
+       response.status===404||response.status===409){
+      if(response.headers.get(NOTE_EDIT_PRECOMMIT_HEADER)!==NOTE_EDIT_PRECOMMIT_VALUE||
+         response.headers.get(NOTE_EDIT_COMMAND_HEADER)!==command.commandId)
+        return {outcome:"uncertain"};
+      const refusal=await strictJson(response);
+      if(signal.aborted||!record(refusal)||typeof refusal.error!=="string"||
+         !["error","code,error"].includes(Object.keys(refusal).sort().join(",")))
+        return {outcome:"uncertain"};
+      return response.status===403||response.status===404
+        ?{outcome:"denied",rejectedBeforeCommit:true}
+        :{outcome:"conflict"};
+    }
     if(response.status!==200)return {outcome:"uncertain"};
     const result=await strictJson(response);
     if(!record(result))return {outcome:"uncertain"};

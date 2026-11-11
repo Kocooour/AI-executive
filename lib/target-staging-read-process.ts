@@ -87,8 +87,6 @@ export function createStagingReadRunner(
           process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_PRIVATE_NOTE_AREAS_ENABLED || "",
         AI_EXECUTIVE_TARGET_STAGING_HTTP_WRITE_ENABLED:
           process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_WRITE_ENABLED || "",
-        AI_EXECUTIVE_TARGET_STAGING_HTTP_PROJECT_TITLE_WRITE_ENABLED:
-          process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_PROJECT_TITLE_WRITE_ENABLED || "",
         AI_EXECUTIVE_TARGET_STAGING_HTTP_TEMPORAL_ENABLED:
           process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_TEMPORAL_ENABLED || "",
         AI_EXECUTIVE_TARGET_STAGING_HTTP_TEMPORAL_WRITE_ENABLED:
@@ -1791,7 +1789,7 @@ export async function readStagingNotificationSettingsInChild(
 
 /** R2d.3g: exact detail child DTO; the guard/witness remain server-only. */
 export type StagingTemporalDetailResult =
-  | { ok: true; detail: TemporalTaskDetail }
+  | { ok: true; detail: TemporalTaskDetail; expectedRevision?:string }
   | { ok: false; reason: "inaccessible" };
 
 export function parseStagingTemporalDetail(value: unknown, taskId: string): StagingTemporalDetailResult | null {
@@ -1801,7 +1799,11 @@ export function parseStagingTemporalDetail(value: unknown, taskId: string): Stag
   if (Object.keys(result).sort().join(",") === "ok,reason" &&
       result.ok === false && result.reason === "inaccessible")
     return { ok: false, reason: "inaccessible" };
-  if (Object.keys(result).sort().join(",") !== "guard,linearization,ok,task" ||
+  const keys = Object.keys(result).sort().join(",");
+  const hasRevision = keys === "expectedRevision,guard,linearization,ok,task";
+  if ((keys !== "guard,linearization,ok,task" && !hasRevision) ||
+      (hasRevision && (typeof result.expectedRevision !== "string" ||
+        !REVISION.test(result.expectedRevision))) ||
       result.ok !== true || !result.task || typeof result.task !== "object" ||
       Array.isArray(result.task) || !result.guard ||
       typeof result.guard !== "object" || Array.isArray(result.guard)) return null;
@@ -1831,7 +1833,8 @@ export function parseStagingTemporalDetail(value: unknown, taskId: string): Stag
     taskRevision: g.taskRevision as number,
     parentRevision: g.parentRevision as number | null,
   };
-  return { ok: true, detail: { task: t, guard, linearization: framed.linearization } };
+  return { ok: true, detail: { task: t, guard, linearization: framed.linearization },
+    ...(hasRevision ? {expectedRevision:result.expectedRevision as string} : {}) };
 }
 
 export async function readStagingTemporalDetailInChild(
@@ -2101,14 +2104,6 @@ export async function readStagingAuthorizedProjectTasksInChild(
   const result = parseStagingProjectTasks(payload, projectId);
   if (payload !== null && !result) logStagingFailure("project_tasks", "invalid_child_dto");
   return result;
-}
-
-/** Same bounded DTO as project detail, with v26 checked in the pinned snapshot. */
-export async function readStagingProjectTitlePreviewInChild(
-  config: StagingPersonalReadConfig, projectId: string,
-): Promise<StagingProjectTasksResult | null> {
-  const payload = await runChild(config, "target-staging-project-title-preview-child.mjs", [projectId, "1", "0"]);
-  return parseStagingProjectTasks(payload, projectId);
 }
 
 /** Staging relation child DTO: explicit allowlist prevents linked data leaks. */

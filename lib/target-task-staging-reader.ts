@@ -12,7 +12,7 @@
 import { closeSync, constants, fstatSync, lstatSync, openSync, readdirSync, realpathSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { TARGET_STORE_FILENAME, TARGET_STORE_SCHEMA_VERSION, verifyExistingTargetStagingPath } from "./target-store-bootstrap";
+import { TARGET_STORE_FILENAME, verifyExistingTargetStagingPath } from "./target-store-bootstrap";
 import { inspectIsolatedTargetStore } from "./target-store-preflight";
 import { checkTargetStagingJournal, warmTargetStagingJournal } from "./target-staging-anchor-journal";
 import { withPinnedTargetSnapshot } from "./target-store-read-snapshot";
@@ -68,11 +68,11 @@ import {validTargetStagingAttentionLifecycleCommand,
   from "./target-attention-lifecycle-writer";
 import type { TemporalScope, TemporalStatus, TemporalTaskPage, TemporalTaskDetail, TemporalDueWindow, TemporalDueWindowPage } from "./target-task-temporal-read-model";
 import { readAuthorizedTargetNote } from "./target-note-access";
-import {readTargetProjectTitleRecovery,type TargetProjectTitleRecovery} from "./target-project-title-command-status";
 import { readAuthorizedTargetNoteSyncPage, type TargetNoteSyncPage } from "./target-note-sync-read-model";
 import { evaluateTargetAreaPolicy } from "./target-area-policy";
 import {readTargetNoteEditCommandStatus,readTargetNoteEditRecovery,
   type TargetNoteEditCommandStatus,type TargetNoteEditRecovery} from "./target-note-command-status";
+import {readTargetNoteCreateRecovery,type TargetNoteCreateRecovery} from "./target-note-create-status";
 import { readTargetNoteDeleteCommandStatus, type TargetNoteDeleteCommandStatus } from "./target-note-delete-command-status";
 import { validTargetStagingNoteDeleteRequest, type TargetStagingNoteDeleteRequest } from "./target-note-delete-writer";
 import {
@@ -990,19 +990,6 @@ export function readPreflightedTargetNoteEditCommandStatus(
         }, denied));
 }
 
-/** Actor is derived exclusively from an authenticated preflighted reader. */
-export function readPreflightedProjectTitleRecovery(
-  store:TargetStagingReadStore,access:TargetStagingReadCredential,commandId:string,
-):TargetProjectTitleRecovery{
-  const denied=():TargetProjectTitleRecovery=>({ok:false,reason:"unavailable"});
-  return withPreflightedStore<TargetProjectTitleRecovery>(store,denied,(db,preflight)=>
-    inReadSnapshot(db,()=>{
-      if(!preflight(db))return denied();
-      const actor=verifiedActor(db,access,true);
-      return actor?readTargetProjectTitleRecovery(db,actor,commandId,store.expectedRestoreGeneration):denied();
-    },denied));
-}
-
 /** Read-only, signed-writer-scoped receipt lookup for reload recovery. */
 export function readPreflightedTargetNoteEditRecovery(
   store:TargetStagingReadStore,access:TargetStagingReadCredential,commandId:string,
@@ -1013,6 +1000,19 @@ export function readPreflightedTargetNoteEditRecovery(
       if(!preflight(db))return denied();
       const actor=verifiedActor(db,access,true);
       return actor?readTargetNoteEditRecovery(db,actor,commandId):denied();
+    },denied));
+}
+
+/** R3-CAPTURE-2: private CREATE UUID status from a preflighted pinned snapshot. */
+export function readPreflightedTargetNoteCreateRecovery(
+  store:TargetStagingReadStore,access:TargetStagingReadCredential,commandId:string,
+):TargetNoteCreateRecovery{
+  const denied=():TargetNoteCreateRecovery=>({ok:false,reason:"unavailable"});
+  return withPreflightedStore<TargetNoteCreateRecovery>(store,denied,(db,preflight)=>
+    inReadSnapshot(db,()=>{
+      if(!preflight(db))return denied();
+      const actor=verifiedActor(db,access,true);
+      return actor?readTargetNoteCreateRecovery(db,actor,commandId):denied();
     },denied));
 }
 
@@ -1299,21 +1299,6 @@ export function readPreflightedAuthorizedProjectTasks(
         });
       }, () => null),
   );
-}
-
-/** Project title preview must never offer a token on the older read-compatible schema. */
-export function readPreflightedProjectTitlePreview(
-  store: TargetStagingReadStore, access: TargetStagingReadCredential, projectId: string,
-): TargetAuthorizedProjectTasksResult | null {
-  return withPreflightedStore<TargetAuthorizedProjectTasksResult | null>(store, () => null, (db, preflight) =>
-    inReadSnapshot<TargetAuthorizedProjectTasksResult | null>(db, () => {
-      if (!preflight(db)) return null;
-      const actorUserId = verifiedActor(db, access);
-      const version = db.prepare("SELECT value FROM metadata WHERE key='schema_version'").get() as {value:string} | undefined;
-      if (!actorUserId || version?.value !== String(TARGET_STORE_SCHEMA_VERSION)) return null;
-      return readAuthorizedProjectTasksPage(db, { actorUserId, projectId, limit:1, offset:0,
-        restoreGeneration:store.expectedRestoreGeneration });
-    }, () => null));
 }
 
 /** R2d structural project links on ONE authorized, preflighted snapshot. */
