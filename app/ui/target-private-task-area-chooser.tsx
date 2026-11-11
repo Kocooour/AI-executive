@@ -120,7 +120,10 @@ export default function TargetPrivateTaskAreaChooser({
     const unregister=runtime.register({
       dispose:()=>controller.abort(),suspend:()=>controller.abort(),
     });
-    const timer=setTimeout(()=>controller.abort(),8000);
+    const timer=setTimeout(()=>{
+      controller.abort();
+      if(active)setAreas({kind:"unavailable",generation});
+    },8000);
     void loadPrivateNoteAreaChoices(controller.signal).then(result=>{
       if(!active||controller.signal.aborted||!live())return;
       if(result.ok)setAreas({kind:"ready",generation,items:result.areas});
@@ -204,7 +207,8 @@ export default function TargetPrivateTaskAreaChooser({
             {items.map(item=><option key={item.id} value={item.id}>{item.title}</option>)}
           </select>
         </label>)}
-      {blocked&&<section data-testid="target-private-task-unresolved">
+      {blocked&&phase==="saving"&&<p role="status">{c.saving}</p>}
+      {blocked&&phase!=="saving"&&<section data-testid="target-private-task-unresolved">
         <p role="alert">{marker.kind==="unavailable"?c.storage:c.blocked}</p>
         {marker.kind==="blocked"&&!tracked&&<p role="note">{c.lost}</p>}
         {marker.kind==="blocked"&&tracked&&<button type="button"
