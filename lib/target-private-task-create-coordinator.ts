@@ -160,10 +160,12 @@ export async function recoverPrivateTaskCreate(
   const marker=privateTaskCreateMarker(generation);
   if(marker.kind!=="blocked")return "unavailable";
   const receipt=await check(marker.commandId,signal);
-  if(receipt==="committed"&&!signal.aborted&&runtime.known()&&
-    runtime.generation()===generation&&
+  if(typeof receipt==="object"&&receipt.status==="committed"&&
+    !signal.aborted&&runtime.known()&&runtime.generation()===generation&&
     confirm(generation,marker.commandId,true)){
-    notify(runtime,{generation,confirmedTaskId:null});
+    notify(runtime,{generation,confirmedTaskId:receipt.taskId});
+    return "committed";
   }
-  return receipt;
+  // A response whose marker could not be positively cleared is NOT success.
+  return typeof receipt==="object"?"unavailable":receipt;
 }
