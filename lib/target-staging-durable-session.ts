@@ -21,7 +21,7 @@ import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import {
   TARGET_STAGING_SESSION_MAX_LIFETIME_MS, TARGET_STAGING_SESSION_MAX_ROWS,
-  TARGET_STORE_SCHEMA_VERSION,
+  isSupportedTargetSchemaVersion,
 } from "./target-store-bootstrap";
 import {
   noTargetStagingSidecars, pinTargetStagingFiles, withPinnedTargetStagingWrite,
@@ -410,7 +410,7 @@ function withLiveStagingReadTransaction<T>(
     ).all() as { key: string; value: string }[];
     const values = new Map(metadata.map(row => [row.key, row.value]));
     if (metadata.length !== 3 || values.size !== 3 ||
-        values.get("schema_version") !== String(TARGET_STORE_SCHEMA_VERSION) ||
+        !isSupportedTargetSchemaVersion(values.get("schema_version")) ||
         values.get("activated") !== "false" ||
         values.get("restore_generation") !== store.expectedRestoreGeneration) {
       logStagingFailure("live_read", "metadata_mismatch");

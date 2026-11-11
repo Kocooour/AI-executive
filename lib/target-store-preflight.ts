@@ -5,7 +5,8 @@ import path from "node:path";
 import { createHash } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import {
-  TARGET_SCHEMA_SQL, TARGET_STORE_FILENAME, TARGET_STORE_SCHEMA_VERSION,
+  TARGET_SCHEMA_SQL, TARGET_SCHEMA_V25_SQL, TARGET_STORE_FILENAME, TARGET_STORE_SCHEMA_VERSION,
+  TARGET_STORE_LEGACY_SCHEMA_VERSION, isSupportedTargetSchemaVersion,
   TARGET_STAGING_AUDIT_MAX_EVENTS, TARGET_STAGING_MAX_RECEIPTS, TARGET_STAGING_SESSION_MAX_ROWS,
   TARGET_STAGING_RECEIPT_PREFIX, TARGET_STAGING_DELETE_RECEIPT_PREFIX,
   TARGET_STAGING_TEMPORAL_STATUS_RECEIPT_PREFIX, TARGET_STAGING_TEMPORAL_DUE_ON_RECEIPT_PREFIX,
@@ -14,7 +15,7 @@ import {
   TARGET_STAGING_PERSONAL_NOTIFICATION_RECEIPT_PREFIX, TARGET_STAGING_PERSONAL_PUSH_TARGET_RECEIPT_PREFIX,
   TARGET_STAGING_PUSH_BASELINE_PREFIX,
   TARGET_STAGING_NOTE_RECEIPT_PREFIX, TARGET_STAGING_NOTE_DELETE_RECEIPT_PREFIX,
-  TARGET_STAGING_NOTE_LIFECYCLE_RECEIPT_PREFIX,
+  TARGET_STAGING_NOTE_LIFECYCLE_RECEIPT_PREFIX, TARGET_STAGING_PROJECT_TITLE_CANCEL_PREFIX,
   TARGET_STAGING_MAX_TOMBSTONES, TARGET_STAGING_NOTE_CHANGE_MAX_EVENTS, TARGET_STAGING_RESTORE_HISTORY_MAX,
   TARGET_STAGING_SUPERSEDED_SESSIONS_MAX, TARGET_STAGING_MAX_NOTES,
   TARGET_STAGING_MAX_PERSONAL_PLANS, TARGET_STAGING_MAX_ATTENTION_STATES, verifyExistingTargetStagingPath,
@@ -61,7 +62,9 @@ const CONTROL_METADATA_KEYS = new Set([
 function matchesCanonicalSchema(actual: DatabaseSync): boolean {
   const expected = new DatabaseSync(":memory:");
   try {
-    expected.exec(TARGET_SCHEMA_SQL);
+    const version = (actual.prepare("SELECT value FROM metadata WHERE key='schema_version'").get() as {value: string} | undefined)?.value;
+    if (!isSupportedTargetSchemaVersion(version)) return false;
+    expected.exec(version === String(TARGET_STORE_LEGACY_SCHEMA_VERSION) ? TARGET_SCHEMA_V25_SQL : TARGET_SCHEMA_SQL);
     const schema = (db: DatabaseSync) => db.prepare(
       "SELECT type, name, tbl_name, sql FROM sqlite_schema ORDER BY type, name, tbl_name",
     ).all();
@@ -260,6 +263,14 @@ export function inspectIsolatedTargetStore(
         row.key.startsWith(TARGET_STAGING_NOTE_DELETE_RECEIPT_PREFIX));
       const lifecycleReceipts = rows.filter(row => typeof row.key === "string" &&
         row.key.startsWith(TARGET_STAGING_NOTE_LIFECYCLE_RECEIPT_PREFIX));
+      const projectTitleCancels = rows.filter(row => typeof row.key === "string" &&
+        row.key.startsWith(TARGET_STAGING_PROJECT_TITLE_CANCEL_PREFIX));
+      // An irreversible fence is valid only as an opaque 64-hex key and a
+      // literal '1'. Reject all other metadata rather than losing the fence.
+      const projectTitleCancelsValid = projectTitleCancels.every(row =>
+        typeof row.key === "string" &&
+        sha256Hex.test(row.key.slice(TARGET_STAGING_PROJECT_TITLE_CANCEL_PREFIX.length)) &&
+        row.value === "1");
       // The only extra metadata entries allowed are strictly validated,
       // content-free, staging-only receipt hashes (title, delete and note
       // namespaces, each capped separately). Reject unknown metadata,
@@ -270,7 +281,7 @@ export function inspectIsolatedTargetStore(
         typeof row.value === "string" && sha256Hex.test(row.value));
       if (rows.length !== 6 + receipts.length + deleteReceipts.length + temporalReceipts.length + dueOnReceipts.length + privateWhenReceipts.length + attentionReceipts.length + noteReceipts.length +
             notificationReceipts.length + pushTargetReceipts.length + baselineMarkers.length +
-            noteDeleteReceipts.length + lifecycleReceipts.length ||
+            noteDeleteReceipts.length + lifecycleReceipts.length + projectTitleCancels.length ||
           receipts.length > TARGET_STAGING_MAX_RECEIPTS ||
           deleteReceipts.length > TARGET_STAGING_MAX_RECEIPTS ||
           temporalReceipts.length > TARGET_STAGING_MAX_RECEIPTS ||
@@ -285,6 +296,10 @@ export function inspectIsolatedTargetStore(
           noteReceipts.length > TARGET_STAGING_MAX_RECEIPTS ||
           noteDeleteReceipts.length > TARGET_STAGING_MAX_RECEIPTS ||
           lifecycleReceipts.length > TARGET_STAGING_MAX_RECEIPTS ||
+          projectTitleCancels.length > TARGET_STAGING_AUDIT_MAX_EVENTS ||
+          !projectTitleCancelsValid ||
+          (meta.get("schema_version") !== String(TARGET_STORE_SCHEMA_VERSION) &&
+            projectTitleCancels.length !== 0) ||
           !receiptValid(receipts, TARGET_STAGING_RECEIPT_PREFIX) ||
           !receiptValid(deleteReceipts, TARGET_STAGING_DELETE_RECEIPT_PREFIX) ||
           !receiptValid(temporalReceipts, TARGET_STAGING_TEMPORAL_STATUS_RECEIPT_PREFIX) ||
@@ -308,8 +323,9 @@ export function inspectIsolatedTargetStore(
               row.key.startsWith(TARGET_STAGING_PUSH_BASELINE_PREFIX) ||
               row.key.startsWith(TARGET_STAGING_NOTE_RECEIPT_PREFIX) ||
               row.key.startsWith(TARGET_STAGING_NOTE_DELETE_RECEIPT_PREFIX) ||
-              row.key.startsWith(TARGET_STAGING_NOTE_LIFECYCLE_RECEIPT_PREFIX))) ||
-          meta.get("schema_version") !== String(TARGET_STORE_SCHEMA_VERSION) ||
+              row.key.startsWith(TARGET_STAGING_NOTE_LIFECYCLE_RECEIPT_PREFIX) ||
+              row.key.startsWith(TARGET_STAGING_PROJECT_TITLE_CANCEL_PREFIX))) ||
+          !isSupportedTargetSchemaVersion(meta.get("schema_version")) ||
           meta.get("activated") !== "false" || meta.get("write_protocol") !== "per-item-only" ||
           typeof meta.get("anchor_seq") !== "string" ||
           !/^(0|[1-9][0-9]{0,14})$/.test(meta.get("anchor_seq") as string) ||
@@ -339,6 +355,18 @@ export function inspectIsolatedTargetStore(
             typeof row.expected_revision !== "string" || !sha256Hex.test(row.expected_revision) ||
             !allowedGenerations.has(row.restore_generation) ||
             !meta.has(row.receipt_key))) fail("audit_invalid");
+      if (meta.get("schema_version") === String(TARGET_STORE_SCHEMA_VERSION)) {
+        const projectAudit = all("SELECT receipt_key, request_digest, expected_revision, restore_generation FROM project_title_audit") as
+          { receipt_key: unknown; request_digest: unknown; expected_revision: unknown; restore_generation: unknown }[];
+        if (projectAudit.length > TARGET_STAGING_AUDIT_MAX_EVENTS || projectAudit.some(row =>
+          typeof row.receipt_key !== "string" || !sha256Hex.test(row.receipt_key) ||
+          typeof row.request_digest !== "string" || !sha256Hex.test(row.request_digest) ||
+          typeof row.expected_revision !== "string" || !sha256Hex.test(row.expected_revision) ||
+          !allowedGenerations.has(row.restore_generation)) || count(`SELECT COUNT(*) AS n FROM project_title_audit a
+            LEFT JOIN projects p ON p.id=a.project_id LEFT JOIN project_tombstones t ON t.id=a.project_id
+            WHERE (p.id IS NULL AND t.id IS NULL) OR (p.id IS NOT NULL AND a.revision_after>p.revision)
+              OR (t.id IS NOT NULL AND a.revision_after>=t.revision)`) !== 0) fail("audit_invalid");
+      }
       // R2c.1 delete audit: bounded, content-free, backed by a delete receipt and
       // by the tombstone (same Area, revision and change sequence) it describes.
       const deleteAudit = all("SELECT receipt_key, expected_revision, restore_generation FROM task_delete_audit") as

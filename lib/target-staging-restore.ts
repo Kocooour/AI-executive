@@ -31,7 +31,7 @@ import {
 } from "./target-staging-anchor-journal";
 import { pinTargetStagingFiles, withPinnedTargetStagingRestore } from "./target-staging-pinned-write";
 import type { TargetStagingPinnedRestoreContext } from "./target-staging-pinned-write";
-import { TARGET_STORE_SCHEMA_VERSION } from "./target-store-bootstrap";
+import { isSupportedTargetSchemaVersion } from "./target-store-bootstrap";
 import { inspectIsolatedTargetStore } from "./target-store-preflight";
 import type { TargetStagingReadStore } from "./target-task-staging-reader";
 
@@ -166,7 +166,7 @@ export function restoreTargetStagingFromBackup(
     return { ok: false, reason: "invalid_request" };
   }
   const version = typeof store?.stagingDirectory === "string" ? backupSchemaVersion(store) : null;
-  if (version !== null && version !== String(TARGET_STORE_SCHEMA_VERSION)) {
+  if (version !== null && !isSupportedTargetSchemaVersion(version)) {
     return { ok: false, reason: "unsupported_backup" };
   }
   const result = withPinnedTargetStagingRestore<TargetStagingRestoreResult>(store, context => {

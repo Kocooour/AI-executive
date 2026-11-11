@@ -2,6 +2,7 @@
 import { spawn } from "node:child_process";
 import path from "node:path";
 import type { StagingPersonalReadConfig } from "./target-staging-read-process";
+import {projectTitleWorkerProofKey} from "./target-project-title-identity";
 import type { TargetStagingTaskTitleWriteRequest } from "./target-task-staging-writer";
 import type { TargetStagingTaskDeleteRequest } from "./target-task-delete-writer";
 
@@ -15,7 +16,7 @@ type Preview = { ok: true; snapshotRevision: string } |
 type Write = { ok: true; replayed?: true } |
   { ok: false; reason: "unavailable" | "stale_revision" |
     "idempotency_conflict" | "unchanged" | "write_failed" | "session_revoked" |
-    "resync_required" | "write_area_mismatch" };
+    "resync_required" | "write_area_mismatch" | "cancelled" };
 type DeleteWrite = { ok: true; replayed?: true } |
   { ok: false; reason: "unavailable" | "stale_revision" |
     "idempotency_conflict" | "write_failed" | "session_revoked" |
@@ -51,7 +52,8 @@ function parseWrite(value: unknown): Write | null {
       (v.reason === "unavailable" || v.reason === "stale_revision" ||
        v.reason === "idempotency_conflict" || v.reason === "unchanged" ||
        v.reason === "write_failed" || v.reason === "session_revoked" ||
-       v.reason === "resync_required" || v.reason === "write_area_mismatch")) return { ok: false, reason: v.reason };
+       v.reason === "resync_required" || v.reason === "write_area_mismatch" ||
+       v.reason === "cancelled")) return { ok: false, reason: v.reason };
   return null;
 }
 
@@ -108,6 +110,7 @@ async function run(config: StagingPersonalReadConfig, scriptName: string,
             AI_EXECUTIVE_DATA_DIR: process.env.AI_EXECUTIVE_DATA_DIR || "",
             AI_EXECUTIVE_TARGET_STAGING_HTTP_ENABLED: process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_ENABLED || "",
             AI_EXECUTIVE_TARGET_STAGING_HTTP_WRITE_ENABLED: process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_WRITE_ENABLED || "",
+            AI_EXECUTIVE_TARGET_STAGING_HTTP_PROJECT_TITLE_WRITE_ENABLED: process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_PROJECT_TITLE_WRITE_ENABLED || "",
             AI_EXECUTIVE_TARGET_STAGING_HTTP_TEMPORAL_ENABLED: process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_TEMPORAL_ENABLED || "",
             AI_EXECUTIVE_TARGET_STAGING_HTTP_TEMPORAL_WRITE_ENABLED: process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_TEMPORAL_WRITE_ENABLED || "",
             AI_EXECUTIVE_TARGET_STAGING_HTTP_TEMPORAL_DUE_ON_WRITE_ENABLED: process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_TEMPORAL_DUE_ON_WRITE_ENABLED || "",
@@ -124,6 +127,12 @@ async function run(config: StagingPersonalReadConfig, scriptName: string,
             AI_EXECUTIVE_TARGET_STAGING_RESTORE_GENERATION: config.expectedRestoreGeneration,
             AI_EXECUTIVE_TARGET_STAGING_OWNER_USER_ID: config.ownerUserId,
             AI_EXECUTIVE_TARGET_STAGING_SESSION_HASH: config.sessionTokenHash || "",
+            // The project-title writer independently rechecks the actor proof
+            // INSIDE its pinned transaction. Pass a domain-separated key only
+            // to that worker, never the application's session signing secret.
+            ...(scriptName === "target-staging-project-title-write-child.mjs"
+              ? {AI_EXECUTIVE_TARGET_STAGING_PROJECT_TITLE_PROOF_KEY: projectTitleWorkerProofKey() || ""}
+              : {}),
           },
         });
       } catch { resolve(null); return; }
@@ -248,4 +257,51 @@ export async function deleteStagingNoteInChild(
 ): Promise<DeleteWrite | null> {
   const value = await run(config, "target-staging-note-delete-child.mjs", JSON.stringify(request));
   return parseDeleteWrite(value);
+}
+
+/** Content-free actor-scoped project rename receipt lookup. */
+export async function readProjectTitleRecoveryInChild(
+  config:StagingPersonalReadConfig,commandId:string,
+):Promise<import("./target-project-title-command-status").TargetProjectTitleRecovery|null>{
+  const value=await run(config,"target-staging-project-title-recovery-child.mjs",JSON.stringify({commandId}));
+  if(!value||typeof value!=="object"||Array.isArray(value))return null;
+  const v=value as Record<string,unknown>,keys=Object.keys(v).sort().join(",");
+  if(v.ok===true&&v.status==="not_recorded"&&keys==="ok,status")
+    return {ok:true,status:"not_recorded"};
+  if(v.ok===true&&v.status==="committed"&&keys==="areaId,ok,projectId,status"&&
+    typeof v.projectId==="string"&&typeof v.areaId==="string")
+    return {ok:true,status:"committed",projectId:v.projectId,areaId:v.areaId};
+  if(v.ok===false&&v.reason==="unavailable"&&keys==="ok,reason")
+    return {ok:false,reason:"unavailable"};
+  return null;
+}
+
+type TitleCancel = {ok:true;status:"committed"|"cancelled"}|
+  {ok:false;reason:"unavailable"|"session_revoked"|"resync_required"|"write_failed"};
+export async function cancelProjectTitleInChild(
+  config:StagingPersonalReadConfig,
+  request:import("./target-project-title-cancel").ProjectTitleCancelCommand,
+  expectedActorUserId:string,
+):Promise<TitleCancel|null>{
+  // Actor ID comes ONLY from the independently authorized server read,
+  // never from user JSON. The child rechecks it within the write transaction.
+  const v=await run(config,"target-staging-project-title-cancel-child.mjs",
+    JSON.stringify({command:request,expectedActorUserId}));
+  if(!v||typeof v!=="object"||Array.isArray(v))return null;
+  const x=v as Record<string,unknown>,keys=Object.keys(x).sort().join(",");
+  if(keys==="ok,status"&&x.ok===true&&(x.status==="cancelled"||x.status==="committed"))
+    return {ok:true,status:x.status};
+  if(keys==="ok,reason"&&x.ok===false&&
+    (x.reason==="unavailable"||x.reason==="session_revoked"||x.reason==="resync_required"||x.reason==="write_failed"))
+    return {ok:false,reason:x.reason};
+  return null;
+}
+
+/** Bounded project rename worker; request content is passed only via stdin. */
+export async function writeProjectTitleInChild(
+  config: StagingPersonalReadConfig, request: import("./target-project-title-writer").ProjectTitleCommand,
+  expectedActorUserId:string,
+): Promise<Write | null> {
+  return parseWrite(await run(config, "target-staging-project-title-write-child.mjs",
+    JSON.stringify({command:request,expectedActorUserId})));
 }
