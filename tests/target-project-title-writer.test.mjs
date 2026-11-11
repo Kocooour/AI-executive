@@ -170,3 +170,37 @@ test('untrusted post-COMMIT journal confirmation never acknowledges a project ti
    } finally {current.close();}
  } finally {local.close();connection.close();}
 });
+
+test('post-COMMIT untrusted cancellation must not acknowledge a safe unlock',async()=>{
+ const isolated=bootstrapIsolatedTargetStore({stagingDirectory:path.join(root,'unconfirmed-cancel'),ownerUserId:'alice'});
+ const isolatedStore={stagingDirectory:isolated.directory,expectedRestoreGeneration:isolated.restoreGeneration};
+ const connection=new DatabaseSync(isolated.databasePath);
+ connection.prepare("INSERT INTO projects(id,area_id,title) VALUES ('cancel-race',?,'Before')").run(isolated.unassignedAreaId);
+ const local=new TargetStagingSessionAuthority(isolatedStore);
+ try{
+   const token=local.issueWritable('alice').sessionToken;
+   const command={projectId:'cancel-race',commandId:randomUUID(),restoreGeneration:isolated.restoreGeneration};
+   const original=DatabaseSync.prototype.exec;let swapped=false;
+   try{
+     DatabaseSync.prototype.exec=function(sql,...args){
+       const result=original.call(this,sql,...args);
+       if(!swapped&&sql==='COMMIT'){
+         swapped=true;
+         copyFileSync(isolated.databasePath,isolated.databasePath+'.copy');
+         renameSync(isolated.databasePath+'.copy',isolated.databasePath);
+       }
+       return result;
+     };
+     assert.deepEqual(local.cancelProjectTitle(token,command),{ok:false,reason:'write_failed'});
+   }finally{DatabaseSync.prototype.exec=original;}
+   assert.equal(swapped,true);
+   const {projectTitleCancelKey}=await import('../lib/target-project-title-cancel.ts');
+   const current=new DatabaseSync(isolated.databasePath,{readOnly:true});
+   try{
+     const key=projectTitleCancelKey('alice',command.projectId,command.commandId);
+     assert.equal(current.prepare("SELECT value FROM metadata WHERE key=?").get(key)?.value,'1',
+       'cancellation may have committed, but no untrusted confirmation can unlock the browser');
+     assert.equal(current.prepare("SELECT title FROM projects WHERE id='cancel-race'").get().title,'Before');
+   }finally{current.close();}
+ }finally{local.close();connection.close();}
+});
