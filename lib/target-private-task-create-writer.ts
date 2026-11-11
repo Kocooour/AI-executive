@@ -138,8 +138,8 @@ export function readPrivateTaskCreateRecovery(
   const denied=():PrivateTaskCreateRecovery=>({ok:false,reason:"unavailable"});
   if(!UUID.test(commandId))return denied();
   const receipt=db.prepare("SELECT value FROM metadata WHERE key=?")
-    .get(PRIVATE_TASK_CREATE_RECEIPT_PREFIX+commandHash(actor,commandId))
-    as {value:string}|undefined;
+    .get(PRIVATE_TASK_CREATE_RECEIPT_PREFIX+commandHash(actor,commandId)) as
+    {value:string}|undefined;
   const witness=db.prepare("SELECT value FROM metadata WHERE key=?")
     .get(recoveryKey(actor,commandId)) as {value:string}|undefined;
   if(!receipt&&!witness)return {ok:true,status:"not_recorded"};
