@@ -95,6 +95,10 @@ test("runtime preserves exact payload only in memory; no second POST after uncer
     const runtime={known:()=>true,generation:()=>generation,register:()=>()=>{}};
     const cmd=command();
     let posts=0;
+    assert.equal(await runPrivateTaskCreate(runtime,generation,{...cmd,title:" invalid "},
+      async()=>{posts++;return "saved";}),"conflict");
+    assert.equal(privateTaskCreateMarker(generation).kind,"clear");
+    assert.equal(posts,0);
     assert.equal(await runPrivateTaskCreate(runtime,generation,cmd,
       async()=>{posts++;return "uncertain";}),"uncertain");
     assert.equal(posts,1);
