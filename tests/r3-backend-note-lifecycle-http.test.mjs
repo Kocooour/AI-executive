@@ -38,7 +38,10 @@ Object.assign(process.env, {
   AI_EXECUTIVE_TARGET_STAGING_HTTP_NOTES_CREATE_ENABLED: "true",
 });
 
-const { bootstrapIsolatedTargetStore } = await import("../lib/target-store-bootstrap.ts");
+const { bootstrapIsolatedTargetStore, TARGET_STAGING_NOTE_LIFECYCLE_RECEIPT_PREFIX } =
+  await import("../lib/target-store-bootstrap.ts");
+const { TARGET_STAGING_JOURNAL_FILENAME } =
+  await import("../lib/target-staging-anchor-journal.ts");
 const durable = await import("../lib/target-staging-durable-session.ts");
 const { createSessionToken, sessionCookieName } = await import("../lib/auth.ts");
 const { POST: CREATE } = await import("../app/api/target-staging/notes/route.ts");
@@ -128,14 +131,44 @@ function queryOne(fx, sql, ...params) {
   finally { db.close(); }
 }
 
+/** Content-free, durable write fingerprint. A rejected or replayed CREATE
+ * must not change ANY note row, receipt, audit, journal or anchor. */
+function persistenceState(fx, noteId) {
+  const db = new DatabaseSync(fx.stage.databasePath, { readOnly: true });
+  try {
+    const count = (sql, ...args) => db.prepare(sql).get(...args).n;
+    return {
+      noteExists: db.prepare("SELECT 1 FROM notes WHERE id=?").get(noteId) !== undefined,
+      notes: count("SELECT COUNT(*) AS n FROM notes"),
+      lifecycleReceipts: count("SELECT COUNT(*) AS n FROM metadata WHERE key LIKE ?",
+        TARGET_STAGING_NOTE_LIFECYCLE_RECEIPT_PREFIX + "%"),
+      lifecycleAudit: count("SELECT COUNT(*) AS n FROM note_lifecycle_audit"),
+      editAudit: count("SELECT COUNT(*) AS n FROM note_edit_audit"),
+      deleteAudit: count("SELECT COUNT(*) AS n FROM note_delete_audit"),
+      tombstones: count("SELECT COUNT(*) AS n FROM note_tombstones"),
+      changeSequence: count("SELECT COALESCE(MAX(seq),0) AS n FROM change_log"),
+      anchor: db.prepare("SELECT value FROM metadata WHERE key='anchor_seq'").get().value,
+      journal: readFileSync(
+        path.join(fx.stage.directory, TARGET_STAGING_JOURNAL_FILENAME), "utf8"),
+    };
+  } finally { db.close(); }
+}
+
 test("real R3 route chain: private create → authorized edit → delete/tombstone", async () => {
   const fx = fixture();
   const alice = ownerCookie(), bob = session(fx, "bob");
   const cmd = createCommand(fx);
   assert.deepEqual(await response(route("POST", null, alice, cmd), 201),
     { ok: true, noteId: cmd.noteId });
+  const created = persistenceState(fx, cmd.noteId);
+  assert.equal(created.noteExists, true);
+  assert.equal(created.notes, 1);
+  assert.equal(created.lifecycleReceipts, 1);
+  assert.equal(created.lifecycleAudit, 1);
   assert.deepEqual(await response(route("POST", null, alice, cmd), 200),
     { ok: true, noteId: cmd.noteId, replayed: true });
+  assert.deepEqual(persistenceState(fx, cmd.noteId), created,
+    "CREATE replay must not insert duplicate notes, receipts, audit or journal events");
   assert.equal((await response(route("GET", cmd.noteId, alice), 200)).note.body,
     "Private content");
   assert.deepEqual(await response(route("GET", cmd.noteId, bob), 404),
@@ -170,6 +203,19 @@ test("real R3 route chain: private create → authorized edit → delete/tombsto
   assert.equal(queryOne(fx, "SELECT COUNT(*) AS n FROM note_tombstones WHERE id=?", cmd.noteId).n, 1);
   assert.equal(queryOne(fx, "SELECT COUNT(*) AS n FROM note_edit_audit WHERE note_id=?", cmd.noteId).n, 1);
   assert.equal(queryOne(fx, "SELECT COUNT(*) AS n FROM note_delete_audit WHERE note_id=?", cmd.noteId).n, 1);
+  const deleted = persistenceState(fx, cmd.noteId);
+  assert.equal(deleted.noteExists, false);
+  assert.equal(deleted.notes, 0);
+  assert.equal(deleted.lifecycleReceipts, 1);
+  assert.equal(deleted.lifecycleAudit, 1);
+  assert.equal(deleted.editAudit, 1);
+  assert.equal(deleted.deleteAudit, 1);
+  assert.equal(deleted.tombstones, 1);
+  const resurrect = { ...cmd, commandId: randomUUID(), title: "Resurrection" };
+  assert.deepEqual(await response(route("POST", null, alice, resurrect), 404),
+    { error: "Not found" });
+  assert.deepEqual(persistenceState(fx, cmd.noteId), deleted,
+    "CREATE after DELETE must not resurrect a tombstoned ID or write receipts, audit or journal");
 });
 
 test("private creator loses access after session revocation, with no additional mutation", async () => {
@@ -187,12 +233,19 @@ test("private creator loses access after session revocation, with no additional 
   assert.equal(live.ok, true);
   assert.equal(durable.revokeDurableTargetStagingSession(fx.store, live.sessionId).ok, true);
   const before = queryOne(fx, "SELECT title,body,revision FROM notes WHERE id=?", cmd.noteId);
+  const refusedCreate = createCommand(fx, "bob-private");
+  const beforeRefusal = persistenceState(fx, refusedCreate.noteId);
+  assert.equal(beforeRefusal.noteExists, false);
   for (const method of ["GET", "PREVIEW", "PATCH"]) {
     const result = await response(route(method, cmd.noteId, bob,
       method === "PATCH" ? { ...preview, commandId: randomUUID(), title: "No", body: "Never" } : undefined), 401);
     assert.equal(result.code, "session_revoked");
   }
-  assert.equal((await response(route("POST", null, bob,
-    createCommand(fx, "bob-private")), 401)).code, "session_revoked");
+  assert.equal((await response(route("POST", null, bob, refusedCreate), 401)).code,
+    "session_revoked");
   assert.deepEqual(queryOne(fx, "SELECT title,body,revision FROM notes WHERE id=?", cmd.noteId), before);
+  assert.deepEqual(persistenceState(fx, refusedCreate.noteId), beforeRefusal,
+    "revoked session must not create any other note, receipt, audit, journal or anchor event");
+  assert.equal(queryOne(fx, "SELECT 1 AS present FROM notes WHERE id=?",
+    refusedCreate.noteId), undefined);
 });
