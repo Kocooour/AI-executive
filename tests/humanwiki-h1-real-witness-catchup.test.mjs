@@ -290,6 +290,14 @@ globalThis.fetch = async (target, init) => {
 };
 `;
 
+// Node 24 currently warns when a child imports node:sqlite. Keep unexpected
+// stderr fatal: do NOT globally hide warnings or mute the operator CLI.
+const assertCleanOperatorStderr = stderr => {
+  const onlySqliteWarning = /^\(node:\d+\) ExperimentalWarning: SQLite is an experimental feature and might change at any time\n\(Use \x60node --trace-warnings ...\x60 to show where the warning was created\)\n$/;
+  assert.ok(stderr === "" || onlySqliteWarning.test(stderr),
+    "unexpected operator CLI stderr: " + stderr);
+};
+
 async function executeOperatorCli(env) {
   const cli = fileURLToPath(new URL(
     "../scripts/humanwiki/witness-catchup-operator.mjs", import.meta.url));
@@ -352,7 +360,7 @@ test("operator CLI uses pinned real TLS witness and handles lag and sync", {
     };
     const synced = await executeOperatorCli(env);
     assert.equal(synced.code, 0, synced.stderr);
-    assert.equal(synced.stderr, "");
+    assertCleanOperatorStderr(synced.stderr);
     const initial = JSON.parse(synced.stdout);
     assert.equal(initial.ok, true);
     assert.equal(initial.checkpoint, null);
@@ -364,7 +372,7 @@ test("operator CLI uses pinned real TLS witness and handles lag and sync", {
     assert.equal(f.append(0).ok, true);
     const lag = await executeOperatorCli(env);
     assert.equal(lag.code, 0, lag.stderr);
-    assert.equal(lag.stderr, "");
+    assertCleanOperatorStderr(lag.stderr);
     const proposal = JSON.parse(lag.stdout);
     assert.equal(proposal.ok, true);
     assert.equal(proposal.checkpoint.sequence, 1);
@@ -380,6 +388,7 @@ test("operator CLI uses pinned real TLS witness and handles lag and sync", {
       proposal.checkpoint).ok, true);
     const caughtUp = await executeOperatorCli(env);
     assert.equal(caughtUp.code, 0, caughtUp.stderr);
+    assertCleanOperatorStderr(caughtUp.stderr);
     assert.equal(JSON.parse(caughtUp.stdout).checkpoint, null);
 
     const wrong = generateKeyPairSync("ed25519").publicKey;
