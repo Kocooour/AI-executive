@@ -2,14 +2,15 @@
 /** R3-FE-05: real server-authorized Search in the main shell, no legacy mixing.
  * No automatic query, prefetch, persistence or speculative detail opening. */
 import {useEffect,useRef,useState} from "react";
-import {useTargetGeneration,useTargetSession} from "./target-data-provider";
+import {useTargetGeneration,useTargetRuntime,useTargetSession} from "./target-data-provider";
 import {useTargetScope} from "./target-scope-state";
 import {useTargetGate} from "./use-target-gate";
 import {queuedTargetFetch} from "../../lib/target-read-queue";
 import {validTitleSearchQuery,type TitleSearchFailure} from "../../lib/target-staging-title-search-client";
 import {createStagingTitleSearchSession} from "../../lib/target-staging-title-search-session";
 import {
-  mainTitleSearchCopy,visibleMainTitleSearchResult,TARGET_MAIN_SEARCH_SUBMIT_EVENT,
+  mainTitleSearchCopy,subscribeMainTitleSearchAclInvalidation,
+  visibleMainTitleSearchResult,TARGET_MAIN_SEARCH_SUBMIT_EVENT,
   type MainTitleSearchBinding,type BoundMainTitleSearch,type MainTitleSearchLanguage,
 } from "../../lib/target-main-title-search-ui";
 import "./target-main-title-search.css";
@@ -30,6 +31,7 @@ export default function TargetMainTitleSearch({query,language="cs"}:{
   const copy=mainTitleSearchCopy[language];
   const scope=useTargetScope();
   const generation=useTargetGeneration();
+  const runtime=useTargetRuntime();
   const {gate,onRefusal,retry}=useTargetGate();
   const session=useTargetSession(()=>makeSession(),[scope]);
   const sessionRef=useRef<Session|null>(session);
@@ -72,6 +74,16 @@ export default function TargetMainTitleSearch({query,language="cs"}:{
       window.removeEventListener("offline",conceal);
     };
   },[]);
+
+  // A live Area membership change need not rotate the login generation.
+  // The runtime signals each successful visible/online revalidation via tick:
+  // discard ALL displayed titles/counts, cancel any pending network result,
+  // and require a NEW explicit search so every row receives fresh server ACL.
+  useEffect(()=>subscribeMainTitleSearchAclInvalidation(runtime,()=>{
+    ++epoch.current;
+    sessionRef.current?.reset();
+    setResult(null);
+  }),[runtime]);
 
   useEffect(()=>{
     const submit=()=>submitRef.current();
