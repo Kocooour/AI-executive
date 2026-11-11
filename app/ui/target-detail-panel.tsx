@@ -206,7 +206,8 @@ function DetailBody({route,language,gates,noteEdit,projectEdit}:{
   const kindLabel=route.kind==="task"?copy.kindTask:route.kind==="project"?copy.kindProject:copy.kindNote;
 
   useEffect(()=>{
-    if(state.kind==="error"&&state.reason==="signed-out")refusalRef.current();
+    if(state.kind==="error"&&(state.reason==="signed-out"||state.reason==="session-expired"))
+      refusalRef.current(state.reason==="session-expired"?"session_expired":"session_revoked");
   },[state]);
 
   // Focus moves into the panel when it opens. (Closing returns it to the row; the
@@ -330,7 +331,7 @@ function DetailBody({route,language,gates,noteEdit,projectEdit}:{
     :content?.kind==="project"?content.page.project.title:null;
   // The accessible name follows what is shown: title, loading, or the sentence of the error/hidden state.
   const label=title!==null?copy.panelLabel(kindLabel,title)
-    :state.kind==="error"?(state.reason==="hidden"?copy.hidden:copy.failures[state.reason])
+    :state.kind==="error"?(state.reason==="hidden"?copy.hidden:copy.failures[state.reason==="session-expired"?"signed-out":state.reason])
     :copy.panelLabelLoading(kindLabel);
 
   let gateView:React.ReactNode=null;
@@ -356,7 +357,7 @@ function DetailBody({route,language,gates,noteEdit,projectEdit}:{
       </p>
       {state.kind==="error"&&state.reason!=="hidden"&&
         <p role={state.reason==="not-available"?"status":"alert"} data-testid="target-detail-error"
-          data-reason={state.reason}>{copy.failures[state.reason]}</p>}
+          data-reason={state.reason}>{copy.failures[state.reason==="session-expired"?"signed-out":state.reason]}</p>}
       {state.kind==="error"&&state.reason!=="not-available"&&
         <button type="button" onClick={reload}>{copy.retry}</button>}
       {content&&state.kind==="ready"&&

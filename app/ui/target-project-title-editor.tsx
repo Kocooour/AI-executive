@@ -173,7 +173,8 @@ export default function TargetProjectTitleEditor({project,language,onCommitted,o
   const fresh=await loadProjectTasksPage({projectId:project.id,limit:1,signal:ctrl.signal},readFetch);
   if(n!==seq.current||ctrl.signal.aborted||!stillBound())return;
   if(fresh.ok===false){
-   if(fresh.reason==='signed-out'||fresh.reason==='not-found')refuse();
+   if(fresh.reason==='session-expired')sessionExpired();
+   else if(fresh.reason==='signed-out'||fresh.reason==='not-found')refuse();
    else{setMode({kind:'recovery'});setMessage(copy.recovering);}return;
   }
   if(fresh.page.project.areaId!==preview.preview.writeAreaId||
@@ -201,7 +202,8 @@ export default function TargetProjectTitleEditor({project,language,onCommitted,o
    if(result.preview.writeAreaId!==stored.writeAreaId||result.preview.writeAreaId!==project.areaId){refuse();return;}
    const fresh=await loadProjectTasksPage({projectId:project.id,limit:1,signal:current.signal},readFetch);
    if(id!==seq.current||current.signal.aborted||!stillBound())return;
-   if(fresh.ok===false){if(fresh.reason==='signed-out'||fresh.reason==='not-found')refuse();else{setMode({kind:'recovery'});setMessage(copy.recovering);}return;}
+   if(fresh.ok===false){if(fresh.reason==='session-expired')sessionExpired();
+   else if(fresh.reason==='signed-out'||fresh.reason==='not-found')refuse();else{setMode({kind:'recovery'});setMessage(copy.recovering);}return;}
    if(fresh.page.project.areaId!==stored.writeAreaId){refuse();return;}
    const conflict=projectTitleDraftConflicts(stored,result.preview,fresh.page.project.title)||project.title!==stored.original;
    setMode({kind:'draft',draft:{preview:result.preview,original:stored.original,title:stored.title,command:null,phase:conflict?'conflict':'edit'}});
@@ -230,7 +232,8 @@ export default function TargetProjectTitleEditor({project,language,onCommitted,o
    const fresh=await loadProjectTasksPage({projectId:project.id,limit:1,signal:current.signal},readFetch);
    if(id!==seq.current||current.signal.aborted||!stillBound())return;
    if(fresh.ok===false){
-     if(fresh.reason==='signed-out'||fresh.reason==='not-found')refuse();
+     if(fresh.reason==='session-expired')sessionExpired();
+   else if(fresh.reason==='signed-out'||fresh.reason==='not-found')refuse();
      else {setMode({kind:'idle'});setMessage(copy.conflict);onAccessRefused();}
      return;
    }
