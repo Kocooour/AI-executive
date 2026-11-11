@@ -18,6 +18,16 @@ export function targetMainTitleSearchEnabled(env:Record<string,string|undefined>
   return TARGET_MAIN_TITLE_SEARCH_FLAGS.every(name=>env[name]==="true");
 }
 
+/** A successful runtime revalidation can follow ACL revocation with exactly
+ * the SAME login generation. Do not retain previously disclosed titles/counts.
+ * A tick invalidates the current explicit result; it MUST NOT auto-search. */
+export function subscribeMainTitleSearchAclInvalidation(
+  runtime:{subscribeTick(listener:()=>void):()=>void}|null,
+  invalidate:()=>void,
+):()=>void {
+  return runtime?.subscribeTick(invalidate)??(()=>{});
+}
+
 export type MainTitleSearchBinding={
   input:string;scope:TitleSearchScope;generation:string;
 };
