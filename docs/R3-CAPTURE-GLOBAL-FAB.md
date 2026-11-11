@@ -1,6 +1,6 @@
 # R3-CAPTURE-3 — globální soukromý Quick Capture
 
-**Milník:** [R3-CAPTURE](R3-CAPTURE-PRIVATE-AREAS.md), třetí a poslední plánovaný PR. **Základ:** sloučený [PR #380](https://github.com/Kocooour/AI-executive/pull/380) (R3-CAPTURE-2) a integrovaný BE-QA [PR #385](https://github.com/Kocooour/AI-executive/pull/385). Zůstává default-off a před produkcí vyžaduje release brány. Zůstává default-off.
+**Milník:** [R3-CAPTURE](R3-CAPTURE-PRIVATE-AREAS.md), třetí a poslední plánovaný PR. **Základ:** sloučený [PR #380](https://github.com/Kocooour/AI-executive/pull/380) (R3-CAPTURE-2) a integrovaný BE-QA [PR #385](https://github.com/Kocooour/AI-executive/pull/385). Zůstává default-off a před produkcí vyžaduje release brány.
 
 ## Akceptační krok
 

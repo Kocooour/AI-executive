@@ -2,7 +2,7 @@
  * NEVER write permissions or identity. The inert helper is safe to import in
  * the default-off app shell; only an explicit navigation calls it. */
 import {withoutDetailMarker} from "./target-detail-route";
-import {defaultUrlScope,scopeFromSearch,searchWithScope,type UrlScope} from "./view-url";
+import {scopeFromSearch,searchWithScope,type UrlScope} from "./view-url";
 
 export const TARGET_SCOPE_CHANGED="lumi-target-scope-changed";
 export function writeTargetReadingScope(next:UrlScope):boolean{
