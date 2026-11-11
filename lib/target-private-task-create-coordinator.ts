@@ -4,7 +4,8 @@
  * status currently requires the exact title digest, reload destroys recovery
  * capability but MUST NOT clear the blocking UUID. This remains a release gate.
  */
-import {checkPrivateTaskCreateReceipt,sendPrivateTaskCreate,
+import {checkPrivateTaskCreateReceipt,checkPrivateTaskCreateRecovery,
+  sendPrivateTaskCreate,
   validPrivateTaskCreateCommand,type PrivateTaskCreateCommand,type TaskCreateOutcome,type TaskCreateReceipt,
 } from "./target-private-task-create-client";
 import type {TargetClientRuntime} from "./target-client-runtime";
@@ -144,6 +145,25 @@ export async function checkTrackedPrivateTaskCreate(
     runtime.generation()===generation&&confirm(generation,entry.command.commandId,true)){
     entries.delete(runtime);entry.unregister();
     notify(runtime,{generation,confirmedTaskId:entry.command.taskId});
+  }
+  return receipt;
+}
+
+/** After a full reload the original title and task ID have been deliberately
+ * discarded. The actor-bound server verifies the original opaque command. */
+export async function recoverPrivateTaskCreate(
+  runtime:Runtime,generation:string,signal:AbortSignal,
+  check:typeof checkPrivateTaskCreateRecovery=checkPrivateTaskCreateRecovery,
+):Promise<TaskCreateReceipt>{
+  if(!runtime.known()||runtime.generation()!==generation||signal.aborted)
+    return "unavailable";
+  const marker=privateTaskCreateMarker(generation);
+  if(marker.kind!=="blocked")return "unavailable";
+  const receipt=await check(marker.commandId,signal);
+  if(receipt==="committed"&&!signal.aborted&&runtime.known()&&
+    runtime.generation()===generation&&
+    confirm(generation,marker.commandId,true)){
+    notify(runtime,{generation,confirmedTaskId:null});
   }
   return receipt;
 }
