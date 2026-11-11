@@ -268,6 +268,21 @@ function withPreflightedStore<T>(
   }
 }
 
+/** Pinned, preflighted, write-audience recovery without any mutation. */
+export function readPreflightedPrivateTaskCreateStatus(
+  store: TargetStagingReadStore,
+  access: TargetStagingReadCredential,
+  command: PrivateTaskCreateCommand,
+): PrivateTaskCreateStatus {
+  const denied = (): PrivateTaskCreateStatus => ({ok:false,reason:"unavailable"});
+  return withPreflightedStore<PrivateTaskCreateStatus>(store,denied,(db,preflight)=>
+    inReadSnapshot(db,()=>{
+      if (!preflight(db)) return denied();
+      const actor = verifiedActor(db,access,true);
+      return actor ? readPrivateTaskCreateStatus(db,actor,command) : denied();
+    },denied));
+}
+
 /** R3-CAPTURE-1: the exact private Areas writable by the signed actor.
  * No client area/scope/actor input. All rows and Area ACL witnesses come
  * from ONE preflighted pinned snapshot; HTTP must verify the witness LIVE.
