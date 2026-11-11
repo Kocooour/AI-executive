@@ -6,6 +6,10 @@ import {
   loadNoteEditPreview,saveNoteEdit,
 } from "../lib/target-staging-note-edit-client.ts";
 import {targetNoteEditUiEnabled,TARGET_NOTE_EDIT_UI_FLAGS} from "../lib/target-note-edit-ui-gate.ts";
+import {
+  NOTE_EDIT_COMMAND_HEADER,NOTE_EDIT_PRECOMMIT_HEADER,NOTE_EDIT_PRECOMMIT_VALUE,
+  stampNoteEditPrecommit,
+} from "../lib/target-note-edit-precommit.ts";
 
 const generation="b7ab0e6e-d01f-44ed-babe-e9b69e84dbaa";
 const preview={
@@ -18,6 +22,10 @@ const reply=(data,status=200)=>Response.json(data,{
   status,headers:{"cache-control":"no-store"},
 });
 const signal=()=>new AbortController().signal;
+const preCommitReply=(data,status,commandId=command.commandId)=>stampNoteEditPrecommit(
+  new Request("https://lumi.test/api/target-staging/notes/"+id+"/edit",{
+    headers:{[NOTE_EDIT_COMMAND_HEADER]:commandId},
+  }),reply(data,status));
 const read=path=>readFileSync(new URL("../"+path,import.meta.url),"utf8");
 
 test("R3-FE-4b: note edit is independently default-off even with enabled detail read",()=>{
@@ -88,12 +96,21 @@ test("PATCH uses the exact command; ambiguous outcomes never count as success",a
   assert.equal(seen.init.credentials,"same-origin");
   assert.equal(seen.init.cache,"no-store");
   assert.equal(seen.init.headers["x-lumi-target-protocol"],"1");
+  assert.equal(seen.init.headers[NOTE_EDIT_COMMAND_HEADER],command.commandId);
   assert.deepEqual(JSON.parse(seen.init.body),command);
   assert.deepEqual(await saveNoteEdit(id,command,signal(),async()=>reply({ok:true,replayed:true})),
     {outcome:"saved",replayed:true});
-  assert.deepEqual(await saveNoteEdit(id,command,signal(),async()=>reply({error:"Revision conflict"},409)),
-    {outcome:"conflict"});
-  assert.deepEqual(await saveNoteEdit(id,command,signal(),async()=>reply({error:"Not found"},404)),
+  assert.deepEqual(await saveNoteEdit(id,command,signal(),
+    async()=>preCommitReply({error:"Revision conflict"},409)),{outcome:"conflict"});
+  assert.deepEqual(await saveNoteEdit(id,command,signal(),
+    async()=>preCommitReply({error:"Invalid request"},400)),{outcome:"conflict"});
+  assert.deepEqual(await saveNoteEdit(id,command,signal(),
+    async()=>preCommitReply({error:"Not found"},404)),
+    {outcome:"denied",rejectedBeforeCommit:true});
+  assert.deepEqual(await saveNoteEdit(id,command,signal(),
+    async()=>preCommitReply({error:"Cross-origin request rejected"},403)),
+    {outcome:"denied",rejectedBeforeCommit:true});
+  assert.deepEqual(await saveNoteEdit(id,command,signal(),async()=>reply({error:"Authentication required"},401)),
     {outcome:"denied"});
   assert.deepEqual(await saveNoteEdit(id,command,signal(),async()=>reply({error:"Staging unavailable"},503)),
     {outcome:"uncertain"});
@@ -103,4 +120,41 @@ test("PATCH uses the exact command; ambiguous outcomes never count as success",a
     {outcome:"uncertain"});
   assert.deepEqual(await saveNoteEdit(id,{...command,body:"\0"},signal(),fetchImpl),
     {outcome:"conflict"});
+});
+
+test("a proxy/WAF refusal or malformed application receipt cannot release a PATCH",async()=>{
+  for(const status of [400,403,404,409]){
+    // Even if the upstream may already have committed, intermediary statuses
+    // carry no proof from the note-edit route.
+    assert.deepEqual(await saveNoteEdit(id,command,signal(),
+      async()=>reply({error:"Not found"},status)),{outcome:"uncertain"});
+  }
+  const other="1dbe798b-8ae4-46a8-98ae-51ac73dd31b9";
+  assert.deepEqual(await saveNoteEdit(id,command,signal(),
+    async()=>preCommitReply({error:"Not found"},404,other)),{outcome:"uncertain"});
+  assert.deepEqual(await saveNoteEdit(id,command,signal(),
+    async()=>preCommitReply({error:"Not found",unexpected:true},404)),{outcome:"uncertain"});
+  assert.deepEqual(await saveNoteEdit(id,command,signal(),
+    async()=>new Response(JSON.stringify({error:"Not found"}),{status:404,
+      headers:{[NOTE_EDIT_PRECOMMIT_HEADER]:NOTE_EDIT_PRECOMMIT_VALUE,
+        [NOTE_EDIT_COMMAND_HEADER]:command.commandId,
+        "content-type":"application/json"}})),{outcome:"uncertain"});
+  assert.deepEqual(await saveNoteEdit(id,command,signal(),
+    async()=>new Response(JSON.stringify({error:"Not found"}),{status:404,
+      headers:{[NOTE_EDIT_PRECOMMIT_HEADER]:"invalid",
+        [NOTE_EDIT_COMMAND_HEADER]:command.commandId,
+        "content-type":"application/json","cache-control":"no-store"}})),
+    {outcome:"uncertain"});
+  // The helper is restricted to safe 4xx responses and valid command UUIDs.
+  const request=new Request("https://lumi.test/",{
+    headers:{[NOTE_EDIT_COMMAND_HEADER]:command.commandId},
+  });
+  for(const status of [200,401,429,503]){
+    const raw=reply({error:"Unavailable"},status);
+    const stamped=stampNoteEditPrecommit(request,raw);
+    assert.equal(stamped.headers.get(NOTE_EDIT_PRECOMMIT_HEADER),null);
+  }
+  const stamped=preCommitReply({error:"Not found"},404);
+  assert.equal(stamped.headers.get(NOTE_EDIT_PRECOMMIT_HEADER),NOTE_EDIT_PRECOMMIT_VALUE);
+  assert.equal(stamped.headers.get(NOTE_EDIT_COMMAND_HEADER),command.commandId);
 });
