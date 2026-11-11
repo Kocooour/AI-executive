@@ -2,11 +2,11 @@ import assert from 'node:assert/strict';
 import {test} from 'node:test';
 import {readFileSync} from 'node:fs';
 import {targetProjectTitleEditUiEnabled,TARGET_PROJECT_TITLE_EDIT_UI_FLAGS} from '../lib/target-project-title-edit-ui-gate.ts';
-import {parseProjectTitleEditPreview,validProjectTitleEditText,validProjectTitleEditCommand,loadProjectTitleEditPreview,saveProjectTitleEdit} from '../lib/target-staging-project-title-edit-client.ts';
+import {parseProjectTitleEditPreview,validProjectTitleEditText,validProjectTitleEditCommand,loadProjectTitleEditPreview,saveProjectTitleEdit,PROJECT_TITLE_PREVIEW_TIMEOUT_MS} from '../lib/target-staging-project-title-edit-client.ts';
 const generation='b7ab0e6e-d01f-44ed-babe-e9b69e84dbaa',id='project';
 const server={snapshotRevision:'a'.repeat(64),restoreGeneration:generation,writeAreaId:'area',principalBinding:'P'.repeat(43),currentTitle:'Original'};
 const preview={expectedRevision:server.snapshotRevision,restoreGeneration:generation,writeAreaId:'area',principalBinding:'P'.repeat(43),currentTitle:'Original'};
-const command={expectedRevision:preview.expectedRevision,restoreGeneration:preview.restoreGeneration,writeAreaId:preview.writeAreaId,commandId:'f3d18d63-9073-48f7-8d25-6c81f23b9a01',title:'Updated'};
+const command={expectedRevision:preview.expectedRevision,restoreGeneration:preview.restoreGeneration,writeAreaId:preview.writeAreaId,principalBinding:preview.principalBinding,commandId:'f3d18d63-9073-48f7-8d25-6c81f23b9a01',title:'Updated'};
 const reply=(data,status=200)=>Response.json(data,{status,headers:{'cache-control':'no-store'}});
 const signal=()=>new AbortController().signal;
 const source=path=>readFileSync(new URL('../'+path,import.meta.url),'utf8');
@@ -23,6 +23,9 @@ test('preflight and command enforce exact schemas and safe titles',()=>{
  for(const invalid of [{...server,actorId:'x'},{...server,writeAreaId:'../hidden'},{...server,restoreGeneration:'bad'},{...server,snapshotRevision:'bad'},{...server,principalBinding:'bad'},{...server,currentTitle:''}])assert.equal(parseProjectTitleEditPreview(invalid),null);
  assert.equal(validProjectTitleEditCommand(command),true);
  assert.equal(validProjectTitleEditCommand({...command,commandId:'bad'}),false);
+ assert.equal(validProjectTitleEditCommand({...command,principalBinding:'bad'}),false);
+ const {principalBinding:ignored,...unbound}=command;
+ assert.equal(validProjectTitleEditCommand(unbound),false);
  assert.equal(validProjectTitleEditText(' valid '),false);
  assert.equal(validProjectTitleEditText('\ud800'),false);
  assert.equal(validProjectTitleEditText('😀'.repeat(1025)),false);
@@ -34,9 +37,15 @@ test('server preflight and writes use authenticated no-store requests and fail c
  assert.equal(calls[0].init.cache,'no-store');assert.equal(calls[0].init.credentials,'same-origin');
  assert.deepEqual(await loadProjectTitleEditPreview('..',signal(),fetch),{ok:false,reason:'denied'});
  assert.deepEqual(await loadProjectTitleEditPreview(id,signal(),async()=>reply({...server,extra:'x'})),{ok:false,reason:'invalid-response'});
- let seen;assert.deepEqual(await saveProjectTitleEdit(id,command,signal(),async(url,init)=>{seen={url,init};return reply({ok:true})}),{outcome:'saved',replayed:false});
+ let seen;assert.deepEqual(await saveProjectTitleEdit(id,command,signal(),async(url,init)=>{seen={url,init};return reply({ok:true,principalBinding:command.principalBinding})}),{outcome:'saved',replayed:false});
  assert.deepEqual(JSON.parse(seen.init.body),command);assert.equal(seen.init.headers['x-lumi-target-protocol'],'1');
- assert.deepEqual(await saveProjectTitleEdit(id,command,signal(),async()=>reply({ok:true,replayed:true})),{outcome:'saved',replayed:true});
+ assert.deepEqual(await saveProjectTitleEdit(id,command,signal(),async()=>reply({ok:true,replayed:true,principalBinding:command.principalBinding})),{outcome:'saved',replayed:true});
+ for(const bad of [
+   reply({ok:true}),reply({ok:true,principalBinding:'Q'.repeat(43)}),
+   reply({ok:true,replayed:true,principalBinding:'Q'.repeat(43)}),
+   reply({ok:true,replayed:true}),
+ ])assert.deepEqual(await saveProjectTitleEdit(id,command,signal(),async()=>bad),
+   {outcome:'uncertain'},'wrong/missing principal cannot acknowledge a successful PATCH');
  assert.deepEqual(await saveProjectTitleEdit(id,command,signal(),async()=>reply({error:'Revision conflict'},409)),{outcome:'conflict'});
  assert.deepEqual(await saveProjectTitleEdit(id,command,signal(),async()=>reply({error:'Invalid request'},400)),{outcome:'conflict'});
  for(const bad of [reply({},400),reply({error:'Invalid request',extra:1},400),
@@ -60,4 +69,29 @@ test('server preflight and writes use authenticated no-store requests and fail c
      {outcome:'denied'},'untrusted or non-canonical denial must not unlock an uncertain command');
  }
  assert.deepEqual(await saveProjectTitleEdit(id,command,signal(),async()=>{throw Error('offline')}),{outcome:'uncertain'});
+});
+
+test('project title preview has a deadline and aborts fetch ignoring cancellation',async()=>{
+ assert.equal(PROJECT_TITLE_PREVIEW_TIMEOUT_MS,8000);
+ let observed;
+ const result=await loadProjectTitleEditPreview(id,signal(),async(_url,init)=>{
+   observed=init.signal;return new Promise(()=>{});
+ },12);
+ assert.deepEqual(result,{ok:false,reason:'unavailable'});
+ assert.equal(observed.aborted,true);
+ const controller=new AbortController();
+ const pending=loadProjectTitleEditPreview(id,controller.signal,async()=>new Promise(()=>{}),200);
+ controller.abort();
+ assert.deepEqual(await pending,{ok:false,reason:'offline'});
+});
+test('never-ending session-expired 401 body is cancelled at preview deadline',async()=>{
+ let stopped=false;
+ const result=await loadProjectTitleEditPreview(id,signal(),async()=>new Response(
+   new ReadableStream({start(c){c.enqueue(new TextEncoder().encode('{"error":'));},
+     cancel(){stopped=true;}}),{status:401,
+     headers:{'cache-control':'no-store','content-type':'application/json'}}
+ ),12);
+ assert.deepEqual(result,{ok:false,reason:'unavailable'});
+ await new Promise(resolve=>setTimeout(resolve,0));
+ assert.equal(stopped,true);
 });

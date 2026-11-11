@@ -83,3 +83,27 @@ test("detail, list and sidebar reads all share the queue",()=>{
     assert.match(source,/readFetch\)/,file);
   }
 });
+
+test('aborting active read releases the slot even when fetch ignores abort',async()=>{
+ let deliver;
+ const calls=[];
+ const q=queuedTargetFetch(url=>{
+   calls.push(String(url));
+   return String(url)==="/stuck"?new Promise(resolve=>{deliver=resolve;})
+     :Promise.resolve(new Response("ok"));
+ });
+ const controller=new AbortController();
+ const stuck=q("/stuck",{signal:controller.signal});
+ const healthy=q("/healthy");
+ await tick();
+ assert.deepEqual(targetReadQueueState(),{active:1,waiting:1});
+ controller.abort();
+ await assert.rejects(stuck);
+ assert.equal((await healthy).status,200);
+ assert.deepEqual(calls,["/stuck","/healthy"]);
+ assert.deepEqual(targetReadQueueState(),{active:0,waiting:0});
+ let cancelled=false;
+ deliver(new Response(new ReadableStream({cancel(){cancelled=true;}})));
+ await tick();
+ assert.equal(cancelled,true,'late response stream must not leak into another session');
+});

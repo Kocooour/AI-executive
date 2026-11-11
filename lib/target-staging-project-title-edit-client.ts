@@ -83,8 +83,8 @@ async function strictJson(response:Response,maxBytes=8192,signal?:AbortSignal):P
     reader.releaseLock();
   }
 }
-async function codedExpiry(response:Response):Promise<boolean>{
- try{const v=await strictJson(response,512);
+async function codedExpiry(response:Response,signal?:AbortSignal):Promise<boolean>{
+ try{const v=await strictJson(response,512,signal);
  return record(v)&&Object.keys(v).sort().join(",")==="code,error"&&
  v.code==="session_expired"&&v.error==="Authentication required";
  }catch{return false;}
@@ -123,7 +123,7 @@ export async function loadProjectTitleEditPreview(projectId:string,signal:AbortS
         void response.body?.cancel().catch(()=>{});
         return {ok:false,reason:signal.aborted?"offline":"unavailable"};
       }
-      if(response.status===401&&await codedExpiry(response))
+      if(response.status===401&&await codedExpiry(response,own.signal))
         return own.signal.aborted?{ok:false,reason:"unavailable"}:{ok:false,reason:"expired"};
       if(response.status!==200)return {ok:false,reason:failure(response.status)};
       let parsed:unknown;

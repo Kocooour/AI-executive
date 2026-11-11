@@ -42,9 +42,9 @@ async function setup(page:Page,patch:Patch,params:{
       currentTitle:params.committed?.()?"Renamed project":ORIGINAL,
     });
     const body=JSON.parse(route.request().postData()??"{}") as Record<string,unknown>;
-    // The opaque principal proof is a READ-side comparison, never a PATCH token.
+    // Principal binding is a consistency proof, never an authorization grant.
     expect(Object.keys(body).sort()).toEqual([
-      "commandId","expectedRevision","restoreGeneration","title","writeAreaId",
+      "commandId","expectedRevision","principalBinding","restoreGeneration","title","writeAreaId",
     ]);
     return patch(route,body);
   });
@@ -73,13 +73,14 @@ for(const width of [390,1280])test(
     let committed=false;
     await setup(page,async(route,body)=>{
       writes.push(body);
+      expect(body.principalBinding).toBe(ACTOR);
       if(writes.length===1){
         generation=B;
         return response(route,{error:"Authentication required",code:"session_expired"},401);
       }
       expect(body).toEqual(writes[0]);
       committed=true;
-      return response(route,{ok:true,replayed:true});
+      return response(route,{ok:true,replayed:true,principalBinding:ACTOR});
     },{session:()=>generation,binding:()=>ACTOR,committed:()=>committed});
     await open(page);
     await edit(page,PRIVATE);
@@ -104,11 +105,12 @@ for(const width of [390,1280])test(
   async({page})=>{
     await page.setViewportSize({width,height:844});
     let generation=A,binding=ACTOR,writes=0;
-    await setup(page,async(route)=>{
+    await setup(page,async(route,body)=>{
+      expect(body.principalBinding).toBe(writes===0?ACTOR:OTHER);
       writes++;
       if(writes===1){generation=B;binding=OTHER;
         return response(route,{error:"Authentication required",code:"session_expired"},401);}
-      return response(route,{ok:true});
+      return response(route,{ok:true,principalBinding:OTHER});
     },{session:()=>generation,binding:()=>binding});
     await open(page);
     await edit(page,PRIVATE);
@@ -181,12 +183,13 @@ for(const width of [390,1280])test(
     });
     await setup(page,async(route,body)=>{
       writes.push(body);
+      expect(body.principalBinding).toBe(ACTOR);
       if(writes.length===1){originalId=String(body.commandId);
         return response(route,{error:"Staging unavailable"},503);}
       expect(cancelled).toBe(true);
       expect(body.commandId).not.toBe(originalId);
       committed=true;
-      return response(route,{ok:true});
+      return response(route,{ok:true,principalBinding:ACTOR});
     },{session:()=>A,binding:()=>ACTOR,committed:()=>committed});
     await open(page);
     await edit(page,PRIVATE);
