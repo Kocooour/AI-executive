@@ -35,8 +35,6 @@ import {detailCopy,type DetailCopy,type DetailLanguage} from "../../lib/target-d
 import type {TargetUiEdits} from "../../lib/target-ui-config";
 import {NoteEdits,TaskEdits,kindHasEdits,useDetailEdits,type DetailEditApi} from "./target-detail-edit";
 import TargetNoteEditor from "./target-note-editor";
-import TargetProjectTitleEditor from "./target-project-title-editor";
-import {TARGET_PROJECT_TITLE_UPDATED} from "../../lib/target-project-title-edit-ui-gate";
 import "./target-details.css";
 
 type State=
@@ -54,9 +52,10 @@ const humanDate=(day:string,locale:string)=>{
 
 const FOCUSABLE='a[href],button:not([disabled]),input:not([disabled]),select:not([disabled]),textarea:not([disabled]),[tabindex]:not([tabindex="-1"])';
 
-function Shell({route,label,language,children,panelRef}:{
+function Shell({route,label,language,children,panelRef,onPrivateCapture}:{
   route:TargetDetailRoute|null;label:string;language:DetailLanguage;
   children:React.ReactNode;panelRef:React.RefObject<HTMLElement|null>;
+  onPrivateCapture?:()=>void;
 }){
   const copy=detailCopy[language];
   const close=useCallback(()=>closeTargetDetail(route),[route]);
@@ -108,25 +107,29 @@ function Shell({route,label,language,children,panelRef}:{
           <span className="inspectorCloseAccessible">{copy.close}</span></span>
         <span className="inspectorBackLabel">{copy.back}</span>
       </button>
+      {onPrivateCapture&&<button type="button" data-testid="target-detail-capture"
+        onClick={onPrivateCapture}>
+        ＋ {language==="cs"?"Nová soukromá poznámka":"New private note"}
+      </button>}
       {children}
     </aside>
   </div>;
 }
 
 /** Calm answer for a malformed address or a kind that is switched off. */
-function UnavailablePanel({language}:{language:DetailLanguage}){
+function UnavailablePanel({language,onPrivateCapture}:{language:DetailLanguage;onPrivateCapture?:()=>void}){
   const copy=detailCopy[language];
   const ref=useRef<HTMLElement|null>(null);
   useEffect(()=>{ref.current?.focus({preventScroll:true});},[]);
-  return <Shell route={null} label={copy.failures["not-available"]} language={language} panelRef={ref}>
+  return <Shell route={null} label={copy.failures["not-available"]} language={language} panelRef={ref} onPrivateCapture={onPrivateCapture}>
     <p role="status" data-testid="target-detail-unavailable">{copy.failures["not-available"]}</p>
   </Shell>;
 }
 
-function Content({content,route,copy,gates,more,onMore,edit,noteEdit,projectEdit,onCommitted,onAccessRefused,language}:{
+function Content({content,route,copy,gates,more,onMore,edit,noteEdit,onCommitted,onAccessRefused,language}:{
   content:TargetDetailContent;route:TargetDetailRoute;copy:DetailCopy;gates:TargetDetailGates;
   more:boolean;onMore:()=>void;edit:DetailEditApi|null;
-  noteEdit:boolean;projectEdit:boolean;onCommitted:()=>void;onAccessRefused:()=>void;language:DetailLanguage;
+  noteEdit:boolean;onCommitted:()=>void;onAccessRefused:()=>void;language:DetailLanguage;
 }){
   const area=(kind:"private"|"shared")=>kind==="shared"?copy.areaShared:copy.areaPrivate;
   if(content.kind==="task"){
@@ -174,9 +177,6 @@ function Content({content,route,copy,gates,more,onMore,edit,noteEdit,projectEdit
   return <article className="targetDetailContent" data-area-kind={page.project.areaKind}>
     <p className="eyebrow">{copy.kindProject} · {area(page.project.areaKind)}</p>
     <h2>{page.project.title}</h2>
-    {projectEdit&&<TargetProjectTitleEditor project={page.project} language={language}
-      onCommitted={onCommitted}
-      onAccessRefused={()=>{window.dispatchEvent(new Event(TARGET_PROJECT_TITLE_UPDATED));onAccessRefused();}}/>}
     <h3>{copy.tasksHeading}</h3>
     {page.tasks.length===0&&!page.hasMore
       ?<p className="targetDetailMuted">{copy.tasksEmpty}</p>
@@ -197,8 +197,9 @@ function Content({content,route,copy,gates,more,onMore,edit,noteEdit,projectEdit
   </article>;
 }
 
-function DetailBody({route,language,gates,edits,noteEdit,projectEdit}:{
-  route:TargetDetailRoute;language:DetailLanguage;gates:TargetDetailGates;edits?:TargetUiEdits;noteEdit:boolean;projectEdit:boolean;
+function DetailBody({route,language,gates,edits,noteEdit,onPrivateCapture}:{
+  route:TargetDetailRoute;language:DetailLanguage;gates:TargetDetailGates;edits?:TargetUiEdits;noteEdit:boolean;
+  onPrivateCapture?:()=>void;
 }){
   const copy=detailCopy[language];
   const {gate,onRefusal,retry}=useTargetGate();
@@ -221,8 +222,7 @@ function DetailBody({route,language,gates,edits,noteEdit,projectEdit}:{
   const kindLabel=route.kind==="task"?copy.kindTask:route.kind==="project"?copy.kindProject:copy.kindNote;
 
   useEffect(()=>{
-    if(state.kind==="error"&&(state.reason==="signed-out"||state.reason==="session-expired"))
-      refusalRef.current(state.reason==="session-expired"?"session_expired":"session_revoked");
+    if(state.kind==="error"&&state.reason==="signed-out")refusalRef.current();
   },[state]);
 
   // Focus moves into the panel when it opens. (Closing returns it to the row; the
@@ -349,7 +349,7 @@ function DetailBody({route,language,gates,edits,noteEdit,projectEdit}:{
     :content?.kind==="project"?content.page.project.title:null;
   // The accessible name follows what is shown: title, loading, or the sentence of the error/hidden state.
   const label=title!==null?copy.panelLabel(kindLabel,title)
-    :state.kind==="error"?(state.reason==="hidden"?copy.hidden:copy.failures[state.reason==="session-expired"?"signed-out":state.reason])
+    :state.kind==="error"?(state.reason==="hidden"?copy.hidden:copy.failures[state.reason])
     :copy.panelLabelLoading(kindLabel);
 
   const edit=useDetailEdits({
@@ -374,7 +374,7 @@ function DetailBody({route,language,gates,edits,noteEdit,projectEdit}:{
       error={gate.kind==="refused"?{kind:"signed_out",action:"verify",message:copy.failures["signed-out"]}:undefined}
       language={language} onAction={retry}/>;
 
-  return <Shell route={route} label={gateView?kindLabel:label} language={language} panelRef={panelRef}>
+  return <Shell route={route} label={gateView?kindLabel:label} language={language} panelRef={panelRef} onPrivateCapture={onPrivateCapture}>
     {gateView}
     {!gateView&&<>
       <p role="status" className="targetDetailStatus">
@@ -384,27 +384,28 @@ function DetailBody({route,language,gates,edits,noteEdit,projectEdit}:{
       </p>
       {state.kind==="error"&&state.reason!=="hidden"&&
         <p role={state.reason==="not-available"?"status":"alert"} data-testid="target-detail-error"
-          data-reason={state.reason}>{copy.failures[state.reason==="session-expired"?"signed-out":state.reason]}</p>}
+          data-reason={state.reason}>{copy.failures[state.reason]}</p>}
       {state.kind==="error"&&state.reason!=="not-available"&&
         <button type="button" onClick={reload}>{copy.retry}</button>}
       {content&&state.kind==="ready"&&
         <Content content={content} route={route} copy={copy} gates={gates}
           more={state.more} onMore={()=>{void more();}} edit={edit}
-          noteEdit={noteEdit} projectEdit={projectEdit} onCommitted={reload} onAccessRefused={invalidateAndReload}
+          noteEdit={noteEdit} onCommitted={reload} onAccessRefused={invalidateAndReload}
           language={language}/>}
-      {content&&!(noteEdit&&content.kind==="note")&&!(projectEdit&&content.kind==="project")&&!(edit&&kindHasEdits(content.kind,edits))&&
+      {content&&!(noteEdit&&content.kind==="note")&&!(edit&&kindHasEdits(content.kind,edits))&&
         <p className="targetDetailNote">{copy.readOnlyNote}</p>}
     </>}
   </Shell>;
 }
 
-export default function TargetDetailPanel({route,language="cs",gates,edits,noteEdit=false,projectEdit=false}:{
+export default function TargetDetailPanel({route,language="cs",gates,edits,noteEdit=false,onPrivateCapture}:{
   /** null: the address asked for something that cannot be opened. */
   route:TargetDetailRoute|null;language?:DetailLanguage;gates:TargetDetailGates;
   /** R3-FE-4b: which edits exist at all (server-derived flags); absent = read-only as in 4a. */
-  edits?:TargetUiEdits;noteEdit?:boolean;projectEdit?:boolean;
+  edits?:TargetUiEdits;noteEdit?:boolean;
+  onPrivateCapture?:()=>void;
 }){
-  if(route===null)return <UnavailablePanel language={language}/>;
+  if(route===null)return <UnavailablePanel language={language} onPrivateCapture={onPrivateCapture}/>;
   // Keyed by target: another item is a new session, never a reuse of old content.
-  return <DetailBody key={detailRouteKey(route)} route={route} language={language} gates={gates} edits={edits} noteEdit={noteEdit&&gates.note} projectEdit={projectEdit&&gates.project}/>;
+  return <DetailBody key={detailRouteKey(route)} route={route} language={language} gates={gates} edits={edits} noteEdit={noteEdit&&gates.note} onPrivateCapture={onPrivateCapture}/>;
 }

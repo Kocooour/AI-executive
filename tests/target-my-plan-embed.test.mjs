@@ -223,6 +223,10 @@ test("nav labels never claim legacy data in target mode",()=>{
     assert.match(source,/server plan from staging/,file);
   }
   const rootSource=read("app/ui/lumi-app-root.tsx");
-  assert.match(rootSource,/<Sidebar app=\{app\} targetPlan=\{Boolean\(targetMyPlan\?\.enabled\)\} \/>/);
-  assert.match(rootSource,/<MobileNav app=\{app\} targetPlan=\{Boolean\(targetMyPlan\?\.enabled\)\} \/>/);
+  // Root wiring may grow extra independently gated props; the target-plan
+  // signal must still reach BOTH navigation components without changing labels.
+  assert.match(rootSource,/<Sidebar app=\{app\} targetPlan=\{Boolean\(targetMyPlan\?\.enabled\)\}/);
+  assert.match(rootSource,/<MobileNav app=\{app\} targetPlan=\{Boolean\(targetMyPlan\?\.enabled\)\}/);
+  assert.match(rootSource,/<Sidebar app=\{app\}[^>]*onTargetCapture=\{targetCapture\?\(\)=>openAreaChooser\(\):undefined\}/s);
+  assert.match(rootSource,/<MobileNav app=\{app\}[^>]*onTargetCapture=\{targetCapture\?\(\)=>openAreaChooser\(\):undefined\}/s);
 });

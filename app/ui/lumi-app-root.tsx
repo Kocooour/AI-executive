@@ -4,7 +4,9 @@ import { useEffect, useRef, useState } from "react";
 import { TargetSidebarContext } from "./target-sidebar-context";
 import { LegacyWritesContext } from "./legacy-writes-context";
 import { useLumiApp } from "./use-lumi-app";
-import { expectFocusReturn, focusPendingRow, useTargetSearch } from "./target-detail-state";
+import { closeTargetDetail, expectFocusReturn, focusPendingRow, useTargetSearch } from "./target-detail-state";
+import { writeTargetReadingScope } from "../../lib/target-reading-scope-nav";
+import { scopeFromSearch } from "../../lib/view-url";
 import { detailActivation, detailRouteKey, isParentOf, isTargetAddress, viewOfSearch, type DetailActivation } from "../../lib/target-detail-route";
 import { activeTargetViewFor, detailsActive, targetViewsFor } from "../../lib/target-shell-views";
 import { detailCopy } from "../../lib/target-detail-copy";
@@ -50,11 +52,17 @@ export type TargetScopesProps = { enabled: boolean; projects: boolean; notes: bo
 export type TargetEditsProps = TargetUiEdits;
 export type TargetMyPlanProps = { enabled: boolean; statusWrite: boolean; whenWrite: boolean };
 
-export function LumiAppRoot({ targetMyPlan, targetScopes, targetDetails, targetEdits, targetNoteEdit = false, targetProjectEdit = false, targetPrivateNoteAreas = false, targetPrivateNoteCreate = false }: { targetMyPlan?: TargetMyPlanProps; targetScopes?: TargetScopesProps; targetDetails?: TargetDetailsProps; targetEdits?: TargetEditsProps; targetNoteEdit?: boolean; targetProjectEdit?: boolean; targetPrivateNoteAreas?: boolean; targetPrivateNoteCreate?: boolean } = {}) {
+export function LumiAppRoot({ targetMyPlan, targetScopes, targetDetails, targetEdits, targetNoteEdit = false, targetPrivateNoteAreas = false, targetPrivateNoteCreate = false }: { targetMyPlan?: TargetMyPlanProps; targetScopes?: TargetScopesProps; targetDetails?: TargetDetailsProps; targetEdits?: TargetEditsProps; targetNoteEdit?: boolean; targetPrivateNoteAreas?: boolean; targetPrivateNoteCreate?: boolean } = {}) {
   // Owner decision 2026-11-09: with target scopes on, the single global scope governs the
   // sidebar projects, the inspector and quick capture (see docs/R3-FE-04A-DETAILS.md).
   const scopesOn = Boolean(targetScopes?.enabled);
+  // All staging, Area and write flags must be on before the global FAB opens
+  // the R3 private-note creator; no implicit legacy-write fallback.
+  const targetCapture=Boolean(scopesOn&&targetScopes?.notes&&targetPrivateNoteAreas&&
+    targetPrivateNoteCreate&&mobileDesignV1Preview);
   const [areaChooserOpen,setAreaChooserOpen]=useState(false);
+  const [captureAfterDetailClose,setCaptureAfterDetailClose]=useState(false);
+  const areaChooserOpener=useRef<HTMLElement|null>(null);
   const [noteListRevision,setNoteListRevision]=useState(0);
   const detailGates = { task: Boolean(targetDetails?.task), project: Boolean(targetDetails?.project), note: Boolean(targetDetails?.note) };
   const shellInput = { scopesOn, projectsList: Boolean(targetScopes?.projects), notesList: Boolean(targetScopes?.notes),
@@ -76,13 +84,71 @@ export function LumiAppRoot({ targetMyPlan, targetScopes, targetDetails, targetE
   } = app;
   const planActive = mobileDesignV1Preview && app.mobilePlanPreviewActive && view === "Today";
   const { scopeList, targetPlan, active: activeTargetView } = activeTargetViewFor({ ...shellInput, view, planActive });
-  // Never keep the chooser active when leaving the target Notes view.
-  useEffect(()=>{setAreaChooserOpen(false);},[view,scopesOn,targetPrivateNoteAreas]);
+  // Read-only Notes chooser remains view-scoped; a gated global capture does not.
+  useEffect(()=>{
+    if(!targetCapture)setAreaChooserOpen(false);
+  },[view,scopesOn,targetPrivateNoteAreas,targetCapture]);
+  function openAreaChooser(fromTargetDetail=false){
+    if(!targetPrivateNoteAreas||areaChooserOpen||captureAfterDetailClose||
+      app.offlineView||app.capture||app.moreOpen||app.assistantOpen||
+      app.confirmRequest||document.visibilityState!=="visible"||!navigator.onLine)return;
+    // Other dialogs must never be bypassed. The target detail is the one
+    // exception: first close it as a history step, THEN mount capture.
+    if(document.querySelector('[aria-modal="true"]:not([data-testid="target-detail"])'))return;
+    if(detailPanel){
+      if(!fromTargetDetail||!targetCapture)return;
+      areaChooserOpener.current=null; // its button unmounts; use the live FAB on dismiss
+      setCaptureAfterDetailClose(true);
+      closeTargetDetail(detailRoute);
+      return;
+    }
+    if(document.querySelector('[aria-modal="true"]'))return;
+    areaChooserOpener.current=document.activeElement instanceof HTMLElement
+      ?document.activeElement:null;
+    setAreaChooserOpen(true);
+  }
+  function closeAreaChooser(){
+    setAreaChooserOpen(false);
+    window.requestAnimationFrame(()=>{
+      const opener=areaChooserOpener.current;
+      const focusable=(element:HTMLElement)=>element.isConnected&&
+        element.getClientRects().length>0;
+      const fabCandidates=document.querySelectorAll<HTMLElement>(
+        '[data-target-private-capture-fab]:not([disabled])');
+      const fallback=Array.from(fabCandidates).find(focusable) ??
+        Array.from(document.querySelectorAll<HTMLElement>(
+          '[data-testid="target-private-area-open"]:not([disabled])')).find(focusable);
+      if(opener&&focusable(opener))opener.focus();
+      else fallback?.focus();
+      areaChooserOpener.current=null;
+    });
+  }
+  function createdPrivateNote(){
+    closeAreaChooser();
+    setNoteListRevision(v=>v+1);
+    // Write Area is always explicit/private. If the user was reading only
+    // Shared, show the authorized Personal read scope after successful CREATE
+    // rather than an empty Shared Notes list. A scope is never write consent.
+    if(targetCapture&&scopeFromSearch(window.location.search)==="shared")
+      writeTargetReadingScope("personal");
+    // Never append a client-fabricated row. Re-read the authorized Notes index.
+    if(targetCapture&&view!=="Notes")app.setView("Notes");
+  }
   const detailSearch = useTargetSearch(detailsOn);
   const activation: DetailActivation = detailsOn
     ? detailActivation({ search: detailSearch, gates: detailGates, activeTargetView }) : { state: "none" };
+  const detailPanel = detailsOn && activation.state !== "none";
   const detailRoute = activation.state === "route" ? activation.route : null;
   const detailKey = detailRoute !== null ? detailRouteKey(detailRoute) : activation.state;
+  useEffect(()=>{
+    if(!captureAfterDetailClose||detailPanel)return;
+    setCaptureAfterDetailClose(false);
+    if(targetCapture&&document.visibilityState==="visible"&&navigator.onLine&&
+      !app.offlineView&&!app.capture&&!app.moreOpen&&!app.assistantOpen&&
+      !app.confirmRequest&&!document.querySelector('[aria-modal="true"]'))
+      setAreaChooserOpen(true);
+  },[captureAfterDetailClose,detailPanel,targetCapture,app.offlineView,app.capture,
+    app.moreOpen,app.assistantOpen,app.confirmRequest]);
   // After a detail closed (Close, Back, Forward), focus returns to the row that opened it;
   // opening a deeper detail (project -> its task) never returns focus to the list.
   const previousRoute = useRef<typeof detailRoute>(null);
@@ -90,6 +156,9 @@ export function LumiAppRoot({ targetMyPlan, targetScopes, targetDetails, targetE
     if (!detailsOn) return;
     const previous = previousRoute.current;
     previousRoute.current = detailRoute;
+    // Capture is taking ownership of focus. Do not schedule the detail's old
+    // row-focus restoration into the new private modal (rAF may run later).
+    if(captureAfterDetailClose)return;
     if (previous !== null && !isParentOf(previous, detailRoute)) expectFocusReturn(previous);
     const frame = window.requestAnimationFrame(() => {
       // A successful refresh can also remove the originating row (e.g. revoked
@@ -120,7 +189,6 @@ export function LumiAppRoot({ targetMyPlan, targetScopes, targetDetails, targetE
     );
   }
   const scopeSwitcher = scopeList !== null || (scopesOn && targetPlan);
-  const detailPanel = detailsOn && activation.state !== "none";
   // The legacy inspector is never fed legacy records in a target view.
   const targetView = scopeList !== null || targetPlan;
   const legacyInspector = Boolean(app.selected) && !(scopesOn && targetView);
@@ -131,7 +199,8 @@ export function LumiAppRoot({ targetMyPlan, targetScopes, targetDetails, targetE
     <main className={`appShell view-${view.toLowerCase()}${legacyInspector || detailPanel ? " inspectorOpen" : ""}${view === "Projects" && app.openProject ? " projectPageOpen" : ""}`} data-design-system={mobileDesignV1Preview ? "lumi-v1" : undefined} data-workspace-tone={app.activeWorkspaceTone}
       data-my-plan-preview={mobileDesignV1Preview && app.mobilePlanPreviewActive && view === "Today" ? "true" : undefined}>
       <TargetSidebarContext.Provider value={scopesOn && targetScopes?.projects ? { projects: true, openable: detailsOn && detailGates.project } : undefined}>
-        <Sidebar app={app} targetPlan={Boolean(targetMyPlan?.enabled)} />
+        <Sidebar app={app} targetPlan={Boolean(targetMyPlan?.enabled)}
+          onTargetCapture={targetCapture?()=>openAreaChooser():undefined} />
       </TargetSidebarContext.Provider>
       <section className="appPane">
         {app.offlineView && (
@@ -218,7 +287,7 @@ export function LumiAppRoot({ targetMyPlan, targetScopes, targetDetails, targetE
           {scopeSwitcher && <TargetScopeSwitcher language={language} variant={scopeList === null ? "plan" : "lists"} />}
           {scopeList==="note"&&targetPrivateNoteAreas&&<button type="button"
             className="targetScopeAreaChooserButton" data-testid="target-private-area-open"
-            onClick={()=>setAreaChooserOpen(true)}>{targetPrivateNoteCreate
+            onClick={()=>openAreaChooser()}>{targetPrivateNoteCreate
               ?(language==="cs"?"Nová soukromá poznámka":"New private note")
               :(language==="cs"?"Oblasti pro novou poznámku":"Areas for a new note")}</button>}
           <HeldBack app={app} />
@@ -238,16 +307,16 @@ export function LumiAppRoot({ targetMyPlan, targetScopes, targetDetails, targetE
           {view === "Today" && !targetPlan && <TodayFooter app={app} />}
         </div>
       </section>
-      <MobileNav app={app} targetPlan={Boolean(targetMyPlan?.enabled)} />
-      <DesktopCaptureFab app={app} />
+      <MobileNav app={app} targetPlan={Boolean(targetMyPlan?.enabled)}
+        onTargetCapture={targetCapture?()=>openAreaChooser():undefined} />
+      <DesktopCaptureFab app={app} onTargetCapture={targetCapture?()=>openAreaChooser():undefined}
+        targetCaptureOpen={areaChooserOpen} />
       <CaptureDialog app={app} />
-      {scopeList==="note"&&targetPrivateNoteAreas&&areaChooserOpen&&
+      {targetPrivateNoteAreas&&areaChooserOpen&&(scopeList==="note"||targetCapture)&&
         <TargetPrivateNoteAreaChooser language={language} createEnabled={targetPrivateNoteCreate}
-          onClose={()=>setAreaChooserOpen(false)} onCreated={()=>{
-            setAreaChooserOpen(false);setNoteListRevision(v=>v+1);
-          }} />}
+          onClose={closeAreaChooser} onCreated={createdPrivateNote} />}
       {!(scopesOn && targetView) && <DetailPanel app={app} />}
-      {detailPanel && <TargetDetailPanel route={detailRoute} language={language} gates={detailGates} edits={targetEdits} noteEdit={targetNoteEdit && detailGates.note} projectEdit={targetProjectEdit && detailGates.project} />}
+      {detailPanel && <TargetDetailPanel route={detailRoute} language={language} gates={detailGates} edits={targetEdits} noteEdit={targetNoteEdit && detailGates.note} onPrivateCapture={targetCapture?()=>openAreaChooser(true):undefined} />}
       <AssistantPanel app={app} />
       <DeferPopover app={app} />
       <ConfirmDialog app={app} />

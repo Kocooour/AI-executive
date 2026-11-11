@@ -46,13 +46,13 @@ const indexDetailPreviewTest = process.env.LUMI_INDEX_DETAIL_PREVIEW_E2E === "tr
 const targetDetailEditRaceTest = process.env.LUMI_TARGET_DETAIL_EDITS_E2E === "true";
 const focusFallbackTest = process.env.LUMI_TARGET_DETAIL_FOCUS_E2E === "true";
 const noteEditRecoveryTest = process.env.LUMI_TARGET_NOTE_EDIT_E2E === "true";
-const projectTitleRecoveryTest = process.env.LUMI_TARGET_PROJECT_TITLE_E2E === "true";
 // Profile-specific recovery QA (including BOTH active edit flags), isolated to Playwright.
 const noteEditProfile = process.env.LUMI_TARGET_NOTE_EDIT_PROFILE ?? "legacy";
 if(noteEditRecoveryTest&&!["legacy","combined","4b"].includes(noteEditProfile))
   throw new Error("Invalid LUMI_TARGET_NOTE_EDIT_PROFILE");
 const privateNoteAreasTest = process.env.LUMI_PRIVATE_NOTE_AREAS_E2E === "true";
 const privateNoteCreateTest = process.env.LUMI_PRIVATE_NOTE_CREATE_E2E === "true";
+const globalCaptureTest = process.env.LUMI_TARGET_GLOBAL_CAPTURE_E2E === "true";
 
 export default defineConfig({
   testDir: "e2e",
@@ -172,18 +172,10 @@ export default defineConfig({
         AI_EXECUTIVE_TARGET_UI_PRIVATE_NOTE_AREAS_ENABLED: "true",
         AI_EXECUTIVE_TARGET_UI_PRIVATE_NOTE_CREATE_ENABLED: "true",
       } : {}),
-      // Explicit opt-in project title reauthentication on a throwaway server.
-      // Browser routes are synthetic; no staging DB or production writes.
-      ...(projectTitleRecoveryTest ? {
-        AI_EXECUTIVE_TARGET_STAGING_HTTP_ENABLED: "true",
-        AI_EXECUTIVE_TARGET_UI_ENABLED: "true",
-        AI_EXECUTIVE_TARGET_UI_SCOPES_ENABLED: "true",
-        AI_EXECUTIVE_TARGET_STAGING_HTTP_GLOBAL_PROJECTS_ENABLED: "true",
+      // Only this synthetic R3-CAPTURE-3 run enables a target detail as an
+      // actual modal, to exercise the focus-trapped inspector capture entry.
+      ...(globalCaptureTest ? {
         AI_EXECUTIVE_TARGET_UI_DETAILS_ENABLED: "true",
-        AI_EXECUTIVE_TARGET_STAGING_HTTP_WRITE_ENABLED: "true",
-        AI_EXECUTIVE_TARGET_STAGING_HTTP_PROJECT_TITLE_WRITE_ENABLED: "true",
-        AI_EXECUTIVE_TARGET_UI_PROJECT_EDIT_ENABLED: "true",
-        AI_EXECUTIVE_TARGET_UI_PROJECT_REAUTH_RECOVERY_ENABLED: "true",
       } : {}),
       AI_EXECUTIVE_PASSWORD_HASH: passwordHash,
       AI_EXECUTIVE_SESSION_SECRET: sessionSecret,
