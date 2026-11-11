@@ -6,8 +6,8 @@ import { mobileDesignV1Preview } from "../navigation";
 import type { LumiApp } from "../use-lumi-app";
 
 /** One desktop FAB, with an independently gated private-note target action. */
-export function DesktopCaptureFab({ app, onTargetCapture, targetCaptureOpen = false }: {
-  app: LumiApp; onTargetCapture?:()=>void; targetCaptureOpen?:boolean;
+export function DesktopCaptureFab({ app, onTargetCapture, targetCaptureOpen = false, targetTaskCapture = false }: {
+  app: LumiApp; onTargetCapture?:()=>void; targetCaptureOpen?:boolean; targetTaskCapture?:boolean;
 }) {
   const currentApp = useRef(app);
   currentApp.current = app;
@@ -44,7 +44,7 @@ export function DesktopCaptureFab({ app, onTargetCapture, targetCaptureOpen = fa
   const blocked = Boolean(app.capture || app.assistantOpen || app.moreOpen ||
     app.selected || app.confirmRequest || app.offlineView || targetCaptureOpen);
   const label=onTargetCapture
-    ?(app.language==="cs"?"Nová soukromá poznámka":"New private note")
+    ?(targetTaskCapture?(app.language==="cs"?"Nový soukromý úkol nebo poznámka":"New private task or note"):(app.language==="cs"?"Nová soukromá poznámka":"New private note"))
     :app.tr("quickCapture");
   return (
     <button type="button" className="desktopCaptureFab"
