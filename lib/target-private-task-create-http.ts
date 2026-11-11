@@ -124,7 +124,13 @@ async function handle(request:Request,mode:"create"|"status"|"recovery"):Promise
       const response=releasePrivateTaskCreateCommittedStatus(
         request,identity,store,base.ownerUserId,result,detail);
       if(!unchanged(base))return answer(503,"Staging unavailable");
-      return response;
+      // Unlike exact-command status, a reload has discarded the original
+      // task ID. Only AFTER the server has verified live actor + private Area
+      // + exact task on the current store may we return its opaque ID for an
+      // authorized detail navigation. Never send title or Area to the client.
+      return response.status===200
+        ?Response.json({status:"committed",taskId:result.taskId},{headers})
+        :response;
     }
     if(command===null)return answer(400,"Invalid request");
     if(mode==="status"){
