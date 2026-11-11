@@ -34,8 +34,13 @@ cílovém režimu nikdy nezapisuje.
   restore-generation nejsou v browser storage. Živá runtime session drží přesný
   původní příkaz jen v RAM, aby bylo možné bezpečně volat
   `POST /api/target-staging/tasks/create-status` (read-only). Status
-  `not_recorded` ponechá zábranu. Potvrzené `committed` ji odblokuje.
-- Po úplném reloadu nebo změně identity zmizí originální title z paměti.
+  `not_recorded` ponechá zábranu. Ani úspěšné HTTP `201`, ani read-only
+  `committed` ji neodstraní před doručením: teprve ověřená viditelná session,
+  která skutečně přebírá potvrzení v UI, atomicky odstraní neprůhledný marker
+  pro přesné původní `commandId`. Při chybě storage zůstane vše zablokované.
+- Po úplném reloadu nebo změně identity, i po kladné odpovědi serveru
+  dosud nedoručené do UI, zmizí originální title z paměti, ale neprůhledný
+  marker zůstává zachovaný a blokuje jakýkoli nový POST.
   Serverový status bez přesného původního příkazu **nelze bezpečně ověřit**.
   Zábrana proto zůstává záměrně uzamčená a UI tuto skutečnost vysvětluje.
   To je release blocker pro běžné bezobslužné používání, ne příležitost
