@@ -8,6 +8,7 @@ import { expectFocusReturn, focusPendingRow, useTargetSearch } from "./target-de
 import { detailActivation, detailRouteKey, isParentOf, isTargetAddress, viewOfSearch, type DetailActivation } from "../../lib/target-detail-route";
 import { activeTargetViewFor, detailsActive, targetViewsFor } from "../../lib/target-shell-views";
 import { detailCopy } from "../../lib/target-detail-copy";
+import type { TargetUiEdits } from "../../lib/target-ui-config";
 import { mobileDesignV1Preview } from "./navigation";
 import { projectSyncNoticeLabel } from "../../lib/project-sync-notice";
 import { AuthScreen } from "./views/auth-screen";
@@ -46,9 +47,10 @@ const TargetPrivateNoteAreaChooser = dynamic(() => import("./target-private-note
 
 export type TargetDetailsProps = { task: boolean; project: boolean; note: boolean };
 export type TargetScopesProps = { enabled: boolean; projects: boolean; notes: boolean };
+export type TargetEditsProps = TargetUiEdits;
 export type TargetMyPlanProps = { enabled: boolean; statusWrite: boolean; whenWrite: boolean };
 
-export function LumiAppRoot({ targetMyPlan, targetScopes, targetDetails, targetNoteEdit = false, targetPrivateNoteAreas = false, targetPrivateNoteCreate = false }: { targetMyPlan?: TargetMyPlanProps; targetScopes?: TargetScopesProps; targetDetails?: TargetDetailsProps; targetNoteEdit?: boolean; targetPrivateNoteAreas?: boolean; targetPrivateNoteCreate?: boolean } = {}) {
+export function LumiAppRoot({ targetMyPlan, targetScopes, targetDetails, targetEdits, targetNoteEdit = false, targetPrivateNoteAreas = false, targetPrivateNoteCreate = false }: { targetMyPlan?: TargetMyPlanProps; targetScopes?: TargetScopesProps; targetDetails?: TargetDetailsProps; targetEdits?: TargetEditsProps; targetNoteEdit?: boolean; targetPrivateNoteAreas?: boolean; targetPrivateNoteCreate?: boolean } = {}) {
   // Owner decision 2026-11-09: with target scopes on, the single global scope governs the
   // sidebar projects, the inspector and quick capture (see docs/R3-FE-04A-DETAILS.md).
   const scopesOn = Boolean(targetScopes?.enabled);
@@ -245,7 +247,7 @@ export function LumiAppRoot({ targetMyPlan, targetScopes, targetDetails, targetN
             setAreaChooserOpen(false);setNoteListRevision(v=>v+1);
           }} />}
       {!(scopesOn && targetView) && <DetailPanel app={app} />}
-      {detailPanel && <TargetDetailPanel route={detailRoute} language={language} gates={detailGates} noteEdit={targetNoteEdit && detailGates.note} />}
+      {detailPanel && <TargetDetailPanel route={detailRoute} language={language} gates={detailGates} edits={targetEdits} noteEdit={targetNoteEdit && detailGates.note} />}
       <AssistantPanel app={app} />
       <DeferPopover app={app} />
       <ConfirmDialog app={app} />

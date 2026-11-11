@@ -7,7 +7,7 @@ export type TaskPreview={
 };
 export type TaskPreviewFailure="invalid-request"|"signed-out"|"not-found"|
   "stale"|"disabled"|"rate-limited"|"unavailable"|"offline"|"aborted"|"invalid-response";
-export type TaskPreviewResult={ok:true;task:TaskPreview}|{ok:false;reason:TaskPreviewFailure};
+export type TaskPreviewResult={ok:true;task:TaskPreview;expectedRevision?:string}|{ok:false;reason:TaskPreviewFailure};
 
 const encoder=new TextEncoder();
 const control=/[\u0000-\u001f\u007f]/u;
@@ -125,9 +125,15 @@ export async function readStagingTaskPreview(
     return {ok:false,reason:"invalid-response"};
   }
   try{
+    // The server sets this ONLY for a currently writable actor; it comes from the
+    // same pinned SQLite snapshot as the strict, unchanged `{task}` JSON payload.
+    const revision=response.headers.get("x-lumi-task-revision");
+    if(revision!==null&&!/^[a-f0-9]{64}$/.test(revision))
+      return {ok:false,reason:"invalid-response"};
     const body=await boundedJson(response,signal);
     if(signal.aborted)return {ok:false,reason:"aborted"};
     const task=parseTaskPreview(body,taskId);
-    return task?{ok:true,task}:{ok:false,reason:"invalid-response"};
+    return task?{ok:true,task,...(revision!==null?{expectedRevision:revision}:{})}
+      :{ok:false,reason:"invalid-response"};
   }catch{return {ok:false,reason:signal.aborted?"aborted":"invalid-response"};}
 }

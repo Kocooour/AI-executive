@@ -89,6 +89,7 @@ const exempt = {
   // They never write the legacy backup scope; do not inject the wrong
   // generation fence into staging-only and unconditional deny-only routes.
   "POST /api/humanwiki/import": "unconditional deny-only 404 before inspecting request body; neither writes data nor admits any import",
+  "POST /api/humanwiki/withdrawal-intent": "writes only bounded metadata-only non-authorizing withdrawal requests to a dedicated SQLite registry outside the legacy backup scope; default-OFF, real signed owner cookie, live pinned owner-private staging Area ACL and restore generation verified before and after, HMAC-linked per-source CAS and read-only import fence; no legacy snapshot data mutated",
   "POST /api/target-staging/notes/edit-recovery": "content-free, read-only receipt lookup against isolated staging SQLite; verifies signed actor, live note/Area ACL and staging generation; writes no legacy backup data",
   "POST /api/target-staging/notes/create-preview": "read-only validation of explicitly selected private Area against isolated staging SQLite with live signed identity and restore-generation checks; no note or legacy backup write",
   "POST /api/target-staging/notes/create-recovery": "read-only command receipt reconciliation in isolated staging SQLite; exact actor, private note/Area ACL, session and restore generation checked before content-free release; no legacy backup write",

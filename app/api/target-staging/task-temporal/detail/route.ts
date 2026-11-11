@@ -78,7 +78,14 @@ export async function GET(request: Request): Promise<Response> {
       return answer(503,"Staging unavailable");
     }
     // Never release the actor, Area witness or task/parent revision guard.
-    return Response.json({task:result.detail.task},{headers});
+    // A current writer may receive only the opaque CAS from the SAME pinned read;
+    // it is not authorization, and the DELETE still verifies ACL and CAS in its TX.
+    // Keep the strict public JSON DTO unchanged. The opaque task CAS is an
+    // optional response header, bound to the SAME authorized detail snapshot.
+    return Response.json({task:result.detail.task},{headers:{
+      ...headers,
+      ...(result.expectedRevision ? {"x-lumi-task-revision":result.expectedRevision} : {}),
+    }});
   } catch (error) {
     logStagingFailure("target-staging/task-temporal/detail","route_exception",error);
     return answer(503,"Staging unavailable");

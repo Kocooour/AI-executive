@@ -20,6 +20,7 @@ import {useTargetGate} from "./use-target-gate";
 import {useTargetTick,useTargetWake} from "./use-target-revalidation";
 import {wakeRetryDelay} from "../../lib/target-wake";
 import {queuedTargetFetch} from "../../lib/target-read-queue";
+import {emitTargetChange} from "../../lib/target-data-invalidation";
 
 // Shared one-at-a-time read queue: the server answers 503 beyond two concurrent reads.
 const readFetch=queuedTargetFetch();
@@ -31,6 +32,8 @@ import {
   detailIdOk,detailRouteKey,type TargetDetailGates,type TargetDetailRoute,
 } from "../../lib/target-detail-route";
 import {detailCopy,type DetailCopy,type DetailLanguage} from "../../lib/target-detail-copy";
+import type {TargetUiEdits} from "../../lib/target-ui-config";
+import {NoteEdits,TaskEdits,kindHasEdits,useDetailEdits,type DetailEditApi} from "./target-detail-edit";
 import TargetNoteEditor from "./target-note-editor";
 import "./target-details.css";
 
@@ -118,10 +121,10 @@ function UnavailablePanel({language}:{language:DetailLanguage}){
   </Shell>;
 }
 
-function Content({content,route,copy,gates,more,onMore,noteEdit,onCommitted,onAccessRefused,language}:{
+function Content({content,route,copy,gates,more,onMore,edit,noteEdit,onCommitted,onAccessRefused,language}:{
   content:TargetDetailContent;route:TargetDetailRoute;copy:DetailCopy;gates:TargetDetailGates;
-  more:boolean;onMore:()=>void;noteEdit:boolean;onCommitted:()=>void;
-  onAccessRefused:()=>void;language:DetailLanguage;
+  more:boolean;onMore:()=>void;edit:DetailEditApi|null;
+  noteEdit:boolean;onCommitted:()=>void;onAccessRefused:()=>void;language:DetailLanguage;
 }){
   const area=(kind:"private"|"shared")=>kind==="shared"?copy.areaShared:copy.areaPrivate;
   if(content.kind==="task"){
@@ -141,6 +144,7 @@ function Content({content,route,copy,gates,more,onMore,noteEdit,onCommitted,onAc
               {content.parentTitle}</button>
           :<strong>{content.parentTitle}</strong>}
       </p>}
+      {edit&&<TaskEdits api={edit} task={task} expectedRevision={content.expectedRevision??null}/>}
     </article>;
   }
   if(content.kind==="note"){
@@ -151,8 +155,17 @@ function Content({content,route,copy,gates,more,onMore,noteEdit,onCommitted,onAc
       {note.body.length===0
         ?<p className="targetDetailMuted">{copy.noteBodyEmpty}</p>
         :<div className="targetDetailNoteBody" data-testid="target-detail-note-body">{note.body}</div>}
-      {noteEdit&&<TargetNoteEditor note={note} language={language}
-        onCommitted={onCommitted} onAccessRefused={onAccessRefused}/>}
+      {/* One recovery-safe PATCH editor for every enabled note-edit profile. In
+          4b the other controller remains responsible for note deletion only. */}
+      {edit&&<NoteEdits api={edit} note={note} managedNoteEdit={noteEdit||edit.flags.noteEdit}/>}
+      {(noteEdit||Boolean(edit?.flags.noteEdit))&&!edit?.deleted&&
+        <TargetNoteEditor note={note} language={language}
+          onCommitted={()=>{
+            // The recovery-safe editor does not use the 4b controller, so its
+            // successful PATCH must still invalidate note lists and the sidebar.
+            emitTargetChange({kind:"note",id:note.id,change:"updated"});
+            onCommitted();
+          }} onAccessRefused={onAccessRefused}/>}
     </article>;
   }
   const {page}=content;
@@ -179,8 +192,8 @@ function Content({content,route,copy,gates,more,onMore,noteEdit,onCommitted,onAc
   </article>;
 }
 
-function DetailBody({route,language,gates,noteEdit}:{
-  route:TargetDetailRoute;language:DetailLanguage;gates:TargetDetailGates;noteEdit:boolean;
+function DetailBody({route,language,gates,edits,noteEdit}:{
+  route:TargetDetailRoute;language:DetailLanguage;gates:TargetDetailGates;edits?:TargetUiEdits;noteEdit:boolean;
 }){
   const copy=detailCopy[language];
   const {gate,onRefusal,retry}=useTargetGate();
@@ -190,6 +203,8 @@ function DetailBody({route,language,gates,noteEdit}:{
   const [state,setState]=useState<State>({kind:"idle"});
   const [nonce,setNonce]=useState(0);
   const epoch=useRef(0);
+  // A confirmed irreversible delete invalidates any GET already in flight.
+  const deletedRef=useRef(false);
   const sessionRef=useRef(session);
   sessionRef.current=session;
   const stateRef=useRef(state);
@@ -267,10 +282,13 @@ function DetailBody({route,language,gates,noteEdit}:{
   // does not change the auth generation, so an open detail re-reads. The shown
   // content is replaced only by the complete new result; any failure removes it
   // (a 404 becomes the calm not-available state).
-  useTargetTick(()=>{
+  const editRef=useRef<DetailEditApi|null>(null);
+  const revalidate=useCallback(()=>{
     const current=stateRef.current;
     const live=sessionRef.current;
     if(current.kind!=="ready"||current.more||!live)return;
+    // A deleted item is gone: never re-read it (that would replace the confirmation by a 404).
+    if(deletedRef.current||editRef.current?.deleted)return;
     const id=++epoch.current;
     const wanted=current.content.kind==="project"?current.content.page.tasks.length:0;
     void (async()=>{
@@ -279,12 +297,13 @@ function DetailBody({route,language,gates,noteEdit}:{
       for(let guard=0;guard<20&&result.ok===true&&result.content.kind==="project"&&
         result.content.page.hasMore&&result.content.page.tasks.length<wanted;guard++)
         result=await live.loadMore();
-      if(epoch.current!==id)return;
+      if(epoch.current!==id||deletedRef.current)return;
       if(result.ok===true)setState({kind:"ready",content:result.content,more:false});
       else if(result.reason==="superseded")return;
       else setState({kind:"error",reason:result.reason==="not-ready"?"stale":result.reason});
-    })().catch(()=>{if(epoch.current===id)setState({kind:"error",reason:"unavailable"});});
-  });
+    })().catch(()=>{if(epoch.current===id&&!deletedRef.current)setState({kind:"error",reason:"unavailable"});});
+  },[]);
+  useTargetTick(revalidate);
 
   // Returning from a task to its project: focus the task row once rows exist.
   useEffect(()=>{if(state.kind==="ready")focusPendingRow();},[state]);
@@ -327,6 +346,15 @@ function DetailBody({route,language,gates,noteEdit}:{
     :state.kind==="error"?(state.reason==="hidden"?copy.hidden:copy.failures[state.reason])
     :copy.panelLabelLoading(kindLabel);
 
+  const edit=useDetailEdits({
+    route,language,edits,content,sessionKey:session,
+    removed:state.kind==="error"?state.reason:null,
+    readFetch,onRefusal,revalidate,
+    onDeleted:()=>{deletedRef.current=true;epoch.current++;},
+    onClose:()=>closeTargetDetail(route),
+  });
+  editRef.current=edit;
+
   let gateView:React.ReactNode=null;
   if(gate.kind==="checking")
     gateView=<p role="status" data-testid="target-detail-checking">{copy.loading}</p>;
@@ -355,19 +383,22 @@ function DetailBody({route,language,gates,noteEdit}:{
         <button type="button" onClick={reload}>{copy.retry}</button>}
       {content&&state.kind==="ready"&&
         <Content content={content} route={route} copy={copy} gates={gates}
-          more={state.more} onMore={()=>{void more();}} noteEdit={noteEdit}
-          onCommitted={reload} onAccessRefused={invalidateAndReload}
+          more={state.more} onMore={()=>{void more();}} edit={edit}
+          noteEdit={noteEdit} onCommitted={reload} onAccessRefused={invalidateAndReload}
           language={language}/>}
-      {content&&!(noteEdit&&content.kind==="note")&&<p className="targetDetailNote">{copy.readOnlyNote}</p>}
+      {content&&!(noteEdit&&content.kind==="note")&&!(edit&&kindHasEdits(content.kind,edits))&&
+        <p className="targetDetailNote">{copy.readOnlyNote}</p>}
     </>}
   </Shell>;
 }
 
-export default function TargetDetailPanel({route,language="cs",gates,noteEdit=false}:{
+export default function TargetDetailPanel({route,language="cs",gates,edits,noteEdit=false}:{
   /** null: the address asked for something that cannot be opened. */
-  route:TargetDetailRoute|null;language?:DetailLanguage;gates:TargetDetailGates;noteEdit?:boolean;
+  route:TargetDetailRoute|null;language?:DetailLanguage;gates:TargetDetailGates;
+  /** R3-FE-4b: which edits exist at all (server-derived flags); absent = read-only as in 4a. */
+  edits?:TargetUiEdits;noteEdit?:boolean;
 }){
   if(route===null)return <UnavailablePanel language={language}/>;
   // Keyed by target: another item is a new session, never a reuse of old content.
-  return <DetailBody key={detailRouteKey(route)} route={route} language={language} gates={gates} noteEdit={noteEdit&&gates.note}/>;
+  return <DetailBody key={detailRouteKey(route)} route={route} language={language} gates={gates} edits={edits} noteEdit={noteEdit&&gates.note}/>;
 }

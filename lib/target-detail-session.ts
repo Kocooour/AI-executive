@@ -17,7 +17,7 @@ import type {TargetDetailKind} from "./target-detail-route";
 export type TargetDetailFailure=
   |"not-available"|"signed-out"|"stale"|"rate-limited"|"unavailable"|"offline"|"invalid-response";
 export type TargetDetailContent=
-  |{kind:"task";task:TaskPreview;parentTitle:string|null}
+  |{kind:"task";task:TaskPreview;parentTitle:string|null;expectedRevision?:string}
   |{kind:"project";page:ProjectTasksPage}
   |{kind:"note";note:NotePreview};
 export type TargetDetailResult=
@@ -98,7 +98,8 @@ export function createTargetDetailSession(
             return fail(parent.reason);
           }
         }
-        result={ok:true,content:{kind:"task",task:read.task,parentTitle}};
+        result={ok:true,content:{kind:"task",task:read.task,parentTitle,
+          ...(read.expectedRevision?{expectedRevision:read.expectedRevision}:{})}};
       }
     }else if(config.kind==="note"){
       const read=await readStagingNotePreview(config.id,controller.signal,fetchImpl);
