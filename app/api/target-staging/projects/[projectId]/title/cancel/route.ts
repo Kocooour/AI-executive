@@ -9,10 +9,14 @@ import {resolveStagingHttpIdentity,stagingAnchorRefusal,stagingUnauthenticatedRe
 import {cancelProjectTitleInChild} from "../../../../../../../lib/target-staging-title-http-process";
 import {targetProtocolRefusal,resyncRequiredResponse} from "../../../../../../../lib/target-staging-write-contract";
 import {isReadableStagingProjectId} from "../../../../../../../lib/target-project-id";
+import {projectTitlePrincipalBinding} from "../../../../../../../lib/target-project-title-identity";
+import {readStagingProjectTitlePreviewInChild} from "../../../../../../../lib/target-staging-read-process";
+import {verifyStagingReadBeforeRelease} from "../../../../../../../lib/target-staging-http-identity";
 
 export const runtime="nodejs";
 export const dynamic="force-dynamic";
 const headers={"cache-control":"no-store"};
+const BINDING=/^[A-Za-z0-9_-]{43}$/;
 const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const ID=/^[A-Za-z0-9_.:@-]{1,120}$/;
 const answer=(status:number,error:string)=>Response.json({error},{status,headers});
@@ -53,16 +57,37 @@ export async function POST(request:Request,context:{params:Promise<{projectId:st
     if(limited)return Response.json({error:"Too many requests"},{status:429,headers:{...headers,"retry-after":String(limited.retryAfter)}});
     const input=await readJsonBody<unknown>(request,512,{strictUtf8:true});
     if(!input||typeof input!=="object"||Array.isArray(input)||
-       Object.keys(input).sort().join(",")!=="commandId,restoreGeneration")return answer(400,"Invalid request");
+       Object.keys(input).sort().join(",")!=="commandId,principalBinding,restoreGeneration")return answer(400,"Invalid request");
     const value=input as Record<string,unknown>;
     if(typeof value.commandId!=="string"||!UUID.test(value.commandId)||
-       typeof value.restoreGeneration!=="string"||!UUID.test(value.restoreGeneration))return answer(400,"Invalid request");
+       typeof value.restoreGeneration!=="string"||!UUID.test(value.restoreGeneration)||
+       typeof value.principalBinding!=="string"||!BINDING.test(value.principalBinding))
+      return answer(400,"Invalid request");
     const before=verifyStagingIdentityBeforeRelease(request,identity,bound);
     if(before!=="ok")return stagingIdentityRefusal(before);
     if(!unchanged(base))return answer(503,"Staging unavailable");
+    // Freeze the HTTP session identity BEFORE the write worker. An A preview
+    // cannot authorize a B session cancellation, even when both can edit the
+    // same shared project. The worker is pinned to this same session hash.
+    const read=await readStagingProjectTitlePreviewInChild(bound,projectId);
+    if(!read)return answer(503,"Staging unavailable");
+    const release=read.ok===true?verifyStagingReadBeforeRelease(
+      request,identity,bound,base.ownerUserId,read.page.linearization,
+      {projectId,areaId:read.page.project.areaId,taskIds:read.page.tasks.map(t=>t.id)})
+      :verifyStagingIdentityBeforeRelease(request,identity,bound);
+    if(release!=="ok"&&release!=="stale")return stagingIdentityRefusal(release);
+    if(release==="stale"||read.ok===false)return answer(404,"Not found");
+    const access=read.page.linearization.areas[0]?.access;
+    if(access!=="private-owner"&&access!=="editor"&&access!=="admin")return answer(404,"Not found");
+    const actorId=read.page.linearization.actorUserId;
+    const verifiedBinding=projectTitlePrincipalBinding(actorId,projectId,base.expectedRestoreGeneration);
+    if(!verifiedBinding)return answer(503,"Staging unavailable");
+    if(verifiedBinding!==value.principalBinding)return answer(404,"Not found");
+    if(!unchanged(base))return answer(503,"Staging unavailable");
     const result=await cancelProjectTitleInChild(bound,{
       projectId,commandId:value.commandId,restoreGeneration:value.restoreGeneration,
-    });
+      principalBinding:value.principalBinding,
+    },actorId);
     if(identity.kind==="owner"){
       const after=verifyStagingIdentityBeforeRelease(request,identity,bound);
       if(after!=="ok")return stagingIdentityRefusal(after);
@@ -79,7 +104,7 @@ export async function POST(request:Request,context:{params:Promise<{projectId:st
       if(result.reason==="resync_required")return resyncRequiredResponse();
       return answer(503,"Staging unavailable");
     }
-    return Response.json({status:result.status},{headers});
+    return Response.json({status:result.status,principalBinding:verifiedBinding},{headers});
   }catch(error){
     if(error instanceof HttpInputError)return answer(error.status,error.message);
     logStagingFailure("target-staging/projects/[projectId]/title/cancel","route_exception",error);

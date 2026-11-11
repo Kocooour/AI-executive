@@ -13,15 +13,20 @@ try{
     process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_PROJECT_TITLE_WRITE_ENABLED!=="true"||
     !stagingDirectory||!path.isAbsolute(stagingDirectory)||!expectedRestoreGeneration||!ownerUserId)
     throw Error("Unavailable");
-  const input=await readTitleCommand(process.stdin,512);
-  if(!validProjectTitleCancelCommand(input))throw Error("Invalid command");
+  const input=await readTitleCommand(process.stdin,2048);
+  if(!input||typeof input!=="object"||Array.isArray(input)||
+     Object.keys(input).sort().join(",")!=="command,expectedActorUserId"||
+     typeof input.expectedActorUserId!=="string"||
+     !/^[A-Za-z0-9_.:@-]{1,120}$/.test(input.expectedActorUserId)||
+     !validProjectTitleCancelCommand(input.command))throw Error("Invalid command");
   const authority=new TargetStagingSessionAuthority({stagingDirectory,expectedRestoreGeneration});
   try{
     const resolved=resolveChildActor({stagingDirectory,expectedRestoreGeneration,ownerUserId});
-    if(!resolved)throw Error("Unavailable");
+    if(!resolved||resolved.actor!==input.expectedActorUserId)throw Error("Unavailable");
     const session=authority.issueWritable(resolved.actor);
     if(!session)throw Error("Unavailable");
-    const result=authority.cancelProjectTitle(session.sessionToken,input,resolved.sessionTokenHash);
+    const result=authority.cancelProjectTitle(session.sessionToken,input.command,
+      input.expectedActorUserId,resolved.sessionTokenHash);
     if(result.ok)process.stdout.write(JSON.stringify({ok:true,status:result.status}));
     else if(["unavailable","session_revoked","resync_required","write_failed"].includes(result.reason))
       process.stdout.write(JSON.stringify({ok:false,reason:result.reason}));

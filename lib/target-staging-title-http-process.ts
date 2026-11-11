@@ -274,8 +274,12 @@ type TitleCancel = {ok:true;status:"committed"|"cancelled"}|
 export async function cancelProjectTitleInChild(
   config:StagingPersonalReadConfig,
   request:import("./target-project-title-cancel").ProjectTitleCancelCommand,
+  expectedActorUserId:string,
 ):Promise<TitleCancel|null>{
-  const v=await run(config,"target-staging-project-title-cancel-child.mjs",JSON.stringify(request));
+  // Actor ID comes ONLY from the independently authorized server read,
+  // never from user JSON. The child rechecks it within the write transaction.
+  const v=await run(config,"target-staging-project-title-cancel-child.mjs",
+    JSON.stringify({command:request,expectedActorUserId}));
   if(!v||typeof v!=="object"||Array.isArray(v))return null;
   const x=v as Record<string,unknown>,keys=Object.keys(x).sort().join(",");
   if(keys==="ok,status"&&x.ok===true&&(x.status==="cancelled"||x.status==="committed"))

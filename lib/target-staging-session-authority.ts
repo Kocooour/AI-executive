@@ -1009,11 +1009,11 @@ export class TargetStagingSessionAuthority {
 
   /** Durable cancellation of a command which may have been lost after reload. */
   cancelProjectTitle(sessionToken:string,request:ProjectTitleCancelCommand,
-    durableSessionTokenHash?:string):ProjectTitleCancelResult{
+    expectedActorUserId:string,durableSessionTokenHash?:string):ProjectTitleCancelResult{
     const credential=this.#credential(sessionToken,true);
     if(!credential)return {ok:false,reason:"unauthorized"};
     if(!validProjectTitleCancelCommand(request))return {ok:false,reason:"invalid_request"};
-    return cancelTargetProjectTitle(this.#store,credential,request,durableSessionTokenHash);
+    return cancelTargetProjectTitle(this.#store,credential,request,expectedActorUserId,durableSessionTokenHash);
   }
 
   /**
