@@ -119,6 +119,13 @@ test("runtime preserves exact payload only in memory; no second POST after uncer
     assert.equal(privateTaskCreateMarker(generation).kind,"clear");
     assert.equal(trackedPrivateTaskCreate(runtime,generation),null);
     assert.equal(store.toString().includes(cmd.title),false);
+    // A committed receipt is not yet a user-visible completion: it must
+    // survive a delayed bridge refresh without permitting a second INSERT.
+    assert.equal(hasPrivateTaskCreateCompletion(runtime,generation),true);
+    assert.equal(await runPrivateTaskCreate(runtime,generation,command(),
+      async()=>{posts++;return "saved";}),"conflict");
+    assert.equal(posts,1,"no second POST until the success notice was delivered");
+    assert.equal(consumePrivateTaskCreateCompletion(runtime,generation),true);
     assert.equal(await runPrivateTaskCreate(runtime,generation,command(),
       async()=>{posts++;return "saved";}),"saved");
     assert.equal(posts,2);
@@ -168,6 +175,77 @@ test("late successful POST is delivered after modal unmount, once, without a dra
     assert.equal(store.toString().includes(cmd.title),false);
     assert.equal(privateTaskCreateMarker(generation).kind,"clear");
     unsubscribeRoot();
+  });
+});
+test("pending completion blocks new POST across delayed and failed bridge verification",async()=>{
+  await withStorage(async store=>{
+    const runtime={known:()=>true,generation:()=>generation,register:()=>()=>{}};
+    let posts=0;
+    const prior=command();
+    const notices=[];
+    const un=subscribePrivateTaskCreateCompletion(runtime,
+      ()=>notices.push(hasPrivateTaskCreateCompletion(runtime,generation)));
+    assert.equal(await runPrivateTaskCreate(runtime,generation,prior,
+      async()=>{posts++;return "saved";}),"saved");
+    assert.equal(posts,1);
+    assert.deepEqual(notices,[true]);
+    assert.deepEqual(privateTaskCreateMarker(generation),{kind:"clear"},
+      "the pending-delivery fence must work even after the tab marker cleared");
+
+    // Simulate the always-mounted bridge's session refresh not finishing.
+    let completeRefresh;
+    const slowRefresh=new Promise(resolve=>{completeRefresh=resolve;});
+    let delivered=0;
+    const verify=slowRefresh.then(result=>{
+      if(result==="ok"&&consumePrivateTaskCreateCompletion(runtime,generation))
+        delivered++;
+    });
+    for(const attempt of [command(),command()]){
+      assert.equal(await runPrivateTaskCreate(runtime,generation,attempt,
+        async()=>{posts++;return "saved";}),"conflict");
+    }
+    assert.equal(posts,1);
+    assert.equal(delivered,0);
+    assert.equal(hasPrivateTaskCreateCompletion(runtime,generation),true);
+    // An unavailable refresh cannot release an acknowledged pending command.
+    completeRefresh("unavailable");
+    await verify;
+    assert.equal(delivered,0);
+    assert.equal(hasPrivateTaskCreateCompletion(runtime,generation),true);
+    assert.equal(await runPrivateTaskCreate(runtime,generation,command(),
+      async()=>{posts++;return "saved";}),"conflict");
+    assert.equal(posts,1);
+    assert.deepEqual(notices,[true],"a rejected second POST cannot overwrite the receipt");
+
+    // Only a subsequently successful, current-session verification delivers
+    // the completion and opens the gate for another user-initiated task.
+    if(consumePrivateTaskCreateCompletion(runtime,generation))delivered++;
+    assert.equal(delivered,1);
+    assert.equal(consumePrivateTaskCreateCompletion(runtime,generation),false);
+    assert.equal(await runPrivateTaskCreate(runtime,generation,command(),
+      async()=>{posts++;return "saved";}),"saved");
+    assert.equal(posts,2);
+    assert.deepEqual(notices,[true,true]);
+    assert.equal(store.toString().includes(prior.title),false);
+    un();
+  });
+});
+test("pending success blocks a reopened capture before the bridge subscribes",async()=>{
+  await withStorage(async ()=>{
+    const runtime={known:()=>true,generation:()=>generation,register:()=>()=>{}};
+    let posts=0;
+    assert.equal(await runPrivateTaskCreate(runtime,generation,command(),
+      async()=>{posts++;return "saved";}),"saved");
+    // Simulate root completion component not mounted yet, and a modal reopen:
+    // the coordinator must fail closed regardless of subscriptions.
+    assert.equal(hasPrivateTaskCreateCompletion(runtime,generation),true);
+    assert.equal(await runPrivateTaskCreate(runtime,generation,command(),
+      async()=>{posts++;return "saved";}),"conflict");
+    assert.equal(posts,1);
+    assert.equal(consumePrivateTaskCreateCompletion(runtime,generation),true);
+    assert.equal(await runPrivateTaskCreate(runtime,generation,command(),
+      async()=>{posts++;return "saved";}),"saved");
+    assert.equal(posts,2);
   });
 });
 test("acknowledged CREATE delivered after root listener mounts late",async()=>{
@@ -242,4 +320,9 @@ test("task completion hook is separate from unmounted editor and defers while hi
   assert.match(bridge,/runtime\.refresh\(\)/,"fresh session verification required");
   assert.match(bridge,/document\.visibilityState!=="visible"\|\|!navigator\.onLine/);
   assert.match(bridge,/consumePrivateTaskCreateCompletion/);
+  assert.match(editor,/hasPrivateTaskCreateCompletion/);
+  assert.match(editor,/target-task-create-awaiting-confirmation/);
+  assert.match(editor,/marker.kind!=="clear"\|\|pendingConfirmation/);
+  assert.match(src("lib/target-private-task-create-coordinator.ts"),
+    /entries.has\(runtime\)\|\|hasPrivateTaskCreateCompletion\(runtime,generation\)/);
 });
