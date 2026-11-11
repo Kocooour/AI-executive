@@ -52,6 +52,7 @@ if(noteEditRecoveryTest&&!["legacy","combined","4b"].includes(noteEditProfile))
   throw new Error("Invalid LUMI_TARGET_NOTE_EDIT_PROFILE");
 const privateNoteAreasTest = process.env.LUMI_PRIVATE_NOTE_AREAS_E2E === "true";
 const privateNoteCreateTest = process.env.LUMI_PRIVATE_NOTE_CREATE_E2E === "true";
+const globalCaptureTest = process.env.LUMI_TARGET_GLOBAL_CAPTURE_E2E === "true";
 
 export default defineConfig({
   testDir: "e2e",
@@ -170,6 +171,11 @@ export default defineConfig({
         AI_EXECUTIVE_TARGET_STAGING_HTTP_NOTES_CREATE_ENABLED: "true",
         AI_EXECUTIVE_TARGET_UI_PRIVATE_NOTE_AREAS_ENABLED: "true",
         AI_EXECUTIVE_TARGET_UI_PRIVATE_NOTE_CREATE_ENABLED: "true",
+      } : {}),
+      // Only this synthetic R3-CAPTURE-3 run enables a target detail as an
+      // actual modal, to exercise the focus-trapped inspector capture entry.
+      ...(globalCaptureTest ? {
+        AI_EXECUTIVE_TARGET_UI_DETAILS_ENABLED: "true",
       } : {}),
       AI_EXECUTIVE_PASSWORD_HASH: passwordHash,
       AI_EXECUTIVE_SESSION_SECRET: sessionSecret,

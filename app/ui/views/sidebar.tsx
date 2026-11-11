@@ -13,7 +13,9 @@ import { TargetSidebarContext } from "../target-sidebar-context";
 // R3-FE-4a: loaded only when the server page enabled target scopes with the project index.
 const TargetSidebarProjects = dynamic(() => import("../target-sidebar-projects"), { ssr: false });
 
-export function Sidebar({ app, targetPlan = false }: { app: LumiApp; targetPlan?: boolean }) {
+export function Sidebar({ app, targetPlan = false, onTargetCapture }: {
+  app: LumiApp; targetPlan?: boolean; onTargetCapture?:()=>void;
+}) {
   const targetSidebar = useContext(TargetSidebarContext);
   const {
     setSettingsSection,
@@ -246,21 +248,17 @@ export function Sidebar({ app, targetPlan = false }: { app: LumiApp; targetPlan?
         )}
         </div>
         <footer className="sidebarActions">
-          {/* The FAB is the normal desktop entry point. With a nonmodal
-              inspector open it is hidden to keep the inspector unobstructed,
-              so provide a fixed, keyboard-accessible sidebar entry instead.
-              Legacy sidebar controls remain unchanged when preview is off. */}
-          {!app.captureDisabled && <>
-          {mobileDesignV1Preview && app.selected && (
+          {/* Legacy inspector retains its previous sidebar capture entry.
+              Target details are aria-modal focus traps: the target capture
+              entry belongs INSIDE their dialog, not in an unreachable sidebar. */}
+          {mobileDesignV1Preview && app.selected && !onTargetCapture && !app.captureDisabled && (
             <button type="button" className="desktopInspectorCapture"
-              data-desktop-inspector-capture
-              aria-label={tr("quickCapture")}
+              data-desktop-inspector-capture aria-label={tr("quickCapture")}
               disabled={Boolean(app.capture || app.assistantOpen || app.moreOpen || app.confirmRequest)}
-              onClick={() => openCapture()}>
+              onClick={()=>openCapture()}>
               ＋ {tr("new")}
             </button>
           )}
-          </>}
           {!mobileDesignV1Preview && (
             <>
               {!app.captureDisabled && <button onClick={() => openCapture()} aria-label={tr("addTask")}>

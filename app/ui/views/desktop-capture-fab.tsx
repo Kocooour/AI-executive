@@ -5,19 +5,21 @@ import { desktopCaptureShortcut } from "../../../lib/desktop-shell-ui03a";
 import { mobileDesignV1Preview } from "../navigation";
 import type { LumiApp } from "../use-lumi-app";
 
-/** Desktop-only action in the existing, default-off Lumi v1 preview.
- * Keyboard and click both use openCapture's existing scope/consent rules.
- */
-export function DesktopCaptureFab({ app }: { app: LumiApp }) {
+/** One desktop FAB, with an independently gated private-note target action. */
+export function DesktopCaptureFab({ app, onTargetCapture, targetCaptureOpen = false }: {
+  app: LumiApp; onTargetCapture?:()=>void; targetCaptureOpen?:boolean;
+}) {
   const currentApp = useRef(app);
   currentApp.current = app;
+  const targetState=useRef({onOpen:onTargetCapture,open:targetCaptureOpen});
+  targetState.current={onOpen:onTargetCapture,open:targetCaptureOpen};
 
   useEffect(() => {
     if (!mobileDesignV1Preview) return;
     const onKeyDown = (event: KeyboardEvent) => {
       if (!window.matchMedia("(min-width: 701px)").matches) return;
       const state = currentApp.current;
-      if (state.captureDisabled) return;
+      if (state.captureDisabled && !targetState.current.onOpen) return;
       const target = event.target instanceof Element ? event.target : null;
       const editable = Boolean(target?.closest(
         'input, textarea, select, [contenteditable]:not([contenteditable="false"])',
@@ -26,25 +28,31 @@ export function DesktopCaptureFab({ app }: { app: LumiApp }) {
       // sidebar remains accessible. Allow capture via shortcut, while real
       // modal/dialog overlays continue to block global keyboard commands.
       const blocked = Boolean(state.capture || state.assistantOpen || state.moreOpen ||
-        state.confirmRequest || document.querySelector('[aria-modal="true"]'));
+        state.confirmRequest || state.offlineView || targetState.current.open ||
+        document.querySelector('[aria-modal="true"]'));
       if (!desktopCaptureShortcut(event, editable, blocked)) return;
       event.preventDefault();
-      state.openCapture();
+      if(targetState.current.onOpen)targetState.current.onOpen();
+      else state.openCapture();
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, []);
 
   if (!mobileDesignV1Preview) return null;
-  if (app.captureDisabled) return null;
+  if (app.captureDisabled && !onTargetCapture) return null;
   const blocked = Boolean(app.capture || app.assistantOpen || app.moreOpen ||
-    app.selected || app.confirmRequest);
+    app.selected || app.confirmRequest || app.offlineView || targetCaptureOpen);
+  const label=onTargetCapture
+    ?(app.language==="cs"?"Nová soukromá poznámka":"New private note")
+    :app.tr("quickCapture");
   return (
     <button type="button" className="desktopCaptureFab"
-      data-desktop-capture-fab disabled={blocked}
-      aria-label={app.tr("quickCapture")}
-      title={`${app.tr("quickCapture")} · ⌘⇧.`}
-      onClick={() => app.openCapture()}>
+      data-desktop-capture-fab data-target-private-capture-fab={onTargetCapture?"desktop":undefined}
+      disabled={blocked}
+      aria-label={label}
+      title={`${label} · ⌘⇧.`}
+      onClick={onTargetCapture ?? (()=>app.openCapture())}>
       <span aria-hidden="true">＋</span>
     </button>
   );

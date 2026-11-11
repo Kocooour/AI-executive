@@ -4,10 +4,10 @@
  * source of truth: nothing is stored in browser storage, and the value is only
  * ever used to choose which server query to make (never an authorization claim). */
 import {useCallback,useSyncExternalStore} from "react";
-import {withoutDetailMarker} from "../../lib/target-detail-route";
-import {defaultUrlScope,scopeFromSearch,searchWithScope,type UrlScope} from "../../lib/view-url";
+import {TARGET_SCOPE_CHANGED,writeTargetReadingScope} from "../../lib/target-reading-scope-nav";
+import {defaultUrlScope,scopeFromSearch,type UrlScope} from "../../lib/view-url";
 
-const CHANGED="lumi-target-scope-changed";
+const CHANGED=TARGET_SCOPE_CHANGED;
 
 function subscribe(notify:()=>void):()=>void{
   window.addEventListener("popstate",notify);
@@ -20,16 +20,8 @@ function subscribe(notify:()=>void):()=>void{
 const snapshot=():UrlScope=>scopeFromSearch(window.location.search);
 const serverSnapshot=():UrlScope=>defaultUrlScope;
 
-/** Selecting a scope is a navigation step (a new history entry), so Back returns to the previous scope. */
-export function writeTargetScope(next:UrlScope):void{
-  if(snapshot()===next)return;
-  try{
-    // The target-detail marker belongs to the entry it was pushed with, never to this one.
-    window.history.pushState(withoutDetailMarker(window.history.state),"",
-      `${window.location.pathname}${searchWithScope(window.location.search,next)}${window.location.hash}`);
-  }catch{/* History API blocked: the scope simply stays unchanged. */}
-  window.dispatchEvent(new Event(CHANGED));
-}
+/** Selecting a scope is a navigation step; all target UI call sites share the same rule. */
+export const writeTargetScope=writeTargetReadingScope;
 
 export function useTargetScope():UrlScope{
   return useSyncExternalStore(subscribe,snapshot,serverSnapshot);
