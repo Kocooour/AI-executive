@@ -35,7 +35,9 @@ async function setup(page:Page,create:(route:Route,cmd:Cmd)=>Promise<void>,
     const cmd=route.request().postDataJSON();
     expect(Object.keys(cmd)).toEqual(["commandId"]);
     expect(cmd.commandId).toBe(posted[0].commandId);
-    return reply(route,{status:receipt()});
+    const status=receipt();
+    return reply(route,status==="committed"
+      ?{status,taskId:posted[0].taskId}:{status});
   });
   await page.route("**/api/target-staging/tasks",async route=>{
     const cmd=route.request().postDataJSON() as Cmd;
@@ -138,19 +140,20 @@ test("close before successful POST still announces the saved task without anothe
   await expect(page.getByTestId("target-private-task-created")).toBeVisible();
   expect(writes).toHaveLength(1);
 });
-test("uncertain task CREATE cannot be resent after reload; opaque recovery must confirm",async({page})=>{
-  await page.setViewportSize({width:390,height:844});
+for(const width of [390,1280]){
+test("reload recovery exposes authorized task detail without retrying CREATE at "+width+"px",async({page})=>{
+  await page.setViewportSize({width,height:844});
   let receipt="not_recorded";
   const writes=await setup(page,route=>reply(route,{error:"unavailable"},503),()=>receipt);
-  await page.goto("/?view=Calendar");
-  await openAndFill(page,390);
+  await page.goto("/?view=Calendar&scope=shared");
+  await openAndFill(page,width);
   await page.getByTestId("target-private-task-save").click();
   await expect(page.getByTestId("target-private-task-unresolved")).toBeVisible();
   const stored=await page.evaluate(()=>sessionStorage.getItem("lumi-private-task-create-unresolved-v1"));
   expect(stored).toContain(writes[0].commandId);
   expect(stored).not.toContain(writes[0].title);
   await page.reload();
-  await fab(page,390).click();
+  await fab(page,width).click();
   await page.getByTestId("target-capture-task-kind").click();
   await expect(page.getByTestId("target-private-task-unresolved")).toBeVisible();
   await expect(page.getByTestId("target-private-task-form")).toHaveCount(0);
@@ -160,10 +163,20 @@ test("uncertain task CREATE cannot be resent after reload; opaque recovery must 
   await expect(page.getByTestId("target-private-task-unresolved")).toBeVisible();
   receipt="committed";
   await verify.click();
-  await expect(page.getByTestId("target-private-task-unresolved")).toHaveCount(0);
-  await expect(page.getByText("Vytvoření úkolu bylo potvrzeno.")).toBeVisible();
+  const notice=page.getByTestId("target-private-task-created");
+  await expect(notice).toBeVisible();
+  await expect(page.getByTestId("target-private-task-capture")).toHaveCount(0);
   expect(writes).toHaveLength(1);
+  const persisted=await page.evaluate(()=>sessionStorage.getItem(
+    "lumi-private-task-create-unresolved-v1"));
+  expect(persisted).toBe(null);
+  await notice.getByTestId("target-private-task-open").click();
+  await expect(page).toHaveURL(/view=MyPlanPreview/);
+  await expect(page).toHaveURL(/scope=personal/);
+  await expect(page).toHaveURL(new RegExp("taskId="+writes[0].taskId));
+  await expect(page.getByTestId("target-detail")).toBeVisible();
 });
+}
 test("preflight timeout restores a retryable Area selection without CREATE",async({page})=>{
   test.setTimeout(45000);
   await page.setViewportSize({width:390,height:844});
