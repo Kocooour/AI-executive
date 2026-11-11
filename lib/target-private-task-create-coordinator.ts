@@ -5,7 +5,7 @@
  * capability but MUST NOT clear the blocking UUID. This remains a release gate.
  */
 import {checkPrivateTaskCreateReceipt,sendPrivateTaskCreate,
-  type PrivateTaskCreateCommand,type TaskCreateOutcome,type TaskCreateReceipt,
+  validPrivateTaskCreateCommand,type PrivateTaskCreateCommand,type TaskCreateOutcome,type TaskCreateReceipt,
 } from "./target-private-task-create-client";
 import type {TargetClientRuntime} from "./target-client-runtime";
 
@@ -76,7 +76,8 @@ export async function runPrivateTaskCreate(
   timeoutMs=DEADLINE_MS,
 ):Promise<TaskCreateOutcome|"blocked">{
   if(!runtime.known()||runtime.generation()!==generation||
-    entries.has(runtime)||!reservePrivateTaskCreate(generation,command.commandId))
+    entries.has(runtime)||!validPrivateTaskCreateCommand(command)||
+    !reservePrivateTaskCreate(generation,command.commandId)
     return "blocked";
   const controller=new AbortController();
   let timeoutResolve:(v:TaskCreateOutcome)=>void=()=>{};
