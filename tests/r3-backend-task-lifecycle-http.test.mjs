@@ -5,7 +5,7 @@
  */
 import assert from "node:assert/strict";
 import {randomUUID} from "node:crypto";
-import {mkdtempSync,mkdirSync,readFileSync,writeFileSync,rmSync} from "node:fs";
+import {chmodSync,existsSync,mkdtempSync,mkdirSync,readFileSync,writeFileSync,rmSync} from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import {DatabaseSync} from "node:sqlite";
@@ -182,6 +182,35 @@ test("owner real HTTP detail → CAS title → same-command receipt → delete t
   verifyStore();
 });
 
+const REAL_NODE=process.execPath;
+let gateNumber=0;
+async function pauseChildBeforeTransaction(operation,revokeDuringPause){
+  const dir=path.join(root,"race-gate-"+(++gateNumber));
+  mkdirSync(dir);
+  const entry=path.join(dir,"node-wrapper.sh");
+  writeFileSync(entry,`#!/bin/sh
+PATH=/usr/bin:/bin
+: > "${dir}/entered"
+while [ ! -e "${dir}/continue" ]; do sleep 0.02; done
+exec "${REAL_NODE}" "$@"
+`);
+  chmodSync(entry,0o755);
+  process.execPath=entry;
+  try{
+    const pending=operation();
+    for(let waited=0;!existsSync(path.join(dir,"entered"));waited+=20){
+      assert.ok(waited<30000,"child writer never reached the race gate");
+      await new Promise(resolve=>setTimeout(resolve,20));
+    }
+    await revokeDuringPause();
+    writeFileSync(path.join(dir,"continue"),"");
+    return await pending;
+  }finally{
+    process.execPath=REAL_NODE;
+    // The gate only delays a child; it is not part of the product state.
+  }
+}
+
 test("shared editor has a live right, viewer/foreign task cannot infer content; revoke hides receipts",async()=>{
   const id="team-lifecycle";
   const previousTitle=db.prepare("SELECT title FROM tasks WHERE id=?").get(id).title;
@@ -223,5 +252,32 @@ test("shared editor has a live right, viewer/foreign task cannot infer content; 
   assert.equal(count("task_title_audit"),earlierCount);
   assert.equal(db.prepare("SELECT title FROM tasks WHERE id=?").get(id).title,"Bob's own update");
   assert.notEqual(previousTitle,"Bob's own update");
+  verifyStore();
+});
+
+test("durable session revoked between HTTP dispatch and SQLite writer cannot delete",async()=>{
+  const id="race-task";
+  db.prepare("INSERT INTO tasks(id,area_id,title) VALUES (?,'team-area','Race original')").run(id);
+  const session=durable.issueDurableTargetStagingSession(store,"bob",900);
+  assert.equal(session.ok,true);
+  const cookie=`${durable.TARGET_STAGING_SESSION_COOKIE}=${session.sessionToken}`;
+  const rev=(await (await detail(id,cookie)).json()).snapshotRevision;
+  const input={commandId:randomUUID(),expectedRevision:rev};
+  const audits=count("task_delete_audit"),tombs=count("task_tombstones");
+  const response=await pauseChildBeforeTransaction(
+    ()=>del(id,input,cookie),
+    async()=>{
+      const result=durable.revokeDurableTargetStagingSession(store,session.sessionId);
+      assert.equal(result.ok,true);
+    },
+  );
+  assert.equal(response.status,401);
+  assert.deepEqual(await response.json(),
+    {error:"Authentication required",code:"session_revoked"});
+  assert.equal(count("task_delete_audit"),audits);
+  assert.equal(count("task_tombstones"),tombs);
+  assert.equal(db.prepare("SELECT title FROM tasks WHERE id=?").get(id).title,
+    "Race original");
+  assert.equal((await delStatus(id,input,cookie)).status,401);
   verifyStore();
 });
