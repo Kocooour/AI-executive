@@ -94,16 +94,12 @@ async function handle(request:Request,statusOnly:boolean):Promise<Response>{
       return Response.json({status:"committed"},{headers});
     }
     const result=await createPrivateTaskInChild(child,command);
-    if(identity.kind==="owner"){
-      const checked=verifyStagingIdentityBeforeRelease(request,identity,store);
-      if(checked!=="ok")return stagingIdentityRefusal(checked);
-    }
+    // A write may have committed just before the session was revoked:
+    // do not release a success response without a fresh live identity check.
+    const checked=verifyStagingIdentityBeforeRelease(request,identity,store);
+    if(checked!=="ok")return stagingIdentityRefusal(checked);
     if(result?.ok===false&&result.reason==="session_revoked")
       return stagingUnauthorizedRefusal(request,identity,store);
-    if(!result&&identity.kind==="session"){
-      const checked=verifyStagingIdentityBeforeRelease(request,identity,store);
-      if(checked!=="ok")return stagingIdentityRefusal(checked);
-    }
     if(!unchanged(base)||!result)return answer(503,"Staging unavailable");
     if(!result.ok){
       if(result.reason==="unavailable")return answer(404,"Not found");
