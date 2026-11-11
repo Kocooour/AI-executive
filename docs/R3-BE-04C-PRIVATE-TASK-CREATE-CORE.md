@@ -38,3 +38,7 @@ Test používá skutečnou izolovanou SQLite, podepsané writable/read-only toke
 - Chybí read-only recovery/status pro ztracenou HTTP odpověď, klientské pending/uncertain/cancel/Undo a FE Quick Capture pro úkol.
 - Create do sdíleného projektu/Oblasti vyžaduje samostatnou autorizaci a výslovné rozhodnutí o zveřejnění.
 - Stagingový pinned-fd model není produkční VFS a nepovoluje R4 cutover. Reálná data, import HumanWiki ani produkční migrace se tímto PR nezapínají.
+
+## Navazující R3-BE-4c.2 — HTTP + exact-command recovery
+
+Tento interní writer zůstává serverovým jádrem. Navazující [R3-BE-4c.2](R3-BE-04C-PRIVATE-TASK-CREATE-HTTP.md) doplňuje default-off HTTP `POST /api/target-staging/tasks` a read-only `POST /api/target-staging/tasks/create-status` s existující revokační a Area ACL bariérou. Stav `not_recorded` nikdy nedokazuje, že původní write nemůže teprve dokončit; klient musí zachovat nezměněné ID a payload. UI task Quick Capture následuje v samostatné FE iteraci.
