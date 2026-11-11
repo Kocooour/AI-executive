@@ -6,6 +6,11 @@ export type PrivateTaskCreateCommand={
 };
 export type TaskCreateOutcome="saved"|"denied"|"uncertain";
 export type TaskCreateReceipt="committed"|"not_recorded"|"denied"|"unavailable";
+/** Only the separately verified reload recovery returns an authorized task ID.
+ * No private title, Area, actor or original command ever crosses this response. */
+export type TaskCreateRecoveryOutcome=
+  |Exclude<TaskCreateReceipt,"committed">
+  |{status:"committed";taskId:string};
 const uuid=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const area=/^[A-Za-z0-9_.:@-]{1,120}$/;
 const encoder=new TextEncoder();
@@ -101,11 +106,11 @@ export async function checkPrivateTaskCreateReceipt(
   }catch{return "unavailable";}
 }
 
-/** Content-free recovery after full reload: server derives the original
- * task/Area from a verified, actor-keyed immutable receipt. */
+/** Content-free title recovery after reload: the server verifies actor,
+ * private Area and task before returning a navigable, opaque task ID. */
 export async function checkPrivateTaskCreateRecovery(
   commandId:string,signal:AbortSignal,fetchImpl:typeof fetch=fetch,
-):Promise<TaskCreateReceipt>{
+):Promise<TaskCreateRecoveryOutcome>{
   if(typeof commandId!=="string"||!uuid.test(commandId)||signal.aborted)
     return "unavailable";
   try{
@@ -117,8 +122,14 @@ export async function checkPrivateTaskCreateRecovery(
     if([401,403,404].includes(response.status))return "denied";
     if(response.status!==200)return "unavailable";
     const result=await bounded(response,signal);
-    return record(result)&&Object.keys(result).join(",")==="status"&&
-      (result.status==="committed"||result.status==="not_recorded")
-      ?result.status:"unavailable";
+    if(!record(result))return "unavailable";
+    if(Object.keys(result).join(",")==="status"&&result.status==="not_recorded")
+      return "not_recorded";
+    if(Object.keys(result).sort().join(",")==="status,taskId"&&
+      result.status==="committed"&&
+      typeof result.taskId==="string"&&uuid.test(result.taskId)&&
+      result.taskId===result.taskId.toLowerCase())
+      return {status:"committed",taskId:result.taskId};
+    return "unavailable";
   }catch{return "unavailable";}
 }
