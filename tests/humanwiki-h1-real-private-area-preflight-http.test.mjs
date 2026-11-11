@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -7,6 +8,9 @@ import { after, test } from "node:test";
 import { createSessionToken, sessionCookieName } from "../lib/auth.ts";
 import { bootstrapIsolatedTargetStore } from "../lib/target-store-bootstrap.ts";
 import { verifyHumanWikiOwnerPrivateAreaLive } from "../lib/target-staging-durable-session.ts";
+import { withPinnedTargetStagingWrite } from "../lib/target-staging-pinned-write.ts";
+import { evaluateTargetAreaPolicy } from "../lib/target-area-policy.ts";
+import { POST as CHANGE_MEMBERSHIP } from "../app/api/target-staging/areas/[areaId]/members/route.ts";
 import { GET } from "../app/api/humanwiki/private-area-preflight/route.ts";
 import { POST } from "../app/api/humanwiki/import/route.ts";
 
@@ -23,6 +27,8 @@ const env = [
   "AI_EXECUTIVE_HUMANWIKI_PRIVATE_AREA_ID",
   "AI_EXECUTIVE_HUMANWIKI_PRIVATE_AREA_PREFLIGHT_ENABLED",
   "AI_EXECUTIVE_HUMANWIKI_REAL_IMPORT_ENABLED",
+  "AI_EXECUTIVE_TARGET_STAGING_HTTP_ENABLED",
+  "AI_EXECUTIVE_TARGET_STAGING_HTTP_WRITE_ENABLED",
 ];
 const original = env.map(key => process.env[key]);
 process.env.AI_EXECUTIVE_DATA_DIR = legacy;
@@ -191,4 +197,144 @@ test("H1-real.2 unauthorized or malformed request never reveals Area or owner co
     {stagingDirectory:path.join(root,"missing"),expectedRestoreGeneration:store.restoreGeneration},
     store.ownerUserId,store.unassignedAreaId),false);
   // No owner, Area, source, or private token in rejection response.
+});
+
+
+// Use the same anchored staging writer as the application, not out-of-band sqlite
+// edits that merely cause the entire store to fail its integrity preflight.
+const commitAclFixture = (mutate, operation) => withPinnedTargetStagingWrite(
+  liveStore,
+  context => {
+    mutate(context.db);
+    return context.commit({ kind: "membership", payload: { operation } });
+  },
+  () => false,
+  () => false,
+);
+
+test("H1-real.2 rejects foreign private Areas and preserves valid owner ACL after forbidden deletion", async () => {
+  setup();
+  const token = createSessionToken();
+  const owned = "hw:temporary-private-area";
+  const foreign = "hw:foreign-private-area";
+  const foreignUser = "owner-bob";
+  const foreignWorkspace = "hw:foreign-personal-workspace";
+
+  assert.equal(commitAclFixture(db => {
+    // Fully formed second identity/private workspace: the denial cannot be
+    // attributed to a nonexistent actor or a missing Area ID.
+    db.prepare("INSERT INTO identities(id) VALUES (?)").run(foreignUser);
+    db.prepare("INSERT INTO workspaces(id,kind,owner_user_id) VALUES (?,'personal',?)")
+      .run(foreignWorkspace, foreignUser);
+    db.prepare("INSERT INTO areas(id,title,kind,workspace_id,owner_user_id,system_key) VALUES (?,?,'private',?,?, 'unassigned')")
+      .run(foreign, "Other owner's private Area", foreignWorkspace, foreignUser);
+    db.prepare("INSERT INTO areas(id,title,kind,workspace_id,owner_user_id) VALUES (?,?,'private',?,?)")
+      .run(owned, "Temporary owner's private Area", store.personalWorkspaceId, store.ownerUserId);
+  }, "create-private-fixtures"), true);
+
+  // First show the live anchor and legitimate owner ACL are still accepted.
+  assert.equal(verifyHumanWikiOwnerPrivateAreaLive(liveStore, store.ownerUserId, owned), true);
+  assert.equal(verifyHumanWikiOwnerPrivateAreaLive(liveStore, foreignUser, foreign), true);
+  assert.equal(verifyHumanWikiOwnerPrivateAreaLive(liveStore, store.ownerUserId, foreign), false);
+  process.env.AI_EXECUTIVE_HUMANWIKI_PRIVATE_AREA_ID = foreign;
+  await assertHidden(await GET(ownerRequest(token)));
+
+  // Deletion is NEVER a supported private Area ACL transition. The schema's
+  // area_deletion_guard preserves identity/epoch and must reject deletion even
+  // through the canonical anchored writer. Its failed TX must not corrupt the
+  // registry or revoke an authorized owner.
+  process.env.AI_EXECUTIVE_HUMANWIKI_PRIVATE_AREA_ID = owned;
+  assert.equal((await GET(ownerRequest(token))).status, 200);
+  const areaExists = () => {
+    const db = new DatabaseSync(store.databasePath, {readOnly:true});
+    try { return db.prepare("SELECT COUNT(*) AS n FROM areas WHERE id=?").get(owned).n; }
+    finally { db.close(); }
+  };
+  assert.equal(areaExists(), 1);
+  assert.equal(commitAclFixture(db => {
+    db.prepare("DELETE FROM areas WHERE id=?").run(owned);
+  }, "forbidden-private-area-deletion"), false,
+  "an attempted Area deletion must roll back under area_deletion_guard");
+  assert.equal(areaExists(), 1);
+  assert.equal(verifyHumanWikiOwnerPrivateAreaLive(liveStore, store.ownerUserId, owned), true);
+  assert.equal((await GET(ownerRequest(token))).status, 200,
+    "failed deletion cannot invalidate an authenticated owner's private Area");
+  // The default private Area also remains live: no broken anchor/global denial.
+  process.env.AI_EXECUTIVE_HUMANWIKI_PRIVATE_AREA_ID = store.unassignedAreaId;
+  assert.equal((await GET(ownerRequest(token))).status, 200);
+});
+
+test("H1-real.2 private-only preflight stays denied for shared Area while supported membership removal revokes live ACL", async () => {
+  setup();
+  const token = createSessionToken();
+  const member = "hw:acl-member";
+  const personalWorkspace = "hw:acl-member-personal";
+  const memberPrivate = "hw:acl-member-unassigned";
+  const sharedWorkspace = "hw:acl-shared-workspace";
+  const sharedArea = "hw:acl-shared-area";
+
+  assert.equal(commitAclFixture(db => {
+    db.prepare("INSERT INTO identities(id) VALUES (?)").run(member);
+    db.prepare("INSERT INTO workspaces(id,kind,owner_user_id) VALUES (?,'personal',?)")
+      .run(personalWorkspace, member);
+    db.prepare(`INSERT INTO areas(id,title,kind,workspace_id,owner_user_id,system_key)
+      VALUES (?,'Member private','private',?,?,'unassigned')`)
+      .run(memberPrivate, personalWorkspace, member);
+    db.prepare("INSERT INTO workspaces(id,kind,owner_user_id) VALUES (?,'shared',?)")
+      .run(sharedWorkspace, store.ownerUserId);
+    db.prepare("INSERT INTO areas(id,title,kind,workspace_id,owner_user_id) VALUES (?,'Team','shared',?,?)")
+      .run(sharedArea, sharedWorkspace, store.ownerUserId);
+    db.prepare("INSERT INTO area_members(area_id,user_id,role) VALUES (?,?,'admin')")
+      .run(sharedArea, store.ownerUserId);
+    db.prepare("INSERT INTO area_members(area_id,user_id,role) VALUES (?,?,'editor')")
+      .run(sharedArea, member);
+  }, "create-shared-acl-fixture"), true);
+
+  const policy = actor => {
+    const db = new DatabaseSync(store.databasePath, {readOnly:true});
+    try { return evaluateTargetAreaPolicy(db, {
+      actorUserId:actor, areaId:sharedArea, permission:"read",
+    }); } finally { db.close(); }
+  };
+  assert.equal(policy(member).allowed, true);
+  assert.equal(policy(store.ownerUserId).allowed, true);
+  assert.equal(verifyHumanWikiOwnerPrivateAreaLive(
+    liveStore, store.ownerUserId, sharedArea), false,
+  "the HumanWiki preflight must NEVER authorize a shared Area");
+  process.env.AI_EXECUTIVE_HUMANWIKI_PRIVATE_AREA_ID = sharedArea;
+  await assertHidden(await GET(ownerRequest(token)));
+
+  // A shared membership can actually be revoked by the existing authenticated
+  // R2 command. This is distinct from private Area deletion, which is forbidden.
+  process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_ENABLED = "true";
+  process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_WRITE_ENABLED = "true";
+  const db = new DatabaseSync(store.databasePath, {readOnly:true});
+  let revision;
+  try {
+    revision = db.prepare("SELECT policy_revision AS revision FROM areas WHERE id=?")
+      .get(sharedArea).revision;
+  } finally { db.close(); }
+  const payload = {
+    commandId: randomUUID(), action:"remove", targetUserId:member,
+    expectedPolicyRevision:revision, writeAreaId:sharedArea,
+    restoreGeneration:store.restoreGeneration,
+  };
+  const response = await CHANGE_MEMBERSHIP(new Request(
+    "https://lumi.invalid/api/target-staging/areas/"+sharedArea+"/members", {
+      method:"POST",
+      headers:{
+        cookie:sessionCookieName+"="+token,origin:"https://lumi.invalid",
+        "content-type":"application/json","x-lumi-target-protocol":"1",
+      },
+      body:JSON.stringify(payload),
+    }), {params:Promise.resolve({areaId:sharedArea})});
+  assert.equal(response.status, 200, "real supported shared membership removal");
+  assert.equal((await response.json()).ok, true);
+  assert.equal(policy(member).allowed, false, "removed member loses current read right");
+  assert.equal(policy(store.ownerUserId).allowed, true, "owner still has access");
+  await assertHidden(await GET(ownerRequest(token)),
+    "a shared Area stays denied by HumanWiki private-only preflight");
+  process.env.AI_EXECUTIVE_HUMANWIKI_PRIVATE_AREA_ID = store.unassignedAreaId;
+  assert.equal((await GET(ownerRequest(token))).status, 200,
+    "successful shared ACL mutation must not break the private owner preflight");
 });
