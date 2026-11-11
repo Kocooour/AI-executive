@@ -279,7 +279,9 @@ export function witnessCurrentHead(directory,registryId,privateKey) {
  * Requires the *next* sequence and exact previous digest, and commits the
  * witness-signed event under a SQLite immediate write lock.
  * It does not prove the source event has committed: app-side durable ack and
- * an external antirestore anchor are separately required.
+ * an external antirestore anchor are separately required. Losing the
+ * operator response after COMMIT is recoverable by exact latest-tuple replay;
+ * all replay checks must stay inside this same audited write transaction.
  */
 export function publishWitnessCheckpoint(directory,registryId,privateKey,
   {sequence,previousDigest,digest}={}) {
@@ -298,8 +300,21 @@ export function publishWitnessCheckpoint(directory,registryId,privateKey,
       // can change the audited snapshot before COMMIT.
       const audited=verifyRows(db,registryId,pub);
       const current=readSignedHeadForAppend(db,registryId,pub);
-      if(audited.sequence!==current.sequence || audited.digest!==current.digest ||
-          sequence!==current.sequence+1 || previousDigest!==current.digest)
+      if(audited.sequence!==current.sequence || audited.digest!==current.digest)
+        throw Error("witness_unavailable");
+
+      // Crash/retry boundary: the FIRST attempt may already have committed
+      // when the operator loses its response. Replay only the *latest* exact
+      // tuple, after a complete history audit under the same write lock.
+      // A stale historical tuple, conflicting digest or predecessor may never
+      // be acknowledged. A replay does not re-sign or append any event.
+      if(sequence===current.sequence && sequence>0 &&
+          digest===current.digest && previousDigest===current.previous_digest){
+        db.exec("COMMIT");
+        return {ok:true,replayed:true,sequence,digest,importAuthorized:false,
+          independentWitnessVerified:false,withdrawalComplete:false};
+      }
+      if(sequence!==current.sequence+1 || previousDigest!==current.digest)
         throw Error("witness_unavailable");
       const hash=chainHash(registryId,sequence,previousDigest,digest,
         current.chain_hash,current.signature);
@@ -313,7 +328,7 @@ export function publishWitnessCheckpoint(directory,registryId,privateKey,
       if(saved.sequence!==sequence || saved.digest!==digest)
         throw Error("witness_unavailable");
       db.exec("COMMIT");
-      return {ok:true,sequence,digest,importAuthorized:false,
+      return {ok:true,replayed:false,sequence,digest,importAuthorized:false,
         independentWitnessVerified:false,withdrawalComplete:false};
     }catch(error){
       try{db.exec("ROLLBACK");}catch{/* fail closed */}
