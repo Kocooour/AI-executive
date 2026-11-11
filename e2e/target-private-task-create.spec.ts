@@ -31,6 +31,12 @@ async function setup(page:Page,create:(route:Route,cmd:Cmd)=>Promise<void>,
     expect(route.request().postDataJSON()).toEqual(posted[0]); // exact original command
     return reply(route,{status:receipt()});
   });
+  await page.route("**/api/target-staging/tasks/create-recovery",route=>{
+    const cmd=route.request().postDataJSON();
+    expect(Object.keys(cmd)).toEqual(["commandId"]);
+    expect(cmd.commandId).toBe(posted[0].commandId);
+    return reply(route,{status:receipt()});
+  });
   await page.route("**/api/target-staging/tasks",async route=>{
     const cmd=route.request().postDataJSON() as Cmd;
     expect(Object.keys(cmd).sort()).toEqual([
@@ -132,9 +138,10 @@ test("close before successful POST still announces the saved task without anothe
   await expect(page.getByTestId("target-private-task-created")).toBeVisible();
   expect(writes).toHaveLength(1);
 });
-test("uncertain task CREATE cannot be resent after reload; private title is not stored",async({page})=>{
+test("uncertain task CREATE cannot be resent after reload; opaque recovery must confirm",async({page})=>{
   await page.setViewportSize({width:390,height:844});
-  const writes=await setup(page,route=>reply(route,{error:"unavailable"},503));
+  let receipt="not_recorded";
+  const writes=await setup(page,route=>reply(route,{error:"unavailable"},503),()=>receipt);
   await page.goto("/?view=Calendar");
   await openAndFill(page,390);
   await page.getByTestId("target-private-task-save").click();
@@ -147,7 +154,14 @@ test("uncertain task CREATE cannot be resent after reload; private title is not 
   await page.getByTestId("target-capture-task-kind").click();
   await expect(page.getByTestId("target-private-task-unresolved")).toBeVisible();
   await expect(page.getByTestId("target-private-task-form")).toHaveCount(0);
-  await expect(page.getByTestId("target-private-task-receipt")).toHaveCount(0);
+  const verify=page.getByTestId("target-private-task-receipt");
+  await expect(verify).toBeEnabled();
+  await verify.click();
+  await expect(page.getByTestId("target-private-task-unresolved")).toBeVisible();
+  receipt="committed";
+  await verify.click();
+  await expect(page.getByTestId("target-private-task-unresolved")).toHaveCount(0);
+  await expect(page.getByText("Vytvoření úkolu bylo potvrzeno.")).toBeVisible();
   expect(writes).toHaveLength(1);
 });
 test("preflight timeout restores a retryable Area selection without CREATE",async({page})=>{
