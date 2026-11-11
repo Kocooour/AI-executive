@@ -7,8 +7,11 @@
  * Syntax: node services/humanwiki-witness/operator.mjs bootstrap
  *         node services/humanwiki-witness/operator.mjs publish SEQ PREV_DIGEST DIGEST
  */
+import { randomBytes } from "node:crypto";
 import { loadWitnessSigningKey } from "./server.mjs";
-import { bootstrapWitnessStore, publishWitnessCheckpoint } from "./store.mjs";
+import {
+  bootstrapWitnessStore, publishWitnessCheckpoint, witnessChallengeReceipt,
+} from "./store.mjs";
 
 const directory=process.env.HUMANWIKI_WITNESS_STORAGE_DIRECTORY;
 const registryId=process.env.HUMANWIKI_WITNESS_REGISTRY_ID;
@@ -27,7 +30,23 @@ if(command==="bootstrap"&&args.length===0){
   });
   if(!result.ok||result.importAuthorized!==false||result.withdrawalComplete!==false)
     throw Error("witness publication unavailable");
-  process.stdout.write("Witness checkpoint committed; no import or revocation enabled.\n");
+
+  // Sign a FRESH read of the durable head *after* the write/replay
+  // transaction committed. If another operator advanced it meanwhile,
+  // refuse rather than reporting an acknowledgement for the wrong event.
+  // A lost stdout can be recovered by repeating the exact same latest
+  // triple: the SQLite publisher returns replayed:true without a new write.
+  const receipt=witnessChallengeReceipt(directory,registryId,privateKey,
+    randomBytes(32).toString("base64url"));
+  if(receipt.sequence!==result.sequence || receipt.digest!==result.digest)
+    throw Error("witness publication unavailable");
+  process.stdout.write(JSON.stringify({
+    schema:"humanwiki_witness_operator_handoff_v1",
+    replayed:result.replayed===true,
+    receipt,
+    importAuthorized:false,independentWitnessVerified:false,
+    withdrawalComplete:false,consentVerified:false,
+  })+"\n");
 } else {
   throw Error("Use bootstrap or publish SEQUENCE PREVIOUS_DIGEST DIGEST");
 }
