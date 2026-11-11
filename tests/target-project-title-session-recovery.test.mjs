@@ -135,6 +135,15 @@ test("a later 403/404/409 after an uncertain PATCH never releases its tab lock",
   }
   clean();
 });
+test("malformed first 400 cannot release an uncertain rename marker",async()=>{
+ clean();const rt=runtime();
+ assert.equal(reserveProjectTitleReload(A,CMD,A),true);
+ assert.deepEqual(await runTrackedProjectTitleEdit(rt,A,PROJECT,command,
+   (id,cmd,signal)=>saveProjectTitleEdit(id,cmd,signal,async()=>reply({},400)),100,A),
+   {outcome:"uncertain"});
+ assert.equal(projectTitleReloadMarker(A).kind,"blocked");
+ clean();rt.securityReset();
+});
 test("malformed first 409 cannot release an uncertain rename marker",async()=>{
   clean();const rt=runtime();
   assert.equal(reserveProjectTitleReload(A,CMD,A),true);

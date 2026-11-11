@@ -9,7 +9,7 @@ export type ProjectTitleEditPreview={
 export type ProjectTitleEditCommand=Omit<ProjectTitleEditPreview,"principalBinding">&{
   commandId:string;title:string;
 };
-export type ProjectTitleEditFailure="denied"|"conflict"|"unavailable"|"offline"|"invalid-response";
+export type ProjectTitleEditFailure="denied"|"expired"|"conflict"|"unavailable"|"offline"|"invalid-response";
 export type ProjectTitleEditPreviewResult={ok:true;preview:ProjectTitleEditPreview}|
   {ok:false;reason:ProjectTitleEditFailure};
 export type ProjectTitleEditSaveResult=
@@ -75,6 +75,12 @@ async function strictJson(response:Response,maxBytes=8192):Promise<unknown>{
     reader.releaseLock();
   }
 }
+async function codedExpiry(response:Response):Promise<boolean>{
+ try{const v=await strictJson(response,512);
+ return record(v)&&Object.keys(v).sort().join(",")==="code,error"&&
+ v.code==="session_expired"&&v.error==="Authentication required";
+ }catch{return false;}
+}
 const failure=(status:number):ProjectTitleEditFailure =>
   status===401||status===403||status===404?"denied":
   status===409?"conflict":"unavailable";
@@ -89,6 +95,7 @@ export async function loadProjectTitleEditPreview(projectId:string,signal:AbortS
       headers:{accept:"application/json"},signal,
     });
     if(signal.aborted)return {ok:false,reason:"offline"};
+    if(response.status===401&&await codedExpiry(response))return {ok:false,reason:"expired"};
     if(response.status!==200)return {ok:false,reason:failure(response.status)};
     let parsed:unknown;
     try{parsed=await strictJson(response);}
@@ -113,12 +120,7 @@ export async function saveProjectTitleEdit(projectId:string,command:ProjectTitle
     if(response.status===401){
       // Only the specifically coded durable-session expiry may be re-bound
       // after a separate server-verified SAME-actor preflight.
-      try{
-        const coded=await strictJson(response,512);
-        if(record(coded)&&Object.keys(coded).sort().join(",")==="code,error"&&
-          coded.code==="session_expired"&&coded.error==="Authentication required")
-          return {outcome:"expired"};
-      }catch{/* malformed refusal is an ordinary denial */}
+      if(await codedExpiry(response))return {outcome:"expired"};
       return {outcome:"denied"};
     }
     if(response.status===403||response.status===404){
@@ -146,7 +148,14 @@ export async function saveProjectTitleEdit(projectId:string,command:ProjectTitle
       }catch{/* keep the command uncertain */}
       return {outcome:"uncertain"};
     }
-    if(response.status===400)return {outcome:"conflict"};
+    if(response.status===400){
+      try{
+        const body=await strictJson(response,512);
+        if(record(body)&&Object.keys(body).join(",")==="error"&&
+          body.error==="Invalid request")return {outcome:"conflict"};
+      }catch{/* A proxy response cannot prove an uncommitted write. */}
+      return {outcome:"uncertain"};
+    }
     if(response.status!==200)return {outcome:"uncertain"};
     const result=await strictJson(response);
     if(!record(result))return {outcome:"uncertain"};

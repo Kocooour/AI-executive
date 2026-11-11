@@ -38,6 +38,12 @@ test('server preflight and writes use authenticated no-store requests and fail c
  assert.deepEqual(JSON.parse(seen.init.body),command);assert.equal(seen.init.headers['x-lumi-target-protocol'],'1');
  assert.deepEqual(await saveProjectTitleEdit(id,command,signal(),async()=>reply({ok:true,replayed:true})),{outcome:'saved',replayed:true});
  assert.deepEqual(await saveProjectTitleEdit(id,command,signal(),async()=>reply({error:'Revision conflict'},409)),{outcome:'conflict'});
+ assert.deepEqual(await saveProjectTitleEdit(id,command,signal(),async()=>reply({error:'Invalid request'},400)),{outcome:'conflict'});
+ for(const bad of [reply({},400),reply({error:'Invalid request',extra:1},400),
+   Response.json({error:'Invalid request'},{status:400,headers:{'cache-control':'private'}})])
+   assert.deepEqual(await saveProjectTitleEdit(id,command,signal(),async()=>bad),{outcome:'uncertain'});
+ assert.deepEqual(await loadProjectTitleEditPreview(id,signal(),
+   async()=>reply({error:'Authentication required',code:'session_expired'},401)),{ok:false,reason:'expired'});
  assert.deepEqual(await saveProjectTitleEdit(id,command,signal(),async()=>reply({},409)),{outcome:'uncertain'},
    'unrecognized 409 does not prove that the PATCH never committed');
  assert.deepEqual(await saveProjectTitleEdit(id,command,signal(),async()=>reply({error:'Not found'},404)),
