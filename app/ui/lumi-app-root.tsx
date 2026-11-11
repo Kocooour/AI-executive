@@ -218,7 +218,7 @@ export function LumiAppRoot({ targetMyPlan, targetScopes, targetDetails, targetE
             <button type="button" onClick={app.dismissRestoredNotice}>{tr("restoredNoticeOk")}</button>
           </div>
         )}
-        <Topbar app={app} />
+        <Topbar app={app} targetSearch={targetSearch} />
         {mobileDesignV1Preview && app.projectSyncNotices.map((notice) => (
           <div key={notice.projectId} className="navigationUnavailableNotice" role="alert"
             data-testid="project-sync-warning">

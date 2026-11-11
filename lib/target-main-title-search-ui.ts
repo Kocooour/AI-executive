@@ -4,6 +4,8 @@
 import type {TitleSearchFailure,TitleSearchScope} from "./target-staging-title-search-client";
 import type {TitleSearchSessionSnapshot} from "./target-staging-title-search-session";
 
+/** Topbar Enter is a deliberate submit, not a fetch-on-keystroke. */
+export const TARGET_MAIN_SEARCH_SUBMIT_EVENT="lumi-target-main-search-submit";
 export const TARGET_MAIN_TITLE_SEARCH_FLAGS=[
   "AI_EXECUTIVE_TARGET_STAGING_HTTP_ENABLED",
   "AI_EXECUTIVE_TARGET_UI_ENABLED",

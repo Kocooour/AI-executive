@@ -52,6 +52,8 @@ test("shell switches exactly the Search view to server titles; no new bottom nav
   assert.match(root,/targetSearch\s*&&\s*view==="Search"/);
   assert.match(page,/targetMainTitleSearchEnabled/);
   assert.match(topbar,/setView\("Search"\)/);
+  assert.match(topbar,/TARGET_MAIN_SEARCH_SUBMIT_EVENT/);
+  assert.match(ui,/addEventListener\(TARGET_MAIN_SEARCH_SUBMIT_EVENT/);
   assert.doesNotMatch(nav,/\bSearch\b/);
   assert.match(ui,/useTargetScope\(\)/);
   assert.match(ui,/useTargetSession\(/);

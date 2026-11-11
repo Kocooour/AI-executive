@@ -9,7 +9,7 @@ import {queuedTargetFetch} from "../../lib/target-read-queue";
 import {validTitleSearchQuery,type TitleSearchFailure} from "../../lib/target-staging-title-search-client";
 import {createStagingTitleSearchSession} from "../../lib/target-staging-title-search-session";
 import {
-  mainTitleSearchCopy,visibleMainTitleSearchResult,
+  mainTitleSearchCopy,visibleMainTitleSearchResult,TARGET_MAIN_SEARCH_SUBMIT_EVENT,
   type MainTitleSearchBinding,type BoundMainTitleSearch,type MainTitleSearchLanguage,
 } from "../../lib/target-main-title-search-ui";
 import "./target-main-title-search.css";
@@ -40,6 +40,7 @@ export default function TargetMainTitleSearch({query,language="cs"}:{
   const epoch=useRef(0);
   const [result,setResult]=useState<BoundMainTitleSearch|null>(null);
   const statusRef=useRef<HTMLParagraphElement>(null);
+  const submitRef=useRef<()=>void>(()=>{});
 
   // Query edits, navigation across Personal/Shared and auth rotation cannot
   // leave an older actor's data or a stale count on screen.
@@ -70,6 +71,12 @@ export default function TargetMainTitleSearch({query,language="cs"}:{
       window.removeEventListener("blur",conceal);
       window.removeEventListener("offline",conceal);
     };
+  },[]);
+
+  useEffect(()=>{
+    const submit=()=>submitRef.current();
+    window.addEventListener(TARGET_MAIN_SEARCH_SUBMIT_EVENT,submit);
+    return ()=>window.removeEventListener(TARGET_MAIN_SEARCH_SUBMIT_EVENT,submit);
   },[]);
 
   const allowed=gate.kind==="ready"&&session!==null&&foregroundOnline();
@@ -113,6 +120,8 @@ export default function TargetMainTitleSearch({query,language="cs"}:{
         setResult({binding,snapshot:session.getSnapshot(),failure:"unavailable"});
     });
   }
+  // One explicit Enter from the topbar uses the same guarded path as the button.
+  submitRef.current=search;
   function loadMore(){
     if(!session||!ready||!ready.hasMore||!foregroundOnline())return;
     statusRef.current?.focus();
