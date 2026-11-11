@@ -32,12 +32,12 @@ export type TargetStagingJournalType = "genesis" | "intent" | "confirm" | "abort
 export type TargetStagingJournalKind =
   | "title" | "delete" | "membership" | "session_issue" | "session_revoke"
   | "session_revoke_all" | "compaction" | "restore" | "note_edit" | "note_delete"
-  | "note_create" | "note_move" | "temporal_status" | "temporal_due_on" | "personal_when"
+  | "note_create" | "note_move" | "task_create" | "temporal_status" | "temporal_due_on" | "personal_when"
   | "personal_attention" | "personal_notification";
 const KINDS = new Set<string>([
   "title", "delete", "membership", "session_issue", "session_revoke",
   "session_revoke_all", "compaction", "restore", "note_edit", "note_delete",
-  "note_create", "note_move", "temporal_status", "temporal_due_on", "personal_when",
+  "note_create", "note_move", "task_create", "temporal_status", "temporal_due_on", "personal_when",
   "personal_attention","personal_notification",
 ]);
 export type TargetStagingJournalValue = string | number | null | readonly number[] | readonly (readonly string[])[];
