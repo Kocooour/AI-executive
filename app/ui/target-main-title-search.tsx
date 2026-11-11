@@ -87,7 +87,8 @@ export default function TargetMainTitleSearch({query,language="cs"}:{
   function finish(active:Session,binding:MainTitleSearchBinding,run:number,
     outcome:{ok:true}|{ok:false;reason:TitleSearchFailure|"limit-reached"}){
     if(!stillCurrent(binding,run,active))return;
-    const reason=outcome.ok?null:outcome.reason==="limit-reached"?"invalid-request":outcome.reason;
+    const reason:TitleSearchFailure|null=outcome.ok===false
+      ?(outcome.reason==="limit-reached"?"invalid-request":outcome.reason):null;
     setResult({binding,snapshot:active.getSnapshot(),failure:reason});
     if(reason==="signed-out")onRefusal();
   }
