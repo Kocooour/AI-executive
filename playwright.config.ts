@@ -54,6 +54,8 @@ if(noteEditRecoveryTest&&!["legacy","combined","4b"].includes(noteEditProfile))
 const privateNoteAreasTest = process.env.LUMI_PRIVATE_NOTE_AREAS_E2E === "true";
 const privateNoteCreateTest = process.env.LUMI_PRIVATE_NOTE_CREATE_E2E === "true";
 const globalCaptureTest = process.env.LUMI_TARGET_GLOBAL_CAPTURE_E2E === "true";
+// H1-real.9: dedicated, isolated, strictly synthetic owner status browser test.
+const humanWikiStatusTest = process.env.LUMI_HUMANWIKI_SOURCE_STATUS_E2E === "true";
 
 export default defineConfig({
   testDir: "e2e",
@@ -190,6 +192,13 @@ export default defineConfig({
       // actual modal, to exercise the focus-trapped inspector capture entry.
       ...(globalCaptureTest ? {
         AI_EXECUTIVE_TARGET_UI_DETAILS_ENABLED: "true",
+      } : {}),
+      // E2E-only: Next UI rendering is enabled, but the real HTTP handler
+      // remains without any ledger, witness host, or credentials. Playwright
+      // intercepts every status request with an isolated synthetic fixture.
+      ...(humanWikiStatusTest ? {
+        AI_EXECUTIVE_HUMANWIKI_SOURCE_WITNESS_UI_ENABLED: "true",
+        AI_EXECUTIVE_HUMANWIKI_SOURCE_WITNESS_STATUS_ENABLED: "true",
       } : {}),
       AI_EXECUTIVE_PASSWORD_HASH: passwordHash,
       AI_EXECUTIVE_SESSION_SECRET: sessionSecret,
