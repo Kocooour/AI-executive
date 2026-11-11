@@ -10,7 +10,7 @@ import {useTargetWake} from "./use-target-revalidation";
 import {loadPrivateNoteAreaChoices,type PrivateNoteAreaChoice} from
   "../../lib/target-private-note-area-client";
 import {privateNoteCreatePreflight} from "../../lib/target-private-note-create-client";
-import {validPrivateTaskTitle,type PrivateTaskCreateCommand} from
+import {validPrivateTaskAreaId,validPrivateTaskTitle,type PrivateTaskCreateCommand} from
   "../../lib/target-private-task-create-client";
 import {privateTaskCreateMarker,trackedPrivateTaskCreate,
   runPrivateTaskCreate,checkTrackedPrivateTaskCreate} from
@@ -132,7 +132,7 @@ export default function TargetPrivateTaskAreaChooser({
     return ()=>{active=false;clearTimeout(timer);controller.abort();unregister();};
   },[runtime,generation,nonce]);
   const ready=live()&&areas.kind==="ready"&&areas.generation===generation;
-  const items=ready&&areas.kind==="ready"?areas.items:[];
+  const items=ready&&areas.kind==="ready"?areas.items.filter(a=>validPrivateTaskAreaId(a.id)):[];
   const selected=items.find(item=>item.id===chosen)||null;
   const marker=privateTaskCreateMarker(generation);
   const tracked=runtime?trackedPrivateTaskCreate(runtime,generation):null;
