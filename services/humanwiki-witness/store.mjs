@@ -167,11 +167,11 @@ function verifyRows(db, registryId, publicKey) {
 }
 
 /**
- * O(1) signed-head check for offline append. The last valid Ed25519 signature
- * is a cryptographic commitment to every previous event via chain_hash.
- * The slower complete audit is used on network challenges to verify stored
- * historical rows have not been altered. A partial/rollback DB is still
- * refused by the full challenge audit (no import authority is created).
+ * O(1) signed-head structural check used after the full streaming audit
+ * and to verify the newly appended row within the same write transaction.
+ * A signed head alone DOES NOT prove stored historical rows are intact:
+ * publishing must run verifyRows first. This helper never authorizes a
+ * standalone append or relaxes the real-data import barrier.
  */
 function readSignedHeadForAppend(db, registryId, publicKey) {
   checkDatabase(db);
@@ -290,8 +290,16 @@ export function publishWitnessCheckpoint(directory,registryId,privateKey,
   return openExisting(directory,"write",registryId,pub,db=>{
     db.exec("BEGIN IMMEDIATE");
     try{
+      // A signed tail alone is insufficient: an older SQLite row can be
+      // corrupted while the last two rows (and their signatures) stay intact.
+      // Check every SHA-256 chain link against the signed terminal hash
+      // BEFORE signing any new event. This occurs under the same immediate
+      // write transaction as the subsequent insert, so no concurrent writer
+      // can change the audited snapshot before COMMIT.
+      const audited=verifyRows(db,registryId,pub);
       const current=readSignedHeadForAppend(db,registryId,pub);
-      if(sequence!==current.sequence+1||previousDigest!==current.digest)
+      if(audited.sequence!==current.sequence || audited.digest!==current.digest ||
+          sequence!==current.sequence+1 || previousDigest!==current.digest)
         throw Error("witness_unavailable");
       const hash=chainHash(registryId,sequence,previousDigest,digest,
         current.chain_hash,current.signature);
