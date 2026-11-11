@@ -16,7 +16,7 @@ Interní `TargetStagingSessionAuthority.createPrivateTask(sessionToken,command,d
 }
 ```
 
-`taskId` a `commandId` jsou klientem předem vygenerované UUID, které se při nejistém výsledku **nemění**. `title` je neprázdné, bez úvodních/koncových mezer a řídicích znaků, nejvýše 4096 UTF-8 bajtů. `areaId` je explicitní organizace záznamu, **nikdy autorizační důkaz**. `actor`, `scope`, `workspaceId`, `projectId` a `assigneeUserId` jsou zakázaná pole.
+`taskId` a `commandId` jsou klientem předem vygenerované UUID, které se při nejistém výsledku **nemění**. `taskId` musí být **kanonické lowercase UUID**: jiné velikosti písmen se odmítnou jako `invalid_request`. Protože starší staging zápisy mohly používat smíšenou velikost písmen, kontrola existujících `tasks.id` i `task_tombstones.id` je navíc case-insensitive, aby se nedala obejít identita úkolu ani tombstone. `title` je neprázdné, bez úvodních/koncových mezer a řídicích znaků, nejvýše 4096 UTF-8 bajtů. `areaId` je explicitní organizace záznamu, **nikdy autorizační důkaz**. `actor`, `scope`, `workspaceId`, `projectId` a `assigneeUserId` jsou zakázaná pole.
 
 Writer přijme pouze krátce platný serverem podepsaný **write audience** credential. V `withPinnedTargetStagingWrite` pod `BEGIN IMMEDIATE` znovu ověří identitu, případnou durable session (i bezprostředně před commitem), restore generation, vlastní soukromou Oblast a její oprávnění. Cizí, sdílená nebo neexistující Oblast jsou nerozlišitelné. Před `INSERT` se odmítá již existující ID i ID v trvalé tabulce tombstonů; úkol vzniká jen se `status=open`, `revision=0`, `project_id=NULL`, bez assignee a termínu. SQLite triggery aktualizují `areas.content_revision` a `change_log`.
 
