@@ -73,8 +73,15 @@ export function runPrivateTaskCreate(runtime:TaskCreateRuntime,generation:string
   // Reject malformed commands BEFORE reserving a persistent ambiguity marker:
   // no HTTP request can have been dispatched for such an input.
   if(!validPrivateTaskCreateCommand(command))return Promise.resolve("conflict");
-  if(entries.has(runtime)||privateTaskCreateMarker(generation).kind!=="clear"||
-    !reservePrivateTaskCreate(generation,command.commandId))return Promise.resolve("conflict");
+  // A successful HTTP acknowledgement may still be waiting for the
+  // always-mounted bridge to reverify the visible session and notify the user.
+  // The tab marker has already been cleared at that point, so it alone cannot
+  // prevent a duplicate retry with a fresh commandId. Preserve the one-slot
+  // completion until delivered before allowing another INSERT.
+  if(entries.has(runtime)||hasPrivateTaskCreateCompletion(runtime,generation)||
+    privateTaskCreateMarker(generation).kind!=="clear"||
+    !reservePrivateTaskCreate(generation,command.commandId))
+    return Promise.resolve("conflict");
   const controller=new AbortController();
   const e:Entry={generation,command,controller,phase:"saving",listeners:new Set(),
     unregister:()=>{}};
