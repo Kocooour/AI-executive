@@ -3,11 +3,11 @@ import {test} from "node:test";
 import {randomUUID} from "node:crypto";
 import {readFileSync} from "node:fs";
 import {validPrivateTaskAreaId,validPrivateTaskTitle,validPrivateTaskCreateCommand,
-  sendPrivateTaskCreate,checkPrivateTaskCreateReceipt} from
+  sendPrivateTaskCreate,checkPrivateTaskCreateReceipt,checkPrivateTaskCreateRecovery} from
   "../lib/target-private-task-create-client.ts";
 import {privateTaskCreateMarker,reservePrivateTaskCreate,
   runPrivateTaskCreate,trackedPrivateTaskCreate,checkTrackedPrivateTaskCreate,
-  subscribePrivateTaskCreate}
+  subscribePrivateTaskCreate,recoverPrivateTaskCreate}
   from "../lib/target-private-task-create-coordinator.ts";
 import {TARGET_PRIVATE_TASK_CREATE_UI_FLAGS,targetPrivateTaskCreateUiEnabled}
   from "../lib/target-private-task-create-ui-gate.ts";
@@ -199,6 +199,41 @@ test("server success announces only exact confirmed task ID, once, to active run
   assert.equal(await runPrivateTaskCreate(rt,gen,command(),async()=> "saved"),"saved");
   assert.equal(events.length,1,"unsubscribed modal must not receive future events");
 }));
+test("UUID-only recovery is a strict, no-store request with no private command content",async()=>{
+  const cmd=command(),signal=new AbortController().signal;
+  assert.equal(await checkPrivateTaskCreateRecovery(cmd.commandId,signal,async(url,init)=>{
+    assert.equal(url,"/api/target-staging/tasks/create-recovery");
+    assert.deepEqual(JSON.parse(init.body),{commandId:cmd.commandId});
+    assert.equal(init.method,"POST");assert.equal(init.cache,"no-store");
+    assert.equal(init.credentials,"same-origin");
+    assert.equal(init.headers["x-lumi-target-protocol"],"1");
+    return json({status:"committed"});
+  }),"committed");
+  assert.equal(await checkPrivateTaskCreateRecovery(cmd.commandId,signal,
+    async()=>json({status:"not_recorded"})),"not_recorded");
+  assert.equal(await checkPrivateTaskCreateRecovery(cmd.commandId,signal,
+    async()=>json({status:"committed",title:cmd.title})),"unavailable");
+  assert.equal(await checkPrivateTaskCreateRecovery(cmd.commandId,signal,
+    async()=>json({error:"Not found"},404)),"denied");
+});
+test("reload UUID recovery never unlocks on not_recorded or refusal; committed does",()=>withStorage(async()=>{
+  const original=runtime(),cmd=command();
+  assert.equal(await runPrivateTaskCreate(original,gen,cmd,async()=>"uncertain"),"uncertain");
+  const reload=runtime();
+  const signal=new AbortController().signal;
+  let probes=0;
+  const check=async(id)=>{
+    probes++;assert.equal(id,cmd.commandId);return probes===1?"not_recorded":
+      probes===2?"denied":"committed";
+  };
+  assert.equal(await recoverPrivateTaskCreate(reload,gen,signal,check),"not_recorded");
+  assert.equal(privateTaskCreateMarker(gen).kind,"blocked");
+  assert.equal(await recoverPrivateTaskCreate(reload,gen,signal,check),"denied");
+  assert.equal(privateTaskCreateMarker(gen).kind,"blocked");
+  assert.equal(await recoverPrivateTaskCreate(reload,gen,signal,check),"committed");
+  assert.deepEqual(privateTaskCreateMarker(gen),{kind:"clear"});
+  assert.equal(probes,3);
+}));
 test("main shell wiring preserves note-only default, no Search tab, distinct task consent and feedback",()=>{
   const root=readFileSync(new URL("../app/ui/lumi-app-root.tsx",import.meta.url),"utf8");
   const page=readFileSync(new URL("../app/page.tsx",import.meta.url),"utf8");
@@ -218,6 +253,7 @@ test("main shell wiring preserves note-only default, no Search tab, distinct tas
   assert.match(form,/loadPrivateNoteAreaChoices\(/);
   assert.match(form,/flushSync\(hide\)/);
   assert.match(form,/checkTrackedPrivateTaskCreate\(/);
+  assert.match(form,/recoverPrivateTaskCreate\(/);
   assert.match(form,/subscribePrivateTaskCreate\(/);
   assert.match(form,/if\(!preflight\?\.ok\|\|controller\.signal\.aborted\)/);
   assert.match(form,/if\(current!==serial\.current\|\|!mounted\.current\|\|!live\(\)\)return/);
