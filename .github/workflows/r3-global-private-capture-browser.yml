@@ -1,0 +1,63 @@
+name: Focused R3 global private capture browser
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/r3-global-private-capture-browser.yml"
+      - "app/ui/lumi-app-root.tsx"
+      - "app/ui/views/mobile-nav.tsx"
+      - "app/ui/views/desktop-capture-fab.tsx"
+      - "app/ui/views/sidebar.tsx"
+      - "app/ui/target-private-note-area-chooser.tsx"
+      - "app/ui/target-detail-panel.tsx"
+      - "app/ui/target-scope-state.ts"
+      - "lib/target-reading-scope-nav.ts"
+      - "e2e/target-global-private-capture.spec.ts"
+      - "playwright.config.ts"
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  chromium:
+    name: Global private capture (Chromium)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    env:
+      CI: "true"
+      NEXT_TELEMETRY_DISABLED: "1"
+      NEXT_PUBLIC_LUMI_DESIGN_V1_PREVIEW: "1"
+      E2E_SKIP_BUILD: "1"
+      E2E_PORT: "3123"
+      LUMI_PRIVATE_NOTE_CREATE_E2E: "true"
+      LUMI_TARGET_GLOBAL_CAPTURE_E2E: "true"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+      - name: Install pnpm
+        uses: pnpm/action-setup@v5
+        with:
+          version: 10.20.0
+      - name: Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+          cache: pnpm
+      - name: Locked dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Desktop capture and target detail invariant regressions
+        run: node --experimental-loader ./tests/ts-loader.mjs --test tests/desktop-shell-ui03a.test.mjs tests/target-details-wiring.test.mjs
+      - name: Build isolated UI
+        run: pnpm build
+      - name: Chromium
+        run: pnpm exec playwright install --with-deps chromium
+      - name: Scoped global capture acceptance
+        run: pnpm exec playwright test e2e/target-global-private-capture.spec.ts --project=desktop
+      - name: Upload failure traces
+        if: failure()
+        uses: actions/upload-artifact@v6
+        with:
+          name: lumi-r3-global-capture
+          path: |
+            test-results/
+            playwright-report/
+          retention-days: 7
+          if-no-files-found: ignore

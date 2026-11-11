@@ -53,6 +53,21 @@ export default function TargetPrivateNoteAreaChooser({
   const mounted=useRef(true);
   const writeSerial=useRef(0);
   const closeRef=useRef<HTMLButtonElement>(null);
+  // The runtime can confirm a CREATE while the tab is frozen or hidden.
+  // Defer navigation until a visible, verified session; deliver once only.
+  const completionPending=useRef(false);
+  const completionDelivered=useRef(false);
+  function notifyCreated(){
+    if(completionDelivered.current)return;
+    if(document.visibilityState!=="visible"||!navigator.onLine){
+      completionPending.current=true;
+      return;
+    }
+    if(!runtime?.known()||runtime.generation()!==generation)return;
+    completionPending.current=false;
+    completionDelivered.current=true;
+    onCreated();
+  }
   useEffect(()=>{closeRef.current?.focus();},[]);
   useEffect(()=>()=>{
     mounted.current=false;
@@ -62,12 +77,14 @@ export default function TargetPrivateNoteAreaChooser({
   useEffect(()=>{
     // Never carry private draft across authenticated generations.
     setTitle("");setBody("");setWritePhase("idle");setWriteMessage("");
+    completionPending.current=false;
+    completionDelivered.current=false;
   },[generation]);
   useEffect(()=>{
     if(!createEnabled||!runtime)return;
     const onResult=()=>{
       setTrackedRevision(v=>v+1);
-      if(privateNoteCreateMarker(generation).kind==="clear")onCreated();
+      if(privateNoteCreateMarker(generation).kind==="clear")notifyCreated();
     };
     return subscribePrivateNoteCreate(runtime,generation,onResult);
   },[createEnabled,runtime,generation,writePhase]);
@@ -78,6 +95,9 @@ export default function TargetPrivateNoteAreaChooser({
     beforePost.current?.abort();
     setChosen("");
     setState({kind:"unavailable",generation});
+    // A BFCache/offline/private-view hide cannot keep a draft around to
+    // resurface under a different freshly selected Area.
+    setTitle("");setBody("");
     if(writePhase==="preflight")setWritePhase("idle");
     if(writePhase==="receipt")setWritePhase("uncertain");
   };
@@ -89,8 +109,10 @@ export default function TargetPrivateNoteAreaChooser({
     hide:()=>flushSync(hidePrivate),
     ready:()=>{
       if(runtime?.known()&&runtime.lastOutcome()==="ok"&&
-        runtime.generation()===generation)setNonce(v=>v+1);
-      else hidePrivate();
+        runtime.generation()===generation){
+        setNonce(v=>v+1);
+        if(completionPending.current)notifyCreated();
+      }else hidePrivate();
     },
     signedOut:()=>{
       setChosen("");
@@ -207,7 +229,8 @@ export default function TargetPrivateNoteAreaChooser({
       if(!mounted.current||runtime.generation()!==generation)return;
       if(outcome==="saved"){
         setWritePhase("saved");setTitle("");setBody("");
-        onCreated();return;
+        notifyCreated();
+        return;
       }
       setWritePhase("uncertain");
       setWriteMessage(language==="cs"
@@ -234,7 +257,7 @@ export default function TargetPrivateNoteAreaChooser({
     if(receipt==="committed"&&
       confirmRecoveredPrivateNoteCreate(generation,current.commandId)){
       releaseTrackedPrivateNoteCreate(runtime,generation,current.commandId);
-      setTitle("");setBody("");setWritePhase("saved");onCreated();
+      setTitle("");setBody("");setWritePhase("saved");notifyCreated();
       return;
     }
     setWritePhase("uncertain");
@@ -295,6 +318,9 @@ export default function TargetPrivateNoteAreaChooser({
                 :(language==="cs"?"Vytvořit soukromou poznámku":"Create private note")}
           </button>
         </form>}
+      {createEnabled&&writePhase==="saved"&&<p role="status">
+        {language==="cs"?"Vytvoření potvrzeno.":"Creation confirmed."}
+      </p>}
       {createEnabled&&writeMessage&&<p role="alert">{writeMessage}</p>}
       <div className="captureActions">
         {!ready&&<button type="button" onClick={()=>{

@@ -67,16 +67,32 @@ test("target addresses are never resolved against legacy records (no legacy fall
   assert.match(hookSource,/const target = targetTyped \? null :/);
 });
 
-test("unification: Quick Capture is a no-op and hidden everywhere in target mode",()=>{
+test("unification: legacy Quick Capture stays blocked; private note capture requires every independent gate",()=>{
   assert.match(hookSource,/function openCapture\([^)]*\) \{\s*\/\/[^\n]*\n\s*if \(blockLegacyWrite\(\)\) return;/);
   assert.match(hookSource,/const captureDisabled = Boolean\(options\.targetUnified\)/);
   assert.match(hookSource,/\n\s*captureDisabled,\n/);
-  assert.match(read("app/ui/views/mobile-nav.tsx"),/!moreOpen && !app\.captureDisabled && <button className="mobileCaptureButton"/);
+  // The only target CREATE entry is a separately gated private Area/Notes flow;
+  // a missing gate may never fall through to a legacy task/note writer.
+  assert.match(rootSource,/const targetCapture=Boolean\(scopesOn&&targetScopes\?\.notes&&targetPrivateNoteAreas&&\s*targetPrivateNoteCreate&&mobileDesignV1Preview\)/);
+  // A click event must never be interpreted as the explicit in-detail flag.
+  assert.doesNotMatch(rootSource,/onTargetCapture=\{targetCapture\?openAreaChooser:undefined\}/);
+  assert.match(rootSource,/onTargetCapture=\{targetCapture\?\(\)=>openAreaChooser\(\):undefined\}/);
+  const mobile=read("app/ui/views/mobile-nav.tsx");
+  assert.match(mobile,/!moreOpen && \(!app\.captureDisabled \|\| onTargetCapture\)/);
+  assert.match(mobile,/onClick=\{onTargetCapture \?\? \(\(\)=>openCapture\(\)\)\}/);
   const fab=read("app/ui/views/desktop-capture-fab.tsx");
-  assert.match(fab,/if \(state\.captureDisabled\) return;/);
-  assert.match(fab,/if \(app\.captureDisabled\) return null;/);
-  assert.match(sidebar,/\{!app\.captureDisabled && <>\s*\{mobileDesignV1Preview && app\.selected/);
-  assert.match(sidebar,/\{!app\.captureDisabled && <button onClick=\{\(\) => openCapture\(\)\}/);
+  assert.match(fab,/if \(state\.captureDisabled && !targetState\.current\.onOpen\) return;/);
+  assert.match(fab,/if \(app\.captureDisabled && !onTargetCapture\) return null;/);
+  assert.match(fab,/onClick=\{onTargetCapture \?\? \(\(\)=>app\.openCapture\(\)\)\}/);
+  // A modal detail traps focus: its capture action must be inside it.
+  assert.match(sidebar,/app\.selected && !onTargetCapture && !app\.captureDisabled/);
+  assert.doesNotMatch(sidebar,/targetInspectorOpen/);
+  const detail=read("app/ui/target-detail-panel.tsx");
+  assert.match(detail,/data-testid="target-detail-capture"/);
+  assert.match(detail,/onClick=\{onPrivateCapture\}/);
+  assert.match(rootSource,/onPrivateCapture=\{targetCapture\?\(\)=>openAreaChooser\(true\):undefined\}/);
+  assert.match(rootSource,/closeTargetDetail\(detailRoute\)/);
+  assert.match(rootSource,/if\(!captureAfterDetailClose\|\|detailPanel\)return;/);
   assert.match(read("app/ui/views/home-view.tsx"),/\{!app\.captureDisabled && <button onClick=\{\(\) => openCapture\(\)\}>/);
   assert.match(read("app/ui/views/context-view.tsx"),/disabled=\{!task\.title\.trim\(\) \|\| app\.captureDisabled\}/);
 });
@@ -318,7 +334,8 @@ test("revalidation: lists, sidebar and detail re-read on the runtime tick; wake 
 });
 
 test("scope change does not carry the detail marker; close of the unavailable overlay keeps the view",()=>{
-  assert.match(read("app/ui/target-scope-state.ts"),/pushState\(withoutDetailMarker\(window\.history\.state\)/);
+  assert.match(read("app/ui/target-scope-state.ts"),/writeTargetScope=writeTargetReadingScope/);
+  assert.match(read("lib/target-reading-scope-nav.ts"),/pushState\(withoutDetailMarker\(window\.history\.state\)/);
   assert.match(read("app/ui/target-detail-state.ts"),/parentSearchForDetail\(\s*route,scopeFromSearch\(window\.location\.search\),window\.location\.search\)/);
 });
 
