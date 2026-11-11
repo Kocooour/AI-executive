@@ -37,8 +37,9 @@ const durable=await import("../lib/target-staging-durable-session.ts");
 const {createSessionToken,sessionCookieName}=await import("../lib/auth.ts");
 const {POST}=await import("../app/api/target-staging/tasks/route.ts");
 const {POST:STATUS}=await import("../app/api/target-staging/tasks/create-status/route.ts");
+const {POST:RECOVER}=await import("../app/api/target-staging/tasks/create-recovery/route.ts");
 const {GET:GET_TASK}=await import("../app/api/target-staging/tasks/[taskId]/route.ts");
-const {parseTaskCreateReply,parseTaskCreateStatusReply}=
+const {parseTaskCreateReply,parseTaskCreateStatusReply,parseTaskCreateRecoveryReply}=
   await import("../lib/target-staging-task-create-process.ts");
 const {readStagingTemporalDetailInChild}=
   await import("../lib/target-staging-read-process.ts");
@@ -98,6 +99,8 @@ function request(url,data,cookie=owner(),headers={}){
 }
 const create=(cmd,cookie,headers)=>POST(request(base,cmd,cookie,headers));
 const recover=(cmd,cookie,headers)=>STATUS(request(base+"/create-status",cmd,cookie,headers));
+const recoverOpaque=(cmd,cookie,headers)=>RECOVER(
+  request(base+"/create-recovery",{commandId:cmd.commandId},cookie,headers));
 async function checked(response,status){
   const value=await response.json();
   assert.equal(response.status,status,JSON.stringify(value));
@@ -133,6 +136,7 @@ test("private CREATE HTTP inserts once, uses content-free receipt, and survives 
   assert.equal(first.sequence,before.sequence+1);
   assert.equal(first.journal.includes(cmd.title),false);
   assert.deepEqual(await checked(await recover(cmd),200),{status:"committed"});
+  assert.deepEqual(await checked(await recoverOpaque(cmd),200),{status:"committed"});
   const read=await GET_TASK(new Request(base+"/"+cmd.taskId,{headers:{cookie:owner()}}),
     {params:Promise.resolve({taskId:cmd.taskId})});
   assert.equal(read.status,200);
@@ -150,6 +154,8 @@ test("live actor and private Area ACL deny foreign and shared writes, without an
   const own=command(fx,{areaId:"bob-private"});
   assert.equal((await checked(await create(own,bob),201)).taskId,own.taskId);
   assert.deepEqual(await checked(await recover(own,bob),200),{status:"committed"});
+  assert.deepEqual(await checked(await recoverOpaque(own,bob),200),{status:"committed"});
+  assert.deepEqual(await checked(await recoverOpaque(own),200),{status:"not_recorded"});
   assert.deepEqual(await checked(await recover(own),404),{error:"Not found"});
   assert.equal((await checked(await recover(own,bob+"broken"),401)).code,
     "session_revoked");
@@ -172,6 +178,7 @@ test("durable revocation denies create and status and leaves journal untouched",
   const before=persistence(fx,cmd.taskId);
   assert.equal((await checked(await create(cmd,bob),401)).code,"session_revoked");
   assert.equal((await checked(await recover(cmd,bob),401)).code,"session_revoked");
+  assert.equal((await checked(await recoverOpaque(cmd,bob),401)).code,"session_revoked");
   assert.deepEqual(persistence(fx,cmd.taskId),before);
 });
 test("flags, origin, protocol, shape and restore fence fail closed",async()=>{
@@ -232,6 +239,7 @@ test("create status cannot confirm a deleted task or resurrect its tombstone",as
     statusRequest,identity,fx.store,"alice",cmd,preDelete),404),
     {error:"Not found"},"a pre-delete snapshot must fail the live task guard");
   assert.deepEqual(await checked(await recover(cmd),404),{error:"Not found"});
+  assert.deepEqual(await checked(await recoverOpaque(cmd),404),{error:"Not found"});
   assert.deepEqual(await checked(await create(cmd),404),{error:"Not found"});
   assert.deepEqual(await checked(await create({...cmd,commandId:randomUUID()}),404),
     {error:"Not found"});
@@ -262,10 +270,34 @@ test("exact content-free child DTO parsing rejects all extra properties",()=>{
   assert.deepEqual(parseTaskCreateReply({ok:true,replayed:true}),{ok:true,replayed:true});
   assert.deepEqual(parseTaskCreateStatusReply({ok:true,status:"committed"}),
     {ok:true,status:"committed"});
+  assert.deepEqual(parseTaskCreateRecoveryReply({ok:true,status:"committed",
+    taskId:randomUUID(),areaId:"safe"}).status,"committed");
+  assert.deepEqual(parseTaskCreateRecoveryReply({ok:true,status:"not_recorded"}),
+    {ok:true,status:"not_recorded"});
+  assert.equal(parseTaskCreateRecoveryReply({ok:true,status:"committed",title:"leak"}),null);
   for(const reply of [{ok:true,taskId:randomUUID()},{ok:true,replayed:false},
     {ok:false,reason:"unauthorized"},{ok:false,reason:"write_failed",title:"leak"}])
     assert.equal(parseTaskCreateReply(reply),null);
   for(const reply of [{ok:true,status:"committed",taskId:randomUUID()},
     {ok:true,status:"unknown"},{ok:false,reason:"session_revoked"}])
     assert.equal(parseTaskCreateStatusReply(reply),null);
+});
+
+test("opaque task recovery enforces current Area ACL, restore generation and exact record",async()=>{
+  const fx=fixture(),cmd=command(fx);
+  assert.deepEqual(await checked(await recoverOpaque(cmd),200),{status:"not_recorded"});
+  assert.deepEqual(await checked(await create(cmd),201),{ok:true,taskId:cmd.taskId});
+  const database=new DatabaseSync(fx.stage.databasePath);
+  try{
+    assert.deepEqual(await checked(await recoverOpaque(cmd),200),{status:"committed"});
+    // Revoke private ownership: the receipt cannot reveal the old title,
+    // original Area or even whether a CREATE existed.
+    const original=database.prepare("SELECT owner_user_id FROM areas WHERE id=?")
+      .get(cmd.areaId);
+    assert.ok(original);
+    database.prepare("UPDATE areas SET owner_user_id='bob' WHERE id=?").run(cmd.areaId);
+    assert.deepEqual(await checked(await recoverOpaque(cmd),404),{error:"Not found"});
+    database.prepare("UPDATE areas SET owner_user_id='alice' WHERE id=?").run(cmd.areaId);
+    assert.deepEqual(await checked(await recoverOpaque(cmd),200),{status:"committed"});
+  }finally{database.close();}
 });
