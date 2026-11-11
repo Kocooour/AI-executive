@@ -164,3 +164,46 @@ for(const width of [390,1280])test(
     expect(writes).toBe(1);
     await expect(form.getByRole("button",{name:"Upravit název"})).toBeVisible();
   });
+
+for(const width of [390,1280])test(
+  `not_recorded requires durable cancel before a new project rename at ${width}px`,
+  async({page})=>{
+    await page.setViewportSize({width,height:844});
+    let writes:Record<string,unknown>[]=[],originalId="",cancelled=false,committed=false;
+    await page.route("**/api/target-staging/project-title/recovery",route=>
+      response(route,{status:"not_recorded"}));
+    await page.route("**/api/target-staging/projects/prj/title/cancel",async route=>{
+      const input=JSON.parse(route.request().postData()??"{}") as Record<string,unknown>;
+      expect(input).toEqual({commandId:originalId,restoreGeneration:STAGE});
+      cancelled=true;
+      return response(route,{status:"cancelled"});
+    });
+    await setup(page,async(route,body)=>{
+      writes.push(body);
+      if(writes.length===1){originalId=String(body.commandId);
+        return response(route,{error:"Staging unavailable"},503);}
+      expect(cancelled).toBe(true);
+      expect(body.commandId).not.toBe(originalId);
+      committed=true;
+      return response(route,{ok:true});
+    },{session:()=>A,binding:()=>ACTOR,committed:()=>committed});
+    await open(page);
+    await edit(page,PRIVATE);
+    await expect(page.getByTestId("target-project-title-edit")
+      .getByRole("button",{name:"Ověřit uložením znovu"})).toBeVisible();
+    await page.reload();
+    await expect(page.getByTestId("target-scope-list")).toHaveAttribute("data-state","ready");
+    if(!(await page.getByTestId("target-detail").isVisible()))await open(page);
+    const form=page.getByTestId("target-project-title-edit");
+    await expect(form.getByRole("button",{name:"Ověřit předchozí zápis"})).toBeVisible();
+    await form.getByRole("button",{name:"Ověřit předchozí zápis"}).click();
+    await expect(form.getByRole("button",{name:"Bezpečně ukončit nevyřízený zápis"})).toBeVisible();
+    expect(cancelled).toBe(false);
+    expect((await marker(page))).not.toBeNull();
+    await form.getByRole("button",{name:"Bezpečně ukončit nevyřízený zápis"}).click();
+    await expect.poll(()=>marker(page)).toBeNull();
+    await expect(form.getByRole("button",{name:"Upravit název"})).toBeVisible();
+    await edit(page,"Fresh authorized rename");
+    await expect.poll(()=>writes.length).toBe(2);
+    expect(committed).toBe(true);
+  });

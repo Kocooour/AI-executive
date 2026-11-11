@@ -16,6 +16,7 @@ import {
 import {
   saveProjectTitleEdit,
 } from "../lib/target-staging-project-title-edit-client.ts";
+import {cancelProjectTitleReload} from "../lib/target-project-title-cancel-client.ts";
 
 const A="A".repeat(43),B="B".repeat(43),OTHER="C".repeat(43);
 const CMD="f3d18d63-9073-48f7-8d25-6c81f23b9a01";
@@ -313,4 +314,20 @@ test("UI does not send principal proof as a command token and remains default-of
   assert.match(editor,/const command=d\.command\?\?\{expectedRevision:/);
   assert.match(gate,/TARGET_PROJECT_TITLE_EDIT_UI_FLAGS\.every\(flag=>env\[flag\]==='true'\)/);
   assert.doesNotMatch(editor,/sessionStorage\.setItem/);
+});
+
+// The browser never clears a marker from a missing receipt, a bad proxy reply,
+// a denial or a truncated JSON confirmation.
+test("cancel acknowledgements must be exact, bounded no-store JSON",async()=>{
+  const signal=new AbortController().signal;
+  const good=async()=>reply({status:"cancelled"});
+  assert.equal(await cancelProjectTitleReload(PROJECT,CMD,STAGE,signal,good),"cancelled");
+  const committed=async()=>reply({status:"committed"});
+  assert.equal(await cancelProjectTitleReload(PROJECT,CMD,STAGE,signal,committed),"committed");
+  for(const answer of [
+    reply({status:"not_recorded"}),reply({status:"cancelled",extra:1}),
+    Response.json({status:"cancelled"},{headers:{"cache-control":"private"}}),
+    Response.json({status:"cancelled"},{status:503,headers}),
+  ])assert.equal(await cancelProjectTitleReload(PROJECT,CMD,STAGE,signal,
+      async()=>answer),"unavailable");
 });
