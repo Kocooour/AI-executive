@@ -7,6 +7,7 @@ import { after, test } from "node:test";
 import { createSessionToken, sessionCookieName } from "../lib/auth.ts";
 import { bootstrapIsolatedTargetStore } from "../lib/target-store-bootstrap.ts";
 import { verifyHumanWikiOwnerPrivateAreaLive } from "../lib/target-staging-durable-session.ts";
+import { withPinnedTargetStagingWrite } from "../lib/target-staging-pinned-write.ts";
 import { GET } from "../app/api/humanwiki/private-area-preflight/route.ts";
 import { POST } from "../app/api/humanwiki/import/route.ts";
 
@@ -191,4 +192,57 @@ test("H1-real.2 unauthorized or malformed request never reveals Area or owner co
     {stagingDirectory:path.join(root,"missing"),expectedRestoreGeneration:store.restoreGeneration},
     store.ownerUserId,store.unassignedAreaId),false);
   // No owner, Area, source, or private token in rejection response.
+});
+
+
+// Use the same anchored staging writer as the application, not out-of-band sqlite
+// edits that merely cause the entire store to fail its integrity preflight.
+const commitAclFixture = (mutate, operation) => withPinnedTargetStagingWrite(
+  liveStore,
+  context => {
+    mutate(context.db);
+    return context.commit({ kind: "membership", payload: { operation } });
+  },
+  () => false,
+  () => false,
+);
+
+test("H1-real.2 denies existing foreign private Areas and reacts to live Area removal", async () => {
+  setup();
+  const token = createSessionToken();
+  const owned = "hw:temporary-private-area";
+  const foreign = "hw:foreign-private-area";
+  const foreignUser = "owner-bob";
+  const foreignWorkspace = "hw:foreign-personal-workspace";
+
+  assert.equal(commitAclFixture(db => {
+    // Fully formed second identity/private workspace: the denial cannot be
+    // attributed to a nonexistent actor or a missing Area ID.
+    db.prepare("INSERT INTO identities(id) VALUES (?)").run(foreignUser);
+    db.prepare("INSERT INTO workspaces(id,kind,owner_user_id) VALUES (?,'personal',?)")
+      .run(foreignWorkspace, foreignUser);
+    db.prepare("INSERT INTO areas(id,title,kind,workspace_id,owner_user_id,system_key) VALUES (?,?,'private',?,?, 'unassigned')")
+      .run(foreign, "Other owner's private Area", foreignWorkspace, foreignUser);
+    db.prepare("INSERT INTO areas(id,title,kind,workspace_id,owner_user_id) VALUES (?,?,'private',?,?)")
+      .run(owned, "Temporary owner's private Area", store.personalWorkspaceId, store.ownerUserId);
+  }, "create-private-fixtures"), true);
+
+  // First show the live anchor and legitimate owner ACL are still accepted.
+  assert.equal(verifyHumanWikiOwnerPrivateAreaLive(liveStore, store.ownerUserId, owned), true);
+  assert.equal(verifyHumanWikiOwnerPrivateAreaLive(liveStore, foreignUser, foreign), true);
+  assert.equal(verifyHumanWikiOwnerPrivateAreaLive(liveStore, store.ownerUserId, foreign), false);
+  process.env.AI_EXECUTIVE_HUMANWIKI_PRIVATE_AREA_ID = foreign;
+  await assertHidden(await GET(ownerRequest(token)));
+
+  // A successful HTTP preflight must be invalidated by a later real commit.
+  process.env.AI_EXECUTIVE_HUMANWIKI_PRIVATE_AREA_ID = owned;
+  assert.equal((await GET(ownerRequest(token))).status, 200);
+  assert.equal(commitAclFixture(db => {
+    db.prepare("DELETE FROM areas WHERE id=?").run(owned);
+  }, "remove-private-area"), true);
+  assert.equal(verifyHumanWikiOwnerPrivateAreaLive(liveStore, store.ownerUserId, owned), false);
+  await assertHidden(await GET(ownerRequest(token)));
+  // Another private Area still works: it is the live ACL, not a broken anchor.
+  process.env.AI_EXECUTIVE_HUMANWIKI_PRIVATE_AREA_ID = store.unassignedAreaId;
+  assert.equal((await GET(ownerRequest(token))).status, 200);
 });
