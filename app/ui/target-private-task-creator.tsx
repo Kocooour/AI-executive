@@ -10,7 +10,7 @@ import {useTargetTick,useTargetWake} from "./use-target-revalidation";
 import {loadPrivateNoteAreaChoices,type PrivateNoteAreaChoice}
   from "../../lib/target-private-note-area-client";
 import {privateNoteCreatePreflight} from "../../lib/target-private-note-create-client";
-import {validPrivateTaskCreateCommand,type PrivateTaskCreateCommand}
+import {validPrivateTaskCreateCommand,validPrivateTaskCreateArea,type PrivateTaskCreateCommand}
   from "../../lib/target-private-task-create-client";
 import {privateTaskCreateMarker} from "../../lib/target-private-task-create-reload";
 import {runPrivateTaskCreate,checkPrivateTaskCreate,trackedPrivateTaskCreate,
@@ -105,7 +105,10 @@ export default function TargetPrivateTaskCreator({
   const ready=Boolean(runtime?.known()&&runtime.generation()===generation&&
     state.kind==="ready"&&state.generation===generation&&
     document.visibilityState==="visible"&&navigator.onLine);
-  const areas=ready&&state.kind==="ready"?state.areas:[];
+  // Note Areas may have ids that the standalone task writer intentionally
+  // refuses. Never offer an unwriteable task destination as a UI option.
+  const areas=ready&&state.kind==="ready"
+    ?state.areas.filter(a=>validPrivateTaskCreateArea(a.id)):[];
   const choice=areas.find(a=>a.id===selected);
   const marker=privateTaskCreateMarker(generation);
   const blocked=marker.kind!=="clear";
