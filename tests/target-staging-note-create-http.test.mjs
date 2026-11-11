@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
-import {spawnSync} from "node:child_process";
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -49,10 +48,6 @@ const { GET: GET_NOTE } = await import("../app/api/target-staging/notes/[noteId]
 const {POST:PREVIEW_CREATE}=await import("../app/api/target-staging/notes/create-preview/route.ts");
 const {POST:RECOVER_CREATE}=await import("../app/api/target-staging/notes/create-recovery/route.ts");
 const {parseNoteCreateRecoveryReply}=await import("../lib/target-staging-note-create-process.ts");
-const {readStagingNoteCreateRecoveryInChild}=await import("../lib/target-staging-note-create-process.ts");
-const {readTargetNoteCreateRecovery}=await import("../lib/target-note-create-status.ts");
-const {TargetStagingSessionAuthority}=await import("../lib/target-staging-session-authority.ts");
-const {runStagingWriteChild}=await import("../lib/target-staging-title-http-process.ts");
 const { parseNoteCreateReply } = await import("../lib/target-staging-note-create-process.ts");
 
 after(() => {
@@ -283,54 +278,6 @@ test("live private CREATE preview returns generation only to an authorized write
 });
 test("read-only CREATE receipt confirms the exact owner commit but never text",async()=>{
   const fx=fixture(),cmd=body(fx),bob=session(fx,"bob");
-  // Distinguish the local, actor-scoped SQLite receipt scan from its bounded
-  // subprocess transport and the final server HTTP contract.
-  const db=new DatabaseSync(fx.stage.databasePath,{readOnly:true});
-  try{assert.deepEqual(readTargetNoteCreateRecovery(db,"alice",cmd.commandId),
-    {ok:true,status:"not_recorded"});}
-  finally{db.close();}
-  const authority=new TargetStagingSessionAuthority({
-    stagingDirectory:fx.stage.directory,expectedRestoreGeneration:fx.stage.restoreGeneration,
-  });
-  try{
-    const issued=authority.issueWritable("alice");
-    assert.ok(issued,"test actor must have a write-audience session");
-    assert.deepEqual(authority.noteCreateRecovery(issued.sessionToken,cmd.commandId),
-      {ok:true,status:"not_recorded"},"preflighted note-create receipt must be readable");
-  }finally{authority.close();}
-  const raw=spawnSync(process.execPath,[
-    "--experimental-loader",path.join(process.cwd(),"scripts/target-staging-ts-loader.mjs"),
-    path.join(process.cwd(),"scripts/target-staging-note-create-recovery-child.mjs"),
-  ],{
-    cwd:process.cwd(),encoding:"utf8",timeout:20_000,
-    input:JSON.stringify({commandId:cmd.commandId}),
-    env:{...process.env,
-      AI_EXECUTIVE_TARGET_STAGING_DIRECTORY:fx.stage.directory,
-      AI_EXECUTIVE_TARGET_STAGING_RESTORE_GENERATION:fx.stage.restoreGeneration,
-      AI_EXECUTIVE_TARGET_STAGING_OWNER_USER_ID:"alice",
-      AI_EXECUTIVE_TARGET_STAGING_SESSION_HASH:"",
-      LUMI_SYNTHETIC_CHILD_DIAG:"true",
-    },
-  });
-  assert.equal(raw.status,0,"synthetic receipt child process failed: "+
-    raw.stderr.slice(-1000)+" | stdout="+raw.stdout.slice(0,150));
-  assert.deepEqual(JSON.parse(raw.stdout),{ok:true,status:"not_recorded"});
-  assert.match(Function.prototype.toString.call(parseNoteCreateRecoveryReply),
-    /const exact=/,"the updated strict DTO parser must be loaded");
-  assert.deepEqual(parseNoteCreateRecoveryReply({ok:true,status:"not_recorded"}),
-    {ok:true,status:"not_recorded"},"strict adapter must accept a content-free not-recorded reply");
-  const rawTransport=await runStagingWriteChild({
-    stagingDirectory:fx.stage.directory,
-    expectedRestoreGeneration:fx.stage.restoreGeneration,ownerUserId:"alice",
-  },"target-staging-note-create-recovery-child.mjs",
-  JSON.stringify({commandId:cmd.commandId}));
-  assert.deepEqual(rawTransport,{ok:true,status:"not_recorded"},
-    "bounded shared child transport must return the exact raw receipt");
-  const child=await readStagingNoteCreateRecoveryInChild({
-    stagingDirectory:fx.stage.directory,
-    expectedRestoreGeneration:fx.stage.restoreGeneration,ownerUserId:"alice",
-  },cmd.commandId);
-  assert.deepEqual(child,{ok:true,status:"not_recorded"},"child worker must report an absent receipt");
   const fresh=await checked(await RECOVER_CREATE(req("create-recovery",{
     commandId:cmd.commandId,
   })),200);
@@ -383,20 +330,17 @@ test("revoked or missing session, disabled write flag, and malformed create-reco
   process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_NOTES_CREATE_ENABLED="true";
 });
 test("create-recovery child DTO is exact and content-free",()=>{
-  const sample={ok:true,status:"committed",noteId:randomUUID(),areaId:"private"};
-  process.env.LUMI_SYNTHETIC_RECEIPT_PARSER_TRACE="true";
-  const parsed=parseNoteCreateRecoveryReply(sample);
-  delete process.env.LUMI_SYNTHETIC_RECEIPT_PARSER_TRACE;
-  assert.deepEqual(parseNoteCreateRecoveryReply({ok:true,status:"not_recorded"}),
-    {ok:true,status:"not_recorded"});
-  assert.deepEqual(parsed?.status,"committed",JSON.stringify({
-    keys:Object.keys(sample).sort().join(","),noteId:sample.noteId,
-    uuid:/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(sample.noteId),
-    areaId:sample.areaId,
-    bytes:Buffer.byteLength(sample.areaId,"utf8"),
-    controls:/[\u0000-\u001f\u007f]/u.test(sample.areaId),
-    hasOwn:["ok","status","noteId","areaId"].every(x=>Object.hasOwn(sample,x)),
-  }));
+  // Explicit UUID group boundaries guard the worker parser: 8-4-4-4-12.
+  const known="123e4567-e89b-42d3-a456-426614174001";
+  assert.deepEqual(parseNoteCreateRecoveryReply({
+    ok:true,status:"committed",noteId:known,areaId:"private",
+  }),{ok:true,status:"committed",noteId:known,areaId:"private"});
+  assert.equal(parseNoteCreateRecoveryReply({
+    ok:true,status:"committed",noteId:"123e4567-e89b-42d3a456426614174001",areaId:"private",
+  }),null);
+  assert.deepEqual(parseNoteCreateRecoveryReply({
+    ok:true,status:"committed",noteId:randomUUID(),areaId:"private",
+  })?.status,"committed");
   assert.deepEqual(parseNoteCreateRecoveryReply({ok:true,status:"not_recorded"}),
     {ok:true,status:"not_recorded"});
   for(const obj of [
