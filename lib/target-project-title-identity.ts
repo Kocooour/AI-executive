@@ -1,6 +1,7 @@
 /** Server-only, non-authorizing actor proof for a single project and restore era.
  * A matching value from two independently authenticated previews proves the
- * CURRENT server-recognized actor is unchanged; it is never accepted on a write.
+ * CURRENT server-recognized actor is unchanged; on write it is a comparison
+ * proof only, never a substitute for live identity, Area ACL and CAS.
  * Rotates with the operator's signing secret or staging restore generation.
  */
 import {createHmac} from "node:crypto";

@@ -7,11 +7,13 @@ import {DatabaseSync} from 'node:sqlite';
 import {test,after} from 'node:test';
 const root=mkdtempSync(path.join(os.tmpdir(),'lumi-v25-upgrade-'));
 const legacy=path.join(root,'legacy');mkdirSync(legacy);process.env.AI_EXECUTIVE_DATA_DIR=legacy;
+process.env.AI_EXECUTIVE_SESSION_SECRET='synthetic-staging-v25-upgrade-proof-secret-2026';
 const {bootstrapIsolatedTargetStore}=await import('../lib/target-store-bootstrap.ts');
 const {upgradeTargetStagingV25}=await import('../lib/target-staging-schema-upgrade.ts');
 const {inspectIsolatedTargetStore}=await import('../lib/target-store-preflight.ts');
 const {issueDurableTargetStagingSession,verifyDurableTargetStagingSessionLive,hashTargetStagingSessionToken}=await import('../lib/target-staging-durable-session.ts');
 const {TargetStagingSessionAuthority}=await import('../lib/target-staging-session-authority.ts');
+const {projectTitlePrincipalBinding}=await import('../lib/target-project-title-identity.ts');
 const hashFile = file=>createHash('sha256').update(readFileSync(file)).digest('hex');
 function fixture(name) {
  const stage=bootstrapIsolatedTargetStore({stagingDirectory:path.join(root,name),ownerUserId:'alice'});
@@ -43,7 +45,7 @@ test('explicit upgrade preserves all v25 rows and sessions, advances journal, an
  const authority=new TargetStagingSessionAuthority(store),token=authority.issueWritable('alice').sessionToken;
  const page=authority.readProjectTitlePreview('alice','project');assert.equal(page.ok,true);
  assert.deepEqual(authority.updateProjectTitle(token,{projectId:'project',commandId:randomUUID(),title:'After',
-   expectedRevision:page.page.revision,writeAreaId:stage.unassignedAreaId,restoreGeneration:generation,principalBinding:'P'.repeat(43)},'alice'),{ok:true});
+   expectedRevision:page.page.revision,writeAreaId:stage.unassignedAreaId,restoreGeneration:generation,principalBinding:projectTitlePrincipalBinding('alice','project',generation)},'alice'),{ok:true});
  authority.close();db.close();
 });
 test('tampered v25 DDL and wrong generation fail closed without changing database or journal',()=>{

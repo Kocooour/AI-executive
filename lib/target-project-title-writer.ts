@@ -2,6 +2,7 @@
  * mutation share the pinned write transaction. */
 import { createHash } from "node:crypto";
 import { isReadableStagingProjectId } from "./target-project-id";
+import { projectTitlePrincipalBinding } from "./target-project-title-identity";
 import { readAuthorizedProjectTasksPage } from "./target-project-task-read-model";
 import { canWriteIsolatedTargetArea, targetStoreRestoreGeneration } from "./target-task-write-preflight";
 import { verifiedActor, type TargetStagingReadCredential } from "./target-task-authenticated-read";
@@ -55,6 +56,11 @@ export function writeTargetProjectTitle(store: TargetStagingReadStore, access: T
     if (!page?.ok || !canWriteIsolatedTargetArea(db, actor, page.page.project.areaId)) return {ok:false,reason:"unavailable"};
     if (!canWriteIsolatedTargetArea(db, actor, command.writeAreaId)) return {ok:false,reason:"unavailable"};
     if (command.writeAreaId !== page.page.project.areaId) return {ok:false,reason:"write_area_mismatch"};
+    // HTTP checked this opaque actor proof before dispatch, but the pinned
+    // writer must independently bind it to the EXACT actor and restore era.
+    // The proof never grants write access; live Area ACL is already required.
+    const pinnedBinding = projectTitlePrincipalBinding(actor,command.projectId,command.restoreGeneration);
+    if (!pinnedBinding || pinnedBinding !== command.principalBinding) return denied();
     const version = db.prepare("SELECT value FROM metadata WHERE key='schema_version'").get() as {value: string} | undefined;
     if (version?.value !== String(TARGET_STORE_SCHEMA_VERSION)) return {ok:false,reason:"write_failed"};
     const digest = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");

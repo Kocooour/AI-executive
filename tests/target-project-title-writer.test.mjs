@@ -8,8 +8,15 @@ import {DatabaseSync} from 'node:sqlite';
 import {test,after} from 'node:test';
 const root=mkdtempSync(path.join(os.tmpdir(),'lumi-project-title-unit-'));
 const legacy=path.join(root,'legacy'); mkdirSync(legacy);process.env.AI_EXECUTIVE_DATA_DIR=legacy;
+process.env.AI_EXECUTIVE_SESSION_SECRET='synthetic-project-title-writer-actor-proof-2026';
 const {bootstrapIsolatedTargetStore}=await import('../lib/target-store-bootstrap.ts');
 const {TargetStagingSessionAuthority}=await import('../lib/target-staging-session-authority.ts');
+const {projectTitlePrincipalBinding}=await import('../lib/target-project-title-identity.ts');
+const proof=(actor,id,generation)=>{
+ const value=projectTitlePrincipalBinding(actor,id,generation);
+ assert.match(value,/^[A-Za-z0-9_-]{43}$/);
+ return value;
+};
 const {readAuthorizedProjectTasksPage}=await import('../lib/target-project-task-read-model.ts');
 const {readChangeFeedPage}=await import('../lib/target-change-feed-read-model.ts');
 const {inspectIsolatedTargetStore}=await import('../lib/target-store-preflight.ts');
@@ -30,9 +37,12 @@ test('project rename enforces roles and CAS, persists audit, supports retry, and
  const bob=session('bob'), carol=session('carol'),dave=session('dave');
  const page=readAuthorizedProjectTasksPage(db,{actorUserId:'bob',projectId:'proj',limit:1,offset:0,restoreGeneration:stage.restoreGeneration});assert.equal(page.ok,true);
  const p=db.prepare('SELECT COALESCE(MAX(seq),0) AS n FROM change_log').get().n;
- const cmd={projectId:'proj',commandId:randomUUID(),title:'Updated',expectedRevision:page.page.revision,writeAreaId:'team-area',restoreGeneration:stage.restoreGeneration,principalBinding:'P'.repeat(43)};
+ const cmd={projectId:'proj',commandId:randomUUID(),title:'Updated',expectedRevision:page.page.revision,writeAreaId:'team-area',restoreGeneration:stage.restoreGeneration,principalBinding:proof('bob','proj',stage.restoreGeneration)};
  assert.deepEqual(authority.updateProjectTitle(carol,cmd,'carol'),{ok:false,reason:'unavailable'});
  assert.deepEqual(authority.updateProjectTitle(dave,cmd,'dave'),{ok:false,reason:'unavailable'});
+ assert.deepEqual(authority.updateProjectTitle(bob,{...cmd,principalBinding:proof('alice','proj',stage.restoreGeneration)},'bob'),
+   {ok:false,reason:'unauthorized'},'the pinned writer rejects another actor proof');
+ assert.equal(db.prepare("SELECT title FROM projects WHERE id='proj'").get().title,'Original');
  assert.deepEqual(authority.updateProjectTitle(bob,cmd,'bob'),{ok:true});
  assert.deepEqual(authority.updateProjectTitle(bob,cmd,'bob'),{ok:true,replayed:true});
  assert.deepEqual(authority.updateProjectTitle(bob,{...cmd,title:'Other'},'bob'),{ok:false,reason:'idempotency_conflict'});
@@ -61,7 +71,7 @@ test('v25 remains readable and is not silently migrated or mutated by project re
  assert.equal(a.readProjectTitlePreview('alice','old'),null);
  const page=readAuthorizedProjectTasksPage(oldDb,{actorUserId:'alice',projectId:'old',limit:1,offset:0,restoreGeneration:old.restoreGeneration});
  assert.equal(page.ok,true);
- const result=a.updateProjectTitle(token,{projectId:'old',commandId:randomUUID(),title:'New',expectedRevision:page.page.revision,writeAreaId:old.unassignedAreaId,restoreGeneration:old.restoreGeneration,principalBinding:'P'.repeat(43)},'alice');
+ const result=a.updateProjectTitle(token,{projectId:'old',commandId:randomUUID(),title:'New',expectedRevision:page.page.revision,writeAreaId:old.unassignedAreaId,restoreGeneration:old.restoreGeneration,principalBinding:proof('alice','old',old.restoreGeneration)},'alice');
  assert.deepEqual(result,{ok:false,reason:'write_failed'});
  assert.equal(oldDb.prepare("SELECT title FROM projects WHERE id='old'").get().title,'Old');
  assert.equal(oldDb.prepare("SELECT value FROM metadata WHERE key='schema_version'").get().value,'25');
@@ -75,7 +85,7 @@ test('a session expiring during a replay cannot reveal the receipt outcome',()=>
  const token=authority.issueWritable('alice').sessionToken;
  const durableHash=hashTargetStagingSessionToken(issued.sessionToken);
  const page=readAuthorizedProjectTasksPage(db,{actorUserId:'alice',projectId:'expiry',limit:1,offset:0,restoreGeneration:stage.restoreGeneration});
- const cmd={projectId:'expiry',commandId:randomUUID(),title:'After',expectedRevision:page.page.revision,writeAreaId:stage.unassignedAreaId,restoreGeneration:stage.restoreGeneration,principalBinding:'P'.repeat(43)};
+ const cmd={projectId:'expiry',commandId:randomUUID(),title:'After',expectedRevision:page.page.revision,writeAreaId:stage.unassignedAreaId,restoreGeneration:stage.restoreGeneration,principalBinding:proof('alice','expiry',stage.restoreGeneration)};
  assert.deepEqual(authority.updateProjectTitle(token,cmd,'alice',durableHash),{ok:true});
  const originalNow=Date.now;let checks=0;
  try {
@@ -95,7 +105,7 @@ test('two processes racing the same project CAS commit at most one change',async
  const workers=[0,1].map(i=>{
    const input=path.join(root,'input'+i);
    writeFileSync(input,JSON.stringify({store,command:{projectId:'race',commandId:randomUUID(),title:'After '+i,
-     expectedRevision:page.page.revision,writeAreaId:stage.unassignedAreaId,restoreGeneration:stage.restoreGeneration,principalBinding:'P'.repeat(43)}}));
+     expectedRevision:page.page.revision,writeAreaId:stage.unassignedAreaId,restoreGeneration:stage.restoreGeneration,principalBinding:proof('alice','race',stage.restoreGeneration)}}));
    return spawn(process.execPath,['--experimental-loader','./tests/ts-loader.mjs','./tests/support/project-title-race-child.mjs',input,ready[i],go,results[i]],{stdio:'ignore',cwd:process.cwd()});
  });
  try {
@@ -116,7 +126,7 @@ test('session revoked in another process before the pending write prevents every
  const issued=issueDurableTargetStagingSession(store,'alice',900);assert.equal(issued.ok,true);
  const page=readAuthorizedProjectTasksPage(db,{actorUserId:'alice',projectId:'revoked-race',limit:1,offset:0,restoreGeneration:stage.restoreGeneration});
  const input=path.join(root,'revoke-input'),ready=path.join(root,'revoke-ready'),go=path.join(root,'revoke-go'),result=path.join(root,'revoke-result');
- writeFileSync(input,JSON.stringify({store,durableHash:hashTargetStagingSessionToken(issued.sessionToken),command:{projectId:'revoked-race',commandId:randomUUID(),title:'After',expectedRevision:page.page.revision,writeAreaId:stage.unassignedAreaId,restoreGeneration:stage.restoreGeneration,principalBinding:'P'.repeat(43)}}));
+ writeFileSync(input,JSON.stringify({store,durableHash:hashTargetStagingSessionToken(issued.sessionToken),command:{projectId:'revoked-race',commandId:randomUUID(),title:'After',expectedRevision:page.page.revision,writeAreaId:stage.unassignedAreaId,restoreGeneration:stage.restoreGeneration,principalBinding:proof('alice','revoked-race',stage.restoreGeneration)}}));
  const worker=spawn(process.execPath,['--experimental-loader','./tests/ts-loader.mjs','./tests/support/project-title-race-child.mjs',input,ready,go,result],{stdio:'ignore',cwd:process.cwd()});
  try {
    const deadline=Date.now()+10000;
@@ -143,7 +153,7 @@ test('untrusted post-COMMIT journal confirmation never acknowledges a project ti
    assert.equal(preview.ok,true);
    const cmd={projectId:'unconfirmed',commandId:randomUUID(),title:'Committed but unconfirmed',
      expectedRevision:preview.page.revision,writeAreaId:isolated.unassignedAreaId,
-     restoreGeneration:isolated.restoreGeneration,principalBinding:'P'.repeat(43)};
+     restoreGeneration:isolated.restoreGeneration,principalBinding:proof('alice','unconfirmed',isolated.restoreGeneration)};
    const original=DatabaseSync.prototype.exec;
    let swapped=false;
    try {
@@ -180,7 +190,7 @@ test('post-COMMIT untrusted cancellation must not acknowledge a safe unlock',asy
  try{
    const token=local.issueWritable('alice').sessionToken;
    const command={projectId:'cancel-race',commandId:randomUUID(),
-     restoreGeneration:isolated.restoreGeneration,principalBinding:'A'.repeat(43)};
+     restoreGeneration:isolated.restoreGeneration,principalBinding:proof('alice','cancel-race',isolated.restoreGeneration)};
    const original=DatabaseSync.prototype.exec;let swapped=false;
    try{
      DatabaseSync.prototype.exec=function(sql,...args){
