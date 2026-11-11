@@ -9,7 +9,8 @@ import {openTargetDetail} from "./target-detail-state";
 import {writeTargetReadingScope} from "../../lib/target-reading-scope-nav";
 import {scopeFromSearch} from "../../lib/view-url";
 import {detailIdOk} from "../../lib/target-detail-route";
-import {subscribePrivateTaskCreate} from "../../lib/target-private-task-create-coordinator";
+import {lastConfirmedPrivateTask,subscribePrivateTaskCreate} from
+  "../../lib/target-private-task-create-coordinator";
 
 export default function TargetPrivateTaskCreatedNotice({
   language="cs",onCreated,
@@ -23,12 +24,19 @@ export default function TargetPrivateTaskCreatedNotice({
     if(!runtime?.known()||runtime.generation()!==generation)return;
     // Neither the modal nor its own .then owns completion. Only a confirmed
     // POST/exact receipt/actor-authorized reload recovery can notify this.
-    return subscribePrivateTaskCreate(runtime,generation,change=>{
-      if(change.confirmedTaskId&&detailIdOk(change.confirmedTaskId)){
-        setNotice({generation,taskId:change.confirmedTaskId});
-        onCreatedRef.current();
-      }
+    const show=(taskId:string)=>{
+      if(!detailIdOk(taskId))return;
+      setNotice({generation,taskId});
+      onCreatedRef.current();
+    };
+    const unsubscribe=subscribePrivateTaskCreate(runtime,generation,change=>{
+      if(change.confirmedTaskId)show(change.confirmedTaskId);
     });
+    // Dynamic chunk loading can finish after a fast HTTP 201; catch up
+    // without replaying the write or trusting any browser storage.
+    const last=lastConfirmedPrivateTask(runtime,generation);
+    if(last)show(last);
+    return unsubscribe;
   },[runtime,generation]);
   if(!notice||notice.generation!==generation||
     !runtime?.known()||runtime.generation()!==generation)return null;
