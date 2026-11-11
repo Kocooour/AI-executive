@@ -12,8 +12,9 @@
 import { closeSync, constants, fstatSync, lstatSync, openSync, readdirSync, realpathSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { readPrivateTaskCreateStatus, type PrivateTaskCreateCommand,
-  type PrivateTaskCreateStatus } from "./target-private-task-create-writer";
+import { readPrivateTaskCreateStatus,readPrivateTaskCreateRecovery,
+  type PrivateTaskCreateCommand,type PrivateTaskCreateStatus,
+  type PrivateTaskCreateRecovery } from "./target-private-task-create-writer";
 import { TARGET_STORE_FILENAME, TARGET_STORE_SCHEMA_VERSION, verifyExistingTargetStagingPath } from "./target-store-bootstrap";
 import { inspectIsolatedTargetStore } from "./target-store-preflight";
 import { checkTargetStagingJournal, warmTargetStagingJournal } from "./target-staging-anchor-journal";
@@ -280,6 +281,20 @@ export function readPreflightedPrivateTaskCreateStatus(
       if (!preflight(db)) return denied();
       const actor = verifiedActor(db,access,true);
       return actor ? readPrivateTaskCreateStatus(db,actor,command) : denied();
+    },denied));
+}
+
+/** Content-free actor-authorized create recovery with pinned read snapshot. */
+export function readPreflightedPrivateTaskCreateRecovery(
+  store:TargetStagingReadStore,access:TargetStagingReadCredential,
+  commandId:string,
+):PrivateTaskCreateRecovery{
+  const denied=():PrivateTaskCreateRecovery=>({ok:false,reason:"unavailable"});
+  return withPreflightedStore<PrivateTaskCreateRecovery>(store,denied,(db,preflight)=>
+    inReadSnapshot(db,()=>{
+      if(!preflight(db))return denied();
+      const actor=verifiedActor(db,access,true);
+      return actor?readPrivateTaskCreateRecovery(db,actor,commandId):denied();
     },denied));
 }
 
