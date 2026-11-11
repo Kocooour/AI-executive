@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { generateKeyPairSync, randomUUID, verify } from "node:crypto";
+import { createHash, generateKeyPairSync, randomUUID, sign, verify } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { chmodSync, existsSync, lstatSync, mkdtempSync, readFileSync,
   rmSync, renameSync, symlinkSync, writeFileSync } from "node:fs";
@@ -131,44 +131,116 @@ test("missing or partly tampered ledger fails closed and cannot auto bootstrap",
     sequence:1,previousDigest:EMPTY,digest:"b".repeat(64)}));
 });
 
-test("checkpoint 10000 and successor append without reset; middle-row tamper fails audit",()=>{
+test("checkpoint 10001 can publish after 10k signed records, and old corruption forbids the next append",()=>{
   const dir=fixture();
   bootstrapWitnessStore(dir,registryId,privateKey);
+  const file=path.join(dir,"witness-high-water.sqlite");
+  // The fixture seeds 10,000 genuinely Ed25519-signed SQLite records directly
+  // in one transaction to avoid O(n^2) full-chain audits in the test setup.
+  // The production publication API must audit ALL 10k rows and then append
+  // checkpoint 10001 normally, proving continuity beyond the old limit.
   let previous=EMPTY;
-  // Real offline SQLite commits with real Ed25519 signatures, not synthetic
-  // table injection. This would permanently fail at 10000 before the fix.
-  for(let sequence=1;sequence<=10001;sequence++){
-    const digest=sequence.toString(16).padStart(64,"0");
-    const saved=publishWitnessCheckpoint(dir,registryId,privateKey,{
-      sequence,previousDigest:previous,digest,
-    });
-    assert.equal(saved.sequence,sequence);
-    previous=digest;
-  }
+  const db=new DatabaseSync(file);
+  try{
+    const genesis=db.prepare(`SELECT chain_hash,signature FROM witness_high_water_events
+      WHERE sequence=0`).get();
+    let priorHash=genesis.chain_hash,priorSig=genesis.signature;
+    const insert=db.prepare(`INSERT INTO witness_high_water_events
+      (sequence,registry_id,digest,previous_digest,chain_hash,signature)
+      VALUES (?,?,?,?,?,?)`);
+    db.exec("BEGIN IMMEDIATE");
+    try {
+      for(let sequence=1;sequence<=10000;sequence++){
+        const digest=sequence.toString(16).padStart(64,"0");
+        const hash=createHash("sha256").update([
+          "humanwiki_witness_accumulator_v2",registryId,String(sequence),
+          previous,digest,priorHash,priorSig,"",
+        ].join("\n"),"utf8").digest("hex");
+        const signature=sign(null,Buffer.from([
+          "humanwiki_witness_monotonic_event_v2",registryId,String(sequence),
+          previous,digest,hash,"",
+        ].join("\n"),"utf8"),privateKey).toString("base64url");
+        insert.run(sequence,registryId,digest,previous,hash,signature);
+        priorHash=hash;priorSig=signature;previous=digest;
+      }
+      db.exec("COMMIT");
+    }catch(error){
+      try{db.exec("ROLLBACK");}catch{/* fail closed */}
+      throw error;
+    }
+  }finally{db.close();}
+
   assert.deepEqual(witnessCurrentHead(dir,registryId,privateKey),{
-    sequence:10001,digest:previous,
+    sequence:10000,digest:previous,
+  });
+  const finalDigest="a".repeat(64);
+  const appended=publishWitnessCheckpoint(dir,registryId,privateKey,{
+    sequence:10001,previousDigest:previous,digest:finalDigest,
+  });
+  assert.equal(appended.ok,true);
+  assert.equal(appended.sequence,10001);
+  assert.deepEqual(witnessCurrentHead(dir,registryId,privateKey),{
+    sequence:10001,digest:finalDigest,
   });
   const receipt=witnessChallengeReceipt(dir,registryId,privateKey,nonce());
   checkSignature(receipt);
   assert.equal(receipt.sequence,10001);
-  assert.equal(receipt.digest,previous);
+  assert.equal(receipt.digest,finalDigest);
 
-  // A tamperer can temporarily drop a trigger, change a historical digest,
-  // then restore the exact same trigger DDL. The authenticated cumulative
-  // hash must still detect this even though the most recent signature is
-  // genuine and the expected schema exists again.
-  const db=new DatabaseSync(path.join(dir,"witness-high-water.sqlite"));
-  try {
-    const original=db.prepare(`SELECT sql FROM sqlite_master
+  // A local tamperer can DROP the no-update trigger, change an older digest,
+  // then recreate the exact original trigger. The tail signature stays valid
+  // but the history is corrupt; BOTH future signatures and HTTP challenges
+  // must refuse. The attempted append must leave row count unchanged.
+  const changed=new DatabaseSync(file);
+  try{
+    const original=changed.prepare(`SELECT sql FROM sqlite_master
+      WHERE name='witness_high_water_no_update'`).get().sql;
+    changed.exec("DROP TRIGGER witness_high_water_no_update");
+    changed.prepare(`UPDATE witness_high_water_events SET digest=?
+      WHERE sequence=5000`).run("f".repeat(64));
+    changed.exec(original+";");
+  }finally{changed.close();}
+  assert.throws(()=>witnessCurrentHead(dir,registryId,privateKey));
+  assert.throws(()=>witnessChallengeReceipt(dir,registryId,privateKey,nonce()));
+  assert.throws(()=>publishWitnessCheckpoint(dir,registryId,privateKey,{
+    sequence:10002,previousDigest:finalDigest,digest:"b".repeat(64),
+  }),"corrupt older row must prevent a signed operator acknowledgement");
+  const check=new DatabaseSync(file,{readOnly:true});
+  try{
+    assert.equal(check.prepare("SELECT COUNT(*) AS n FROM witness_high_water_events").get().n,10002);
+    assert.equal(check.prepare(
+      "SELECT COUNT(*) AS n FROM witness_high_water_events WHERE sequence=10002").get().n,0);
+  }finally{check.close();}
+});
+
+test("short corrupt historical chain refuses publishing next signed head",()=>{
+  const dir=fixture();
+  bootstrapWitnessStore(dir,registryId,privateKey);
+  let previous=EMPTY;
+  for(let seq=1;seq<=4;seq++){
+    const digest=seq.toString(16).padStart(64,"0");
+    assert.equal(publishWitnessCheckpoint(dir,registryId,privateKey,{
+      sequence:seq,previousDigest:previous,digest,
+    }).ok,true);
+    previous=digest;
+  }
+  const file=path.join(dir,"witness-high-water.sqlite");
+  const db=new DatabaseSync(file);
+  try{
+    const trigger=db.prepare(`SELECT sql FROM sqlite_master
       WHERE name='witness_high_water_no_update'`).get().sql;
     db.exec("DROP TRIGGER witness_high_water_no_update");
     db.prepare(`UPDATE witness_high_water_events SET digest=?
-      WHERE sequence=5000`).run("f".repeat(64));
-    db.exec(original+";");
-  } finally {db.close();}
-  assert.throws(()=>witnessCurrentHead(dir,registryId,privateKey),
-    "historical modification must break the cumulative hash");
-  assert.throws(()=>witnessChallengeReceipt(dir,registryId,privateKey,nonce()));
+      WHERE sequence=1`).run("f".repeat(64));
+    db.exec(trigger+";");
+  }finally{db.close();}
+  assert.throws(()=>publishWitnessCheckpoint(dir,registryId,privateKey,{
+    sequence:5,previousDigest:previous,digest:"a".repeat(64),
+  }));
+  const read=new DatabaseSync(file,{readOnly:true});
+  try{
+    assert.equal(read.prepare("SELECT MAX(sequence) AS head FROM witness_high_water_events").get().head,4);
+  }finally{read.close();}
 });
 
 test("protected private files reject symlinks and group-readable key material",()=>{
