@@ -95,7 +95,7 @@ export default function TargetPrivateTaskCreator({
           runtime.generation()!==generation||document.visibilityState!=="visible"||
           !navigator.onLine)return;
         if(res.ok)setState({kind:"ready",generation,areas:res.areas});
-        else if(res.reason==="signed-out"){
+        else if(res.ok===false&&res.reason==="signed-out"){
           setState({kind:"signed-out",generation});void runtime.reportRefusal();
         }else setState({kind:"unavailable",generation});
       }).catch(()=>{if(active&&!controller.signal.aborted)hide();});
