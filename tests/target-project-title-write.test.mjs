@@ -117,7 +117,8 @@ test('cancel fence serializes before lost PATCH and permanently rejects old UUID
   const reread=await preview(new Request(base+'title',{headers:headers(alice)}),ctx);
   assert.equal(reread.status,200,'the pinned store remains readable after cancellation');
   const duplicate=await cancelWrite(cookie('alice'),old.commandId,p.principalBinding);
-  assert.deepEqual(await duplicate.json(),{status:'cancelled'});
+  assert.equal(duplicate.status,200,'a repeated cancellation must acknowledge the same actor');
+  assert.deepEqual(await duplicate.json(),{status:'cancelled',principalBinding:p.principalBinding});
   const tooLate=await write(alice,old);
   assert.equal(tooLate.status,409);
   assert.deepEqual(await tooLate.json(),{error:'Command cancelled'});
