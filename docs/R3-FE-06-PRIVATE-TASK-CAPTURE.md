@@ -116,9 +116,22 @@ samostatný task Area transport by byl další backendová iterace a
 - Před produkčním nasazením ověřit samostatně dostupnost/ztrátu přístupu,
   reálný BFCache hit a kompletní Browser E2E na přesném release SHA podle
   [AGENTS.md](../AGENTS.md).
-- `main` obsahuje #393; nezávisle otevřený [#391](https://github.com/Kocooour/AI-executive/pull/391)
-  mění stejný shell. Před merge je nutná integrační kontrola s jeho
-  aktuálním HEAD, review, úspěšné PR Checks a vyřešení všech nálezů.
+- `main` obsahuje #393 i již sloučené autorizované vyhledávání
+  [#391](https://github.com/Kocooour/AI-executive/pull/391). Společný shell
+  zachovává oddělení serverových titulů od lokálních legacy úkolů.
+  Cílený společný browser test na 390px i desktopu kontroluje Search a
+  Quick Capture v jedné relaci, bez automatického hledání či lokálního
+  optimistického vložení. Nezávislé review a zelené HEAD CI zůstávají branou.
 - Bez reálných osobních dat, importu, resetu databáze, R4 souhlasu,
   produkční aktivace nebo nasazení. Případné další PR překračující
   tří-PR rozpočet milestone musí dostat nové rozhodnutí vlastníka.
+
+## Sjednocení #395 a #396
+
+[#395](https://github.com/Kocooour/AI-executive/pull/395) je překrytý
+starší experimentální variantou, která nedokáže bezpečně rozlišit výsledek
+neznámého CREATE po reloadu. #396 zůstává jedinou integrační implementací:
+zachovává explicitní privátní Oblast, jediný idempotentní POST,
+modal-independent oznámení a fail-closed marker, ale navíc obsahuje
+actor-bound HTTP/SQLite recovery a browser/HTTP testy. Alternativní
+dialog ani neúplný recovery fallback z #395 se nepřidává.

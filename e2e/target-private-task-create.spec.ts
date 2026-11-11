@@ -209,3 +209,50 @@ test("receipt timeout re-enables exact verification; never retries CREATE",async
   expect(writes).toHaveLength(1);
   await (timeoutRoute as Route|null)?.abort("failed").catch(()=>{});
 });
+
+/** Integrates merged #391 Search with this default-off private task capture.
+ * Both feature flags are ON only in this isolated synthetic browser profile.
+ * No automatic local task insertion, Search request or production write. */
+for(const width of [390,1280]){
+  test("authorized Search and private task Quick Capture coexist at "+width+"px",
+    async({page})=>{
+    await page.setViewportSize({width,height:844});
+    const writes=await setup(page,(route,cmd)=>
+      reply(route,{ok:true,taskId:cmd.taskId},201));
+    const searches:{query:string;scope:string}[]=[];
+    await page.route(/\/api\/target-staging\/title-search(?:\?|$)/,route=>{
+      const url=new URL(route.request().url());
+      const query=url.searchParams.get("q")??"";
+      const scope=url.searchParams.get("scope")??"";
+      searches.push({query,scope});
+      expect(route.request().method()).toBe("GET");
+      expect(query).toBe("integration");
+      expect(scope).toBe("personal");
+      const items=writes.length===1?[{
+        kind:"task",id:writes[0].taskId,title:"Integration private task",
+        areaId:"private-a",areaKind:"private",projectId:null,
+      }]:[];
+      return reply(route,{query,scope,items,hasMore:false,nextCursor:null});
+    });
+    await page.goto("/?view=Calendar&scope=personal");
+    const input=page.locator(".searchField input");
+    await input.fill("integration");
+    const search=page.getByTestId("target-main-title-search");
+    await expect(search).toBeVisible();
+    await expect(search.locator(".targetMainSearchItems li")).toHaveCount(0);
+    expect(searches).toHaveLength(0); // no implicit fetch on typing/focus
+    await openAndFill(page,width,"Integration private task");
+    await page.getByTestId("target-private-task-save").click();
+    await expect(page.getByTestId("target-private-task-created")).toBeVisible();
+    expect(writes).toHaveLength(1);
+    await expect(search).toBeVisible();
+    await expect(search.locator(".targetMainSearchItems li")).toHaveCount(0);
+    expect(searches).toHaveLength(0); // CREATE must not trigger Search
+    await search.getByRole("button",{name:"Vyhledat"}).click();
+    await expect(search.locator(".targetMainSearchItems li")).toHaveCount(1);
+    await expect(search).toContainText("Integration private task");
+    await expect(search.locator('[data-area-kind="private"]')).toHaveCount(1);
+    await expect(page.locator(".taskRow")).toHaveCount(0);
+    expect(searches).toEqual([{query:"integration",scope:"personal"}]);
+  });
+}

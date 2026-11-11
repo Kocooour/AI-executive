@@ -47,6 +47,12 @@ const targetDetailEditRaceTest = process.env.LUMI_TARGET_DETAIL_EDITS_E2E === "t
 const focusFallbackTest = process.env.LUMI_TARGET_DETAIL_FOCUS_E2E === "true";
 const noteEditRecoveryTest = process.env.LUMI_TARGET_NOTE_EDIT_E2E === "true";
 const projectTitleRecoveryTest = process.env.LUMI_TARGET_PROJECT_TITLE_E2E === "true";
+// R3-FE-05: isolated real-React main Search acceptance. Two CI matrix jobs
+// exercise opt-in authorized Search and identical flag-off legacy Search.
+const mainTitleSearchTest = process.env.LUMI_TARGET_MAIN_SEARCH_E2E === "true";
+const mainTitleSearchMode = process.env.LUMI_TARGET_MAIN_SEARCH_MODE ?? "on";
+if(mainTitleSearchTest&&!["on","off"].includes(mainTitleSearchMode))
+  throw new Error("Invalid LUMI_TARGET_MAIN_SEARCH_MODE");
 // Profile-specific recovery QA (including BOTH active edit flags), isolated to Playwright.
 const noteEditProfile = process.env.LUMI_TARGET_NOTE_EDIT_PROFILE ?? "legacy";
 if(noteEditRecoveryTest&&!["legacy","combined","4b"].includes(noteEditProfile))
@@ -159,6 +165,17 @@ export default defineConfig({
         AI_EXECUTIVE_TARGET_STAGING_HTTP_NOTES_WRITE_ENABLED: "true",
         AI_EXECUTIVE_TARGET_UI_EDITS_ENABLED: "true",
       } : {}),
+      // R3-FE-05 browser-only, synthetic target session/title pages. For the
+      // off job disable ONLY the new UI search flag; the rest of the environment
+      // remains identical, proving the legacy Search fallback survives.
+      ...(mainTitleSearchTest ? {
+        AI_EXECUTIVE_TARGET_STAGING_HTTP_ENABLED: "true",
+        AI_EXECUTIVE_TARGET_UI_ENABLED: "true",
+        AI_EXECUTIVE_TARGET_UI_SCOPES_ENABLED: "true",
+        AI_EXECUTIVE_TARGET_STAGING_HTTP_TITLE_SEARCH_ENABLED: "true",
+        AI_EXECUTIVE_TARGET_UI_TITLE_SEARCH_ENABLED:
+          mainTitleSearchMode==="on"?"true":"false",
+      } : {}),
       // R3-CAPTURE-2: separate, isolated synthetic CREATE browser run.
       // It NEVER turns on a live host and does not alter read-only chooser CI.
       ...(privateNoteCreateTest ? {
@@ -190,6 +207,9 @@ export default defineConfig({
         AI_EXECUTIVE_TARGET_UI_PRIVATE_NOTE_CREATE_ENABLED: "true",
         AI_EXECUTIVE_TARGET_STAGING_HTTP_TASKS_CREATE_ENABLED: "true",
         AI_EXECUTIVE_TARGET_UI_PRIVATE_TASK_CREATE_ENABLED: "true",
+        // Combined isolated Search + task Capture browser acceptance.
+        AI_EXECUTIVE_TARGET_STAGING_HTTP_TITLE_SEARCH_ENABLED: "true",
+        AI_EXECUTIVE_TARGET_UI_TITLE_SEARCH_ENABLED: "true",
         AI_EXECUTIVE_TARGET_UI_MY_PLAN_ENABLED: "true",
         AI_EXECUTIVE_TARGET_STAGING_HTTP_MY_PLAN_DAY_ENABLED: "true",
         AI_EXECUTIVE_TARGET_STAGING_HTTP_MY_PLAN_SLICE_ENABLED: "true",

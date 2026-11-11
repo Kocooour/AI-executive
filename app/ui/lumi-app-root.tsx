@@ -12,6 +12,7 @@ import { activeTargetViewFor, detailsActive, targetViewsFor } from "../../lib/ta
 import { detailCopy } from "../../lib/target-detail-copy";
 import type { TargetUiEdits } from "../../lib/target-ui-config";
 import { mobileDesignV1Preview } from "./navigation";
+import { mainTitleSearchLegacySurfaces } from "../../lib/target-main-title-search-ui";
 import { projectSyncNoticeLabel } from "../../lib/project-sync-notice";
 import { AuthScreen } from "./views/auth-screen";
 import { Sidebar } from "./views/sidebar";
@@ -42,6 +43,9 @@ const TargetMyPlan = dynamic(() => import("./target-my-plan"), { ssr: false });
 const TargetScopeSwitcher = dynamic(() => import("./target-scope-switcher"), { ssr: false });
 const TargetScopeLists = dynamic(() => import("./target-scope-lists"), { ssr: false });
 
+// R3-FE-05: search in the main shell only when the target backend and UI opt in.
+const TargetMainTitleSearch = dynamic(() => import("./target-main-title-search"), { ssr: false });
+
 // R3-FE-4a: authorized details inside the main app; loaded only when a detail flag is on.
 const TargetDetailPanel = dynamic(() => import("./target-detail-panel"), { ssr: false });
 // R3-CAPTURE-1: read-only, real actor-private Area catalogue in target Notes.
@@ -54,7 +58,7 @@ export type TargetScopesProps = { enabled: boolean; projects: boolean; notes: bo
 export type TargetEditsProps = TargetUiEdits;
 export type TargetMyPlanProps = { enabled: boolean; statusWrite: boolean; whenWrite: boolean };
 
-export function LumiAppRoot({ targetMyPlan, targetScopes, targetDetails, targetEdits, targetNoteEdit = false, targetProjectEdit = false, targetPrivateNoteAreas = false, targetPrivateNoteCreate = false, targetPrivateTaskCreate = false }: { targetMyPlan?: TargetMyPlanProps; targetScopes?: TargetScopesProps; targetDetails?: TargetDetailsProps; targetEdits?: TargetEditsProps; targetNoteEdit?: boolean; targetProjectEdit?: boolean; targetPrivateNoteAreas?: boolean; targetPrivateNoteCreate?: boolean; targetPrivateTaskCreate?: boolean } = {}) {
+export function LumiAppRoot({ targetMyPlan, targetScopes, targetDetails, targetEdits, targetNoteEdit = false, targetProjectEdit = false, targetPrivateNoteAreas = false, targetPrivateNoteCreate = false, targetPrivateTaskCreate = false, targetSearch = false }: { targetMyPlan?: TargetMyPlanProps; targetScopes?: TargetScopesProps; targetDetails?: TargetDetailsProps; targetEdits?: TargetEditsProps; targetNoteEdit?: boolean; targetProjectEdit?: boolean; targetPrivateNoteAreas?: boolean; targetPrivateNoteCreate?: boolean; targetPrivateTaskCreate?: boolean; targetSearch?: boolean } = {}) {
   // Owner decision 2026-11-09: with target scopes on, the single global scope governs the
   // sidebar projects, the inspector and quick capture (see docs/R3-FE-04A-DETAILS.md).
   const scopesOn = Boolean(targetScopes?.enabled);
@@ -197,12 +201,15 @@ export function LumiAppRoot({ targetMyPlan, targetScopes, targetDetails, targetE
       <AuthScreen app={app} />
     );
   }
-  const scopeSwitcher = scopeList !== null || (scopesOn && targetPlan);
+  const scopeSwitcher = scopeList !== null || (scopesOn && (targetPlan || (targetSearch && view==="Search")));
   // The legacy inspector is never fed legacy records in a target view.
-  const targetView = scopeList !== null || targetPlan;
+  const targetView = scopeList !== null || targetPlan || (targetSearch && view==="Search");
   const legacyInspector = Boolean(app.selected) && !(scopesOn && targetView);
   // Unified target mode: views that still show legacy data are read-only (no target create/edit API yet).
   const legacyReadOnly = app.legacyWritesDisabled && !targetView;
+  // Do not mount legacy task rows or local held-back titles underneath
+  // server-authorized Search, including before the first explicit query.
+  const legacySearchSurfaces = mainTitleSearchLegacySurfaces(targetSearch,view);
   return (
     <LegacyWritesContext.Provider value={{ disabled: app.legacyWritesDisabled, hint: app.legacyReadOnlyHint }}>
     <main className={`appShell view-${view.toLowerCase()}${legacyInspector || detailPanel ? " inspectorOpen" : ""}${view === "Projects" && app.openProject ? " projectPageOpen" : ""}`} data-design-system={mobileDesignV1Preview ? "lumi-v1" : undefined} data-workspace-tone={app.activeWorkspaceTone}
@@ -224,7 +231,7 @@ export function LumiAppRoot({ targetMyPlan, targetScopes, targetDetails, targetE
             <button type="button" onClick={app.dismissRestoredNotice}>{tr("restoredNoticeOk")}</button>
           </div>
         )}
-        <Topbar app={app} />
+        <Topbar app={app} targetSearch={targetSearch} />
         {mobileDesignV1Preview && app.projectSyncNotices.map((notice) => (
           <div key={notice.projectId} className="navigationUnavailableNotice" role="alert"
             data-testid="project-sync-warning">
@@ -293,19 +300,21 @@ export function LumiAppRoot({ targetMyPlan, targetScopes, targetDetails, targetE
               {view === "Today" && !targetPlan && <TodayHeaderMeta app={app} />}
             </div>
           </div>
-          {scopeSwitcher && <TargetScopeSwitcher language={language} variant={scopeList === null ? "plan" : "lists"} />}
+          {scopeSwitcher && <TargetScopeSwitcher language={language} variant={targetPlan ? "plan" : "lists"} />}
           {scopeList==="note"&&targetPrivateNoteAreas&&<button type="button"
             className="targetScopeAreaChooserButton" data-testid="target-private-area-open"
             onClick={()=>openAreaChooser(false,"note")}>{targetPrivateNoteCreate
               ?(language==="cs"?"Nová soukromá poznámka":"New private note")
               :(language==="cs"?"Oblasti pro novou poznámku":"Areas for a new note")}</button>}
-          <HeldBack app={app} />
+          {legacySearchSurfaces.heldBack && <HeldBack app={app} />}
           {taskCaptureReady&&<TargetPrivateTaskCreatedNotice language={language}
             onCreated={closeAreaChooser} />}
           <CalendarView app={app} />
           <HomeView app={app} />
           {view === "Today" && !targetPlan && <TodayTop app={app} />}
-          <SearchResults app={app} />
+          {view==="Search" && targetSearch
+            ? <TargetMainTitleSearch query={app.query} language={language} />
+            : <SearchResults app={app} />}
           <ContextView app={app} />
           <AgentsView app={app} />
           <SettingsView app={app} />
@@ -314,7 +323,9 @@ export function LumiAppRoot({ targetMyPlan, targetScopes, targetDetails, targetE
             : scopeList
               ? <TargetScopeLists key={scopeList==="note"?scopeList+":"+noteListRevision:scopeList} kind={scopeList} language={language}
                 detail={scopeList === "project" ? detailGates.project : detailGates.note} />
-              : <EntityList app={app} />}
+              : legacySearchSurfaces.entityList
+                ? <EntityList app={app} />
+                : null}
           {view === "Today" && !targetPlan && <TodayFooter app={app} />}
         </div>
       </section>
