@@ -52,6 +52,7 @@ const {parseNoteCreateRecoveryReply}=await import("../lib/target-staging-note-cr
 const {readStagingNoteCreateRecoveryInChild}=await import("../lib/target-staging-note-create-process.ts");
 const {readTargetNoteCreateRecovery}=await import("../lib/target-note-create-status.ts");
 const {TargetStagingSessionAuthority}=await import("../lib/target-staging-session-authority.ts");
+const {runStagingWriteChild}=await import("../lib/target-staging-title-http-process.ts");
 const { parseNoteCreateReply } = await import("../lib/target-staging-note-create-process.ts");
 
 after(() => {
@@ -318,6 +319,13 @@ test("read-only CREATE receipt confirms the exact owner commit but never text",a
     /const exact=/,"the updated strict DTO parser must be loaded");
   assert.deepEqual(parseNoteCreateRecoveryReply({ok:true,status:"not_recorded"}),
     {ok:true,status:"not_recorded"},"strict adapter must accept a content-free not-recorded reply");
+  const rawTransport=await runStagingWriteChild({
+    stagingDirectory:fx.stage.directory,
+    expectedRestoreGeneration:fx.stage.restoreGeneration,ownerUserId:"alice",
+  },"target-staging-note-create-recovery-child.mjs",
+  JSON.stringify({commandId:cmd.commandId}));
+  assert.deepEqual(rawTransport,{ok:true,status:"not_recorded"},
+    "bounded shared child transport must return the exact raw receipt");
   const child=await readStagingNoteCreateRecoveryInChild({
     stagingDirectory:fx.stage.directory,
     expectedRestoreGeneration:fx.stage.restoreGeneration,ownerUserId:"alice",
