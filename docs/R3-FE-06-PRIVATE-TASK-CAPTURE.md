@@ -46,7 +46,10 @@ HTTP API. Testy používají pouze syntetická data, bez zapnutí produkce nebo 
    dohledá atomicky uložený actor-bound záznam obsahující jen ID úkolu,
    ID Oblasti a restore generation (bez názvu úkolu), ověří živou
    identitu, soukromou Oblast, oprávnění a samotný existující úkol.
-   Klient obdrží jen `committed`/`not_recorded` bez názvu/ID.
+   `not_recorded` neobsahuje žádné ID; pouze při `committed` po všech živých
+   kontrolách server vrátí neprůhledné `taskId` pro autorizovaný detail,
+   nikdy soukromý název, Oblast ani identitu. V UI vznikne oznámení
+   **Zobrazit úkol** i po reloadu; v browser storage zůstává jen marker.
    Bariéra se uvolní **pouze** při potvrzeném `committed`.
    `not_recorded` není důkaz neprovedení.
 5. Vypršení 8sekundové lhůty ověření Oblasti vrátí dialog do bezpečně
@@ -67,8 +70,10 @@ a původním digest potvrzením zapíše druhý content-free metadata svědek
 (actor+command hash -> `{taskId,areaId,restoreGeneration}`).
 Svědek je striktně validován canonical store preflightem; read-only
 worker jej vydá jen do serverového procesu, nikoli do klienta.
-Čerstvé HTTP ověření požaduje původní `commandId`, ale nikdy nevrací
-privátní název, ID úkolu ani Oblasti a znovu kontroluje živá oprávnění.
+Čerstvé HTTP ověření požaduje původní `commandId`, znovu kontroluje živá
+oprávnění a vrací `taskId` výhradně při potvrzeném, aktuálně autorizovaném
+`committed`, nikdy privátní název nebo Oblast. Odmítnutí a `not_recorded`
+neobsahují identifikátor žádného úkolu.
 Neověřený, revokovaný, změněný nebo jinému actorovi patřící zápis
 ponechá klienta zablokovaného. Neexistuje časové odblokování, nové
 UUID, ani automatické opakování CREATE.
