@@ -132,6 +132,11 @@ import {
 } from "./target-note-lifecycle-writer";
 import type { TargetStagingNoteDeleteRequest, TargetStagingNoteDeleteResult } from "./target-note-delete-writer";
 import type { TargetStagingTaskTitleWriteRequest, TargetStagingTaskTitleWriteResult } from "./target-task-staging-writer";
+import {
+  createPreflightedPrivateTask, validPrivateTaskCreateCommand,
+  type PrivateTaskCreateCommand, type PrivateTaskCreateResult,
+} from "./target-private-task-create-writer";
+
 import { deletePreflightedTargetTask, validTargetStagingTaskDeleteRequest } from "./target-task-delete-writer";
 import type {
   TargetStagingTaskDeleteRequest, TargetStagingTaskDeleteResult, TargetStagingTaskDeleteStatusResult,
@@ -1330,6 +1335,23 @@ export class TargetStagingSessionAuthority {
     if (!validTargetStagingNoteDeleteRequest(request))
       return { ok: false, reason: "invalid_request" };
     return readPreflightedTargetNoteDeleteCommandStatus(this.#store, credential, request);
+  }
+
+  /**
+   * R3-BE-4c core-only: one standalone private task create. This is not an
+   * HTTP endpoint and does not grant access to shared projects/Areas.
+   * Session and Area ACL are verified again under the pinned write lock.
+   */
+  createPrivateTask(
+    sessionToken: string,
+    request: PrivateTaskCreateCommand,
+    durableSessionTokenHash?: string,
+  ): PrivateTaskCreateResult {
+    const credential = this.#credential(sessionToken, true);
+    if (!credential) return {ok:false,reason:"unauthorized"};
+    if (!validPrivateTaskCreateCommand(request)) return {ok:false,reason:"invalid_request"};
+    return createPreflightedPrivateTask(
+      this.#store,credential,request,durableSessionTokenHash);
   }
 
   /**
