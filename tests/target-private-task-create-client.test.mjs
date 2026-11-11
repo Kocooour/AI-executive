@@ -6,7 +6,8 @@ import {sendPrivateTaskCreate,recoverPrivateTaskCreate,
 import {privateTaskCreateMarker,reservePrivateTaskCreate,
   confirmPrivateTaskCreate} from "../lib/target-private-task-create-reload.ts";
 import {runPrivateTaskCreate,trackedPrivateTaskCreate,
-  checkPrivateTaskCreate} from "../lib/target-private-task-create-coordinator.ts";
+  checkPrivateTaskCreate,hasPrivateTaskCreateCompletion,
+  consumePrivateTaskCreateCompletion,subscribePrivateTaskCreateCompletion} from "../lib/target-private-task-create-coordinator.ts";
 import {targetPrivateTaskCreateUiEnabled,TARGET_PRIVATE_TASK_CREATE_UI_FLAGS}
   from "../lib/target-private-task-create-ui-gate.ts";
 import {TARGET_PRIVATE_NOTE_CREATE_UI_FLAGS}
@@ -136,4 +137,105 @@ test("after reload without original title, marker blocks all replacement command
     assert.equal(posts,0);
     assert.equal(privateTaskCreateMarker(generation).kind,"blocked");
   });
+});
+
+test("late successful POST is delivered after modal unmount, once, without a draft",async()=>{
+  await withStorage(async store=>{
+    const runtime={known:()=>true,generation:()=>generation,register:()=>()=>{}};
+    const cmd=command();
+    let finishRequest;
+    const delayed=new Promise(resolve=>{finishRequest=resolve;});
+    const completions=[];
+    // Always-mounted root listener remains after the task modal is gone.
+    const unsubscribeRoot=subscribePrivateTaskCreateCompletion(runtime,
+      ()=>completions.push(hasPrivateTaskCreateCompletion(runtime,generation)));
+    const inflight=runPrivateTaskCreate(runtime,generation,cmd,
+      async()=>{await delayed;return "saved";});
+    const unsubscribeModal=()=>{}; // modal promise callback no longer owns root delivery
+    unsubscribeModal();
+    assert.equal(hasPrivateTaskCreateCompletion(runtime,generation),false);
+    finishRequest();
+    assert.equal(await inflight,"saved");
+    assert.deepEqual(completions,[true],"root receives late verified success");
+    assert.equal(hasPrivateTaskCreateCompletion(runtime,generation),true);
+    assert.equal(consumePrivateTaskCreateCompletion(runtime,generation),true);
+    assert.equal(consumePrivateTaskCreateCompletion(runtime,generation),false,
+      "completion is consumed exactly once");
+    assert.equal(store.toString().includes(cmd.title),false);
+    assert.equal(privateTaskCreateMarker(generation).kind,"clear");
+    unsubscribeRoot();
+  });
+});
+test("acknowledged CREATE delivered after root listener mounts late",async()=>{
+  await withStorage(async ()=>{
+    const runtime={known:()=>true,generation:()=>generation,register:()=>()=>{}};
+    assert.equal(await runPrivateTaskCreate(runtime,generation,command(),
+      async()=> "saved"),"saved");
+    assert.equal(hasPrivateTaskCreateCompletion(runtime,generation),true);
+    let deliveries=0;
+    const unsub=subscribePrivateTaskCreateCompletion(runtime,()=>deliveries++);
+    assert.equal(deliveries,0,"observer can probe an already buffered completion");
+    assert.equal(consumePrivateTaskCreateCompletion(runtime,generation),true);
+    assert.equal(consumePrivateTaskCreateCompletion(runtime,generation),false);
+    unsub();
+  });
+});
+test("committed receipt never unlocks or notifies when storage removal fails",async()=>{
+  await withStorage(async store=>{
+    const runtime={known:()=>true,generation:()=>generation,register:()=>()=>{}};
+    const cmd=command();
+    let notifications=0;
+    const un=subscribePrivateTaskCreateCompletion(runtime,()=>notifications++);
+    assert.equal(await runPrivateTaskCreate(runtime,generation,cmd,
+      async()=> "uncertain"),"uncertain");
+    const realRemove=store.removeItem;
+    store.removeItem=()=>{throw Error("sessionStorage unavailable");};
+    assert.equal(await checkPrivateTaskCreate(runtime,generation,
+      new AbortController().signal,async()=> "committed"),"unavailable");
+    assert.deepEqual(privateTaskCreateMarker(generation),
+      {kind:"blocked",commandId:cmd.commandId});
+    assert.equal(hasPrivateTaskCreateCompletion(runtime,generation),false);
+    assert.equal(notifications,0);
+    store.removeItem=realRemove;
+    assert.equal(await checkPrivateTaskCreate(runtime,generation,
+      new AbortController().signal,async()=> "committed"),"committed");
+    assert.equal(notifications,1);
+    assert.equal(consumePrivateTaskCreateCompletion(runtime,generation),true);
+    un();
+  });
+});
+test("identity rotation during receipt reconciliation cannot deliver or clear marker",async()=>{
+  await withStorage(async ()=>{
+    let gen=generation;
+    const runtime={known:()=>true,generation:()=>gen,register:()=>()=>{}};
+    const cmd=command();
+    assert.equal(await runPrivateTaskCreate(runtime,generation,cmd,
+      async()=> "uncertain"),"uncertain");
+    gen="B".repeat(43);
+    assert.equal(await checkPrivateTaskCreate(runtime,generation,
+      new AbortController().signal,async()=> "committed"),"unavailable");
+    assert.equal(hasPrivateTaskCreateCompletion(runtime,generation),false);
+    assert.deepEqual(privateTaskCreateMarker(gen),
+      {kind:"blocked",commandId:cmd.commandId});
+    gen=generation;
+    assert.equal(await checkPrivateTaskCreate(runtime,generation,
+      new AbortController().signal,async()=> "committed"),"committed");
+    assert.equal(consumePrivateTaskCreateCompletion(runtime,generation),true);
+  });
+});
+test("task completion hook is separate from unmounted editor and defers while hidden",async()=>{
+  const {readFileSync}=await import("node:fs");
+  const {fileURLToPath}=await import("node:url");
+  const {resolve}=await import("node:path");
+  const src=path=>readFileSync(resolve(fileURLToPath(new URL("..",import.meta.url)),path),"utf8");
+  const root=src("app/ui/lumi-app-root.tsx");
+  const bridge=src("app/ui/target-private-task-completion.tsx");
+  const editor=src("app/ui/target-private-task-creator.tsx");
+  assert.match(root,/taskCapture&&<TargetPrivateTaskCompletion/);
+  assert.match(root,/taskCreatedNotice/);
+  assert.match(root,/if\(!areaChooserOpen\|\|captureKind!=="task"\)return;/);
+  assert.doesNotMatch(editor,/onCreated\(/,"modal must not own final success notification");
+  assert.match(bridge,/runtime\.refresh\(\)/,"fresh session verification required");
+  assert.match(bridge,/document\.visibilityState!=="visible"\|\|!navigator\.onLine/);
+  assert.match(bridge,/consumePrivateTaskCreateCompletion/);
 });
