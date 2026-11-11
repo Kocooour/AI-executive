@@ -43,6 +43,8 @@ jobs:
           cache: pnpm
       - name: Locked dependencies
         run: pnpm install --frozen-lockfile
+      - name: Desktop capture and target detail invariant regressions
+        run: node --experimental-loader ./tests/ts-loader.mjs --test tests/desktop-shell-ui03a.test.mjs tests/target-details-wiring.test.mjs
       - name: Build isolated UI
         run: pnpm build
       - name: Chromium
