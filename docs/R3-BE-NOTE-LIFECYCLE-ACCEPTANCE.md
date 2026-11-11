@@ -14,11 +14,11 @@ pnpm build
 ```
 
 Test kontroluje:
-- create POST a přesný retry 201/200 bez duplicit;
+- create POST a přesný retry 201/200 bez duplicit, včetně neměnnosti SQLite notes, lifecycle receipt/audit, change sequence, anchor a fyzického journalu;
 - autorizované GET a edit preview; PATCH stejného příkazu, čtení změněného obsahu;
 - izolaci Alice/Bob a odmítnutí cizích soukromých dat;
-- DELETE a opakování, 404 po smazání, přesně jeden edit audit, delete audit a tombstone;
-- odvolání živé durable session: 401 pro čtení, preflight, zápis a create, žádná další změna původní poznámky;
+- DELETE a opakování, 404 po smazání, přesně jeden edit audit, delete audit a tombstone; následný nový create se stejným noteId je odmítnut bez vedlejších zápisů;
+- odvolání živé durable session: 401 pro čtení, preflight, zápis a create, žádná změna původní poznámky ani vedlejší vytvoření nového noteId, receipt, auditu, anchoru nebo journalu;
 - zachování legacy sentinel souboru v oddělené cestě.
 
 Všechny testovací flagy žijí pouze uvnitř izolovaného testovacího procesu a jsou po dokončení obnoveny. Žádná produkční aktivace, reálné uživatelské údaje, deployment ani povolení R4. Před release nadále chybí kompletní integrovaná R3 QA včetně skutečného UI a **plné Browser E2E na přesném release SHA**. Otevřené PR #370, #380, #383 a #384 nejsou součástí tohoto kroku. Je nutné samostatné code review a zelené PR Checks.
