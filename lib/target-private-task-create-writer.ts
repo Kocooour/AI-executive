@@ -16,11 +16,14 @@ import { withPinnedTargetStagingWrite } from "./target-staging-pinned-write";
 import { verifiedActor, type TargetStagingReadCredential } from "./target-task-authenticated-read";
 import { canWriteIsolatedTargetArea } from "./target-task-write-preflight";
 import type { TargetStagingReadStore } from "./target-task-staging-reader";
-import { TARGET_STAGING_MAX_RECEIPTS, TARGET_STAGING_AUDIT_MAX_EVENTS } from "./target-store-bootstrap";
+import {
+  TARGET_STAGING_MAX_RECEIPTS, TARGET_STAGING_AUDIT_MAX_EVENTS,
+  TARGET_STAGING_PRIVATE_TASK_CREATE_RECEIPT_PREFIX,
+} from "./target-store-bootstrap";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const AREA = /^[A-Za-z0-9_.:@-]{1,120}$/;
-export const PRIVATE_TASK_CREATE_RECEIPT_PREFIX = "r3:private-task-create-receipt-v1:";
+export const PRIVATE_TASK_CREATE_RECEIPT_PREFIX = TARGET_STAGING_PRIVATE_TASK_CREATE_RECEIPT_PREFIX;
 
 export interface PrivateTaskCreateCommand {
   readonly taskId: string;
