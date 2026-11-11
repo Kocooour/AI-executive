@@ -201,7 +201,7 @@ test("server success announces only exact confirmed task ID, once, to active run
 }));
 test("UUID-only recovery is a strict, no-store request with no private command content",async()=>{
   const cmd=command(),signal=new AbortController().signal;
-  assert.equal(await checkPrivateTaskCreateRecovery(cmd.commandId,signal,async(url,init)=>{
+  assert.deepEqual(await checkPrivateTaskCreateRecovery(cmd.commandId,signal,async(url,init)=>{
     assert.equal(url,"/api/target-staging/tasks/create-recovery");
     assert.deepEqual(JSON.parse(init.body),{commandId:cmd.commandId});
     assert.equal(init.method,"POST");assert.equal(init.cache,"no-store");
