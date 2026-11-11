@@ -6,7 +6,8 @@ import {validPrivateTaskAreaId,validPrivateTaskTitle,validPrivateTaskCreateComma
   sendPrivateTaskCreate,checkPrivateTaskCreateReceipt} from
   "../lib/target-private-task-create-client.ts";
 import {privateTaskCreateMarker,reservePrivateTaskCreate,
-  runPrivateTaskCreate,trackedPrivateTaskCreate,checkTrackedPrivateTaskCreate}
+  runPrivateTaskCreate,trackedPrivateTaskCreate,checkTrackedPrivateTaskCreate,
+  subscribePrivateTaskCreate}
   from "../lib/target-private-task-create-coordinator.ts";
 import {TARGET_PRIVATE_TASK_CREATE_UI_FLAGS,targetPrivateTaskCreateUiEnabled}
   from "../lib/target-private-task-create-ui-gate.ts";
@@ -164,20 +165,61 @@ test("server success before modal unmount unlocks without a second POST",()=>wit
   assert.equal(privateTaskCreateMarker(gen).kind,"clear");
   assert.equal(posts,1);
 }));
+test("a reopened modal observes the original pending POST and can check its receipt",()=>withStorage(async()=>{
+  const rt=runtime(),cmd=command(),events=[];
+  let finish;
+  const pending=new Promise(resolve=>{finish=resolve;});
+  const request=runPrivateTaskCreate(rt,gen,cmd,async()=>pending);
+  assert.deepEqual(trackedPrivateTaskCreate(rt,gen),
+    {phase:"saving",commandId:cmd.commandId});
+  // The first modal has been dismissed. A replacement subscriber must be
+  // notified even though it was not mounted when CREATE was dispatched.
+  const unsubscribe=subscribePrivateTaskCreate(rt,gen,change=>events.push(change));
+  finish("uncertain");
+  assert.equal(await request,"uncertain");
+  assert.deepEqual(events,[{generation:gen,confirmedTaskId:null}]);
+  assert.deepEqual(trackedPrivateTaskCreate(rt,gen),
+    {phase:"uncertain",commandId:cmd.commandId});
+  const receipt=await checkTrackedPrivateTaskCreate(rt,gen,
+    new AbortController().signal,async()=> "committed");
+  assert.equal(receipt,"committed");
+  assert.deepEqual(events[1],{generation:gen,confirmedTaskId:cmd.taskId});
+  assert.deepEqual(privateTaskCreateMarker(gen),{kind:"clear"});
+  unsubscribe();
+}));
+test("server success announces only exact confirmed task ID, once, to active runtime",()=>withStorage(async()=>{
+  const rt=runtime(),cmd=command(),events=[];
+  const dispose=subscribePrivateTaskCreate(rt,gen,change=>events.push(change));
+  const result=await runPrivateTaskCreate(rt,gen,cmd,async()=> "saved");
+  assert.equal(result,"saved");
+  assert.deepEqual(events,[{generation:gen,confirmedTaskId:cmd.taskId}]);
+  assert.equal(events[0].title,undefined);
+  assert.deepEqual(privateTaskCreateMarker(gen),{kind:"clear"});
+  dispose();
+  assert.equal(await runPrivateTaskCreate(rt,gen,command(),async()=> "saved"),"saved");
+  assert.equal(events.length,1,"unsubscribed modal must not receive future events");
+}));
 test("main shell wiring preserves note-only default, no Search tab, distinct task consent and feedback",()=>{
   const root=readFileSync(new URL("../app/ui/lumi-app-root.tsx",import.meta.url),"utf8");
   const page=readFileSync(new URL("../app/page.tsx",import.meta.url),"utf8");
   const quick=readFileSync(new URL("../app/ui/target-private-quick-capture.tsx",import.meta.url),"utf8");
   const form=readFileSync(new URL("../app/ui/target-private-task-area-chooser.tsx",import.meta.url),"utf8");
   assert.match(page,/targetPrivateTaskCreateUiEnabled\(process\.env\)/);
-  assert.match(root,/targetPrivateTaskCreate\s*\?\s*<TargetPrivateQuickCapture/);
+  assert.match(root,/taskCaptureReady\s*\?\s*<TargetPrivateQuickCapture/);
   assert.match(root,/onClick=\{\(\)=>openAreaChooser\(false,"note"\)\}/);
   assert.match(root,/target-private-task-created/);
+  assert.match(root,/target-private-task-open/);
+  assert.match(root,/subscribePrivateTaskCreate\(/);
+  assert.match(root,/openTargetDetail\(\{kind:"task"/);
+  assert.match(page,/config\?\.myPlan\.enabled&&config\?\.details\.task/);
   assert.match(quick,/onClick=\{\(\)=>setKind\("task"\)\}/);
   assert.match(quick,/onClick=\{\(\)=>setKind\("note"\)\}/);
   assert.match(form,/privateNoteCreatePreflight\(selected\.id/);
   assert.match(form,/loadPrivateNoteAreaChoices\(/);
   assert.match(form,/flushSync\(hide\)/);
   assert.match(form,/checkTrackedPrivateTaskCreate\(/);
+  assert.match(form,/subscribePrivateTaskCreate\(/);
+  assert.match(form,/if\(!preflight\?\.ok\|\|controller\.signal\.aborted\)/);
+  assert.match(form,/if\(current!==serial\.current\|\|!mounted\.current\|\|!live\(\)\)return/);
   assert.doesNotMatch(quick,/localStorage|IndexedDB/);
 });
