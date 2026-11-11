@@ -189,6 +189,32 @@ test("flags, origin, protocol, shape and restore fence fail closed",async()=>{
     "resync_required");
   assert.deepEqual(persistence(fx,cmd.taskId),before);
 });
+test("create status cannot confirm a deleted task or resurrect its tombstone",async()=>{
+  const fx=fixture(),cmd=command(fx);
+  assert.deepEqual(await checked(await create(cmd),201),{ok:true,taskId:cmd.taskId});
+  assert.deepEqual(await checked(await recover(cmd),200),{status:"committed"});
+  const {TargetStagingSessionAuthority}=await import("../lib/target-staging-session-authority.ts");
+  const authority=new TargetStagingSessionAuthority(fx.store);
+  try{
+    const write=authority.issueWritable("alice");
+    assert.ok(write);
+    const preview=authority.previewTaskTitleEdit(write.sessionToken,{taskId:cmd.taskId});
+    assert.equal(preview.ok,true);
+    assert.deepEqual(authority.deleteTask(write.sessionToken,{
+      taskId:cmd.taskId,commandId:randomUUID(),
+      expectedRevision:preview.snapshotRevision,writeAreaId:cmd.areaId,
+      restoreGeneration:cmd.restoreGeneration,
+    },true),{ok:true});
+  }finally{authority.close();}
+  const afterDelete=persistence(fx,cmd.taskId);
+  assert.equal(afterDelete.task,undefined);
+  assert.deepEqual(await checked(await recover(cmd),404),{error:"Not found"});
+  assert.deepEqual(await checked(await create(cmd),404),{error:"Not found"});
+  assert.deepEqual(await checked(await create({...cmd,commandId:randomUUID()}),404),
+    {error:"Not found"});
+  assert.deepEqual(persistence(fx,cmd.taskId),afterDelete,
+    "failed recovery/retries must not alter receipt, journal or tombstones");
+});
 test("exact content-free child DTO parsing rejects all extra properties",()=>{
   assert.deepEqual(parseTaskCreateReply({ok:true,replayed:true}),{ok:true,replayed:true});
   assert.deepEqual(parseTaskCreateStatusReply({ok:true,status:"committed"}),
