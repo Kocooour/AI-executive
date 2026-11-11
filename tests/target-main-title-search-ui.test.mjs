@@ -60,17 +60,27 @@ test("shell switches exactly the Search view to server titles; no new bottom nav
   assert.match(ui,/useTargetScope\(\)/);
   assert.match(ui,/useTargetSession\(/);
   assert.match(ui,/subscribeMainTitleSearchAclInvalidation\(runtime/);
+  assert.match(ui,/const verificationReady=runtime\?\.lastOutcome\(\)==="ok"/);
+  assert.match(ui,/if\(!session\|\|!allowed\)return/);
   assert.match(ui,/window\.addEventListener\("offline"/);
   assert.match(ui,/session\.next\(\)/);
   assert.doesNotMatch(ui,/localStorage|sessionStorage|indexedDB|document\.cookie/i);
 });
 
 test("same-generation ACL revocation tick removes shared titles and aborts late results",async()=>{
-  const subscribers=new Set();
-  const runtime={subscribeTick(listener){
-    subscribers.add(listener);
-    return ()=>subscribers.delete(listener);
-  }};
+  const subscribers=new Set(),outcomeSubscribers=new Set();
+  let outcome="ok";
+  const runtime={
+    subscribeTick(listener){
+      subscribers.add(listener);
+      return ()=>subscribers.delete(listener);
+    },
+    subscribeOutcome(listener){
+      outcomeSubscribers.add(listener);
+      return ()=>outcomeSubscribers.delete(listener);
+    },
+    lastOutcome(){return outcome;},
+  };
   const emitVerifiedTick=()=>{for(const fn of [...subscribers])fn();};
   const item={kind:"task",id:"shared-id",title:"Confidential shared title",
     areaId:"shared-area",areaKind:"shared",projectId:null};
@@ -123,8 +133,85 @@ test("same-generation ACL revocation tick removes shared titles and aborts late 
   assert.equal(subscribers.size,1);
   subscribe();
   assert.equal(subscribers.size,0);
+  assert.equal(outcomeSubscribers.size,0);
   assert.doesNotMatch(
     (await import("node:fs")).readFileSync("app/ui/target-main-title-search.tsx","utf8"),
     /setInterval\(|setTimeout\(/,
     "no search polling/prefetch should be added by the ACL invalidation");
+});
+
+test("failed same-generation revalidation removes shared titles, aborts late reads and gates Enter",async()=>{
+  const ticks=new Set(),outcomes=new Set();
+  let outcome="ok";
+  const runtime={
+    lastOutcome:()=>outcome,
+    subscribeTick(fn){ticks.add(fn);return ()=>ticks.delete(fn);},
+    subscribeOutcome(fn){outcomes.add(fn);return ()=>outcomes.delete(fn);},
+  };
+  let displayed=null,epoch=0;
+  let resolvePending=null;
+  let slow=false;
+  const page=()=>new Response(JSON.stringify({
+    query:"school",scope:"shared",items:[{
+      kind:"task",id:"revoked-task",title:"Private shared title",
+      areaId:"shared-area",areaKind:"shared",projectId:null,
+    }],hasMore:false,nextCursor:null,
+  }),{headers:{"content-type":"application/json","cache-control":"private, no-store"}});
+  const fetchImpl=async()=>slow
+    ?new Promise(resolve=>{resolvePending=resolve;}):page();
+  const session=createStagingTitleSearchSession(fetchImpl);
+  const binding={input:"school",scope:"shared",generation:"unchanged-login"};
+  const unbind=subscribeMainTitleSearchAclInvalidation(runtime,()=>{
+    ++epoch;session.reset();displayed=null;
+  });
+  const confirmed=()=>runtime.lastOutcome()==="ok";
+  const first=await session.first({query:"school",scope:"shared",limit:25});
+  assert.deepEqual(first,{ok:true});
+  displayed={binding,snapshot:session.getSnapshot(),failure:null};
+  assert.equal(visibleMainTitleSearchResult(displayed,binding,confirmed())?.snapshot.items.length,1);
+
+  // A passive 503 / timeout does NOT change login generation or emit a tick.
+  // A lost Area ACL cannot be ruled out, so the result must disappear anyway.
+  outcome="unavailable";
+  for(const fn of [...outcomes])fn();
+  assert.equal(binding.generation,"unchanged-login");
+  assert.equal(ticks.size,1);
+  assert.equal(displayed,null);
+  assert.equal(session.getSnapshot().status,"idle");
+  assert.equal(session.getSnapshot().items.length,0);
+  assert.equal(confirmed(),false,"button and topbar Enter must refuse new reads");
+
+  // Recovery merely permits another explicit submit; it never resurrects rows.
+  outcome="ok";
+  for(const fn of [...outcomes])fn();
+  assert.equal(confirmed(),true);
+  assert.equal(displayed,null);
+  slow=true;
+  const run=++epoch;
+  const old=session.first({query:"school",scope:"shared",limit:25}).then(result=>{
+    if(run===epoch&&confirmed()&&result.ok)
+      displayed={binding,snapshot:session.getSnapshot(),failure:null};
+    return result;
+  });
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(typeof resolvePending,"function");
+  outcome="unavailable";
+  for(const fn of [...outcomes])fn();
+  resolvePending(page());
+  assert.deepEqual(await old,{ok:false,reason:"aborted"});
+  assert.equal(displayed,null);
+  assert.equal(session.getSnapshot().status,"idle");
+
+  for(const refusal of ["signed_out","feature_off"]){
+    outcome="ok";
+    for(const fn of [...outcomes])fn();
+    displayed={binding,snapshot,failure:null};
+    outcome=refusal;
+    for(const fn of [...outcomes])fn();
+    assert.equal(displayed,null,refusal+" must fail closed");
+    assert.equal(confirmed(),false);
+  }
+  unbind();
+  assert.equal(ticks.size,0);
+  assert.equal(outcomes.size,0);
 });
