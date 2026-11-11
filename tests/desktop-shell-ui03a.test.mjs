@@ -47,7 +47,7 @@ test("UI-03a: desktop FAB preserves legacy private-first capture and separately 
   assert.match(fab, /const label=onTargetCapture/);
   assert.match(fab, /aria-label=\{label\}/);
   assert.match(fab, /onClick=\{onTargetCapture \?\? \(\(\)=>app\.openCapture\(\)\)\}/);
-  assert.match(page, /<DesktopCaptureFab app=\{app\} onTargetCapture=\{targetCapture\?openAreaChooser:undefined\}/);
+  assert.match(page, /<DesktopCaptureFab app=\{app\} onTargetCapture=\{targetCapture\?\(\)=>openAreaChooser\(\):undefined\}/);
   // Legacy write is still reached only when an independently gated target callback
   // is absent; unified target mode never falls through to the old writer.
   assert.match(fab, /if \(state\.captureDisabled && !targetState\.current\.onOpen\) return;/);
