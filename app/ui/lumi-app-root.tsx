@@ -47,6 +47,7 @@ const TargetDetailPanel = dynamic(() => import("./target-detail-panel"), { ssr: 
 // R3-CAPTURE-1: read-only, real actor-private Area catalogue in target Notes.
 const TargetPrivateNoteAreaChooser = dynamic(() => import("./target-private-note-area-chooser"), { ssr: false });
 const TargetPrivateTaskCreator = dynamic(() => import("./target-private-task-creator"), { ssr: false });
+const TargetPrivateTaskCompletion = dynamic(() => import("./target-private-task-completion"), { ssr: false });
 
 export type TargetDetailsProps = { task: boolean; project: boolean; note: boolean };
 export type TargetScopesProps = { enabled: boolean; projects: boolean; notes: boolean };
@@ -68,6 +69,7 @@ export function LumiAppRoot({ targetMyPlan, targetScopes, targetDetails, targetE
   const areaChooserOpener=useRef<HTMLElement|null>(null);
   const [noteListRevision,setNoteListRevision]=useState(0);
   const [taskListRevision,setTaskListRevision]=useState(0);
+  const [taskCreatedNotice,setTaskCreatedNotice]=useState(false);
   const detailGates = { task: Boolean(targetDetails?.task), project: Boolean(targetDetails?.project), note: Boolean(targetDetails?.note) };
   const shellInput = { scopesOn, projectsList: Boolean(targetScopes?.projects), notesList: Boolean(targetScopes?.notes),
     myPlan: Boolean(targetMyPlan?.enabled), v1Shell: mobileDesignV1Preview };
@@ -112,6 +114,7 @@ export function LumiAppRoot({ targetMyPlan, targetScopes, targetDetails, targetE
     if(document.querySelector('[aria-modal="true"]'))return;
     areaChooserOpener.current=document.activeElement instanceof HTMLElement
       ?document.activeElement:null;
+    if(kind==="task")setTaskCreatedNotice(false);
     setCaptureKind(kind);
     setAreaChooserOpen(true);
   }
@@ -132,9 +135,14 @@ export function LumiAppRoot({ targetMyPlan, targetScopes, targetDetails, targetE
     });
   }
   function createdPrivateTask(){
-    closeAreaChooser();
+    // A successful HTTP acknowledgement may arrive after the user closed
+    // Capture or switched to Note. Never tear down an unrelated modal, steal
+    // focus, or force navigation in that case. Keep a visible confirmation.
+    setTaskCreatedNotice(true);
     // Force an authorized My Plan refetch; never fabricate a client task row.
     setTaskListRevision(v=>v+1);
+    if(!areaChooserOpen||captureKind!=="task")return;
+    closeAreaChooser();
     if(taskCapture&&scopeFromSearch(window.location.search)==="shared")
       writeTargetReadingScope("personal");
     if(taskCapture&&targetMyPlan?.enabled)
@@ -309,6 +317,12 @@ export function LumiAppRoot({ targetMyPlan, targetScopes, targetDetails, targetE
             onClick={()=>openAreaChooser(false,"note")}>{targetPrivateNoteCreate
               ?(language==="cs"?"Nová soukromá poznámka":"New private note")
               :(language==="cs"?"Oblasti pro novou poznámku":"Areas for a new note")}</button>}
+          {taskCapture&&taskCreatedNotice&&<p role="status" data-testid="target-task-create-confirmed">
+            {language==="cs"?"Soukromý úkol byl vytvořen.":"Private task created."}
+            <button type="button" onClick={()=>setTaskCreatedNotice(false)}>
+              {language==="cs"?"Skrýt":"Dismiss"}
+            </button>
+          </p>}
           <HeldBack app={app} />
           <CalendarView app={app} />
           <HomeView app={app} />
@@ -331,10 +345,12 @@ export function LumiAppRoot({ targetMyPlan, targetScopes, targetDetails, targetE
       <DesktopCaptureFab app={app} onTargetCapture={targetCapture?()=>openAreaChooser():undefined}
         targetTaskCapture={Boolean(taskCapture)} targetCaptureOpen={areaChooserOpen} />
       <CaptureDialog app={app} />
+      {taskCapture&&<TargetPrivateTaskCompletion
+        onCreated={createdPrivateTask} onReset={()=>setTaskCreatedNotice(false)} />}
       {targetPrivateNoteAreas&&areaChooserOpen&&(scopeList==="note"||targetCapture)&&(
         captureKind==="task"&&taskCapture
           ?<TargetPrivateTaskCreator language={language} onClose={closeAreaChooser}
-            onCreated={createdPrivateTask} onSwitchToNote={()=>setCaptureKind("note")} />
+            onSwitchToNote={()=>setCaptureKind("note")} />
           :<TargetPrivateNoteAreaChooser language={language} createEnabled={targetPrivateNoteCreate}
             onClose={closeAreaChooser} onCreated={createdPrivateNote}
             onSwitchToTask={taskCapture?()=>setCaptureKind("task"):undefined} />
