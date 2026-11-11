@@ -98,6 +98,8 @@ test("only the runtime (and its server route) reference the session endpoint; no
     "app/ui/target-private-note-area-chooser.tsx",
     // R3-FE-6: lazily loaded private task capture uses the same runtime contract.
     "app/ui/target-private-task-area-chooser.tsx",
+    // Completion observer is independently gated and never imported by default shell eagerly.
+    "app/ui/target-private-task-created-notice.tsx",
   ].sort());
 });
 
