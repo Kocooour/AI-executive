@@ -77,7 +77,7 @@ export async function runPrivateTaskCreate(
 ):Promise<TaskCreateOutcome|"blocked">{
   if(!runtime.known()||runtime.generation()!==generation||
     entries.has(runtime)||!validPrivateTaskCreateCommand(command)||
-    !reservePrivateTaskCreate(generation,command.commandId)
+    !reservePrivateTaskCreate(generation,command.commandId))
     return "blocked";
   const controller=new AbortController();
   let timeoutResolve:(v:TaskCreateOutcome)=>void=()=>{};
