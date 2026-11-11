@@ -38,6 +38,11 @@ jobs:
       E2E_SKIP_BUILD: "1"
       E2E_PORT: "3124"
       LUMI_HUMANWIKI_SOURCE_STATUS_E2E: "true"
+      # Real owner status API remains unconfigured (no ledger/witness/key) and
+      # is intercepted by synthetic page.route fixtures. These flags never
+      # reach the production or unrelated browser-test servers.
+      AI_EXECUTIVE_HUMANWIKI_SOURCE_WITNESS_UI_ENABLED: "true"
+      AI_EXECUTIVE_HUMANWIKI_SOURCE_WITNESS_STATUS_ENABLED: "true"
     steps:
       - name: Checkout isolated PR code
         uses: actions/checkout@v5
