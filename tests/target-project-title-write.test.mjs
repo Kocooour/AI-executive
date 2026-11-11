@@ -155,3 +155,21 @@ test('simultaneous PATCH and cancel are ordered by pinned write transaction',asy
   }
   assert.equal(inspectIsolatedTargetStore({...store,mode:'r2-model'}).ok,true);
 });
+
+test('strict preflight rejects malformed cancellation metadata and preserves good fences',()=>{
+  const row=db.prepare("SELECT key,value FROM metadata WHERE key LIKE 'r3:project-title-cancel-v1:%' LIMIT 1").get();
+  assert.ok(row,'a committed fence is required from the earlier cancellation tests');
+  assert.equal(row.value,'1');
+  try{
+    db.prepare("UPDATE metadata SET value='0' WHERE key=?").run(row.key);
+    const bad=inspectIsolatedTargetStore({...store,mode:'r2-model'});
+    assert.equal(bad.ok,false);
+    assert.ok(bad.issues.includes('metadata_invalid'),JSON.stringify(bad));
+  }finally{db.prepare("UPDATE metadata SET value='1' WHERE key=?").run(row.key);}
+  const key='r3:project-title-cancel-v1:not-a-sha256';
+  try{
+    db.prepare("INSERT INTO metadata(key,value) VALUES (?,'1')").run(key);
+    assert.ok(inspectIsolatedTargetStore({...store,mode:'r2-model'}).issues.includes('metadata_invalid'));
+  }finally{db.prepare("DELETE FROM metadata WHERE key=?").run(key);}
+  assert.equal(inspectIsolatedTargetStore({...store,mode:'r2-model'}).ok,true);
+});

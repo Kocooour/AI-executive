@@ -6,7 +6,7 @@ import {readableProjectId} from "./target-staging-project-tasks-client";
 export type ProjectTitleEditPreview={
   expectedRevision:string;writeAreaId:string;restoreGeneration:string;principalBinding:string;currentTitle:string;
 };
-export type ProjectTitleEditCommand=Omit<ProjectTitleEditPreview,"principalBinding">&{
+export type ProjectTitleEditCommand=Omit<ProjectTitleEditPreview,"principalBinding"|"currentTitle">&{
   commandId:string;title:string;
 };
 export type ProjectTitleEditFailure="denied"|"expired"|"conflict"|"unavailable"|"offline"|"invalid-response";
