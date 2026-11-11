@@ -11,6 +11,9 @@ const area=/^[A-Za-z0-9_.:@-]{1,120}$/;
 const encoder=new TextEncoder();
 const record=(v:unknown):v is Record<string,unknown>=>
   v!==null&&typeof v==="object"&&!Array.isArray(v);
+export function validPrivateTaskAreaId(value:unknown):value is string{
+  return typeof value==="string"&&area.test(value);
+}
 export function validPrivateTaskTitle(value:unknown):value is string{
   return typeof value==="string"&&value.length>0&&value===value.trim()&&
     value.isWellFormed()&&encoder.encode(value).length<=4096&&
