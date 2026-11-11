@@ -19,13 +19,23 @@ export function targetMainTitleSearchEnabled(env:Record<string,string|undefined>
 }
 
 /** A successful runtime revalidation can follow ACL revocation with exactly
- * the SAME login generation. Do not retain previously disclosed titles/counts.
- * A tick invalidates the current explicit result; it MUST NOT auto-search. */
+ * the SAME login generation. Unsuccessful revalidation also makes previously
+ * disclosed titles untrustworthy: purge on EITHER a verified tick or a failed
+ * outcome, aborting pending reads without automatically searching again. */
 export function subscribeMainTitleSearchAclInvalidation(
-  runtime:{subscribeTick(listener:()=>void):()=>void}|null,
+  runtime:{
+    subscribeTick(listener:()=>void):()=>void;
+    subscribeOutcome(listener:()=>void):()=>void;
+    lastOutcome():string|null;
+  }|null,
   invalidate:()=>void,
 ):()=>void {
-  return runtime?.subscribeTick(invalidate)??(()=>{});
+  if(!runtime)return ()=>{};
+  const stopTick=runtime.subscribeTick(invalidate);
+  const stopOutcome=runtime.subscribeOutcome(()=>{
+    if(runtime.lastOutcome()!=="ok")invalidate();
+  });
+  return ()=>{stopTick();stopOutcome();};
 }
 
 export type MainTitleSearchBinding={
