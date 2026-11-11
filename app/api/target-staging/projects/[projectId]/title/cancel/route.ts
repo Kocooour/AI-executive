@@ -74,7 +74,7 @@ export async function POST(request:Request,context:{params:Promise<{projectId:st
       if(after!=="ok")return stagingIdentityRefusal(after);
     }
     if(!unchanged(base)||!result)return answer(503,"Staging unavailable");
-    if(!result.ok){
+    if(result.ok===false){
       if(result.reason==="unavailable")return answer(404,"Not found");
       if(result.reason==="resync_required")return resyncRequiredResponse();
       return answer(503,"Staging unavailable");
