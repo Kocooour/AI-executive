@@ -208,7 +208,7 @@ test("owner HTTP observes real source-specific withdrawal intent and live signed
   const empty = await GET(ownerReq(token));
   assert.equal(empty.status, 200);
   const e = await empty.json();
-  assert.equal(e.witnessState, "signed_remote_head_matches_local");
+  assert.equal(e.witnessState, "signed_witness_prefix_covers_owner_intents");
   assert.deepEqual(e.sources, cleanSources(0, 0));
   assertNoPrivileges(e);
   assert.equal(empty.headers.get("cache-control"), "no-store");
@@ -220,7 +220,7 @@ test("owner HTTP observes real source-specific withdrawal intent and live signed
   const pending = await GET(ownerReq(token));
   assert.equal(pending.status, 200);
   const p = await pending.json();
-  assert.equal(p.witnessState, "signed_remote_prefix_requires_catchup");
+  assert.equal(p.witnessState, "signed_witness_prefix_lags_owner_intents");
   assert.deepEqual(p.sources, cleanSources(1, 0));
   assertNoPrivileges(p);
   assert.equal(witnessHead().sequence, 0, "GET may not publish a checkpoint");
@@ -229,7 +229,7 @@ test("owner HTTP observes real source-specific withdrawal intent and live signed
   const matched = await GET(ownerReq(token));
   assert.equal(matched.status, 200);
   const m = await matched.json();
-  assert.equal(m.witnessState, "signed_remote_head_matches_local");
+  assert.equal(m.witnessState, "signed_witness_prefix_covers_owner_intents");
   assert.deepEqual(m.sources, cleanSources(1, 0));
   assertNoPrivileges(m);
 
@@ -238,7 +238,7 @@ test("owner HTTP observes real source-specific withdrawal intent and live signed
   const second = await GET(ownerReq(token));
   assert.equal(second.status, 200);
   assert.equal((await second.json()).witnessState,
-    "signed_remote_prefix_requires_catchup");
+    "signed_witness_prefix_lags_owner_intents");
   publishLocalTail();
   const synced = await GET(ownerReq(token));
   assert.equal(synced.status, 200);
@@ -310,12 +310,21 @@ test("a local append racing signed network observation is rejected", async () =>
   const status = await GET(ownerReq(token));
   assert.equal(status.status, 200);
   assert.equal((await status.json()).witnessState,
-    "signed_remote_prefix_requires_catchup");
+    "signed_witness_prefix_lags_owner_intents");
 });
 
 test("foreign scoped events cannot leak, and config revocation during TLS fails closed", async () => {
   configure();
   const token = createSessionToken();
+  // Finish the earlier owner's pending seq 3. Now witness and owner are
+  // genuinely in sync before a *foreign-only* global append occurs.
+  publishLocalTail();
+  const beforeForeign = await GET(ownerReq(token));
+  assert.equal(beforeForeign.status, 200);
+  const beforeData = await beforeForeign.json();
+  assert.equal(beforeData.witnessState, "signed_witness_prefix_covers_owner_intents");
+  assert.deepEqual(beforeData.sources, cleanSources(2, 1));
+
   // A physically shared HMAC chain can carry events from many actors; only
   // the authenticated owner's private scope may affect the JSON projection.
   const foreign = withHumanWikiConsentPrivateLedger(ledgerDir, "write", db =>
@@ -330,8 +339,11 @@ test("foreign scoped events cannot leak, and config revocation during TLS fails 
   const observed = await GET(ownerReq(token));
   assert.equal(observed.status, 200);
   const data = await observed.json();
-  assert.deepEqual(data.sources, cleanSources(2, 1));
-  assert.equal(data.witnessState, "signed_remote_prefix_requires_catchup");
+  assert.equal(localHead().sequence, 4);
+  assert.equal(witnessHead().sequence, 3, "foreign global checkpoint remains unpublished");
+  assert.deepEqual(data, beforeData,
+    "foreign-only append must not change ANY owner-visible JSON including witness state");
+  assert.equal(data.witnessState, "signed_witness_prefix_covers_owner_intents");
   assertNoPrivileges(data);
   assert.equal(JSON.stringify(data).includes("different-owner"), false);
 
@@ -349,11 +361,11 @@ test("foreign scoped events cannot leak, and config revocation during TLS fails 
 test("a signed foreign witness digest blocks even the read-only source projection", async () => {
   configure();
   const token = createSessionToken();
-  // Witness sequence 2, local sequence >=3: publish a foreign-but-signed seq 3.
+  // Witness sequence 3, local sequence 4: publish foreign-but-signed seq 4.
   const current = witnessHead();
-  assert.equal(current.sequence, 2);
+  assert.equal(current.sequence, 3);
   assert.equal(publishWitnessCheckpoint(witnessDir, registryId, privateKey, {
-    sequence: 3, previousDigest: current.digest, digest: "e".repeat(64),
+    sequence: 4, previousDigest: current.digest, digest: "e".repeat(64),
   }).ok, true);
   await denied(await GET(ownerReq(token)));
 });
