@@ -24,6 +24,7 @@ const whenWrite={
 const off={enabled:false,statusWrite:false,whenWrite:false};
 const off3={enabled:false,projects:false,notes:false};
 const det0={task:false,project:false,note:false};
+const ed0={taskTitle:false,taskStatus:false,taskWhen:false,taskDelete:false,noteEdit:false,noteDelete:false};
 
 test("default env: target UI off, no config at all",()=>{
   assert.equal(targetUiConfig({}),null);
@@ -38,7 +39,7 @@ test("either R3-FE-1 flag missing or not exactly true: null (identical legacy tr
 });
 
 test("My Plan is enabled only when ALL five flags are exactly true",()=>{
-  assert.deepEqual(targetUiConfig(base),{myPlan:{...off,enabled:true},scopes:off3,details:det0});
+  assert.deepEqual(targetUiConfig(base),{myPlan:{...off,enabled:true},scopes:off3,details:det0,edits:ed0});
   assert.equal(TARGET_UI_MY_PLAN_FLAGS.length,5);
   for(const name of TARGET_UI_MY_PLAN_FLAGS){
     const env={...base,...statusWrite,...whenWrite};
@@ -47,23 +48,23 @@ test("My Plan is enabled only when ALL five flags are exactly true",()=>{
       assert.equal(targetUiConfig(env),null,name);continue;
     }
     // Missing my-plan flag: target UI still on, My Plan and its writes off.
-    assert.deepEqual(targetUiConfig(env),{myPlan:off,scopes:off3,details:det0},name);
+    assert.deepEqual(targetUiConfig(env),{myPlan:off,scopes:off3,details:det0,edits:ed0},name);
     for(const bad of ["1","TRUE","false",""])
-      assert.deepEqual(targetUiConfig({...env,[name]:bad}),{myPlan:off,scopes:off3,details:det0},name+bad);
+      assert.deepEqual(targetUiConfig({...env,[name]:bad}),{myPlan:off,scopes:off3,details:det0,edits:ed0},name+bad);
   }
 });
 
 test("write gates are independent of each other and never apply without My Plan",()=>{
-  assert.deepEqual(targetUiConfig({...base,...statusWrite}),{myPlan:{enabled:true,statusWrite:true,whenWrite:false},scopes:off3,details:det0});
-  assert.deepEqual(targetUiConfig({...base,...whenWrite}),{myPlan:{enabled:true,statusWrite:false,whenWrite:true},scopes:off3,details:det0});
-  assert.deepEqual(targetUiConfig({...base,...statusWrite,...whenWrite}),{myPlan:{enabled:true,statusWrite:true,whenWrite:true},scopes:off3,details:det0});
+  assert.deepEqual(targetUiConfig({...base,...statusWrite}),{myPlan:{enabled:true,statusWrite:true,whenWrite:false},scopes:off3,details:det0,edits:ed0});
+  assert.deepEqual(targetUiConfig({...base,...whenWrite}),{myPlan:{enabled:true,statusWrite:false,whenWrite:true},scopes:off3,details:det0,edits:ed0});
+  assert.deepEqual(targetUiConfig({...base,...statusWrite,...whenWrite}),{myPlan:{enabled:true,statusWrite:true,whenWrite:true},scopes:off3,details:det0,edits:ed0});
   const noMyPlan={...base,...statusWrite,...whenWrite};
   delete noMyPlan.AI_EXECUTIVE_TARGET_UI_MY_PLAN_ENABLED;
-  assert.deepEqual(targetUiConfig(noMyPlan),{myPlan:off,scopes:off3,details:det0});
+  assert.deepEqual(targetUiConfig(noMyPlan),{myPlan:off,scopes:off3,details:det0,edits:ed0});
   // A partial write gate leaves that write off while reads stay on.
   const partial={...base,...statusWrite};
   delete partial.AI_EXECUTIVE_TARGET_STAGING_HTTP_TEMPORAL_WRITE_ENABLED;
-  assert.deepEqual(targetUiConfig(partial),{myPlan:{...off,enabled:true},scopes:off3,details:det0});
+  assert.deepEqual(targetUiConfig(partial),{myPlan:{...off,enabled:true},scopes:off3,details:det0,edits:ed0});
 });
 
 test("the config is plain serializable booleans only",()=>{
@@ -81,15 +82,15 @@ const projectsFlag={AI_EXECUTIVE_TARGET_STAGING_HTTP_GLOBAL_PROJECTS_ENABLED:T};
 const notesFlag={AI_EXECUTIVE_TARGET_STAGING_HTTP_GLOBAL_NOTES_ENABLED:T};
 
 test("R3-FE-3: switcher needs all three flags exactly true, independent of My Plan",()=>{
-  assert.deepEqual(targetUiConfig(scopesOnly),{myPlan:off,scopes:{enabled:true,projects:false,notes:false},details:det0});
+  assert.deepEqual(targetUiConfig(scopesOnly),{myPlan:off,scopes:{enabled:true,projects:false,notes:false},details:det0,edits:ed0});
   assert.deepEqual(targetUiConfig({...base,...scopesOnly}),
-    {myPlan:{...off,enabled:true},scopes:{enabled:true,projects:false,notes:false},details:det0});
+    {myPlan:{...off,enabled:true},scopes:{enabled:true,projects:false,notes:false},details:det0,edits:ed0});
   assert.equal(TARGET_UI_SCOPES_FLAGS.length,3);
   for(const name of TARGET_UI_SCOPES_FLAGS){
     const env={...scopesOnly,...projectsFlag,...notesFlag};
     delete env[name];
     const expected=name==="AI_EXECUTIVE_TARGET_UI_ENABLED"||name==="AI_EXECUTIVE_TARGET_STAGING_HTTP_ENABLED"
-      ?null:{myPlan:off,scopes:off3,details:det0};
+      ?null:{myPlan:off,scopes:off3,details:det0,edits:ed0};
     assert.deepEqual(targetUiConfig(env),expected,name);
     for(const bad of ["1","TRUE","yes","false",""])
       assert.deepEqual(targetUiConfig({...env,[name]:bad}),expected,name+bad);

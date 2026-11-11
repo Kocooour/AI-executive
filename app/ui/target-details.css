@@ -50,6 +50,35 @@
 .targetSidebarProjects small,.targetSidebarProjectText{color:var(--muted,#5f5f62);font-size:13px;padding:6px 10px;}
 .targetSidebarProjectRow{display:block;min-height:44px;padding:10px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .targetScopeRow:has(.targetScopeRowButton){padding:0;}
+/* R3-FE-4b: edits inside the authorized detail. */
+.targetDetailEdit{display:grid;gap:10px;padding-top:6px;border-top:1px solid var(--line,#d6dbd6);}
+.targetDetailEditRow{display:flex;flex-wrap:wrap;gap:8px;align-items:flex-start;}
+.targetDetailEditForm{display:grid;gap:8px;width:100%;}
+.targetDetailEditForm label{display:grid;gap:4px;font-weight:600;font-size:14px;}
+.targetDetailEditForm input,.targetDetailEditForm textarea,.targetDetailEditConflict textarea{
+  font:inherit;font-weight:400;width:100%;box-sizing:border-box;min-height:44px;padding:8px 10px;
+  border-radius:10px;border:1px solid var(--line,#9da99e);background:var(--surface,#fff);color:inherit;}
+.targetDetailEditForm textarea,.targetDetailEditConflict textarea{resize:vertical;line-height:1.5;}
+.targetDetailEditForm input:focus-visible,.targetDetailEditForm textarea:focus-visible{
+  outline:3px solid #2563EB;outline-offset:2px;}
+.targetDetailEditActions{display:flex;flex-wrap:wrap;gap:8px;}
+.targetDetailEditConfirm,.targetDetailEditConflict{display:grid;gap:8px;padding:12px;border-radius:12px;
+  border:1px solid var(--line,#9da99e);background:var(--surface-2,rgba(0,0,0,.04));}
+.targetDetail button.targetDetailEditDanger{border-color:#b42318;color:#b42318;}
+.targetDetailEditFeedback{display:grid;gap:6px;}
+.targetDetailEditFeedback p{min-height:0;}
+.targetDetailEditFeedback p:empty{display:none;}
+.targetDetailEditFeedback [role="alert"]{color:#8a1c12;font-weight:600;}
+:root[data-theme="dark"] .targetDetail button.targetDetailEditDanger{color:#ff9d92;border-color:#ff9d92;}
+:root[data-theme="dark"] .targetDetailEditFeedback [role="alert"]{color:#ffb4aa;}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme]) .targetDetail button.targetDetailEditDanger{color:#ff9d92;border-color:#ff9d92;}
+  :root:not([data-theme]) .targetDetailEditFeedback [role="alert"]{color:#ffb4aa;}
+}
+@media (max-width:640px){
+  .targetDetailEditActions button,.targetDetailEditRow>button{flex:1 1 140px;justify-self:stretch;}
+}
+.targetDetailEditLabel{align-self:center;font-size:14px;font-weight:600;}
 
 /* R3-FE-4b: conservative native note editing inside an authorized detail. */
 .targetNoteEdit{display:grid;gap:12px;margin-top:8px;min-width:0;}

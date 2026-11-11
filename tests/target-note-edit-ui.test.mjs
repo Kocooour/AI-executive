@@ -31,7 +31,8 @@ test("R3-FE-4b: note edit is independently default-off even with enabled detail 
   }
   assert.match(read("app/page.tsx"),/targetNoteEditUiEnabled\(process\.env\)/);
   assert.match(read("app/ui/lumi-app-root.tsx"),/noteEdit=\{targetNoteEdit && detailGates\.note\}/);
-  assert.match(read("app/ui/target-detail-panel.tsx"),/noteEdit&&<TargetNoteEditor/);
+  assert.match(read("app/ui/target-detail-panel.tsx"),/\(noteEdit\|\|Boolean\(edit\?\.flags\.noteEdit\)\)&&!edit\?\.deleted&&/);
+  assert.match(read("app/ui/target-detail-panel.tsx"),/<TargetNoteEditor note=\{note\}/);
   assert.match(read("app/ui/target-note-editor.tsx"),/onCommitted\(\)/);
   assert.match(read("app/ui/target-note-editor.tsx"),/draft\.command\?\?/);
 });
