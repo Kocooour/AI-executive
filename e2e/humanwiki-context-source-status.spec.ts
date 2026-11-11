@@ -172,6 +172,7 @@ test.describe("H1-real.9 focused owner status browser integration", () => {
     await observed;
     await page.context().clearCookies();
     await page.reload();
+    await expect(page.locator(".authShell")).toBeVisible();
     await expect(panel(page)).toHaveCount(0);
     release();
     await deliveryAttempted;
