@@ -27,6 +27,12 @@ export function consumePrivateTaskCreateCompletion(
   runtime:TaskCreateRuntime,generation:string,
 ):boolean{
   if(!hasPrivateTaskCreateCompletion(runtime,generation))return false;
+  const acknowledged=completions.get(runtime);
+  if(!acknowledged||acknowledged.generation!==generation||
+    // Clear the opaque reload barrier ONLY when the visible, freshly
+    // authenticated bridge is delivering this exact command. On storage
+    // errors retain both the marker and the RAM receipt for a later wake.
+    !confirmPrivateTaskCreate(generation,acknowledged.commandId))return false;
   completions.delete(runtime);
   return true;
 }
@@ -61,6 +67,10 @@ export function subscribePrivateTaskCreate(runtime:TaskCreateRuntime,
   return ()=>{e.listeners.delete(listener);};
 }
 function notify(e:Entry){for(const listener of e.listeners)listener();}
+function hasExactMarker(generation:string,commandId:string):boolean{
+  const marker=privateTaskCreateMarker(generation);
+  return marker.kind==="blocked"&&marker.commandId===commandId;
+}
 function finish(runtime:TaskCreateRuntime,e:Entry){
   if(entries.get(runtime)===e)entries.delete(runtime);
   e.listeners.clear();
@@ -75,9 +85,8 @@ export function runPrivateTaskCreate(runtime:TaskCreateRuntime,generation:string
   if(!validPrivateTaskCreateCommand(command))return Promise.resolve("conflict");
   // A successful HTTP acknowledgement may still be waiting for the
   // always-mounted bridge to reverify the visible session and notify the user.
-  // The tab marker has already been cleared at that point, so it alone cannot
-  // prevent a duplicate retry with a fresh commandId. Preserve the one-slot
-  // completion until delivered before allowing another INSERT.
+  // The tab marker is retained until delivery to cover a full page reload.
+  // Keep the one-slot RAM completion fenced as well until it is consumed.
   if(entries.has(runtime)||hasPrivateTaskCreateCompletion(runtime,generation)||
     privateTaskCreateMarker(generation).kind!=="clear"||
     !reservePrivateTaskCreate(generation,command.commandId))
@@ -104,7 +113,9 @@ export function runPrivateTaskCreate(runtime:TaskCreateRuntime,generation:string
     clearTimeout(timer);
     if(entries.get(runtime)!==e)return outcome;
     if(outcome==="saved"&&runtime.known()&&runtime.generation()===generation&&
-      confirmPrivateTaskCreate(generation,command.commandId)){
+      hasExactMarker(generation,command.commandId)){
+      // Do not remove sessionStorage here. The server has acknowledged the
+      // write, but the UI has not yet safely delivered that acknowledgement.
       finish(runtime,e);
       announceCompletion(runtime,generation,command.commandId);
       return "saved";
@@ -125,12 +136,13 @@ export async function checkPrivateTaskCreate(runtime:TaskCreateRuntime,
   const result=await recover(e.command,signal);
   if(result==="committed"&&!signal.aborted&&runtime.known()&&
     runtime.generation()===generation&&
-    confirmPrivateTaskCreate(generation,e.command.commandId)){
+    hasExactMarker(generation,e.command.commandId)){
+    // Same late-delivery fence as the direct 201: retain the opaque tab marker.
     finish(runtime,e);
     announceCompletion(runtime,generation,e.command.commandId);
     return "committed";
   }
-  // The server may have committed, but an unreadable/uncleared local marker
+  // The server may have committed, but an unreadable/mismatched local marker
   // must never be reported as safely complete. Keep the write blocked.
   return result==="committed"?"unavailable":result;
 }
