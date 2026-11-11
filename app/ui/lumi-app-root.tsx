@@ -198,7 +198,7 @@ export function LumiAppRoot({ targetMyPlan, targetScopes, targetDetails, targetN
       data-my-plan-preview={mobileDesignV1Preview && app.mobilePlanPreviewActive && view === "Today" ? "true" : undefined}>
       <TargetSidebarContext.Provider value={scopesOn && targetScopes?.projects ? { projects: true, openable: detailsOn && detailGates.project } : undefined}>
         <Sidebar app={app} targetPlan={Boolean(targetMyPlan?.enabled)}
-          onTargetCapture={targetCapture?openAreaChooser:undefined} />
+          onTargetCapture={targetCapture?()=>openAreaChooser():undefined} />
       </TargetSidebarContext.Provider>
       <section className="appPane">
         {app.offlineView && (
@@ -306,8 +306,8 @@ export function LumiAppRoot({ targetMyPlan, targetScopes, targetDetails, targetN
         </div>
       </section>
       <MobileNav app={app} targetPlan={Boolean(targetMyPlan?.enabled)}
-        onTargetCapture={targetCapture?openAreaChooser:undefined} />
-      <DesktopCaptureFab app={app} onTargetCapture={targetCapture?openAreaChooser:undefined}
+        onTargetCapture={targetCapture?()=>openAreaChooser():undefined} />
+      <DesktopCaptureFab app={app} onTargetCapture={targetCapture?()=>openAreaChooser():undefined}
         targetCaptureOpen={areaChooserOpen} />
       <CaptureDialog app={app} />
       {targetPrivateNoteAreas&&areaChooserOpen&&(scopeList==="note"||targetCapture)&&
