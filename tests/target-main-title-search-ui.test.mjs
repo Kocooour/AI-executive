@@ -5,7 +5,7 @@ import {createStagingTitleSearchSession} from "../lib/target-staging-title-searc
 import {
   TARGET_MAIN_TITLE_SEARCH_FLAGS,targetMainTitleSearchEnabled,
   visibleMainTitleSearchResult,mainTitleSearchCopy,
-  subscribeMainTitleSearchAclInvalidation,
+  subscribeMainTitleSearchAclInvalidation,mainTitleSearchLegacySurfaces,
 } from "../lib/target-main-title-search-ui.ts";
 
 const all=Object.fromEntries(TARGET_MAIN_TITLE_SEARCH_FLAGS.map(k=>[k,"true"]));
@@ -65,6 +65,39 @@ test("shell switches exactly the Search view to server titles; no new bottom nav
   assert.match(ui,/window\.addEventListener\("offline"/);
   assert.match(ui,/session\.next\(\)/);
   assert.doesNotMatch(ui,/localStorage|sessionStorage|indexedDB|document\.cookie/i);
+});
+
+
+test("authorized Search never mounts legacy task or held-back titles, including before submit and during paging",()=>{
+  // Guard the actual root JSX, not just the target-only SearchResults ternary.
+  // A pre-existing local task or held-back record must never be present on the
+  // authorized Search screen regardless of the remote response lifecycle.
+  const root=readFileSync("app/ui/lumi-app-root.tsx","utf8");
+  assert.match(root,/const legacySearchSurfaces = mainTitleSearchLegacySurfaces\(targetSearch,view\);/);
+  assert.match(root,/\{legacySearchSurfaces\.heldBack && <HeldBack app=\{app\} \/>\}/);
+  assert.match(root,/: legacySearchSurfaces\.entityList\s*\? <EntityList app=\{app\} \/>\s*: null\}/);
+  const legacyTask="PRIVATE LEGACY TASK NOT AUTHORIZED BY TARGET";
+  const heldBack="PRIVATE HELD-BACK TITLE NOT AUTHORIZED BY TARGET";
+  const presentTitles=(enabled,view)=>{
+    const surfaces=mainTitleSearchLegacySurfaces(enabled,view);
+    return [
+      ...(surfaces.entityList?[legacyTask]:[]),
+      ...(surfaces.heldBack?[heldBack]:[]),
+    ];
+  };
+  for(const phase of ["before-submit","loading","ready","load-more","empty","error"]){
+    assert.deepEqual(presentTitles(true,"Search"),[],phase);
+    assert.deepEqual(mainTitleSearchLegacySurfaces(true,"Search"),
+      {heldBack:false,entityList:false},phase);
+  }
+  // Default-off Search and unrelated views retain existing legacy behaviour.
+  assert.deepEqual(presentTitles(false,"Search"),[legacyTask,heldBack]);
+  for(const view of ["Today","Projects","Notes","Home","Inbox"])
+    assert.deepEqual(presentTitles(true,view),[legacyTask,heldBack],view);
+  // The target component continues to own result pagination, never a fallback
+  // into local task rows even while no server data has loaded.
+  assert.match(root,/\{view==="Search" && targetSearch\s*\? <TargetMainTitleSearch/);
+  assert.match(root,/: <SearchResults app=\{app\} \/>\}/);
 });
 
 test("same-generation ACL revocation tick removes shared titles and aborts late results",async()=>{
