@@ -135,7 +135,7 @@ import type { TargetStagingNoteDeleteRequest, TargetStagingNoteDeleteResult } fr
 import type { TargetStagingTaskTitleWriteRequest, TargetStagingTaskTitleWriteResult } from "./target-task-staging-writer";
 import {
   createPreflightedPrivateTask, validPrivateTaskCreateCommand,
-  type PrivateTaskCreateCommand, type PrivateTaskCreateResult,
+  type PrivateTaskCreateCommand, type PrivateTaskCreateResult, type PrivateTaskCreateStatus,
 } from "./target-private-task-create-writer";
 
 import { deletePreflightedTargetTask, validTargetStagingTaskDeleteRequest } from "./target-task-delete-writer";
