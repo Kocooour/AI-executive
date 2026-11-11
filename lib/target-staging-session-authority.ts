@@ -1355,6 +1355,17 @@ export class TargetStagingSessionAuthority {
       this.#store,credential,request,durableSessionTokenHash);
   }
 
+  /** Exact-command, read-only reconciliation for a private task CREATE.
+   * A foreign actor, inaccessible Area or reused command cannot reveal data. */
+  privateTaskCreateStatus(
+    sessionToken: string, command: PrivateTaskCreateCommand,
+  ): PrivateTaskCreateStatus {
+    const credential = this.#credential(sessionToken,true);
+    return credential
+      ? readPreflightedPrivateTaskCreateStatus(this.#store,credential,command)
+      : {ok:false,reason:"unavailable"};
+  }
+
   /**
    * R2c.1 idempotent task delete (tombstone). Same write audience, live-ACL and
    * in-transaction durable-session guarantees as updateTaskTitle.
