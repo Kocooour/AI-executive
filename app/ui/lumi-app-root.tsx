@@ -159,9 +159,10 @@ export function LumiAppRoot({ targetMyPlan, targetScopes, targetDetails, targetE
     setCaptureAfterDetailClose(false);
     if(targetCapture&&document.visibilityState==="visible"&&navigator.onLine&&
       !app.offlineView&&!app.capture&&!app.moreOpen&&!app.assistantOpen&&
-      !app.confirmRequest&&!document.querySelector('[aria-modal="true"]'))
+      !app.confirmRequest&&!document.querySelector('[aria-modal="true"]')){
       setCaptureKind(taskCapture?"task":"note");
       setAreaChooserOpen(true);
+    }
   },[captureAfterDetailClose,detailPanel,targetCapture,taskCapture,app.offlineView,app.capture,
     app.moreOpen,app.assistantOpen,app.confirmRequest]);
   // After a detail closed (Close, Back, Forward), focus returns to the row that opened it;
