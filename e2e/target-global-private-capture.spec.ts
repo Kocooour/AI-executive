@@ -143,6 +143,26 @@ test("focus-trapped desktop detail opens private capture after closing the detai
   await expect(page.getByTestId("target-private-note-areas")).toHaveCount(0);
   expect(writes).toHaveLength(1);
 });
+test("background mobile FAB event never masquerades as an in-detail capture action",async({page})=>{
+  await page.setViewportSize({width:390,height:844});
+  const writes=await setup(page);
+  const id="123e4567-e89b-42d3-a456-426614174001";
+  await page.route("**/api/target-staging/notes/"+id,route=>
+    reply(route,{error:"not-available"},404));
+  await page.goto("/?view=Notes&noteId="+id);
+  const detail=page.getByTestId("target-detail");
+  await expect(detail).toBeVisible();
+  // An injected click bypasses the modal's visual focus trap. The global FAB
+  // still must not be accepted as the explicit button *inside* the detail.
+  await page.evaluate(()=>{
+    document.querySelector<HTMLElement>('[data-target-private-capture-fab="mobile"]')
+      ?.dispatchEvent(new MouseEvent("click",{bubbles:true}));
+  });
+  await expect(detail).toBeVisible();
+  await expect(page.getByTestId("target-private-note-areas")).toHaveCount(0);
+  expect(writes).toHaveLength(0);
+});
+
 test("CREATE in Shared read filter reveals Personal Notes, never changes write Area",async({page})=>{
   await page.setViewportSize({width:390,height:844});
   const writes=await setup(page);
