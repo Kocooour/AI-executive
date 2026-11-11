@@ -67,6 +67,7 @@ export function LumiAppRoot({ targetMyPlan, targetScopes, targetDetails, targetE
   const [captureAfterDetailClose,setCaptureAfterDetailClose]=useState(false);
   const areaChooserOpener=useRef<HTMLElement|null>(null);
   const [noteListRevision,setNoteListRevision]=useState(0);
+  const [taskListRevision,setTaskListRevision]=useState(0);
   const detailGates = { task: Boolean(targetDetails?.task), project: Boolean(targetDetails?.project), note: Boolean(targetDetails?.note) };
   const shellInput = { scopesOn, projectsList: Boolean(targetScopes?.projects), notesList: Boolean(targetScopes?.notes),
     myPlan: Boolean(targetMyPlan?.enabled), v1Shell: mobileDesignV1Preview };
@@ -132,6 +133,8 @@ export function LumiAppRoot({ targetMyPlan, targetScopes, targetDetails, targetE
   }
   function createdPrivateTask(){
     closeAreaChooser();
+    // Force an authorized My Plan refetch; never fabricate a client task row.
+    setTaskListRevision(v=>v+1);
     if(taskCapture&&scopeFromSearch(window.location.search)==="shared")
       writeTargetReadingScope("personal");
     if(taskCapture&&targetMyPlan?.enabled)
@@ -315,7 +318,7 @@ export function LumiAppRoot({ targetMyPlan, targetScopes, targetDetails, targetE
           <AgentsView app={app} />
           <SettingsView app={app} />
           {targetPlan && targetMyPlan
-            ? <TargetMyPlan gates={targetMyPlan} language={language} scopeDriven={scopesOn} taskDetail={detailGates.task} />
+            ? <TargetMyPlan key={"private-task:"+taskListRevision} gates={targetMyPlan} language={language} scopeDriven={scopesOn} taskDetail={detailGates.task} />
             : scopeList
               ? <TargetScopeLists key={scopeList==="note"?scopeList+":"+noteListRevision:scopeList} kind={scopeList} language={language}
                 detail={scopeList === "project" ? detailGates.project : detailGates.note} />
