@@ -313,10 +313,43 @@ test("a local append racing signed network observation is rejected", async () =>
     "signed_remote_prefix_requires_catchup");
 });
 
+test("foreign scoped events cannot leak, and config revocation during TLS fails closed", async () => {
+  configure();
+  const token = createSessionToken();
+  // A physically shared HMAC chain can carry events from many actors; only
+  // the authenticated owner's private scope may affect the JSON projection.
+  const foreign = withHumanWikiConsentPrivateLedger(ledgerDir, "write", db =>
+    appendHumanWikiConsentIntent(db, ledgerKey, {
+      ownerUserId: "different-owner", privateAreaId: "other-private-area",
+    }, {
+      commandId: randomUUID(), decision: "withdrawal_requested",
+      sourceType: sourceNames[0], purpose: "humanwiki_context_bootstrap",
+      retentionDays: null, expectedRevision: 0, explicitConfirmation: true,
+    }));
+  assert.equal(foreign.ok, true);
+  const observed = await GET(ownerReq(token));
+  assert.equal(observed.status, 200);
+  const data = await observed.json();
+  assert.deepEqual(data.sources, cleanSources(2, 1));
+  assert.equal(data.witnessState, "signed_remote_prefix_requires_catchup");
+  assertNoPrivileges(data);
+  assert.equal(JSON.stringify(data).includes("different-owner"), false);
+
+  // The signed response can be perfectly valid but the operator may revoke
+  // this endpoint while HTTPS is in flight; do not return the stale 200.
+  globalThis.fetch = async (url, options) => {
+    const signed = await fetchAdapter(url, options);
+    process.env.AI_EXECUTIVE_HUMANWIKI_SOURCE_WITNESS_STATUS_ENABLED = "false";
+    return signed;
+  };
+  await denied(await GET(ownerReq(token)));
+  configure();
+});
+
 test("a signed foreign witness digest blocks even the read-only source projection", async () => {
   configure();
   const token = createSessionToken();
-  // Witness sequence 2, local sequence 3: publish a foreign-but-signed seq 3.
+  // Witness sequence 2, local sequence >=3: publish a foreign-but-signed seq 3.
   const current = witnessHead();
   assert.equal(current.sequence, 2);
   assert.equal(publishWitnessCheckpoint(witnessDir, registryId, privateKey, {
