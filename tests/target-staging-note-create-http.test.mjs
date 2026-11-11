@@ -50,6 +50,7 @@ const {POST:RECOVER_CREATE}=await import("../app/api/target-staging/notes/create
 const {parseNoteCreateRecoveryReply}=await import("../lib/target-staging-note-create-process.ts");
 const {readStagingNoteCreateRecoveryInChild}=await import("../lib/target-staging-note-create-process.ts");
 const {readTargetNoteCreateRecovery}=await import("../lib/target-note-create-status.ts");
+const {TargetStagingSessionAuthority}=await import("../lib/target-staging-session-authority.ts");
 const { parseNoteCreateReply } = await import("../lib/target-staging-note-create-process.ts");
 
 after(() => {
@@ -286,6 +287,15 @@ test("read-only CREATE receipt confirms the exact owner commit but never text",a
   try{assert.deepEqual(readTargetNoteCreateRecovery(db,"alice",cmd.commandId),
     {ok:true,status:"not_recorded"});}
   finally{db.close();}
+  const authority=new TargetStagingSessionAuthority({
+    stagingDirectory:fx.stage.directory,expectedRestoreGeneration:fx.stage.restoreGeneration,
+  });
+  try{
+    const issued=authority.issueWritable("alice");
+    assert.ok(issued,"test actor must have a write-audience session");
+    assert.deepEqual(authority.noteCreateRecovery(issued.sessionToken,cmd.commandId),
+      {ok:true,status:"not_recorded"},"preflighted note-create receipt must be readable");
+  }finally{authority.close();}
   const child=await readStagingNoteCreateRecoveryInChild({
     stagingDirectory:fx.stage.directory,
     expectedRestoreGeneration:fx.stage.restoreGeneration,ownerUserId:"alice",
@@ -349,6 +359,9 @@ test("create-recovery child DTO is exact and content-free",()=>{
     keys:Object.keys(sample).sort().join(","),noteId:sample.noteId,
     uuid:/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(sample.noteId),
     areaId:sample.areaId,
+    bytes:Buffer.byteLength(sample.areaId,"utf8"),
+    controls:/[\u0000-\u001f\u007f]/u.test(sample.areaId),
+    hasOwn:["ok","status","noteId","areaId"].every(x=>Object.hasOwn(sample,x)),
   }));
   assert.deepEqual(parseNoteCreateRecoveryReply({ok:true,status:"not_recorded"}),
     {ok:true,status:"not_recorded"});
