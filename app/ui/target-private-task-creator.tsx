@@ -215,12 +215,12 @@ export default function TargetPrivateTaskCreator({
           ?"Úkol je uložený. Ověřuji relaci před zobrazením potvrzení; další úkol zatím nelze vytvořit."
           :"Task saved. Verifying the session before showing confirmation; another task cannot be created yet."}</p>
       </section>}
-      {marker.kind!=="clear"&&<section data-testid="target-task-create-unresolved">
+      {marker.kind!=="clear"&&!pendingConfirmation&&<section data-testid="target-task-create-unresolved">
         <p role="alert">{marker.kind==="unavailable"
           ?(cs?"Bezpečné úložiště relace není dostupné. Zápis je vypnutý.":
             "Secure tab storage unavailable. Creation disabled.")
-          :(cs?"Předchozí vytvoření úkolu není potvrzené.":
-            "Previous task creation is unresolved.")}</p>
+          :(cs?"Předchozí vytvoření úkolu nelze v této relaci bezpečně potvrdit.":
+            "Previous task creation cannot be safely confirmed in this session.")}</p>
         {marker.kind==="blocked"&&<button type="button"
           disabled={!ready||!tracked||tracked.phase==="saving"||phase==="checking"}
           data-testid="target-task-create-receipt" onClick={()=>{void verify();}}>
