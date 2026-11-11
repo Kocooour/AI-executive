@@ -175,7 +175,7 @@ export default function TargetProjectTitleEditor({project,language,onCommitted,o
   const marker=projectTitleReloadMarker(bound.current,preview.preview.principalBinding);
   if(marker.kind!=='blocked'){setMode({kind:'idle'});setMessage(copy.storageUnavailable);return;}
   const outcome=await cancelProjectTitleReload(project.id,marker.commandId,
-    preview.preview.restoreGeneration,ctrl.signal);
+    preview.preview.restoreGeneration,marker.principalBinding,ctrl.signal);
   if(n!==seq.current||ctrl.signal.aborted||!stillBound())return;
   if(outcome==='cancelled'&&
      confirmProjectTitleReload(marker.commandId,marker.principalBinding)){

@@ -174,9 +174,9 @@ for(const width of [390,1280])test(
       response(route,{status:"not_recorded"}));
     await page.route("**/api/target-staging/projects/prj/title/cancel",async route=>{
       const input=JSON.parse(route.request().postData()??"{}") as Record<string,unknown>;
-      expect(input).toEqual({commandId:originalId,restoreGeneration:STAGE});
+      expect(input).toEqual({commandId:originalId,restoreGeneration:STAGE,principalBinding:ACTOR});
       cancelled=true;
-      return response(route,{status:"cancelled"});
+      return response(route,{status:"cancelled",principalBinding:ACTOR});
     });
     await setup(page,async(route,body)=>{
       writes.push(body);

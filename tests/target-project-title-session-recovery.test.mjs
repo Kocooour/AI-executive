@@ -320,22 +320,24 @@ test("UI does not send principal proof as a command token and remains default-of
 // a denial or a truncated JSON confirmation.
 test("cancel acknowledgements must be exact, bounded no-store JSON",async()=>{
   const signal=new AbortController().signal;
-  const good=async()=>reply({status:"cancelled"});
-  assert.equal(await cancelProjectTitleReload(PROJECT,CMD,STAGE,signal,good),"cancelled");
-  const committed=async()=>reply({status:"committed"});
-  assert.equal(await cancelProjectTitleReload(PROJECT,CMD,STAGE,signal,committed),"committed");
+  const good=async()=>reply({status:"cancelled",principalBinding:A});
+  assert.equal(await cancelProjectTitleReload(PROJECT,CMD,STAGE,A,signal,good),"cancelled");
+  const committed=async()=>reply({status:"committed",principalBinding:A});
+  assert.equal(await cancelProjectTitleReload(PROJECT,CMD,STAGE,A,signal,committed),"committed");
   for(const answer of [
-    reply({status:"not_recorded"}),reply({status:"cancelled",extra:1}),
-    Response.json({status:"cancelled"},{headers:{"cache-control":"private"}}),
-    Response.json({status:"cancelled"},{status:503,headers}),
-  ])assert.equal(await cancelProjectTitleReload(PROJECT,CMD,STAGE,signal,
+    reply({status:"not_recorded",principalBinding:A}),
+    reply({status:"cancelled",principalBinding:OTHER}),
+    reply({status:"cancelled",principalBinding:A,extra:1}),
+    Response.json({status:"cancelled",principalBinding:A},{headers:{"cache-control":"private"}}),
+    Response.json({status:"cancelled",principalBinding:A},{status:503,headers}),
+  ])assert.equal(await cancelProjectTitleReload(PROJECT,CMD,STAGE,A,signal,
       async()=>answer),"unavailable");
 });
 
 test("cancel transport times out and retains the unresolved marker when fetch ignores abort",async()=>{
  clean();reserveProjectTitleReload(A,CMD,A);
  let seen;
- const status=await cancelProjectTitleReload(PROJECT,CMD,STAGE,
+ const status=await cancelProjectTitleReload(PROJECT,CMD,STAGE,A,
    new AbortController().signal,async(_,init)=>{seen=init.signal;return new Promise(()=>{});},12);
  assert.equal(status,"unavailable");
  assert.equal(seen.aborted,true);

@@ -1,13 +1,15 @@
 /** A missing receipt never unlocks a rename; only a durable server fence does. */
 import {readableProjectId} from "./target-staging-project-tasks-client";
+const BINDING=/^[A-Za-z0-9_-]{43}$/;
 const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 export type ProjectTitleCancelStatus="cancelled"|"committed"|"unavailable";
 export const PROJECT_TITLE_CANCEL_TIMEOUT_MS=8_000;
 export async function cancelProjectTitleReload(
-  projectId:string,commandId:string,restoreGeneration:string,signal:AbortSignal,
+  projectId:string,commandId:string,restoreGeneration:string,
+  principalBinding:string,signal:AbortSignal,
   fetchImpl:typeof fetch=fetch,timeoutMs=PROJECT_TITLE_CANCEL_TIMEOUT_MS,
 ):Promise<ProjectTitleCancelStatus>{
-  if(!readableProjectId(projectId)||!UUID.test(commandId)||!UUID.test(restoreGeneration)||signal.aborted)
+  if(!readableProjectId(projectId)||!UUID.test(commandId)||!UUID.test(restoreGeneration)||!BINDING.test(principalBinding)||signal.aborted)
     return "unavailable";
   const own=new AbortController(),abort=()=>{own.abort();giveUp("unavailable");};
   let giveUp:(result:ProjectTitleCancelStatus)=>void=()=>{};
@@ -21,7 +23,7 @@ export async function cancelProjectTitleReload(
       const response=await fetchImpl("/api/target-staging/projects/"+encodeURIComponent(projectId)+"/title/cancel",{
         method:"POST",credentials:"same-origin",cache:"no-store",redirect:"error",
         headers:{"content-type":"application/json",accept:"application/json","x-lumi-target-protocol":"1"},
-        body:JSON.stringify({commandId,restoreGeneration}),signal:own.signal,
+        body:JSON.stringify({commandId,restoreGeneration,principalBinding}),signal:own.signal,
       });
       if(own.signal.aborted||response.status!==200||response.redirected||
          response.headers.get("content-type")?.split(";")[0].trim().toLowerCase()!=="application/json"||
@@ -46,7 +48,8 @@ export async function cancelProjectTitleReload(
       const value:unknown=JSON.parse(raw);
       if(!value||typeof value!=="object"||Array.isArray(value))return "unavailable";
       const record=value as Record<string,unknown>;
-      if(Object.keys(record).join(",")!=="status")return "unavailable";
+      if(Object.keys(record).sort().join(",")!=="principalBinding,status"||
+         record.principalBinding!==principalBinding)return "unavailable";
       return record.status==="cancelled"||record.status==="committed"?record.status:"unavailable";
     }catch{return "unavailable";}
   })();
