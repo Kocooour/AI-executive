@@ -16,6 +16,24 @@ type Runtime=Pick<TargetClientRuntime,"known"|"generation"|"register">;
 type Entry={generation:string;command:PrivateTaskCreateCommand;
   phase:"saving"|"uncertain";abort:()=>void;unregister:()=>void};
 const entries=new WeakMap<Runtime,Entry>();
+// Subscribers belong to the authenticated runtime, not the transient modal.
+// Only a positive, exact server confirmation carries an opaque task ID.
+export type TaskCreateChange={generation:string;confirmedTaskId:string|null};
+const observers=new WeakMap<Runtime,Set<(change:TaskCreateChange)=>void>>();
+export function subscribePrivateTaskCreate(
+  runtime:Runtime,generation:string,listener:(change:TaskCreateChange)=>void,
+):()=>void{
+  if(!runtime.known()||runtime.generation()!==generation)return ()=>{};
+  let set=observers.get(runtime);
+  if(!set){set=new Set();observers.set(runtime,set);}
+  set.add(listener);
+  return ()=>{set?.delete(listener);if(set?.size===0)observers.delete(runtime);};
+}
+function notify(runtime:Runtime,change:TaskCreateChange):void{
+  if(!runtime.known()||runtime.generation()!==change.generation)return;
+  for(const listener of [...(observers.get(runtime)??[])])
+    try{listener(change);}catch{/* A UI listener must not affect the write. */}
+}
 function store():Storage|null{
   try{return globalThis.sessionStorage??null;}catch{return null;}
 }
@@ -104,7 +122,11 @@ export async function runPrivateTaskCreate(
     if(outcome==="saved"&&runtime.known()&&runtime.generation()===generation&&
       confirm(generation,command.commandId)){
       entries.delete(runtime);unregister();
-    }else entry.phase="uncertain";
+      notify(runtime,{generation,confirmedTaskId:command.taskId});
+    }else{
+      entry.phase="uncertain";
+      notify(runtime,{generation,confirmedTaskId:null});
+    }
   }
   return outcome;
 }
@@ -121,6 +143,7 @@ export async function checkTrackedPrivateTaskCreate(
   if(receipt==="committed"&&!signal.aborted&&runtime.known()&&
     runtime.generation()===generation&&confirm(generation,entry.command.commandId,true)){
     entries.delete(runtime);entry.unregister();
+    notify(runtime,{generation,confirmedTaskId:entry.command.taskId});
   }
   return receipt;
 }
