@@ -74,7 +74,9 @@ test("unification: legacy Quick Capture stays blocked; private note capture requ
   // The only target CREATE entry is a separately gated private Area/Notes flow;
   // a missing gate may never fall through to a legacy task/note writer.
   assert.match(rootSource,/const targetCapture=Boolean\(scopesOn&&targetScopes\?\.notes&&targetPrivateNoteAreas&&\s*targetPrivateNoteCreate&&mobileDesignV1Preview\)/);
-  assert.match(rootSource,/onTargetCapture=\{targetCapture\?openAreaChooser:undefined\}/);
+  // A click event must never be interpreted as the explicit in-detail flag.
+  assert.doesNotMatch(rootSource,/onTargetCapture=\{targetCapture\?openAreaChooser:undefined\}/);
+  assert.match(rootSource,/onTargetCapture=\{targetCapture\?\(\)=>openAreaChooser\(\):undefined\}/);
   const mobile=read("app/ui/views/mobile-nav.tsx");
   assert.match(mobile,/!moreOpen && \(!app\.captureDisabled \|\| onTargetCapture\)/);
   assert.match(mobile,/onClick=\{onTargetCapture \?\? \(\(\)=>openCapture\(\)\)\}/);
