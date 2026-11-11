@@ -11,6 +11,40 @@ export type TaskCreateRuntime=Pick<TargetClientRuntime,"known"|"generation"|"reg
 type Entry={generation:string;command:PrivateTaskCreateCommand;phase:"saving"|"uncertain";
   controller:AbortController;listeners:Set<()=>void>;unregister:()=>void};
 const entries=new WeakMap<TaskCreateRuntime,Entry>();
+// The modal may unmount before a real HTTP acknowledgement arrives. Keep only
+// non-content command identity until the always-mounted target bridge has
+// verified the current session and delivered a one-shot completion.
+type Completion={generation:string;commandId:string};
+const completions=new WeakMap<TaskCreateRuntime,Completion>();
+const completionListeners=new WeakMap<TaskCreateRuntime,Set<()=>void>>();
+export function hasPrivateTaskCreateCompletion(
+  runtime:TaskCreateRuntime,generation:string,
+):boolean{
+  return runtime.known()&&runtime.generation()===generation&&
+    completions.get(runtime)?.generation===generation;
+}
+export function consumePrivateTaskCreateCompletion(
+  runtime:TaskCreateRuntime,generation:string,
+):boolean{
+  if(!hasPrivateTaskCreateCompletion(runtime,generation))return false;
+  completions.delete(runtime);
+  return true;
+}
+export function subscribePrivateTaskCreateCompletion(
+  runtime:TaskCreateRuntime,listener:()=>void,
+):()=>void{
+  let listeners=completionListeners.get(runtime);
+  if(!listeners){listeners=new Set();completionListeners.set(runtime,listeners);}
+  listeners.add(listener);
+  return ()=>{listeners?.delete(listener);};
+}
+function announceCompletion(runtime:TaskCreateRuntime,generation:string,commandId:string){
+  if(!runtime.known()||runtime.generation()!==generation)return;
+  completions.set(runtime,{generation,commandId});
+  for(const listener of [...(completionListeners.get(runtime)??[])]){
+    try{listener();}catch{/* no UI listener can break the committed receipt */}
+  }
+}
 export const TASK_CREATE_DEADLINE_MS=20_000;
 export function trackedPrivateTaskCreate(runtime:TaskCreateRuntime,generation:string):
   {phase:"saving"|"uncertain";commandId:string}|null{
@@ -64,7 +98,9 @@ export function runPrivateTaskCreate(runtime:TaskCreateRuntime,generation:string
     if(entries.get(runtime)!==e)return outcome;
     if(outcome==="saved"&&runtime.known()&&runtime.generation()===generation&&
       confirmPrivateTaskCreate(generation,command.commandId)){
-      finish(runtime,e);return "saved";
+      finish(runtime,e);
+      announceCompletion(runtime,generation,command.commandId);
+      return "saved";
     }
     // Even conflict/denial might follow a commit; keep exact UUID blocked.
     e.phase="uncertain";notify(e);return "uncertain";
@@ -83,7 +119,11 @@ export async function checkPrivateTaskCreate(runtime:TaskCreateRuntime,
   if(result==="committed"&&!signal.aborted&&runtime.known()&&
     runtime.generation()===generation&&
     confirmPrivateTaskCreate(generation,e.command.commandId)){
-    finish(runtime,e);return "committed";
+    finish(runtime,e);
+    announceCompletion(runtime,generation,e.command.commandId);
+    return "committed";
   }
-  return result;
+  // The server may have committed, but an unreadable/uncleared local marker
+  // must never be reported as safely complete. Keep the write blocked.
+  return result==="committed"?"unavailable":result;
 }
