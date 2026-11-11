@@ -79,14 +79,14 @@ test("trusted writable owner creates once, exact replay adds nothing and change 
   assert.equal(validPrivateTaskCreateCommand(cmd),true);
   const baseline=state(f);
   assert.deepEqual(f.authority.createPrivateTask(write.sessionToken,cmd),{ok:true});
-  assert.deepEqual(readTask(f.db,cmd.taskId),{
+  assert.deepEqual({...readTask(f.db,cmd.taskId)},{
     id:cmd.taskId,title:cmd.title,area_id:cmd.areaId,project_id:null,status:"open",revision:0,
   });
   assert.equal(receiptCount(f.db),baseline.receipts+1);
   assert.equal(state(f).changes,baseline.changes+1);
   const event=f.db.prepare(
     "SELECT entity_kind,entity_id,area_id,op,revision FROM change_log ORDER BY seq DESC LIMIT 1").get();
-  assert.deepEqual(event,{entity_kind:"task",entity_id:cmd.taskId,
+  assert.deepEqual({...event},{entity_kind:"task",entity_id:cmd.taskId,
     area_id:cmd.areaId,op:"upsert",revision:0});
   const after=state(f);
   assert.equal(after.journal.includes("task_create"),true);
@@ -107,6 +107,13 @@ test("trusted writable owner creates once, exact replay adds nothing and change 
   assert.deepEqual(state(f),after);
   assert.deepEqual(inspectIsolatedTargetStore({stagingDirectory:f.stage.directory}),
     {ok:true,mode:"stage",issues:[]});
+  // Private CREATE receipts are recognized, but unknown/malformed metadata
+  // is still refused by the canonical preflight.
+  const badKey=PRIVATE_TASK_CREATE_RECEIPT_PREFIX+"not-a-sha256";
+  f.db.prepare("INSERT INTO metadata(key,value) VALUES (?,?)").run(badKey,"tampered");
+  assert.equal(inspectIsolatedTargetStore({stagingDirectory:f.stage.directory})
+    .issues.includes("metadata_invalid"),true);
+  f.db.prepare("DELETE FROM metadata WHERE key=?").run(badKey);
 });
 
 test("private boundary, write audience, strict shape and restore generation all fail closed",()=>{
