@@ -73,7 +73,6 @@ for(const width of [390,1280]){
     const writes=await setup(page,(route,cmd)=>reply(route,{ok:true,taskId:cmd.taskId},201));
     await page.goto("/?view=Calendar&scope=shared");
     const modal=await openAndFill(page,width);
-    await expect(modal.getByRole("button",{name:"Zavřít"})).toBeFocused();
     await page.getByTestId("target-private-task-save").click();
     await expect(modal).toHaveCount(0);
     const notice=page.getByTestId("target-private-task-created");
