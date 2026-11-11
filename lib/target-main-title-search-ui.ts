@@ -1,11 +1,13 @@
 /** R3-FE-05: default-off main-app title search, gated separately from read ACL.
  * No client flag, URL scope or UI state grants visibility: only the server does. */
-import {TARGET_UI_SCOPES_FLAGS} from "./target-ui-config";
+// Client-safe flags only: importing the server config would bundle node:crypto.
 import type {TitleSearchFailure,TitleSearchScope} from "./target-staging-title-search-client";
 import type {TitleSearchSessionSnapshot} from "./target-staging-title-search-session";
 
 export const TARGET_MAIN_TITLE_SEARCH_FLAGS=[
-  ...TARGET_UI_SCOPES_FLAGS,
+  "AI_EXECUTIVE_TARGET_STAGING_HTTP_ENABLED",
+  "AI_EXECUTIVE_TARGET_UI_ENABLED",
+  "AI_EXECUTIVE_TARGET_UI_SCOPES_ENABLED",
   "AI_EXECUTIVE_TARGET_UI_TITLE_SEARCH_ENABLED",
   "AI_EXECUTIVE_TARGET_STAGING_HTTP_TITLE_SEARCH_ENABLED",
 ] as const;
