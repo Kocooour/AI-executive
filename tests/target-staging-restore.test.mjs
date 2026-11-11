@@ -44,6 +44,7 @@ const identityLib = await import("../lib/target-staging-http-identity.ts");
 const feedCursor = await import("../lib/target-staging-feed-cursor.ts");
 const writePreflight = await import("../lib/target-task-write-preflight.ts");
 const {readAuthorizedProjectTasksPage} = await import("../lib/target-project-task-read-model.ts");
+const {projectTitlePrincipalBinding} = await import("../lib/target-project-title-identity.ts");
 const requireProjectPage = (db, generation) => readAuthorizedProjectTasksPage(db, {actorUserId:"alice", projectId:"project", limit:1, offset:0, restoreGeneration:generation});
 const noteWritePreflight = await import("../lib/target-note-write-contract.ts");
 const { compactTargetStagingChangeLog } = await import("../lib/target-staging-change-log-compaction.ts");
@@ -736,11 +737,14 @@ test("v25 backup remains restorable after a v26 project title command", () => {
   assert.equal(preflight(fx).ok, true);
   const backup = backupOf(fx);
   assert.deepEqual(upgradeTargetStagingV25(fx.store), {ok:true,status:"upgraded"});
-  const projectRead = requireProjectPage(fx.db, fx.stage.restoreGeneration);
+  const projectRead = fx.authority.readProjectTitlePreview('alice','project');
+  assert.equal(projectRead?.ok,true);
+  const firstBinding=projectTitlePrincipalBinding('alice','project',fx.stage.restoreGeneration);
+  assert.match(firstBinding,/^[A-Za-z0-9_-]{43}$/);
   const command = {projectId:'project',commandId:randomUUID(),title:'After',
     expectedRevision:projectRead.page.revision,writeAreaId:fx.stage.unassignedAreaId,
-    restoreGeneration:fx.stage.restoreGeneration};
-  assert.deepEqual(fx.authority.updateProjectTitle(writableToken(fx),command),{ok:true});
+    restoreGeneration:fx.stage.restoreGeneration,principalBinding:firstBinding};
+  assert.deepEqual(fx.authority.updateProjectTitle(writableToken(fx),command,'alice'),{ok:true});
   copyBack(fx, backup);
   const result = restoreLib.restoreTargetStagingFromBackup(fx.store);
   assert.equal(result.ok,true,JSON.stringify(result));
@@ -750,12 +754,15 @@ test("v25 backup remains restorable after a v26 project title command", () => {
   const newStore={...fx.store,expectedRestoreGeneration:result.restoreGeneration};
   assert.deepEqual(upgradeTargetStagingV25(newStore),{ok:true,status:"upgraded"});
   useStore(fx, result.restoreGeneration);
-  const restoredPage = requireProjectPage(fx.db, result.restoreGeneration);
-  assert.equal(restoredPage.ok, true);
+  const restoredPage = fx.authority.readProjectTitlePreview('alice','project');
+  assert.equal(restoredPage?.ok,true);
+  const restoredBinding=projectTitlePrincipalBinding('alice','project',result.restoreGeneration);
+  assert.match(restoredBinding,/^[A-Za-z0-9_-]{43}$/);
+  assert.notEqual(restoredBinding,firstBinding,'restore rotates actor-bound project proof');
   const freshCommand = {projectId:'project',commandId:randomUUID(),title:'After restore',
     expectedRevision:restoredPage.page.revision,writeAreaId:fx.stage.unassignedAreaId,
-    restoreGeneration:result.restoreGeneration};
-  assert.deepEqual(fx.authority.updateProjectTitle(writableToken(fx),freshCommand),{ok:true});
+    restoreGeneration:result.restoreGeneration,principalBinding:restoredBinding};
+  assert.deepEqual(fx.authority.updateProjectTitle(writableToken(fx),freshCommand,'alice'),{ok:true});
   assert.equal(fx.db.prepare("SELECT title FROM projects WHERE id='project'").get().title,'After restore');
   assert.equal(preflight(fx).ok,true);
 });
