@@ -89,8 +89,9 @@ for(const width of [390,1280])test(
     await expect(form.getByRole("textbox",{name:"Název projektu"})).toHaveValue(PRIVATE);
     await expect(form.getByRole("button",{name:"Ověřit uložením znovu"})).toBeVisible();
     const lock=JSON.parse((await marker(page))??"null") as Record<string,unknown>;
-    expect(lock.commandId).toBe(writes[0].commandId);
-    expect(lock.principalBinding).toBe(ACTOR);
+    expect(lock.version).toBe(2);
+    const entries=lock.entries as Record<string,unknown>[];
+    expect(entries).toEqual([{commandId:writes[0].commandId,principalBinding:ACTOR}]);
     expect(JSON.stringify(lock)).not.toContain(PRIVATE);
     await form.getByRole("button",{name:"Ověřit uložením znovu"}).click();
     await expect.poll(()=>writes.length).toBe(2);
@@ -98,24 +99,30 @@ for(const width of [390,1280])test(
     await expect.poll(()=>marker(page)).toBeNull();
   });
 for(const width of [390,1280])test(
-  `another actor cannot see sealed old title or issue fresh rename at ${width}px`,
+  `another actor sees no old title and can safely edit under their own principal at ${width}px`,
   async({page})=>{
     await page.setViewportSize({width,height:844});
     let generation=A,binding=ACTOR,writes=0;
     await setup(page,async(route)=>{
-      writes++;generation=B;binding=OTHER;
-      return response(route,{error:"Authentication required",code:"session_expired"},401);
+      writes++;
+      if(writes===1){generation=B;binding=OTHER;
+        return response(route,{error:"Authentication required",code:"session_expired"},401);}
+      return response(route,{ok:true});
     },{session:()=>generation,binding:()=>binding});
     await open(page);
     await edit(page,PRIVATE);
     await expect.poll(()=>writes).toBe(1);
     const form=page.getByTestId("target-project-title-edit");
-    await expect(form.getByRole("button",{name:"Ověřit předchozí zápis"})).toBeVisible();
+    await expect(form.getByRole("button",{name:"Upravit název"})).toBeVisible();
     await expect(form.getByRole("textbox",{name:"Název projektu"})).toHaveCount(0);
     await expect(page.getByText(PRIVATE)).toHaveCount(0);
-    await expect(form.getByRole("button",{name:"Uložit změny"})).toHaveCount(0);
-    expect(await marker(page)).not.toBeNull();
-    expect(writes).toBe(1);
+    const old=JSON.parse((await marker(page))??"null") as {entries:{principalBinding:string}[]};
+    expect(old.entries).toEqual([expect.objectContaining({principalBinding:ACTOR})]);
+    await edit(page,"Other actor rename");
+    await expect.poll(()=>writes).toBe(2);
+    await expect.poll(async()=>JSON.parse((await marker(page))??"null")?.entries?.length).toBe(1);
+    const left=JSON.parse((await marker(page))??"null") as {entries:{principalBinding:string}[]};
+    expect(left.entries[0].principalBinding).toBe(ACTOR);
   });
 for(const width of [390,1280])test(
   `reload after ambiguous PATCH locks writes until same-actor committed receipt at ${width}px`,
@@ -139,7 +146,7 @@ for(const width of [390,1280])test(
       .getByRole("button",{name:"Ověřit uložením znovu"})).toBeVisible();
     expect(writes).toBe(1);
     const before=JSON.parse((await marker(page))??"null") as Record<string,unknown>;
-    expect(before).toEqual({generation:A,commandId:originalId,principalBinding:ACTOR});
+    expect(before).toEqual({version:2,entries:[{commandId:originalId,principalBinding:ACTOR}]});
     await page.reload();
     await expect(page.getByTestId("target-scope-list")).toHaveAttribute("data-state","ready");
     await expect(page.getByText(PRIVATE)).toHaveCount(0);
