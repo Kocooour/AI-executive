@@ -8,6 +8,7 @@ import {
   TARGET_SCHEMA_SQL, TARGET_STORE_FILENAME, TARGET_STORE_SCHEMA_VERSION,
   TARGET_STAGING_AUDIT_MAX_EVENTS, TARGET_STAGING_MAX_RECEIPTS, TARGET_STAGING_SESSION_MAX_ROWS,
   TARGET_STAGING_RECEIPT_PREFIX, TARGET_STAGING_DELETE_RECEIPT_PREFIX,
+  TARGET_STAGING_PRIVATE_TASK_CREATE_RECEIPT_PREFIX,
   TARGET_STAGING_TEMPORAL_STATUS_RECEIPT_PREFIX, TARGET_STAGING_TEMPORAL_DUE_ON_RECEIPT_PREFIX,
   TARGET_STAGING_PERSONAL_WHEN_RECEIPT_PREFIX,
   TARGET_STAGING_PERSONAL_ATTENTION_RECEIPT_PREFIX,
@@ -232,6 +233,8 @@ export function inspectIsolatedTargetStore(
         row.key.startsWith(TARGET_STAGING_RECEIPT_PREFIX));
       const deleteReceipts = rows.filter(row => typeof row.key === "string" &&
         row.key.startsWith(TARGET_STAGING_DELETE_RECEIPT_PREFIX));
+      const privateTaskCreateReceipts = rows.filter(row => typeof row.key === "string" &&
+        row.key.startsWith(TARGET_STAGING_PRIVATE_TASK_CREATE_RECEIPT_PREFIX));
       const temporalReceipts = rows.filter(row => typeof row.key === "string" &&
         row.key.startsWith(TARGET_STAGING_TEMPORAL_STATUS_RECEIPT_PREFIX));
       const dueOnReceipts = rows.filter(row => typeof row.key === "string" &&
@@ -270,9 +273,10 @@ export function inspectIsolatedTargetStore(
         typeof row.value === "string" && sha256Hex.test(row.value));
       if (rows.length !== 6 + receipts.length + deleteReceipts.length + temporalReceipts.length + dueOnReceipts.length + privateWhenReceipts.length + attentionReceipts.length + noteReceipts.length +
             notificationReceipts.length + pushTargetReceipts.length + baselineMarkers.length +
-            noteDeleteReceipts.length + lifecycleReceipts.length ||
+            noteDeleteReceipts.length + lifecycleReceipts.length + privateTaskCreateReceipts.length ||
           receipts.length > TARGET_STAGING_MAX_RECEIPTS ||
           deleteReceipts.length > TARGET_STAGING_MAX_RECEIPTS ||
+           privateTaskCreateReceipts.length > TARGET_STAGING_MAX_RECEIPTS ||
           temporalReceipts.length > TARGET_STAGING_MAX_RECEIPTS ||
           dueOnReceipts.length > TARGET_STAGING_MAX_RECEIPTS ||
           privateWhenReceipts.length > TARGET_STAGING_MAX_RECEIPTS ||
@@ -287,6 +291,7 @@ export function inspectIsolatedTargetStore(
           lifecycleReceipts.length > TARGET_STAGING_MAX_RECEIPTS ||
           !receiptValid(receipts, TARGET_STAGING_RECEIPT_PREFIX) ||
           !receiptValid(deleteReceipts, TARGET_STAGING_DELETE_RECEIPT_PREFIX) ||
+           !receiptValid(privateTaskCreateReceipts, TARGET_STAGING_PRIVATE_TASK_CREATE_RECEIPT_PREFIX) ||
           !receiptValid(temporalReceipts, TARGET_STAGING_TEMPORAL_STATUS_RECEIPT_PREFIX) ||
           !receiptValid(dueOnReceipts, TARGET_STAGING_TEMPORAL_DUE_ON_RECEIPT_PREFIX) ||
           !receiptValid(privateWhenReceipts, TARGET_STAGING_PERSONAL_WHEN_RECEIPT_PREFIX) ||
@@ -299,6 +304,7 @@ export function inspectIsolatedTargetStore(
             (CONTROL_METADATA_KEYS.has(row.key) ||
               row.key.startsWith(TARGET_STAGING_RECEIPT_PREFIX) ||
               row.key.startsWith(TARGET_STAGING_DELETE_RECEIPT_PREFIX) ||
+               row.key.startsWith(TARGET_STAGING_PRIVATE_TASK_CREATE_RECEIPT_PREFIX) ||
               row.key.startsWith(TARGET_STAGING_TEMPORAL_STATUS_RECEIPT_PREFIX) ||
               row.key.startsWith(TARGET_STAGING_TEMPORAL_DUE_ON_RECEIPT_PREFIX) ||
               row.key.startsWith(TARGET_STAGING_PERSONAL_WHEN_RECEIPT_PREFIX) ||
