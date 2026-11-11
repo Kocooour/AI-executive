@@ -26,7 +26,13 @@ HTTP API. Testy používají pouze syntetická data, bez zapnutí produkce nebo 
    úkol, bez projektu, přiřazených osob, sdílení, termínu a priority.
    Výsledek se **nepřidává optimisticky** do Mého plánu (úkol nemá Kdy).
    Viditelná zpráva v hlavní obrazovce se objeví až po přesném serverovém
-   potvrzení.
+   potvrzení. Jde o runtime událost nezávislou na životnosti formuláře:
+   i po zavření dialogu se opožděně potvrzený zápis projeví v hlavní
+   obrazovce. V oznámení je **Zobrazit úkol**, které otevře existující
+   serverově autorizovaný detail `MyPlanPreview&taskId=…`; při čtení
+   ve Sdíleném přepne čtecí rozsah na Osobní. UI je proto k dispozici jen
+   současně s povoleným cílovým Mým plánem a autorizovaným detailem úkolu.
+   Tato cesta nezavádí neautorizovaný seznam ani optimistický řádek.
 4. Timeout, revokace během requestu, nevysvětlené 4xx/5xx, neplatná 2xx
    odpověď a výpadek sítě jsou **uncertain** — žádný nový příkaz,
    automatic retry, local insert, legacy fallback ani klientské Undo.
@@ -36,7 +42,11 @@ HTTP API. Testy používají pouze syntetická data, bez zapnutí produkce nebo 
    volá `POST /api/target-staging/tasks/create-status` se **stejným
    nezměněným příkazem** a uvolňuje bariéru jen při `committed`
    potvrzeném serverem. `not_recorded` není důkaz neprovedení.
-5. Offline, skrytí stránky, pagehide, BFCache a změna generace smažou
+5. Vypršení 8sekundové lhůty ověření Oblasti vrátí dialog do bezpečně
+   opakovatelného výběru; nejde o odeslaný CREATE. Timeout read-only
+   ověření `create-status` znovu zpřístupní **Ověřit původní zápis**
+   bez změny `commandId` či přenosu titulku do storage.
+6. Offline, skrytí stránky, pagehide, BFCache a změna generace smažou
    rozpracovaný privátní text, výběr Oblasti a staré read výsledky.
    Neodmountují už odeslaný POST ani nemažou jeho marker. Znovu otevřený
    dialog bez známé aktuální identity nezačne zápis. Escape/Zavřít
@@ -66,7 +76,10 @@ samostatný task Area transport by byl další backendová iterace a
 - Samostatné flags: `AI_EXECUTIVE_TARGET_UI_PRIVATE_TASK_CREATE_ENABLED=true`
   a `AI_EXECUTIVE_TARGET_STAGING_HTTP_TASKS_CREATE_ENABLED=true` nad
   již existujícím `targetPrivateNoteCreateUiEnabled` a serverovými
-  `HTTP_ENABLED` / `HTTP_WRITE_ENABLED`. **Výchozí stav false.**
+  `HTTP_ENABLED` / `HTTP_WRITE_ENABLED`. Nově i současně aktivní
+  cílový Můj plán (`config.myPlan.enabled`) a task detail
+  (`config.details.task`), jinak formulář úkolu není nabídnut.
+  **Výchozí stav false.**
 - Cílený test: `node --experimental-loader ./tests/ts-loader.mjs --test tests/target-private-task-create-ui.test.mjs`
   — flag matrix, DTO parser, no-store, exact original command receipt,
   content-free barrier, uncertain → not_recorded → committed,
@@ -74,10 +87,16 @@ samostatný task Area transport by byl další backendová iterace a
 - Existující skutečná HTTP/SQLite test suite:
   `tests/target-staging-private-task-create-http.test.mjs`,
   `tests/target-private-task-create-writer.test.mjs`.
-- Nutné dokončit **cílený Playwright** 390 px / desktop se syntetickým
-  HTTP a autorizovanými Area volbami; ověřit focus, offline, skutečný
-  BFCache hit a revokaci. Plná Browser E2E pouze na přesném release
-  SHA před produkčním nasazením podle [AGENTS.md](../AGENTS.md).
+- Přidána cílená izolovaná Playwright sada
+  `e2e/target-private-task-create.spec.ts` a
+  `.github/workflows/r3-private-task-create-browser.yml`: reálný React
+  390/1280 px, syntetické HTTP a Area volby, právě jeden POST, serverové
+  potvrzení a přechod do detailu, zavření/opětovné otevření při pending,
+  exact receipt, privacy při reloadu a oba timeouty. CI výsledek
+  vyhodnocovat na přesném HEAD; existence testu není jeho průchod.
+- Před produkčním nasazením ověřit samostatně dostupnost/ztrátu přístupu,
+  reálný BFCache hit a kompletní Browser E2E na přesném release SHA podle
+  [AGENTS.md](../AGENTS.md).
 - `main` obsahuje #393; nezávisle otevřený [#391](https://github.com/Kocooour/AI-executive/pull/391)
   mění stejný shell. Před merge je nutná integrační kontrola s jeho
   aktuálním HEAD, review, úspěšné PR Checks a vyřešení všech nálezů.
