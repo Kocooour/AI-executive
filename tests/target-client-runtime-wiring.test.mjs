@@ -33,7 +33,16 @@ test("the server page mounts the provider only behind the flag and reads it per 
   assert.doesNotMatch(page,/^"use client"/m);
   assert.match(page,/export const dynamic = "force-dynamic"/);
   assert.match(page,/targetUiEnabled\(\)/);
-  assert.match(page,/targetData\s*\n?\s*\?\s*<TargetDataProvider><LumiAppRoot targetMyPlan=\{config\?\.myPlan\} targetScopes=\{config\?\.scopes\} targetDetails=\{config\?\.details\} targetEdits=\{config\?\.edits\} targetNoteEdit=\{Boolean\(config\?\.details\.note\) && targetNoteEditUiEnabled\(process\.env\)\} targetProjectEdit=\{Boolean\(config\?\.details\.project\) && targetProjectTitleEditUiEnabled\(process\.env\)\} targetPrivateNoteAreas=\{Boolean\(config\?\.scopes\.notes\)&&targetPrivateNoteAreaUiEnabled\(process\.env\)\} targetPrivateNoteCreate=\{Boolean\(config\?\.scopes\.notes\)&&targetPrivateNoteCreateUiEnabled\(process\.env\)\} \/><\/TargetDataProvider>\s*\n?\s*:\s*<LumiAppRoot \/>/);
+  // Search is independently gated by the target UI and title-search HTTP
+  // flags. Neither details-only nor scopes-only activates a runtime.
+  assert.match(page,/const targetSearch=Boolean\(config\)&&targetMainTitleSearchEnabled\(process\.env\);/);
+  assert.match(page,/const targetData = targetDataNeeded\(config\)\|\|targetSearch;/);
+  assert.match(page,/targetData\s*\n?\s*\?\s*<TargetDataProvider><LumiAppRoot targetMyPlan=\{config\?\.myPlan\} targetScopes=\{config\?\.scopes\} targetDetails=\{config\?\.details\} targetEdits=\{config\?\.edits\}/);
+  assert.match(page,/targetNoteEdit=\{Boolean\(config\?\.details\.note\) && targetNoteEditUiEnabled\(process\.env\)\}/);
+  assert.match(page,/targetProjectEdit=\{Boolean\(config\?\.details\.project\) && targetProjectTitleEditUiEnabled\(process\.env\)\}/);
+  assert.match(page,/targetPrivateNoteAreas=\{Boolean\(config\?\.scopes\.notes\)&&targetPrivateNoteAreaUiEnabled\(process\.env\)\}/);
+  assert.match(page,/targetPrivateNoteCreate=\{Boolean\(config\?\.scopes\.notes\)&&targetPrivateNoteCreateUiEnabled\(process\.env\)\}/);
+  assert.match(page,/targetSearch=\{targetSearch\} \/><\/TargetDataProvider>\s*:\s*<LumiAppRoot \/>/);
   // The page itself never creates a runtime nor fetches.
   assert.doesNotMatch(page,/createTargetClientRuntime|fetch\(|target-client-runtime/);
 });
@@ -93,6 +102,9 @@ test("only the runtime (and its server route) reference the session endpoint; no
     // R3-FE-4b: the lazily loaded detail edit controls use the existing runtime
     // to enforce the same generation-scoped note PATCH recovery barrier as the note editor.
     "app/ui/target-detail-edit.tsx","app/ui/target-note-editor.tsx",
+    // R3-FE-05: title search is an additional lazy runtime consumer; no
+    // legacy root or arbitrary view may begin reading the target session.
+    "app/ui/target-main-title-search.tsx",
     "app/ui/target-project-title-editor.tsx",
     // R3-CAPTURE-1: live private Area chooser uses the existing runtime.
     "app/ui/target-private-note-area-chooser.tsx",
