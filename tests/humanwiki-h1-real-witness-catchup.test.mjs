@@ -1,11 +1,14 @@
 import assert from "node:assert/strict";
 import { generateKeyPairSync, randomUUID, sign } from "node:crypto";
-import { mkdtempSync, rmSync } from "node:fs";
+import { spawn, spawnSync, execFileSync } from "node:child_process";
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { after, test } from "node:test";
-import { spawnSync } from "node:child_process";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import https from "node:https";
+import { DatabaseSync } from "node:sqlite";
+import { createWitnessHttpsServer } from "../services/humanwiki-witness/server.mjs";
 import {
   bootstrapHumanWikiConsentPrivateLedger, withHumanWikiConsentPrivateLedger,
   withHumanWikiConsentPrivateLedgerAsync,
@@ -169,7 +172,7 @@ test("a local append while remote check is pending cannot leave a usable proposa
   assert.equal(witnessCurrentHead(f.remote, f.registryId, f.privateKey).sequence, 0);
 });
 
-test("local HMAC tamper and missing witness data fail closed without writes", async () => {
+test("wrong ledger key, missing witness and corrupted HMAC history fail closed", async () => {
   const f = fixture();
   assert.equal(f.append(0).ok, true);
   refused(await f.plan(async () => { throw Error("unavailable"); }));
@@ -181,6 +184,46 @@ test("local HMAC tamper and missing witness data fail closed without writes", as
       witnessPublicKey: f.publicKey, getFreshReceipt: f.provider,
     }));
   refused(local);
+  // A short invalid key is not a corrupted ledger: actually modify the
+  // on-disk signed row, then restore the canonical append-only trigger.
+  const db = new DatabaseSync(path.join(f.local, "humanwiki-consent-intents.sqlite"));
+  try {
+    const trigger = db.prepare(`SELECT sql FROM sqlite_master
+      WHERE name = 'humanwiki_consent_intent_no_update'`).get().sql;
+    db.exec("DROP TRIGGER humanwiki_consent_intent_no_update");
+    db.prepare("UPDATE humanwiki_consent_intent_events SET event_mac = ? WHERE seq = 1")
+      .run("f".repeat(64));
+    db.exec(trigger + ";");
+  } finally { db.close(); }
+  let remoteReads = 0;
+  refused(await f.plan(async args => {
+    remoteReads++;
+    return f.provider(args);
+  }));
+  assert.equal(remoteReads, 0, "corrupt local HMAC chain must refuse before remote I/O");
+});
+
+test("planner enforces its own 2s deadline and aborts cooperative witness I/O", {
+  timeout: 7000,
+}, async () => {
+  const f = fixture();
+  assert.equal(f.append(0).ok, true);
+  let abortCount = 0;
+  let gotSignal = false;
+  const result = await f.plan(({ signal }) => {
+    gotSignal = signal instanceof AbortSignal && !signal.aborted;
+    return new Promise((_, reject) => {
+      signal.addEventListener("abort", () => {
+        abortCount++;
+        reject(Error("witness I/O aborted"));
+      }, { once: true });
+    });
+  });
+  refused(result);
+  assert.equal(result.checkpoint, undefined, "no publish tuple may escape timeout");
+  assert.equal(gotSignal, true);
+  assert.equal(abortCount, 1);
+  assert.equal(witnessCurrentHead(f.remote, f.registryId, f.privateKey).sequence, 0);
 });
 
 test("operator CLI is default-off and rejects export paths without reading data", () => {
@@ -204,4 +247,150 @@ test("operator CLI is default-off and rejects export paths without reading data"
   assert.notEqual(invalidArgument.status, 0);
   assert.equal(invalidArgument.stdout, "");
   assert.match(invalidArgument.stderr, /catch-up blocked/);
+});
+
+/**
+ * Synthetic test-only preload: preserve the production CLI's pinned HTTPS
+ * URL validation and provider signature checks, while routing the request
+ * over a REAL mutually verified TLS connection to a loopback witness.
+ * This exists only as a child-process --import file in the isolated test.
+ * No test override, custom port, or unverified TLS exception enters Lumi code.
+ */
+const bridgeSource = `
+import https from "node:https";
+import { readFileSync } from "node:fs";
+const url = "https://witness.example.org/v1/humanwiki/high-water/challenge";
+globalThis.fetch = async (target, init) => {
+  if (target !== url || init?.method !== "POST" ||
+      init?.redirect !== "error" || init?.cache !== "no-store" ||
+      init?.credentials !== "omit" ||
+      init?.headers?.["content-type"] !== "application/json")
+    throw Error("unexpected witness request");
+  return new Promise((resolve, reject) => {
+    const req = https.request({
+      hostname: "127.0.0.1",
+      servername: "localhost",
+      port: Number(process.env.LUMI_TEST_WITNESS_TLS_PORT),
+      method: "POST",
+      path: "/v1/humanwiki/high-water/challenge",
+      ca: readFileSync(process.env.LUMI_TEST_WITNESS_TLS_CA),
+      headers: init.headers,
+      signal: init.signal,
+    }, res => {
+      const chunks = [];
+      res.on("data", chunk => chunks.push(chunk));
+      res.on("error", reject);
+      res.on("end", () => resolve(new Response(Buffer.concat(chunks), {
+        status: res.statusCode, headers: res.headers,
+      })));
+    });
+    req.on("error", reject);
+    req.end(init.body);
+  });
+};
+`;
+
+async function executeOperatorCli(env) {
+  const cli = fileURLToPath(new URL(
+    "../scripts/humanwiki/witness-catchup-operator.mjs", import.meta.url));
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, [cli], {
+      env, stdio: ["ignore", "pipe", "pipe"],
+    });
+    let stdout = "", stderr = "";
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
+    child.stdout.on("data", chunk => { stdout += chunk; });
+    child.stderr.on("data", chunk => { stderr += chunk; });
+    child.on("error", reject);
+    child.on("close", code => resolve({ code, stdout, stderr }));
+  });
+}
+
+test("operator CLI uses pinned real TLS witness and handles lag and sync", {
+  timeout: 18000,
+}, async () => {
+  const f = fixture();
+  const tlsDir = directory();
+  const tlsKey = path.join(tlsDir, "tls-key.pem");
+  const cert = path.join(tlsDir, "tls-cert.pem");
+  execFileSync("openssl", [
+    "req", "-x509", "-newkey", "rsa:2048", "-nodes",
+    "-keyout", tlsKey, "-out", cert, "-days", "1",
+    "-subj", "/CN=localhost",
+    "-addext", "subjectAltName=DNS:localhost,IP:127.0.0.1",
+  ], { stdio: "ignore" });
+  chmodSync(tlsKey, 0o600);
+  const bridge = path.join(tlsDir, "test-https-preload.mjs");
+  writeFileSync(bridge, bridgeSource, { mode: 0o600 });
+  const server = createWitnessHttpsServer({
+    directory: f.remote, registryId: f.registryId, privateKey: f.privateKey,
+    tlsKey: readFileSync(tlsKey), tlsCert: readFileSync(cert),
+  });
+  await new Promise((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      server.off("error", reject);
+      resolve();
+    });
+  });
+  try {
+    const env = {
+      ...process.env,
+      NODE_OPTIONS: "--import=" + pathToFileURL(bridge).href,
+      LUMI_TEST_WITNESS_TLS_PORT: String(server.address().port),
+      LUMI_TEST_WITNESS_TLS_CA: cert,
+      AI_EXECUTIVE_HUMANWIKI_WITNESS_CATCHUP_OPERATOR_ENABLED: "true",
+      AI_EXECUTIVE_HUMANWIKI_CONSENT_LEDGER_DIRECTORY: f.local,
+      AI_EXECUTIVE_HUMANWIKI_CONSENT_LEDGER_HMAC_KEY:
+        ledgerKey.toString("base64url"),
+      AI_EXECUTIVE_HUMANWIKI_WITNESS_REGISTRY_ID: f.registryId,
+      AI_EXECUTIVE_HUMANWIKI_WITNESS_HTTPS_ORIGIN:
+        "https://witness.example.org",
+      AI_EXECUTIVE_HUMANWIKI_WITNESS_PUBLIC_KEY_SPKI_B64URL:
+        f.publicKey.export({ format: "der", type: "spki" }).toString("base64url"),
+    };
+    const synced = await executeOperatorCli(env);
+    assert.equal(synced.code, 0, synced.stderr);
+    assert.equal(synced.stderr, "");
+    const initial = JSON.parse(synced.stdout);
+    assert.equal(initial.ok, true);
+    assert.equal(initial.checkpoint, null);
+    assert.equal(initial.importAuthorized, false);
+    assert.equal(initial.consentVerified, false);
+    assert.equal(initial.independentWitnessVerified, false);
+    assert.equal(initial.withdrawalComplete, false);
+
+    assert.equal(f.append(0).ok, true);
+    const lag = await executeOperatorCli(env);
+    assert.equal(lag.code, 0, lag.stderr);
+    assert.equal(lag.stderr, "");
+    const proposal = JSON.parse(lag.stdout);
+    assert.equal(proposal.ok, true);
+    assert.equal(proposal.checkpoint.sequence, 1);
+    assert.equal(proposal.checkpoint.previousDigest, ZERO);
+    assert.equal(proposal.checkpoint.digest, f.head().digest);
+    assert.equal(proposal.importAuthorized, false);
+    assert.equal(proposal.withdrawalComplete, false);
+    assert.equal(witnessCurrentHead(f.remote, f.registryId, f.privateKey).sequence, 0,
+      "read-only CLI must never publish its proposal");
+
+    // Only the separate offline witness operator is allowed to publish.
+    assert.equal(publishWitnessCheckpoint(f.remote, f.registryId, f.privateKey,
+      proposal.checkpoint).ok, true);
+    const caughtUp = await executeOperatorCli(env);
+    assert.equal(caughtUp.code, 0, caughtUp.stderr);
+    assert.equal(JSON.parse(caughtUp.stdout).checkpoint, null);
+
+    const wrong = generateKeyPairSync("ed25519").publicKey;
+    const invalidPin = await executeOperatorCli({
+      ...env,
+      AI_EXECUTIVE_HUMANWIKI_WITNESS_PUBLIC_KEY_SPKI_B64URL:
+        wrong.export({ format: "der", type: "spki" }).toString("base64url"),
+    });
+    assert.notEqual(invalidPin.code, 0);
+    assert.equal(invalidPin.stdout, "");
+  } finally {
+    await new Promise(resolve => server.close(resolve));
+  }
 });
