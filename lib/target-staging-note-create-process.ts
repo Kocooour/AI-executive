@@ -41,18 +41,25 @@ export type NoteCreateRecoveryReply=
   |{ok:true;status:"committed";noteId:string;areaId:string}
   |{ok:false;reason:"unavailable"};
 const uuid=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{12}$/i;
+/** Strict worker DTO: content-free, exactly the expected properties, no extras.
+ * The HTTP adapter separately checks the CURRENT actor and private Area ACL
+ * before releasing even a confirmed status to the browser. */
 export function parseNoteCreateRecoveryReply(value:unknown):NoteCreateRecoveryReply|null{
-  if(!value||typeof value!=="object"||Array.isArray(value))return null;
-  const v=value as Record<string,unknown>,keys=Object.keys(v).sort().join(",");
-  if(v.ok===true&&keys==="ok,status"&&v.status==="not_recorded")
+  if(value===null||typeof value!=="object"||Array.isArray(value))return null;
+  const r=value as Record<string,unknown>;
+  const exact=(names:readonly string[])=>{
+    const keys=Object.keys(r);
+    return keys.length===names.length&&names.every(name=>Object.hasOwn(r,name));
+  };
+  if(exact(["ok","status"])&&r.ok===true&&r.status==="not_recorded")
     return {ok:true,status:"not_recorded"};
-  if(v.ok===true&&keys==="areaId,noteId,ok,status"&&v.status==="committed"&&
-     typeof v.noteId==="string"&&uuid.test(v.noteId)&&
-     typeof v.areaId==="string"&&v.areaId.trim()===v.areaId&&
-     v.areaId.length>0&&Buffer.byteLength(v.areaId,"utf8")<=512&&
-     !/[\u0000-\u001f\u007f]/u.test(v.areaId))
-    return {ok:true,status:"committed",noteId:v.noteId,areaId:v.areaId};
-  if(v.ok===false&&keys==="ok,reason"&&v.reason==="unavailable")
+  if(exact(["ok","status","noteId","areaId"])&&r.ok===true&&
+    r.status==="committed"&&typeof r.noteId==="string"&&uuid.test(r.noteId)&&
+    typeof r.areaId==="string"&&r.areaId.length>0&&
+    r.areaId.trim()===r.areaId&&Buffer.byteLength(r.areaId,"utf8")<=512&&
+    !/[\u0000-\u001f\u007f]/u.test(r.areaId))
+    return {ok:true,status:"committed",noteId:r.noteId,areaId:r.areaId};
+  if(exact(["ok","reason"])&&r.ok===false&&r.reason==="unavailable")
     return {ok:false,reason:"unavailable"};
   return null;
 }
