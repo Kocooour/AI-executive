@@ -12,6 +12,8 @@
 import { closeSync, constants, fstatSync, lstatSync, openSync, readdirSync, realpathSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { readPrivateTaskCreateStatus, type PrivateTaskCreateCommand,
+  type PrivateTaskCreateStatus } from "./target-private-task-create-writer";
 import { TARGET_STORE_FILENAME, TARGET_STORE_SCHEMA_VERSION, verifyExistingTargetStagingPath } from "./target-store-bootstrap";
 import { inspectIsolatedTargetStore } from "./target-store-preflight";
 import { checkTargetStagingJournal, warmTargetStagingJournal } from "./target-staging-anchor-journal";
