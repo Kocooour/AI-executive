@@ -129,7 +129,8 @@ test("private CREATE HTTP inserts once, uses content-free receipt, and survives 
   assert.deepEqual(await checked(await recover(cmd),200),{status:"committed"});
   const read=await GET_TASK(new Request(base+"/"+cmd.taskId,{headers:{cookie:owner()}}),
     {params:Promise.resolve({taskId:cmd.taskId})});
-  assert.equal((await checked(read,200)).task.id,cmd.taskId);
+  assert.equal(read.status,200);
+  assert.equal((await read.json()).task.id,cmd.taskId);
   assert.deepEqual(await checked(await create(cmd),200),
     {ok:true,taskId:cmd.taskId,replayed:true});
   assert.deepEqual(persistence(fx,cmd.taskId),first);
