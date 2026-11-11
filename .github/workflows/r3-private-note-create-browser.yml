@@ -50,6 +50,8 @@ jobs:
           cache: pnpm
       - name: Locked dependencies
         run: pnpm install --frozen-lockfile
+      - name: Private CREATE HTTP receipt regression (isolated SQLite)
+        run: node --experimental-loader ./tests/ts-loader.mjs --test tests/target-staging-note-create-http.test.mjs
       - name: Build isolated UI
         run: pnpm build
       - name: Chromium
