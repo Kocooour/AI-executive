@@ -46,13 +46,14 @@ const TargetScopeLists = dynamic(() => import("./target-scope-lists"), { ssr: fa
 const TargetDetailPanel = dynamic(() => import("./target-detail-panel"), { ssr: false });
 // R3-CAPTURE-1: read-only, real actor-private Area catalogue in target Notes.
 const TargetPrivateNoteAreaChooser = dynamic(() => import("./target-private-note-area-chooser"), { ssr: false });
+const TargetPrivateTaskCreator = dynamic(() => import("./target-private-task-creator"), { ssr: false });
 
 export type TargetDetailsProps = { task: boolean; project: boolean; note: boolean };
 export type TargetScopesProps = { enabled: boolean; projects: boolean; notes: boolean };
 export type TargetEditsProps = TargetUiEdits;
 export type TargetMyPlanProps = { enabled: boolean; statusWrite: boolean; whenWrite: boolean };
 
-export function LumiAppRoot({ targetMyPlan, targetScopes, targetDetails, targetEdits, targetNoteEdit = false, targetProjectEdit = false, targetPrivateNoteAreas = false, targetPrivateNoteCreate = false }: { targetMyPlan?: TargetMyPlanProps; targetScopes?: TargetScopesProps; targetDetails?: TargetDetailsProps; targetEdits?: TargetEditsProps; targetNoteEdit?: boolean; targetProjectEdit?: boolean; targetPrivateNoteAreas?: boolean; targetPrivateNoteCreate?: boolean } = {}) {
+export function LumiAppRoot({ targetMyPlan, targetScopes, targetDetails, targetEdits, targetNoteEdit = false, targetProjectEdit = false, targetPrivateNoteAreas = false, targetPrivateNoteCreate = false, targetPrivateTaskCreate = false }: { targetMyPlan?: TargetMyPlanProps; targetScopes?: TargetScopesProps; targetDetails?: TargetDetailsProps; targetEdits?: TargetEditsProps; targetNoteEdit?: boolean; targetProjectEdit?: boolean; targetPrivateNoteAreas?: boolean; targetPrivateNoteCreate?: boolean; targetPrivateTaskCreate?: boolean } = {}) {
   // Owner decision 2026-11-09: with target scopes on, the single global scope governs the
   // sidebar projects, the inspector and quick capture (see docs/R3-FE-04A-DETAILS.md).
   const scopesOn = Boolean(targetScopes?.enabled);
@@ -61,6 +62,8 @@ export function LumiAppRoot({ targetMyPlan, targetScopes, targetDetails, targetE
   const targetCapture=Boolean(scopesOn&&targetScopes?.notes&&targetPrivateNoteAreas&&
     targetPrivateNoteCreate&&mobileDesignV1Preview);
   const [areaChooserOpen,setAreaChooserOpen]=useState(false);
+  const [captureKind,setCaptureKind]=useState<"note"|"task">("note");
+  const taskCapture=targetCapture&&targetPrivateTaskCreate;
   const [captureAfterDetailClose,setCaptureAfterDetailClose]=useState(false);
   const areaChooserOpener=useRef<HTMLElement|null>(null);
   const [noteListRevision,setNoteListRevision]=useState(0);
@@ -88,7 +91,10 @@ export function LumiAppRoot({ targetMyPlan, targetScopes, targetDetails, targetE
   useEffect(()=>{
     if(!targetCapture)setAreaChooserOpen(false);
   },[view,scopesOn,targetPrivateNoteAreas,targetCapture]);
-  function openAreaChooser(fromTargetDetail=false){
+  function openAreaChooser(fromTargetDetail=false,kind:"note"|"task"=(taskCapture?"task":"note")){
+    // The target FAB defaults to Task when the separate task-create flag is on;
+    // the Notes list retains its explicit note-only action.
+    if(kind==="task"&&!taskCapture)return;
     if(!targetPrivateNoteAreas||areaChooserOpen||captureAfterDetailClose||
       app.offlineView||app.capture||app.moreOpen||app.assistantOpen||
       app.confirmRequest||document.visibilityState!=="visible"||!navigator.onLine)return;
@@ -105,6 +111,7 @@ export function LumiAppRoot({ targetMyPlan, targetScopes, targetDetails, targetE
     if(document.querySelector('[aria-modal="true"]'))return;
     areaChooserOpener.current=document.activeElement instanceof HTMLElement
       ?document.activeElement:null;
+    setCaptureKind(kind);
     setAreaChooserOpen(true);
   }
   function closeAreaChooser(){
@@ -122,6 +129,13 @@ export function LumiAppRoot({ targetMyPlan, targetScopes, targetDetails, targetE
       else fallback?.focus();
       areaChooserOpener.current=null;
     });
+  }
+  function createdPrivateTask(){
+    closeAreaChooser();
+    if(taskCapture&&scopeFromSearch(window.location.search)==="shared")
+      writeTargetReadingScope("personal");
+    if(taskCapture&&targetMyPlan?.enabled)
+      app.setView("Today",{previewMyPlan:true});
   }
   function createdPrivateNote(){
     closeAreaChooser();
@@ -146,8 +160,9 @@ export function LumiAppRoot({ targetMyPlan, targetScopes, targetDetails, targetE
     if(targetCapture&&document.visibilityState==="visible"&&navigator.onLine&&
       !app.offlineView&&!app.capture&&!app.moreOpen&&!app.assistantOpen&&
       !app.confirmRequest&&!document.querySelector('[aria-modal="true"]'))
+      setCaptureKind(taskCapture?"task":"note");
       setAreaChooserOpen(true);
-  },[captureAfterDetailClose,detailPanel,targetCapture,app.offlineView,app.capture,
+  },[captureAfterDetailClose,detailPanel,targetCapture,taskCapture,app.offlineView,app.capture,
     app.moreOpen,app.assistantOpen,app.confirmRequest]);
   // After a detail closed (Close, Back, Forward), focus returns to the row that opened it;
   // opening a deeper detail (project -> its task) never returns focus to the list.
@@ -200,7 +215,7 @@ export function LumiAppRoot({ targetMyPlan, targetScopes, targetDetails, targetE
       data-my-plan-preview={mobileDesignV1Preview && app.mobilePlanPreviewActive && view === "Today" ? "true" : undefined}>
       <TargetSidebarContext.Provider value={scopesOn && targetScopes?.projects ? { projects: true, openable: detailsOn && detailGates.project } : undefined}>
         <Sidebar app={app} targetPlan={Boolean(targetMyPlan?.enabled)}
-          onTargetCapture={targetCapture?()=>openAreaChooser():undefined} />
+          onTargetCapture={targetCapture?()=>openAreaChooser():undefined} targetTaskCapture={Boolean(taskCapture)} />
       </TargetSidebarContext.Provider>
       <section className="appPane">
         {app.offlineView && (
@@ -287,7 +302,7 @@ export function LumiAppRoot({ targetMyPlan, targetScopes, targetDetails, targetE
           {scopeSwitcher && <TargetScopeSwitcher language={language} variant={scopeList === null ? "plan" : "lists"} />}
           {scopeList==="note"&&targetPrivateNoteAreas&&<button type="button"
             className="targetScopeAreaChooserButton" data-testid="target-private-area-open"
-            onClick={()=>openAreaChooser()}>{targetPrivateNoteCreate
+            onClick={()=>openAreaChooser(false,"note")}>{targetPrivateNoteCreate
               ?(language==="cs"?"Nová soukromá poznámka":"New private note")
               :(language==="cs"?"Oblasti pro novou poznámku":"Areas for a new note")}</button>}
           <HeldBack app={app} />
@@ -308,13 +323,18 @@ export function LumiAppRoot({ targetMyPlan, targetScopes, targetDetails, targetE
         </div>
       </section>
       <MobileNav app={app} targetPlan={Boolean(targetMyPlan?.enabled)}
-        onTargetCapture={targetCapture?()=>openAreaChooser():undefined} />
+        onTargetCapture={targetCapture?()=>openAreaChooser():undefined} targetTaskCapture={Boolean(taskCapture)} />
       <DesktopCaptureFab app={app} onTargetCapture={targetCapture?()=>openAreaChooser():undefined}
-        targetCaptureOpen={areaChooserOpen} />
+        targetTaskCapture={Boolean(taskCapture)} targetCaptureOpen={areaChooserOpen} />
       <CaptureDialog app={app} />
-      {targetPrivateNoteAreas&&areaChooserOpen&&(scopeList==="note"||targetCapture)&&
-        <TargetPrivateNoteAreaChooser language={language} createEnabled={targetPrivateNoteCreate}
-          onClose={closeAreaChooser} onCreated={createdPrivateNote} />}
+      {targetPrivateNoteAreas&&areaChooserOpen&&(scopeList==="note"||targetCapture)&&(
+        captureKind==="task"&&taskCapture
+          ?<TargetPrivateTaskCreator language={language} onClose={closeAreaChooser}
+            onCreated={createdPrivateTask} onSwitchToNote={()=>setCaptureKind("note")} />
+          :<TargetPrivateNoteAreaChooser language={language} createEnabled={targetPrivateNoteCreate}
+            onClose={closeAreaChooser} onCreated={createdPrivateNote}
+            onSwitchToTask={taskCapture?()=>setCaptureKind("task"):undefined} />
+      )}
       {!(scopesOn && targetView) && <DetailPanel app={app} />}
       {detailPanel && <TargetDetailPanel route={detailRoute} language={language} gates={detailGates} edits={targetEdits} noteEdit={targetNoteEdit && detailGates.note} projectEdit={targetProjectEdit && detailGates.project} onPrivateCapture={targetCapture?()=>openAreaChooser(true):undefined} />}
       <AssistantPanel app={app} />
