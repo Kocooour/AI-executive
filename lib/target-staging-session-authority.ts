@@ -45,7 +45,7 @@ import {
   readPreflightedTargetTaskTitleCommandStatus, readPreflightedTargetTaskDeleteCommandStatus,
   readPreflightedTargetNoteEditCommandStatus,readPreflightedTargetNoteEditRecovery,
   readPreflightedTargetNoteCreateRecovery,readPreflightedProjectTitleRecovery,readPreflightedTargetNoteDeleteCommandStatus,
-  readPreflightedPrivateTaskCreateStatus,
+  readPreflightedPrivateTaskCreateStatus,readPreflightedPrivateTaskCreateRecovery,
   listPreflightedPrivateProjectsAtOffset, readPreflightedPrivateProjectDetail,
   readPreflightedPrivateTaskTitleAudit,
   readPreflightedScopedTaskPage, readPreflightedSharedTargetTask, readPreflightedChangeFeedPage,
@@ -135,7 +135,7 @@ import type { TargetStagingNoteDeleteRequest, TargetStagingNoteDeleteResult } fr
 import type { TargetStagingTaskTitleWriteRequest, TargetStagingTaskTitleWriteResult } from "./target-task-staging-writer";
 import {
   createPreflightedPrivateTask, validPrivateTaskCreateCommand,
-  type PrivateTaskCreateCommand, type PrivateTaskCreateResult, type PrivateTaskCreateStatus,
+  type PrivateTaskCreateCommand, type PrivateTaskCreateResult, type PrivateTaskCreateStatus,type PrivateTaskCreateRecovery,
 } from "./target-private-task-create-writer";
 
 import { deletePreflightedTargetTask, validTargetStagingTaskDeleteRequest } from "./target-task-delete-writer";
@@ -1364,6 +1364,16 @@ export class TargetStagingSessionAuthority {
     return credential
       ? readPreflightedPrivateTaskCreateStatus(this.#store,credential,command)
       : {ok:false,reason:"unavailable"};
+  }
+
+  /** UUID-only private task recovery; the actor is never supplied by the client. */
+  privateTaskCreateRecovery(
+    sessionToken:string,commandId:string,
+  ):PrivateTaskCreateRecovery{
+    const credential=this.#credential(sessionToken,true);
+    return credential
+      ?readPreflightedPrivateTaskCreateRecovery(this.#store,credential,commandId)
+      :{ok:false,reason:"unavailable"};
   }
 
   /**
