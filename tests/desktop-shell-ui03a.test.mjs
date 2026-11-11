@@ -118,7 +118,7 @@ test("UI-03a: purple FAB stays outside inspector and actions in a reserved scrol
 });
 
 
-test("UI-03a: capture remains available in sidebar with 701–1199px and wide side-by-side inspectors", () => {
+test("UI-03a: legacy inspector sidebar remains usable at desktop breakpoints; target detail traps its own capture", () => {
   const sidebar = read("../app/ui/views/sidebar.tsx");
   const fab = read("../app/ui/views/desktop-capture-fab.tsx");
   const css = read("../app/lumi-desktop-v1.css");
