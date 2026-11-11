@@ -48,6 +48,8 @@ const { GET: GET_NOTE } = await import("../app/api/target-staging/notes/[noteId]
 const {POST:PREVIEW_CREATE}=await import("../app/api/target-staging/notes/create-preview/route.ts");
 const {POST:RECOVER_CREATE}=await import("../app/api/target-staging/notes/create-recovery/route.ts");
 const {parseNoteCreateRecoveryReply}=await import("../lib/target-staging-note-create-process.ts");
+const {readStagingNoteCreateRecoveryInChild}=await import("../lib/target-staging-note-create-process.ts");
+const {readTargetNoteCreateRecovery}=await import("../lib/target-note-create-status.ts");
 const { parseNoteCreateReply } = await import("../lib/target-staging-note-create-process.ts");
 
 after(() => {
@@ -278,6 +280,17 @@ test("live private CREATE preview returns generation only to an authorized write
 });
 test("read-only CREATE receipt confirms the exact owner commit but never text",async()=>{
   const fx=fixture(),cmd=body(fx),bob=session(fx,"bob");
+  // Distinguish the local, actor-scoped SQLite receipt scan from its bounded
+  // subprocess transport and the final server HTTP contract.
+  const db=new DatabaseSync(fx.stage.databasePath,{readOnly:true});
+  try{assert.deepEqual(readTargetNoteCreateRecovery(db,"alice",cmd.commandId),
+    {ok:true,status:"not_recorded"});}
+  finally{db.close();}
+  const child=await readStagingNoteCreateRecoveryInChild({
+    stagingDirectory:fx.stage.directory,
+    expectedRestoreGeneration:fx.stage.restoreGeneration,ownerUserId:"alice",
+  },cmd.commandId);
+  assert.deepEqual(child,{ok:true,status:"not_recorded"},"child worker must report an absent receipt");
   const fresh=await checked(await RECOVER_CREATE(req("create-recovery",{
     commandId:cmd.commandId,
   })),200);
@@ -330,9 +343,13 @@ test("revoked or missing session, disabled write flag, and malformed create-reco
   process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_NOTES_CREATE_ENABLED="true";
 });
 test("create-recovery child DTO is exact and content-free",()=>{
-  assert.deepEqual(parseNoteCreateRecoveryReply({
-    ok:true,status:"committed",noteId:randomUUID(),areaId:"private",
-  })?.status,"committed");
+  const sample={ok:true,status:"committed",noteId:randomUUID(),areaId:"private"};
+  const parsed=parseNoteCreateRecoveryReply(sample);
+  assert.deepEqual(parsed?.status,"committed",JSON.stringify({
+    keys:Object.keys(sample).sort().join(","),noteId:sample.noteId,
+    uuid:/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(sample.noteId),
+    areaId:sample.areaId,
+  }));
   assert.deepEqual(parseNoteCreateRecoveryReply({ok:true,status:"not_recorded"}),
     {ok:true,status:"not_recorded"});
   for(const obj of [
