@@ -11,6 +11,8 @@ import {
   forgetTrackedNoteEdit,runTrackedNoteEdit,subscribeTrackedNoteEdit,trackedNoteEdit,
 } from "../lib/target-note-edit-recovery.ts";
 import {saveNoteEdit} from "../lib/target-staging-note-edit-client.ts";
+import {NOTE_EDIT_COMMAND_HEADER,stampNoteEditPrecommit}
+  from "../lib/target-note-edit-precommit.ts";
 
 const A="A".repeat(43),B="B".repeat(43);
 const id="4c977f1a-f9e8-4b6c-b2a8-53818c6c471e";
@@ -24,6 +26,9 @@ const storage={
 Object.defineProperty(globalThis,"sessionStorage",{configurable:true,value:storage});
 const headers={"content-type":"application/json","cache-control":"no-store"};
 const reply=(value,status=200)=>new Response(JSON.stringify(value),{status,headers});
+const preCommitReply=(value,status)=>stampNoteEditPrecommit(
+  new Request("https://lumi.test/",{headers:{[NOTE_EDIT_COMMAND_HEADER]:id}}),
+  reply(value,status));
 
 const noteId="note-in-edit";
 const command={
@@ -89,11 +94,26 @@ test("detached editor: first pre-commit refusal releases the exact marker",async
       async()=>await new Promise(resolve=>{finish=resolve;})));
   await Promise.resolve();
   detach();
-  finish(reply({error:"Forbidden"},403));
+  finish(preCommitReply({error:"Cross-origin request rejected"},403));
   assert.deepEqual(await flight,{outcome:"denied",rejectedBeforeCommit:true});
   assert.deepEqual(noteEditReloadMarker(A),{kind:"clear"});
   forgetTrackedNoteEdit(runtime,A,noteId);
   assert.equal(reserveNoteEditReload(A,other),true);
+  data.clear();
+});
+
+test("an intermediary 403/404 after a possible commit never releases the marker",async()=>{
+  for(const status of [403,404,400,409]){
+    data.clear();
+    const runtime=fakeRuntime();
+    assert.equal(reserveNoteEditReload(A,id),true);
+    const flight=runTrackedNoteEdit(runtime,A,noteId,command,
+      (note,cmd,signal)=>saveNoteEdit(note,cmd,signal,
+        async()=>reply({error:"Not found"},status)));
+    assert.deepEqual(await flight,{outcome:"uncertain"});
+    assert.deepEqual(noteEditReloadMarker(A),{kind:"blocked",commandId:id});
+    assert.equal(reserveNoteEditReload(A,other),false);
+  }
   data.clear();
 });
 
