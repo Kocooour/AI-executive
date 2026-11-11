@@ -52,6 +52,7 @@ test.describe("H1-real.9 focused owner status browser integration", () => {
       expect(route.request().method()).toBe("GET");
       expect(route.request().postData()).toBeNull();
       expect(route.request().headers().accept).toContain("application/json");
+      expect(route.request().headers().cookie).toBeTruthy();
       await respond(route);
     });
     await openContext(page);
@@ -116,14 +117,18 @@ test.describe("H1-real.9 focused owner status browser integration", () => {
   test("late signed response after blur and view exit cannot resurrect previous owner's UI", async ({ page }) => {
     let release: () => void = () => { throw Error("route not initialized"); };
     const gate = new Promise<void>(resolve => { release = resolve; });
+    let delivered: () => void = () => { throw Error("not initialized"); };
+    const deliveryAttempted = new Promise<void>(resolve => { delivered = resolve; });
     let count = 0;
     await page.route(routePattern, async route => {
       count++;
       if (count === 1) {
-        await gate;
-        // An aborted browser request can already be gone; never use an
-        // actual witness host or private data to simulate this late answer.
-        await respond(route).catch(() => undefined);
+        try {
+          await gate;
+          // This attempts a synthetic late response even if the real browser
+          // aborted the request when it lost focus.
+          await respond(route).catch(() => undefined);
+        } finally { delivered(); }
       } else await respond(route);
     });
     await openContext(page);
@@ -135,6 +140,7 @@ test.describe("H1-real.9 focused owner status browser integration", () => {
     await expect(status(page)).toHaveCount(0);
     await expect(panel(page)).toContainText("Stav se načítá pouze na vyžádání.");
     release();
+    await deliveryAttempted;
     await expect(status(page)).toHaveCount(0);
     // A route transition unmounts the source panel; the next mount has no
     // saved user data and does not automatically send a new request.
@@ -150,11 +156,15 @@ test.describe("H1-real.9 focused owner status browser integration", () => {
   test("session removal while network is pending cannot render owner data after reload", async ({ page }) => {
     let release: () => void = () => { throw Error("route not initialized"); };
     const gate = new Promise<void>(resolve => { release = resolve; });
+    let delivered: () => void = () => { throw Error("not initialized"); };
+    const deliveryAttempted = new Promise<void>(resolve => { delivered = resolve; });
     let count = 0;
     await page.route(routePattern, async route => {
       count++;
-      await gate;
-      await respond(route).catch(() => undefined);
+      try {
+        await gate;
+        await respond(route).catch(() => undefined);
+      } finally { delivered(); }
     });
     await openContext(page);
     const observed = page.waitForRequest(routePattern);
@@ -164,6 +174,7 @@ test.describe("H1-real.9 focused owner status browser integration", () => {
     await page.reload();
     await expect(panel(page)).toHaveCount(0);
     release();
+    await deliveryAttempted;
     await expect(panel(page)).toHaveCount(0);
     expect(count).toBe(1);
   });
