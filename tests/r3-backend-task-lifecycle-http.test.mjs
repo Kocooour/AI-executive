@@ -137,7 +137,7 @@ test("owner real HTTP detail → CAS title → same-command receipt → delete t
   const head=await detail(id);
   assert.equal(head.status,200);
   assert.equal(head.headers.get("cache-control"),"no-store");
-  assert.equal((await head.json()).title,"Original");
+  assert.equal((await head.json()).task.title,"Original");
   const pre=await preview(id);
   assert.equal(pre.status,200);
   const firstRev=(await pre.json()).snapshotRevision;
