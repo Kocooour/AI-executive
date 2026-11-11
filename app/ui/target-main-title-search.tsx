@@ -76,9 +76,9 @@ export default function TargetMainTitleSearch({query,language="cs"}:{
   },[]);
 
   // A live Area membership change need not rotate the login generation.
-  // The runtime signals each successful visible/online revalidation via tick:
-  // discard ALL displayed titles/counts, cancel any pending network result,
-  // and require a NEW explicit search so every row receives fresh server ACL.
+  // A successful verification tick, OR a failed authentication revalidation,
+  // discards all titles/counts, cancels pending work, and requires a NEW
+  // explicit search after access has been successfully verified again.
   useEffect(()=>subscribeMainTitleSearchAclInvalidation(runtime,()=>{
     ++epoch.current;
     sessionRef.current?.reset();
@@ -91,7 +91,11 @@ export default function TargetMainTitleSearch({query,language="cs"}:{
     return ()=>window.removeEventListener(TARGET_MAIN_SEARCH_SUBMIT_EVENT,submit);
   },[]);
 
-  const allowed=gate.kind==="ready"&&session!==null&&foregroundOnline();
+  // A failed 503/timeout poll retains the login generation in the runtime.
+  // Its outcome must nevertheless block both rendering AND explicit submits
+  // until a later successful re-verification (never auto-refetch titles).
+  const verificationReady=runtime?.lastOutcome()==="ok";
+  const allowed=gate.kind==="ready"&&verificationReady&&session!==null&&foregroundOnline();
   const shown=visibleMainTitleSearchResult(result,current,allowed);
   const snapshot=shown?.snapshot??null;
   const failure=shown?.failure??null;
@@ -100,7 +104,8 @@ export default function TargetMainTitleSearch({query,language="cs"}:{
 
   function stillCurrent(binding:MainTitleSearchBinding,run:number,active:Session):boolean{
     const now=bindingRef.current;
-    return epoch.current===run&&sessionRef.current===active&&foregroundOnline()&&
+    return epoch.current===run&&sessionRef.current===active&&
+      runtime?.lastOutcome()==="ok"&&foregroundOnline()&&
       now.input===binding.input&&now.scope===binding.scope&&now.generation===binding.generation;
   }
   function finish(active:Session,binding:MainTitleSearchBinding,run:number,
@@ -112,7 +117,7 @@ export default function TargetMainTitleSearch({query,language="cs"}:{
     if(reason==="signed-out")onRefusal();
   }
   function search(){
-    if(!session||gate.kind!=="ready")return;
+    if(!session||!allowed)return;
     const binding={...bindingRef.current};
     const input=query.trim();
     const run=++epoch.current;
@@ -163,7 +168,12 @@ export default function TargetMainTitleSearch({query,language="cs"}:{
     </div>}
     {gate.kind==="ready"&&!foregroundOnline()&&
       <p role="status" className="searchState">{copy.offline}</p>}
-    {gate.kind==="ready"&&foregroundOnline()&&
+    {gate.kind==="ready"&&!verificationReady&&foregroundOnline()&&
+      <div className="searchState" role="status">
+        <p>{copy.unavailable}</p>
+        <button type="button" onClick={retry}>{copy.retry}</button>
+      </div>}
+    {gate.kind==="ready"&&verificationReady&&foregroundOnline()&&
       <p role="status" tabIndex={-1} ref={statusRef} className="searchSummary">
         {busy?copy.loading:ready?copy.count(ready.items.length):failure?"":copy.idle}
       </p>}
