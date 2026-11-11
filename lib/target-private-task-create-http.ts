@@ -6,13 +6,16 @@ import {HttpInputError,enforceRateLimit,readJsonBody,requireSameOrigin}
 import {logStagingFailure} from "./target-staging-failure-log";
 import {resolveStagingHttpIdentity,stagingAnchorRefusal,stagingUnauthenticatedRefusal,
   stagingChildSessionConfig,admitStagingIdentity,stagingIdentityRefusal,
-  stagingUnauthorizedRefusal,verifyStagingIdentityBeforeRelease}
+  stagingUnauthorizedRefusal,verifyStagingIdentityBeforeRelease,
+  verifyStagingReadBeforeRelease,type StagingHttpIdentity}
   from "./target-staging-http-identity";
 import {validPrivateTaskCreateCommand,type PrivateTaskCreateCommand}
   from "./target-private-task-create-writer";
 import {createPrivateTaskInChild,readPrivateTaskCreateStatusInChild}
   from "./target-staging-task-create-process";
-import {readStagingPersonalDetailInChild} from "./target-staging-read-process";
+import {readStagingTemporalDetailInChild,type StagingTemporalDetailResult}
+  from "./target-staging-read-process";
+import type {TargetStagingReadStore} from "./target-task-staging-reader";
 import {targetProtocolRefusal,legacySnapshotRefusal,resyncRequiredResponse}
   from "./target-staging-write-contract";
 
@@ -39,6 +42,35 @@ function unchanged(base:Config):boolean{
     now.stagingDirectory===base.stagingDirectory&&
     now.expectedRestoreGeneration===base.expectedRestoreGeneration&&
     now.ownerUserId===base.ownerUserId;
+}
+/**
+ * Recheck the server-derived Area witness and task/parent revisions against the
+ * live SQLite immediately before releasing a committed receipt. Kept separate
+ * from the child read so a stale snapshot can be regression-tested exactly.
+ * A receipt alone is never read authorization for a task.
+ */
+export function releasePrivateTaskCreateCommittedStatus(
+  request:Request,identity:StagingHttpIdentity,store:TargetStagingReadStore,
+  ownerUserId:string,command:PrivateTaskCreateCommand,
+  detail:StagingTemporalDetailResult|null,
+):Response{
+  const live=detail?.ok===true
+    ?verifyStagingReadBeforeRelease(request,identity,store,ownerUserId,
+      detail.detail.linearization,
+      undefined,undefined,undefined,undefined,undefined,undefined,
+      detail.detail.guard)
+    :verifyStagingIdentityBeforeRelease(request,identity,store);
+  if(live!=="ok"&&live!=="stale")return stagingIdentityRefusal(live);
+  if(!detail)return answer(503,"Staging unavailable");
+  if(live==="stale"||detail.ok===false||
+    detail.detail.task.projectId!==null||
+    detail.detail.task.areaId!==command.areaId||
+    detail.detail.task.areaKind!=="private"||
+    detail.detail.linearization.areas.length!==1||
+    detail.detail.linearization.areas[0]?.areaId!==command.areaId||
+    detail.detail.linearization.areas[0]?.access!=="private-owner")
+    return answer(404,"Not found");
+  return Response.json({status:"committed"},{headers});
 }
 async function handle(request:Request,statusOnly:boolean):Promise<Response>{
   if(!enabled())return answer(404,"Not found");
@@ -82,16 +114,14 @@ async function handle(request:Request,statusOnly:boolean):Promise<Response>{
       }
       if(result.status==="not_recorded")
         return Response.json({status:"not_recorded"},{headers});
-      // A receipt does not entitle a caller to learn about a deleted/moved
-      // task. Repeat the current private task/Area check before release.
-      const detail=await readStagingPersonalDetailInChild(child,command.taskId);
-      const checked=verifyStagingIdentityBeforeRelease(request,identity,store);
-      if(checked!=="ok")return stagingIdentityRefusal(checked);
-      if(!unchanged(base)||!detail)return answer(503,"Staging unavailable");
-      if(!detail.ok||detail.task.projectId!==null||
-        detail.task.effectiveAreaId!==command.areaId||
-        detail.task.areaKind!=="private")return answer(404,"Not found");
-      return Response.json({status:"committed"},{headers});
+      // A receipt never authorizes a detached task snapshot. Release only
+      // after the exact private task/Area witness passes the live-read fence.
+      const detail=await readStagingTemporalDetailInChild(child,command.taskId);
+      if(!unchanged(base))return answer(503,"Staging unavailable");
+      const response=releasePrivateTaskCreateCommittedStatus(
+        request,identity,store,base.ownerUserId,command,detail);
+      if(!unchanged(base))return answer(503,"Staging unavailable");
+      return response;
     }
     const result=await createPrivateTaskInChild(child,command);
     // A write may have committed just before the session was revoked:
