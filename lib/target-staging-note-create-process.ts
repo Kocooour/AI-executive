@@ -54,6 +54,19 @@ export function parseNoteCreateRecoveryReply(value:unknown):NoteCreateRecoveryRe
   if(r.ok===true){
     if(r.status==="not_recorded")
       return exact(["ok","status"])?{ok:true,status:"not_recorded"}:null;
+    if(process.env.LUMI_SYNTHETIC_RECEIPT_PARSER_TRACE==="true"){
+      // Test-only booleans, never content or identifiers.
+      process.stderr.write("synthetic dto flags "+JSON.stringify({
+        exact:exact(["ok","status","noteId","areaId"]),
+        noteType:typeof r.noteId==="string",
+        uuid:typeof r.noteId==="string"&&uuid.test(r.noteId),
+        areaType:typeof r.areaId==="string",
+        areaEmpty:typeof r.areaId==="string"&&r.areaId.length===0,
+        areaTrim:typeof r.areaId==="string"&&r.areaId.trim()===r.areaId,
+        areaBytes:typeof r.areaId==="string"?Buffer.byteLength(r.areaId,"utf8"):null,
+        controls:typeof r.areaId==="string"&&/[\\x00-\\x1f\\x7f]/u.test(r.areaId),
+      })+"\\n");
+    }
     if(r.status!=="committed"||!exact(["ok","status","noteId","areaId"]))
       return null;
     if(typeof r.noteId!=="string"||!uuid.test(r.noteId))return null;
