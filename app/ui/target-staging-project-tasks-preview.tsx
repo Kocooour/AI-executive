@@ -14,6 +14,7 @@ type View={status:"empty"|"loading"}|
 const failures:Record<ProjectTasksFailure,string>={
   "invalid-request":"Neplatný požadavek na projekt.",
   "signed-out":"Přihlášení nebo oprávnění zaniklo. Předchozí data byla skryta.",
+  "session-expired": "Přihlášení nebo oprávnění zaniklo. Předchozí data byla skryta.",
   "not-found":"Projekt nebyl nalezen nebo k němu nemáte přístup.",
   "stale":"Projekt nebo přístup se změnil. Spusťte nové ověření.",
   "unavailable":"Autorizované zobrazení projektu není dostupné.",

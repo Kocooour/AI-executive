@@ -7,7 +7,7 @@ import {useTargetGeneration,useTargetRuntime} from "./target-data-provider";
 import {targetMyPlanGate,type TargetMyPlanGate} from "../../lib/target-my-plan-embed";
 import {refusalBudgetFor} from "../../lib/target-refusal-budget";
 
-export function useTargetGate():{gate:TargetMyPlanGate;onRefusal:()=>void;retry:()=>void}{
+export function useTargetGate():{gate:TargetMyPlanGate;onRefusal:(reason?:"session_revoked"|"session_expired")=>void;retry:()=>void}{
   const runtime=useTargetRuntime();
   const generation=useTargetGeneration();
   const subscribeOutcome=useMemo(
@@ -21,11 +21,12 @@ export function useTargetGate():{gate:TargetMyPlanGate;onRefusal:()=>void;retry:
     if(ownBump.current){ownBump.current=false;return;}
     setBlocked(false);
   },[generation]);
-  const onRefusal=useCallback(()=>{
+  const onRefusal=useCallback((reason:"session_revoked"|"session_expired"="session_revoked")=>{
     if(!runtime)return;
-    if(!refusalBudgetFor(runtime).admit()){setBlocked(true);return;}
+    // Coded expiry must always close the old runtime and seal drafts immediately.
+    if(reason!=="session_expired"&&!refusalBudgetFor(runtime).admit()){setBlocked(true);return;}
     ownBump.current=true;
-    void runtime.reportRefusal("session_revoked");
+    void runtime.reportRefusal(reason);
   },[runtime]);
   const retry=useCallback(()=>{
     refusalBudgetFor(runtime).reset();

@@ -155,6 +155,9 @@ export const developerOnly: ReadonlySet<string> = new Set([
   // R2c.3 staging write contract (lib/target-staging-write-contract.ts): staging-only, no UI yet.
   "Resync required",
   "Revision conflict",
+  // R3 read queue: internal, fail-closed client-side capacity guard.
+  // Read consumers map the rejected fetch to their existing unavailable state.
+  "Target read capacity exhausted",
   // R2 staging-only private snapshot guards: caught by the gateway, never surfaced.
   "Unsafe staging source file",
   "Unsupported staging SQLite journal mode",

@@ -114,6 +114,9 @@ const exempt = {
   "PATCH /api/target-staging/notes/[noteId]/edit": "writes only isolated staging SQLite outside the legacy backup scope; staging anchor validates the server restore generation and the transactional note writer rechecks client generation, durable session, ACL, parent and note revisions before atomic commit",
   "DELETE /api/target-staging/notes/[noteId]": "writes only isolated staging SQLite outside legacy backup scope; staging anchor verifies live restore state and the pinned delete writer checks client restore generation, durable session, Area ACL, note and parent CAS before atomic tombstone, audit and receipt commit",
 
+  "POST /api/target-staging/project-title/recovery": "read-only actor-scoped receipt recovery from isolated staging SQLite with current session, generation and project write ACL; no legacy backup data is modified or returned",
+  "POST /api/target-staging/projects/[projectId]/title/cancel": "cancellation fence writes only the isolated staging SQLite, not the legacy backup scope; exact project/actor/restore generation and current Area ACL are checked in the same pinned BEGIN IMMEDIATE write transaction as PATCH, with durable session and anti-rollback witness journal; a late PATCH checks this tombstone before mutation",
+  "PATCH /api/target-staging/projects/[projectId]/title": "renames projects only in separate isolated staging SQLite, outside the legacy backup scope; the staging anchor and pinned writer verify restore generation, live session, current Area editor/admin or private-owner ACL, project revision CAS, idempotent audit and journal before atomic commit",
 };
 
 function routeFiles(directory) {

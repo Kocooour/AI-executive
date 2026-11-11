@@ -2,6 +2,7 @@ import { LumiAppRoot } from "./ui/lumi-app-root";
 import { TargetDataProvider } from "./ui/target-data-provider";
 import { targetUiEnabled } from "../lib/target-staging-session-generation";
 import { targetDataNeeded, targetUiConfig } from "../lib/target-ui-config";
+import {targetProjectTitleEditUiEnabled} from "../lib/target-project-title-edit-ui-gate";
 import { targetNoteEditUiEnabled } from "../lib/target-note-edit-ui-gate";
 import {targetPrivateNoteAreaUiEnabled} from "../lib/target-private-note-area-ui-gate";
 import {targetPrivateNoteCreateUiEnabled} from "../lib/target-private-note-create-ui-gate";
@@ -19,6 +20,6 @@ export default function Page() {
   // list or the plan, so they are no consumer either.
   const targetData = targetDataNeeded(config);
   return targetData
-    ? <TargetDataProvider><LumiAppRoot targetMyPlan={config?.myPlan} targetScopes={config?.scopes} targetDetails={config?.details} targetEdits={config?.edits} targetNoteEdit={Boolean(config?.details.note) && targetNoteEditUiEnabled(process.env)} targetPrivateNoteAreas={Boolean(config?.scopes.notes)&&targetPrivateNoteAreaUiEnabled(process.env)} targetPrivateNoteCreate={Boolean(config?.scopes.notes)&&targetPrivateNoteCreateUiEnabled(process.env)} /></TargetDataProvider>
+    ? <TargetDataProvider><LumiAppRoot targetMyPlan={config?.myPlan} targetScopes={config?.scopes} targetDetails={config?.details} targetEdits={config?.edits} targetNoteEdit={Boolean(config?.details.note) && targetNoteEditUiEnabled(process.env)} targetProjectEdit={Boolean(config?.details.project) && targetProjectTitleEditUiEnabled(process.env)} targetPrivateNoteAreas={Boolean(config?.scopes.notes)&&targetPrivateNoteAreaUiEnabled(process.env)} targetPrivateNoteCreate={Boolean(config?.scopes.notes)&&targetPrivateNoteCreateUiEnabled(process.env)} /></TargetDataProvider>
     : <LumiAppRoot />;
 }

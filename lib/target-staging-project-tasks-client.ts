@@ -1,6 +1,6 @@
 /** UI-09c: ephemeral, read-only transport for one server-authorized project.
  * IDs are untrusted selectors, NEVER ACL proof. No caching, writes or retries. */
-export type ProjectTasksFailure="invalid-request"|"signed-out"|"not-found"|
+export type ProjectTasksFailure="invalid-request"|"signed-out"|"session-expired"|"not-found"|
   "stale"|"unavailable"|"offline"|"aborted"|"invalid-response";
 export type ProjectTasksProject={
   id:string;title:string;areaId:string;areaKind:"private"|"shared";
@@ -93,10 +93,10 @@ function noStore(header:string|null):boolean{
   directives.push(header.slice(start).trim());
   return directives.some(v=>/^no-store$/i.test(v));
 }
-async function boundedJson(res:Response,signal?:AbortSignal):Promise<unknown>{
+async function boundedJson(res:Response,signal?:AbortSignal,limit=maxBytes):Promise<unknown>{
   const length=res.headers.get("content-length");
   if(length!==null&&(!/^(?:0|[1-9][0-9]*)$/.test(length)||
-    !Number.isSafeInteger(Number(length))||Number(length)>maxBytes)){
+    !Number.isSafeInteger(Number(length))||Number(length)>limit)){
     discard(res);throw Error("oversized");
   }
   if(!res.body)throw Error("no body");
@@ -112,7 +112,7 @@ async function boundedJson(res:Response,signal?:AbortSignal):Promise<unknown>{
       if(signal?.aborted)throw Error("aborted");
       if(chunk.done){complete=true;break;}
       bytes+=chunk.value.byteLength;
-      if(bytes>maxBytes)throw Error("oversized");
+      if(bytes>limit)throw Error("oversized");
       text+=decoder.decode(chunk.value,{stream:true});
     }
     text+=decoder.decode();
@@ -167,9 +167,23 @@ export async function loadProjectTasksPage(
     response=received;
   }catch{return {ok:false,reason:options.signal?.aborted?"aborted":"offline"};}
   if(options.signal?.aborted){discard(response);return {ok:false,reason:"aborted"};}
+  if(response.status===401){
+    // Only the exact bounded, no-store server code can retain old private
+    // editor state until reauthentication. All other 401s revoke it.
+    if(!response.redirected&&noStore(response.headers.get("cache-control"))&&
+       response.headers.get("content-type")?.split(";")[0].trim().toLowerCase()==="application/json"){
+      try{
+        const body=await boundedJson(response,options.signal,512);
+        if(record(body)&&exact(body,["code","error"])&&
+           body.code==="session_expired"&&body.error==="Authentication required")
+          return {ok:false,reason:"session-expired"};
+      }catch{/* refuse untrusted session replies */}
+    }else discard(response);
+    return {ok:false,reason:"signed-out"};
+  }
   if(response.status!==200){
     discard(response);
-    if(response.status===401||response.status===403)
+    if(response.status===403)
       return {ok:false,reason:"signed-out"};
     if(response.status===404)return {ok:false,reason:"not-found"};
     if(response.status===409)return {ok:false,reason:"stale"};
