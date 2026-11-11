@@ -21,12 +21,12 @@ const stage=bootstrapIsolatedTargetStore({stagingDirectory:path.join(root,'stage
 Object.assign(process.env,{AI_EXECUTIVE_TARGET_STAGING_DIRECTORY:stage.directory,AI_EXECUTIVE_TARGET_STAGING_RESTORE_GENERATION:stage.restoreGeneration,AI_EXECUTIVE_TARGET_STAGING_OWNER_USER_ID:'alice'});
 const store={stagingDirectory:stage.directory,expectedRestoreGeneration:stage.restoreGeneration};
 const db=new DatabaseSync(stage.databasePath);db.exec('PRAGMA foreign_keys=ON');
-for(const who of ['bob','carol','dave']){
+for(const who of ['bob','carol','dave','erin']){
  db.prepare('INSERT INTO identities(id) VALUES (?)').run(who);
  db.prepare("INSERT INTO workspaces(id,kind,owner_user_id) VALUES (?,'personal',?)").run(who+'-ws',who);
  db.prepare("INSERT INTO areas(id,title,kind,workspace_id,owner_user_id,system_key) VALUES (?,?,'private',?,?,'unassigned')").run(who+'-area',who,who+'-ws',who);
 }
-db.exec("INSERT INTO workspaces(id,kind,owner_user_id) VALUES ('team','shared','alice'); INSERT INTO areas(id,title,kind,workspace_id,owner_user_id) VALUES ('team-area','Team','shared','team','alice'); INSERT INTO area_members(area_id,user_id,role) VALUES ('team-area','alice','admin'),('team-area','bob','editor'),('team-area','carol','viewer'); INSERT INTO projects(id,area_id,title) VALUES ('proj','team-area','Original');");
+db.exec("INSERT INTO workspaces(id,kind,owner_user_id) VALUES ('team','shared','alice'); INSERT INTO areas(id,title,kind,workspace_id,owner_user_id) VALUES ('team-area','Team','shared','team','alice'); INSERT INTO area_members(area_id,user_id,role) VALUES ('team-area','alice','admin'),('team-area','bob','editor'),('team-area','carol','viewer'),('team-area','erin','editor'); INSERT INTO projects(id,area_id,title) VALUES ('proj','team-area','Original');");
 after(()=>{db.close();rmSync(root,{recursive:true,force:true})});
 const cookie=who=>{const x=issueDurableTargetStagingSession(store,who,900);assert.equal(x.ok,true);return `${TARGET_STAGING_SESSION_COOKIE}=${x.sessionToken}`};
 const base='http://localhost:3001/api/target-staging/projects/proj/';const ctx={params:Promise.resolve({projectId:'proj'})};
@@ -43,7 +43,7 @@ test('generic staging write flags do not expose project title preview or rename'
  try {
    // Generic staging HTTP/write remains enabled for unrelated commands.
    const cmd={commandId:randomUUID(),title:'Bypass',expectedRevision:'0'.repeat(64),
-     writeAreaId:'team-area',restoreGeneration:stage.restoreGeneration};
+     writeAreaId:'team-area',restoreGeneration:stage.restoreGeneration,principalBinding:'P'.repeat(43)};
    const before=db.prepare("SELECT title FROM projects WHERE id='proj'").get().title;
    assert.equal((await preview(new Request(base+'title'),ctx)).status,404);
    assert.equal((await write('',cmd)).status,404);
@@ -55,6 +55,42 @@ test('generic staging write flags do not expose project title preview or rename'
    if(old===undefined)delete process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_PROJECT_TITLE_WRITE_ENABLED;
    else process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_PROJECT_TITLE_WRITE_ENABLED=old;
  }
+});
+test('A-preview to B-PATCH cannot cross a shared-editor identity boundary',async()=>{
+ process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_PROJECT_TITLE_WRITE_ENABLED='true';
+ db.prepare("INSERT INTO projects(id,area_id,title) VALUES ('actor-switch','team-area','Before')").run();
+ const bob=cookie('bob'),erin=cookie('erin');
+ const url='http://localhost:3001/api/target-staging/projects/actor-switch/title';
+ const selector={params:Promise.resolve({projectId:'actor-switch'})};
+ const getPreview=c=>preview(new Request(url,{headers:headers(c)}),selector);
+ const send=(c,cmd)=>PATCH(new Request(url,{method:'PATCH',headers:headers(c),body:JSON.stringify(cmd)}),selector);
+ const before=db.prepare("SELECT title FROM projects WHERE id='actor-switch'").get().title;
+ const beforeAudit=db.prepare("SELECT COUNT(*) AS n FROM project_title_audit").get().n;
+ const responseA=await getPreview(bob),responseB=await getPreview(erin);
+ assert.equal(responseA.status,200);assert.equal(responseB.status,200);
+ const a=await responseA.json(),b=await responseB.json();
+ assert.equal(a.snapshotRevision,b.snapshotRevision,'equal editor roles yield equal CAS revision');
+ assert.notEqual(a.principalBinding,b.principalBinding,'bindings are actor-scoped');
+ const cmd={commandId:randomUUID(),title:'Private draft composed by A',
+   expectedRevision:a.snapshotRevision,writeAreaId:a.writeAreaId,
+   restoreGeneration:a.restoreGeneration,principalBinding:a.principalBinding};
+ const switched=await send(erin,cmd);
+ assert.equal(switched.status,404,'B must not dispatch A-bound write');
+ assert.deepEqual(await switched.json(),{error:'Not found'});
+ assert.equal(db.prepare("SELECT title FROM projects WHERE id='actor-switch'").get().title,before);
+ assert.equal(db.prepare("SELECT COUNT(*) AS n FROM project_title_audit").get().n,beforeAudit);
+ const missing=await send(bob,{...cmd,commandId:randomUUID(),principalBinding:undefined});
+ assert.equal(missing.status,400,'unbound commands cannot write');
+ const accepted=await send(bob,cmd);
+ assert.equal(accepted.status,200,await accepted.clone().text());
+ assert.deepEqual(await accepted.json(),{ok:true,principalBinding:a.principalBinding});
+ assert.equal(db.prepare("SELECT title FROM projects WHERE id='actor-switch'").get().title,cmd.title);
+ const replayed=await send(cookie('bob'),cmd);
+ assert.equal(replayed.status,200);
+ assert.deepEqual(await replayed.json(),{ok:true,replayed:true,principalBinding:a.principalBinding});
+ const afterSwitch=await send(erin,cmd);
+ assert.equal(afterSwitch.status,404,'B cannot replay A committed command');
+ assert.equal(db.prepare("SELECT COUNT(*) AS n FROM project_title_audit").get().n,beforeAudit+1);
 });
 test('project rename enforces role and CAS, persists audit, supports retry, and rejects revoked access',async()=>{
  process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_PROJECT_TITLE_WRITE_ENABLED='true';
@@ -71,7 +107,7 @@ test('project rename enforces role and CAS, persists audit, supports retry, and 
  assert.equal((await preview(new Request(base+'title',{headers:headers(dave)}),ctx)).status,404,
    'outsider cannot obtain a writer identity binding');
  assert.equal(page.writeAreaId,'team-area');assert.equal(page.restoreGeneration,stage.restoreGeneration);
- const cmd={commandId:randomUUID(),title:'Updated',expectedRevision:page.snapshotRevision,writeAreaId:page.writeAreaId,restoreGeneration:page.restoreGeneration};
+ const cmd={commandId:randomUUID(),title:'Updated',expectedRevision:page.snapshotRevision,writeAreaId:page.writeAreaId,restoreGeneration:page.restoreGeneration,principalBinding:page.principalBinding};
  assert.equal((await write(carol,cmd)).status,404); assert.equal((await write(dave,cmd)).status,404);
  response=await receipt(bob,cmd.commandId);
  assert.equal(response.status,200);assert.deepEqual(await response.json(),{status:'not_recorded'});
@@ -83,7 +119,7 @@ test('project rename enforces role and CAS, persists audit, supports retry, and 
  response=await receipt(cookie('bob'),cmd.commandId);
  assert.equal(response.status,200);
  assert.deepEqual(await response.json(),{status:'committed',principalBinding:page.principalBinding});
- response=await write(bob,cmd);assert.deepEqual(await response.json(),{ok:true,replayed:true});
+ response=await write(bob,cmd);assert.deepEqual(await response.json(),{ok:true,replayed:true,principalBinding:page.principalBinding});
  assert.equal((await write(bob,{...cmd,title:'Other'})).status,409);
  assert.equal((await write(bob,{...cmd,commandId:randomUUID()})).status,409);
  response=await read(bob); assert.equal((await response.json()).project.title,'Updated');
@@ -103,7 +139,7 @@ test('cancel fence serializes before lost PATCH and permanently rejects old UUID
   const p=await previewResponse.json();
   const oldTitle=db.prepare("SELECT title FROM projects WHERE id='proj'").get().title;
   const old={commandId:randomUUID(),title:'Must never write after cancellation',
-    expectedRevision:p.snapshotRevision,writeAreaId:p.writeAreaId,restoreGeneration:p.restoreGeneration};
+    expectedRevision:p.snapshotRevision,writeAreaId:p.writeAreaId,restoreGeneration:p.restoreGeneration,principalBinding:p.principalBinding};
   const bob=cookie('bob');
   const switched=await cancelWrite(bob,old.commandId,p.principalBinding);
   assert.equal(switched.status,404,'B cannot cancel A command using A proof');
@@ -141,7 +177,7 @@ test('simultaneous PATCH and cancel are ordered by pinned write transaction',asy
   const alice=cookie('alice');
   const p=await (await preview(new Request(base+'title',{headers:headers(alice)}),ctx)).json();
   const command={commandId:randomUUID(),title:'Race winner title',
-    expectedRevision:p.snapshotRevision,writeAreaId:p.writeAreaId,restoreGeneration:p.restoreGeneration};
+    expectedRevision:p.snapshotRevision,writeAreaId:p.writeAreaId,restoreGeneration:p.restoreGeneration,principalBinding:p.principalBinding};
   const [rename,fence]=await Promise.all([write(alice,command),cancelWrite(alice,command.commandId,p.principalBinding)]);
   assert.equal(fence.status,200,await fence.clone().text());
   const status=(await fence.json()).status;
