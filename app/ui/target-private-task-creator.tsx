@@ -20,8 +20,8 @@ type AreaState={kind:"loading"|"unavailable"|"signed-out";generation:string}|
   {kind:"ready";generation:string;areas:PrivateNoteAreaChoice[]};
 type Phase="idle"|"preflight"|"saving"|"uncertain"|"checking"|"saved";
 export default function TargetPrivateTaskCreator({
-  language="cs",onClose,onCreated,onSwitchToNote,
-}:{language?:"cs"|"en";onClose:()=>void;onCreated:()=>void;onSwitchToNote:()=>void}){
+  language="cs",onClose,onSwitchToNote,
+}:{language?:"cs"|"en";onClose:()=>void;onSwitchToNote:()=>void}){
   const runtime=useTargetRuntime(),generation=useTargetGeneration();
   const [state,setState]=useState<AreaState>({kind:"loading",generation:""});
   const [reload,setReload]=useState(0);
@@ -150,7 +150,9 @@ export default function TargetPrivateTaskCreator({
     void runPrivateTaskCreate(runtime,generation,command).then(outcome=>{
       if(!mounted.current||runtime.generation()!==generation)return;
       if(outcome==="saved"){
-        setTitle("");setPhase("saved");onCreated();
+        // The always-mounted completion bridge handles navigation/refetch,
+        // including when this modal was unmounted before the HTTP 201.
+        setTitle("");setPhase("saved");
       }else{
         setPhase("uncertain");
         setNotice(cs?"Zápis není potvrzen. Nový úkol nevytvářejte; ověřte původní příkaz.":
@@ -169,7 +171,7 @@ export default function TargetPrivateTaskCreator({
     clearTimeout(timer);
     if(seq!==sequence.current||controller.signal.aborted||!live())return;
     if(outcome==="committed"){
-      setTitle("");setPhase("saved");onCreated();
+      setTitle("");setPhase("saved");
     }else{
       setPhase("uncertain");
       setNotice(outcome==="not_recorded"
