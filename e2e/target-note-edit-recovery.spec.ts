@@ -3,6 +3,9 @@
  * writes; this is NOT the full release Browser E2E suite. */
 import {expect,test} from "./fixtures";
 import type {Page,Route} from "@playwright/test";
+import {
+  NOTE_EDIT_COMMAND_HEADER,NOTE_EDIT_PRECOMMIT_HEADER,NOTE_EDIT_PRECOMMIT_VALUE,
+} from "../lib/target-note-edit-precommit";
 
 test.skip(process.env.LUMI_TARGET_NOTE_EDIT_E2E!=="true",
   "Focused target note editor requires explicit isolated browser opt-in");
@@ -21,6 +24,13 @@ const integrated=process.env.LUMI_TARGET_NOTE_EDIT_PROFILE==="combined"||
 const reply=(route:Route,body:unknown,status=200)=>route.fulfill({
   status,headers,body:JSON.stringify(body),
 });
+const preCommitReply=(route:Route,body:unknown,status:400|403|404|409,commandId:string)=>{
+  expect(route.request().headers()[NOTE_EDIT_COMMAND_HEADER]).toBe(commandId);
+  return route.fulfill({status,
+    headers:{...headers,[NOTE_EDIT_PRECOMMIT_HEADER]:NOTE_EDIT_PRECOMMIT_VALUE,
+      [NOTE_EDIT_COMMAND_HEADER]:commandId},
+    body:JSON.stringify(body)});
+};
 type Patch=(route:Route,command:Record<string,unknown>)=>Promise<void>;
 async function setup(page:Page,patch:Patch,recover?:Patch){
   await page.route("**/api/target-staging/session",route=>
@@ -102,7 +112,7 @@ for(const width of [390,1280]){
     const first=JSON.parse((await marker(page))??"null") as {commandId:string};
     expect(first?.commandId).toBeTruthy();
     await close(page); // unsubscribes the source editor before 409
-    await pending.route!.fulfill({status:409,headers,body:JSON.stringify({error:"Revision conflict"})});
+    await preCommitReply(pending.route!,{error:"Revision conflict"},409,first.commandId);
     await expect.poll(()=>marker(page)).toBeNull();
     await open(page,"note-b");
     await editAndSave(page,"Independent B");
@@ -120,7 +130,7 @@ test(`uncertain PATCH then retry 409 retains tab marker; other notes stay readab
   await setup(page,async(route,command)=>{
     sent.push(String(command.commandId));
     if(sent.length===1)return reply(route,{error:"Staging unavailable"},503);
-    return reply(route,{error:"Revision conflict"},409);
+    return preCommitReply(route,{error:"Revision conflict"},409,String(command.commandId));
   });
   await open(page,"note-a");
   if(integrated)await expect(page.getByTestId("target-detail-edit-delete")).toBeVisible();

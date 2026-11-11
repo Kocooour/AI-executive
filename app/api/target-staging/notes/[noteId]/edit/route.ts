@@ -11,6 +11,9 @@ import {
 import { readStagingAuthorizedNoteInChild } from "../../../../../../lib/target-staging-read-process";
 import { writeStagingNoteInChild } from "../../../../../../lib/target-staging-title-http-process";
 import { noteWriteRevision } from "../../../../../../lib/target-note-write-contract";
+import {
+  NOTE_EDIT_COMMAND_HEADER,stampNoteEditPrecommit,
+} from "../../../../../../lib/target-note-edit-precommit";
 import { validTargetStagingNoteEditRequest } from "../../../../../../lib/target-note-staging-writer";
 import {
   targetProtocolRefusal, legacySnapshotRefusal, resyncRequiredResponse, writeAreaMismatchResponse,
@@ -98,7 +101,7 @@ export async function GET(request: Request, context: { params: Promise<{ noteId:
 
 /** One atomic, idempotent note title/body edit. Parent/Area never accepted as mutations. */
 export async function PATCH(request: Request, context: { params: Promise<{ noteId: string }> }): Promise<Response> {
-  if (!enabled()) return answer(404, "Not found");
+  if (!enabled()) return stampNoteEditPrecommit(request, answer(404, "Not found"));
   const anchor = stagingAnchorRefusal(request, true);
   if (anchor) return anchor;
   const identity = resolveStagingHttpIdentity(request);
@@ -108,31 +111,37 @@ export async function PATCH(request: Request, context: { params: Promise<{ noteI
   try {
     requireSameOrigin(request);
     if (request.headers.get("origin") !== new URL(request.url).origin)
-      return answer(403, "Cross-origin request rejected");
+      return stampNoteEditPrecommit(request, answer(403, "Cross-origin request rejected"));
     const admitted = admitStagingIdentity(request, identity, base);
     if (admitted) return admitted;
     const noteId = await noteIdFrom(context);
-    if (!noteId || new URL(request.url).search !== "") return answer(400, "Invalid request");
+    if (!noteId || new URL(request.url).search !== "") return stampNoteEditPrecommit(request, answer(400, "Invalid request"));
     const unsupported = targetProtocolRefusal(request);
-    if (unsupported) return unsupported;
+    if (unsupported) return stampNoteEditPrecommit(request, unsupported);
     const limited = enforceRateLimit(request, "target-staging-note-edit-write", 30, 600000);
     if (limited) return Response.json({ error: "Too many requests" }, {
       status: 429, headers: { ...headers, "retry-after": String(limited.retryAfter) },
     });
     const input = await readJsonBody<unknown>(request, 192 * 1024, { strictUtf8: true });
     const legacy = legacySnapshotRefusal(input);
-    if (legacy) return legacy;
+    if (legacy) return stampNoteEditPrecommit(request, legacy);
     if (!input || typeof input !== "object" || Array.isArray(input) ||
         Object.keys(input).sort().join(",") !==
         "body,commandId,expectedRevision,restoreGeneration,title,writeAreaId")
-      return answer(400, "Invalid request");
+      return stampNoteEditPrecommit(request, answer(400, "Invalid request"));
     const fields = input as Record<string, unknown>;
     const command = {
       noteId, body: fields.body, commandId: fields.commandId,
       expectedRevision: fields.expectedRevision, title: fields.title,
       restoreGeneration: fields.restoreGeneration, writeAreaId: fields.writeAreaId,
     };
-    if (!validTargetStagingNoteEditRequest(command)) return answer(400, "Invalid request");
+    if (!validTargetStagingNoteEditRequest(command))
+      return stampNoteEditPrecommit(request, answer(400, "Invalid request"));
+    // An optional header is needed only for clients using acknowledged refusals.
+    // Never bind a receipt to a different command than the body we dispatch.
+    const headerId=request.headers.get(NOTE_EDIT_COMMAND_HEADER);
+    if(headerId!==null&&headerId!==command.commandId)
+      return answer(400, "Invalid request");
     const live = verifyStagingIdentityBeforeRelease(request, identity, base);
     if (live !== "ok") return stagingIdentityRefusal(live);
     if (!unchanged(base)) return answer(503, "Staging unavailable");
@@ -153,16 +162,22 @@ export async function PATCH(request: Request, context: { params: Promise<{ noteI
     }
     if (!unchanged(base) || !result) return answer(503, "Staging unavailable");
     if (result.ok === false) {
-      if (result.reason === "unavailable") return answer(404, "Not found");
-      if (result.reason === "resync_required") return resyncRequiredResponse();
-      if (result.reason === "write_area_mismatch") return writeAreaMismatchResponse();
+      // The writer emits "unavailable" only before mutation inside its TX.
+      if (result.reason === "unavailable")
+        return stampNoteEditPrecommit(request, answer(404, "Not found"));
+      if (result.reason === "resync_required") return stampNoteEditPrecommit(request, resyncRequiredResponse());
+      if (result.reason === "write_area_mismatch") return stampNoteEditPrecommit(request, writeAreaMismatchResponse());
       if (result.reason === "stale_revision" || result.reason === "idempotency_conflict" ||
-          result.reason === "unchanged") return answer(409, "Revision conflict");
+          result.reason === "unchanged") return stampNoteEditPrecommit(request, answer(409, "Revision conflict"));
       return answer(503, "Staging unavailable");
     }
     return Response.json(result.replayed ? { ok: true, replayed: true } : { ok: true }, { headers });
   } catch (error) {
-    if (error instanceof HttpInputError) return answer(error.status, error.message);
+    if (error instanceof HttpInputError){
+      const response=answer(error.status,error.message);
+      // All HttpInputError cases in PATCH are thrown before child dispatch.
+      return stampNoteEditPrecommit(request,response);
+    }
     logStagingFailure("target-staging/note-edit-write", "route_exception", error);
     return answer(503, "Staging unavailable");
   }
