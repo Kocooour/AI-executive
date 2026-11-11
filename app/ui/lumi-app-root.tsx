@@ -42,6 +42,9 @@ const TargetMyPlan = dynamic(() => import("./target-my-plan"), { ssr: false });
 const TargetScopeSwitcher = dynamic(() => import("./target-scope-switcher"), { ssr: false });
 const TargetScopeLists = dynamic(() => import("./target-scope-lists"), { ssr: false });
 
+// R3-FE-05: search in the main shell only when the target backend and UI opt in.
+const TargetMainTitleSearch = dynamic(() => import("./target-main-title-search"), { ssr: false });
+
 // R3-FE-4a: authorized details inside the main app; loaded only when a detail flag is on.
 const TargetDetailPanel = dynamic(() => import("./target-detail-panel"), { ssr: false });
 // R3-CAPTURE-1: read-only, real actor-private Area catalogue in target Notes.
@@ -52,7 +55,7 @@ export type TargetScopesProps = { enabled: boolean; projects: boolean; notes: bo
 export type TargetEditsProps = TargetUiEdits;
 export type TargetMyPlanProps = { enabled: boolean; statusWrite: boolean; whenWrite: boolean };
 
-export function LumiAppRoot({ targetMyPlan, targetScopes, targetDetails, targetEdits, targetNoteEdit = false, targetProjectEdit = false, targetPrivateNoteAreas = false, targetPrivateNoteCreate = false }: { targetMyPlan?: TargetMyPlanProps; targetScopes?: TargetScopesProps; targetDetails?: TargetDetailsProps; targetEdits?: TargetEditsProps; targetNoteEdit?: boolean; targetProjectEdit?: boolean; targetPrivateNoteAreas?: boolean; targetPrivateNoteCreate?: boolean } = {}) {
+export function LumiAppRoot({ targetMyPlan, targetScopes, targetDetails, targetEdits, targetNoteEdit = false, targetProjectEdit = false, targetPrivateNoteAreas = false, targetPrivateNoteCreate = false, targetSearch = false }: { targetMyPlan?: TargetMyPlanProps; targetScopes?: TargetScopesProps; targetDetails?: TargetDetailsProps; targetEdits?: TargetEditsProps; targetNoteEdit?: boolean; targetProjectEdit?: boolean; targetPrivateNoteAreas?: boolean; targetPrivateNoteCreate?: boolean; targetSearch?: boolean } = {}) {
   // Owner decision 2026-11-09: with target scopes on, the single global scope governs the
   // sidebar projects, the inspector and quick capture (see docs/R3-FE-04A-DETAILS.md).
   const scopesOn = Boolean(targetScopes?.enabled);
@@ -188,9 +191,9 @@ export function LumiAppRoot({ targetMyPlan, targetScopes, targetDetails, targetE
       <AuthScreen app={app} />
     );
   }
-  const scopeSwitcher = scopeList !== null || (scopesOn && targetPlan);
+  const scopeSwitcher = scopeList !== null || (scopesOn && (targetPlan || (targetSearch && view==="Search")));
   // The legacy inspector is never fed legacy records in a target view.
-  const targetView = scopeList !== null || targetPlan;
+  const targetView = scopeList !== null || targetPlan || (targetSearch && view==="Search");
   const legacyInspector = Boolean(app.selected) && !(scopesOn && targetView);
   // Unified target mode: views that still show legacy data are read-only (no target create/edit API yet).
   const legacyReadOnly = app.legacyWritesDisabled && !targetView;
@@ -294,7 +297,9 @@ export function LumiAppRoot({ targetMyPlan, targetScopes, targetDetails, targetE
           <CalendarView app={app} />
           <HomeView app={app} />
           {view === "Today" && !targetPlan && <TodayTop app={app} />}
-          <SearchResults app={app} />
+          {view==="Search" && targetSearch
+            ? <TargetMainTitleSearch query={app.query} language={language} />
+            : <SearchResults app={app} />}
           <ContextView app={app} />
           <AgentsView app={app} />
           <SettingsView app={app} />
