@@ -7,6 +7,7 @@ import { canWriteIsolatedTargetArea, targetStoreRestoreGeneration } from "./targ
 import { verifiedActor, type TargetStagingReadCredential } from "./target-task-authenticated-read";
 import { isTargetStagingSessionTokenHash, lookupLiveTargetStagingSession } from "./target-staging-durable-session";
 import { withPinnedTargetStagingWrite } from "./target-staging-pinned-write";
+import {projectTitleWasCancelled} from "./target-project-title-cancel";
 import type { TargetStagingReadStore } from "./target-task-staging-reader";
 import { TARGET_STORE_SCHEMA_VERSION } from "./target-store-bootstrap";
 
@@ -20,7 +21,7 @@ function validTitle(value: unknown): value is string {
   catch { return false; }
 }
 export type ProjectTitleCommand = { commandId: string; projectId: string; title: string; expectedRevision: string; writeAreaId: string; restoreGeneration: string };
-export type ProjectTitleResult = {ok: true; replayed?: true} | {ok: false; reason: "invalid_request" | "unauthorized" | "unavailable" | "session_revoked" | "resync_required" | "write_area_mismatch" | "stale_revision" | "idempotency_conflict" | "unchanged" | "write_failed"};
+export type ProjectTitleResult = {ok: true; replayed?: true} | {ok: false; reason: "invalid_request" | "unauthorized" | "unavailable" | "session_revoked" | "resync_required" | "write_area_mismatch" | "stale_revision" | "idempotency_conflict" | "unchanged" | "write_failed" | "cancelled"};
 export function validProjectTitleCommand(input: unknown): input is ProjectTitleCommand {
   if (!input || typeof input !== "object" || Array.isArray(input)) return false;
   const v = input as Record<string, unknown>;
@@ -58,6 +59,9 @@ export function writeTargetProjectTitle(store: TargetStagingReadStore, access: T
       if (!sessionLive()) return {ok:false,reason:"session_revoked"};
       return prior.request_digest === payload ? {ok:true,replayed:true} : {ok:false,reason:"idempotency_conflict"};
     }
+    // The cancel fence and PATCH serialize under the same BEGIN IMMEDIATE lock.
+    if(projectTitleWasCancelled(db,actor,command.projectId,command.commandId))
+      return {ok:false,reason:"cancelled"};
     if (page.page.revision !== command.expectedRevision) {
       if (!sessionLive()) return {ok:false,reason:"session_revoked"};
       return {ok:false,reason:"stale_revision"};

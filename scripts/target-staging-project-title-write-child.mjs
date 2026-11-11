@@ -36,7 +36,8 @@ try {
     else if (result.reason === "resync_required" || result.reason === "write_area_mismatch" ||
         result.reason === "unavailable" || result.reason === "stale_revision" ||
         result.reason === "idempotency_conflict" || result.reason === "unchanged" ||
-        result.reason === "write_failed" || result.reason === "session_revoked") {
+        result.reason === "write_failed" || result.reason === "session_revoked" ||
+        result.reason === "cancelled") {
       process.stdout.write(JSON.stringify({ ok: false, reason: result.reason }));
     } else throw new Error("Unavailable");
   } finally { authority.close(); }

@@ -1,5 +1,6 @@
 import { readPreflightedProjectTitlePreview } from "./target-task-staging-reader";
 import { writeTargetProjectTitle, validProjectTitleCommand, type ProjectTitleCommand, type ProjectTitleResult } from "./target-project-title-writer";
+import {cancelTargetProjectTitle,validProjectTitleCancelCommand,type ProjectTitleCancelCommand,type ProjectTitleCancelResult} from "./target-project-title-cancel";
 /**
  * R2 staging-only process-local session issuance and revocation.
  *
@@ -1011,6 +1012,15 @@ export class TargetStagingSessionAuthority {
     if (!credential) return {ok:false,reason:"unauthorized"};
     if (!validProjectTitleCommand(request)) return {ok:false,reason:"invalid_request"};
     return writeTargetProjectTitle(this.#store, credential, request, durableSessionTokenHash);
+  }
+
+  /** Durable cancellation of a command which may have been lost after reload. */
+  cancelProjectTitle(sessionToken:string,request:ProjectTitleCancelCommand,
+    durableSessionTokenHash?:string):ProjectTitleCancelResult{
+    const credential=this.#credential(sessionToken,true);
+    if(!credential)return {ok:false,reason:"unauthorized"};
+    if(!validProjectTitleCancelCommand(request))return {ok:false,reason:"invalid_request"};
+    return cancelTargetProjectTitle(this.#store,credential,request,durableSessionTokenHash);
   }
 
   /**

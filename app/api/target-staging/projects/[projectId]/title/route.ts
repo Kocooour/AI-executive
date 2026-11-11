@@ -154,6 +154,7 @@ export async function PATCH(request: Request,
       if (result.reason === "unavailable") return answer(404, "Not found");
       if (result.reason === "resync_required") return resyncRequiredResponse();
       if (result.reason === "write_area_mismatch") return writeAreaMismatchResponse();
+      if (result.reason === "cancelled") return answer(409, "Command cancelled");
       if (result.reason === "stale_revision" || result.reason === "idempotency_conflict" ||
           result.reason === "unchanged") return answer(409, "Revision conflict");
       return answer(503, "Staging unavailable");

@@ -15,7 +15,7 @@ type Preview = { ok: true; snapshotRevision: string } |
 type Write = { ok: true; replayed?: true } |
   { ok: false; reason: "unavailable" | "stale_revision" |
     "idempotency_conflict" | "unchanged" | "write_failed" | "session_revoked" |
-    "resync_required" | "write_area_mismatch" };
+    "resync_required" | "write_area_mismatch" | "cancelled" };
 type DeleteWrite = { ok: true; replayed?: true } |
   { ok: false; reason: "unavailable" | "stale_revision" |
     "idempotency_conflict" | "write_failed" | "session_revoked" |
@@ -51,7 +51,8 @@ function parseWrite(value: unknown): Write | null {
       (v.reason === "unavailable" || v.reason === "stale_revision" ||
        v.reason === "idempotency_conflict" || v.reason === "unchanged" ||
        v.reason === "write_failed" || v.reason === "session_revoked" ||
-       v.reason === "resync_required" || v.reason === "write_area_mismatch")) return { ok: false, reason: v.reason };
+       v.reason === "resync_required" || v.reason === "write_area_mismatch" ||
+       v.reason === "cancelled")) return { ok: false, reason: v.reason };
   return null;
 }
 
@@ -265,6 +266,23 @@ export async function readProjectTitleRecoveryInChild(
     return {ok:true,status:"committed",projectId:v.projectId,areaId:v.areaId};
   if(v.ok===false&&v.reason==="unavailable"&&keys==="ok,reason")
     return {ok:false,reason:"unavailable"};
+  return null;
+}
+
+type TitleCancel = {ok:true;status:"committed"|"cancelled"}|
+  {ok:false;reason:"unavailable"|"session_revoked"|"resync_required"|"write_failed"};
+export async function cancelProjectTitleInChild(
+  config:StagingPersonalReadConfig,
+  request:import("./target-project-title-cancel").ProjectTitleCancelCommand,
+):Promise<TitleCancel|null>{
+  const v=await run(config,"target-staging-project-title-cancel-child.mjs",JSON.stringify(request));
+  if(!v||typeof v!=="object"||Array.isArray(v))return null;
+  const x=v as Record<string,unknown>,keys=Object.keys(x).sort().join(",");
+  if(keys==="ok,status"&&x.ok===true&&(x.status==="cancelled"||x.status==="committed"))
+    return {ok:true,status:x.status};
+  if(keys==="ok,reason"&&x.ok===false&&
+    (x.reason==="unavailable"||x.reason==="session_revoked"||x.reason==="resync_required"||x.reason==="write_failed"))
+    return {ok:false,reason:x.reason};
   return null;
 }
 
