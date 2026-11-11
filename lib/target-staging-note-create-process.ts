@@ -51,15 +51,18 @@ export function parseNoteCreateRecoveryReply(value:unknown):NoteCreateRecoveryRe
     const keys=Object.keys(r);
     return keys.length===names.length&&names.every(name=>Object.hasOwn(r,name));
   };
-  if(exact(["ok","status"])&&r.ok===true&&r.status==="not_recorded")
-    return {ok:true,status:"not_recorded"};
-  if(exact(["ok","status","noteId","areaId"])&&r.ok===true&&
-    r.status==="committed"&&typeof r.noteId==="string"&&uuid.test(r.noteId)&&
-    typeof r.areaId==="string"&&r.areaId.length>0&&
-    r.areaId.trim()===r.areaId&&Buffer.byteLength(r.areaId,"utf8")<=512&&
-    !/[\x00-\x1f\x7f]/u.test(r.areaId))
+  if(r.ok===true){
+    if(r.status==="not_recorded")
+      return exact(["ok","status"])?{ok:true,status:"not_recorded"}:null;
+    if(r.status!=="committed"||!exact(["ok","status","noteId","areaId"]))
+      return null;
+    if(typeof r.noteId!=="string"||!uuid.test(r.noteId))return null;
+    if(typeof r.areaId!=="string"||r.areaId.length===0||
+       r.areaId.trim()!==r.areaId||Buffer.byteLength(r.areaId,"utf8")>512||
+       /[\x00-\x1f\x7f]/u.test(r.areaId))return null;
     return {ok:true,status:"committed",noteId:r.noteId,areaId:r.areaId};
-  if(exact(["ok","reason"])&&r.ok===false&&r.reason==="unavailable")
+  }
+  if(r.ok===false&&exact(["ok","reason"])&&r.reason==="unavailable")
     return {ok:false,reason:"unavailable"};
   return null;
 }
