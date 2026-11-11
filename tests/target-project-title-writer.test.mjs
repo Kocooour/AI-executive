@@ -11,7 +11,7 @@ const legacy=path.join(root,'legacy'); mkdirSync(legacy);process.env.AI_EXECUTIV
 process.env.AI_EXECUTIVE_SESSION_SECRET='synthetic-project-title-writer-actor-proof-2026';
 const {bootstrapIsolatedTargetStore}=await import('../lib/target-store-bootstrap.ts');
 const {TargetStagingSessionAuthority}=await import('../lib/target-staging-session-authority.ts');
-const {projectTitlePrincipalBinding}=await import('../lib/target-project-title-identity.ts');
+const {projectTitlePrincipalBinding,projectTitleWorkerProofKey}=await import('../lib/target-project-title-identity.ts');
 const proof=(actor,id,generation)=>{
  const value=projectTitlePrincipalBinding(actor,id,generation);
  assert.match(value,/^[A-Za-z0-9_-]{43}$/);
@@ -32,6 +32,36 @@ for(const who of ['bob','carol','dave']){
 db.exec("INSERT INTO workspaces(id,kind,owner_user_id) VALUES ('team','shared','alice'); INSERT INTO areas(id,title,kind,workspace_id,owner_user_id) VALUES ('team-area','Team','shared','team','alice'); INSERT INTO area_members(area_id,user_id,role) VALUES ('team-area','alice','admin'),('team-area','bob','editor'),('team-area','carol','viewer'); INSERT INTO projects(id,area_id,title) VALUES ('proj','team-area','Original');");
 const authority=new TargetStagingSessionAuthority(store);
 after(()=>{authority.close();db.close();rmSync(root,{recursive:true,force:true})});
+test('isolated title worker verifies actor proof without receiving the session secret',()=>{
+ const originalSecret=process.env.AI_EXECUTIVE_SESSION_SECRET;
+ const originalWorkerKey=process.env.AI_EXECUTIVE_TARGET_STAGING_PROJECT_TITLE_PROOF_KEY;
+ const key=projectTitleWorkerProofKey();
+ assert.match(key,/^[0-9a-f]{64}$/);
+ const expected=projectTitlePrincipalBinding('alice','proj',stage.restoreGeneration);
+ assert.match(expected,/^[A-Za-z0-9_-]{43}$/);
+ try{
+   delete process.env.AI_EXECUTIVE_SESSION_SECRET;
+   delete process.env.AI_EXECUTIVE_TARGET_STAGING_PROJECT_TITLE_PROOF_KEY;
+   assert.equal(projectTitlePrincipalBinding('alice','proj',stage.restoreGeneration),null,
+     'missing worker key must fail closed');
+   process.env.AI_EXECUTIVE_TARGET_STAGING_PROJECT_TITLE_PROOF_KEY=key;
+   assert.equal(projectTitlePrincipalBinding('alice','proj',stage.restoreGeneration),expected,
+     'domain-separated worker proof must match server-issued binding');
+   assert.notEqual(projectTitlePrincipalBinding('bob','proj',stage.restoreGeneration),expected);
+   assert.notEqual(projectTitlePrincipalBinding('alice','proj',randomUUID()),expected);
+   process.env.AI_EXECUTIVE_TARGET_STAGING_PROJECT_TITLE_PROOF_KEY='f'.repeat(64);
+   assert.notEqual(projectTitlePrincipalBinding('alice','proj',stage.restoreGeneration),expected);
+   process.env.AI_EXECUTIVE_SESSION_SECRET='short';
+   assert.equal(projectTitlePrincipalBinding('alice','proj',stage.restoreGeneration),null,
+     'invalid primary secret must not fall back to a child key');
+ }finally{
+   if(originalSecret===undefined)delete process.env.AI_EXECUTIVE_SESSION_SECRET;
+   else process.env.AI_EXECUTIVE_SESSION_SECRET=originalSecret;
+   if(originalWorkerKey===undefined)delete process.env.AI_EXECUTIVE_TARGET_STAGING_PROJECT_TITLE_PROOF_KEY;
+   else process.env.AI_EXECUTIVE_TARGET_STAGING_PROJECT_TITLE_PROOF_KEY=originalWorkerKey;
+ }
+});
+
 test('project rename enforces roles and CAS, persists audit, supports retry, and denies revoked access',()=>{
  const session=who=>{const x=authority.issueWritable(who);assert.ok(x);return x.sessionToken};
  const bob=session('bob'), carol=session('carol'),dave=session('dave');

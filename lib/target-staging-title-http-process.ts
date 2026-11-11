@@ -2,6 +2,7 @@
 import { spawn } from "node:child_process";
 import path from "node:path";
 import type { StagingPersonalReadConfig } from "./target-staging-read-process";
+import {projectTitleWorkerProofKey} from "./target-project-title-identity";
 import type { TargetStagingTaskTitleWriteRequest } from "./target-task-staging-writer";
 import type { TargetStagingTaskDeleteRequest } from "./target-task-delete-writer";
 
@@ -126,6 +127,12 @@ async function run(config: StagingPersonalReadConfig, scriptName: string,
             AI_EXECUTIVE_TARGET_STAGING_RESTORE_GENERATION: config.expectedRestoreGeneration,
             AI_EXECUTIVE_TARGET_STAGING_OWNER_USER_ID: config.ownerUserId,
             AI_EXECUTIVE_TARGET_STAGING_SESSION_HASH: config.sessionTokenHash || "",
+            // The project-title writer independently rechecks the actor proof
+            // INSIDE its pinned transaction. Pass a domain-separated key only
+            // to that worker, never the application's session signing secret.
+            ...(scriptName === "target-staging-project-title-write-child.mjs"
+              ? {AI_EXECUTIVE_TARGET_STAGING_PROJECT_TITLE_PROOF_KEY: projectTitleWorkerProofKey() || ""}
+              : {}),
           },
         });
       } catch { resolve(null); return; }
