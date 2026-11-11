@@ -15,7 +15,7 @@ import {
   TARGET_STAGING_PERSONAL_NOTIFICATION_RECEIPT_PREFIX, TARGET_STAGING_PERSONAL_PUSH_TARGET_RECEIPT_PREFIX,
   TARGET_STAGING_PUSH_BASELINE_PREFIX,
   TARGET_STAGING_NOTE_RECEIPT_PREFIX, TARGET_STAGING_NOTE_DELETE_RECEIPT_PREFIX,
-  TARGET_STAGING_NOTE_LIFECYCLE_RECEIPT_PREFIX,
+  TARGET_STAGING_NOTE_LIFECYCLE_RECEIPT_PREFIX, TARGET_STAGING_PROJECT_TITLE_CANCEL_PREFIX,
   TARGET_STAGING_MAX_TOMBSTONES, TARGET_STAGING_NOTE_CHANGE_MAX_EVENTS, TARGET_STAGING_RESTORE_HISTORY_MAX,
   TARGET_STAGING_SUPERSEDED_SESSIONS_MAX, TARGET_STAGING_MAX_NOTES,
   TARGET_STAGING_MAX_PERSONAL_PLANS, TARGET_STAGING_MAX_ATTENTION_STATES, verifyExistingTargetStagingPath,
@@ -263,6 +263,14 @@ export function inspectIsolatedTargetStore(
         row.key.startsWith(TARGET_STAGING_NOTE_DELETE_RECEIPT_PREFIX));
       const lifecycleReceipts = rows.filter(row => typeof row.key === "string" &&
         row.key.startsWith(TARGET_STAGING_NOTE_LIFECYCLE_RECEIPT_PREFIX));
+      const projectTitleCancels = rows.filter(row => typeof row.key === "string" &&
+        row.key.startsWith(TARGET_STAGING_PROJECT_TITLE_CANCEL_PREFIX));
+      // An irreversible fence is valid only as an opaque 64-hex key and a
+      // literal '1'. Reject all other metadata rather than losing the fence.
+      const projectTitleCancelsValid = projectTitleCancels.every(row =>
+        typeof row.key === "string" &&
+        sha256Hex.test(row.key.slice(TARGET_STAGING_PROJECT_TITLE_CANCEL_PREFIX.length)) &&
+        row.value === "1");
       // The only extra metadata entries allowed are strictly validated,
       // content-free, staging-only receipt hashes (title, delete and note
       // namespaces, each capped separately). Reject unknown metadata,
@@ -273,7 +281,7 @@ export function inspectIsolatedTargetStore(
         typeof row.value === "string" && sha256Hex.test(row.value));
       if (rows.length !== 6 + receipts.length + deleteReceipts.length + temporalReceipts.length + dueOnReceipts.length + privateWhenReceipts.length + attentionReceipts.length + noteReceipts.length +
             notificationReceipts.length + pushTargetReceipts.length + baselineMarkers.length +
-            noteDeleteReceipts.length + lifecycleReceipts.length ||
+            noteDeleteReceipts.length + lifecycleReceipts.length + projectTitleCancels.length ||
           receipts.length > TARGET_STAGING_MAX_RECEIPTS ||
           deleteReceipts.length > TARGET_STAGING_MAX_RECEIPTS ||
           temporalReceipts.length > TARGET_STAGING_MAX_RECEIPTS ||
@@ -288,6 +296,10 @@ export function inspectIsolatedTargetStore(
           noteReceipts.length > TARGET_STAGING_MAX_RECEIPTS ||
           noteDeleteReceipts.length > TARGET_STAGING_MAX_RECEIPTS ||
           lifecycleReceipts.length > TARGET_STAGING_MAX_RECEIPTS ||
+          projectTitleCancels.length > TARGET_STAGING_AUDIT_MAX_EVENTS ||
+          !projectTitleCancelsValid ||
+          (meta.get("schema_version") !== String(TARGET_STORE_SCHEMA_VERSION) &&
+            projectTitleCancels.length !== 0) ||
           !receiptValid(receipts, TARGET_STAGING_RECEIPT_PREFIX) ||
           !receiptValid(deleteReceipts, TARGET_STAGING_DELETE_RECEIPT_PREFIX) ||
           !receiptValid(temporalReceipts, TARGET_STAGING_TEMPORAL_STATUS_RECEIPT_PREFIX) ||
@@ -311,7 +323,8 @@ export function inspectIsolatedTargetStore(
               row.key.startsWith(TARGET_STAGING_PUSH_BASELINE_PREFIX) ||
               row.key.startsWith(TARGET_STAGING_NOTE_RECEIPT_PREFIX) ||
               row.key.startsWith(TARGET_STAGING_NOTE_DELETE_RECEIPT_PREFIX) ||
-              row.key.startsWith(TARGET_STAGING_NOTE_LIFECYCLE_RECEIPT_PREFIX))) ||
+              row.key.startsWith(TARGET_STAGING_NOTE_LIFECYCLE_RECEIPT_PREFIX) ||
+              row.key.startsWith(TARGET_STAGING_PROJECT_TITLE_CANCEL_PREFIX))) ||
           !isSupportedTargetSchemaVersion(meta.get("schema_version")) ||
           meta.get("activated") !== "false" || meta.get("write_protocol") !== "per-item-only" ||
           typeof meta.get("anchor_seq") !== "string" ||

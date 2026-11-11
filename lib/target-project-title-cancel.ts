@@ -10,10 +10,11 @@ import {verifiedActor,type TargetStagingReadCredential} from "./target-task-auth
 import {isTargetStagingSessionTokenHash,lookupLiveTargetStagingSession} from "./target-staging-durable-session";
 import {withPinnedTargetStagingWrite} from "./target-staging-pinned-write";
 import type {TargetStagingReadStore} from "./target-task-staging-reader";
-import {TARGET_STORE_SCHEMA_VERSION,TARGET_STAGING_AUDIT_MAX_EVENTS} from "./target-store-bootstrap";
+import {TARGET_STORE_SCHEMA_VERSION,TARGET_STAGING_AUDIT_MAX_EVENTS,
+  TARGET_STAGING_PROJECT_TITLE_CANCEL_PREFIX} from "./target-store-bootstrap";
 
 const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-const PREFIX="r3:project-title-cancel-v1:";
+const PREFIX=TARGET_STAGING_PROJECT_TITLE_CANCEL_PREFIX;
 const digest=(value:unknown)=>createHash("sha256").update(JSON.stringify(value)).digest("hex");
 export type ProjectTitleCancelCommand={projectId:string;commandId:string;restoreGeneration:string};
 export type ProjectTitleCancelResult=

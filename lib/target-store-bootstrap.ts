@@ -107,6 +107,8 @@ export const TARGET_STAGING_NOTE_RECEIPT_PREFIX = "r2:note-edit-receipt-v1:";
 export const TARGET_STAGING_NOTE_DELETE_RECEIPT_PREFIX = "r2:note-delete-receipt-v1:";
 /** Staging-only create/move receipts; never note titles or bodies. */
 export const TARGET_STAGING_NOTE_LIFECYCLE_RECEIPT_PREFIX = "r2:note-lifecycle-receipt-v1:";
+/** R3 project-title cancellation fences: content-free, irreversible across reloads. */
+export const TARGET_STAGING_PROJECT_TITLE_CANCEL_PREFIX = "r3:project-title-cancel-v1:";
 /** Per-table cap for task, project and note tombstones; fails closed. */
 export const TARGET_STAGING_MAX_TOMBSTONES = 4096;
 /** Provisional, isolated-staging audit policy; production retention is not approved. */
