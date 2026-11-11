@@ -136,7 +136,7 @@ test("private CREATE HTTP inserts once, uses content-free receipt, and survives 
   assert.equal(first.sequence,before.sequence+1);
   assert.equal(first.journal.includes(cmd.title),false);
   assert.deepEqual(await checked(await recover(cmd),200),{status:"committed"});
-  assert.deepEqual(await checked(await recoverOpaque(cmd),200),{status:"committed"});
+  assert.deepEqual(await checked(await recoverOpaque(cmd),200),{status:"committed",taskId:cmd.taskId});
   const read=await GET_TASK(new Request(base+"/"+cmd.taskId,{headers:{cookie:owner()}}),
     {params:Promise.resolve({taskId:cmd.taskId})});
   assert.equal(read.status,200);
@@ -154,7 +154,7 @@ test("live actor and private Area ACL deny foreign and shared writes, without an
   const own=command(fx,{areaId:"bob-private"});
   assert.equal((await checked(await create(own,bob),201)).taskId,own.taskId);
   assert.deepEqual(await checked(await recover(own,bob),200),{status:"committed"});
-  assert.deepEqual(await checked(await recoverOpaque(own,bob),200),{status:"committed"});
+  assert.deepEqual(await checked(await recoverOpaque(own,bob),200),{status:"committed",taskId:own.taskId});
   assert.deepEqual(await checked(await recoverOpaque(own),200),{status:"not_recorded"});
   assert.deepEqual(await checked(await recover(own),404),{error:"Not found"});
   assert.equal((await checked(await recover(own,bob+"broken"),401)).code,
@@ -287,7 +287,7 @@ test("opaque recovery stays content-free and actor-bound on real SQLite",async()
   const fx=fixture(),cmd=command(fx),bob=session(fx,"bob");
   assert.deepEqual(await checked(await recoverOpaque(cmd),200),{status:"not_recorded"});
   assert.deepEqual(await checked(await create(cmd),201),{ok:true,taskId:cmd.taskId});
-  assert.deepEqual(await checked(await recoverOpaque(cmd),200),{status:"committed"});
+  assert.deepEqual(await checked(await recoverOpaque(cmd),200),{status:"committed",taskId:cmd.taskId});
   assert.deepEqual(await checked(await recoverOpaque(cmd,bob),200),
     {status:"not_recorded"},"another actor has no matching receipt");
   assert.deepEqual(await checked(await recoverOpaque({...cmd,commandId:randomUUID()}),200),
