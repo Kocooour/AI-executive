@@ -6,7 +6,7 @@ import {sendPrivateTaskCreate,recoverPrivateTaskCreate,
 import {privateTaskCreateMarker,reservePrivateTaskCreate,
   confirmPrivateTaskCreate} from "../lib/target-private-task-create-reload.ts";
 import {runPrivateTaskCreate,trackedPrivateTaskCreate,
-  checkPrivateTaskCreate,hasPrivateTaskCreateCompletion,
+  checkPrivateTaskCreate,subscribePrivateTaskCreate,hasPrivateTaskCreateCompletion,
   consumePrivateTaskCreateCompletion,subscribePrivateTaskCreateCompletion} from "../lib/target-private-task-create-coordinator.ts";
 import {targetPrivateTaskCreateUiEnabled,TARGET_PRIVATE_TASK_CREATE_UI_FLAGS}
   from "../lib/target-private-task-create-ui-gate.ts";
@@ -151,12 +151,16 @@ test("late successful POST is delivered after modal unmount, once, without a dra
       ()=>completions.push(hasPrivateTaskCreateCompletion(runtime,generation)));
     const inflight=runPrivateTaskCreate(runtime,generation,cmd,
       async()=>{await delayed;return "saved";});
-    const unsubscribeModal=()=>{}; // modal promise callback no longer owns root delivery
+    let modalEvents=0;
+    const unsubscribeModal=subscribePrivateTaskCreate(runtime,generation,
+      ()=>modalEvents++);
+    // Closing the editor unsubscribes its listener, not the runtime-owned POST.
     unsubscribeModal();
     assert.equal(hasPrivateTaskCreateCompletion(runtime,generation),false);
     finishRequest();
     assert.equal(await inflight,"saved");
     assert.deepEqual(completions,[true],"root receives late verified success");
+    assert.equal(modalEvents,0,"unmounted task editor cannot receive events");
     assert.equal(hasPrivateTaskCreateCompletion(runtime,generation),true);
     assert.equal(consumePrivateTaskCreateCompletion(runtime,generation),true);
     assert.equal(consumePrivateTaskCreateCompletion(runtime,generation),false,
