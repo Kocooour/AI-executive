@@ -207,7 +207,7 @@ const commitAclFixture = (mutate, operation) => withPinnedTargetStagingWrite(
   () => false,
 );
 
-test("H1-real.2 denies existing foreign private Areas and reacts to live Area removal", async () => {
+test("H1-real.2 rejects foreign private Areas and preserves valid owner ACL after forbidden deletion", async () => {
   setup();
   const token = createSessionToken();
   const owned = "hw:temporary-private-area";
@@ -234,15 +234,27 @@ test("H1-real.2 denies existing foreign private Areas and reacts to live Area re
   process.env.AI_EXECUTIVE_HUMANWIKI_PRIVATE_AREA_ID = foreign;
   await assertHidden(await GET(ownerRequest(token)));
 
-  // A successful HTTP preflight must be invalidated by a later real commit.
+  // Deletion is NEVER a supported private Area ACL transition. The schema's
+  // area_deletion_guard preserves identity/epoch and must reject deletion even
+  // through the canonical anchored writer. Its failed TX must not corrupt the
+  // registry or revoke an authorized owner.
   process.env.AI_EXECUTIVE_HUMANWIKI_PRIVATE_AREA_ID = owned;
   assert.equal((await GET(ownerRequest(token))).status, 200);
+  const areaExists = () => {
+    const db = new DatabaseSync(store.databasePath, {readOnly:true});
+    try { return db.prepare("SELECT COUNT(*) AS n FROM areas WHERE id=?").get(owned).n; }
+    finally { db.close(); }
+  };
+  assert.equal(areaExists(), 1);
   assert.equal(commitAclFixture(db => {
     db.prepare("DELETE FROM areas WHERE id=?").run(owned);
-  }, "remove-private-area"), true);
-  assert.equal(verifyHumanWikiOwnerPrivateAreaLive(liveStore, store.ownerUserId, owned), false);
-  await assertHidden(await GET(ownerRequest(token)));
-  // Another private Area still works: it is the live ACL, not a broken anchor.
+  }, "forbidden-private-area-deletion"), false,
+  "an attempted Area deletion must roll back under area_deletion_guard");
+  assert.equal(areaExists(), 1);
+  assert.equal(verifyHumanWikiOwnerPrivateAreaLive(liveStore, store.ownerUserId, owned), true);
+  assert.equal((await GET(ownerRequest(token))).status, 200,
+    "failed deletion cannot invalidate an authenticated owner's private Area");
+  // The default private Area also remains live: no broken anchor/global denial.
   process.env.AI_EXECUTIVE_HUMANWIKI_PRIVATE_AREA_ID = store.unassignedAreaId;
   assert.equal((await GET(ownerRequest(token))).status, 200);
 });
