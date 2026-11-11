@@ -12,6 +12,7 @@ import { activeTargetViewFor, detailsActive, targetViewsFor } from "../../lib/ta
 import { detailCopy } from "../../lib/target-detail-copy";
 import type { TargetUiEdits } from "../../lib/target-ui-config";
 import { mobileDesignV1Preview } from "./navigation";
+import { mainTitleSearchLegacySurfaces } from "../../lib/target-main-title-search-ui";
 import { projectSyncNoticeLabel } from "../../lib/project-sync-notice";
 import { AuthScreen } from "./views/auth-screen";
 import { Sidebar } from "./views/sidebar";
@@ -197,6 +198,9 @@ export function LumiAppRoot({ targetMyPlan, targetScopes, targetDetails, targetE
   const legacyInspector = Boolean(app.selected) && !(scopesOn && targetView);
   // Unified target mode: views that still show legacy data are read-only (no target create/edit API yet).
   const legacyReadOnly = app.legacyWritesDisabled && !targetView;
+  // Do not mount legacy task rows or local held-back titles underneath
+  // server-authorized Search, including before the first explicit query.
+  const legacySearchSurfaces = mainTitleSearchLegacySurfaces(targetSearch,view);
   return (
     <LegacyWritesContext.Provider value={{ disabled: app.legacyWritesDisabled, hint: app.legacyReadOnlyHint }}>
     <main className={`appShell view-${view.toLowerCase()}${legacyInspector || detailPanel ? " inspectorOpen" : ""}${view === "Projects" && app.openProject ? " projectPageOpen" : ""}`} data-design-system={mobileDesignV1Preview ? "lumi-v1" : undefined} data-workspace-tone={app.activeWorkspaceTone}
@@ -293,7 +297,7 @@ export function LumiAppRoot({ targetMyPlan, targetScopes, targetDetails, targetE
             onClick={()=>openAreaChooser()}>{targetPrivateNoteCreate
               ?(language==="cs"?"Nová soukromá poznámka":"New private note")
               :(language==="cs"?"Oblasti pro novou poznámku":"Areas for a new note")}</button>}
-          <HeldBack app={app} />
+          {legacySearchSurfaces.heldBack && <HeldBack app={app} />}
           <CalendarView app={app} />
           <HomeView app={app} />
           {view === "Today" && !targetPlan && <TodayTop app={app} />}
@@ -308,7 +312,9 @@ export function LumiAppRoot({ targetMyPlan, targetScopes, targetDetails, targetE
             : scopeList
               ? <TargetScopeLists key={scopeList==="note"?scopeList+":"+noteListRevision:scopeList} kind={scopeList} language={language}
                 detail={scopeList === "project" ? detailGates.project : detailGates.note} />
-              : <EntityList app={app} />}
+              : legacySearchSurfaces.entityList
+                ? <EntityList app={app} />
+                : null}
           {view === "Today" && !targetPlan && <TodayFooter app={app} />}
         </div>
       </section>
