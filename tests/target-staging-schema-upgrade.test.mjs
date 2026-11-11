@@ -43,7 +43,7 @@ test('explicit upgrade preserves all v25 rows and sessions, advances journal, an
  const authority=new TargetStagingSessionAuthority(store),token=authority.issueWritable('alice').sessionToken;
  const page=authority.readProjectTitlePreview('alice','project');assert.equal(page.ok,true);
  assert.deepEqual(authority.updateProjectTitle(token,{projectId:'project',commandId:randomUUID(),title:'After',
-   expectedRevision:page.page.revision,writeAreaId:stage.unassignedAreaId,restoreGeneration:generation}),{ok:true});
+   expectedRevision:page.page.revision,writeAreaId:stage.unassignedAreaId,restoreGeneration:generation,principalBinding:'P'.repeat(43)},'alice'),{ok:true});
  authority.close();db.close();
 });
 test('tampered v25 DDL and wrong generation fail closed without changing database or journal',()=>{

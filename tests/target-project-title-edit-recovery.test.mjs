@@ -12,7 +12,7 @@ const id="1dbe798b-8ae4-46a8-98ae-51ac73dd31b8";
 const command={
   commandId:"f3d18d63-9073-48f7-8d25-6c81f23b9a01",
   expectedRevision:"a".repeat(64),restoreGeneration:gen,
-  writeAreaId:"private-area",title:"My project",
+  writeAreaId:"private-area",title:"My project",principalBinding:"P".repeat(43),
 };
 const read=path=>readFileSync(new URL("../"+path,import.meta.url),"utf8");
 function fakeRuntime(){

@@ -13,5 +13,5 @@ try {
     if (Date.now()>deadline) throw Error('barrier timeout');
     await new Promise(resolve=>setTimeout(resolve,10));
   }
-  writeFileSync(resultPath,JSON.stringify(authority.updateProjectTitle(issued.sessionToken,command,durableHash)));
+  writeFileSync(resultPath,JSON.stringify(authority.updateProjectTitle(issued.sessionToken,command,actor,durableHash)));
 } finally {authority.close()}

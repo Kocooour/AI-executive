@@ -25,7 +25,7 @@ const STAGE="b7ab0e6e-d01f-44ed-babe-e9b69e84dbaa";
 const command={
   commandId:CMD,expectedRevision:"a".repeat(64),
   restoreGeneration:STAGE,writeAreaId:"owner-private",
-  title:"Secret private project",
+  title:"Secret private project",principalBinding:A,
 };
 const preview={expectedRevision:command.expectedRevision,
   restoreGeneration:STAGE,writeAreaId:command.writeAreaId,principalBinding:A,currentTitle:"Before"};

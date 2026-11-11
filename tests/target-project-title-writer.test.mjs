@@ -30,13 +30,13 @@ test('project rename enforces roles and CAS, persists audit, supports retry, and
  const bob=session('bob'), carol=session('carol'),dave=session('dave');
  const page=readAuthorizedProjectTasksPage(db,{actorUserId:'bob',projectId:'proj',limit:1,offset:0,restoreGeneration:stage.restoreGeneration});assert.equal(page.ok,true);
  const p=db.prepare('SELECT COALESCE(MAX(seq),0) AS n FROM change_log').get().n;
- const cmd={projectId:'proj',commandId:randomUUID(),title:'Updated',expectedRevision:page.page.revision,writeAreaId:'team-area',restoreGeneration:stage.restoreGeneration};
- assert.deepEqual(authority.updateProjectTitle(carol,cmd),{ok:false,reason:'unavailable'});
- assert.deepEqual(authority.updateProjectTitle(dave,cmd),{ok:false,reason:'unavailable'});
- assert.deepEqual(authority.updateProjectTitle(bob,cmd),{ok:true});
- assert.deepEqual(authority.updateProjectTitle(bob,cmd),{ok:true,replayed:true});
- assert.deepEqual(authority.updateProjectTitle(bob,{...cmd,title:'Other'}),{ok:false,reason:'idempotency_conflict'});
- assert.deepEqual(authority.updateProjectTitle(bob,{...cmd,commandId:randomUUID()}),{ok:false,reason:'stale_revision'});
+ const cmd={projectId:'proj',commandId:randomUUID(),title:'Updated',expectedRevision:page.page.revision,writeAreaId:'team-area',restoreGeneration:stage.restoreGeneration,principalBinding:'P'.repeat(43)};
+ assert.deepEqual(authority.updateProjectTitle(carol,cmd,'carol'),{ok:false,reason:'unavailable'});
+ assert.deepEqual(authority.updateProjectTitle(dave,cmd,'dave'),{ok:false,reason:'unavailable'});
+ assert.deepEqual(authority.updateProjectTitle(bob,cmd,'bob'),{ok:true});
+ assert.deepEqual(authority.updateProjectTitle(bob,cmd,'bob'),{ok:true,replayed:true});
+ assert.deepEqual(authority.updateProjectTitle(bob,{...cmd,title:'Other'},'bob'),{ok:false,reason:'idempotency_conflict'});
+ assert.deepEqual(authority.updateProjectTitle(bob,{...cmd,commandId:randomUUID()},'bob'),{ok:false,reason:'stale_revision'});
  assert.equal(db.prepare("SELECT title FROM projects WHERE id='proj'").get().title,'Updated');
  const feed=who=>readChangeFeedPage(db,{actorUserId:who,restoreGeneration:stage.restoreGeneration,
    claims:{uid:who,epoch:0,gen:stage.restoreGeneration,pos:{ph:'f',p}}});
@@ -47,7 +47,7 @@ test('project rename enforces roles and CAS, persists audit, supports retry, and
  assert.equal(audit.length,1);assert.deepEqual({...audit[0]},{actor_user_id:'bob',project_id:'proj',revision_before:0,revision_after:1});
  assert.equal(inspectIsolatedTargetStore({...store,mode:'r2-model'}).ok,true);
  db.prepare("DELETE FROM area_members WHERE area_id='team-area' AND user_id='bob'").run();
- assert.deepEqual(authority.updateProjectTitle(bob,cmd),{ok:false,reason:'unavailable'});
+ assert.deepEqual(authority.updateProjectTitle(bob,cmd,'bob'),{ok:false,reason:'unavailable'});
 });
 
 test('v25 remains readable and is not silently migrated or mutated by project rename',()=>{
@@ -61,7 +61,7 @@ test('v25 remains readable and is not silently migrated or mutated by project re
  assert.equal(a.readProjectTitlePreview('alice','old'),null);
  const page=readAuthorizedProjectTasksPage(oldDb,{actorUserId:'alice',projectId:'old',limit:1,offset:0,restoreGeneration:old.restoreGeneration});
  assert.equal(page.ok,true);
- const result=a.updateProjectTitle(token,{projectId:'old',commandId:randomUUID(),title:'New',expectedRevision:page.page.revision,writeAreaId:old.unassignedAreaId,restoreGeneration:old.restoreGeneration});
+ const result=a.updateProjectTitle(token,{projectId:'old',commandId:randomUUID(),title:'New',expectedRevision:page.page.revision,writeAreaId:old.unassignedAreaId,restoreGeneration:old.restoreGeneration,principalBinding:'P'.repeat(43)},'alice');
  assert.deepEqual(result,{ok:false,reason:'write_failed'});
  assert.equal(oldDb.prepare("SELECT title FROM projects WHERE id='old'").get().title,'Old');
  assert.equal(oldDb.prepare("SELECT value FROM metadata WHERE key='schema_version'").get().value,'25');
@@ -75,12 +75,12 @@ test('a session expiring during a replay cannot reveal the receipt outcome',()=>
  const token=authority.issueWritable('alice').sessionToken;
  const durableHash=hashTargetStagingSessionToken(issued.sessionToken);
  const page=readAuthorizedProjectTasksPage(db,{actorUserId:'alice',projectId:'expiry',limit:1,offset:0,restoreGeneration:stage.restoreGeneration});
- const cmd={projectId:'expiry',commandId:randomUUID(),title:'After',expectedRevision:page.page.revision,writeAreaId:stage.unassignedAreaId,restoreGeneration:stage.restoreGeneration};
- assert.deepEqual(authority.updateProjectTitle(token,cmd,durableHash),{ok:true});
+ const cmd={projectId:'expiry',commandId:randomUUID(),title:'After',expectedRevision:page.page.revision,writeAreaId:stage.unassignedAreaId,restoreGeneration:stage.restoreGeneration,principalBinding:'P'.repeat(43)};
+ assert.deepEqual(authority.updateProjectTitle(token,cmd,'alice',durableHash),{ok:true});
  const originalNow=Date.now;let checks=0;
  try {
    Date.now=()=>{if ((new Error()).stack.includes('sessionLive')) return ++checks===1 ? issued.expiresAtMs-1 : issued.expiresAtMs; return originalNow();};
-   assert.deepEqual(authority.updateProjectTitle(token,cmd,durableHash),{ok:false,reason:'session_revoked'});
+   assert.deepEqual(authority.updateProjectTitle(token,cmd,'alice',durableHash),{ok:false,reason:'session_revoked'});
    assert.equal(checks,2);
  } finally {Date.now=originalNow;}
  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM project_title_audit WHERE project_id='expiry'").get().n,1);
@@ -95,7 +95,7 @@ test('two processes racing the same project CAS commit at most one change',async
  const workers=[0,1].map(i=>{
    const input=path.join(root,'input'+i);
    writeFileSync(input,JSON.stringify({store,command:{projectId:'race',commandId:randomUUID(),title:'After '+i,
-     expectedRevision:page.page.revision,writeAreaId:stage.unassignedAreaId,restoreGeneration:stage.restoreGeneration}}));
+     expectedRevision:page.page.revision,writeAreaId:stage.unassignedAreaId,restoreGeneration:stage.restoreGeneration,principalBinding:'P'.repeat(43)}}));
    return spawn(process.execPath,['--experimental-loader','./tests/ts-loader.mjs','./tests/support/project-title-race-child.mjs',input,ready[i],go,results[i]],{stdio:'ignore',cwd:process.cwd()});
  });
  try {
@@ -116,7 +116,7 @@ test('session revoked in another process before the pending write prevents every
  const issued=issueDurableTargetStagingSession(store,'alice',900);assert.equal(issued.ok,true);
  const page=readAuthorizedProjectTasksPage(db,{actorUserId:'alice',projectId:'revoked-race',limit:1,offset:0,restoreGeneration:stage.restoreGeneration});
  const input=path.join(root,'revoke-input'),ready=path.join(root,'revoke-ready'),go=path.join(root,'revoke-go'),result=path.join(root,'revoke-result');
- writeFileSync(input,JSON.stringify({store,durableHash:hashTargetStagingSessionToken(issued.sessionToken),command:{projectId:'revoked-race',commandId:randomUUID(),title:'After',expectedRevision:page.page.revision,writeAreaId:stage.unassignedAreaId,restoreGeneration:stage.restoreGeneration}}));
+ writeFileSync(input,JSON.stringify({store,durableHash:hashTargetStagingSessionToken(issued.sessionToken),command:{projectId:'revoked-race',commandId:randomUUID(),title:'After',expectedRevision:page.page.revision,writeAreaId:stage.unassignedAreaId,restoreGeneration:stage.restoreGeneration,principalBinding:'P'.repeat(43)}}));
  const worker=spawn(process.execPath,['--experimental-loader','./tests/ts-loader.mjs','./tests/support/project-title-race-child.mjs',input,ready,go,result],{stdio:'ignore',cwd:process.cwd()});
  try {
    const deadline=Date.now()+10000;
@@ -143,7 +143,7 @@ test('untrusted post-COMMIT journal confirmation never acknowledges a project ti
    assert.equal(preview.ok,true);
    const cmd={projectId:'unconfirmed',commandId:randomUUID(),title:'Committed but unconfirmed',
      expectedRevision:preview.page.revision,writeAreaId:isolated.unassignedAreaId,
-     restoreGeneration:isolated.restoreGeneration};
+     restoreGeneration:isolated.restoreGeneration,principalBinding:'P'.repeat(43)};
    const original=DatabaseSync.prototype.exec;
    let swapped=false;
    try {
@@ -159,7 +159,7 @@ test('untrusted post-COMMIT journal confirmation never acknowledges a project ti
        }
        return returned;
      };
-     assert.deepEqual(local.updateProjectTitle(token,cmd),{ok:false,reason:'write_failed'});
+     assert.deepEqual(local.updateProjectTitle(token,cmd,'alice'),{ok:false,reason:'write_failed'});
    } finally {DatabaseSync.prototype.exec=original;}
    assert.equal(swapped,true);
    const current=new DatabaseSync(isolated.databasePath,{readOnly:true});
