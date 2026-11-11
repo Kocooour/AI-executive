@@ -126,8 +126,8 @@ export default function TargetPrivateTaskAreaChooser({
     },8000);
     void loadPrivateNoteAreaChoices(controller.signal).then(result=>{
       if(!active||controller.signal.aborted||!live())return;
-      if(result.ok)setAreas({kind:"ready",generation,items:result.areas});
-      else if(result.reason==="signed-out"){
+      if(result.ok===true)setAreas({kind:"ready",generation,items:result.areas});
+      else if(result.ok===false&&result.reason==="signed-out"){
         setAreas({kind:"signed-out",generation});void runtime.reportRefusal();
       }else setAreas({kind:"unavailable",generation});
     }).catch(()=>{if(active&&!controller.signal.aborted)setAreas({kind:"unavailable",generation});})
