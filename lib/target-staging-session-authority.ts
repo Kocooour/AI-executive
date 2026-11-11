@@ -40,7 +40,8 @@ import {
   previewPreflightedTargetTaskTitleEdit, readPreflightedIsolatedTargetTask,
   readPreflightedIsolatedPersonalTargetTask, readPreflightedPersonalTargetTaskWithRevision,
   readPreflightedTargetTaskTitleCommandStatus, readPreflightedTargetTaskDeleteCommandStatus,
-  readPreflightedTargetNoteEditCommandStatus,readPreflightedTargetNoteEditRecovery, readPreflightedTargetNoteDeleteCommandStatus,
+  readPreflightedTargetNoteEditCommandStatus,readPreflightedTargetNoteEditRecovery,
+  readPreflightedTargetNoteCreateRecovery,readPreflightedTargetNoteDeleteCommandStatus,
   listPreflightedPrivateProjectsAtOffset, readPreflightedPrivateProjectDetail,
   readPreflightedPrivateTaskTitleAudit,
   readPreflightedScopedTaskPage, readPreflightedSharedTargetTask, readPreflightedChangeFeedPage,
@@ -89,6 +90,7 @@ import type { FeedClaims } from "./target-staging-feed-cursor";
 import type { TargetPrivateTaskTitleAuditResult } from "./target-task-read-model";
 import type { TargetStagingTaskTitleCommandStatusResult, TargetTemporalStatusReceiptResult, TargetTemporalStatusReceiptSnapshot, TargetTemporalDueOnReceiptResult, TargetTemporalDueOnReceiptSnapshot } from "./target-task-staging-reader";
 import type {TargetNoteEditCommandStatus,TargetNoteEditRecovery} from "./target-note-command-status";
+import type {TargetNoteCreateRecovery} from "./target-note-create-status";
 import type { TargetNoteDeleteCommandStatus } from "./target-note-delete-command-status";
 import { validTargetTaskTitleEditPreviewRequest } from "./target-task-write-preflight";
 import { writePreflightedTargetTaskTitle, validTargetStagingTaskTitleWriteRequest } from "./target-task-staging-writer";
@@ -1252,6 +1254,14 @@ export class TargetStagingSessionAuthority {
   noteEditRecovery(sessionToken:string,commandId:string):TargetNoteEditRecovery{
     const credential=this.#credential(sessionToken,true);
     return credential?readPreflightedTargetNoteEditRecovery(this.#store,credential,commandId)
+      :{ok:false,reason:"unavailable"};
+  }
+
+  /** R3-CAPTURE-2: one content-free CREATE receipt for its signed writer. */
+  noteCreateRecovery(sessionToken:string,commandId:string):TargetNoteCreateRecovery{
+    const credential=this.#credential(sessionToken,true);
+    return credential
+      ?readPreflightedTargetNoteCreateRecovery(this.#store,credential,commandId)
       :{ok:false,reason:"unavailable"};
   }
 

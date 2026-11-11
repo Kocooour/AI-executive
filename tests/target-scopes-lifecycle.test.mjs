@@ -368,7 +368,8 @@ test("429 maps to the rate_limited kind: client reason, distinct calm copy, retr
 
 test("wiring: lists keyed by kind in the root; legacy unresolved-link notice suppressed for target lists",()=>{
   const root_=read("app/ui/lumi-app-root.tsx");
-  assert.match(root_,/<TargetScopeLists key=\{scopeList\} kind=\{scopeList\}/);
+  assert.match(root_,/<TargetScopeLists key=\{scopeList==="note"\?scopeList\+":"\+noteListRevision:scopeList\} kind=\{scopeList\}/);
+  assert.match(root_,/setNoteListRevision\(v=>v\+1\)/);
   assert.match(root_,/app\.navigationUnavailable && !scopeList &&/);
   assert.match(root_,/variant=\{scopeList === null \? "plan" : "lists"\}/);
   const lists=read("app/ui/target-scope-lists.tsx");

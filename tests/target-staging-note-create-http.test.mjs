@@ -14,6 +14,7 @@ const envNames = [
   "AI_EXECUTIVE_TARGET_STAGING_HTTP_NOTES_ENABLED",
   "AI_EXECUTIVE_TARGET_STAGING_HTTP_NOTES_WRITE_ENABLED",
   "AI_EXECUTIVE_TARGET_STAGING_HTTP_NOTES_CREATE_ENABLED",
+  "AI_EXECUTIVE_TARGET_STAGING_HTTP_PRIVATE_NOTE_AREAS_ENABLED",
   "AI_EXECUTIVE_TARGET_STAGING_DIRECTORY",
   "AI_EXECUTIVE_TARGET_STAGING_RESTORE_GENERATION",
   "AI_EXECUTIVE_TARGET_STAGING_OWNER_USER_ID",
@@ -34,6 +35,7 @@ Object.assign(process.env, {
   AI_EXECUTIVE_TARGET_STAGING_HTTP_NOTES_ENABLED: "true",
   AI_EXECUTIVE_TARGET_STAGING_HTTP_NOTES_WRITE_ENABLED: "true",
   AI_EXECUTIVE_TARGET_STAGING_HTTP_NOTES_CREATE_ENABLED: "true",
+  AI_EXECUTIVE_TARGET_STAGING_HTTP_PRIVATE_NOTE_AREAS_ENABLED: "true",
 });
 const { bootstrapIsolatedTargetStore, TARGET_STAGING_NOTE_LIFECYCLE_RECEIPT_PREFIX } =
   await import("../lib/target-store-bootstrap.ts");
@@ -43,6 +45,9 @@ const durable = await import("../lib/target-staging-durable-session.ts");
 const { createSessionToken, sessionCookieName } = await import("../lib/auth.ts");
 const { POST } = await import("../app/api/target-staging/notes/route.ts");
 const { GET: GET_NOTE } = await import("../app/api/target-staging/notes/[noteId]/route.ts");
+const {POST:PREVIEW_CREATE}=await import("../app/api/target-staging/notes/create-preview/route.ts");
+const {POST:RECOVER_CREATE}=await import("../app/api/target-staging/notes/create-recovery/route.ts");
+const {parseNoteCreateRecoveryReply}=await import("../lib/target-staging-note-create-process.ts");
 const { parseNoteCreateReply } = await import("../lib/target-staging-note-create-process.ts");
 
 after(() => {
@@ -237,4 +242,111 @@ test("bounded child result accepts only exact content-free protocol", () => {
     { ok: true, replayed: false }, { ok: false, reason: "write_failed", body: "leak" }]) {
     assert.equal(parseNoteCreateReply(invalid), null);
   }
+});
+
+/** Preflight and receipt are read-only, same-origin, current actor/ACL guarded. */
+const req=(endpoint,data,cookie=owner(),custom={})=>new Request(
+  "http://localhost:3001/api/target-staging/notes/"+endpoint,{
+    method:"POST",headers:{
+      ...(cookie?{cookie}:{}),origin:"http://localhost:3001",
+      "x-lumi-target-protocol":"1","content-type":"application/json",
+      "x-forwarded-for":"10.9.0.25",...custom,
+    },body:JSON.stringify(data),
+  });
+test("live private CREATE preview returns generation only to an authorized writer",async()=>{
+  const fx=fixture(),bob=session(fx,"bob");
+  const alice=await checked(await PREVIEW_CREATE(req("create-preview",{
+    areaId:fx.stage.unassignedAreaId,
+  })),200);
+  assert.deepEqual(alice,{restoreGeneration:fx.stage.restoreGeneration});
+  assert.deepEqual(await checked(await PREVIEW_CREATE(req("create-preview",{
+    areaId:"bob-private",
+  },bob)),200),{restoreGeneration:fx.stage.restoreGeneration});
+  for(const areaId of ["team-area","bob-private","not-an-area"]){
+    const a=await checked(await PREVIEW_CREATE(req("create-preview",{areaId})),404);
+    assert.equal(a.error,"Not found");
+  }
+  assert.equal((await checked(await PREVIEW_CREATE(req("create-preview",{
+    areaId:fx.stage.unassignedAreaId,
+  },bob)),404)).error,"Not found");
+  assert.equal((await checked(await PREVIEW_CREATE(req("create-preview",{
+    areaId:fx.stage.unassignedAreaId,
+  },"")),401)).error!==undefined,true);
+  const db=new DatabaseSync(fx.stage.databasePath,{readOnly:true});
+  try{assert.equal(db.prepare("SELECT COUNT(*) AS n FROM notes").get().n,0);}
+  finally{db.close();}
+});
+test("read-only CREATE receipt confirms the exact owner commit but never text",async()=>{
+  const fx=fixture(),cmd=body(fx),bob=session(fx,"bob");
+  const fresh=await checked(await RECOVER_CREATE(req("create-recovery",{
+    commandId:cmd.commandId,
+  })),200);
+  assert.deepEqual(fresh,{status:"not_recorded"});
+  assert.equal((await checked(await send(cmd),201)).noteId,cmd.noteId);
+  assert.deepEqual(await checked(await RECOVER_CREATE(req("create-recovery",{
+    commandId:cmd.commandId,
+  })),200),{status:"committed"});
+  // A foreign signed actor with the same UUID cannot learn any receipt.
+  assert.deepEqual(await checked(await RECOVER_CREATE(req("create-recovery",{
+    commandId:cmd.commandId,
+  },bob)),200),{status:"not_recorded"});
+  assert.deepEqual(await checked(await RECOVER_CREATE(req("create-recovery",{
+    commandId:randomUUID(),
+  })),200),{status:"not_recorded"});
+  const response=await RECOVER_CREATE(req("create-recovery",{commandId:cmd.commandId}));
+  assert.equal(response.headers.get("cache-control"),"no-store");
+  assert.doesNotMatch(await response.text(),/Private idea|Some captured text|alice|bob|areaId|noteId|receiptKey/);
+});
+test("revoked or missing session, disabled write flag, and malformed create-recovery fail closed",async()=>{
+  const fx=fixture(),bob=session(fx,"bob");
+  const cmd=body(fx,{areaId:"bob-private"});
+  assert.equal((await checked(await send(cmd,bob),201)).noteId,cmd.noteId);
+  const hash=durable.hashTargetStagingSessionToken(bob.split("=")[1]);
+  const live=durable.verifyDurableTargetStagingSessionLive(fx.store,hash);
+  assert.ok(live?.sessionId);
+  assert.equal(durable.revokeDurableTargetStagingSession(fx.store,live.sessionId).ok,true);
+  assert.equal((await checked(await RECOVER_CREATE(req("create-recovery",{
+    commandId:cmd.commandId,
+  },bob)),401)).code,"session_revoked");
+  assert.equal((await checked(await RECOVER_CREATE(req("create-recovery",{
+    commandId:cmd.commandId,
+  },"")),401)).error!==undefined,true);
+  assert.equal((await checked(await RECOVER_CREATE(req("create-recovery",{
+    commandId:"not-a-uuid",
+  })),400)).error,"Invalid request");
+  assert.equal((await checked(await RECOVER_CREATE(req("create-recovery",{
+    commandId:cmd.commandId,extra:"leak",
+  })),400)).error,"Invalid request");
+  assert.equal((await checked(await RECOVER_CREATE(req("create-recovery",{
+    commandId:cmd.commandId,
+  },owner(),{"x-lumi-target-protocol":"0"})),400)).code,"protocol_unsupported");
+  process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_NOTES_CREATE_ENABLED="false";
+  assert.equal((await checked(await RECOVER_CREATE(req("create-recovery",{
+    commandId:cmd.commandId,
+  })),404)).error,"Not found");
+  assert.equal((await checked(await PREVIEW_CREATE(req("create-preview",{
+    areaId:fx.stage.unassignedAreaId,
+  })),404)).error,"Not found");
+  process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_NOTES_CREATE_ENABLED="true";
+});
+test("create-recovery child DTO is exact and content-free",()=>{
+  // Explicit UUID group boundaries guard the worker parser: 8-4-4-4-12.
+  const known="123e4567-e89b-42d3-a456-426614174001";
+  assert.deepEqual(parseNoteCreateRecoveryReply({
+    ok:true,status:"committed",noteId:known,areaId:"private",
+  }),{ok:true,status:"committed",noteId:known,areaId:"private"});
+  assert.equal(parseNoteCreateRecoveryReply({
+    ok:true,status:"committed",noteId:"123e4567-e89b-42d3a456426614174001",areaId:"private",
+  }),null);
+  assert.deepEqual(parseNoteCreateRecoveryReply({
+    ok:true,status:"committed",noteId:randomUUID(),areaId:"private",
+  })?.status,"committed");
+  assert.deepEqual(parseNoteCreateRecoveryReply({ok:true,status:"not_recorded"}),
+    {ok:true,status:"not_recorded"});
+  for(const obj of [
+    {ok:true,status:"committed",noteId:randomUUID()},
+    {ok:true,status:"committed",noteId:randomUUID(),areaId:"shared",body:"secret"},
+    {ok:true,status:"not_recorded",noteId:randomUUID()},
+    {ok:false,reason:"access_denied"},
+  ])assert.equal(parseNoteCreateRecoveryReply(obj),null);
 });
