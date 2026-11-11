@@ -1,4 +1,5 @@
 "use client";
+import {TARGET_PROJECT_TITLE_UPDATED} from "../../lib/target-project-title-edit-ui-gate";
 /** R3-FE-4a: in target mode the sidebar lists the project INDEX of the global
  * reading scope (owner decision 2026-11-09), never the legacy workspace
  * projects. Same session and lifecycle as the Projects list: a read exists
@@ -110,6 +111,13 @@ export default function TargetSidebarProjects({language="cs",openable,onOpen,onS
     if(document.visibilityState==="hidden"||!navigator.onLine)return;
     revalidateRef.current();
   }),[]);
+
+  useEffect(()=>{
+    const updated=()=>{epoch.current++;sessionRef.current?.suspend();setState({kind:"idle"});
+      if(document.visibilityState!=="hidden"&&navigator.onLine){sessionRef.current?.resume();setNonce(value=>value+1);}};
+    window.addEventListener(TARGET_PROJECT_TITLE_UPDATED,updated);
+    return ()=>window.removeEventListener(TARGET_PROJECT_TITLE_UPDATED,updated);
+  },[]);
 
   // Titles are shown only for the CURRENT session and scope.
   const page=state.kind==="ready"&&state.page.scope===scope?state.page:null;
