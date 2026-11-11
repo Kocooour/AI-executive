@@ -17,7 +17,7 @@ export default function TargetPrivateTaskCompletion({
   const runtime=useTargetRuntime(),generation=useTargetGeneration();
   const callbacks=useRef({onCreated,onReset});
   callbacks.current={onCreated,onReset};
-  const alive=useRef(false),busy=useRef(false);
+  const alive=useRef(false),busy=useRef(false),epoch=useRef(0);
   const checkRef=useRef<()=>void>(()=>{});
   const previous=useRef(generation);
   checkRef.current=()=>{
@@ -25,10 +25,11 @@ export default function TargetPrivateTaskCompletion({
       !hasPrivateTaskCreateCompletion(runtime,generation)||
       document.visibilityState!=="visible"||!navigator.onLine)return;
     busy.current=true;
+    const currentEpoch=epoch.current;
     // A stale identity snapshot is never enough to navigate or reveal
     // another actor's task after a frozen/hidden tab resumes.
     void runtime.refresh().then(result=>{
-      if(!alive.current||result!=="ok"||
+      if(!alive.current||currentEpoch!==epoch.current||result!=="ok"||
         !runtime.known()||runtime.generation()!==generation||
         document.visibilityState!=="visible"||!navigator.onLine)return;
       if(consumePrivateTaskCreateCompletion(runtime,generation))
@@ -37,17 +38,18 @@ export default function TargetPrivateTaskCompletion({
       .finally(()=>{busy.current=false;});
   };
   useEffect(()=>{
+    epoch.current++;
     alive.current=true;
     if(previous.current!==generation){
       previous.current=generation;
       callbacks.current.onReset();
     }
     if(!runtime)return ()=>{
-      alive.current=false;
+      alive.current=false;epoch.current++;
     };
     const unsub=subscribePrivateTaskCreateCompletion(runtime,()=>checkRef.current());
     checkRef.current(); // completion may predate the bridge's first mount
-    return ()=>{alive.current=false;unsub();};
+    return ()=>{alive.current=false;epoch.current++;unsub();};
   },[runtime,generation]);
   useTargetTick(()=>checkRef.current());
   useTargetWake({
