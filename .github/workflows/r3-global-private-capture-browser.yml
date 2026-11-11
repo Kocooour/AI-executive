@@ -29,6 +29,9 @@ jobs:
       E2E_PORT: "3123"
       LUMI_PRIVATE_NOTE_CREATE_E2E: "true"
       LUMI_TARGET_GLOBAL_CAPTURE_E2E: "true"
+      # PR checks cover both synthetic lifecycle events and real Back/reload.
+      # A manual release run must OBSERVE a real pageshow.persisted cache hit.
+      LUMI_REAL_BFCACHE_E2E: ${{ github.event_name == 'workflow_dispatch' && 'true' || 'false' }}
     steps:
       - name: Checkout
         uses: actions/checkout@v5
