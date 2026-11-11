@@ -28,8 +28,7 @@ async function setup(page:Page,create:(route:Route,cmd:Cmd)=>Promise<void>,
   await page.route("**/api/target-staging/notes/create-preview",route=>
     reply(route,{restoreGeneration:restore}));
   await page.route("**/api/target-staging/tasks/create-status",route=>{
-    expect(route.request().postDataJSON()).toEqual(posted[0],
-      "status must send the original full command, not create a second task");
+    expect(route.request().postDataJSON()).toEqual(posted[0]); // exact original command
     return reply(route,{status:receipt()});
   });
   await page.route("**/api/target-staging/tasks",async route=>{
@@ -164,7 +163,7 @@ test("preflight timeout restores a retryable Area selection without CREATE",asyn
   await expect(page.getByTestId("target-private-task-area")).toHaveValue("",{timeout:15000});
   await expect(page.getByTestId("target-private-task-area")).toBeEnabled();
   expect(writes).toHaveLength(0);
-  await timeoutRoute?.abort("failed").catch(()=>{});
+  await (timeoutRoute as Route|null)?.abort("failed").catch(()=>{});
 });
 test("receipt timeout re-enables exact verification; never retries CREATE",async({page})=>{
   test.setTimeout(45000);
@@ -181,5 +180,5 @@ test("receipt timeout re-enables exact verification; never retries CREATE",async
   await expect.poll(()=>timeoutRoute!==null).toBe(true);
   await expect(verify).toBeEnabled({timeout:15000});
   expect(writes).toHaveLength(1);
-  await timeoutRoute?.abort("failed").catch(()=>{});
+  await (timeoutRoute as Route|null)?.abort("failed").catch(()=>{});
 });
