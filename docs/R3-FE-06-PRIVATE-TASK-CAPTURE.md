@@ -39,9 +39,16 @@ HTTP API. Testy používají pouze syntetická data, bez zapnutí produkce nebo 
    Stavový marker v `sessionStorage` obsahuje **pouze**
    `{generation,commandId}`. Celý příkaz včetně názvu zůstává pouze
    v paměti stejné aktuální autentizační runtime. Volitelné potvrzení
-   volá `POST /api/target-staging/tasks/create-status` se **stejným
-   nezměněným příkazem** a uvolňuje bariéru jen při `committed`
-   potvrzeném serverem. `not_recorded` není důkaz neprovedení.
+   v otevřené relaci volá `POST /api/target-staging/tasks/create-status`
+   se **stejným nezměněným příkazem**. Po úplném reloadu, kdy už text
+   není v paměti, volá `POST /api/target-staging/tasks/create-recovery`
+   pouze s neprůhledným `commandId`. Server v odděleném stagingu
+   dohledá atomicky uložený actor-bound záznam obsahující jen ID úkolu,
+   ID Oblasti a restore generation (bez názvu úkolu), ověří živou
+   identitu, soukromou Oblast, oprávnění a samotný existující úkol.
+   Klient obdrží jen `committed`/`not_recorded` bez názvu/ID.
+   Bariéra se uvolní **pouze** při potvrzeném `committed`.
+   `not_recorded` není důkaz neprovedení.
 5. Vypršení 8sekundové lhůty ověření Oblasti vrátí dialog do bezpečně
    opakovatelného výběru; nejde o odeslaný CREATE. Timeout read-only
    ověření `create-status` znovu zpřístupní **Ověřit původní zápis**
@@ -52,18 +59,25 @@ HTTP API. Testy používají pouze syntetická data, bez zapnutí produkce nebo 
    dialog bez známé aktuální identity nezačne zápis. Escape/Zavřít
    vrátí fokus na původní tlačítko/fallback FAB.
 
-## Bezpečnostní omezení a release blokátor
+## Bezpečnostní omezení a release kontrola
 
-Tato UI iterace **záměrně nezapisuje citlivý název úkolu do storage**.
-Proto po plném reloadu nelze rekonstruovat přesný původní příkaz nutný
-pro existující serverový digest receipt. Marker bezpečně **zůstává
-zablokovaný**, ale současné UI jej neumí samo odblokovat. To je
-**nedokončené recovery UX, blokující produkční zapnutí task capture**.
-Před release je potřeba návrh bezpečného obnovitelného, actor-bound
-serverového content-free recovery tokenu/receiptu, nebo jiného
-samostatně schváleného řešení. Žádné časové „odblokování“, nové UUID,
-přenos citlivého textu do persistence nebo domněnka ze stavu not_recorded
-nejsou bezpečné náhrady.
+Soukromý text úkolu se nikdy neukládá do `sessionStorage` ani
+`localStorage`. Při CREATE se v jedné připnuté transakci s úkolem
+a původním digest potvrzením zapíše druhý content-free metadata svědek
+(actor+command hash -> `{taskId,areaId,restoreGeneration}`).
+Svědek je striktně validován canonical store preflightem; read-only
+worker jej vydá jen do serverového procesu, nikoli do klienta.
+Čerstvé HTTP ověření požaduje původní `commandId`, ale nikdy nevrací
+privátní název, ID úkolu ani Oblasti a znovu kontroluje živá oprávnění.
+Neověřený, revokovaný, změněný nebo jinému actorovi patřící zápis
+ponechá klienta zablokovaného. Neexistuje časové odblokování, nové
+UUID, ani automatické opakování CREATE.
+
+Tento nový backendový protokol řeší technický problém zaznamenaný
+v [#398](https://github.com/Kocooour/AI-executive/issues/398);
+jeho přijetí stále vyžaduje úspěšné HTTP/SQLite a browser testy,
+nezávislou bezpečnostní revizi a release E2E. Flagy zůstávají
+default-off; samotná implementace není produkční schválení.
 
 Další omezení: UI při současné implementaci vyžaduje všechny stávající
 Notes Create + Private Area transport flagy, protože znovu používá jejich
@@ -83,7 +97,7 @@ samostatný task Area transport by byl další backendová iterace a
 - Cílený test: `node --experimental-loader ./tests/ts-loader.mjs --test tests/target-private-task-create-ui.test.mjs`
   — flag matrix, DTO parser, no-store, exact original command receipt,
   content-free barrier, uncertain → not_recorded → committed,
-  reload/generation deny a základní integrace UI.
+  reload/generation deny, obsahově prázdné UUID recovery a základní integrace UI.
 - Existující skutečná HTTP/SQLite test suite:
   `tests/target-staging-private-task-create-http.test.mjs`,
   `tests/target-private-task-create-writer.test.mjs`.
