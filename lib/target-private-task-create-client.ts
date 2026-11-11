@@ -100,3 +100,25 @@ export async function checkPrivateTaskCreateReceipt(
       ?result.status:"unavailable";
   }catch{return "unavailable";}
 }
+
+/** Content-free recovery after full reload: server derives the original
+ * task/Area from a verified, actor-keyed immutable receipt. */
+export async function checkPrivateTaskCreateRecovery(
+  commandId:string,signal:AbortSignal,fetchImpl:typeof fetch=fetch,
+):Promise<TaskCreateReceipt>{
+  if(typeof commandId!=="string"||!uuid.test(commandId)||signal.aborted)
+    return "unavailable";
+  try{
+    const response=await fetchImpl("/api/target-staging/tasks/create-recovery",{
+      method:"POST",credentials:"same-origin",cache:"no-store",redirect:"error",
+      headers:HEADERS,body:JSON.stringify({commandId}),signal,
+    });
+    if(signal.aborted)return "unavailable";
+    if([401,403,404].includes(response.status))return "denied";
+    if(response.status!==200)return "unavailable";
+    const result=await bounded(response,signal);
+    return record(result)&&Object.keys(result).join(",")==="status"&&
+      (result.status==="committed"||result.status==="not_recorded")
+      ?result.status:"unavailable";
+  }catch{return "unavailable";}
+}
