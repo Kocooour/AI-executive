@@ -57,7 +57,7 @@ export function parseNoteCreateRecoveryReply(value:unknown):NoteCreateRecoveryRe
     r.status==="committed"&&typeof r.noteId==="string"&&uuid.test(r.noteId)&&
     typeof r.areaId==="string"&&r.areaId.length>0&&
     r.areaId.trim()===r.areaId&&Buffer.byteLength(r.areaId,"utf8")<=512&&
-    !/[\u0000-\u001f\u007f]/u.test(r.areaId))
+    !/[\x00-\x1f\x7f]/u.test(r.areaId))
     return {ok:true,status:"committed",noteId:r.noteId,areaId:r.areaId};
   if(exact(["ok","reason"])&&r.ok===false&&r.reason==="unavailable")
     return {ok:false,reason:"unavailable"};
