@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
+import {spawnSync} from "node:child_process";
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -296,6 +297,23 @@ test("read-only CREATE receipt confirms the exact owner commit but never text",a
     assert.deepEqual(authority.noteCreateRecovery(issued.sessionToken,cmd.commandId),
       {ok:true,status:"not_recorded"},"preflighted note-create receipt must be readable");
   }finally{authority.close();}
+  const raw=spawnSync(process.execPath,[
+    "--experimental-loader",path.join(process.cwd(),"scripts/target-staging-ts-loader.mjs"),
+    path.join(process.cwd(),"scripts/target-staging-note-create-recovery-child.mjs"),
+  ],{
+    cwd:process.cwd(),encoding:"utf8",timeout:20_000,
+    input:JSON.stringify({commandId:cmd.commandId}),
+    env:{...process.env,
+      AI_EXECUTIVE_TARGET_STAGING_DIRECTORY:fx.stage.directory,
+      AI_EXECUTIVE_TARGET_STAGING_RESTORE_GENERATION:fx.stage.restoreGeneration,
+      AI_EXECUTIVE_TARGET_STAGING_OWNER_USER_ID:"alice",
+      AI_EXECUTIVE_TARGET_STAGING_SESSION_HASH:"",
+      LUMI_SYNTHETIC_CHILD_DIAG:"true",
+    },
+  });
+  assert.equal(raw.status,0,"synthetic receipt child process failed: "+
+    raw.stderr.slice(-1000)+" | stdout="+raw.stdout.slice(0,150));
+  assert.deepEqual(JSON.parse(raw.stdout),{ok:true,status:"not_recorded"});
   const child=await readStagingNoteCreateRecoveryInChild({
     stagingDirectory:fx.stage.directory,
     expectedRestoreGeneration:fx.stage.restoreGeneration,ownerUserId:"alice",
