@@ -14,7 +14,8 @@ import {validPrivateTaskCreateCommand,validPrivateTaskCreateArea,type PrivateTas
   from "../../lib/target-private-task-create-client";
 import {privateTaskCreateMarker} from "../../lib/target-private-task-create-reload";
 import {runPrivateTaskCreate,checkPrivateTaskCreate,trackedPrivateTaskCreate,
-  subscribePrivateTaskCreate} from "../../lib/target-private-task-create-coordinator";
+  subscribePrivateTaskCreate,hasPrivateTaskCreateCompletion,
+  subscribePrivateTaskCreateCompletion} from "../../lib/target-private-task-create-coordinator";
 
 type AreaState={kind:"loading"|"unavailable"|"signed-out";generation:string}|
   {kind:"ready";generation:string;areas:PrivateNoteAreaChoice[]};
@@ -73,6 +74,10 @@ export default function TargetPrivateTaskCreator({
     return subscribePrivateTaskCreate(runtime,generation,()=>setRevision(n=>n+1));
   },[runtime,generation,phase]);
   useEffect(()=>{
+    if(!runtime)return;
+    return subscribePrivateTaskCreateCompletion(runtime,()=>setRevision(n=>n+1));
+  },[runtime,generation]);
+  useEffect(()=>{
     const controller=new AbortController();
     let active=true;
     let timer:ReturnType<typeof setTimeout>|null=null;
@@ -111,7 +116,9 @@ export default function TargetPrivateTaskCreator({
     ?state.areas.filter(a=>validPrivateTaskCreateArea(a.id)):[];
   const choice=areas.find(a=>a.id===selected);
   const marker=privateTaskCreateMarker(generation);
-  const blocked=marker.kind!=="clear";
+  const pendingConfirmation=Boolean(runtime&&
+    hasPrivateTaskCreateCompletion(runtime,generation));
+  const blocked=marker.kind!=="clear"||pendingConfirmation;
   const tracked=runtime?trackedPrivateTaskCreate(runtime,generation):null;
   const canSend=Boolean(choice&&ready&&!blocked&&phase==="idle");
   const live=()=>mounted.current&&runtime?.known()&&runtime.generation()===generation&&
@@ -203,7 +210,12 @@ export default function TargetPrivateTaskCreator({
             {areas.map(a=><option key={a.id} value={a.id}>{a.title}</option>)}
           </select>
         </label>)}
-      {blocked&&<section data-testid="target-task-create-unresolved">
+      {pendingConfirmation&&<section data-testid="target-task-create-awaiting-confirmation">
+        <p role="status">{cs
+          ?"Úkol je uložený. Ověřuji relaci před zobrazením potvrzení; další úkol zatím nelze vytvořit."
+          :"Task saved. Verifying the session before showing confirmation; another task cannot be created yet."}</p>
+      </section>}
+      {marker.kind!=="clear"&&<section data-testid="target-task-create-unresolved">
         <p role="alert">{marker.kind==="unavailable"
           ?(cs?"Bezpečné úložiště relace není dostupné. Zápis je vypnutý.":
             "Secure tab storage unavailable. Creation disabled.")
