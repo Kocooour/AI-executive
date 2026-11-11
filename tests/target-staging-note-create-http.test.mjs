@@ -384,7 +384,9 @@ test("revoked or missing session, disabled write flag, and malformed create-reco
 });
 test("create-recovery child DTO is exact and content-free",()=>{
   const sample={ok:true,status:"committed",noteId:randomUUID(),areaId:"private"};
+  process.env.LUMI_SYNTHETIC_RECEIPT_PARSER_TRACE="true";
   const parsed=parseNoteCreateRecoveryReply(sample);
+  delete process.env.LUMI_SYNTHETIC_RECEIPT_PARSER_TRACE;
   assert.deepEqual(parseNoteCreateRecoveryReply({ok:true,status:"not_recorded"}),
     {ok:true,status:"not_recorded"});
   assert.deepEqual(parsed?.status,"committed",JSON.stringify({
