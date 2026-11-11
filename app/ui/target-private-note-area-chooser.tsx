@@ -37,8 +37,8 @@ const copy={
 } as const;
 
 export default function TargetPrivateNoteAreaChooser({
-  language="cs",onClose,createEnabled=false,onCreated=()=>{},
-}:{language?:"cs"|"en";onClose:()=>void;createEnabled?:boolean;onCreated?:()=>void}){
+  language="cs",onClose,createEnabled=false,onCreated=()=>{},onSwitchToTask,
+}:{language?:"cs"|"en";onClose:()=>void;createEnabled?:boolean;onCreated?:()=>void;onSwitchToTask?:()=>void}){
   const c=copy[language];
   const runtime=useTargetRuntime(),generation=useTargetGeneration();
   const [nonce,setNonce]=useState(0);
@@ -272,6 +272,8 @@ export default function TargetPrivateNoteAreaChooser({
       onClick={e=>e.stopPropagation()}
       onKeyDown={e=>handleOverlayKeys(e,onClose)}>
       <h2>{c.title}</h2>
+      {onSwitchToTask&&<button type="button" data-testid="target-capture-switch-task"
+        onClick={onSwitchToTask}>{language==="cs"?"Místo toho úkol":"Create a task instead"}</button>}
       {!ready&&(state.kind==="loading"||state.generation!==generation)
         ?<p role="status">{c.checking}</p>
         :null}
