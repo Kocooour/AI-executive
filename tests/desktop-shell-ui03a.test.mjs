@@ -35,26 +35,26 @@ test("UI-03a: desktop FAB is preview-only, accessible and uses existing private-
   assert.match(fab, /if \(!mobileDesignV1Preview\) return null/);
   assert.match(fab, /window\.matchMedia\("\(min-width: 701px\)"\)/);
   assert.match(fab, /state\.capture \|\| state\.assistantOpen \|\| state\.moreOpen/);
-  assert.match(fab, /state\\.confirmRequest \\|\\| state\\.offlineView \\|\\| targetState\\.current\\.open \\|\\|\\s*document\\.querySelector/);
+  assert.match(fab, /state\.confirmRequest \|\| state\.offlineView \|\| targetState\.current\.open \|\|\s*document\.querySelector/);
   const keyBlock = fab.slice(fab.indexOf("const blocked = Boolean(state.capture"), fab.indexOf("if (!desktopCaptureShortcut"));
   assert.doesNotMatch(keyBlock, /state\.selected/, "nonmodal desktop inspector must not block capture shortcut");
   assert.match(fab, /document\.querySelector\('\[aria-modal="true"\]'\)/);
   assert.match(fab, /window\.addEventListener\("keydown", onKeyDown\)/);
   assert.match(fab, /window\.removeEventListener\("keydown", onKeyDown\)/);
   assert.match(fab, /desktopCaptureShortcut\(event, editable, blocked\)/);
-  assert.match(fab, /event\\.preventDefault\\(\\);\\s*if\\(targetState\\.current\\.onOpen\\)targetState\\.current\\.onOpen\\(\\);\\s*else state\\.openCapture\\(\\)/);
-  assert.match(fab, /data-desktop-capture-fab data-target-private-capture-fab=\\{onTargetCapture\\?"desktop":undefined\\}/);
+  assert.match(fab, /event\.preventDefault\(\);\s*if\(targetState\.current\.onOpen\)targetState\.current\.onOpen\(\);\s*else state\.openCapture\(\)/);
+  assert.match(fab, /data-desktop-capture-fab data-target-private-capture-fab=\{onTargetCapture\?"desktop":undefined\}/);
   assert.match(fab, /const label=onTargetCapture/);
-  assert.match(fab, /aria-label=\\{label\\}/);
-  assert.match(fab, /onClick=\\{onTargetCapture \\?\\? \\(\\(\\)=>app\\.openCapture\\(\\)\\)\\}/);
-  assert.match(page, /<DesktopCaptureFab app=\\{app\\} onTargetCapture=\\{targetCapture\\?openAreaChooser:undefined\\}/);
+  assert.match(fab, /aria-label=\{label\}/);
+  assert.match(fab, /onClick=\{onTargetCapture \?\? \(\(\)=>app\.openCapture\(\)\)\}/);
+  assert.match(page, /<DesktopCaptureFab app=\{app\} onTargetCapture=\{targetCapture\?openAreaChooser:undefined\}/);
   // Legacy write is still reached only when an independently gated target callback
   // is absent; unified target mode never falls through to the old writer.
-  assert.match(fab, /if \\(state\\.captureDisabled && !targetState\\.current\\.onOpen\\) return;/);
-  assert.match(fab, /if \\(app\\.captureDisabled && !onTargetCapture\\) return null;/);
-  assert.match(page, /const targetCapture=Boolean\\(scopesOn&&targetScopes\\?\\.notes&&targetPrivateNoteAreas&&\\s*targetPrivateNoteCreate&&mobileDesignV1Preview\\)/);
-  assert.match(fab, /document\\.querySelector\\('\\[aria-modal="true"\\]'\\)/);
-    // No new persistence/auth logic: both keyboard and button use one existing handler.
+  assert.match(fab, /if \(state\.captureDisabled && !targetState\.current\.onOpen\) return;/);
+  assert.match(fab, /if \(app\.captureDisabled && !onTargetCapture\) return null;/);
+  assert.match(page, /const targetCapture=Boolean\(scopesOn&&targetScopes\?\.notes&&targetPrivateNoteAreas&&\s*targetPrivateNoteCreate&&mobileDesignV1Preview\)/);
+  assert.match(fab, /document\.querySelector\('\[aria-modal="true"\]'\)/);
+  // Legacy handler remains independently private-first when target flags are off.
   const app = read("../app/ui/use-lumi-app.tsx");
   assert.match(app, /function openCapture\(type: "task" \| "note" = "task", projectId = ""\)/);
   assert.match(app, /initialCaptureWorkspace\(projectWorkspaceId, personalWorkspaceId\)/);
@@ -126,12 +126,12 @@ test("UI-03a: capture remains available in sidebar with 701–1199px and wide si
   // At both desktop breakpoints the existing sidebar is not a blocking modal.
   assert.match(inspectorCss, /@media \(min-width: 1200px\)/);
   assert.match(inspectorCss, /@media \(min-width: 701px\) and \(max-width: 1199px\)/);
-  assert.match(sidebar, /\\{mobileDesignV1Preview && app\\.selected && !onTargetCapture && !app\\.captureDisabled && \\(\\s*<button/);
+  assert.match(sidebar, /\{mobileDesignV1Preview && app\.selected && !onTargetCapture && !app\.captureDisabled && \(\s*<button/);
   assert.doesNotMatch(sidebar, /targetInspectorOpen/);
   const targetDetail=read("../app/ui/target-detail-panel.tsx");
   assert.match(targetDetail, /role="dialog" aria-modal="true"/);
   assert.match(targetDetail, /data-testid="target-detail-capture"/);
-  assert.match(targetDetail, /onClick=\\{onPrivateCapture\\}/);
+  assert.match(targetDetail, /onClick=\{onPrivateCapture\}/);
   assert.match(sidebar, /data-desktop-inspector-capture/);
   assert.match(sidebar, /aria-label=\{tr\("quickCapture"\)\}/);
   assert.match(sidebar, /disabled=\{Boolean\(app\.capture \|\| app\.assistantOpen \|\| app\.moreOpen \|\| app\.confirmRequest\)\}/);
