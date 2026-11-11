@@ -1,0 +1,349 @@
+/**
+ * Standalone H1-real.5 witness reference store. This module MUST be deployed
+ * to a separately administered recovery domain, never on the Lumi VPS.
+ *
+ * An offline operator publishes opaque, strictly increasing checkpoints.
+ * The network listener is read-only and signs ONLY its current durable head.
+ * This does not implement the app-side write-before-ack protocol or hardware-
+ * protected antirollback. A restored witness database must never be trusted
+ * without independent reconciliation.
+ */
+import { KeyObject, createHash, createPublicKey, sign, verify } from "node:crypto";
+import {
+  constants, closeSync, fsyncSync, lstatSync, openSync, readFileSync, realpathSync, writeSync,
+} from "node:fs";
+import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
+import {
+  humanWikiWitnessChallengePayload,
+} from "../../lib/humanwiki-consent-witness-preflight.mjs";
+
+const FILENAME = "witness-high-water.sqlite";
+const INSTALL_MARKER = "witness-installation.lock";
+const EMPTY = "0".repeat(64);
+const HEX = /^[0-9a-f]{64}$/;
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+// Sequences use SQLite INTEGER while JS remains safe through 2^53-1.
+// Do not impose a low fixed publication ceiling: the signed chain is
+// verifiable with constant memory and one Ed25519 check per full audit.
+const MAX_SEQUENCE = Number.MAX_SAFE_INTEGER - 1;
+const DEFINITIONS = [
+  { name:"witness_high_water_events",type:"table",sql:`CREATE TABLE IF NOT EXISTS witness_high_water_events (
+    sequence INTEGER PRIMARY KEY CHECK(sequence >= 0),
+    registry_id TEXT NOT NULL,
+    digest TEXT NOT NULL,
+    previous_digest TEXT NOT NULL,
+    chain_hash TEXT NOT NULL,
+    signature TEXT NOT NULL
+  )` },
+  { name:"witness_high_water_no_update",type:"trigger",sql:`CREATE TRIGGER IF NOT EXISTS witness_high_water_no_update
+    BEFORE UPDATE ON witness_high_water_events
+    BEGIN SELECT RAISE(ABORT,'append_only'); END` },
+  { name:"witness_high_water_no_delete",type:"trigger",sql:`CREATE TRIGGER IF NOT EXISTS witness_high_water_no_delete
+    BEFORE DELETE ON witness_high_water_events
+    BEGIN SELECT RAISE(ABORT,'append_only'); END` },
+];
+const uid = () => typeof process.getuid === "function" ? process.getuid() : null;
+const safeDirectory = dir => {
+  if (typeof dir !== "string" || !path.isAbsolute(dir) ||
+      path.normalize(dir) !== dir || uid() === null) return false;
+  const st = lstatSync(dir);
+  return st.isDirectory() && !st.isSymbolicLink() && st.uid === uid() &&
+    (st.mode & 0o077) === 0 && realpathSync(dir) === dir;
+};
+const identity = file => {
+  const st = lstatSync(file);
+  if (!st.isFile() || st.isSymbolicLink() || st.nlink !== 1 ||
+      st.uid !== uid() || (st.mode & 0o177) !== 0 ||
+      realpathSync(file) !== file) throw Error("witness_unavailable");
+  return { dev: st.dev, ino: st.ino };
+};
+const sidecarsAbsent = file => {
+  for (const tail of ["-wal","-shm"]) {
+    try { lstatSync(file+tail); return false; }
+    catch (error) { if (error?.code !== "ENOENT") throw error; }
+  }
+  return true;
+};
+const publicKeyOf = privateKey => {
+  if (!(privateKey instanceof KeyObject) ||
+      !KeyObject.prototype.equals.call(privateKey,privateKey) ||
+      privateKey.type !== "private" ||
+      privateKey.asymmetricKeyType !== "ed25519") throw Error("witness_unavailable");
+  return createPublicKey(privateKey);
+};
+const validRegistry = id => typeof id === "string" && UUID.test(id);
+const markerBytes = (registryId, publicKey) => Buffer.from(JSON.stringify({
+  schema:"humanwiki_witness_installation_v1",registryId,
+  publicKeySha256:createHash("sha256").update(
+    publicKey.export({format:"der",type:"spki"})).digest("hex"),
+})+"\n","utf8");
+function requireMarker(directory,registryId,publicKey) {
+  const file=path.join(directory,INSTALL_MARKER);
+  identity(file);
+  const actual=readFileSync(file);
+  if(!actual.equals(markerBytes(registryId,publicKey)))
+    throw Error("witness_unavailable");
+}
+// The signed accumulator commits to every predecessor's signature, digest,
+// registry, sequence and prior cumulative hash. Historical tampering changes
+// the authenticated final chain_hash, even when intermediate Ed25519 checks
+// are replaced by efficient SHA-256 continuity checks on reads.
+const chainHash = (registryId,sequence,previousDigest,digest,
+  previousChainHash,previousSignature) =>
+  createHash("sha256").update([
+    "humanwiki_witness_accumulator_v2",registryId,String(sequence),
+    previousDigest,digest,previousChainHash,previousSignature,"",
+  ].join("\n"),"utf8").digest("hex");
+const rowPayload = (registryId,sequence,previousDigest,digest,hash) =>
+  Buffer.from(["humanwiki_witness_monotonic_event_v2",registryId,
+    String(sequence),previousDigest,digest,hash,""].join("\n"),"utf8");
+const validSignature = signature =>
+  typeof signature === "string" && /^[A-Za-z0-9_-]{86}$/.test(signature) &&
+  Buffer.from(signature,"base64url").toString("base64url") === signature;
+
+const schemaCheck = db => {
+  // Permit no extra application-defined tables, views, indexes or triggers:
+  // a foreign DDL object could alter publication behavior without changing
+  // the three expected objects or their canonical definitions.
+  const rows = db.prepare(`SELECT name,type,sql FROM sqlite_master
+    WHERE lower(substr(name,1,7)) <> 'sqlite_'`).all();
+  if (rows.length !== DEFINITIONS.length) throw Error("witness_unavailable");
+  const byName = new Map(rows.map(row => [row.name,row]));
+  for (const definition of DEFINITIONS) {
+    const row = byName.get(definition.name);
+    if (!row || row.type !== definition.type ||
+        row.sql !== definition.sql.replace(" IF NOT EXISTS "," "))
+      throw Error("witness_unavailable");
+  }
+};
+const createSchema = db => {
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    for (const d of DEFINITIONS) db.exec(d.sql+";");
+    schemaCheck(db);
+    db.exec("COMMIT");
+  } catch (error) {
+    try { db.exec("ROLLBACK"); } catch { /* fail closed */ }
+    throw error;
+  }
+};
+const checkDatabase = db => {
+  if (db.prepare("PRAGMA journal_mode").get()?.journal_mode !== "delete" ||
+      Object.values(db.prepare("PRAGMA quick_check").get() ?? {})[0] !== "ok")
+    throw Error("witness_unavailable");
+  schemaCheck(db);
+};
+/**
+ * Complete streaming audit. O(n) cheap SHA-256 links, O(1) Ed25519
+ * verification, and O(1) memory. The final Ed25519 signature authenticates
+ * the cumulative hash of ALL historical rows and their predecessor signatures.
+ * Never trust a stored rolling hash without recomputing the full chain.
+ */
+function verifyRows(db, registryId, publicKey) {
+  checkDatabase(db);
+  let previousDigest=EMPTY,previousChainHash=EMPTY,previousSignature="";
+  let last=null,expected=0;
+  for (const row of db.prepare(`SELECT sequence,registry_id,digest,previous_digest,
+      chain_hash,signature FROM witness_high_water_events ORDER BY sequence`).iterate()) {
+    if (!Number.isSafeInteger(row.sequence) || row.sequence!==expected ||
+        row.registry_id!==registryId || !HEX.test(row.digest) ||
+        row.previous_digest!==previousDigest ||
+        typeof row.chain_hash!=="string" || !HEX.test(row.chain_hash) ||
+        !validSignature(row.signature) || (expected===0 && row.digest!==EMPTY) ||
+        row.chain_hash!==chainHash(registryId,expected,previousDigest,row.digest,
+          previousChainHash,previousSignature)) throw Error("witness_unavailable");
+    previousDigest=row.digest;
+    previousChainHash=row.chain_hash;
+    previousSignature=row.signature;
+    last=row;
+    expected++;
+    if (!Number.isSafeInteger(expected)) throw Error("witness_unavailable");
+  }
+  if (!last || !verify(null,rowPayload(registryId,last.sequence,last.previous_digest,
+      last.digest,last.chain_hash),publicKey,
+      Buffer.from(last.signature,"base64url"))) throw Error("witness_unavailable");
+  return { sequence:last.sequence,digest:last.digest };
+}
+
+/**
+ * O(1) signed-head structural check used after the full streaming audit
+ * and to verify the newly appended row within the same write transaction.
+ * A signed head alone DOES NOT prove stored historical rows are intact:
+ * publishing must run verifyRows first. This helper never authorizes a
+ * standalone append or relaxes the real-data import barrier.
+ */
+function readSignedHeadForAppend(db, registryId, publicKey) {
+  checkDatabase(db);
+  const n=db.prepare("SELECT COUNT(*) AS n FROM witness_high_water_events").get().n;
+  const row=db.prepare(`SELECT sequence,registry_id,digest,previous_digest,
+      chain_hash,signature FROM witness_high_water_events
+      ORDER BY sequence DESC LIMIT 1`).get();
+  if (!row || !Number.isSafeInteger(row.sequence) || row.sequence<0 ||
+      !Number.isSafeInteger(n) || n!==row.sequence+1 ||
+      row.registry_id!==registryId || !HEX.test(row.digest) ||
+      !HEX.test(row.previous_digest) || !HEX.test(row.chain_hash) ||
+      !validSignature(row.signature) ||
+      !verify(null,rowPayload(registryId,row.sequence,row.previous_digest,
+        row.digest,row.chain_hash),publicKey,
+        Buffer.from(row.signature,"base64url"))) throw Error("witness_unavailable");
+
+  const previous=row.sequence===0 ? null :
+    db.prepare(`SELECT sequence,digest,chain_hash,signature
+      FROM witness_high_water_events WHERE sequence=?`).get(row.sequence-1);
+  if (row.sequence===0 && (row.digest!==EMPTY || row.previous_digest!==EMPTY ||
+      row.chain_hash!==chainHash(registryId,0,EMPTY,EMPTY,EMPTY,""))) {
+    throw Error("witness_unavailable");
+  }
+  if (row.sequence>0 && (!previous ||
+      previous.sequence!==row.sequence-1 ||
+      row.previous_digest!==previous.digest ||
+      !HEX.test(previous.chain_hash) || !validSignature(previous.signature) ||
+      row.chain_hash!==chainHash(registryId,row.sequence,row.previous_digest,
+        row.digest,previous.chain_hash,previous.signature)))
+    throw Error("witness_unavailable");
+  return row;
+}
+
+function openExisting(directory,mode,registryId,publicKey,fn) {
+  if (!safeDirectory(directory) || !sidecarsAbsent(path.join(directory,FILENAME)))
+    throw Error("witness_unavailable");
+  requireMarker(directory,registryId,publicKey);
+  const file=path.join(directory,FILENAME),before=identity(file);
+  const db=new DatabaseSync(file,{readOnly:mode==="read"});
+  try {
+    if (mode==="write")db.exec("PRAGMA synchronous=FULL; PRAGMA busy_timeout=2000");
+    const result=fn(db);
+    const after=identity(file);
+    if (!safeDirectory(directory) || !sidecarsAbsent(file) ||
+        before.dev!==after.dev || before.ino!==after.ino)
+      throw Error("witness_unavailable");
+    return result;
+  } finally { db.close(); }
+}
+export function bootstrapWitnessStore(directory,registryId,privateKey) {
+  const pub=publicKeyOf(privateKey);
+  if (!validRegistry(registryId) || !safeDirectory(directory))throw Error("witness_unavailable");
+  const file=path.join(directory,FILENAME);
+  if (!sidecarsAbsent(file))throw Error("witness_unavailable");
+  // The independently durable install marker survives accidental database
+  // removal. If only the DB disappears, bootstrap stays impossible.
+  const marker=path.join(directory,INSTALL_MARKER);
+  const markerfd=openSync(marker,
+    constants.O_CREAT|constants.O_EXCL|constants.O_NOFOLLOW|constants.O_WRONLY,0o600);
+  try {
+    writeSync(markerfd,markerBytes(registryId,pub));
+    fsyncSync(markerfd);
+  } finally {closeSync(markerfd);}
+  const dfd=openSync(directory,
+    constants.O_RDONLY|constants.O_DIRECTORY|constants.O_NOFOLLOW);
+  try{fsyncSync(dfd);}finally{closeSync(dfd);}
+  const fd=openSync(file,
+    constants.O_CREAT|constants.O_EXCL|constants.O_NOFOLLOW|constants.O_RDWR,0o600);
+  closeSync(fd);
+  const before=identity(file);
+  const db=new DatabaseSync(file);
+  try {
+    db.exec("PRAGMA synchronous=FULL; PRAGMA busy_timeout=2000");
+    checkInitialJournal(db);
+    createSchema(db);
+    const genesisHash=chainHash(registryId,0,EMPTY,EMPTY,EMPTY,"");
+    const signature=sign(null,rowPayload(registryId,0,EMPTY,EMPTY,genesisHash),
+      privateKey).toString("base64url");
+    db.prepare(`INSERT INTO witness_high_water_events
+      (sequence,registry_id,digest,previous_digest,chain_hash,signature)
+      VALUES (0,?,?,?,?,?)`).run(registryId,EMPTY,EMPTY,genesisHash,signature);
+    verifyRows(db,registryId,pub);
+  } finally {db.close();}
+  const dirfd=openSync(directory,
+    constants.O_RDONLY|constants.O_DIRECTORY|constants.O_NOFOLLOW);
+  try {fsyncSync(dirfd);}finally{closeSync(dirfd);}
+  const after=identity(file);
+  if(before.dev!==after.dev||before.ino!==after.ino||
+      !sidecarsAbsent(file)||!safeDirectory(directory))throw Error("witness_unavailable");
+  requireMarker(directory,registryId,pub);
+  return {ok:true,sequence:0,importAuthorized:false,withdrawalComplete:false};
+}
+function checkInitialJournal(db) {
+  if(db.prepare("PRAGMA journal_mode").get()?.journal_mode!=="delete")
+    throw Error("witness_unavailable");
+}
+export function witnessCurrentHead(directory,registryId,privateKey) {
+  const pub=publicKeyOf(privateKey);
+  if(!validRegistry(registryId))throw Error("witness_unavailable");
+  return openExisting(directory,"read",registryId,pub,
+    db=>verifyRows(db,registryId,pub));
+}
+/**
+ * Operator-only local publish, NEVER exposed as an HTTP write route.
+ * Requires the *next* sequence and exact previous digest, and commits the
+ * witness-signed event under a SQLite immediate write lock.
+ * It does not prove the source event has committed: app-side durable ack and
+ * an external antirestore anchor are separately required.
+ */
+export function publishWitnessCheckpoint(directory,registryId,privateKey,
+  {sequence,previousDigest,digest}={}) {
+  const pub=publicKeyOf(privateKey);
+  if(!validRegistry(registryId)||!Number.isSafeInteger(sequence)||
+      sequence<1||sequence>MAX_SEQUENCE||!HEX.test(previousDigest)||
+      !HEX.test(digest))throw Error("witness_unavailable");
+  return openExisting(directory,"write",registryId,pub,db=>{
+    db.exec("BEGIN IMMEDIATE");
+    try{
+      // A signed tail alone is insufficient: an older SQLite row can be
+      // corrupted while the last two rows (and their signatures) stay intact.
+      // Check every SHA-256 chain link against the signed terminal hash
+      // BEFORE signing any new event. This occurs under the same immediate
+      // write transaction as the subsequent insert, so no concurrent writer
+      // can change the audited snapshot before COMMIT.
+      const audited=verifyRows(db,registryId,pub);
+      const current=readSignedHeadForAppend(db,registryId,pub);
+      if(audited.sequence!==current.sequence || audited.digest!==current.digest ||
+          sequence!==current.sequence+1 || previousDigest!==current.digest)
+        throw Error("witness_unavailable");
+      const hash=chainHash(registryId,sequence,previousDigest,digest,
+        current.chain_hash,current.signature);
+      const signature=sign(null,
+        rowPayload(registryId,sequence,previousDigest,digest,hash),
+        privateKey).toString("base64url");
+      db.prepare(`INSERT INTO witness_high_water_events
+        (sequence,registry_id,digest,previous_digest,chain_hash,signature)
+        VALUES (?,?,?,?,?,?)`).run(sequence,registryId,digest,previousDigest,hash,signature);
+      const saved=readSignedHeadForAppend(db,registryId,pub);
+      if(saved.sequence!==sequence || saved.digest!==digest)
+        throw Error("witness_unavailable");
+      db.exec("COMMIT");
+      return {ok:true,sequence,digest,importAuthorized:false,
+        independentWitnessVerified:false,withdrawalComplete:false};
+    }catch(error){
+      try{db.exec("ROLLBACK");}catch{/* fail closed */}
+      throw error;
+    }
+  });
+}
+export function witnessChallengeReceipt(directory,registryId,privateKey,nonce) {
+  const pub=publicKeyOf(privateKey);
+  if(!validRegistry(registryId)||typeof nonce!=="string"||
+      !/^[A-Za-z0-9_-]{43}$/.test(nonce)||
+      Buffer.from(nonce,"base64url").toString("base64url")!==nonce)
+    throw Error("witness_unavailable");
+  // Hold a SQLite snapshot while validating and signing the latest head,
+  // so a concurrent publisher cannot commit between read and signature.
+  return openExisting(directory,"read",registryId,pub,db=>{
+    db.exec("BEGIN");
+    try {
+      const head=verifyRows(db,registryId,pub);
+      const result={
+        version:"humanwiki_h1_real_fresh_high_water_preflight_v1",
+        registryId,nonce,sequence:head.sequence,digest:head.digest,
+        signature:sign(null,humanWikiWitnessChallengePayload(
+          registryId,nonce,head.sequence,head.digest),privateKey).toString("base64url"),
+      };
+      db.exec("COMMIT");
+      return result;
+    } catch(error) {
+      try {db.exec("ROLLBACK");}catch{/* fail closed */}
+      throw error;
+    }
+  });
+}
