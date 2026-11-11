@@ -4,10 +4,8 @@ import { useEffect, useRef, useState } from "react";
 import { TargetSidebarContext } from "./target-sidebar-context";
 import { LegacyWritesContext } from "./legacy-writes-context";
 import { useLumiApp } from "./use-lumi-app";
-import { closeTargetDetail, expectFocusReturn, focusPendingRow, openTargetDetail, useTargetSearch } from "./target-detail-state";
+import { closeTargetDetail, expectFocusReturn, focusPendingRow, useTargetSearch } from "./target-detail-state";
 import { writeTargetReadingScope } from "../../lib/target-reading-scope-nav";
-import {useTargetGeneration,useTargetRuntime} from "./target-data-provider";
-import {subscribePrivateTaskCreate} from "../../lib/target-private-task-create-coordinator";
 import { scopeFromSearch } from "../../lib/view-url";
 import { detailActivation, detailRouteKey, isParentOf, isTargetAddress, viewOfSearch, type DetailActivation } from "../../lib/target-detail-route";
 import { activeTargetViewFor, detailsActive, targetViewsFor } from "../../lib/target-shell-views";
@@ -49,6 +47,7 @@ const TargetDetailPanel = dynamic(() => import("./target-detail-panel"), { ssr: 
 // R3-CAPTURE-1: read-only, real actor-private Area catalogue in target Notes.
 const TargetPrivateNoteAreaChooser = dynamic(() => import("./target-private-note-area-chooser"), { ssr: false });
 const TargetPrivateQuickCapture = dynamic(() => import("./target-private-quick-capture"), { ssr: false });
+const TargetPrivateTaskCreatedNotice = dynamic(() => import("./target-private-task-created-notice"), { ssr: false });
 
 export type TargetDetailsProps = { task: boolean; project: boolean; note: boolean };
 export type TargetScopesProps = { enabled: boolean; projects: boolean; notes: boolean };
@@ -65,9 +64,6 @@ export function LumiAppRoot({ targetMyPlan, targetScopes, targetDetails, targetE
     targetPrivateNoteCreate&&mobileDesignV1Preview);
   const [areaChooserOpen,setAreaChooserOpen]=useState(false);
   const [captureKind,setCaptureKind]=useState<"choose"|"note">("choose");
-  const [taskCreatedNotice,setTaskCreatedNotice]=useState<{generation:string;taskId:string}|null>(null);
-  const targetRuntime=useTargetRuntime();
-  const targetGeneration=useTargetGeneration();
   const [captureAfterDetailClose,setCaptureAfterDetailClose]=useState(false);
   const areaChooserOpener=useRef<HTMLElement|null>(null);
   const [noteListRevision,setNoteListRevision]=useState(0);
@@ -136,24 +132,6 @@ export function LumiAppRoot({ targetMyPlan, targetScopes, targetDetails, targetE
       areaChooserOpener.current=null;
     });
   }
-  function createdPrivateTask(taskId:string){
-    if(!taskCaptureReady||!targetRuntime?.known()||
-      targetRuntime.generation()!==targetGeneration)return;
-    closeAreaChooser();
-    // Runtime confirmation carries only the ID, never a fabricated task row.
-    setTaskCreatedNotice({generation:targetGeneration,taskId});
-  }
-  useEffect(()=>{setTaskCreatedNotice(null);},[targetGeneration]);
-  useEffect(()=>{
-    if(!taskCaptureReady||!targetRuntime?.known()||
-      targetRuntime.generation()!==targetGeneration)return;
-    // This subscription survives closure of the capture modal and informs the
-    // user when its original POST later settles, without another CREATE.
-    return subscribePrivateTaskCreate(targetRuntime,targetGeneration,change=>{
-      if(change.confirmedTaskId)createdPrivateTask(change.confirmedTaskId);
-    });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  },[taskCaptureReady,targetRuntime,targetGeneration]);
   function createdPrivateNote(){
     closeAreaChooser();
     setNoteListRevision(v=>v+1);
@@ -322,31 +300,8 @@ export function LumiAppRoot({ targetMyPlan, targetScopes, targetDetails, targetE
               ?(language==="cs"?"Nová soukromá poznámka":"New private note")
               :(language==="cs"?"Oblasti pro novou poznámku":"Areas for a new note")}</button>}
           <HeldBack app={app} />
-          {taskCreatedNotice&&taskCreatedNotice.generation===targetGeneration&&
-            targetRuntime?.known()&&authState==="ready"&&taskCaptureReady&&
-            <div className="navigationUnavailableNotice" role="status"
-              data-testid="target-private-task-created">
-              <p>{language==="cs"
-                ?"Soukromý úkol byl potvrzen serverem. Zatím nemá naplánovaný den."
-                :"Private task creation was confirmed. It has no scheduled day yet."}</p>
-              <button type="button" data-testid="target-private-task-open"
-                onClick={()=>{
-                  if(!targetRuntime.known()||targetRuntime.generation()!==targetGeneration||
-                    !taskCreatedNotice||!detailGates.task||
-                    !targetViews.includes("MyPlanPreview"))return;
-                  // Read scope is not write consent; a private task can only
-                  // open within a scope that includes its authorized Area.
-                  if(scopeFromSearch(window.location.search)==="shared"&&
-                    !writeTargetReadingScope("personal"))return;
-                  const before=window.location.search;
-                  openTargetDetail({kind:"task",id:taskCreatedNotice.taskId,
-                    view:"MyPlanPreview"});
-                  if(window.location.search!==before)setTaskCreatedNotice(null);
-                }}>{language==="cs"?"Zobrazit úkol":"View task"}</button>
-              <button type="button" onClick={()=>setTaskCreatedNotice(null)}>
-                {language==="cs"?"Skrýt":"Dismiss"}
-              </button>
-            </div>}
+          {taskCaptureReady&&<TargetPrivateTaskCreatedNotice language={language}
+            onCreated={closeAreaChooser} />}
           <CalendarView app={app} />
           <HomeView app={app} />
           {view === "Today" && !targetPlan && <TodayTop app={app} />}
