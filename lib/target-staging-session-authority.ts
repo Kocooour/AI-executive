@@ -134,8 +134,10 @@ import {
 import type { TargetStagingNoteDeleteRequest, TargetStagingNoteDeleteResult } from "./target-note-delete-writer";
 import type { TargetStagingTaskTitleWriteRequest, TargetStagingTaskTitleWriteResult } from "./target-task-staging-writer";
 import {
-  createPreflightedPrivateTask, validPrivateTaskCreateCommand,
+  createPreflightedPrivateTask, cancelPreflightedPrivateTaskCreate,
+  validPrivateTaskCreateCommand,
   type PrivateTaskCreateCommand, type PrivateTaskCreateResult, type PrivateTaskCreateStatus,type PrivateTaskCreateRecovery,
+  type PrivateTaskCreateCancelResult,
 } from "./target-private-task-create-writer";
 
 import { deletePreflightedTargetTask, validTargetStagingTaskDeleteRequest } from "./target-task-delete-writer";
@@ -1353,6 +1355,17 @@ export class TargetStagingSessionAuthority {
     if (!validPrivateTaskCreateCommand(request)) return {ok:false,reason:"invalid_request"};
     return createPreflightedPrivateTask(
       this.#store,credential,request,durableSessionTokenHash);
+  }
+
+  /** Actor-bound cancellation fence, serialized with the original CREATE. */
+  cancelPrivateTaskCreate(
+    sessionToken:string,commandId:string,durableSessionTokenHash?:string,
+  ):PrivateTaskCreateCancelResult{
+    const credential=this.#credential(sessionToken,true);
+    return credential
+      ?cancelPreflightedPrivateTaskCreate(
+        this.#store,credential,commandId,durableSessionTokenHash)
+      :{ok:false,reason:"unauthorized"};
   }
 
   /** Exact-command, read-only reconciliation for a private task CREATE.
