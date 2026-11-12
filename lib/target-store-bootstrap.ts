@@ -94,6 +94,9 @@ export const TARGET_STAGING_PRIVATE_TASK_CREATE_RECEIPT_PREFIX = "r3:private-tas
 export const TARGET_STAGING_PRIVATE_TASK_CREATE_RECOVERY_PREFIX = "r3:private-task-create-recovery-v1:";
 /** Actor-scoped immutable no-commit cancellation fence (same pinned lock as CREATE). */
 export const TARGET_STAGING_PRIVATE_TASK_CREATE_CANCEL_PREFIX = "r3:private-task-create-cancel-v1:";
+/** Actor-scoped receipt and content-free witness for private project / project-child CREATE. */
+export const TARGET_STAGING_PRIVATE_STRUCTURE_CREATE_RECEIPT_PREFIX = "r3:private-structure-create-receipt-v1:";
+export const TARGET_STAGING_PRIVATE_STRUCTURE_CREATE_RECOVERY_PREFIX = "r3:private-structure-create-recovery-v1:";
 /** R2d.3h staging-only complete/reopen receipts; audited by the append-only anchor journal. */
 export const TARGET_STAGING_TEMPORAL_STATUS_RECEIPT_PREFIX = "r2:task-temporal-status-receipt-v1:";
 /** R2d.3i.1 isolated task dueOn mutation receipts; capped independently from status writes. */
