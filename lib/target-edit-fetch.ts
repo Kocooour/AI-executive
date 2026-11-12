@@ -10,7 +10,9 @@ export function isTargetReadRequest(input:Parameters<typeof fetch>[0],init?:Requ
   const raw=input instanceof Request?input.url:String(input);
   let path:string;
   try{path=new URL(raw,"https://lumi.invalid").pathname;}catch{return false;}
-  return path.endsWith("/status")||path.endsWith("/receipt");
+  // create-preview / create-recovery / create-status are POST-shaped READS (each spawns a read child), like the receipts.
+  return path.endsWith("/status")||path.endsWith("/receipt")||
+    path.endsWith("/create-preview")||path.endsWith("/create-recovery")||path.endsWith("/create-status");
 }
 
 export function routeTargetFetch(queued:typeof fetch,direct:typeof fetch=fetch):typeof fetch{
