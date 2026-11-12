@@ -1,5 +1,6 @@
 import type { Browser, Page } from "@playwright/test";
 import { sessionFile } from "../playwright.config";
+import { generatedAreaId } from "../lib/area-ids";
 import { expect, test } from "./fixtures";
 import { expectOnServer, waitUntilSynced } from "./helpers";
 
@@ -50,6 +51,9 @@ async function cleanup(page: Page, ids: string[]) {
 // Titles carry a tag of this run, so records left behind by another run can never match a locator.
 const R = Date.now().toString(36).slice(-5);
 const now = () => Date.now();
+// Every seed has its own legacy label, so server-created Areas cannot be
+// reused accidentally by another scenario or an earlier browser run.
+const legacyAreaTitle = (stamp: number) => `Starý štítek B1-${R}-${stamp}`;
 const entity = (id: string, type: string, title: string, properties: Record<string, unknown> = {}, status = "open") =>
   ({ id, type, title, status: type === "task" ? status : "active", workspaceId: "personal", properties, createdAt: now(), updatedAt: now() });
 const member = (stamp: number, task: string, project: string) =>
@@ -59,11 +63,22 @@ const inArea = (stamp: number, project: string, area: string) =>
 
 function ids(stamp: number) {
   return { area: `e2e-b1-area-${stamp}`, rich: `e2e-b1-rich-${stamp}`, bare: `e2e-b1-bare-${stamp}`, old: `e2e-b1-old-${stamp}`,
-    t1: `e2e-b1-t1-${stamp}`, t2: `e2e-b1-t2-${stamp}`, t3: `e2e-b1-t3-${stamp}`, done: `e2e-b1-done-${stamp}`, note: `e2e-b1-note-${stamp}` };
+    t1: `e2e-b1-t1-${stamp}`, t2: `e2e-b1-t2-${stamp}`, t3: `e2e-b1-t3-${stamp}`, done: `e2e-b1-done-${stamp}`, note: `e2e-b1-note-${stamp}`,
+    // The write invariant creates this entity from properties.area. Include it
+    // in *every* seedWorld caller's existing Object.values(id) cleanup.
+    legacyArea: generatedAreaId("personal", legacyAreaTitle(stamp)) };
 }
 
 async function seedWorld(page: Page, stamp: number) {
   const id = ids(stamp);
+  // Fail before writing if a fixture ID or label is already owned by another
+  // run: cleanup must never delete an Area that it did not create.
+  const preexistingLegacyArea = await page.evaluate(async ({ areaId, title }) => {
+    const snapshot = await fetch("/api/store", { cache: "no-store" }).then((response) => response.json());
+    return snapshot.entities.some((row: { id: string; type: string; title: string; workspaceId: string }) =>
+      row.type === "area" && row.workspaceId === "personal" && (row.id === areaId || row.title === title));
+  }, { areaId: id.legacyArea, title: legacyAreaTitle(stamp) });
+  expect(preexistingLegacyArea).toBe(false);
   const day = new Date(Date.now() - 3 * 86_400_000).toISOString().slice(0, 10);
   const status = await seed(page, {
     entities: [
@@ -72,7 +87,7 @@ async function seedWorld(page: Page, stamp: number) {
         context: { why: "Současný web neprodává. Brzdí také nábor.", goals: ["Spustit do 30. 11.", "Udržet SEO"], doneWhen: "Web běží na produkční doméně", provenance: "owner", updatedAt: stamp } }),
       entity(id.bare, "project", `Projekt B1${R} bez kontextu`),
       // #109: a newly written legacy free-text label gets its own canonical Area link.
-      entity(id.old, "project", `Projekt B1${R} starý cíl`, { goal: "Starý cíl projektu zůstane vidět", area: "Starý štítek" }),
+      entity(id.old, "project", `Projekt B1${R} starý cíl`, { goal: "Starý cíl projektu zůstane vidět", area: legacyAreaTitle(stamp) }),
       entity(id.t1, "task", `Úkol B1${R} první`, { deadline: day }),
       entity(id.t2, "task", `Úkol B1${R} druhý`),
       entity(id.done, "task", `Úkol B1${R} hotový`, {}, "completed"),
@@ -107,7 +122,7 @@ test("project list: first sentence of why, progress, next step and one attention
     await expect(bare.locator("[data-project-attention]")).toHaveText("bez dalšího kroku");
     await expect(bare.locator("[data-project-attention]")).toHaveCount(1);
     // The former goal is read as "Hotovo, když" even before anything was saved.
-    // #109: "Starý štítek" becomes an actual Area, not fallback "Nezařazeno".
+    // #109: this fixture's unique legacy label becomes an actual Area, not "Nezařazeno".
     const normalizedLegacy = await page.evaluate(async (projectId) => {
       const snapshot = await fetch("/api/store", { cache: "no-store" }).then((response) => response.json());
       const relation = snapshot.relations.find((row: { sourceEntityId: string; relationType: string }) =>
@@ -120,13 +135,18 @@ test("project list: first sentence of why, progress, next step and one attention
         hasLegacyLabel: Object.prototype.hasOwnProperty.call(project?.properties ?? {}, "area"),
       };
     }, id.old);
-    expect(normalizedLegacy.areaId).toBeTruthy();
-    expect(normalizedLegacy.areaTitle).toBe("Starý štítek");
+    expect(normalizedLegacy.areaId).toBe(id.legacyArea);
+    expect(normalizedLegacy.areaTitle).toBe(legacyAreaTitle(stamp));
     expect(normalizedLegacy.hasLegacyLabel).toBe(false);
     await expect(page.locator(`[data-project-group="${normalizedLegacy.areaId}"]`)
       .locator(".taskRow", { hasText: `Projekt B1${R} starý cíl` })).toBeVisible();
   } finally {
     await cleanup(page, Object.values(id));
+    // The generated legacy Area must not leak into later scenarios.
+    await expect.poll(() => page.evaluate(async (areaId) => {
+      const snapshot = await fetch("/api/store", { cache: "no-store" }).then((response) => response.json());
+      return snapshot.entities.some((row: { id: string }) => row.id === areaId);
+    }, id.legacyArea)).toBe(false);
   }
 });
 
