@@ -62,7 +62,8 @@ function safePaths(sources, output) {
     const configured = process.env[name];
     if (!configured || !existsSync(configured)) continue;
     const live = realpathSync(configured);
-    if (resolved.some(src => within(src, live) || within(live, src)))
+    if (resolved.some(src => within(src, live) || within(live, src)) ||
+        within(dst, live) || within(live, dst))
       throw Error("configured live data location refused");
   }
   return { resolved, dst };
