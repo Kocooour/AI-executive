@@ -167,14 +167,17 @@ test("current project relation rejects a stale legacy parent in a typed task URL
   const now = Date.now();
   const actualProject = { id: actualProjectId, type: "project", title: "Current project",
     status: "active", workspaceId: "personal", properties: {}, createdAt: now, updatedAt: now };
-  const records = [...data.records.map((row) => row.id === data.taskId
-    ? { ...row, properties: { projectId: data.projectId } } : row), actualProject];
+  // A newly supplied legacy properties.projectId is itself treated as a move
+  // by area-write-invariants.ts and overrides a conflicting canonical edge.
+  // To test a stale *URL*, seed an actual canonical parent and keep the URL
+  // stale; otherwise the test mutates its own supposed authoritative fixture.
+  const records = [...data.records, actualProject];
   const links = data.links.map((link) => link.sourceEntityId === data.taskId
     ? { ...link, targetEntityId: actualProjectId } : link);
   expect(await updateStore(page, records, links)).toBe(200);
   try {
-    // Prove the server fixture really has the *current* project edge before
-    // blaming the URL resolver. A stale projectId property alone is not an edge.
+    // Verify the persisted current relation before requesting the *old* URL.
+    // The stale parent must be rejected even though both projects exist.
     const authoritativeParents = await page.evaluate(async (taskId) => {
       const snapshot = await fetch("/api/store", { cache: "no-store" }).then((response) => response.json());
       return snapshot.relations
