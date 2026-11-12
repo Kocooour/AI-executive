@@ -8,10 +8,13 @@ import {fingerprint} from "./target-task-staging-writer";
 import {isTargetStagingSessionTokenHash,lookupLiveTargetStagingSession}
   from "./target-staging-durable-session";
 import {withPinnedTargetStagingWrite} from "./target-staging-pinned-write";
+import {isReadableStagingProjectId} from "./target-project-id";
 import {verifiedActor,type TargetStagingReadCredential} from "./target-task-authenticated-read";
 import {canWriteIsolatedTargetArea} from "./target-task-write-preflight";
 import type {TargetStagingReadStore} from "./target-task-staging-reader";
-import {TARGET_STAGING_MAX_RECEIPTS,TARGET_STAGING_AUDIT_MAX_EVENTS}
+import {TARGET_STAGING_MAX_RECEIPTS,TARGET_STAGING_AUDIT_MAX_EVENTS,
+  TARGET_STAGING_PRIVATE_STRUCTURE_CREATE_RECEIPT_PREFIX,
+  TARGET_STAGING_PRIVATE_STRUCTURE_CREATE_RECOVERY_PREFIX}
   from "./target-store-bootstrap";
 
 const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -39,8 +42,8 @@ export type PrivateStructureCreateRecovery=
   |{ok:true;status:"committed";id:string;projectId:string;areaId:string}
   |{ok:false;reason:"unavailable"};
 
-export const PRIVATE_STRUCTURE_CREATE_RECEIPT_PREFIX="r3:private-structure-create-receipt-v1:";
-export const PRIVATE_STRUCTURE_CREATE_RECOVERY_PREFIX="r3:private-structure-create-recovery-v1:";
+export const PRIVATE_STRUCTURE_CREATE_RECEIPT_PREFIX=TARGET_STAGING_PRIVATE_STRUCTURE_CREATE_RECEIPT_PREFIX;
+export const PRIVATE_STRUCTURE_CREATE_RECOVERY_PREFIX=TARGET_STAGING_PRIVATE_STRUCTURE_CREATE_RECOVERY_PREFIX;
 
 const canonicalUUID=(x:unknown):x is string=>typeof x==="string"&&UUID.test(x)&&x===x.toLowerCase();
 const validTitle=(x:unknown):x is string=>typeof x==="string"&&x.length>0&&
@@ -59,7 +62,7 @@ export function validPrivateStructureCreateCommand(
       typeof r.restoreGeneration==="string"&&UUID.test(r.restoreGeneration)&&validTitle(r.title);
   }
   return keys==="commandId,projectId,restoreGeneration,taskId,title"&&
-    canonicalUUID(r.projectId)&&canonicalUUID(r.taskId)&&
+    isReadableStagingProjectId(r.projectId)&&canonicalUUID(r.taskId)&&
     typeof r.commandId==="string"&&UUID.test(r.commandId)&&
     typeof r.restoreGeneration==="string"&&UUID.test(r.restoreGeneration)&&validTitle(r.title);
 }
@@ -84,16 +87,16 @@ type Witness={kind:PrivateStructureKind;id:string;projectId:string;areaId:string
 const witnessValue=(w:Witness)=>JSON.stringify(w);
 function parseWitness(value:string):Witness|null{
   try{
-    if(value.length>450)return null;
+    if(value.length>900)return null;
     const v:unknown=JSON.parse(value);
     if(!v||typeof v!=="object"||Array.isArray(v))return null;
     const w=v as Record<string,unknown>;
     if(Object.keys(w).sort().join(",")!=="areaId,id,kind,projectId,restoreGeneration"||
       (w.kind!=="project"&&w.kind!=="project-task")||
-      !canonicalUUID(w.id)||!canonicalUUID(w.projectId)||
+      !canonicalUUID(w.id)||!isReadableStagingProjectId(w.projectId)||
       typeof w.areaId!=="string"||!AREA.test(w.areaId)||
       typeof w.restoreGeneration!=="string"||!UUID.test(w.restoreGeneration)||
-      (w.kind==="project"&&w.id!==w.projectId))return null;
+      (w.kind==="project"&&(w.id!==w.projectId||!canonicalUUID(w.projectId))))return null;
     return w as Witness;
   }catch{return null;}
 }
@@ -103,9 +106,9 @@ function generation(db:DatabaseSync):string|null{
   return r?.value?.toLowerCase()||null;
 }
 function liveProjectArea(db:DatabaseSync,actor:string,projectId:string):string|null{
-  const row=db.prepare("SELECT area_id FROM projects WHERE id=? COLLATE NOCASE")
-    .get(projectId) as {area_id:string}|undefined;
-  if(!row||!canWriteIsolatedTargetArea(db,actor,row.area_id,true))return null;
+  const row=db.prepare("SELECT id,area_id FROM projects WHERE id=? COLLATE BINARY")
+    .get(projectId) as {id:string;area_id:string}|undefined;
+  if(!row||row.id!==projectId||!canWriteIsolatedTargetArea(db,actor,row.area_id,true))return null;
   return row.area_id;
 }
 function liveWitness(db:DatabaseSync,actor:string,w:Witness):boolean{
