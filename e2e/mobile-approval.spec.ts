@@ -175,10 +175,18 @@ test.describe("mobile proposal approval", () => {
 
     await ask("Přesuň Tajný úkol");
     await expect(page.getByRole("button", { name: "Zkontrolovat návrh" })).toBeVisible();
+    // Quick Capture must not mutate the global write workspace in All.
+    await expect.poll(() => page.evaluate(() => localStorage.getItem("ai-executive-write-workspace"))).toBe("personal");
     await chooseCaptureDestination(otherWorkspaceId);
+    await expect.poll(() => page.evaluate(() => localStorage.getItem("ai-executive-write-workspace"))).toBe("personal");
     await page.getByRole("button", { name: "Zeptat se AI" }).click();
-    // The original proposal is still readable because only capture changed.
-    await expect(page.getByRole("button", { name: "Zkontrolovat návrh" })).toBeVisible();
+    // The proposal is not merely visible: it must remain valid for approval.
+    await page.getByRole("button", { name: "Zkontrolovat návrh" }).click();
+    const review = page.getByRole("dialog", { name: "Zkontrolovat návrh" });
+    await expect(review).toContainText("Tajný úkol");
+    await expect(review.getByRole("button", { name: "Schválit změnu" })).toBeEnabled();
+    await review.getByRole("button", { name: "Zavřít" }).click();
+    await expect(review).toHaveCount(0);
     await switchActiveWorkspace(otherWorkspaceId);
     await page.getByRole("button", { name: "Zeptat se AI" }).click();
     await expect(page.locator(".assistantMessages")).not.toContainText("Tajný úkol");

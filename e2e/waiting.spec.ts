@@ -42,9 +42,14 @@ test("a task waiting for someone comes back on its follow-up date", async ({ pag
   const item = page.locator(".attentionItem", { hasText: title });
   await expect(item).toContainText("Nastal den připomenutí");
   await expect(item).toContainText("čeká na: Petra Nová");
-  // #242: the detailed rule reason is now in Proč?, not the collapsed row.
+  // #242: Proč? reveals the actual evidence and evaluation time, not the
+  // former "označeno jako čekající" rule tail.
   await item.getByRole("button", { name: `Proč?: ${title}` }).click();
-  await expect(item.locator(".attentionMore")).toContainText("označeno jako čekající");
+  const why = item.locator(".attentionMore");
+  await expect(why).toBeVisible();
+  await expect(why).toContainText("Vyhodnoceno");
+  await expect(why.locator("time")).toBeVisible();
+  await expect(why.locator(".attentionSources")).toContainText(title);
   // Ending the waiting ends the item.
   await page.goto(`/?task=${id}`);
   await waitUntilSynced(page);

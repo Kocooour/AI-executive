@@ -71,7 +71,7 @@ async function seedWorld(page: Page, stamp: number) {
       entity(id.rich, "project", `Projekt B1${R} s kontextem`, {
         context: { why: "Současný web neprodává. Brzdí také nábor.", goals: ["Spustit do 30. 11.", "Udržet SEO"], doneWhen: "Web běží na produkční doméně", provenance: "owner", updatedAt: stamp } }),
       entity(id.bare, "project", `Projekt B1${R} bez kontextu`),
-      // #109: the server normalizes the old free-text label into a real Nezařazeno Area link.
+      // #109: a newly written legacy free-text label gets its own canonical Area link.
       entity(id.old, "project", `Projekt B1${R} starý cíl`, { goal: "Starý cíl projektu zůstane vidět", area: "Starý štítek" }),
       entity(id.t1, "task", `Úkol B1${R} první`, { deadline: day }),
       entity(id.t2, "task", `Úkol B1${R} druhý`),
@@ -107,14 +107,23 @@ test("project list: first sentence of why, progress, next step and one attention
     await expect(bare.locator("[data-project-attention]")).toHaveText("bez dalšího kroku");
     await expect(bare.locator("[data-project-attention]")).toHaveCount(1);
     // The former goal is read as "Hotovo, když" even before anything was saved.
-    // #109: assert the persisted default Area and its actual project group.
-    const defaultArea = await page.evaluate(async (projectId) => {
+    // #109: "Starý štítek" becomes an actual Area, not fallback "Nezařazeno".
+    const normalizedLegacy = await page.evaluate(async (projectId) => {
       const snapshot = await fetch("/api/store", { cache: "no-store" }).then((response) => response.json());
-      return snapshot.relations.find((relation: { sourceEntityId: string; relationType: string }) =>
-        relation.sourceEntityId === projectId && relation.relationType === "belongs_to_area")?.targetEntityId;
+      const relation = snapshot.relations.find((row: { sourceEntityId: string; relationType: string }) =>
+        row.sourceEntityId === projectId && row.relationType === "belongs_to_area");
+      const project = snapshot.entities.find((row: { id: string }) => row.id === projectId);
+      const area = snapshot.entities.find((row: { id: string }) => row.id === relation?.targetEntityId);
+      return {
+        areaId: relation?.targetEntityId ?? null,
+        areaTitle: area?.title ?? null,
+        hasLegacyLabel: Object.prototype.hasOwnProperty.call(project?.properties ?? {}, "area"),
+      };
     }, id.old);
-    expect(defaultArea).toBeTruthy();
-    await expect(page.locator(`[data-project-group="${defaultArea}"]`)
+    expect(normalizedLegacy.areaId).toBeTruthy();
+    expect(normalizedLegacy.areaTitle).toBe("Starý štítek");
+    expect(normalizedLegacy.hasLegacyLabel).toBe(false);
+    await expect(page.locator(`[data-project-group="${normalizedLegacy.areaId}"]`)
       .locator(".taskRow", { hasText: `Projekt B1${R} starý cíl` })).toBeVisible();
   } finally {
     await cleanup(page, Object.values(id));
