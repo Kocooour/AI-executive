@@ -133,7 +133,7 @@ test("flag off: the root loads the target screen lazily and only for target mode
   const page=read("app/page.tsx");
   assert.match(page,/const config = targetUiEnabled\(\) \? targetUiConfig\(process\.env\) : null/);
   assert.match(page,/const targetData = targetDataNeeded\(config\)/);
-  assert.match(page,/: <LumiAppRoot \/>/); // flag off: no prop, no provider
+  assert.match(page,/: <LumiAppRoot humanWikiSourceStatusEnabled=\{humanWikiSourceStatusEnabled\} \/>/); // target flags off: no target provider; independent HumanWiki status defaults off
   assert.doesNotMatch(page,/target-my-plan|fetch\(|target-staging\//);
 });
 
