@@ -1,0 +1,306 @@
+"use client";
+/** R3-FE-6: real private standalone TASK creation in the existing global
+ * Quick Capture shell. No optimistic row, legacy fallback, cached Area or
+ * locally persisted text; only an exact server confirmation means success. */
+import {useEffect,useRef,useState,type FormEvent} from "react";
+import {flushSync} from "react-dom";
+import {handleOverlayKeys} from "./focus";
+import {useTargetGeneration,useTargetRuntime} from "./target-data-provider";
+import {useTargetWake} from "./use-target-revalidation";
+import {loadPrivateNoteAreaChoices,type PrivateNoteAreaChoice} from
+  "../../lib/target-private-note-area-client";
+import {privateNoteCreatePreflight} from "../../lib/target-private-note-create-client";
+import {validPrivateTaskAreaId,validPrivateTaskTitle,type PrivateTaskCreateCommand} from
+  "../../lib/target-private-task-create-client";
+import {privateTaskCreateMarker,trackedPrivateTaskCreate,
+  runPrivateTaskCreate,checkTrackedPrivateTaskCreate,
+  recoverPrivateTaskCreate,cancelTrackedPrivateTaskCreate,
+  subscribePrivateTaskCreate} from
+  "../../lib/target-private-task-create-coordinator";
+
+type Areas={kind:"loading"|"unavailable"|"signed-out";generation:string}|
+  {kind:"ready";generation:string;items:PrivateNoteAreaChoice[]};
+type Phase="idle"|"checking"|"saving"|"uncertain"|"receipt"|"cancelling"|"saved";
+const text={
+  cs:{title:"Nový soukromý úkol",select:"Cílová Oblast",choose:"Vyberte soukromou Oblast",
+    loading:"Ověřuji soukromé Oblasti…",empty:"Nemáte dostupnou soukromou Oblast.",
+    denied:"Oblasti nelze ověřit. Vytvoření úkolu není dovoleno.",
+    signedOut:"Přístup se změnil. Nelze pokračovat.",retry:"Zkusit znovu",
+    name:"Název úkolu",save:"Vytvořit úkol",checking:"Ověřuji oprávnění…",
+    saving:"Ukládám…",close:"Zavřít",
+    privacy:"Úkol bude vytvořen pouze ve výslovně vybrané soukromé Oblasti.",
+    invalid:"Vyplňte platný název úkolu (max. 4096 bajtů).",
+    access:"Oprávnění nebo dostupnost Oblasti se změnily.",
+    uncertain:"Uložení není potvrzené. Nový pokus by mohl vytvořit duplicitu.",
+    blocked:"Předchozí vytvoření úkolu není potvrzené. Další úkol nelze nyní vytvořit.",
+    storage:"Úložiště záložky není dostupné; bezpečné vytvoření je zablokované.",
+    lost:"Text původního příkazu není uložen. Výsledek lze bezpečně ověřit podle neprůhledného ID; do potvrzení je nový zápis zablokovaný.",
+    receipt:"Ověřit původní zápis",cancel:"Zrušit nepotvrzený zápis",
+    cancelling:"Bezpečně ruším…",cancelled:"Původní zápis byl prokazatelně zrušen. Můžete vytvořit nový úkol.",
+    createSettled:"Původní zápis byl proveden. Úkol už ale nemusí být přístupný. Nyní můžete vytvořit nový úkol.",
+    cancelFailed:"Zrušení nelze potvrdit; vytváření dalších úkolů zůstává zablokované.",notRecorded:"Server dosud nepotvrdil zápis. To nevylučuje pozdější dokončení; další příkaz je blokovaný.",
+    receiptFailed:"Zápis nelze bezpečně potvrdit. Ověření opakujte po obnovení oprávnění.",
+    success:"Vytvoření úkolu bylo potvrzeno."},
+  en:{title:"New private task",select:"Destination Area",choose:"Choose a private Area",
+    loading:"Verifying private Areas…",empty:"No writable private Area available.",
+    denied:"Areas cannot be verified. Task creation is not permitted.",
+    signedOut:"Access changed. Cannot continue.",retry:"Try again",
+    name:"Task title",save:"Create task",checking:"Verifying access…",
+    saving:"Saving…",close:"Close",
+    privacy:"The task is created only in the explicitly selected private Area.",
+    invalid:"Enter a valid task title (up to 4096 bytes).",
+    access:"Area access or availability changed.",
+    uncertain:"Creation is not confirmed. A new attempt could duplicate the task.",
+    blocked:"A previous task create is unconfirmed; new creation is blocked.",
+    storage:"Tab storage is unavailable; safe creation is blocked.",
+    lost:"The original private command text was not stored. Check the original create with its opaque ID; new creation remains blocked until confirmed.",
+    receipt:"Check original create",cancel:"Cancel unresolved create",
+    cancelling:"Cancelling safely…",cancelled:"Original create was durably cancelled. You may create another task.",
+    createSettled:"The original create was committed, but its task may no longer be accessible. You can now create a new task.",
+    cancelFailed:"Cancellation is not confirmed; further task creation stays blocked.",notRecorded:"The server has not confirmed this create. It could still commit later; new creation is blocked.",
+    receiptFailed:"The create could not be verified. Retry verification after access is restored.",
+    success:"Task creation confirmed."},
+} as const;
+
+export default function TargetPrivateTaskAreaChooser({
+  language="cs",onClose,
+}:{language?:"cs"|"en";onClose:()=>void}){
+  const c=text[language],runtime=useTargetRuntime(),generation=useTargetGeneration();
+  const [nonce,setNonce]=useState(0);
+  const [areas,setAreas]=useState<Areas>({kind:"loading",generation:""});
+  const [chosen,setChosen]=useState("");
+  const [name,setName]=useState("");
+  const [draftGeneration,setDraftGeneration]=useState("");
+  const [phase,setPhase]=useState<Phase>("idle");
+  const [message,setMessage]=useState("");
+  const [revision,setRevision]=useState(0);
+  const previewRef=useRef<AbortController|null>(null);
+  const mounted=useRef(true);
+  const serial=useRef(0);
+   const closeRef=useRef<HTMLButtonElement>(null);
+  useEffect(()=>{closeRef.current?.focus();},[]);
+  useEffect(()=>{
+    mounted.current=true;
+    return ()=>{mounted.current=false;serial.current++;previewRef.current?.abort();};
+  },[]);
+  useEffect(()=>{
+    if(!runtime||!runtime.known()||runtime.generation()!==generation)return;
+    return subscribePrivateTaskCreate(runtime,generation,change=>{
+      if(!mounted.current)return;
+      setRevision(v=>v+1);
+      if(change.confirmedTaskId){
+        setName("");setPhase("saved");setMessage("");
+      }else if(privateTaskCreateMarker(generation).kind==="blocked"){
+        setPhase("uncertain");setMessage(c.uncertain);
+      }
+    });
+  },[runtime,generation,language]);
+  useEffect(()=>{
+    setName("");setDraftGeneration(generation);setChosen("");
+    setMessage("");setPhase("idle");
+  },[generation]);
+  function live(){
+    return runtime?.known()===true&&runtime.generation()===generation&&
+      document.visibilityState==="visible"&&navigator.onLine;
+  }
+  function hide(){
+    serial.current++;
+    previewRef.current?.abort();
+    setChosen("");setName("");setDraftGeneration(generation);
+    setAreas({kind:"unavailable",generation});
+    if(phase==="checking")setPhase("idle");
+    if(phase==="receipt")setPhase("uncertain");
+    if(phase==="cancelling"){
+      // Aborting a HTTP response does not prove the server fence failed:
+      // keep the opaque command blocked until an explicit verified retry.
+      // If a positive receipt already cleared it, do not strand the form
+      // in a non-idle phase after this hide/wake transition either.
+      const pending=privateTaskCreateMarker(generation).kind!=="clear";
+      setPhase(pending?"uncertain":"idle");
+      setMessage(pending?c.cancelFailed:"");
+    }
+  }
+  useTargetWake({
+    hide:()=>flushSync(hide),
+    ready:()=>{
+      if(live()){
+        setNonce(v=>v+1);
+       }else hide();
+    },
+    signedOut:()=>{hide();setAreas({kind:"signed-out",generation});},
+  });
+  useEffect(()=>{
+    const show=(event:PageTransitionEvent)=>{if(event.persisted)flushSync(hide);};
+    window.addEventListener("pageshow",show);
+    return ()=>window.removeEventListener("pageshow",show);
+  },[generation]);
+  useEffect(()=>{
+    const controller=new AbortController();
+    let active=true;
+    setAreas({kind:"loading",generation});setChosen("");
+    if(!runtime?.known()||runtime.generation()!==generation||
+      document.visibilityState!=="visible"||!navigator.onLine){
+      setAreas({kind:"unavailable",generation});
+      return ()=>{active=false;controller.abort();};
+    }
+    const unregister=runtime.register({
+      dispose:()=>controller.abort(),suspend:()=>controller.abort(),
+    });
+    const timer=setTimeout(()=>{
+      controller.abort();
+      if(active)setAreas({kind:"unavailable",generation});
+    },8000);
+    void loadPrivateNoteAreaChoices(controller.signal).then(result=>{
+      if(!active||controller.signal.aborted||!live())return;
+      if(result.ok===true)setAreas({kind:"ready",generation,items:result.areas});
+      else if(result.ok===false&&result.reason==="signed-out"){
+        setAreas({kind:"signed-out",generation});void runtime.reportRefusal();
+      }else setAreas({kind:"unavailable",generation});
+    }).catch(()=>{if(active&&!controller.signal.aborted)setAreas({kind:"unavailable",generation});})
+      .finally(()=>clearTimeout(timer));
+    return ()=>{active=false;clearTimeout(timer);controller.abort();unregister();};
+  },[runtime,generation,nonce]);
+  const ready=live()&&areas.kind==="ready"&&areas.generation===generation;
+  const items=ready&&areas.kind==="ready"?areas.items.filter(a=>validPrivateTaskAreaId(a.id)):[];
+  const selected=items.find(item=>item.id===chosen)||null;
+  const marker=privateTaskCreateMarker(generation);
+  const tracked=runtime?trackedPrivateTaskCreate(runtime,generation):null;
+  const blocked=marker.kind!=="clear";
+  const writable=Boolean(ready&&selected&&!blocked&&phase==="idle");
+  const title=draftGeneration===generation?name:"";
+  async function create(event:FormEvent<HTMLFormElement>){
+    event.preventDefault();
+    if(!writable||!runtime||!selected||!live()||
+      privateTaskCreateMarker(generation).kind!=="clear")return;
+    if(!validPrivateTaskTitle(title)){setMessage(c.invalid);return;}
+    const current=++serial.current,controller=new AbortController();
+    previewRef.current?.abort();previewRef.current=controller;
+    setPhase("checking");setMessage("");
+    const timer=setTimeout(()=>controller.abort(),8000);
+    // The note Area preview is a READ of owner-private write-capable Areas.
+    // The separate task writer rechecks both identity and ACL at COMMIT.
+    const preflight=await privateNoteCreatePreflight(selected.id,controller.signal)
+      .catch(()=>null);
+    clearTimeout(timer);
+    if(current!==serial.current||!mounted.current||!live())return;
+    // A genuine timeout is retryable. An aborted, superseded operation was
+    // already invalidated by hide()/unmount and must not update this form.
+    if(!preflight?.ok||controller.signal.aborted){
+      setPhase("idle");setMessage(c.access);setNonce(v=>v+1);return;
+    }
+    const command:PrivateTaskCreateCommand={
+      taskId:crypto.randomUUID(),commandId:crypto.randomUUID(),
+      areaId:selected.id,restoreGeneration:preflight.restoreGeneration,title,
+    };
+    setPhase("saving");
+    void runPrivateTaskCreate(runtime,generation,command).then(outcome=>{
+      if(!mounted.current||runtime.generation()!==generation)return;
+      setRevision(v=>v+1);
+      if(outcome==="saved"&&privateTaskCreateMarker(generation).kind==="clear"){
+        setName("");setPhase("saved");return;
+      }
+      setPhase("uncertain");setMessage(c.uncertain);
+    });
+  }
+  async function checkReceipt(){
+    if(!runtime||!live()||!blocked||
+      tracked?.phase==="saving"||phase==="receipt"||phase==="cancelling")return;
+    const current=++serial.current,controller=new AbortController();
+    previewRef.current?.abort();previewRef.current=controller;
+    setPhase("receipt");setMessage("");
+    const timer=setTimeout(()=>controller.abort(),8000);
+    const result=await (tracked
+      ?checkTrackedPrivateTaskCreate(runtime,generation,controller.signal)
+      :recoverPrivateTaskCreate(runtime,generation,controller.signal))
+      .catch(()=>"unavailable" as const);
+    clearTimeout(timer);
+    if(current!==serial.current||!mounted.current||!live())return;
+    setRevision(v=>v+1);
+    if(result==="committed"&&!controller.signal.aborted&&
+      privateTaskCreateMarker(generation).kind==="clear"){
+      setName("");setPhase("saved");return;
+    }
+    setPhase("uncertain");
+    setMessage(result==="not_recorded"?c.notRecorded:c.receiptFailed);
+  }
+  async function cancelPending(){
+    if(!runtime||!live()||marker.kind!=="blocked"||
+      tracked?.phase==="saving"||phase==="receipt"||phase==="cancelling")return;
+    const current=++serial.current,controller=new AbortController();
+    previewRef.current?.abort();previewRef.current=controller;
+    setPhase("cancelling");setMessage("");
+    const timer=setTimeout(()=>controller.abort(),8000);
+    const result=await cancelTrackedPrivateTaskCreate(runtime,generation,controller.signal)
+      .catch(()=>"unavailable" as const);
+    clearTimeout(timer);
+    if(current!==serial.current||!mounted.current||!live())return;
+    setRevision(v=>v+1);
+    if((result==="cancelled"||result==="settled")&&
+      privateTaskCreateMarker(generation).kind==="clear"){
+      setName("");setChosen("");setPhase("idle");
+      setMessage(result==="settled"?c.createSettled:c.cancelled);
+      setNonce(v=>v+1);return;
+    }
+    setPhase("uncertain");
+    setMessage(c.cancelFailed);
+  }
+  void revision;
+  return <div className="captureOverlay" onClick={onClose}>
+    <div className="captureModal" role="dialog" aria-modal="true"
+      aria-label={c.title} data-testid="target-private-task-capture"
+      onClick={event=>event.stopPropagation()}
+      onKeyDown={event=>handleOverlayKeys(event,onClose)}>
+      <h2>{c.title}</h2>
+      {!ready&&<p role="status">{areas.kind==="loading"||areas.generation!==generation
+        ?c.loading:areas.kind==="signed-out"?c.signedOut:c.denied}</p>}
+      {ready&&(items.length===0?<p role="status">{c.empty}</p>:
+        <label>{c.select}
+          <select value={selected?.id??""} data-testid="target-private-task-area"
+            disabled={blocked||phase!=="idle"} onChange={event=>setChosen(event.target.value)}>
+            <option value="">{c.choose}</option>
+            {items.map(item=><option key={item.id} value={item.id}>{item.title}</option>)}
+          </select>
+        </label>)}
+      {blocked&&(phase==="saving"||tracked?.phase==="saving")&&
+        <p role="status">{c.saving}</p>}
+      {blocked&&phase!=="saving"&&tracked?.phase!=="saving"&&<section data-testid="target-private-task-unresolved">
+        <p role="alert">{marker.kind==="unavailable"?c.storage:c.blocked}</p>
+        {marker.kind==="blocked"&&!tracked&&<p role="note">{c.lost}</p>}
+        {marker.kind==="blocked"&&<button type="button"
+          data-testid="target-private-task-receipt"
+          disabled={!ready||phase==="receipt"||phase==="cancelling"}
+          onClick={()=>{void checkReceipt();}}>{c.receipt}</button>}
+        {marker.kind==="blocked"&&<button
+          type="button" data-testid="target-private-task-cancel"
+          disabled={!live()||phase==="receipt"||phase==="cancelling"}
+          onClick={()=>{void cancelPending();}}>
+          {phase==="cancelling"?c.cancelling:c.cancel}
+        </button>}
+      </section>}
+      {ready&&selected&&!blocked&&<form data-testid="target-private-task-form"
+        onSubmit={event=>{void create(event);}}>
+        <label>{c.name}
+          <input type="text" value={title} maxLength={4096}
+            readOnly={phase!=="idle"}
+            onChange={event=>{setDraftGeneration(generation);setName(event.target.value);}}/>
+        </label>
+        <p role="note">{c.privacy}</p>
+        <button type="submit" data-testid="target-private-task-save"
+          disabled={!writable}>{phase==="checking"?c.checking:
+            phase==="saving"?c.saving:c.save}</button>
+      </form>}
+      {phase==="saved"&&<p role="status">{c.success}</p>}
+      {message&&<p role="alert">{message}</p>}
+      <div className="captureActions">
+        {!ready&&<button type="button" onClick={()=>{
+          if(!runtime)return;
+          void runtime.refresh().then(result=>{
+            if(result==="ok"&&live())setNonce(v=>v+1);
+            else hide();
+          });
+        }}>{c.retry}</button>}
+        <button type="button" ref={closeRef} onClick={onClose}>{c.close}</button>
+      </div>
+    </div>
+  </div>;
+}

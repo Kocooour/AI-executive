@@ -1,0 +1,62 @@
+name: Focused R3 private task Quick Capture browser
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/r3-private-task-create-browser.yml"
+      - "app/page.tsx"
+      - "app/ui/lumi-app-root.tsx"
+      - "app/ui/target-private-quick-capture.tsx"
+      - "app/ui/target-private-task-area-chooser.tsx"
+      - "lib/target-private-task-create-*"
+      - "lib/target-client-runtime.ts"
+      - "lib/target-detail-route.ts"
+      - "lib/target-ui-config.ts"
+      - "e2e/target-private-task-create.spec.ts"
+      - "playwright.config.ts"
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  chromium:
+    name: Task Quick Capture (Chromium)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    env:
+      CI: "true"
+      NEXT_TELEMETRY_DISABLED: "1"
+      NEXT_PUBLIC_LUMI_DESIGN_V1_PREVIEW: "1"
+      E2E_SKIP_BUILD: "1"
+      E2E_PORT: "3129"
+      LUMI_PRIVATE_TASK_CREATE_E2E: "true"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+      - name: Install pnpm
+        uses: pnpm/action-setup@v5
+        with:
+          version: 10.20.0
+      - name: Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+          cache: pnpm
+      - name: Locked dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Content-free coordinator and server-contract tests
+        run: node --experimental-loader ./tests/ts-loader.mjs --test tests/target-private-task-create-ui.test.mjs tests/target-staging-private-task-create-http.test.mjs
+      - name: Build isolated UI
+        run: pnpm build
+      - name: Chromium
+        run: pnpm exec playwright install --with-deps chromium
+      - name: 390px and desktop private task Quick Capture acceptance
+        run: pnpm exec playwright test e2e/target-private-task-create.spec.ts --project=desktop
+      - name: Upload failure traces
+        if: failure()
+        uses: actions/upload-artifact@v6
+        with:
+          name: lumi-r3-private-task-capture
+          path: |
+            test-results/
+            playwright-report/
+          retention-days: 7
+          if-no-files-found: ignore

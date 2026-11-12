@@ -37,8 +37,10 @@ const durable=await import("../lib/target-staging-durable-session.ts");
 const {createSessionToken,sessionCookieName}=await import("../lib/auth.ts");
 const {POST}=await import("../app/api/target-staging/tasks/route.ts");
 const {POST:STATUS}=await import("../app/api/target-staging/tasks/create-status/route.ts");
+const {POST:RECOVER}=await import("../app/api/target-staging/tasks/create-recovery/route.ts");
+const {POST:CANCEL}=await import("../app/api/target-staging/tasks/create-cancel/route.ts");
 const {GET:GET_TASK}=await import("../app/api/target-staging/tasks/[taskId]/route.ts");
-const {parseTaskCreateReply,parseTaskCreateStatusReply}=
+const {parseTaskCreateReply,parseTaskCreateStatusReply,parseTaskCreateRecoveryReply}=
   await import("../lib/target-staging-task-create-process.ts");
 const {readStagingTemporalDetailInChild}=
   await import("../lib/target-staging-read-process.ts");
@@ -98,6 +100,10 @@ function request(url,data,cookie=owner(),headers={}){
 }
 const create=(cmd,cookie,headers)=>POST(request(base,cmd,cookie,headers));
 const recover=(cmd,cookie,headers)=>STATUS(request(base+"/create-status",cmd,cookie,headers));
+const recoverOpaque=(cmd,cookie,headers)=>RECOVER(
+  request(base+"/create-recovery",{commandId:cmd.commandId},cookie,headers));
+const cancelOpaque=(cmd,cookie,headers)=>CANCEL(
+  request(base+"/create-cancel",{commandId:cmd.commandId},cookie,headers));
 async function checked(response,status){
   const value=await response.json();
   assert.equal(response.status,status,JSON.stringify(value));
@@ -133,6 +139,7 @@ test("private CREATE HTTP inserts once, uses content-free receipt, and survives 
   assert.equal(first.sequence,before.sequence+1);
   assert.equal(first.journal.includes(cmd.title),false);
   assert.deepEqual(await checked(await recover(cmd),200),{status:"committed"});
+  assert.deepEqual(await checked(await recoverOpaque(cmd),200),{status:"committed",taskId:cmd.taskId});
   const read=await GET_TASK(new Request(base+"/"+cmd.taskId,{headers:{cookie:owner()}}),
     {params:Promise.resolve({taskId:cmd.taskId})});
   assert.equal(read.status,200);
@@ -150,6 +157,8 @@ test("live actor and private Area ACL deny foreign and shared writes, without an
   const own=command(fx,{areaId:"bob-private"});
   assert.equal((await checked(await create(own,bob),201)).taskId,own.taskId);
   assert.deepEqual(await checked(await recover(own,bob),200),{status:"committed"});
+  assert.deepEqual(await checked(await recoverOpaque(own,bob),200),{status:"committed",taskId:own.taskId});
+  assert.deepEqual(await checked(await recoverOpaque(own),200),{status:"not_recorded"});
   assert.deepEqual(await checked(await recover(own),404),{error:"Not found"});
   assert.equal((await checked(await recover(own,bob+"broken"),401)).code,
     "session_revoked");
@@ -172,6 +181,7 @@ test("durable revocation denies create and status and leaves journal untouched",
   const before=persistence(fx,cmd.taskId);
   assert.equal((await checked(await create(cmd,bob),401)).code,"session_revoked");
   assert.equal((await checked(await recover(cmd,bob),401)).code,"session_revoked");
+  assert.equal((await checked(await recoverOpaque(cmd,bob),401)).code,"session_revoked");
   assert.deepEqual(persistence(fx,cmd.taskId),before);
 });
 test("flags, origin, protocol, shape and restore fence fail closed",async()=>{
@@ -232,6 +242,7 @@ test("create status cannot confirm a deleted task or resurrect its tombstone",as
     statusRequest,identity,fx.store,"alice",cmd,preDelete),404),
     {error:"Not found"},"a pre-delete snapshot must fail the live task guard");
   assert.deepEqual(await checked(await recover(cmd),404),{error:"Not found"});
+  assert.deepEqual(await checked(await recoverOpaque(cmd),404),{error:"Not found"});
   assert.deepEqual(await checked(await create(cmd),404),{error:"Not found"});
   assert.deepEqual(await checked(await create({...cmd,commandId:randomUUID()}),404),
     {error:"Not found"});
@@ -262,10 +273,110 @@ test("exact content-free child DTO parsing rejects all extra properties",()=>{
   assert.deepEqual(parseTaskCreateReply({ok:true,replayed:true}),{ok:true,replayed:true});
   assert.deepEqual(parseTaskCreateStatusReply({ok:true,status:"committed"}),
     {ok:true,status:"committed"});
+  assert.deepEqual(parseTaskCreateRecoveryReply({ok:true,status:"committed",
+    taskId:randomUUID(),areaId:"safe"}).status,"committed");
+  assert.deepEqual(parseTaskCreateRecoveryReply({ok:true,status:"not_recorded"}),
+    {ok:true,status:"not_recorded"});
+  assert.equal(parseTaskCreateRecoveryReply({ok:true,status:"committed",title:"leak"}),null);
   for(const reply of [{ok:true,taskId:randomUUID()},{ok:true,replayed:false},
     {ok:false,reason:"unauthorized"},{ok:false,reason:"write_failed",title:"leak"}])
     assert.equal(parseTaskCreateReply(reply),null);
   for(const reply of [{ok:true,status:"committed",taskId:randomUUID()},
     {ok:true,status:"unknown"},{ok:false,reason:"session_revoked"}])
     assert.equal(parseTaskCreateStatusReply(reply),null);
+});
+
+test("opaque recovery stays content-free and actor-bound on real SQLite",async()=>{
+  const fx=fixture(),cmd=command(fx),bob=session(fx,"bob");
+  assert.deepEqual(await checked(await recoverOpaque(cmd),200),{status:"not_recorded"});
+  assert.deepEqual(await checked(await create(cmd),201),{ok:true,taskId:cmd.taskId});
+  assert.deepEqual(await checked(await recoverOpaque(cmd),200),{status:"committed",taskId:cmd.taskId});
+  assert.deepEqual(await checked(await recoverOpaque(cmd,bob),200),
+    {status:"not_recorded"},"another actor has no matching receipt");
+  assert.deepEqual(await checked(await recoverOpaque({...cmd,commandId:randomUUID()}),200),
+    {status:"not_recorded"},"random UUID never exposes a title or task ID");
+  const db=new DatabaseSync(fx.stage.databasePath,{readOnly:true});
+  try{
+    const rows=db.prepare("SELECT key,value FROM metadata WHERE key LIKE ?")
+      .all("r3:private-task-create-recovery-v1:%");
+    assert.equal(rows.length,1);
+    assert.equal(JSON.stringify(rows).includes(cmd.title),false);
+    assert.equal(JSON.stringify(rows).includes(cmd.commandId),false);
+    assert.equal(JSON.stringify(rows).includes(cmd.taskId),true);
+  }finally{db.close();}
+});
+
+test("terminal cancel HTTP is actor-scoped and blocks a late CREATE without new task",async()=>{
+  const fx=fixture(),cookie=session(fx,"alice"),cmd=command(fx);
+  const before=persistence(fx,cmd.taskId);
+  assert.deepEqual(await checked(await cancelOpaque(cmd,cookie),200),
+    {status:"cancelled"});
+  assert.deepEqual(await checked(await cancelOpaque(cmd,cookie),200),
+    {status:"cancelled"},"repeat cancellation is idempotent");
+  assert.deepEqual(await checked(await create(cmd,cookie),409),
+    {error:"Revision conflict"},"late CREATE must be rejected by the pinned fence");
+  const after=persistence(fx,cmd.taskId);
+  assert.equal(after.count,before.count);
+  assert.equal(after.receipts,before.receipts);
+  assert.equal(after.sequence,before.sequence);
+  assert.deepEqual(await checked(await recoverOpaque(cmd,cookie),200),
+    {status:"not_recorded"},"receipt is not proof that an old CREATE can still write");
+  const next=command(fx);
+  assert.deepEqual(await checked(await create(next,cookie),201),
+    {ok:true,taskId:next.taskId},"a new UUID can be created");
+});
+test("cancel cannot disguise committed task; invalid requests stay fail-closed",async()=>{
+  const fx=fixture(),cookie=session(fx,"alice"),cmd=command(fx);
+  assert.deepEqual(await checked(await create(cmd,cookie),201),
+    {ok:true,taskId:cmd.taskId});
+  const committed=persistence(fx,cmd.taskId);
+  assert.deepEqual(await checked(await cancelOpaque(cmd,cookie),200),
+    {status:"settled"});
+  assert.deepEqual(persistence(fx,cmd.taskId),committed);
+  assert.deepEqual(await checked(await CANCEL(request(base+"/create-cancel",
+    {commandId:cmd.commandId,actor:"alice"},cookie)),400),{error:"Invalid request"});
+  assert.equal((await cancelOpaque(cmd,null)).status,401);
+  assert.equal((await CANCEL(request(base+"/create-cancel",
+    {commandId:cmd.commandId},cookie,{origin:"https://foreign.invalid"}))).status,403);
+});
+
+test("deleted CREATE: signed actor gets terminal no-future-write proof without task data",async()=>{
+  const fx=fixture(),cookie=session(fx,"alice"),cmd=command(fx);
+  assert.deepEqual(await checked(await create(cmd,cookie),201),
+    {ok:true,taskId:cmd.taskId});
+  const {TargetStagingSessionAuthority}=await import("../lib/target-staging-session-authority.ts");
+  const authority=new TargetStagingSessionAuthority(fx.store);
+  try{
+    const write=authority.issueWritable("alice");
+    assert.ok(write);
+    const preview=authority.previewTaskTitleEdit(write.sessionToken,{taskId:cmd.taskId});
+    assert.equal(preview.ok,true);
+    assert.deepEqual(authority.deleteTask(write.sessionToken,{
+      taskId:cmd.taskId,commandId:randomUUID(),
+      expectedRevision:preview.snapshotRevision,writeAreaId:cmd.areaId,
+      restoreGeneration:cmd.restoreGeneration,
+    },true),{ok:true});
+  }finally{authority.close();}
+  const deleted=persistence(fx,cmd.taskId);
+  assert.equal(deleted.task,undefined);
+  assert.deepEqual(await checked(await recover(cmd,cookie),404),
+    {error:"Not found"},"detail-guarded status must not release deleted task");
+  assert.deepEqual(await checked(await recoverOpaque(cmd,cookie),404),
+    {error:"Not found"},"reload recovery must not reveal deleted task ID");
+  const settled=await checked(await cancelOpaque(cmd,cookie),200);
+  assert.deepEqual(settled,{status:"settled"},"immutable receipt is terminal proof");
+  assert.equal(JSON.stringify(settled).includes(cmd.taskId),false);
+  assert.deepEqual(await checked(await cancelOpaque(cmd,cookie),200),
+    {status:"settled"},"receipt-based terminal proof is idempotent");
+  assert.deepEqual(persistence(fx,cmd.taskId),deleted,
+    "settlement may not revive a task or mutate durable metadata");
+  assert.deepEqual(await checked(await create(cmd,cookie),404),
+    {error:"Not found"},"old command cannot insert after deletion");
+  assert.deepEqual(await checked(await create({...cmd,taskId:randomUUID()},cookie),409),
+    {error:"Revision conflict"},"old UUID with a different task ID conflicts");
+  const next=command(fx);
+  assert.deepEqual(await checked(await create(next,cookie),201),
+    {ok:true,taskId:next.taskId},"a new command UUID may create");
+  assert.equal((await cancelOpaque(cmd,null)).status,401,
+    "a missing authenticated session cannot query the original receipt");
 });

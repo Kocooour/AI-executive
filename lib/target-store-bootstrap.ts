@@ -89,6 +89,11 @@ export const TARGET_STAGING_MAX_RECEIPTS = 4096;
 export const TARGET_STAGING_DELETE_RECEIPT_PREFIX = "r2:task-delete-receipt-v1:";
 /** Staging-only actor+command receipt for private standalone task CREATE. */
 export const TARGET_STAGING_PRIVATE_TASK_CREATE_RECEIPT_PREFIX = "r3:private-task-create-receipt-v1:";
+/** Content-free, actor+command keyed lookup for private CREATE recovery after reload.
+ * Values contain only internal IDs and restore generation, never a task title. */
+export const TARGET_STAGING_PRIVATE_TASK_CREATE_RECOVERY_PREFIX = "r3:private-task-create-recovery-v1:";
+/** Actor-scoped immutable no-commit cancellation fence (same pinned lock as CREATE). */
+export const TARGET_STAGING_PRIVATE_TASK_CREATE_CANCEL_PREFIX = "r3:private-task-create-cancel-v1:";
 /** R2d.3h staging-only complete/reopen receipts; audited by the append-only anchor journal. */
 export const TARGET_STAGING_TEMPORAL_STATUS_RECEIPT_PREFIX = "r2:task-temporal-status-receipt-v1:";
 /** R2d.3i.1 isolated task dueOn mutation receipts; capped independently from status writes. */

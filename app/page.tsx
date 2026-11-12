@@ -7,6 +7,7 @@ import {targetProjectTitleEditUiEnabled} from "../lib/target-project-title-edit-
 import { targetNoteEditUiEnabled } from "../lib/target-note-edit-ui-gate";
 import {targetPrivateNoteAreaUiEnabled} from "../lib/target-private-note-area-ui-gate";
 import {targetPrivateNoteCreateUiEnabled} from "../lib/target-private-note-create-ui-gate";
+import {targetPrivateTaskCreateUiEnabled} from "../lib/target-private-task-create-ui-gate";
 
 // R3-FE-1/2: the flags are read per request. When they are off (default) the app is
 // rendered exactly as before: no provider, no runtime, no config, no additional request.
@@ -28,6 +29,6 @@ export default function Page() {
     process.env.AI_EXECUTIVE_HUMANWIKI_SOURCE_WITNESS_UI_ENABLED === "true" &&
     process.env.AI_EXECUTIVE_HUMANWIKI_SOURCE_WITNESS_STATUS_ENABLED === "true";
   return targetData
-    ? <TargetDataProvider><LumiAppRoot targetMyPlan={config?.myPlan} targetScopes={config?.scopes} targetDetails={config?.details} targetEdits={config?.edits} targetNoteEdit={Boolean(config?.details.note) && targetNoteEditUiEnabled(process.env)} targetProjectEdit={Boolean(config?.details.project) && targetProjectTitleEditUiEnabled(process.env)} targetPrivateNoteAreas={Boolean(config?.scopes.notes)&&targetPrivateNoteAreaUiEnabled(process.env)} targetPrivateNoteCreate={Boolean(config?.scopes.notes)&&targetPrivateNoteCreateUiEnabled(process.env)} targetSearch={targetSearch} humanWikiSourceStatusEnabled={humanWikiSourceStatusEnabled} /></TargetDataProvider>
+    ? <TargetDataProvider><LumiAppRoot targetMyPlan={config?.myPlan} targetScopes={config?.scopes} targetDetails={config?.details} targetEdits={config?.edits} targetNoteEdit={Boolean(config?.details.note) && targetNoteEditUiEnabled(process.env)} targetProjectEdit={Boolean(config?.details.project) && targetProjectTitleEditUiEnabled(process.env)} targetPrivateNoteAreas={Boolean(config?.scopes.notes)&&targetPrivateNoteAreaUiEnabled(process.env)} targetPrivateNoteCreate={Boolean(config?.scopes.notes)&&targetPrivateNoteCreateUiEnabled(process.env)} targetPrivateTaskCreate={Boolean(config?.scopes.notes&&config?.myPlan.enabled&&config?.details.task)&&targetPrivateTaskCreateUiEnabled(process.env)} targetSearch={targetSearch} humanWikiSourceStatusEnabled={humanWikiSourceStatusEnabled} /></TargetDataProvider>
     : <LumiAppRoot humanWikiSourceStatusEnabled={humanWikiSourceStatusEnabled} />;
 }

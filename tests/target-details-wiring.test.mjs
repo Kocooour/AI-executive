@@ -392,6 +392,7 @@ test("mount rule: page.tsx wiring is checked literally, independent of targetDat
     "targetProjectEdit={Boolean(config?.details.project) && targetProjectTitleEditUiEnabled(process.env)}",
     "targetPrivateNoteAreas={Boolean(config?.scopes.notes)&&targetPrivateNoteAreaUiEnabled(process.env)}",
     "targetPrivateNoteCreate={Boolean(config?.scopes.notes)&&targetPrivateNoteCreateUiEnabled(process.env)}",
+    "targetPrivateTaskCreate={Boolean(config?.scopes.notes&&config?.myPlan.enabled&&config?.details.task)&&targetPrivateTaskCreateUiEnabled(process.env)}",
     "targetSearch={targetSearch}",
     "humanWikiSourceStatusEnabled={humanWikiSourceStatusEnabled}",
   ]) assert.ok(providerProps.includes(prop),"missing expected root prop: "+prop);

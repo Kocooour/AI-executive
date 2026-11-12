@@ -45,7 +45,7 @@ import {
   readPreflightedTargetTaskTitleCommandStatus, readPreflightedTargetTaskDeleteCommandStatus,
   readPreflightedTargetNoteEditCommandStatus,readPreflightedTargetNoteEditRecovery,
   readPreflightedTargetNoteCreateRecovery,readPreflightedProjectTitleRecovery,readPreflightedTargetNoteDeleteCommandStatus,
-  readPreflightedPrivateTaskCreateStatus,
+  readPreflightedPrivateTaskCreateStatus,readPreflightedPrivateTaskCreateRecovery,
   listPreflightedPrivateProjectsAtOffset, readPreflightedPrivateProjectDetail,
   readPreflightedPrivateTaskTitleAudit,
   readPreflightedScopedTaskPage, readPreflightedSharedTargetTask, readPreflightedChangeFeedPage,
@@ -134,8 +134,10 @@ import {
 import type { TargetStagingNoteDeleteRequest, TargetStagingNoteDeleteResult } from "./target-note-delete-writer";
 import type { TargetStagingTaskTitleWriteRequest, TargetStagingTaskTitleWriteResult } from "./target-task-staging-writer";
 import {
-  createPreflightedPrivateTask, validPrivateTaskCreateCommand,
-  type PrivateTaskCreateCommand, type PrivateTaskCreateResult, type PrivateTaskCreateStatus,
+  createPreflightedPrivateTask, cancelPreflightedPrivateTaskCreate,
+  validPrivateTaskCreateCommand,
+  type PrivateTaskCreateCommand, type PrivateTaskCreateResult, type PrivateTaskCreateStatus,type PrivateTaskCreateRecovery,
+  type PrivateTaskCreateCancelResult,
 } from "./target-private-task-create-writer";
 
 import { deletePreflightedTargetTask, validTargetStagingTaskDeleteRequest } from "./target-task-delete-writer";
@@ -1355,6 +1357,17 @@ export class TargetStagingSessionAuthority {
       this.#store,credential,request,durableSessionTokenHash);
   }
 
+  /** Actor-bound cancellation fence, serialized with the original CREATE. */
+  cancelPrivateTaskCreate(
+    sessionToken:string,commandId:string,durableSessionTokenHash?:string,
+  ):PrivateTaskCreateCancelResult{
+    const credential=this.#credential(sessionToken,true);
+    return credential
+      ?cancelPreflightedPrivateTaskCreate(
+        this.#store,credential,commandId,durableSessionTokenHash)
+      :{ok:false,reason:"unauthorized"};
+  }
+
   /** Exact-command, read-only reconciliation for a private task CREATE.
    * A foreign actor, inaccessible Area or reused command cannot reveal data. */
   privateTaskCreateStatus(
@@ -1364,6 +1377,16 @@ export class TargetStagingSessionAuthority {
     return credential
       ? readPreflightedPrivateTaskCreateStatus(this.#store,credential,command)
       : {ok:false,reason:"unavailable"};
+  }
+
+  /** UUID-only private task recovery; the actor is never supplied by the client. */
+  privateTaskCreateRecovery(
+    sessionToken:string,commandId:string,
+  ):PrivateTaskCreateRecovery{
+    const credential=this.#credential(sessionToken,true);
+    return credential
+      ?readPreflightedPrivateTaskCreateRecovery(this.#store,credential,commandId)
+      :{ok:false,reason:"unavailable"};
   }
 
   /**

@@ -59,6 +59,7 @@ if(noteEditRecoveryTest&&!["legacy","combined","4b"].includes(noteEditProfile))
   throw new Error("Invalid LUMI_TARGET_NOTE_EDIT_PROFILE");
 const privateNoteAreasTest = process.env.LUMI_PRIVATE_NOTE_AREAS_E2E === "true";
 const privateNoteCreateTest = process.env.LUMI_PRIVATE_NOTE_CREATE_E2E === "true";
+const privateTaskCreateTest = process.env.LUMI_PRIVATE_TASK_CREATE_E2E === "true";
 const globalCaptureTest = process.env.LUMI_TARGET_GLOBAL_CAPTURE_E2E === "true";
 
 export default defineConfig({
@@ -189,6 +190,31 @@ export default defineConfig({
         AI_EXECUTIVE_TARGET_STAGING_HTTP_NOTES_CREATE_ENABLED: "true",
         AI_EXECUTIVE_TARGET_UI_PRIVATE_NOTE_AREAS_ENABLED: "true",
         AI_EXECUTIVE_TARGET_UI_PRIVATE_NOTE_CREATE_ENABLED: "true",
+      } : {}),
+      // R3-FE-6: only the isolated synthetic private TASK create browser run
+      // enables its full read/detail/write flag matrix. No production activation.
+      ...(privateTaskCreateTest ? {
+        AI_EXECUTIVE_TARGET_STAGING_HTTP_ENABLED: "true",
+        AI_EXECUTIVE_TARGET_UI_ENABLED: "true",
+        AI_EXECUTIVE_TARGET_UI_SCOPES_ENABLED: "true",
+        AI_EXECUTIVE_TARGET_STAGING_HTTP_GLOBAL_NOTES_ENABLED: "true",
+        AI_EXECUTIVE_TARGET_STAGING_HTTP_NOTES_ENABLED: "true",
+        AI_EXECUTIVE_TARGET_STAGING_HTTP_PRIVATE_NOTE_AREAS_ENABLED: "true",
+        AI_EXECUTIVE_TARGET_UI_PRIVATE_NOTE_AREAS_ENABLED: "true",
+        AI_EXECUTIVE_TARGET_STAGING_HTTP_WRITE_ENABLED: "true",
+        AI_EXECUTIVE_TARGET_STAGING_HTTP_NOTES_WRITE_ENABLED: "true",
+        AI_EXECUTIVE_TARGET_STAGING_HTTP_NOTES_CREATE_ENABLED: "true",
+        AI_EXECUTIVE_TARGET_UI_PRIVATE_NOTE_CREATE_ENABLED: "true",
+        AI_EXECUTIVE_TARGET_STAGING_HTTP_TASKS_CREATE_ENABLED: "true",
+        AI_EXECUTIVE_TARGET_UI_PRIVATE_TASK_CREATE_ENABLED: "true",
+        // Combined isolated Search + task Capture browser acceptance.
+        AI_EXECUTIVE_TARGET_STAGING_HTTP_TITLE_SEARCH_ENABLED: "true",
+        AI_EXECUTIVE_TARGET_UI_TITLE_SEARCH_ENABLED: "true",
+        AI_EXECUTIVE_TARGET_UI_MY_PLAN_ENABLED: "true",
+        AI_EXECUTIVE_TARGET_STAGING_HTTP_MY_PLAN_DAY_ENABLED: "true",
+        AI_EXECUTIVE_TARGET_STAGING_HTTP_MY_PLAN_SLICE_ENABLED: "true",
+        AI_EXECUTIVE_TARGET_UI_DETAILS_ENABLED: "true",
+        AI_EXECUTIVE_TARGET_STAGING_HTTP_TEMPORAL_ENABLED: "true",
       } : {}),
       // Explicit opt-in project title reauthentication on a throwaway server.
       // Browser routes are synthetic; no staging DB or production writes.

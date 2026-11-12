@@ -4,8 +4,8 @@ import { mobileDesignV1Preview, mobileMoreGroups, mobileV1MoreGroups, mobileV1Mo
 import type { LumiApp } from "../use-lumi-app";
 import { ViewIcon } from "./project-icon";
 
-export function MobileNav({ app, targetPlan = false, onTargetCapture }: {
-  app: LumiApp; targetPlan?: boolean; onTargetCapture?:()=>void;
+export function MobileNav({ app, targetPlan = false, onTargetCapture, targetIncludesTasks = false }: {
+  app: LumiApp; targetPlan?: boolean; onTargetCapture?:()=>void; targetIncludesTasks?:boolean;
 }) {
   const {
     closeDetail,
@@ -65,8 +65,8 @@ export function MobileNav({ app, targetPlan = false, onTargetCapture }: {
         className="mobileCaptureButton" type="button"
         data-target-private-capture-fab={onTargetCapture?"mobile":undefined}
         onClick={onTargetCapture ?? (()=>openCapture())}
-        aria-label={onTargetCapture?(language==="cs"?"Nová soukromá poznámka":"New private note"):tr("quickCapture")}
-        title={onTargetCapture?(language==="cs"?"Nová soukromá poznámka":"New private note"):tr("quickCapture")}>＋</button>}
+        aria-label={onTargetCapture?(targetIncludesTasks?(language==="cs"?"Rychlé přidání":"Quick capture"):(language==="cs"?"Nová soukromá poznámka":"New private note")):tr("quickCapture")}
+        title={onTargetCapture?(targetIncludesTasks?(language==="cs"?"Rychlé přidání":"Quick capture"):(language==="cs"?"Nová soukromá poznámka":"New private note")):tr("quickCapture")}>＋</button>}
       {moreOpen && (
         <div className="mobileMoreBackdrop" onClick={() => setMoreOpen(false)}>
           <div id="mobile-more-dialog" className="mobileMore" role="dialog" aria-modal="true" aria-labelledby="mobile-more-title" ref={moreDialogRef} onClick={(e) => e.stopPropagation()} onKeyDown={(event) => handleOverlayKeys(event, () => setMoreOpen(false))}>

@@ -186,7 +186,16 @@ test("revoked durable session and tombstoned IDs never create or resurrect tasks
   assert.deepEqual(f.authority.createPrivateTask(alice.sessionToken,{
     ...cmd,commandId:randomUUID(),
   }),rejected("unavailable"),"a different command cannot bypass tombstone ID lock");
-  assert.deepEqual(state(f),afterDelete);
+  assert.deepEqual(f.authority.cancelPrivateTaskCreate(
+    alice.sessionToken,cmd.commandId),{ok:true,status:"settled"},
+    "the receipt remains terminal after the task was deleted");
+  assert.deepEqual(f.authority.cancelPrivateTaskCreate(
+    alice.sessionToken,cmd.commandId),{ok:true,status:"settled"});
+  assert.deepEqual(state(f),afterDelete,
+    "terminal proof after deletion must not change task, receipt or journal");
+  const fresh=request(f.stage,f.stage.unassignedAreaId);
+  assert.deepEqual(f.authority.createPrivateTask(alice.sessionToken,fresh),{ok:true});
+  assert.ok(readTask(f.db,fresh.taskId));
 });
 
 test("canonical UUID rejects mixed-case aliases of both live and tombstoned tasks",()=>{
@@ -252,4 +261,41 @@ test("canonical UUID collides with legacy mixed-case live IDs and tombstones",()
   assert.deepEqual(f.authority.createPrivateTask(write.sessionToken,cmd),
     rejected("unavailable"),"lowercase ID must collide with uppercase legacy tombstone");
   assert.deepEqual(state(f),tombstoned);
+});
+
+test("terminal cancel fence wins against a late CREATE and is durable/idempotent",()=>{
+  const fx=fixture(),alice=fx.authority.issueWritable("alice");
+  assert.ok(alice);
+  const cmd=request(fx.stage,fx.stage.unassignedAreaId);
+  const before=state(fx);
+  assert.deepEqual(fx.authority.cancelPrivateTaskCreate(
+    alice.sessionToken,cmd.commandId),{ok:true,status:"cancelled"});
+  assert.deepEqual(fx.authority.cancelPrivateTaskCreate(
+    alice.sessionToken,cmd.commandId),{ok:true,status:"cancelled"});
+  assert.equal(readTask(fx.db,cmd.taskId),undefined);
+  assert.equal(receiptCount(fx.db),before.receipts);
+  assert.deepEqual(fx.authority.createPrivateTask(alice.sessionToken,cmd),
+    rejected("idempotency_conflict"),"a stale original POST must never write after cancel");
+  assert.equal(readTask(fx.db,cmd.taskId),undefined);
+  assert.deepEqual(inspectIsolatedTargetStore({stagingDirectory:fx.stage.directory}),
+    {ok:true,mode:"stage",issues:[]});
+  const next=request(fx.stage,fx.stage.unassignedAreaId);
+  assert.deepEqual(fx.authority.createPrivateTask(alice.sessionToken,next),{ok:true});
+  assert.ok(readTask(fx.db,next.taskId),"a fresh command can create after cancellation");
+});
+test("a committed task defeats later cancel; a foreign actor cannot cancel it",()=>{
+  const fx=fixture(),alice=fx.authority.issueWritable("alice"),
+    bob=fx.authority.issueWritable("bob");
+  assert.ok(alice&&bob);
+  const cmd=request(fx.stage,fx.stage.unassignedAreaId);
+  assert.deepEqual(fx.authority.cancelPrivateTaskCreate(
+    bob.sessionToken,cmd.commandId),{ok:true,status:"cancelled"},
+    "cancellation is keyed by actor; guessed UUID never affects another owner");
+  assert.deepEqual(fx.authority.createPrivateTask(alice.sessionToken,cmd),{ok:true});
+  const after=state(fx);
+  assert.deepEqual(fx.authority.cancelPrivateTaskCreate(
+    alice.sessionToken,cmd.commandId),{ok:true,status:"settled"});
+  assert.deepEqual(state(fx),after,"settled proof cannot alter a task or its receipt");
+  assert.deepEqual(inspectIsolatedTargetStore({stagingDirectory:fx.stage.directory}),
+    {ok:true,mode:"stage",issues:[]});
 });

@@ -42,8 +42,8 @@ test("the server page mounts the provider only behind the flag and reads it per 
   assert.match(page,/targetProjectEdit=\{Boolean\(config\?\.details\.project\) && targetProjectTitleEditUiEnabled\(process\.env\)\}/);
   assert.match(page,/targetPrivateNoteAreas=\{Boolean\(config\?\.scopes\.notes\)&&targetPrivateNoteAreaUiEnabled\(process\.env\)\}/);
   assert.match(page,/targetPrivateNoteCreate=\{Boolean\(config\?\.scopes\.notes\)&&targetPrivateNoteCreateUiEnabled\(process\.env\)\}/);
+  assert.match(page,/targetPrivateTaskCreate=\{Boolean\(config\?\.scopes\.notes&&config\?\.myPlan\.enabled&&config\?\.details\.task\)&&targetPrivateTaskCreateUiEnabled\(process\.env\)\}/);
   assert.match(page,/targetSearch=\{targetSearch\} humanWikiSourceStatusEnabled=\{humanWikiSourceStatusEnabled\} \/><\/TargetDataProvider>\s*:\s*<LumiAppRoot humanWikiSourceStatusEnabled=\{humanWikiSourceStatusEnabled\} \/>/);
-  // The independent HumanWiki flag never creates a target data provider.
   // The page itself never creates a runtime nor fetches.
   assert.doesNotMatch(page,/createTargetClientRuntime|fetch\(|target-client-runtime/);
 });
@@ -109,6 +109,10 @@ test("only the runtime (and its server route) reference the session endpoint; no
     "app/ui/target-project-title-editor.tsx",
     // R3-CAPTURE-1: live private Area chooser uses the existing runtime.
     "app/ui/target-private-note-area-chooser.tsx",
+    // R3-FE-6: lazily loaded private task capture uses the same runtime contract.
+    "app/ui/target-private-task-area-chooser.tsx",
+    // Completion observer is independently gated and never imported by default shell eagerly.
+    "app/ui/target-private-task-created-notice.tsx",
   ].sort());
 });
 
