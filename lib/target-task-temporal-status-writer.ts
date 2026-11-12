@@ -54,7 +54,7 @@ export function validTargetStagingTemporalStatusCommand(
   const v = input as Record<string,unknown>;
   const base="commandId,expectedRevision,restoreGeneration,status,taskId,writeAreaId";
   const undo=Object.prototype.hasOwnProperty.call(v,"undoOf");
-  if(Object.keys(v).sort().join(",")!==(undo?base.replace("status,","status,undoOf,"):base))return false;
+  if(Object.keys(v).sort().join(",")!==(undo?base.replace("taskId,","taskId,undoOf,"):base))return false;
   if(undo){
     const prior=v.undoOf;
     if(v.status!=="open"||!prior||typeof prior!=="object"||Array.isArray(prior))return false;
