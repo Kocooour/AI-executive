@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { createReadStream, statSync } from "node:fs";
-import { Readable } from "node:stream";
+import { ownerSessionCheckedStream } from "../../../../lib/owner-session-stream-release";
 import { createExportCopy, releaseTemporaryFile, temporaryFile } from "../../../../lib/server-store";
 import { verifyExportOutput, writeExportZip } from "../../../../lib/backup-package";
 import { enforceRateLimit, HttpInputError, requireSameOrigin } from "../../../../lib/http-security";
@@ -53,12 +53,20 @@ export async function GET(request: Request) {
     releaseTemporaryFile(scratchPath);
     const size = statSync(zipPath).size;
     const source = createReadStream(zipPath);
-    // Deleted when the download ends, fails or is abandoned by the browser.
+    // Deny the archive even after the expensive copy/ZIP work if logout was
+    // committed on another process. Never hand a revoked response to Next.
+    if (!isAuthenticated(request)) {
+      source.destroy();
+      recordSecurityEvent(request, "backup.export", "rejected", { reason: "revoked-before-release" });
+      return NextResponse.json({ error: "Authentication required" }, {
+        status: 401, headers: { "cache-control": "private, no-store" },
+      });
+    }
+    // Deleted on success, cancellation, read error or mid-stream revocation.
     source.on("close", () => releaseTemporaryFile(zipPath));
-    handedOver = true;
-    recordSecurityEvent(request, "backup.export", "allowed");
+    const streamed = ownerSessionCheckedStream(request, source);
     const stamp = new Date().toISOString().replace(/[:.]/g, "-");
-    return new Response(Readable.toWeb(source) as ReadableStream, {
+    const response = new Response(streamed, {
       headers: {
         "content-type": "application/zip",
         "content-length": String(size),
@@ -67,6 +75,9 @@ export async function GET(request: Request) {
         "x-content-type-options": "nosniff",
       },
     });
+    handedOver = true;
+    recordSecurityEvent(request, "backup.export", "allowed");
+    return response;
   } catch (error) {
     copy.dispose();
     if (error instanceof HttpInputError) {

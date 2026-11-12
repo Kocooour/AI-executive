@@ -251,3 +251,21 @@ test("legacy serialized private response is withheld after another process commi
   assert.equal(released.status, 401);
   assert.equal((await released.text()).includes("NEVER_RELEASE"), false);
 });
+
+test("a private ZIP stream stops before its next chunk when another worker logs out", async () => {
+  const token = await tokenFromLogin();
+  const { Readable } = await import("node:stream");
+  const { ownerSessionCheckedStream } = await import("../lib/owner-session-stream-release.ts");
+  const source = Readable.from([Buffer.from("FIRST"), Buffer.from("SECRET_SECOND")]);
+  const reader = ownerSessionCheckedStream(authRequest(token), source).getReader();
+  const first = await reader.read();
+  assert.equal(Buffer.from(first.value).toString(), "FIRST");
+  // Actual server-side logout, not just deleting the browser cookie.
+  const external = spawnSync(process.execPath, [
+    "--experimental-loader", "./tests/ts-loader.mjs", "--input-type=module", "-e",
+    'import { revokeAllOwnerSessions } from "./lib/owner-session-revocation.ts"; revokeAllOwnerSessions();',
+  ], { cwd: process.cwd(), env: process.env, encoding: "utf8" });
+  assert.equal(external.status, 0, external.stderr);
+  await assert.rejects(reader.read(), /Owner session revoked during export/);
+  assert.equal(source.destroyed, true, "revocation closes the backing file stream");
+});
