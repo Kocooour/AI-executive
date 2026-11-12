@@ -10,6 +10,7 @@ on:
       - "lib/target-*.ts"
       - "scripts/target-staging-*.mjs"
       - "e2e/target-personal-acceptance.spec.ts"
+      - "e2e/target-personal-my-plan.spec.ts"
       - "e2e/target-personal-store-setup.mjs"
       - "tests/target-personal-profile.test.mjs"
       - "tests/target-app-fetch.test.mjs"
@@ -59,7 +60,7 @@ jobs:
       - name: Chromium
         run: pnpm exec playwright install --with-deps chromium
       - name: 390px and desktop acceptance (real routes, real isolated SQLite)
-        run: pnpm exec playwright test e2e/target-personal-acceptance.spec.ts --project=desktop
+        run: pnpm exec playwright test e2e/target-personal-acceptance.spec.ts e2e/target-personal-my-plan.spec.ts --project=desktop
       - name: Upload failure traces
         if: failure()
         uses: actions/upload-artifact@v6
