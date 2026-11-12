@@ -1,0 +1,75 @@
+name: Focused HumanWiki Context source status browser
+
+# Isolated, real mounted React/Next UI browser acceptance for H1-real.9.
+# Does NOT run the full Browser E2E release suite, import personal data,
+# contact an external witness, or activate this UI in production.
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/humanwiki-context-source-status-browser.yml"
+      - "app/page.tsx"
+      - "app/ui/humanwiki-source-status-panel.tsx"
+      - "app/ui/lumi-app-root.tsx"
+      - "app/ui/views/context-view.tsx"
+      - "app/ui/views/mobile-nav.tsx"
+      - "lib/humanwiki-source-status-ui.ts"
+      - "e2e/humanwiki-context-source-status.spec.ts"
+      - "e2e/fixtures.ts"
+      - "e2e/auth.setup.ts"
+      - "playwright.config.ts"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: lumi-humanwiki-context-status-browser-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  chromium:
+    name: HumanWiki owner Context interaction (Chromium)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    env:
+      CI: "true"
+      NEXT_TELEMETRY_DISABLED: "1"
+      NEXT_PUBLIC_LUMI_DESIGN_V1_PREVIEW: "1"
+      E2E_SKIP_BUILD: "1"
+      E2E_PORT: "3124"
+      LUMI_HUMANWIKI_SOURCE_STATUS_E2E: "true"
+      # Real owner status API remains unconfigured (no ledger/witness/key) and
+      # is intercepted by synthetic page.route fixtures. These flags never
+      # reach the production or unrelated browser-test servers.
+      AI_EXECUTIVE_HUMANWIKI_SOURCE_WITNESS_UI_ENABLED: "true"
+      AI_EXECUTIVE_HUMANWIKI_SOURCE_WITNESS_STATUS_ENABLED: "true"
+    steps:
+      - name: Checkout isolated PR code
+        uses: actions/checkout@v5
+      - name: Install pnpm
+        uses: pnpm/action-setup@v5
+        with:
+          version: 10.20.0
+      - name: Set up Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+          cache: pnpm
+      - name: Install locked dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Build isolated synthetic Next.js instance
+        run: pnpm build
+      - name: Install focused Chromium
+        run: pnpm exec playwright install --with-deps chromium
+      - name: Run ONLY HumanWiki Context mounted interactions
+        run: pnpm exec playwright test e2e/humanwiki-context-source-status.spec.ts --project=desktop
+      - name: Upload failure traces
+        if: failure()
+        uses: actions/upload-artifact@v6
+        with:
+          name: lumi-humanwiki-context-source-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            test-results/
+            playwright-report/
+          if-no-files-found: ignore
+          retention-days: 7

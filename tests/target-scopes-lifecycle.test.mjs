@@ -228,7 +228,7 @@ test("wiring: flags off -> legacy tree, lazy chunks only, no eager import, no re
   assert.match(root_,/\{legacySearchSurfaces\.heldBack && <HeldBack app=\{app\} \/>\}/);
   const page=read("app/page.tsx");
   assert.match(page,/targetScopes=\{config\?\.scopes\}/);
-  assert.match(page,/: <LumiAppRoot \/>/);
+  assert.match(page,/: <LumiAppRoot humanWikiSourceStatusEnabled=\{humanWikiSourceStatusEnabled\} \/>/);
   assert.doesNotMatch(page,/target-scope|fetch\(|api\/target-staging/);
   assert.doesNotMatch(root_,/api\/target-staging|fetch\(|useTargetScope|IndexReadSession/);
 });

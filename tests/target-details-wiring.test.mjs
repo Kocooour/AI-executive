@@ -195,12 +195,20 @@ test("focus management: the panel takes focus on open and Escape/close/backdrop 
   assert.match(state,/export function focusPendingRow/);
 });
 
-test("4b introduces only a separately gated private standalone note-create HTTP route; task/project create and target UI remain unavailable",()=>{
-  for(const file of ["app/api/target-staging/tasks/route.ts","app/api/target-staging/projects/route.ts"]){
-    const source=read(file);
-    assert.match(source,/export async function GET/,file);
-    assert.doesNotMatch(source,/export async function (POST|PUT|PATCH|DELETE)/,file);
-  }
+test("private note and task creation are independently gated; project create remains unavailable",()=>{
+  const taskRoute=read("app/api/target-staging/tasks/route.ts");
+  assert.match(taskRoute,/export async function GET/);
+  assert.match(taskRoute,/export async function POST/);
+  assert.match(taskRoute,/return postPrivateTaskCreate\(request\)/);
+  const privateTaskHttp=read("lib/target-private-task-create-http.ts");
+  assert.match(privateTaskHttp,/const enabled=\(\)=>flags\.every\(key=>process\.env\[key\]==="true"\)/);
+  for(const flag of ["AI_EXECUTIVE_TARGET_STAGING_HTTP_ENABLED",
+    "AI_EXECUTIVE_TARGET_STAGING_HTTP_WRITE_ENABLED",
+    "AI_EXECUTIVE_TARGET_STAGING_HTTP_TASKS_CREATE_ENABLED"])
+    assert.ok(privateTaskHttp.includes(flag),flag+" must gate isolated private task creation");
+  const projectRoute=read("app/api/target-staging/projects/route.ts");
+  assert.match(projectRoute,/export async function GET/);
+  assert.doesNotMatch(projectRoute,/export async function (POST|PUT|PATCH|DELETE)/);
   const noteRoute=read("app/api/target-staging/notes/route.ts");
   assert.match(noteRoute,/export async function POST/);
   assert.match(noteRoute,/AI_EXECUTIVE_TARGET_STAGING_HTTP_NOTES_CREATE_ENABLED/);
@@ -218,7 +226,8 @@ test("page: the provider mounts through the shared rule and the config reaches t
   const page=read("app/page.tsx");
   assert.match(page,/targetDataNeeded\(config\)/);
   assert.match(page,/targetDetails=\{config\?\.details\}/);
-  assert.match(page,/<LumiAppRoot \/>/);
+  // The HumanWiki owner panel is gated independently; the data provider remains absent when targetData is false.
+  assert.match(page, /:\s*<LumiAppRoot humanWikiSourceStatusEnabled=\{humanWikiSourceStatusEnabled\} \/>;/);
 });
 
 test("docs and workflow: the slice documentation and focused CI paths exist",()=>{
@@ -369,17 +378,25 @@ test("the refusal budget is shared per runtime (gate hook and My Plan)",()=>{
 test("mount rule: page.tsx wiring is checked literally, independent of targetDataNeeded",()=>{
   const page=read("app/page.tsx");
   assert.match(page,/const config = targetUiEnabled\(\) \? targetUiConfig\(process\.env\) : null;/);
-  // Search is an independent read consumer requiring *all* default-off
-  // flags; details alone are never a consumer. Preserve the exact provider
-  // and existing feature prop wiring, adding only explicit targetSearch.
   assert.match(page,/const targetSearch=Boolean\(config\)&&targetMainTitleSearchEnabled\(process\.env\);/);
   assert.match(page,/const targetData = targetDataNeeded\(config\)\|\|targetSearch;/);
-  assert.match(page,/return targetData\s*\?\s*<TargetDataProvider><LumiAppRoot targetMyPlan=\{config\?\.myPlan\} targetScopes=\{config\?\.scopes\} targetDetails=\{config\?\.details\} targetEdits=\{config\?\.edits\}/);
-  assert.match(page,/targetNoteEdit=\{Boolean\(config\?\.details\.note\) && targetNoteEditUiEnabled\(process\.env\)\}/);
-  assert.match(page,/targetProjectEdit=\{Boolean\(config\?\.details\.project\) && targetProjectTitleEditUiEnabled\(process\.env\)\}/);
-  assert.match(page,/targetPrivateNoteAreas=\{Boolean\(config\?\.scopes\.notes\)&&targetPrivateNoteAreaUiEnabled\(process\.env\)\}/);
-  assert.match(page,/targetPrivateNoteCreate=\{Boolean\(config\?\.scopes\.notes\)&&targetPrivateNoteCreateUiEnabled\(process\.env\)\}/);
-  assert.match(page,/targetSearch=\{targetSearch\} \/><\/TargetDataProvider>\s*:\s*<LumiAppRoot \/>;/);
+  assert.match(page,/return targetData\s*\?\s*<TargetDataProvider><LumiAppRoot\b[^\n]+\/><\/TargetDataProvider>\s*:\s*<LumiAppRoot\b[^\n]+\/>;/);
+  const providerProps = page.match(/<TargetDataProvider><LumiAppRoot ([^\n]+)\/><\/TargetDataProvider>/)?.[1];
+  assert.ok(providerProps,"target-data provider must wrap the authorized root");
+  for (const prop of [
+    "targetMyPlan={config?.myPlan}",
+    "targetScopes={config?.scopes}",
+    "targetDetails={config?.details}",
+    "targetEdits={config?.edits}",
+    "targetNoteEdit={Boolean(config?.details.note) && targetNoteEditUiEnabled(process.env)}",
+    "targetProjectEdit={Boolean(config?.details.project) && targetProjectTitleEditUiEnabled(process.env)}",
+    "targetPrivateNoteAreas={Boolean(config?.scopes.notes)&&targetPrivateNoteAreaUiEnabled(process.env)}",
+    "targetPrivateNoteCreate={Boolean(config?.scopes.notes)&&targetPrivateNoteCreateUiEnabled(process.env)}",
+    "targetSearch={targetSearch}",
+    "humanWikiSourceStatusEnabled={humanWikiSourceStatusEnabled}",
+  ]) assert.ok(providerProps.includes(prop),"missing expected root prop: "+prop);
+  assert.match(page,/const humanWikiSourceStatusEnabled =\s*process\.env\.AI_EXECUTIVE_HUMANWIKI_SOURCE_WITNESS_UI_ENABLED === "true" &&\s*process\.env\.AI_EXECUTIVE_HUMANWIKI_SOURCE_WITNESS_STATUS_ENABLED === "true";/);
+  assert.match(page,/:\s*<LumiAppRoot humanWikiSourceStatusEnabled=\{humanWikiSourceStatusEnabled\} \/>;/);
   // The rule itself, literally: details are no consumer of their own.
   assert.match(read("lib/target-ui-config.ts"),/return config!==null&&\(config\.myPlan\.enabled\|\|config\.scopes\.projects\|\|config\.scopes\.notes\);/);
 });

@@ -2,4 +2,6 @@
 import {postPrivateTaskCreateStatus} from "../../../../../lib/target-private-task-create-http";
 export const runtime="nodejs";
 export const dynamic="force-dynamic";
-export const POST=postPrivateTaskCreateStatus;
+export async function POST(request: Request): Promise<Response> {
+  return postPrivateTaskCreateStatus(request);
+}

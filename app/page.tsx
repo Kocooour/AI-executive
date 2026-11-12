@@ -21,7 +21,13 @@ export default function Page() {
   // list or the plan, so they are no consumer either.
   const targetSearch=Boolean(config)&&targetMainTitleSearchEnabled(process.env);
   const targetData = targetDataNeeded(config)||targetSearch;
+  // H1-real.9: both server-only opt-ins are required to mount the owner-only
+  // Context source status; never expose this feature merely because the
+  // read-only API was enabled for private operator or staging use.
+  const humanWikiSourceStatusEnabled =
+    process.env.AI_EXECUTIVE_HUMANWIKI_SOURCE_WITNESS_UI_ENABLED === "true" &&
+    process.env.AI_EXECUTIVE_HUMANWIKI_SOURCE_WITNESS_STATUS_ENABLED === "true";
   return targetData
-    ? <TargetDataProvider><LumiAppRoot targetMyPlan={config?.myPlan} targetScopes={config?.scopes} targetDetails={config?.details} targetEdits={config?.edits} targetNoteEdit={Boolean(config?.details.note) && targetNoteEditUiEnabled(process.env)} targetProjectEdit={Boolean(config?.details.project) && targetProjectTitleEditUiEnabled(process.env)} targetPrivateNoteAreas={Boolean(config?.scopes.notes)&&targetPrivateNoteAreaUiEnabled(process.env)} targetPrivateNoteCreate={Boolean(config?.scopes.notes)&&targetPrivateNoteCreateUiEnabled(process.env)} targetSearch={targetSearch} /></TargetDataProvider>
-    : <LumiAppRoot />;
+    ? <TargetDataProvider><LumiAppRoot targetMyPlan={config?.myPlan} targetScopes={config?.scopes} targetDetails={config?.details} targetEdits={config?.edits} targetNoteEdit={Boolean(config?.details.note) && targetNoteEditUiEnabled(process.env)} targetProjectEdit={Boolean(config?.details.project) && targetProjectTitleEditUiEnabled(process.env)} targetPrivateNoteAreas={Boolean(config?.scopes.notes)&&targetPrivateNoteAreaUiEnabled(process.env)} targetPrivateNoteCreate={Boolean(config?.scopes.notes)&&targetPrivateNoteCreateUiEnabled(process.env)} targetSearch={targetSearch} humanWikiSourceStatusEnabled={humanWikiSourceStatusEnabled} /></TargetDataProvider>
+    : <LumiAppRoot humanWikiSourceStatusEnabled={humanWikiSourceStatusEnabled} />;
 }

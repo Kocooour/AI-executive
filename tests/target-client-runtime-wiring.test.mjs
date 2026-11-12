@@ -42,7 +42,8 @@ test("the server page mounts the provider only behind the flag and reads it per 
   assert.match(page,/targetProjectEdit=\{Boolean\(config\?\.details\.project\) && targetProjectTitleEditUiEnabled\(process\.env\)\}/);
   assert.match(page,/targetPrivateNoteAreas=\{Boolean\(config\?\.scopes\.notes\)&&targetPrivateNoteAreaUiEnabled\(process\.env\)\}/);
   assert.match(page,/targetPrivateNoteCreate=\{Boolean\(config\?\.scopes\.notes\)&&targetPrivateNoteCreateUiEnabled\(process\.env\)\}/);
-  assert.match(page,/targetSearch=\{targetSearch\} \/><\/TargetDataProvider>\s*:\s*<LumiAppRoot \/>/);
+  assert.match(page,/targetSearch=\{targetSearch\} humanWikiSourceStatusEnabled=\{humanWikiSourceStatusEnabled\} \/><\/TargetDataProvider>\s*:\s*<LumiAppRoot humanWikiSourceStatusEnabled=\{humanWikiSourceStatusEnabled\} \/>/);
+  // The independent HumanWiki flag never creates a target data provider.
   // The page itself never creates a runtime nor fetches.
   assert.doesNotMatch(page,/createTargetClientRuntime|fetch\(|target-client-runtime/);
 });
