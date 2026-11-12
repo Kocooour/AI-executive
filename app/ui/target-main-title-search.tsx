@@ -54,6 +54,8 @@ export default function TargetMainTitleSearch({query,language="cs",details}:{
     return value;
   });
   const mounted=useRef(false);
+  const returnSessionPending=useRef(fromReturn.current);
+  const returnBinding=useRef(current);
   const statusRef=useRef<HTMLParagraphElement>(null);
   const submitRef=useRef<()=>void>(()=>{});
 
@@ -61,6 +63,16 @@ export default function TargetMainTitleSearch({query,language="cs",details}:{
   // leave an older actor's data or a stale count on screen.
   useEffect(()=>{
     if(!mounted.current){mounted.current=true;return;}
+    // useTargetSession is created in an effect, so the first null -> session
+    // transition after a Back navigation is NOT a change of actor/scope/query.
+    // Keep the one-use return rows through that transition only.
+    if(returnSessionPending.current&&session&&
+      returnBinding.current.input===query&&returnBinding.current.scope===scope&&
+      returnBinding.current.generation===generation&&runtime?.lastOutcome()==="ok"){
+      returnSessionPending.current=false;
+      return;
+    }
+    returnSessionPending.current=false;
     ++epoch.current;
     fromReturn.current=false;
     session?.reset();
