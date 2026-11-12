@@ -259,7 +259,7 @@ export default function TargetPrivateTaskAreaChooser({
           data-testid="target-private-task-receipt"
           disabled={!ready||phase==="receipt"||phase==="cancelling"}
           onClick={()=>{void checkReceipt();}}>{c.receipt}</button>}
-        {marker.kind==="blocked"&&tracked?.phase!=="saving"&&<button
+        {marker.kind==="blocked"&&<button
           type="button" data-testid="target-private-task-cancel"
           disabled={!live()||phase==="receipt"||phase==="cancelling"}
           onClick={()=>{void cancelPending();}}>
