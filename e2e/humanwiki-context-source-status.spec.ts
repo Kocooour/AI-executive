@@ -56,7 +56,7 @@ test.describe("H1-real.9 focused owner status browser integration", () => {
       await respond(route);
     });
     await openContext(page);
-    expect(count).toBe(0, "no automatic owner-status request on navigation");
+    expect(count, "no automatic owner-status request on navigation").toBe(0);
     await clickCheck(page);
     await expect(status(page)).toContainText("Export ChatGPT");
     await expect(status(page)).toContainText("Zapsaná žádost o odvolání — není dokončeno");
@@ -87,7 +87,7 @@ test.describe("H1-real.9 focused owner status browser integration", () => {
     await expect(panel(page)).toBeVisible();
     await expect(status(page)).toHaveCount(0);
     await expect(panel(page)).toContainText("Stav se načítá pouze na vyžádání.");
-    expect(count).toBe(1, "returning to Context must not implicitly re-fetch");
+    expect(count, "returning to Context must not implicitly re-fetch").toBe(1);
     await clickCheck(page);
     await expect(status(page)).toContainText("Export ChatGPT");
     expect(count).toBe(2);
