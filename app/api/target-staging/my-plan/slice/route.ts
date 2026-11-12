@@ -39,14 +39,17 @@ function followingDay(date:string):string|null{
   return temporalCalendarOrdinal(result)===null?null:result;
 }
 /** Reject a malformed combined child result unless both full epoch witnesses agree. */
-function sameSnapshot(today:MyPlanDayTaskPage,tomorrow:MyPlanDayTaskPage):boolean{
-  return today.privateEpoch===tomorrow.privateEpoch&&
-    JSON.stringify(today.linearization)===JSON.stringify(tomorrow.linearization)&&
-    JSON.stringify(today.areaEpochs)===JSON.stringify(tomorrow.areaEpochs);
+function sameSnapshot(today:MyPlanDayTaskPage,tomorrow:MyPlanDayTaskPage,
+  undated:MyPlanDayTaskPage):boolean{
+  return [tomorrow,undated].every(page=>
+    today.privateEpoch===page.privateEpoch&&
+    JSON.stringify(today.linearization)===JSON.stringify(page.linearization)&&
+    JSON.stringify(today.areaEpochs)===JSON.stringify(page.areaEpochs));
 }
-function combinedRevision(today:MyPlanDayTaskPage,tomorrow:MyPlanDayTaskPage):string{
-  return createHash("sha256").update("lumi:r3:my-plan-slice-revision:v1\0")
-    .update(JSON.stringify([today.revision,tomorrow.revision])).digest("hex");
+function combinedRevision(today:MyPlanDayTaskPage,tomorrow:MyPlanDayTaskPage,
+  undated:MyPlanDayTaskPage):string{
+  return createHash("sha256").update("lumi:r3:my-plan-slice-revision:v2\0")
+    .update(JSON.stringify([today.revision,tomorrow.revision,undated.revision])).digest("hex");
 }
 
 export async function GET(request:Request):Promise<Response>{
@@ -95,7 +98,7 @@ export async function GET(request:Request):Promise<Response>{
     const prior=token===null?null:verifyMyPlanSliceCursor(context,token);
     if(prior?.ok===false)return answer(prior.reason==="expired"?409:400,
       prior.reason==="expired"?"Cursor expired":"Invalid cursor");
-    const offsets=prior?.ok===true?prior.positions:{today:0,tomorrow:0};
+    const offsets=prior?.ok===true?prior.positions:{today:0,tomorrow:0,undated:0};
     const child={stagingDirectory,expectedRestoreGeneration,ownerUserId,
       ...stagingChildSessionConfig(identity)};
     // One child, one pinned preflighted SQLite read transaction for BOTH days.
@@ -104,7 +107,8 @@ export async function GET(request:Request):Promise<Response>{
       child,filter,evaluationDate,next,limit,offsets);
     const today=page?.today??null;
     const tomorrow=page?.tomorrow??null;
-    const release=today&&tomorrow&&sameSnapshot(today,tomorrow)
+    const undated=page?.undated??null;
+    const release=today&&tomorrow&&undated&&sameSnapshot(today,tomorrow,undated)
       ?verifyStagingReadBeforeRelease(
         request,identity,store,ownerUserId,today.linearization,
         undefined,undefined,undefined,undefined,undefined,
@@ -118,24 +122,26 @@ export async function GET(request:Request):Promise<Response>{
       process.env.AI_EXECUTIVE_TARGET_STAGING_OWNER_USER_ID!==ownerUserId)
       return answer(503,"Staging unavailable");
     if(release==="stale")return answer(409,"read_stale_reload");
-    if(!today||!tomorrow){
+    if(!today||!tomorrow||!undated){
       logStagingFailure("my_plan_slice","child_page_unavailable");
       return answer(503,"Staging unavailable");
     }
-    if(!sameSnapshot(today,tomorrow))return answer(409,"read_stale_reload");
-    const revision=combinedRevision(today,tomorrow);
+    if(!sameSnapshot(today,tomorrow,undated))return answer(409,"read_stale_reload");
+    const revision=combinedRevision(today,tomorrow,undated);
     if(prior?.ok===true&&prior.revision!==revision)
       return answer(409,"Cursor stale");
-    const hasMore=today.hasMore||tomorrow.hasMore;
+    const hasMore=today.hasMore||tomorrow.hasMore||undated.hasMore;
     const nextCursor=hasMore?signMyPlanSliceCursor(context,revision,{
       today:offsets.today+today.tasks.length,
       tomorrow:offsets.tomorrow+tomorrow.tasks.length,
+      undated:offsets.undated+undated.tasks.length,
     },prior?.ok===true?prior.expiresAt:undefined):null;
     if(hasMore&&!nextCursor)return answer(503,"Staging unavailable");
     return Response.json({
       evaluationDate,areaFilter:filter,
       today:{tasks:today.tasks,hasMore:today.hasMore},
       tomorrow:{tasks:tomorrow.tasks,hasMore:tomorrow.hasMore},
+      undated:{tasks:undated.tasks,hasMore:undated.hasMore},
       hasMore,nextCursor,
     },{headers});
   }catch(error){
