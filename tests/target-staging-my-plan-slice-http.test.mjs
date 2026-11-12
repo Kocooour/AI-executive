@@ -966,14 +966,17 @@ test("two-day atomic child keeps one complete epoch witness and live guard detec
     stagingDirectory:f.stage.directory,
     expectedRestoreGeneration:f.stage.restoreGeneration,
     ownerUserId:"alice",sessionTokenHash:hash,
-  },"all","2026-11-04","2026-11-05",2,{today:0,tomorrow:0});
+  },"all","2026-11-04","2026-11-05",2,{today:0,tomorrow:0,undated:0});
   const page=await read();
   assert.ok(page);
   assert.deepEqual(ids(page.today),["b-overdue","b-today"]);
   assert.deepEqual(ids(page.tomorrow),["b-next","b-next2"]);
   assert.deepEqual(page.today.linearization,page.tomorrow.linearization);
+  assert.deepEqual(page.today.linearization,page.undated.linearization);
   assert.deepEqual(page.today.areaEpochs,page.tomorrow.areaEpochs);
+  assert.deepEqual(page.today.areaEpochs,page.undated.areaEpochs);
   assert.equal(page.today.privateEpoch,page.tomorrow.privateEpoch);
+  assert.equal(page.today.privateEpoch,page.undated.privateEpoch);
   const verify=p=>verifyStagingReadBeforeRelease(
     new Request(base+query(),{headers:{cookie:bob}}),
     {kind:"session",tokenHash:hash},f.store,"alice",p.today.linearization,
