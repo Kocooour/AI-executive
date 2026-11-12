@@ -26,12 +26,17 @@ if (!path.basename(run).startsWith("lumi-e2e-")) fail("the run dir must be a lum
 const { bootstrapIsolatedTargetStore } = await import("../lib/target-store-bootstrap.ts");
 const stage = bootstrapIsolatedTargetStore({ stagingDirectory: path.join(runDir, "target-store"), ownerUserId: owner });
 
-// One project with one task per viewport run, so the two runs never share a renamed row.
-const seed = { areaId: "area:e2e:rodina", areaTitle: "Rodina", projects: {} };
+// Distinct project/task fixtures per viewport AND per spec: each real-store
+// acceptance mutates titles, so parallel or sequential specs must not collide.
+const seed = { areaId: "area:e2e:rodina", areaTitle: "Rodina", projects: {}, searchProjects: {} };
 for (const width of ["390", "1280"]) {
   seed.projects[width] = {
     projectId: `project:e2e:${width}`, projectTitle: `Seed Projekt ${width}`,
     taskId: `task:e2e:${width}`, taskTitle: `Seed úkol v projektu ${width}`,
+  };
+  seed.searchProjects[width] = {
+    projectId: `project:e2e:search:${width}`, projectTitle: `Seed Projekt Search ${width}`,
+    taskId: `task:e2e:search:${width}`, taskTitle: `Seed úkol Search ${width}`,
   };
 }
 const db = new DatabaseSync(stage.databasePath);
@@ -40,7 +45,7 @@ try {
   const workspace = db.prepare("SELECT id FROM workspaces WHERE kind='personal' AND owner_user_id=?").get(owner);
   db.prepare("INSERT INTO areas(id,title,kind,workspace_id,owner_user_id) VALUES (?,?,'private',?,?)")
     .run(seed.areaId, seed.areaTitle, workspace.id, owner);
-  for (const item of Object.values(seed.projects)) {
+  for (const item of [...Object.values(seed.projects), ...Object.values(seed.searchProjects)]) {
     db.prepare("INSERT INTO projects(id,area_id,title) VALUES (?,?,?)").run(item.projectId, seed.areaId, item.projectTitle);
     db.prepare("INSERT INTO tasks(id,project_id,title) VALUES (?,?,?)").run(item.taskId, item.projectId, item.taskTitle);
   }
