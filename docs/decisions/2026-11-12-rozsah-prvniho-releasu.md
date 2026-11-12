@@ -11,11 +11,11 @@ Revize stavu k `main` @ `c1f7862` (2026-11-12): za pět dní bylo sloučeno při
 
 ## Rozhodnutí
 
-Vlastník 2026-11-12 schválil návrh revize („OK, začni“) v těchto bodech:
+Vlastník 2026-11-12 schválil návrh revize v bodech 1, 2 a 4 a u bodu 3 potvrdil původní rozhodnutí:
 
 1. **Rozsah prvního releasu = jeden uživatel (vlastník) a soukromé Oblasti.** Sdílené Oblasti, pozvánky, role a vytváření ve Sdíleném prostoru se přesouvají do R5. Kontrakt [LUMI-FR-013](../PRODUCT.md#lumi-fr-013) se nemění, mění se jen pořadí dodání.
 2. **HumanWiki H1-real je pozastaveno** do vyřešení [#400](https://github.com/Kocooour/AI-executive/issues/400) (nezávislý witness host, off-backup antirollback, durable source ACK). Do té doby žádné další HumanWiki PR.
-3. **Staré pohledy Domů, Inbox a Dnes se v cílovém režimu v prvním releasu skryjí**, místo aby zůstaly jen pro čtení nad dosavadními daty. Jejich přenesení na cílová data následuje po releasu. Nahrazuje pro první release „možnost 1“ z 2026-11-09 ([R3-FE-04A](../R3-FE-04A-DETAILS.md)).
+3. **Staré pohledy Domů, Inbox a Dnes zůstávají v cílovém režimu viditelné a jen pro čtení** podle rozhodnutí z 2026-11-09 („možnost 1“, [R3-FE-04A](../R3-FE-04A-DETAILS.md)). Návrh revize je v prvním releasu skrýt vlastník 2026-11-12 výslovně zamítl. Jejich přenesení na cílová data následuje po releasu.
 4. **Release 0:** nasadit `main` s vypnutými cílovými příznaky po úspěšné plné Browser E2E na přesném SHA, aby se ověřil nasazovací postup a odstranil drift nahromaděný od 2026-10-23.
 
 Mimo první release zůstávají vypnuté a tím jej neblokují: web-push (host politika), provider route AI bundle, Attention nad cílovými daty, note-sync a všechny preview příznaky.
@@ -25,7 +25,3 @@ Mimo první release zůstávají vypnuté a tím jej neblokují: web-push (host 
 - Žádné smazání, přepsání ani výměna databáze, lokálních kopií, záloh, přihlašovacích údajů či integrací.
 - Žádné zapnutí cílových příznaků v produkci.
 - Cutover (R4) vyžaduje **samostatný výslovný souhlas** s přesným rozsahem po inventuře a ověřené záloze s restore.
-
-## K potvrzení
-
-Body 1–4 jsou zapsané podle návrhu, na který vlastník odpověděl souhlasem bez výhrad. Bod 3 je produktová změna oproti rozhodnutí z 2026-11-09; pokud má platit původní varianta „jen pro čtení“, opraví se tento záznam i roadmapa před implementací skrytí (druhý PR milníku A).
