@@ -1,0 +1,258 @@
+/** Real-route + real SQLite acceptance for default-off owner-private project creation. */
+import assert from "node:assert/strict";
+import {randomUUID} from "node:crypto";
+import {mkdtempSync,mkdirSync,readFileSync,rmSync,writeFileSync} from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import {DatabaseSync} from "node:sqlite";
+import {after,test} from "node:test";
+
+const vars=["NODE_ENV","AI_EXECUTIVE_DATA_DIR","AI_EXECUTIVE_AUTH_ENABLED",
+  "AI_EXECUTIVE_PASSWORD_HASH","AI_EXECUTIVE_SESSION_SECRET",
+  "AI_EXECUTIVE_TARGET_STAGING_HTTP_ENABLED",
+  "AI_EXECUTIVE_TARGET_STAGING_HTTP_WRITE_ENABLED",
+  "AI_EXECUTIVE_TARGET_STAGING_HTTP_PROJECTS_CREATE_ENABLED",
+  "AI_EXECUTIVE_TARGET_STAGING_HTTP_PROJECT_TASKS_CREATE_ENABLED",
+  "AI_EXECUTIVE_TARGET_STAGING_DIRECTORY",
+  "AI_EXECUTIVE_TARGET_STAGING_RESTORE_GENERATION",
+  "AI_EXECUTIVE_TARGET_STAGING_OWNER_USER_ID"];
+const original=Object.fromEntries(vars.map(key=>[key,process.env[key]]));
+const root=mkdtempSync(path.join(os.tmpdir(),"lumi-r3-project-create-http-"));
+const legacy=path.join(root,"legacy");
+mkdirSync(legacy);writeFileSync(path.join(legacy,"sentinel"),"unchanged");
+Object.assign(process.env,{
+  NODE_ENV:"production",AI_EXECUTIVE_DATA_DIR:legacy,
+  AI_EXECUTIVE_AUTH_ENABLED:"true",
+  AI_EXECUTIVE_PASSWORD_HASH:"scrypt:"+
+    Buffer.alloc(16,1).toString("base64url")+":"+
+    Buffer.alloc(64,2).toString("base64url"),
+  AI_EXECUTIVE_SESSION_SECRET:"r3-project-create-http-test-secret-long-enough",
+  AI_EXECUTIVE_TARGET_STAGING_HTTP_ENABLED:"true",
+  AI_EXECUTIVE_TARGET_STAGING_HTTP_WRITE_ENABLED:"true",
+  AI_EXECUTIVE_TARGET_STAGING_HTTP_PROJECTS_CREATE_ENABLED:"true",
+  AI_EXECUTIVE_TARGET_STAGING_HTTP_PROJECT_TASKS_CREATE_ENABLED:"true",
+});
+const {bootstrapIsolatedTargetStore}=await import("../lib/target-store-bootstrap.ts");
+const {TARGET_STAGING_JOURNAL_FILENAME}=await import("../lib/target-staging-anchor-journal.ts");
+const {PRIVATE_STRUCTURE_CREATE_RECEIPT_PREFIX,
+  PRIVATE_STRUCTURE_CREATE_RECOVERY_PREFIX}=await import("../lib/target-private-structure-create-writer.ts");
+const durable=await import("../lib/target-staging-durable-session.ts");
+const {createSessionToken,sessionCookieName}=await import("../lib/auth.ts");
+const {POST:PROJECT}=await import("../app/api/target-staging/projects/route.ts");
+const {POST:PROJECT_STATUS}=await import("../app/api/target-staging/projects/create-status/route.ts");
+const {POST:PROJECT_RECOVERY}=await import("../app/api/target-staging/projects/create-recovery/route.ts");
+const {POST:CHILD}=await import("../app/api/target-staging/project-tasks/route.ts");
+const {POST:CHILD_STATUS}=await import("../app/api/target-staging/project-tasks/create-status/route.ts");
+const {POST:CHILD_RECOVERY}=await import("../app/api/target-staging/project-tasks/create-recovery/route.ts");
+const {isTargetReadRequest}=await import("../lib/target-edit-fetch.ts");
+
+const fixtures=[];
+function fixture(){
+  const stage=bootstrapIsolatedTargetStore({
+    stagingDirectory:path.join(root,randomUUID()),ownerUserId:"alice",
+  });
+  const db=new DatabaseSync(stage.databasePath);
+  db.exec("PRAGMA foreign_keys=ON");
+  db.prepare("INSERT INTO identities(id) VALUES('bob')").run();
+  db.prepare("INSERT INTO workspaces(id,kind,owner_user_id) VALUES('bob-space','personal','bob')").run();
+  db.prepare("INSERT INTO areas(id,title,kind,workspace_id,owner_user_id,system_key) VALUES('bob-private','Foreign','private','bob-space','bob','unassigned')").run();
+  db.prepare("INSERT INTO workspaces(id,kind,owner_user_id) VALUES('team','shared','alice')").run();
+  db.prepare("INSERT INTO areas(id,title,kind,workspace_id,owner_user_id) VALUES('team-area','Shared','shared','team','alice')").run();
+  db.prepare("INSERT INTO area_members(area_id,user_id,role) VALUES('team-area','alice','admin')").run();
+  db.prepare("INSERT INTO area_members(area_id,user_id,role) VALUES('team-area','bob','editor')").run();
+  db.close();
+  Object.assign(process.env,{
+    AI_EXECUTIVE_TARGET_STAGING_DIRECTORY:stage.directory,
+    AI_EXECUTIVE_TARGET_STAGING_RESTORE_GENERATION:stage.restoreGeneration,
+    AI_EXECUTIVE_TARGET_STAGING_OWNER_USER_ID:"alice",
+  });
+  const fx={stage,store:{
+    stagingDirectory:stage.directory,expectedRestoreGeneration:stage.restoreGeneration,
+  }};
+  fixtures.push(fx);return fx;
+}
+after(()=>{
+  for(const [key,value] of Object.entries(original)){
+    if(value===undefined)delete process.env[key];else process.env[key]=value;
+  }
+  assert.equal(readFileSync(path.join(legacy,"sentinel"),"utf8"),"unchanged");
+  rmSync(root,{recursive:true,force:true});
+});
+const owner=()=>sessionCookieName+"="+createSessionToken();
+function session(fx,userId){
+  const result=durable.issueDurableTargetStagingSession(fx.store,userId,900);
+  assert.equal(result.ok,true,JSON.stringify(result));
+  return {cookie:durable.TARGET_STAGING_SESSION_COOKIE+"="+result.sessionToken,
+    sessionId:result.sessionId};
+}
+const project=(fx,changes={})=>({
+  projectId:randomUUID(),commandId:randomUUID(),
+  areaId:fx.stage.unassignedAreaId,restoreGeneration:fx.stage.restoreGeneration,
+  title:"Synthetic owner project",...changes,
+});
+const child=(fx,projectId,changes={})=>({
+  taskId:randomUUID(),commandId:randomUUID(),projectId,
+  restoreGeneration:fx.stage.restoreGeneration,title:"Synthetic project child",...changes,
+});
+const base="http://localhost:3001/api/target-staging";
+function request(endpoint,data,cookie=owner(),headers={}){
+  return new Request(base+endpoint,{method:"POST",headers:{
+    ...(cookie?{cookie}:{}),origin:"http://localhost:3001",
+    "x-lumi-target-protocol":"1","content-type":"application/json",
+    "x-forwarded-for":"10.9.18.1",...headers,
+  },body:JSON.stringify(data)});
+}
+const call=(handler,endpoint,data,cookie)=>handler(request(endpoint,data,cookie));
+async function checked(response,status){
+  const data=await response.json();
+  assert.equal(response.status,status,JSON.stringify(data));
+  assert.equal(response.headers.get("cache-control"),"no-store");
+  assert.doesNotMatch(JSON.stringify(data),/Synthetic|bob-private|team-area|receipt-v1/);
+  return data;
+}
+const cp=(cmd,cookie)=>call(PROJECT,"/projects",cmd,cookie);
+const cs=(cmd,cookie)=>call(PROJECT_STATUS,"/projects/create-status",cmd,cookie);
+const cr=(cmd,cookie)=>call(PROJECT_RECOVERY,"/projects/create-recovery",
+  {commandId:cmd.commandId},cookie);
+const ct=(cmd,cookie)=>call(CHILD,"/project-tasks",cmd,cookie);
+const cts=(cmd,cookie)=>call(CHILD_STATUS,"/project-tasks/create-status",cmd,cookie);
+const ctr=(cmd,cookie)=>call(CHILD_RECOVERY,"/project-tasks/create-recovery",
+  {commandId:cmd.commandId},cookie);
+function state(fx){
+  const db=new DatabaseSync(fx.stage.databasePath,{readOnly:true});
+  try{
+    const n=(table)=>db.prepare("SELECT COUNT(*) AS n FROM "+table).get().n;
+    return {
+      projects:n("projects"),tasks:n("tasks"),changes:n("change_log"),
+      receipts:db.prepare("SELECT COUNT(*) AS n FROM metadata WHERE key LIKE ?")
+        .get(PRIVATE_STRUCTURE_CREATE_RECEIPT_PREFIX+"%").n,
+      witnesses:db.prepare("SELECT COUNT(*) AS n FROM metadata WHERE key LIKE ?")
+        .get(PRIVATE_STRUCTURE_CREATE_RECOVERY_PREFIX+"%").n,
+      project:db.prepare("SELECT id,title,area_id,revision FROM projects LIMIT 1").get(),
+      task:db.prepare("SELECT id,title,area_id,project_id,assignee_user_id,status,revision FROM tasks LIMIT 1").get(),
+      metadata:JSON.stringify(db.prepare("SELECT key,value FROM metadata").all()),
+      journal:readFileSync(path.join(fx.stage.directory,TARGET_STAGING_JOURNAL_FILENAME),"utf8"),
+    };
+  }finally{db.close();}
+}
+test("project and project-child create, replay and content-free ledger/journal",async()=>{
+  const fx=fixture(),p=project(fx);
+  const initial=state(fx);
+  const first=await checked(await cp(p),201);
+  assert.equal(first.id,p.projectId);
+  assert.deepEqual(await checked(await cp(p),200),{ok:true,id:p.projectId,replayed:true});
+  assert.deepEqual(await checked(await cs(p),200),{status:"committed",id:p.projectId});
+  assert.deepEqual(await checked(await cr(p),200),{status:"committed",id:p.projectId});
+  const t=child(fx,p.projectId);
+  assert.deepEqual(await checked(await ct(t),201),{ok:true,id:t.taskId});
+  assert.deepEqual(await checked(await ct(t),200),{ok:true,id:t.taskId,replayed:true});
+  assert.deepEqual(await checked(await cts(t),200),{status:"committed",id:t.taskId});
+  assert.deepEqual(await checked(await ctr(t),200),{status:"committed",id:t.taskId});
+  const after=state(fx);
+  assert.equal(after.projects,initial.projects+1);
+  assert.equal(after.tasks,initial.tasks+1);
+  assert.equal(after.receipts,2);
+  assert.equal(after.witnesses,2);
+  assert.equal(after.project.area_id,p.areaId);
+  assert.equal(after.task.project_id,p.projectId);
+  assert.equal(after.task.area_id,null,"child must inherit, not store its own Area");
+  assert.equal(after.task.assignee_user_id,null);
+  assert.equal(after.task.status,"open");
+  assert.equal(after.task.revision,0);
+  assert.equal(after.project.revision,0);
+  assert.match(after.journal,/"k":"project_create"/);
+  assert.match(after.journal,/"k":"project_task_create"/);
+  assert.doesNotMatch(after.journal+after.metadata,/Synthetic owner project|Synthetic project child/);
+  assert.equal(after.changes,initial.changes+2,"replays must not create a second event");
+});
+test("project Area must be explicitly owner-private; foreign, shared, missing and invalid rejected",async()=>{
+  const fx=fixture(),p=project(fx);
+  for(const areaId of ["bob-private","team-area","absent"]){
+    await checked(await cp(project(fx,{areaId})),404);
+  }
+  await checked(await cp({...p,areaId:undefined}),400);
+  await checked(await cp({...p,scope:"shared"}),400);
+  await checked(await cp(project(fx,{restoreGeneration:randomUUID()})),409);
+  assert.equal(state(fx).receipts,0);
+});
+test("child rejects foreign, missing, shared and client-supplied Areas",async()=>{
+  const fx=fixture(),p=project(fx);
+  const db=new DatabaseSync(fx.stage.databasePath);
+  db.exec("PRAGMA foreign_keys=ON");
+  const foreign=randomUUID(),shared=randomUUID();
+  db.prepare("INSERT INTO projects(id,area_id,title) VALUES(?,?,?)")
+    .run(foreign,"bob-private","Foreign");
+  db.prepare("INSERT INTO projects(id,area_id,title) VALUES(?,?,?)")
+    .run(shared,"team-area","Shared");
+  db.close();
+  for(const projectId of [foreign,shared,randomUUID()]){
+    await checked(await ct(child(fx,projectId)),404);
+  }
+  await checked(await ct(child(fx,p.projectId)),404,"parent not created");
+  await checked(await cp(p),201);
+  await checked(await ct(child(fx,p.projectId,{areaId:p.areaId})),400);
+  await checked(await ct(child(fx,p.projectId,{restoreGeneration:randomUUID()})),409);
+  assert.equal(state(fx).receipts,1);
+});
+test("actor-scoped receipts forbid command reuse, and stolen commands cannot replay",async()=>{
+  const fx=fixture(),p=project(fx);
+  await checked(await cp(p),201);
+  await checked(await cp({...p,projectId:randomUUID()}),409);
+  await checked(await cp({...p,title:"Changed"}),409);
+  const bob=session(fx,"bob");
+  await checked(await cp(p,bob.cookie),404);
+  await checked(await cr(p,bob.cookie),404);
+  await checked(await cs(p,bob.cookie),404);
+  const t=child(fx,p.projectId);
+  await checked(await ct(t),201);
+  await checked(await ct({...t,taskId:randomUUID()}),409);
+  await checked(await ct({...t,title:"Changed"}),409);
+  await checked(await ct(t,bob.cookie),404);
+  await checked(await ctr(t,bob.cookie),404);
+});
+test("revoked durable session cannot create, confirm or recover",async()=>{
+  const fx=fixture(),p=project(fx),live=session(fx,"alice");
+  await checked(await cp(p,live.cookie),201);
+  assert.equal(durable.revokeDurableTargetStagingSession(fx.store,live.sessionId).ok,true);
+  const response=await checked(await cp(p,live.cookie),401);
+  assert.equal(response.code,"session_revoked");
+  assert.equal((await checked(await cs(p,live.cookie),401)).code,"session_revoked");
+  assert.equal((await checked(await cr(p,live.cookie),401)).code,"session_revoked");
+  const t=child(fx,p.projectId);
+  assert.equal((await checked(await ct(t,live.cookie),401)).code,"session_revoked");
+  assert.equal((await checked(await ctr(t,live.cookie),401)).code,"session_revoked");
+});
+test("creation flags are independently default-off, recovery POSTs enter shared read queue",async()=>{
+  const fx=fixture(),p=project(fx),t=child(fx,p.projectId);
+  delete process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_PROJECTS_CREATE_ENABLED;
+  await checked(await cp(p),404);
+  process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_PROJECTS_CREATE_ENABLED="true";
+  delete process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_PROJECT_TASKS_CREATE_ENABLED;
+  await checked(await ct(t),404);
+  process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_PROJECT_TASKS_CREATE_ENABLED="true";
+  for(const endpoint of [
+    "/projects/create-status","/projects/create-recovery",
+    "/project-tasks/create-status","/project-tasks/create-recovery",
+  ])assert.equal(isTargetReadRequest(base+endpoint,{method:"POST"}),true,endpoint);
+  assert.equal(isTargetReadRequest(base+"/projects",{method:"POST"}),false);
+  assert.equal(isTargetReadRequest(base+"/project-tasks",{method:"POST"}),false);
+  assert.equal(state(fx).receipts,0);
+});
+test("tombstoned IDs cannot be reused even with a fresh command ID",async()=>{
+  const fx=fixture(),id=randomUUID(),taskId=randomUUID();
+  const db=new DatabaseSync(fx.stage.databasePath);
+  db.exec("PRAGMA foreign_keys=ON");
+  db.prepare("INSERT INTO projects(id,area_id,title) VALUES(?,?,?)")
+    .run(id,fx.stage.unassignedAreaId,"Deleted project");
+  db.prepare("DELETE FROM projects WHERE id=?").run(id);
+  const live=randomUUID();
+  db.prepare("INSERT INTO projects(id,area_id,title) VALUES(?,?,?)")
+    .run(live,fx.stage.unassignedAreaId,"Live project");
+  db.prepare("INSERT INTO tasks(id,project_id,title) VALUES(?,?,?)")
+    .run(taskId,live,"Deleted child");
+  db.prepare("DELETE FROM tasks WHERE id=?").run(taskId);
+  db.close();
+  await checked(await cp(project(fx,{projectId:id})),404);
+  await checked(await ct(child(fx,live,{taskId})),404);
+  assert.equal(state(fx).receipts,0);
+});
