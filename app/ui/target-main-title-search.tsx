@@ -8,7 +8,7 @@ import {useTargetGate} from "./use-target-gate";
 import {queuedTargetFetch} from "../../lib/target-read-queue";
 import {detailRowKey,focusPendingRow,openTargetDetail} from "./target-detail-state";
 import {detailCopy} from "../../lib/target-detail-copy";
-import type {TargetDetailGates} from "../../lib/target-detail-route";
+import type {TargetDetailGates,TargetDetailView} from "../../lib/target-detail-route";
 import {validTitleSearchQuery,type TitleSearchFailure} from "../../lib/target-staging-title-search-client";
 import {createStagingTitleSearchSession} from "../../lib/target-staging-title-search-session";
 import {
@@ -29,8 +29,9 @@ function foregroundOnline():boolean{
   return typeof document!=="undefined"&&document.visibilityState!=="hidden"&&navigator.onLine;
 }
 
-export default function TargetMainTitleSearch({query,language="cs",details}:{
+export default function TargetMainTitleSearch({query,language="cs",details,detailViews}:{
   query:string;language?:MainTitleSearchLanguage;details:TargetDetailGates;
+  detailViews:readonly TargetDetailView[];
 }){
   const copy=mainTitleSearchCopy[language];
   const rowCopy=detailCopy[language];
@@ -217,7 +218,7 @@ export default function TargetMainTitleSearch({query,language="cs",details}:{
       {ready.items.length===0?<p className="searchState" role="status">{copy.empty}</p>:
         <ul className="targetMainSearchItems">
           {ready.items.map(item=>{
-            const route=mainTitleSearchDetailRoute(item,details);
+            const route=mainTitleSearchDetailRoute(item,details,detailViews);
             const body=<>
               <span className="targetMainSearchGlyph" aria-hidden="true"/>
               <span className="targetMainSearchText">
