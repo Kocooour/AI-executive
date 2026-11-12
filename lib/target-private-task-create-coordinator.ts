@@ -185,13 +185,15 @@ export async function recoverPrivateTaskCreate(
   return typeof receipt==="object"?"unavailable":receipt;
 }
 
-/** Release an unresolved UUID ONLY after a durable, server-confirmed fence.
- * A changed authentication generation must not let another account cancel
- * the previous owner's command and incorrectly clear its tab-level marker. */
+/** Release an unresolved UUID only after a durable, actor-bound TERMINAL
+ * proof: either the pinned cancellation fence or the immutable receipt.
+ * A receipt proves no future insert, NOT that the task is readable now.
+ * Never disclose or notify a navigable task ID from terminal settlement.
+ * A changed auth generation cannot clear the previous owner's marker. */
 export async function cancelTrackedPrivateTaskCreate(
   runtime:Runtime,generation:string,signal:AbortSignal,
   cancel:typeof cancelPrivateTaskCreateCommand=cancelPrivateTaskCreateCommand,
-):Promise<"cancelled"|"committed"|"denied"|"unavailable">{
+):Promise<"cancelled"|"settled"|"denied"|"unavailable">{
   if(!runtime.known()||runtime.generation()!==generation||signal.aborted)
     return "unavailable";
   const marker=privateTaskCreateMarker(generation),tracked=entries.get(runtime);
@@ -201,13 +203,15 @@ export async function cancelTrackedPrivateTaskCreate(
   if(!persisted||persisted.generation!==generation||
     persisted.commandId!==marker.commandId)return "unavailable";
   const result=await cancel(marker.commandId,signal);
-  if(result==="cancelled"&&!signal.aborted&&runtime.known()&&
+  if((result==="cancelled"||result==="settled")&&!signal.aborted&&runtime.known()&&
     runtime.generation()===generation&&confirm(generation,marker.commandId)){
     if(tracked?.command.commandId===marker.commandId){
       entries.delete(runtime);tracked.unregister();
     }
     notify(runtime,{generation,confirmedTaskId:null});
-    return "cancelled";
+    return result;
   }
-  return result==="cancelled"?"unavailable":result;
+  // A server proof is not successful release when client storage cannot be
+  // positively cleared (or the signal/session became invalid).
+  return result==="cancelled"||result==="settled"?"unavailable":result;
 }

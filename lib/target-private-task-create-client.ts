@@ -134,9 +134,11 @@ export async function checkPrivateTaskCreateRecovery(
   }catch{return "unavailable";}
 }
 
-/** Safe terminal release is ONLY a server-committed, actor-scoped cancellation
- * fence. Not-recorded, network errors and status codes never clear the marker. */
-export type TaskCreateCancellation="cancelled"|"committed"|"denied"|"unavailable";
+/** This route proves the actor+UUID cannot create again: "cancelled"
+ * is a durable fence, "settled" a durable original CREATE receipt.
+ * Neither is a live task/Area ACL grant or navigable task ID. Ordinary
+ * not_recorded, failed HTTP and detail-status committed never unlock. */
+export type TaskCreateCancellation="cancelled"|"settled"|"denied"|"unavailable";
 export async function cancelPrivateTaskCreateCommand(
   commandId:string,signal:AbortSignal,fetchImpl:typeof fetch=fetch,
 ):Promise<TaskCreateCancellation>{
@@ -153,7 +155,7 @@ export async function cancelPrivateTaskCreateCommand(
     const value=await bounded(response,signal);
     if(!record(value)||Object.keys(value).join(",")!=="status")
       return "unavailable";
-    return value.status==="cancelled"||value.status==="committed"
+    return value.status==="cancelled"||value.status==="settled"
       ?value.status:"unavailable";
   }catch{return "unavailable";}
 }

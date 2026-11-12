@@ -275,7 +275,7 @@ export function createPreflightedPrivateTask(
  * It serializes with createPreflightedPrivateTask under the pinned SQLite lock.
  */
 export type PrivateTaskCreateCancelResult =
-  |{ok:true;status:"cancelled"|"committed"}
+  |{ok:true;status:"cancelled"|"settled"}
   |{ok:false;reason:"unauthorized"|"invalid_request"|"unavailable"|
     "session_revoked"|"resync_required"|"write_failed"};
 export function cancelPreflightedPrivateTaskCreate(
@@ -299,10 +299,14 @@ export function cancelPreflightedPrivateTaskCreate(
     if(!generation||generation.value.toLowerCase()!==store.expectedRestoreGeneration.toLowerCase())
       return {ok:false,reason:"resync_required"};
     const digest=commandHash(actor,commandId);
-    // A committed receipt wins: cancellation must never claim no-commit.
+    // Actor+command receipt is a durable TERMINAL no-future-CREATE proof.
+    // A retry can only replay/reject, never insert with this command UUID.
+    // Unlike detail/recovery, do NOT require live task/Area access: the
+    // original task may have been deleted or access subsequently revoked.
+    // No task ID, Area or title is returned from this endpoint.
     if(db.prepare("SELECT 1 FROM metadata WHERE key=?")
       .get(PRIVATE_TASK_CREATE_RECEIPT_PREFIX+digest))
-      return {ok:true,status:"committed"};
+      return {ok:true,status:"settled"};
     const key=TARGET_STAGING_PRIVATE_TASK_CREATE_CANCEL_PREFIX+digest;
     if(db.prepare("SELECT 1 FROM metadata WHERE key=?").get(key))
       return {ok:true,status:"cancelled"};

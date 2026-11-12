@@ -81,13 +81,13 @@ export async function readPrivateTaskCreateRecoveryInChild(
 
 /** Strict, content-free cancellation result: no task/Area ID may escape. */
 export type TaskCreateCancelReply=
-  |{ok:true;status:"cancelled"|"committed"}
+  |{ok:true;status:"cancelled"|"settled"}
   |{ok:false;reason:"unavailable"|"resync_required"|"session_revoked"|"write_failed"};
 export function parseTaskCreateCancelReply(v:unknown):TaskCreateCancelReply|null{
   if(!v||typeof v!=="object"||Array.isArray(v))return null;
   const x=v as Record<string,unknown>,keys=Object.keys(x).sort().join(",");
   if(keys==="ok,status"&&x.ok===true&&
-    (x.status==="cancelled"||x.status==="committed"))
+    (x.status==="cancelled"||x.status==="settled"))
     return {ok:true,status:x.status};
   if(keys==="ok,reason"&&x.ok===false&&
     (x.reason==="unavailable"||x.reason==="resync_required"||

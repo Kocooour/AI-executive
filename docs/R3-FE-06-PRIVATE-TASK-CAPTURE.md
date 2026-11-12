@@ -50,7 +50,9 @@ HTTP API. Testy používají pouze syntetická data, bez zapnutí produkce nebo 
    kontrolách server vrátí neprůhledné `taskId` pro autorizovaný detail,
    nikdy soukromý název, Oblast ani identitu. V UI vznikne oznámení
    **Zobrazit úkol** i po reloadu; v browser storage zůstává jen marker.
-   Bariéra se uvolní **pouze** při potvrzeném `committed`.
+   Bariéra se pro navigaci k existujícímu úkolu uvolní **pouze** při
+   autorizovaném `committed`; samostatně lze ručně uvolnit jen po trvalém
+   terminálním důkazu `cancelled` nebo `settled` z cancel endpointu.
    `not_recorded` není důkaz neprovedení.
 5. Vypršení 8sekundové lhůty ověření Oblasti vrátí dialog do bezpečně
    opakovatelného výběru; nejde o odeslaný CREATE. Timeout read-only
@@ -76,12 +78,20 @@ Samostatný child pod serverovou identitou vloží trvalou actor+command
 cancel fence v pinned `BEGIN IMMEDIATE` transakci; původní CREATE
 pod stejným zámkem prověřuje tento fence před vložením úkolu.
 
-- `cancelled`: zápis nemohl uspět a žádný opožděný příkaz pod stejným
-  `commandId` už nesmí vytvořit úkol. Jedině poté klient smaže marker.
-- `committed`: CREATE vyhrál závod. Klient nechá blokaci a vyžaduje
-  ověření původního zápisu, které teprve může potvrdit autorizovaný
-  detail úkolu.
-- Chyby, odmítnutí, výpadky i `not_recorded` blokaci zachovávají.
+- `cancelled`: zrušovací zábrana zvítězila v připnuté transakci;
+  tento actor+command už nemůže vytvořit úkol ani při opožděném POST.
+- `settled`: pod stejným připnutým zámkem existuje neměnný actor+command
+  receipt původního CREATE. Opakování téhož UUID smí pouze selhat nebo
+  idempotentně vrátit původní výsledek; další úkol nevloží. Platí i po
+  **smazání** úkolu či pozdější ztrátě přístupu k jeho Oblasti.
+  Odpověď obsahuje výhradně `{status:"settled"}`, žádný taskId, oblast
+  ani soukromý text. Není to potvrzení přístupnosti původního úkolu.
+- Oba terminální důkazy odblokují **pouze nové vytvoření**, až po ověření
+  živé identity, aktuální generace a přesného markeru v sessionStorage.
+  Navigace na původní úkol vyžaduje nezávislé `create-status` nebo
+  `create-recovery` s živým ACL a task/Area guardem.
+- Chyby, odmítnutí, výpadky, `not_recorded` a zastaralé `committed`
+  na cancel endpointu zachovávají blokaci.
   Po změně identity/generation nelze cizí marker zrušit pouhým
   přihlášením jiného účtu.
 
@@ -104,8 +114,9 @@ oprávnění a vrací `taskId` výhradně při potvrzeném, aktuálně autorizov
 `committed`, nikdy privátní název nebo Oblast. Odmítnutí a `not_recorded`
 neobsahují identifikátor žádného úkolu.
 Neověřený, revokovaný, změněný nebo jinému actorovi patřící zápis
-ponechá klienta zablokovaného. Neexistuje časové odblokování, nové
-UUID, ani automatické opakování CREATE.
+ponechá klienta zablokovaného. Neexistuje časové odblokování ani
+automatické opakování původního CREATE. Nové UUID smí vzniknout až
+po potvrzeném terminálním důkazu, nikoli při pouhém `not_recorded`.
 
 Tento nový backendový protokol řeší technický problém zaznamenaný
 v [#398](https://github.com/Kocooour/AI-executive/issues/398);

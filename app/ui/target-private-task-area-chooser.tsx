@@ -37,7 +37,7 @@ const text={
     lost:"Text původního příkazu není uložen. Výsledek lze bezpečně ověřit podle neprůhledného ID; do potvrzení je nový zápis zablokovaný.",
     receipt:"Ověřit původní zápis",cancel:"Zrušit nepotvrzený zápis",
     cancelling:"Bezpečně ruším…",cancelled:"Původní zápis byl prokazatelně zrušen. Můžete vytvořit nový úkol.",
-    cancelCommitted:"Úkol už mohl být vytvořen. Ověřte původní zápis.",
+    createSettled:"Původní zápis byl proveden. Úkol už ale nemusí být přístupný. Nyní můžete vytvořit nový úkol.",
     cancelFailed:"Zrušení nelze potvrdit; vytváření dalších úkolů zůstává zablokované.",notRecorded:"Server dosud nepotvrdil zápis. To nevylučuje pozdější dokončení; další příkaz je blokovaný.",
     receiptFailed:"Zápis nelze bezpečně potvrdit. Ověření opakujte po obnovení oprávnění.",
     success:"Vytvoření úkolu bylo potvrzeno."},
@@ -56,7 +56,7 @@ const text={
     lost:"The original private command text was not stored. Check the original create with its opaque ID; new creation remains blocked until confirmed.",
     receipt:"Check original create",cancel:"Cancel unresolved create",
     cancelling:"Cancelling safely…",cancelled:"Original create was durably cancelled. You may create another task.",
-    cancelCommitted:"The task may have been created. Verify the original create.",
+    createSettled:"The original create was committed, but its task may no longer be accessible. You can now create a new task.",
     cancelFailed:"Cancellation is not confirmed; further task creation stays blocked.",notRecorded:"The server has not confirmed this create. It could still commit later; new creation is blocked.",
     receiptFailed:"The create could not be verified. Retry verification after access is restored.",
     success:"Task creation confirmed."},
@@ -235,12 +235,14 @@ export default function TargetPrivateTaskAreaChooser({
     clearTimeout(timer);
     if(current!==serial.current||!mounted.current||!live())return;
     setRevision(v=>v+1);
-    if(result==="cancelled"&&privateTaskCreateMarker(generation).kind==="clear"){
-      setName("");setChosen("");setPhase("idle");setMessage(c.cancelled);
+    if((result==="cancelled"||result==="settled")&&
+      privateTaskCreateMarker(generation).kind==="clear"){
+      setName("");setChosen("");setPhase("idle");
+      setMessage(result==="settled"?c.createSettled:c.cancelled);
       setNonce(v=>v+1);return;
     }
     setPhase("uncertain");
-    setMessage(result==="committed"?c.cancelCommitted:c.cancelFailed);
+    setMessage(c.cancelFailed);
   }
   void revision;
   return <div className="captureOverlay" onClick={onClose}>
