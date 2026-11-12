@@ -78,3 +78,27 @@ export async function readPrivateTaskCreateRecoveryInChild(
   return parseTaskCreateRecoveryReply(await runStagingWriteChild(
     config,"target-staging-task-create-status-child.mjs",JSON.stringify({commandId})));
 }
+
+/** Strict, content-free cancellation result: no task/Area ID may escape. */
+export type TaskCreateCancelReply=
+  |{ok:true;status:"cancelled"|"committed"}
+  |{ok:false;reason:"unavailable"|"resync_required"|"session_revoked"|"write_failed"};
+export function parseTaskCreateCancelReply(v:unknown):TaskCreateCancelReply|null{
+  if(!v||typeof v!=="object"||Array.isArray(v))return null;
+  const x=v as Record<string,unknown>,keys=Object.keys(x).sort().join(",");
+  if(keys==="ok,status"&&x.ok===true&&
+    (x.status==="cancelled"||x.status==="committed"))
+    return {ok:true,status:x.status};
+  if(keys==="ok,reason"&&x.ok===false&&
+    (x.reason==="unavailable"||x.reason==="resync_required"||
+      x.reason==="session_revoked"||x.reason==="write_failed"))
+    return {ok:false,reason:x.reason};
+  return null;
+}
+export async function cancelPrivateTaskCreateInChild(
+  config:StagingPersonalReadConfig,commandId:string,
+):Promise<TaskCreateCancelReply|null>{
+  if(!UUID.test(commandId))return null;
+  return parseTaskCreateCancelReply(await runStagingWriteChild(
+    config,"target-staging-task-create-cancel-child.mjs",JSON.stringify({commandId})));
+}
