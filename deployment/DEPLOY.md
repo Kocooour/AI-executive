@@ -17,8 +17,16 @@ sudo bash -c 'set -Eeuo pipefail; cd /opt/ai-executive; target="$1"; [[ "$target
 The launcher first checks that `origin/main` matches the **exact SHA**. The
 pinned script then performs its normal root-owned deployment lock, clean/main
 worktree and ancestry checks, consistent backup, stop/build, first-time owner
-cutoff initialization when appropriate, validation, restart, service checks and
-rollback. Its path-independent absolute layout makes execution via stdin
+cutoff initialization when appropriate, validation, restart and service
+checks. Ordinary failures can roll back code, **but a failed first rollout
+introducing the owner-session cutoff must not automatically roll back to
+pre-feature authentication**, because that old code would accept revoked
+signed cookies. After the service has been stopped, a first-rollout failure
+leaves it **stopped** and the current checkout unchanged by automatic rollback;
+the operator must repair and redeploy a cutoff-aware version, or rotate
+`AI_EXECUTIVE_SESSION_SECRET` before manually permitting the older code to
+serve requests. Never recreate or restore the cutoff to make rollback work.
+The script's path-independent absolute layout makes execution via stdin
 equivalent to running the checked-out script **after** updating the checkout.
 
 **Never substitute:**
@@ -37,4 +45,8 @@ under operator control as documented in
 The synthetic test `tests/reviewed-target-deploy.test.mjs` constructs an old
 checkout and a newer remote main, executes this **documented command body**
 against them, and checks that the new script runs while the local checkout
-still contains the old one. No real deployment or systemd commands run in CI.
+still contains the old one. `tests/deploy-safe.test.mjs` additionally
+exercises a failed first rollout with real cutoff initialization in a
+disposable mocked-service environment: it must preserve the cutoff and never
+restart an old binary that would accept a pre-feature signed cookie. No real
+production deployment or systemd commands run in CI.

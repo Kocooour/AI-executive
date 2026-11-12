@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHmac } from "node:crypto";
 import { spawn, spawnSync } from "node:child_process";
 import {
   chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync,
@@ -324,6 +325,42 @@ scenarioCase("rowloss: rollback refuses to certify lost canonical rows", (r, f) 
   assert.equal(r.service, "active");
   assert.equal(r.backups.length, 1, "verified backup must be preserved for owner decision");
   assert.ok(existsSync(path.join(f.backups, r.backups[0], "rollback.json")));
+});
+scenarioCase("firstrolloutunhealthy: failed new startup never re-enables pre-revocation owner cookies", (r, f) => {
+  assert.notEqual(r.status, 0, "the synthetic first rollout must fail its readiness check");
+  assert.match(r.output, /sluzba nebo lokalni\/HTTPS API nejsou dostupne/);
+  assert.match(r.output, /BEZPECNOSTNI BLOKACE: prvni nasazeni revokace relaci selhalo/);
+  assert.equal(r.head, newSha, "must not reset to pre-feature auth code");
+  assert.equal(r.service, "inactive", "failed first rollout leaves all owner API traffic stopped");
+  assert.equal(r.events.includes("start-b"), true, "new service was tried after cutoff init");
+  assert.equal(r.events.includes("start-a"), false, "pre-feature service is never restarted");
+  assert.equal(r.events.includes("reset"), false, "old auth code must not be restored automatically");
+  assert.equal(r.backups.length, 1, "verified data backup remains available for manual repair");
+  const marker = path.join(f.data, "owner-session-valid-from.sqlite");
+  assert.equal(existsSync(marker), true, "the real target CLI provisions the persistent cutoff");
+  const db = new DatabaseSync(marker, { readOnly: true });
+  try {
+    const row = db.prepare("SELECT version, valid_from_ms FROM owner_session_cutoff WHERE id = 1").get();
+    assert.equal(row.version, 1);
+    assert.ok(Number.isSafeInteger(row.valid_from_ms) && row.valid_from_ms > 0);
+  } finally { db.close(); }
+
+  // This is a pre-feature owner token: signed with the same session secret,
+  // unexpired, but missing issuedAt. The old auth code accepts this format
+  // while the target auth rejects it. Never restart the old code after cutoff.
+  const secret = "synthetic-first-rollout-session-secret-long-enough";
+  const payload = Buffer.from(JSON.stringify({
+    subject: "owner", expiresAt: Date.now() + 3600_000,
+  })).toString("base64url");
+  const oldCookie = payload + "." + createHmac("sha256", secret).update(payload).digest("base64url");
+  const [issuedPayload, issuedSignature] = oldCookie.split(".");
+  const original = JSON.parse(Buffer.from(issuedPayload, "base64url").toString("utf8"));
+  assert.equal(original.subject, "owner");
+  assert.ok(original.expiresAt > Date.now());
+  assert.equal(Object.hasOwn(original, "issuedAt"), false);
+  assert.equal(issuedSignature, createHmac("sha256", secret).update(issuedPayload).digest("base64url"),
+    "pre-feature owner validation would accept this still-signed cookie");
+  assert.equal(r.events.includes("start-a"), false, "the vulnerable old authentication is never exposed");
 });
 scenarioCase("unhealthy: failed HTTP readiness triggers verified code rollback", (r) => {
   assert.notEqual(r.status, 0);

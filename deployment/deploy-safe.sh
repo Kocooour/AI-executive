@@ -245,6 +245,17 @@ on_exit() {
     echo "KRITICKA CHYBA: sluzba stale bezi; nelze bezpecne sestavovat rollback." >&2
     exit "$rc"
   fi
+  # A first rollout may already have initialized the persistent cookie cutoff.
+  # The pre-feature $PREV does not consult it: starting that binary would
+  # reaccept old signed owner cookies, including ones invalidated by logout.
+  # Fail closed even if provisioning was interrupted or the state was present
+  # before this attempt; do not infer that no previous cutoff existed.
+  if [ "${OWNER_SESSION_FIRST_ROLLOUT:-0}" = 1 ]; then
+    echo "BEZPECNOSTNI BLOKACE: prvni nasazeni revokace relaci selhalo." >&2
+    echo "Stara verze ignoruje revokacni stav; sluzba zustava zastavena, bez automatickeho rollbacku." >&2
+    echo "Oprav a nasad verzi s kontrolou revokace, nebo pred rucnim spustenim stare verze rotuj AI_EXECUTIVE_SESSION_SECRET." >&2
+    exit "$rc"
+  fi
   if [ "$CHANGED" = 1 ]; then
     echo "Vracim pouze kod na $PREV; produkcni data neobnovuji." >&2
     (
