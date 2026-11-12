@@ -27,7 +27,7 @@ export async function prepareConfirmedMyPlanUndo(
   if(signal?.aborted)return {kind:"retry",reason:"aborted"};
   const prepared=await prepareMyPlanStatus({
     taskId:original.taskId,areaId:original.writeAreaId,
-    status:"open",signal,
+    status:"open",undoOf:original,signal,
   },fetchImpl);
   if(prepared.ok===false)
     return prepared.reason==="signed-out"
