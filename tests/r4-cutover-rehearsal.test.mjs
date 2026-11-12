@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
-import { copyFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -59,7 +59,7 @@ function fixture(t) {
   return { base, source };
 }
 function run(script, args) {
-  return spawnSync(process.execPath, [script, ...args], {
+  return spawnSync(process.execPath, [script, ...args, "--offline-confirmed"], {
     cwd: root, encoding: "utf8",
     env: { ...process.env, AI_EXECUTIVE_DATA_DIR: "" },
     timeout: 15000,
@@ -158,7 +158,7 @@ test("rehearsal refuses existing output, alias of source and configured live sou
   assert.notEqual(run(rehearsal, [source, out]).status, 0);
   assert.equal(readFileSync(path.join(out, "sentinel"), "utf8"), "keep");
   assert.notEqual(run(rehearsal, [source, source]).status, 0);
-  const guarded = spawnSync(process.execPath, [rehearsal, source, path.join(base, "refused")], {
+  const guarded = spawnSync(process.execPath, [rehearsal, source, path.join(base, "refused"), "--offline-confirmed"], {
     cwd: root, encoding: "utf8", env: { ...process.env, AI_EXECUTIVE_DATA_DIR: source },
   });
   assert.notEqual(guarded.status, 0);
@@ -253,7 +253,7 @@ test("inventory and rehearsal refuse writing under configured production data", 
   mkdirSync(home);
   for (const script of [inventory, rehearsal]) {
     const out = path.join(home, "forbidden");
-    const result = spawnSync(process.execPath, [script, source, out], {
+    const result = spawnSync(process.execPath, [script, source, out, "--offline-confirmed"], {
       cwd: root, encoding: "utf8", env: { ...process.env, AI_EXECUTIVE_DATA_DIR: home },
     });
     assert.notEqual(result.status, 0);
@@ -285,4 +285,84 @@ test("rehearsal refuses repeated or malicious offline source option", t => {
   const result = run(rehearsal, [source, out, "--config-offline", source, "--config-offline", source]);
   assert.notEqual(result.status, 0);
   assert.equal(existsSync(out), false);
+});
+
+
+test("both CLIs require explicit offline-snapshot acknowledgement before any output", t => {
+  const { source, base } = fixture(t);
+  for (const script of [inventory, rehearsal]) {
+    const output = path.join(base, path.basename(script) + "-no-ack");
+    const result = spawnSync(process.execPath, [script, source, output], {
+      cwd: root, encoding: "utf8",
+      env: { ...process.env, AI_EXECUTIVE_DATA_DIR: "", AI_EXECUTIVE_TARGET_STAGING_DIRECTORY: "" },
+    });
+    assert.notEqual(result.status, 0);
+    assert.equal(existsSync(output), false);
+  }
+});
+
+test("both CLIs refuse implicit cwd/.data live source or output without environment config", t => {
+  const { source, base } = fixture(t);
+  const live = path.join(base, ".data");
+  cpSync(source, live, { recursive: true });
+  const alias = path.join(base, "default-alias");
+  symlinkSync(live, alias, "dir");
+  for (const script of [inventory, rehearsal]) {
+    for (const candidate of [live, alias]) {
+      const out = path.join(base, path.basename(script) + "-source-rejected");
+      const result = spawnSync(process.execPath, [script, candidate, out, "--offline-confirmed"], {
+        cwd: base, encoding: "utf8",
+        env: { ...process.env, AI_EXECUTIVE_DATA_DIR: "", AI_EXECUTIVE_TARGET_STAGING_DIRECTORY: "" },
+      });
+      assert.notEqual(result.status, 0, "must refuse implicit .data including symlink alias");
+      assert.equal(existsSync(out), false);
+    }
+    for (const output of [path.join(live, "forbidden"), path.join(alias, "forbidden")]) {
+      const result = spawnSync(process.execPath, [script, source, output, "--offline-confirmed"], {
+        cwd: base, encoding: "utf8",
+        env: { ...process.env, AI_EXECUTIVE_DATA_DIR: "", AI_EXECUTIVE_TARGET_STAGING_DIRECTORY: "" },
+      });
+      assert.notEqual(result.status, 0, "must refuse output under implicit live .data");
+      assert.equal(existsSync(output), false);
+    }
+  }
+});
+
+test("inventory labels only exact known migration prefixes as known schema versions", t => {
+  const { source, base } = fixture(t);
+  const migrationText = readFileSync(path.join(root, "lib/schema-migrations.ts"), "utf8");
+  const currentIds = [...migrationText.matchAll(/\bid:\s*"([^"]+)"/g)].map(match => match[1]);
+  assert.ok(currentIds.length >= 2, "expected tracked named migrations");
+  const file = path.join(source, "store.sqlite");
+  const db = new DatabaseSync(file);
+  try {
+    db.exec("DELETE FROM schema_migrations");
+    const insert = db.prepare("INSERT INTO schema_migrations (id) VALUES (?)");
+    for (const id of currentIds) insert.run(id);
+  } finally { db.close(); }
+  const inventoryAt = name => {
+    const out = path.join(base, name);
+    const result = run(inventory, [source, out]);
+    assert.equal(result.status, 0, result.stderr);
+    return JSON.parse(readFileSync(path.join(out, "inventory.json"), "utf8")).schema;
+  };
+  const full = inventoryAt("current-version");
+  assert.equal(full.migrationIdentity, "known_current");
+  assert.equal(full.knownSchemaVersion, "legacy-migrations-" + currentIds.length);
+  assert.equal(full.expectedMigrationCount, currentIds.length);
+  const olderDb = new DatabaseSync(file);
+  try { olderDb.prepare("DELETE FROM schema_migrations WHERE id=?").run(currentIds.at(-1)); }
+  finally { olderDb.close(); }
+  const older = inventoryAt("older-version");
+  assert.equal(older.migrationIdentity, "known_older");
+  assert.equal(older.knownSchemaVersion, "legacy-migrations-" + (currentIds.length - 1));
+  const unknownDb = new DatabaseSync(file);
+  try {
+    unknownDb.prepare("DELETE FROM schema_migrations WHERE id=?").run(currentIds[0]);
+    unknownDb.prepare("INSERT INTO schema_migrations (id) VALUES (?)").run("not-a-known-migration");
+  } finally { unknownDb.close(); }
+  const unknown = inventoryAt("unknown-version");
+  assert.equal(unknown.migrationRows, older.migrationRows);
+  assert.equal(unknown.migrationIdentity, "unknown");
+  assert.equal(unknown.knownSchemaVersion, null);
 });
