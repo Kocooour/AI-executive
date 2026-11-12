@@ -2,7 +2,7 @@
  * No client flag, URL scope or UI state grants visibility: only the server does. */
 // Client-safe flags only: importing the server config would bundle node:crypto.
 import type {TitleSearchFailure,TitleSearchScope,TitleSearchItem} from "./target-staging-title-search-client";
-import {detailIdOk,type TargetDetailGates,type TargetDetailRoute} from "./target-detail-route";
+import {detailIdOk,type TargetDetailGates,type TargetDetailRoute,type TargetDetailView} from "./target-detail-route";
 import type {TitleSearchSessionSnapshot} from "./target-staging-title-search-session";
 
 /** Topbar Enter is a deliberate submit, not a fetch-on-keystroke. */
@@ -131,15 +131,20 @@ export const mainTitleSearchCopy={
 /** Open only kinds whose existing detail UI is enabled. Invalid legacy IDs
  * remain text, as in Projects/Notes/My Plan. Server re-authorizes on open. */
 export function mainTitleSearchDetailRoute(
-  item:TitleSearchItem,gates:TargetDetailGates,
+  item:TitleSearchItem,gates:TargetDetailGates,views:readonly TargetDetailView[],
 ):TargetDetailRoute|null{
   if(!gates[item.kind]||!detailIdOk(item.id))return null;
-  if(item.kind==="project")return {kind:"project",id:item.id,view:"Projects"};
-  if(item.kind==="note")return {kind:"note",id:item.id,view:"Notes"};
-  // A task detail can read both standalone and project tasks by ID; the
-  // MyPlanPreview detail address does not require a valid projectId in the
-  // search DTO and remains server-authorized even for an undated task.
-  return {kind:"task",id:item.id,view:"MyPlanPreview"};
+  if(item.kind==="project")return views.includes("Projects")
+    ?{kind:"project",id:item.id,view:"Projects"}:null;
+  if(item.kind==="note")return views.includes("Notes")
+    ?{kind:"note",id:item.id,view:"Notes"}:null;
+  // My Plan supports both standalone and project tasks, including undated ones.
+  if(views.includes("MyPlanPreview"))return {kind:"task",id:item.id,view:"MyPlanPreview"};
+  // If My Plan is off, a project task may still open in the authorized Projects
+  // detail; a standalone task has no valid Projects address and stays text.
+  if(views.includes("Projects")&&detailIdOk(item.projectId))
+    return {kind:"task",id:item.id,view:"Projects",projectId:item.projectId};
+  return null;
 }
 
 // A single-use, in-memory return bridge: the Search component unmounts while
