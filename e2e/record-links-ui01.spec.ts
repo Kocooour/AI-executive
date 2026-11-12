@@ -195,7 +195,9 @@ test("current project relation rejects a stale legacy parent in a typed task URL
     await page.goto(`/?view=Projects&projectId=${actualProjectId}&taskId=${data.taskId}`);
     await waitUntilSynced(page);
     await expect(page.locator(".projectPage")).toHaveAttribute("data-project-page", actualProjectId);
-    await expect(page.locator(".inspectorDetail")).toContainText(data.taskTitle);
+    // The editable task title is an <input> value, not textContent.
+    await expect(page.locator(".inspectorDetail .titleEdit")).toHaveValue(data.taskTitle);
+    await expect(page.locator(".inspectorDetail")).toHaveAttribute("aria-label", `Úkol: ${data.taskTitle}`);
   } finally {
     expect(await updateStore(page, records, links, true)).toBe(200);
   }
