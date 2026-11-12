@@ -256,6 +256,87 @@ for(const width of [390,1280]){
     expect(writes[1].commandId).not.toBe(writes[0].commandId);
   });
 }
+/** A server may COMMIT the cancel fence even when the first HTTP response
+ * is lost after visibility/offline suspension. UI must allow the same UUID
+ * to be verified again; it must never release on a local abort alone. */
+for(const [width,mode] of [[390,"visibility"],[1280,"offline"]] as const){
+  test("interrupted cancellation wake keeps fence and safely retries at "+
+    width+"px ("+mode+")",async({page})=>{
+    await page.setViewportSize({width,height:844});
+    const writes=await setup(page,route=>reply(route,
+      {error:"Too many requests"},429));
+    let cancelRequests=0,firstCancel:Route|null=null;
+    await page.route("**/api/target-staging/tasks/create-cancel",route=>{
+      cancelRequests++;
+      expect(route.request().postDataJSON()).toEqual({
+        commandId:writes[0].commandId,
+      });
+      if(cancelRequests===1){
+        // Simulate a durable server cancellation whose first response is lost.
+        firstCancel=route;
+        return;
+      }
+      return reply(route,{status:"cancelled"});
+    });
+    await page.goto("/?view=Calendar");
+    await openAndFill(page,width);
+    await page.getByTestId("target-private-task-save").click();
+    const unresolved=page.getByTestId("target-private-task-unresolved");
+    await expect(unresolved).toBeVisible();
+    const cancel=page.getByTestId("target-private-task-cancel");
+    await expect(cancel).toBeEnabled();
+    const marker=await page.evaluate(()=>
+      sessionStorage.getItem("lumi-private-task-create-unresolved-v1"));
+    expect(marker).toContain(writes[0].commandId);
+    expect(marker).not.toContain(writes[0].title);
+    await cancel.click();
+    await expect.poll(()=>cancelRequests).toBe(1);
+    await expect(cancel).toBeDisabled();
+    // Trigger the same visibility/offline handlers used by useTargetWake.
+    if(mode==="visibility"){
+      await page.evaluate(()=>{
+        Object.defineProperty(document,"visibilityState",{
+          configurable:true,value:"hidden",
+        });
+        document.dispatchEvent(new Event("visibilitychange"));
+      });
+      await page.evaluate(()=>{
+        Reflect.deleteProperty(document,"visibilityState");
+        document.dispatchEvent(new Event("visibilitychange"));
+      });
+    }else{
+      await page.evaluate(()=>{
+        Object.defineProperty(navigator,"onLine",{
+          configurable:true,value:false,
+        });
+        window.dispatchEvent(new Event("offline"));
+      });
+      await page.evaluate(()=>{
+        Reflect.deleteProperty(navigator,"onLine");
+        window.dispatchEvent(new Event("online"));
+      });
+    }
+    await expect(unresolved).toBeVisible();
+    await expect(cancel).toBeEnabled({timeout:15000});
+    const stillPending=await page.evaluate(()=>
+      sessionStorage.getItem("lumi-private-task-create-unresolved-v1"));
+    expect(stillPending).toBe(marker);
+    expect(writes).toHaveLength(1);
+    // The identical UUID is safe to retry only because server cancellation is
+    // idempotent under the pinned SQLite write lock.
+    await cancel.click();
+    await expect(unresolved).toHaveCount(0);
+    await expect(page.getByTestId("target-private-task-area")).toBeEnabled();
+    expect(cancelRequests).toBe(2);
+    expect(await page.evaluate(()=>
+      sessionStorage.getItem("lumi-private-task-create-unresolved-v1"))).toBe(null);
+    // A delayed response from the aborted first request cannot undo the proof.
+    if(firstCancel)await (firstCancel as Route).fulfill({
+      status:200,headers,body:JSON.stringify({status:"cancelled"}),
+    }).catch(()=>{});
+    expect(writes).toHaveLength(1);
+  });
+}
 /** Integrates merged #391 Search with this default-off private task capture.
  * Both feature flags are ON only in this isolated synthetic browser profile.
  * No automatic local task insertion, Search request or production write. */
