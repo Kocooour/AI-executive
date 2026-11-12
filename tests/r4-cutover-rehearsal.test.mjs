@@ -231,3 +231,32 @@ test("rehearsal rejects symlinks in source backup tree rather than following the
   assert.equal(result.stdout.includes(SECRET), false);
   assert.equal(result.stderr.includes(SECRET), false);
 });
+
+
+test("inventory accepts only boolean operator attestation for environment token, without token content", t => {
+  const { source, base } = fixture(t);
+  const out = path.join(base, "attested");
+  const result = run(inventory, [source, out, "--integration-token-present", "true"]);
+  assert.equal(result.status, 0, result.stderr);
+  const report = JSON.parse(readFileSync(path.join(out, "inventory.json"), "utf8"));
+  assert.equal(report.credentials.integrationTokenPresent, true);
+  assert.equal(report.credentials.integrationTokenInspection, "operator_attested");
+  const invalid = run(inventory, [source, path.join(base, "invalid"), "--integration-token-present", SECRET]);
+  assert.notEqual(invalid.status, 0);
+  assert.equal(existsSync(path.join(base, "invalid")), false);
+  assert.equal(invalid.stderr.includes(SECRET), false);
+});
+
+test("inventory and rehearsal refuse writing under configured production data", t => {
+  const { source, base } = fixture(t);
+  const home = path.join(base, "production");
+  mkdirSync(home);
+  for (const script of [inventory, rehearsal]) {
+    const out = path.join(home, "forbidden");
+    const result = spawnSync(process.execPath, [script, source, out], {
+      cwd: root, encoding: "utf8", env: { ...process.env, AI_EXECUTIVE_DATA_DIR: home },
+    });
+    assert.notEqual(result.status, 0);
+    assert.equal(existsSync(out), false);
+  }
+});
