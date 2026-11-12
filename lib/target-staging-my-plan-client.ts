@@ -23,6 +23,14 @@ export type MyPlanReadResult=
 const cursorPattern=/^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/;
 const datePattern=/^\d{4}-\d{2}-\d{2}$/;
 const filterValues:readonly string[]=["all","personal","shared"];
+/** SQLite orders task IDs by UTF-8 BINARY bytes, not JS UTF-16 code units. */
+function compareBinaryTaskIds(a:string,b:string):number{
+  const encoder=new TextEncoder(),left=encoder.encode(a),right=encoder.encode(b);
+  for(let i=0;i<Math.min(left.length,right.length);i++){
+    if(left[i]!==right[i])return left[i]-right[i];
+  }
+  return left.length-right.length;
+}
 function exactKeys(value:Record<string,unknown>,keys:string[]):boolean {
   return Object.keys(value).sort().join("|")===keys.sort().join("|");
 }
@@ -85,7 +93,8 @@ function parseDay(
   for(const item of value.tasks){
     const task=parseTask(item,filter,undated);
     if(!task||!match(task.attentionOn)||seen.has(task.taskId)||
-      (undated ? (tasks.length>0&&task.taskId<=tasks[tasks.length-1].taskId) :
+      (undated ? (tasks.length>0&&
+         compareBinaryTaskIds(task.taskId,tasks[tasks.length-1].taskId)<=0) :
         (previousDate!==null&&(task.attentionOn as string)<previousDate)))return null;
     seen.add(task.taskId);
     previousDate=task.attentionOn;
@@ -139,7 +148,8 @@ export function appendMyPlanSlice(
   const mergedUndated=[...previous.undated.tasks,...next.undated.tasks];
   if(mergedToday.some((task,i)=>i>0&&(task.attentionOn as string)<(mergedToday[i-1].attentionOn as string))||
     mergedTomorrow.some((task,i)=>i>0&&(task.attentionOn as string)<(mergedTomorrow[i-1].attentionOn as string))||
-    mergedUndated.some((task,i)=>i>0&&task.taskId<=mergedUndated[i-1].taskId))
+    mergedUndated.some((task,i)=>i>0&&
+      compareBinaryTaskIds(task.taskId,mergedUndated[i-1].taskId)<=0))
     return null;
   return {...next,today:{tasks:mergedToday,hasMore:next.today.hasMore},
     tomorrow:{tasks:mergedTomorrow,hasMore:next.tomorrow.hasMore},
