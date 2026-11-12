@@ -1,6 +1,6 @@
 import { expect, test } from "./fixtures";
 import type { Page } from "@playwright/test";
-import { expectOnServer, seeded, serverEntities, waitUntilSynced } from "./helpers";
+import { expectOnServer, removeTasks, seeded, serverEntities, waitUntilSynced } from "./helpers";
 
 const pragueDate = (page: Page, days: number) => page.evaluate((offset) => new Intl.DateTimeFormat("en-CA", { timeZone: "Europe/Prague" })
   .format(new Date(Date.now() + offset * 86_400_000)), days);
@@ -23,6 +23,7 @@ test("a task whose planned day has passed is shown as needing attention", async 
   await page.locator(".capture input").press("Enter");
   let id = "";
   await expect.poll(async () => (id = (await serverEntities(page)).find((entity) => entity.title === title)?.id || ""), { timeout: 20_000 }).not.toBe("");
+  try {
   await page.goto(`/?task=${id}`);
   await waitUntilSynced(page);
   const yesterday = await pragueDate(page, -1);
@@ -38,6 +39,9 @@ test("a task whose planned day has passed is shown as needing attention", async 
   await page.locator(".detail input[type=date][aria-label='Kdy']").fill(tomorrow);
   await expectOnServer(page, (entity) => entity.id === id && entity.properties?.when === tomorrow, true);
   await expect(await attentionItem(page, title)).toHaveCount(0);
+  } finally {
+    await removeTasks(page, [id]);
+  }
 });
 
 // A local task edit can finish syncing before Attention's GET returns. The old
@@ -50,6 +54,7 @@ test("a synced task edit disables stale quick actions while Attention refresh is
   await page.locator(".capture input").press("Enter");
   let taskId = "";
   await expect.poll(async () => (taskId = (await serverEntities(page)).find((entity) => entity.title === title)?.id || ""), { timeout: 20_000 }).not.toBe("");
+  try {
   await page.goto(`/?task=${taskId}`);
   await waitUntilSynced(page);
   const yesterday = await pragueDate(page, -1);
@@ -100,6 +105,9 @@ test("a synced task edit disables stale quick actions while Attention refresh is
   // Force an unblocked GET before asserting that yesterday's item is gone.
   await page.getByRole("button", { name: "Obnovit" }).first().click();
   await expect(item).toHaveCount(0);
+  } finally {
+    await removeTasks(page, [taskId]);
+  }
 });
 
 // An Attention-origin date popover can already be open when the browser loses
