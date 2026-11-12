@@ -209,12 +209,19 @@ function parseArgs() {
   const args = process.argv.slice(2);
   if (args[0] === "--verify") {
     if (args.length !== 4) throw Error("usage: --verify <offline-expected-dir> <offline-candidate-dir> <new-output-dir>");
-    return { verify: true, sourceArgs: [args[1], args[2]], out: args[3], target: null };
+    return { verify: true, sourceArgs: [args[1], args[2]], out: args[3], targetIndex: null, configIndex: null };
   }
-  if (!(args.length === 2 || (args.length === 4 && args[2] === "--target-offline")))
-    throw Error("usage: <offline-legacy-dir> <new-output-dir> [--target-offline <offline-target-dir>]");
-  return { verify: false, sourceArgs: [args[0], ...(args.length === 4 ? [args[3]] : [])],
-    out: args[1], target: args.length === 4 };
+  if (args.length < 2 || (args.length - 2) % 2 !== 0)
+    throw Error("usage: <offline-legacy> <new-output> [--target-offline <dir>] [--config-offline <dir>]");
+  const sourceArgs = [args[0]], selected = {};
+  for (let i = 2; i < args.length; i += 2) {
+    const kind = args[i] === "--target-offline" ? "target" : args[i] === "--config-offline" ? "config" : null;
+    if (!kind || selected[kind] !== undefined) throw Error("invalid or repeated offline source option");
+    selected[kind] = sourceArgs.length;
+    sourceArgs.push(args[i + 1]);
+  }
+  return { verify: false, sourceArgs, out: args[1],
+    targetIndex: selected.target ?? null, configIndex: selected.config ?? null };
 }
 function main() {
   const args = parseArgs();
@@ -257,12 +264,12 @@ function main() {
     assertEqualDescriptions(expected, archivalDescription);
   }
   let target = { status: "not_provided" };
-  if (args.target) {
+  if (args.targetIndex !== null) {
     // Target is a separate original directory; copy all files including the
     // immutable journal and witness, and verify byte-for-byte restore as a unit.
     const targetArchive = path.join(archive, "target");
     const targetRestored = path.join(restored, "target");
-    const targetEntries = copyTree(resolved[1], targetArchive);
+    const targetEntries = copyTree(resolved[args.targetIndex], targetArchive);
     copyTree(targetArchive, targetRestored);
     if (manifestHash(targetEntries) !== manifestHash(listTree(targetRestored)))
       throw Error("target security archive restore mismatch");
@@ -273,6 +280,19 @@ function main() {
     target = { status: "bytes_and_sqlite_verified",
       files: targetEntries.filter(row => row.kind === "file").length,
       manifestSha256: manifestHash(targetEntries) };
+  }
+  let config = { status: "not_provided" };
+  if (args.configIndex !== null) {
+    // Environment-only credentials may live outside the normal data directory;
+    // they require a separately prepared OFFLINE copy. Never print their names.
+    const archivedConfig = path.join(archive, "configuration");
+    const restoredConfig = path.join(restored, "configuration");
+    const entries = copyTree(resolved[args.configIndex], archivedConfig);
+    copyTree(archivedConfig, restoredConfig);
+    if (manifestHash(entries) !== manifestHash(listTree(restoredConfig)))
+      throw Error("configuration artifact restore mismatch");
+    config = { status: "bytes_verified", files: entries.filter(x => x.kind === "file").length,
+      manifestSha256: manifestHash(entries) };
   }
   // The whole offline snapshot is preserved with original paths in mode 0700/0600;
   // JSON evidence contains only digests/counters and no path, title or secret.
@@ -289,6 +309,7 @@ function main() {
       manifestSha256: manifestHash(expectedManifest),
     },
     target,
+    externalConfiguration: config,
     limitations: [
       "input must be an independently quiesced, consistent offline snapshot",
       "byte-accurate journal/witness restore is not a semantic target anti-rollback preflight",
@@ -300,7 +321,7 @@ function main() {
     { mode: 0o600, flag: "wx" });
   process.stdout.write("R4 OFFLINE rehearsal: PASS; " + report.applicationTableCount +
     " tables; table rows, schema objects, SQLite integrity and directory backup/restore match. " +
-    "Target coverage: " + target.status + ". This is NOT cutover approval.\n");
+    "Target coverage: " + target.status + "; external configuration: " + config.status + ". This is NOT cutover approval.\n");
 }
 try { main(); }
 catch (error) {
