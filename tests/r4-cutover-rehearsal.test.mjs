@@ -260,3 +260,29 @@ test("inventory and rehearsal refuse writing under configured production data", 
     assert.equal(existsSync(out), false);
   }
 });
+
+
+test("rehearsal includes separate offline operator configuration without disclosing values", t => {
+  const { source, base } = fixture(t);
+  const config = path.join(base, "offline-config");
+  mkdirSync(config);
+  writeFileSync(path.join(config, "service.env"), "AI_EXECUTIVE_INTEGRATION_TOKEN=" + SECRET + "\n", { mode: 0o600 });
+  const out = path.join(base, "external-config");
+  const result = run(rehearsal, [source, out, "--config-offline", config]);
+  assert.equal(result.status, 0, result.stderr);
+  const report = JSON.parse(readFileSync(path.join(out, "rehearsal.json"), "utf8"));
+  assert.equal(report.externalConfiguration.status, "bytes_verified");
+  assert.equal(report.externalConfiguration.files, 1);
+  assert.equal(readFileSync(path.join(out, "restored/configuration/service.env"), "utf8"),
+    "AI_EXECUTIVE_INTEGRATION_TOKEN=" + SECRET + "\n");
+  assert.equal(JSON.stringify(report).includes(SECRET), false);
+  assert.equal(result.stdout.includes(SECRET), false);
+});
+
+test("rehearsal refuses repeated or malicious offline source option", t => {
+  const { source, base } = fixture(t);
+  const out = path.join(base, "duplicate");
+  const result = run(rehearsal, [source, out, "--config-offline", source, "--config-offline", source]);
+  assert.notEqual(result.status, 0);
+  assert.equal(existsSync(out), false);
+});
