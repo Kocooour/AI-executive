@@ -21,7 +21,7 @@ const caldav = await import("../lib/caldav.ts");
 const calendar = await import("../lib/calendar.ts");
 const icloud = await import("../lib/icloud-calendar.ts");
 const migrations = await import("../lib/schema-migrations.ts");
-const auth = await import("../lib/auth.ts");
+const auth = await import("./support/owner-session-test-cookie.mjs");
 const icloudRoute = await import("../app/api/calendar/icloud/route.ts");
 const calendarRoute = await import("../app/api/calendar/route.ts");
 

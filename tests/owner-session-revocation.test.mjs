@@ -54,10 +54,15 @@ const readCutoff = () => {
   finally { db.close(); }
 };
 const url = "http://localhost:3001";
+let syntheticLoginSource = 0; // Keep real rate limiting intact; isolate each synthetic login.
 const cookie = token => `${auth.sessionCookieName}=${token}`;
 const request = (endpoint, token, init = {}) => new Request(url + endpoint, {
   ...init,
-  headers: { ...(token ? { cookie: cookie(token) } : {}), ...(init.headers || {}) },
+  headers: {
+    ...(endpoint === "/api/auth/login"
+      ? { "x-forwarded-for": `198.18.0.${++syntheticLoginSource}` } : {}),
+    ...(token ? { cookie: cookie(token) } : {}), ...(init.headers || {}),
+  },
 });
 const tokenFromLogin = async () => {
   const response = await passwordLogin(request("/api/auth/login", null, {
@@ -92,7 +97,15 @@ test("explicit provisioning only; pre-migration token without issuedAt is reject
   }));
   assert.equal(before.status, 503);
   assert.equal(existsSync(marker), false, "login must never bootstrap missing revocation history");
-  cutoff.initializeOwnerSessionRevocationState();
+  const cli = mode => spawnSync(process.execPath, [
+    "--experimental-loader", "./scripts/target-staging-ts-loader.mjs",
+    "./scripts/owner-session-revocation-init.mjs", mode,
+  ], { cwd: process.cwd(), env: process.env, encoding: "utf8" });
+  assert.equal(cli("--check").status, 1, "missing cutoff fails validation");
+  assert.equal(cli("--init").status, 0, "explicit one-time CLI initializes the state");
+  assert.equal(cli("--check").status, 0, "subsequent deployments validate it");
+  assert.equal(cli("--init").status, 1, "the CLI cannot reset a cutoff");
+
   assert.throws(() => cutoff.initializeOwnerSessionRevocationState(),
     /Owner session revocation state unavailable/, "provisioning never overwrites an existing cutoff");
   const token = await tokenFromLogin();

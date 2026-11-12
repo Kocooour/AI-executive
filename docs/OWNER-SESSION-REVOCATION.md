@@ -14,16 +14,18 @@ Scope: one security PR **outside milestone A**. Only the owner cookie `ai_execut
 - **No HTTP request initializes or repairs the store.** A missing, invalid, symlinked, unreadable or unsafe-permission state file denies authentication. Password login gets HTTP 503 and passkey login gets HTTP 503, rather than implying invalid credentials.
 - Authenticated logout increments the cutoff with `max(Date.now(), previous + 1)` in a synchronous SQLite `BEGIN IMMEDIATE` transaction, then expires the cookie. Every previous owner cookie is rejected across all devices/processes, including legacy and target-staging reads. Concurrent logouts cannot move the cutoff backwards.
 - SQLite rollback-journal transactions release write locks automatically after a killed process, unlike persistent directory-based lockfiles. `synchronous=FULL` protects committed updates. No stale-lock cleanup is required.
-- `GET /api/store` performs the same owner-cookie validation **after** serializing its response and immediately before release. Target-staging admission/release checks already existed.
+- `GET /api/store` and the other primary legacy GET endpoints perform the same owner-cookie validation **after** serializing their response and immediately before release. Target-staging admission/release checks already existed.
+- Playwright provisions only its own freshly allocated `lumi-e2e-*` data directory before starting the isolated browser-test server; production remains fail-closed.
 - No changes to `lumi_target_staging_session` (durable target sessions), integration bearer tokens, or their independent revocation.
 
 ## First deployment — mandatory one-time step
 1. Verify every app worker uses the **same private, persistent** `AI_EXECUTIVE_DATA_DIR` on one shared filesystem. The cutoff is not included in ordinary application data backups and **must not be rolled back**.
-2. Run **exactly once**, as the service account, with the normal `AI_EXECUTIVE_DATA_DIR` set, **before starting the new app**:
+2. The standard `deployment/deploy-safe.sh` performs **one-time** initialization automatically as the service account, after backing up the data and checking the first rollout transition (old commit lacks owner revocation, new commit contains it), **before** the new service starts. It verifies an existing file without overwriting it and rejects a missing file on any later rollout. For a nonstandard/manual deployment, explicitly run as the service user with `AI_EXECUTIVE_DATA_DIR` set:
    ```sh
-   node --experimental-loader ./tests/ts-loader.mjs scripts/owner-session-revocation-init.mjs
+   node --experimental-loader ./scripts/target-staging-ts-loader.mjs scripts/owner-session-revocation-init.mjs --init
+   node --experimental-loader ./scripts/target-staging-ts-loader.mjs scripts/owner-session-revocation-init.mjs --check
    ```
-   This refuses to overwrite any pre-existing file. It creates the initial cutoff and does not issue a token.
+   `--init` refuses to overwrite a prior cutoff; `--check` never creates it. Both require the real persistent data directory. No login can bootstrap the state.
 3. Deploy the new code, then sign in once on each device. Pre-deployment cookies lack `issuedAt`, so every device must reauthenticate.
 4. Normal restarts require **no** initialization command. If the file disappears/is damaged, leave authentication denied, investigate and recover the original state. **Do not just recreate it.** If irrecoverable, rotate `AI_EXECUTIVE_SESSION_SECRET` (invalidating every old signature) *before* an explicitly authorized re-provisioning; restarting or logging in does not reinitialize the file.
 5. Never restore an older cutoff snapshot. SQLite requires a local filesystem with functioning cross-process locks. Separate replicas using independent directories are unsupported.

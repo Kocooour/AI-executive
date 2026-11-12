@@ -75,9 +75,9 @@ function cutoff(db: DatabaseSync): number {
 
 function inTransaction<T>(readOnly: boolean, body: (db: DatabaseSync) => T): T {
   const db = openExisting(readOnly);
-  const expectedIdentity = fileIdentity(statePath());
   let active = false;
   try {
+    const expectedIdentity = fileIdentity(statePath());
     db.exec(readOnly ? "BEGIN" : "BEGIN IMMEDIATE");
     active = true;
     const result = body(db);
@@ -178,4 +178,9 @@ export function revokeAllOwnerSessions(): void {
     ).run(next, previous);
     if (updated.changes !== 1) throw new OwnerSessionStateUnavailable();
   });
+}
+
+/** Check one existing, safe and fully initialized cutoff without changing it. */
+export function verifyOwnerSessionRevocationState(): void {
+  inTransaction(true, db => { cutoff(db); });
 }

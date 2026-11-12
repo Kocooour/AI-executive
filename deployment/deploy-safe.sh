@@ -339,6 +339,13 @@ git fetch --no-tags origin main
 test "$(git rev-parse FETCH_HEAD)" = "$TARGET" || die "cil se neshoduje s origin/main"
 test "$PREV" != "$TARGET" || die "verze uz bezi"
 git merge-base --is-ancestor "$PREV" "$TARGET" || die "nelze fast-forward"
+# The only automatic initial provisioning allowed is a real first code rollout.
+# Never recreate missing revocation history during a subsequent deploy/restart.
+OWNER_SESSION_FIRST_ROLLOUT=0
+if git cat-file -e "$TARGET:lib/owner-session-revocation.ts" 2>/dev/null &&
+   ! git cat-file -e "$PREV:lib/owner-session-revocation.ts" 2>/dev/null; then
+  OWNER_SESSION_FIRST_ROLLOUT=1
+fi
 git diff --quiet "$PREV" "$TARGET" -- deployment/ai-executive.service || die "systemd jednotka se zmenila"
 echo "Stavajici: $PREV"
 echo "Cil:       $TARGET"
@@ -423,6 +430,28 @@ pnpm install --frozen-lockfile
 pnpm build
 fix_build_permissions
 test -z "$(git status --porcelain)"
+
+# Verify owner-cookie cutoff before the new app can start. First-time init is
+# authorized ONLY when this code is newly introduced in the deployed commit.
+# Existing state is never overwritten; missing state on later deploys fails closed.
+if git cat-file -e "$TARGET:lib/owner-session-revocation.ts" 2>/dev/null; then
+  OWNER_CUTOFF="$DATA/owner-session-valid-from.sqlite"
+  test -f "$APP/scripts/owner-session-revocation-init.mjs" ||
+    die "chybi prikaz pro inicializaci vlastnicke relace"
+  if [ ! -e "$OWNER_CUTOFF" ] && [ ! -L "$OWNER_CUTOFF" ]; then
+    [ "$OWNER_SESSION_FIRST_ROLLOUT" = 1 ] ||
+      die "zmizel revokacni stav; obnov puvodni stav nebo pred novou inicializaci vymen session secret"
+    echo "=== JEDNORAZOVA INICIALIZACE REVOKACE RELACE ==="
+    runuser -u ai-executive -- env AI_EXECUTIVE_DATA_DIR="$DATA" /usr/bin/node \
+      --experimental-loader "$APP/scripts/target-staging-ts-loader.mjs" \
+      "$APP/scripts/owner-session-revocation-init.mjs" --init ||
+      die "inicializace revokacniho stavu selhala"
+  fi
+  runuser -u ai-executive -- env AI_EXECUTIVE_DATA_DIR="$DATA" /usr/bin/node \
+    --experimental-loader "$APP/scripts/target-staging-ts-loader.mjs" \
+    "$APP/scripts/owner-session-revocation-init.mjs" --check ||
+    die "neplatny revokacni stav vlastnickych relaci"
+fi
 
 # Deployment/code-build work cannot silently alter consent or indexed mail
 # while the service remains stopped. Snapshot before any user traffic resumes.

@@ -26,6 +26,20 @@ if (!process.env.LUMI_E2E_RUN_DIR) {
   // long E2E run, making the CalDAV mock fail before its first test (EADDRINUSE).
   process.env.LUMI_E2E_CALDAV_PORT = String(20_000 + randomInt(10_000));
   process.env.LUMI_E2E_GMAIL_PORT = String(30_000 + randomInt(2_000));
+  // Explicit provisioning for this NEW, throwaway browser-test data directory.
+  // Never initialize missing production state or replace an existing cutoff.
+  execFileSync(process.execPath, [
+    "--experimental-loader",
+    path.join(__dirname, "scripts", "target-staging-ts-loader.mjs"),
+    path.join(__dirname, "scripts", "owner-session-revocation-init.mjs"),
+    "--init",
+  ], {
+    cwd: __dirname,
+    env: {
+      ...process.env,
+      AI_EXECUTIVE_DATA_DIR: path.join(process.env.LUMI_E2E_RUN_DIR, "data"),
+    },
+  });
 }
 const runDir = process.env.LUMI_E2E_RUN_DIR;
 const passwordHash = process.env.LUMI_E2E_PASSWORD_HASH;

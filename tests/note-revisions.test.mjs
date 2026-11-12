@@ -24,7 +24,7 @@ after(() => rmSync(dataDir, { recursive: true, force: true }));
 const store = await import("../lib/server-store.ts");
 const revisions = await import("../lib/note-revisions.ts");
 const migrations = await import("../lib/schema-migrations.ts");
-const auth = await import("../lib/auth.ts");
+const auth = await import("./support/owner-session-test-cookie.mjs");
 
 const db = () => store.getDatabase();
 const note = (id, title, content, extra = {}) => ({ id, type: "note", title, content, status: "active", workspaceId: "personal", properties: {}, createdAt: 1, updatedAt: 1, ...extra });
