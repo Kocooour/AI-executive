@@ -15,6 +15,7 @@ export type MyPlanCopy={
   whenReasons:WhenReasons;
   readReasons:Reasons;
   dayEmpty:string;
+  dayUndated:string;
   areaPrivate:string;
   areaShared:string;
   attentionSince:(date:string)=>string;
@@ -110,6 +111,7 @@ const cs:MyPlanCopy={
     "aborted":"Načítání bylo přerušeno.",
   },
   dayEmpty:"Žádné úkoly v tomto dni.",
+  dayUndated:"Bez data",
   areaPrivate:"Soukromá oblast",
   areaShared:"Sdílená oblast",
   attentionSince:date=>"Vyžaduje pozornost od "+date,
@@ -205,6 +207,7 @@ const en:MyPlanCopy={
     "aborted":"Loading was interrupted.",
   },
   dayEmpty:"No tasks on this day.",
+  dayUndated:"Undated",
   areaPrivate:"Private area",
   areaShared:"Shared area",
   attentionSince:date=>"Needs attention since "+date,
