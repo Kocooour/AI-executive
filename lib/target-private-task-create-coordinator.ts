@@ -1,10 +1,12 @@
 /** R3-FE-6: tab-scoped, content-free ambiguity barrier. The full CREATE
- * command is kept ONLY in the current runtime's memory for exact recovery;
- * title/Area/task ID are never persisted in browser storage. Because task
- * status currently requires the exact title digest, reload destroys recovery
- * capability but MUST NOT clear the blocking UUID. This remains a release gate.
+ * command is retained only in runtime memory; browser storage contains
+ * {generation,commandId}, never title/Area/task ID. After reload the owner
+ * can recover by a live-ACL-verified UUID-only server receipt. not_recorded
+ * never clears the marker. An explicit terminal cancellation is a separate
+ * pinned, durable no-commit fence, which even a late CREATE cannot bypass.
  */
 import {checkPrivateTaskCreateReceipt,checkPrivateTaskCreateRecovery,
+  cancelPrivateTaskCreateCommand,
   sendPrivateTaskCreate,
   validPrivateTaskCreateCommand,type PrivateTaskCreateCommand,type TaskCreateOutcome,type TaskCreateReceipt,
 } from "./target-private-task-create-client";
@@ -181,4 +183,31 @@ export async function recoverPrivateTaskCreate(
   }
   // A response whose marker could not be positively cleared is NOT success.
   return typeof receipt==="object"?"unavailable":receipt;
+}
+
+/** Release an unresolved UUID ONLY after a durable, server-confirmed fence.
+ * A changed authentication generation must not let another account cancel
+ * the previous owner's command and incorrectly clear its tab-level marker. */
+export async function cancelTrackedPrivateTaskCreate(
+  runtime:Runtime,generation:string,signal:AbortSignal,
+  cancel:typeof cancelPrivateTaskCreateCommand=cancelPrivateTaskCreateCommand,
+):Promise<"cancelled"|"committed"|"denied"|"unavailable">{
+  if(!runtime.known()||runtime.generation()!==generation||signal.aborted)
+    return "unavailable";
+  const marker=privateTaskCreateMarker(generation),tracked=entries.get(runtime);
+  if(marker.kind!=="blocked"||tracked?.phase==="saving")
+    return "unavailable";
+  const raw=store()?.getItem(KEY),persisted=raw?decode(raw):null;
+  if(!persisted||persisted.generation!==generation||
+    persisted.commandId!==marker.commandId)return "unavailable";
+  const result=await cancel(marker.commandId,signal);
+  if(result==="cancelled"&&!signal.aborted&&runtime.known()&&
+    runtime.generation()===generation&&confirm(generation,marker.commandId)){
+    if(tracked?.command.commandId===marker.commandId){
+      entries.delete(runtime);tracked.unregister();
+    }
+    notify(runtime,{generation,confirmedTaskId:null});
+    return "cancelled";
+  }
+  return result==="cancelled"?"unavailable":result;
 }
