@@ -192,4 +192,8 @@ export async function GET(request: Request): Promise<Response> {
 
 
 /** Default-off standalone private task creation; GET list remains unchanged. */
-export {postPrivateTaskCreate as POST} from "../../../../lib/target-private-task-create-http";
+import {postPrivateTaskCreate} from "../../../../lib/target-private-task-create-http";
+
+export async function POST(request: Request): Promise<Response> {
+  return postPrivateTaskCreate(request);
+}
