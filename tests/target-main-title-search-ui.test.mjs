@@ -6,6 +6,7 @@ import {
   TARGET_MAIN_TITLE_SEARCH_FLAGS,targetMainTitleSearchEnabled,
   visibleMainTitleSearchResult,mainTitleSearchCopy,
   subscribeMainTitleSearchAclInvalidation,mainTitleSearchLegacySurfaces,
+  mainTitleSearchDetailRoute,
 } from "../lib/target-main-title-search-ui.ts";
 
 const all=Object.fromEntries(TARGET_MAIN_TITLE_SEARCH_FLAGS.map(k=>[k,"true"]));
@@ -36,6 +37,20 @@ test("titles and count vanish immediately on actor, scope, raw query or gate cha
   assert.equal(visibleMainTitleSearchResult({...bound,snapshot:{...snapshot,scope:"personal"}},binding,true),null);
   assert.equal(visibleMainTitleSearchResult({...bound,snapshot:{...snapshot,query:"other"}},binding,true),null);
 });
+test("search rows expose typed routes only for gated kinds and valid detail IDs",()=>{
+  const gates={task:true,project:true,note:true};
+  for(const [kind,view] of [["project","Projects"],["task","MyPlanPreview"],["note","Notes"]]){
+    const item={kind,id:kind+"-1",title:"Title",areaId:"area-1",areaKind:"private",
+      ...(kind==="project"?{}:{projectId:kind==="task"?"project-1":null})};
+    const route=mainTitleSearchDetailRoute(item,gates);
+    assert.deepEqual(route,{kind,id:item.id,view},kind);
+    assert.equal(mainTitleSearchDetailRoute(item,{...gates,[kind]:false}),null,kind+" off");
+    for(const badId of [" padded ","bad/id",".","..","x".repeat(257),"x\\\\y"]){
+      assert.equal(mainTitleSearchDetailRoute({...item,id:badId},gates),null,kind+" "+badId);
+    }
+  }
+});
+
 test("main Search copy is bilingual and never calls All my personal work",()=>{
   const cs=mainTitleSearchCopy.cs,en=mainTitleSearchCopy.en;
   assert.deepEqual(Object.keys(cs).sort(),Object.keys(en).sort());
