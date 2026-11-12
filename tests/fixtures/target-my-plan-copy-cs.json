@@ -23,6 +23,7 @@
   "readReasons.invalid-request": "Neplatné datum nebo parametry požadavku.",
   "readReasons.aborted": "Načítání bylo přerušeno.",
   "dayEmpty": "Žádné úkoly v tomto dni.",
+  "dayUndated": "Bez data",
   "areaPrivate": "Soukromá oblast",
   "areaShared": "Sdílená oblast",
   "attentionSince()": "Vyžaduje pozornost od Sample task",
