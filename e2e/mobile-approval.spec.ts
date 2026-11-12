@@ -120,7 +120,7 @@ test.describe("mobile proposal approval", () => {
     expect(confirmCalls).toBe(0);
   });
 
-  test("changing the write workspace in All clears proposal details and ignores a late reply", async ({ page }) => {
+  test("capture scope stays local, but switching the active workspace clears proposals and late replies", async ({ page }) => {
     await page.goto("/");
     await waitUntilSynced(page);
     const otherWorkspaceId = await page.evaluate(async () => {
@@ -155,17 +155,32 @@ test.describe("mobile proposal approval", () => {
       await page.locator(".assistantComposer input").fill(text);
       await page.locator(".assistantComposer input").press("Enter");
     };
-    const switchWriteWorkspace = async (id: string) => {
+    // #248: the Quick Capture destination is local to the draft and must not
+    // invalidate an unrelated AI proposal or change the global write workspace.
+    const chooseCaptureDestination = async (id: string) => {
       await page.locator(".assistantHead").getByRole("button", { name: "Zavřít" }).click();
       await page.locator(".mobileCaptureButton").click();
       const capture = page.getByRole("dialog", { name: "Rychlé zadání" });
       await capture.getByLabel("Workspace").selectOption(id);
       await capture.getByRole("button", { name: "Zrušit" }).click();
     };
+    // Active scope switching really does invalidate proposal context and late responses.
+    const switchActiveWorkspace = async (id: string) => {
+      await page.locator(".assistantHead").getByRole("button", { name: "Zavřít" }).click();
+      await page.getByRole("button", { name: "Přepnout workspace" }).click();
+      await page.locator(`.mobileWorkspaceMenu button[data-workspace-id="${id}"]`).click();
+      await page.getByRole("button", { name: "Přepnout workspace" }).click();
+      await page.locator('.mobileWorkspaceMenu button[data-workspace-id="all"]').click();
+    };
 
     await ask("Přesuň Tajný úkol");
     await expect(page.getByRole("button", { name: "Zkontrolovat návrh" })).toBeVisible();
-    await switchWriteWorkspace(otherWorkspaceId);
+    await chooseCaptureDestination(otherWorkspaceId);
+    await page.getByRole("button", { name: "Zeptat se AI" }).click();
+    // The original proposal is still readable because only capture changed.
+    await expect(page.getByRole("button", { name: "Zkontrolovat návrh" })).toBeVisible();
+    await page.locator(".assistantHead").getByRole("button", { name: "Zavřít" }).click();
+    await switchActiveWorkspace(otherWorkspaceId);
     await page.getByRole("button", { name: "Zeptat se AI" }).click();
     await expect(page.locator(".assistantMessages")).not.toContainText("Tajný úkol");
     await expect(page.locator(".assistantMessages")).not.toContainText("Tajný projekt");
@@ -173,7 +188,7 @@ test.describe("mobile proposal approval", () => {
 
     await ask("Připrav návrh v Other");
     await expect.poll(() => requestCount).toBe(2);
-    await switchWriteWorkspace("personal");
+    await switchActiveWorkspace("personal");
     releaseLateReply?.();
     await page.getByRole("button", { name: "Zeptat se AI" }).click();
     await expect(page.locator(".assistantMessages")).not.toContainText("Tajný úkol");
