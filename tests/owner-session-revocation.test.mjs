@@ -5,6 +5,7 @@ import {
   renameSync, rmSync, unlinkSync, writeFileSync,
 } from "node:fs";
 import { spawn, spawnSync } from "node:child_process";
+import { DatabaseSync } from "node:sqlite";
 import os from "node:os";
 import path from "node:path";
 import { after, test } from "node:test";
@@ -46,7 +47,12 @@ Object.assign(process.env, {
   AI_EXECUTIVE_TARGET_STAGING_RESTORE_GENERATION: stage.restoreGeneration,
   AI_EXECUTIVE_TARGET_STAGING_OWNER_USER_ID: "alice",
 });
-const marker = path.join(dataDirectory, "owner-session-valid-from.json");
+const marker = path.join(dataDirectory, "owner-session-valid-from.sqlite");
+const readCutoff = () => {
+  const db = new DatabaseSync(marker, { readOnly: true });
+  try { return db.prepare("SELECT valid_from_ms FROM owner_session_cutoff WHERE id = 1").get().valid_from_ms; }
+  finally { db.close(); }
+};
 const url = "http://localhost:3001";
 const cookie = token => `${auth.sessionCookieName}=${token}`;
 const request = (endpoint, token, init = {}) => new Request(url + endpoint, {
@@ -77,9 +83,18 @@ after(() => {
   rmSync(root, { recursive: true, force: true });
 });
 
-test("first successful login bootstraps; pre-migration token without issuedAt is rejected", async () => {
+test("explicit provisioning only; pre-migration token without issuedAt is rejected", async () => {
   assert.equal(existsSync(marker), false);
   assert.equal(auth.isAuthenticated(authRequest("stolen.old")), false);
+  const before = await passwordLogin(request("/api/auth/login", null, {
+    method: "POST", headers: { origin: url, "content-type": "application/json" },
+    body: JSON.stringify({ password }),
+  }));
+  assert.equal(before.status, 503);
+  assert.equal(existsSync(marker), false, "login must never bootstrap missing revocation history");
+  cutoff.initializeOwnerSessionRevocationState();
+  assert.throws(() => cutoff.initializeOwnerSessionRevocationState(),
+    /Owner session revocation state unavailable/, "provisioning never overwrites an existing cutoff");
   const token = await tokenFromLogin();
   assert.equal(existsSync(marker), true);
   assert.equal(auth.isAuthenticated(authRequest(token)), true);
@@ -121,7 +136,7 @@ test("logout invalidates copied cookie on legacy and target reads; a new login w
 
 test("cutoff survives a fresh process and concurrent logout writes never decrease it", async () => {
   const first = await tokenFromLogin();
-  const before = JSON.parse(readFileSync(marker, "utf8")).validFromMs;
+  const before = readCutoff();
   const worker = 'import { revokeAllOwnerSessions } from "./lib/owner-session-revocation.ts"; revokeAllOwnerSessions();';
   const args = ["--experimental-loader", "./tests/ts-loader.mjs", "--input-type=module", "-e", worker];
   const outcomes = await Promise.all(Array.from({ length: 4 }, () => new Promise(resolve => {
@@ -133,7 +148,7 @@ test("cutoff survives a fresh process and concurrent logout writes never decreas
     child.on("error", error => resolve({ code: -1, stderr: String(error) }));
   })));
   assert.deepEqual(outcomes.map(outcome => outcome.code), [0, 0, 0, 0], JSON.stringify(outcomes));
-  const afterWrites = JSON.parse(readFileSync(marker, "utf8")).validFromMs;
+  const afterWrites = readCutoff();
   assert.ok(afterWrites >= before + 4, "each committed concurrent logout advances the cutoff");
   assert.equal(auth.isAuthenticated(authRequest(first)), false);
   const reissued = await tokenFromLogin();
@@ -147,35 +162,64 @@ test("cutoff survives a fresh process and concurrent logout writes never decreas
   assert.equal(resumed.status, 0, resumed.stderr);
 });
 
-test("missing, malformed and symlinked cutoff fail closed; login never repairs corruption", async () => {
+test("missing, damaged and symlinked cutoff refuse all tokens and logins", async () => {
   const token = await tokenFromLogin();
-  const backup = marker + ".backup";
-  renameSync(marker, backup);
+  const saved = marker + ".saved";
+  const attempt = () => passwordLogin(request("/api/auth/login", null, {
+    method: "POST", headers: { origin: url, "content-type": "application/json" },
+    body: JSON.stringify({ password }),
+  }));
+  renameSync(marker, saved);
   try {
-    assert.equal(auth.isAuthenticated(authRequest(token)), false, "missing marker refuses auth");
-    writeFileSync(marker, "{broken", { mode: 0o600 });
-    assert.equal(auth.isAuthenticated(authRequest(token)), false, "corrupt marker refuses auth");
-    const unavailableLogin = await passwordLogin(request("/api/auth/login", null, {
-      method: "POST", headers: { origin: url, "content-type": "application/json" },
-      body: JSON.stringify({ password }),
-    }));
-    assert.equal(unavailableLogin.status, 500, "corrupt marker must not produce a new token");
-    assert.equal(unavailableLogin.headers.get("set-cookie"), null);
-    unlinkSync(marker);
-    // A credential-authenticated new login may bootstrap after file loss.
-    // The old signed cookie must remain dead after the reinitialization.
-    const replacement = await tokenFromLogin();
-    assert.equal(auth.isAuthenticated(authRequest(replacement)), true);
     assert.equal(auth.isAuthenticated(authRequest(token)), false);
+    assert.equal((await attempt()).status, 503, "missing state never reinitializes on login");
+    assert.equal(existsSync(marker), false);
+    writeFileSync(marker, "{corrupt", { mode: 0o600 });
+    assert.equal(auth.isAuthenticated(authRequest(token)), false);
+    assert.equal((await attempt()).status, 503);
     unlinkSync(marker);
-    const symlink = path.join(root, "untrusted");
-    writeFileSync(symlink, JSON.stringify({ version: 1, validFromMs: 0 }));
+    const target = path.join(root, "evil-marker");
+    writeFileSync(target, "{}");
     const { symlinkSync } = await import("node:fs");
-    symlinkSync(symlink, marker);
-    assert.equal(auth.isAuthenticated(authRequest(replacement)), false);
-    unlinkSync(marker);
+    symlinkSync(target, marker);
+    assert.equal(auth.isAuthenticated(authRequest(token)), false);
+    assert.equal((await attempt()).status, 503);
   } finally {
-    if (existsSync(marker)) unlinkSync(marker);
-    unlinkSync(backup);
+    unlinkSync(marker);
+    renameSync(saved, marker);
   }
+  assert.equal(auth.isAuthenticated(authRequest(token)), true);
+});
+
+test("SQLite writer lock is released on SIGKILL; a fresh process can revoke", async () => {
+  const token = await tokenFromLogin();
+  const script = String.raw\`const { DatabaseSync } = require("node:sqlite");
+    const db = new DatabaseSync(process.env.TEST_OWNER_DB);
+    db.exec("BEGIN IMMEDIATE");
+    process.stdout.write("LOCKED\\n");
+    setInterval(() => {}, 10000);\`;
+  const child = spawn(process.execPath, ["-e", script], {
+    env: { ...process.env, TEST_OWNER_DB: marker }, stdio: ["ignore", "pipe", "pipe"],
+  });
+  let stderr = "";
+  child.stderr.setEncoding("utf8");
+  child.stderr.on("data", chunk => { stderr += chunk; });
+  await new Promise((resolve, reject) => {
+    child.stdout.setEncoding("utf8");
+    child.stdout.on("data", chunk => { if (chunk.includes("LOCKED")) resolve(); });
+    child.on("error", reject);
+    child.on("exit", code => { if (code !== null) reject(new Error(stderr)); });
+  });
+  child.kill("SIGKILL");
+  await new Promise(resolve => child.on("close", resolve));
+  cutoff.revokeAllOwnerSessions();
+  assert.equal(auth.isAuthenticated(authRequest(token)), false);
+  const fresh = await tokenFromLogin();
+  assert.equal(auth.isAuthenticated(authRequest(fresh)), true);
+});
+
+test("passkey storage failures map to 503, not failed WebAuthn credentials", async () => {
+  const { passkeySignInError } = await import("../app/api/auth/passkeys/login/verify/route.ts");
+  assert.equal(passkeySignInError(new cutoff.OwnerSessionStateUnavailable()).status, 503);
+  assert.equal(passkeySignInError(new Error("bad assertion")).status, 401);
 });
