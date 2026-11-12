@@ -3,11 +3,13 @@ import {test} from "node:test";
 import {randomUUID} from "node:crypto";
 import {readFileSync} from "node:fs";
 import {validPrivateTaskAreaId,validPrivateTaskTitle,validPrivateTaskCreateCommand,
-  sendPrivateTaskCreate,checkPrivateTaskCreateReceipt,checkPrivateTaskCreateRecovery} from
+  sendPrivateTaskCreate,checkPrivateTaskCreateReceipt,checkPrivateTaskCreateRecovery,
+  cancelPrivateTaskCreateCommand} from
   "../lib/target-private-task-create-client.ts";
 import {privateTaskCreateMarker,reservePrivateTaskCreate,
   runPrivateTaskCreate,trackedPrivateTaskCreate,checkTrackedPrivateTaskCreate,
-  subscribePrivateTaskCreate,recoverPrivateTaskCreate,lastConfirmedPrivateTask}
+  subscribePrivateTaskCreate,recoverPrivateTaskCreate,lastConfirmedPrivateTask,
+  cancelTrackedPrivateTaskCreate}
   from "../lib/target-private-task-create-coordinator.ts";
 import {TARGET_PRIVATE_TASK_CREATE_UI_FLAGS,targetPrivateTaskCreateUiEnabled}
   from "../lib/target-private-task-create-ui-gate.ts";
@@ -282,4 +284,69 @@ test("main shell wiring preserves note-only default, no Search tab, distinct tas
   assert.match(form,/if\(!preflight\?\.ok\|\|controller\.signal\.aborted\)/);
   assert.match(form,/if\(current!==serial\.current\|\|!mounted\.current\|\|!live\(\)\)return/);
   assert.doesNotMatch(quick,/localStorage|IndexedDB/);
+});
+
+test("safe cancellation accepts only the exact authenticated no-store terminal proof",async()=>{
+  const cmd=command(),signal=new AbortController().signal;
+  assert.equal(await cancelPrivateTaskCreateCommand(cmd.commandId,signal,async(url,opts)=>{
+    assert.equal(url,"/api/target-staging/tasks/create-cancel");
+    assert.equal(opts.method,"POST");assert.equal(opts.cache,"no-store");
+    assert.equal(opts.credentials,"same-origin");assert.equal(opts.redirect,"error");
+    assert.deepEqual(JSON.parse(opts.body),{commandId:cmd.commandId});
+    assert.equal(opts.headers["x-lumi-target-protocol"],"1");
+    return json({status:"cancelled"});
+  }),"cancelled");
+  for(const response of [
+    json({status:"cancelled",taskId:cmd.taskId}),
+    json({status:"not_recorded"}),json({status:"cancelled"},429),
+    json({error:"Not found"},403),
+    new Response(JSON.stringify({status:"cancelled"}),{status:200,
+      headers:{"content-type":"application/json"}}),
+  ])assert.notEqual(await cancelPrivateTaskCreateCommand(cmd.commandId,signal,
+    async()=>response),"cancelled","only an exact 200 with no-store releases");
+  assert.equal(await cancelPrivateTaskCreateCommand(cmd.commandId,signal,
+    async()=>json({status:"committed"})),"committed");
+});
+test("429/403 cannot clear an ambiguous CREATE; verified cancellation allows a NEW UUID",()=>withStorage(async()=>{
+  const rt=runtime(),cmd=command(),signal=new AbortController().signal;
+  assert.equal(await runPrivateTaskCreate(rt,gen,cmd,async()=>sendPrivateTaskCreate(
+    cmd,signal,async()=>json({error:"Too many requests"},429))),"uncertain");
+  assert.equal(privateTaskCreateMarker(gen).kind,"blocked");
+  assert.equal(await checkTrackedPrivateTaskCreate(rt,gen,signal,
+    async()=>"not_recorded"),"not_recorded");
+  assert.equal(privateTaskCreateMarker(gen).kind,"blocked");
+  let calls=0;
+  const check=async(id)=>{calls++;assert.equal(id,cmd.commandId);
+    return calls===1?"denied":calls===2?"committed":"cancelled";};
+  assert.equal(await cancelTrackedPrivateTaskCreate(rt,gen,signal,check),"denied");
+  assert.equal(privateTaskCreateMarker(gen).kind,"blocked");
+  assert.equal(await cancelTrackedPrivateTaskCreate(rt,gen,signal,check),"committed");
+  assert.equal(privateTaskCreateMarker(gen).kind,"blocked");
+  assert.equal(await cancelTrackedPrivateTaskCreate(rt,gen,signal,check),"cancelled");
+  assert.deepEqual(privateTaskCreateMarker(gen),{kind:"clear"});
+  assert.equal(trackedPrivateTaskCreate(rt,gen),null);
+  assert.equal(await runPrivateTaskCreate(rt,gen,command(),async()=>"saved"),"saved");
+  assert.equal(calls,3);
+}));
+test("reload and changed actor generation cannot forge cancellation of previous owner",()=>withStorage(async()=>{
+  const cmd=command(),old=runtime(),signal=new AbortController().signal;
+  assert.equal(await runPrivateTaskCreate(old,gen,cmd,async()=>"uncertain"),"uncertain");
+  const newSession=runtime("B".repeat(43));
+  let calls=0;
+  assert.equal(await cancelTrackedPrivateTaskCreate(newSession,"B".repeat(43),
+    signal,async()=>{calls++;return "cancelled";}),"unavailable");
+  assert.equal(calls,0);
+  assert.equal(privateTaskCreateMarker(gen).kind,"blocked");
+  const reloaded=runtime();
+  assert.equal(await cancelTrackedPrivateTaskCreate(reloaded,gen,signal,
+    async(id)=>{assert.equal(id,cmd.commandId);return "cancelled";}),"cancelled");
+  assert.equal(privateTaskCreateMarker(gen).kind,"clear");
+}));
+test("cancellation UI keeps explicit manual action and no automatic release",()=>{
+  const form=readFileSync(new URL("../app/ui/target-private-task-area-chooser.tsx",
+    import.meta.url),"utf8");
+  assert.match(form,/data-testid="target-private-task-cancel"/);
+  assert.match(form,/cancelTrackedPrivateTaskCreate\(/);
+  assert.match(form,/phase==="cancelling"/);
+  assert.match(form,/result==="cancelled"&&privateTaskCreateMarker/);
 });
