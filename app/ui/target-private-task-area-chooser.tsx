@@ -110,6 +110,15 @@ export default function TargetPrivateTaskAreaChooser({
     setAreas({kind:"unavailable",generation});
     if(phase==="checking")setPhase("idle");
     if(phase==="receipt")setPhase("uncertain");
+    if(phase==="cancelling"){
+      // Aborting a HTTP response does not prove the server fence failed:
+      // keep the opaque command blocked until an explicit verified retry.
+      // If a positive receipt already cleared it, do not strand the form
+      // in a non-idle phase after this hide/wake transition either.
+      const pending=privateTaskCreateMarker(generation).kind!=="clear";
+      setPhase(pending?"uncertain":"idle");
+      setMessage(pending?c.cancelFailed:"");
+    }
   }
   useTargetWake({
     hide:()=>flushSync(hide),
