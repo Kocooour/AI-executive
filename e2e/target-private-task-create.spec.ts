@@ -210,6 +210,52 @@ test("receipt timeout re-enables exact verification; never retries CREATE",async
   await (timeoutRoute as Route|null)?.abort("failed").catch(()=>{});
 });
 
+for(const width of [390,1280]){
+  test("manual durable cancellation after rejected CREATE restores capture at "+width+"px",
+    async({page})=>{
+    await page.setViewportSize({width,height:844});
+    let attempts=0,cancellations=0;
+    const writes=await setup(page,(route,cmd)=>{
+      attempts++;
+      return attempts===1?reply(route,{error:"Too many requests"},429):
+        reply(route,{ok:true,taskId:cmd.taskId},201);
+    });
+    await page.route("**/api/target-staging/tasks/create-cancel",route=>{
+      cancellations++;
+      const body=route.request().postDataJSON();
+      expect(Object.keys(body)).toEqual(["commandId"]);
+      expect(body.commandId).toBe(writes[0].commandId);
+      return reply(route,{status:"cancelled"});
+    });
+    await page.goto("/?view=Calendar");
+    const modal=await openAndFill(page,width);
+    await page.getByTestId("target-private-task-save").click();
+    const unresolved=page.getByTestId("target-private-task-unresolved");
+    await expect(unresolved).toBeVisible();
+    const marker=await page.evaluate(()=>
+      sessionStorage.getItem("lumi-private-task-create-unresolved-v1"));
+    expect(marker).toContain(writes[0].commandId);
+    expect(marker).not.toContain(writes[0].title);
+    await page.getByTestId("target-private-task-receipt").click();
+    await expect(unresolved).toBeVisible(); // not_recorded is never release
+    const cancel=page.getByTestId("target-private-task-cancel");
+    await expect(cancel).toBeEnabled();
+    await cancel.click();
+    await expect(unresolved).toHaveCount(0);
+    await expect(page.getByTestId("target-private-task-area")).toBeEnabled();
+    expect(await page.evaluate(()=>
+      sessionStorage.getItem("lumi-private-task-create-unresolved-v1"))).toBe(null);
+    expect(cancellations).toBe(1);
+    await page.getByTestId("target-private-task-area").selectOption("private-a");
+    await page.getByTestId("target-private-task-form").getByRole("textbox",
+      {name:"Název úkolu"}).fill("Nový úkol po zrušení");
+    await page.getByTestId("target-private-task-save").click();
+    await expect(modal).toHaveCount(0);
+    await expect(page.getByTestId("target-private-task-created")).toBeVisible();
+    expect(writes).toHaveLength(2);
+    expect(writes[1].commandId).not.toBe(writes[0].commandId);
+  });
+}
 /** Integrates merged #391 Search with this default-off private task capture.
  * Both feature flags are ON only in this isolated synthetic browser profile.
  * No automatic local task insertion, Search request or production write. */
