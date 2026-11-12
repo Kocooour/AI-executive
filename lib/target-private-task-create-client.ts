@@ -133,3 +133,27 @@ export async function checkPrivateTaskCreateRecovery(
     return "unavailable";
   }catch{return "unavailable";}
 }
+
+/** Safe terminal release is ONLY a server-committed, actor-scoped cancellation
+ * fence. Not-recorded, network errors and status codes never clear the marker. */
+export type TaskCreateCancellation="cancelled"|"committed"|"denied"|"unavailable";
+export async function cancelPrivateTaskCreateCommand(
+  commandId:string,signal:AbortSignal,fetchImpl:typeof fetch=fetch,
+):Promise<TaskCreateCancellation>{
+  if(typeof commandId!=="string"||!uuid.test(commandId)||signal.aborted)
+    return "unavailable";
+  try{
+    const response=await fetchImpl("/api/target-staging/tasks/create-cancel",{
+      method:"POST",credentials:"same-origin",cache:"no-store",redirect:"error",
+      headers:HEADERS,body:JSON.stringify({commandId}),signal,
+    });
+    if(signal.aborted)return "unavailable";
+    if([401,403,404].includes(response.status))return "denied";
+    if(response.status!==200)return "unavailable";
+    const value=await bounded(response,signal);
+    if(!record(value)||Object.keys(value).join(",")!=="status")
+      return "unavailable";
+    return value.status==="cancelled"||value.status==="committed"
+      ?value.status:"unavailable";
+  }catch{return "unavailable";}
+}
