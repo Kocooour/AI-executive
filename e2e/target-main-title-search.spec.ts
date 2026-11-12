@@ -122,6 +122,9 @@ for(const width of [390,1280]){
 
     await input.press("Enter");
     await expect(search.locator(".targetMainSearchItems li")).toHaveCount(25);
+    // Only Search flags are on in this synthetic profile. Detail gates remain
+    // off, so results must stay plain text rather than dead-end buttons.
+    await expect(search.locator(".targetMainSearchItemButton")).toHaveCount(0);
     await expect(search).toContainText("Server-authorized school 01");
     expect(http.requests).toEqual([{scope:"all",query:"school",cursor:null,limit:25}]);
     await assertNoLegacyOnSearch(page);
