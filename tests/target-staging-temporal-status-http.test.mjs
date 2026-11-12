@@ -34,7 +34,7 @@ Object.assign(process.env,{
 const {bootstrapIsolatedTargetStore,TARGET_STAGING_TEMPORAL_STATUS_RECEIPT_PREFIX}=
   await import("../lib/target-store-bootstrap.ts");
 const durable=await import("../lib/target-staging-durable-session.ts");
-const {createSessionToken,sessionCookieName}=await import("../lib/auth.ts");
+const {createSessionToken,sessionCookieName}=await import("./support/owner-session-test-cookie.mjs");
 const {GET,PATCH}=await import("../app/api/target-staging/task-temporal/status/route.ts");
 const {POST}=await import("../app/api/target-staging/task-temporal/status/receipt/route.ts");
 const {
