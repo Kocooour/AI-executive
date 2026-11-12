@@ -43,7 +43,8 @@ node scripts/cutover-inventory.mjs /offline/legacy-copy /new/inventory-report
 
 node deployment/rehearsal/cutover-restore-rehearsal.mjs \
   /offline/legacy-copy /new/rehearsal-output \
-  --target-offline /offline/isolated-target-copy
+  --target-offline /offline/isolated-target-copy \
+  --config-offline /offline/service-config-copy
 
 # A second, INDEPENDENTLY captured offline copy can be compared against the
 # first copy, including its non-SQLite artifacts:
@@ -55,7 +56,7 @@ node deployment/rehearsal/cutover-restore-rehearsal.mjs \
 
 The rehearsal compares all copied files byte-for-byte (including legacy backups, credentials and companion artifacts), checks all SQLite rows, SQLite `integrity_check`, `foreign_key_check`, all table/index/trigger/view definitions and sequence contents, and verifies `VACUUM INTO` as an additional complete SQLite archive. Row-digest computation fails closed above **200,000 rows per table** or **16 MiB per encoded row**; an oversized store is a blocker for this tool, **not** permission to skip its verification.
 
-With `--target-offline`, the separate target directory must contain `lumi-target.sqlite`, `lumi-target.journal` and `lumi-target-witness.sqlite`. The archive restores their **bytes** and verifies both SQLite databases, but this does **not** prove journal↔witness↔target semantic consistency. A **separate supported target-store preflight, using only another offline copy**, must demonstrate the append-only journal, anti-rollback anchor, restore-generation and authorization invariants before owner approval. In particular, a mismatched target journal or witness blocks cutover even when directory hashes match. When the target flag is omitted, the report explicitly says `target.status = not_provided` and **cannot** be used as proof of a complete R4 recovery.
+With `--target-offline`, the separate target directory must contain `lumi-target.sqlite`, `lumi-target.journal` and `lumi-target-witness.sqlite`. The archive restores their **bytes** and verifies both SQLite databases, but this does **not** prove journal↔witness↔target semantic consistency. A **separate supported target-store preflight, using only another offline copy**, must demonstrate the append-only journal, anti-rollback anchor, restore-generation and authorization invariants before owner approval. In particular, a mismatched target journal or witness blocks cutover even when directory hashes match. When the target flag is omitted, the report explicitly says `target.status = not_provided` and **cannot** be used as proof of a complete R4 recovery. External environment files and service credentials located **outside** the data directory require an independently obtained, protected offline copy passed with `--config-offline`. Otherwise `externalConfiguration.status = not_provided` blocks any claim of complete credential recovery. Its presence proves byte preservation, not login/service compatibility; test those independently.
 
 The inventory reports actual legacy migration IDs only as a deterministic SHA-256 of the ordered list and distinguishes `environment_not_inspected` (unknown integration-token presence) from an explicit operator-supplied boolean attestation. The machine cannot establish whether an environment-only secret exists by looking at the legacy SQLite file. Gmail sync is reported as bounded aggregate checkpoint status; no mailbox data is printed.
 
