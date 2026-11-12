@@ -193,11 +193,11 @@ test("missing, damaged and symlinked cutoff refuse all tokens and logins", async
 
 test("SQLite writer lock is released on SIGKILL; a fresh process can revoke", async () => {
   const token = await tokenFromLogin();
-  const script = String.raw\`const { DatabaseSync } = require("node:sqlite");
+  const script = `const { DatabaseSync } = require("node:sqlite");
     const db = new DatabaseSync(process.env.TEST_OWNER_DB);
     db.exec("BEGIN IMMEDIATE");
     process.stdout.write("LOCKED\\n");
-    setInterval(() => {}, 10000);\`;
+    setInterval(() => {}, 10000);`;
   const child = spawn(process.execPath, ["-e", script], {
     env: { ...process.env, TEST_OWNER_DB: marker }, stdio: ["ignore", "pipe", "pipe"],
   });
