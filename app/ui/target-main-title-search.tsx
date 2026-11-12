@@ -58,6 +58,7 @@ export default function TargetMainTitleSearch({query,language="cs",details,detai
   const returnSessionPending=useRef(fromReturn.current);
   const returnBinding=useRef(current);
   const statusRef=useRef<HTMLParagraphElement>(null);
+  const returnFocusRef=useRef<HTMLParagraphElement>(null);
   const submitRef=useRef<()=>void>(()=>{});
 
   // Query edits, navigation across Personal/Shared and auth rotation cannot
@@ -185,13 +186,21 @@ export default function TargetMainTitleSearch({query,language="cs",details,detai
     });
   }
 
-  // The detail closes back to Search. The originating keyed button has been
-  // remounted by now, so it wins focus over the shell\x27s neutral heading fallback.
-  useEffect(()=>{if(ready)focusPendingRow();},[ready]);
+  // Prefer the authorized originating row after detail close. If the Search
+  // result was revoked/cleared (or no longer matches), return keyboard focus
+  // to static, non-sensitive Search guidance instead of leaving it on body.
+  // Wait for the first session to mount: the one-use return snapshot may not
+  // be visible until useTargetSession has completed its initial effect.
+  useEffect(()=>{
+    if(gate.kind==="checking"||
+      (!session&&verificationReady&&foregroundOnline()&&gate.kind==="ready"))return;
+    focusPendingRow(returnFocusRef.current,true);
+  },[ready,gate.kind,session,verificationReady]);
 
   return <section className="searchExplorer targetMainSearch" data-testid="target-main-title-search"
     aria-label={language==="cs"?"Autorizované hledání":"Authorized search"}>
-    <p className="targetMainSearchIntro">{copy.intro}</p>
+    <p className="targetMainSearchIntro" tabIndex={-1} ref={returnFocusRef}
+      data-testid="target-main-search-return">{copy.intro}</p>
     <div className="targetMainSearchActions">
       <p>{copy.instruction}</p>
       <button type="button" onClick={search} disabled={!allowed||Boolean(busy)}>
