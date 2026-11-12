@@ -1094,7 +1094,7 @@ test("R3-A3 Undo restores When atomically, rejects stale and revoked completions
 test("R3-A3 real HTTP serves three large pages at both 50 and 100 with bounded output",async()=>{
   const f=fixture(),bob=login(f,"bob");
   const insert=f.db.prepare("INSERT INTO tasks(id,area_id,title,due_on) VALUES (?,?,?,?)");
-  const title="x"+"\\\"".repeat(4095);
+  const title="x"+String.fromCharCode(92).repeat(4095);
   for(let i=0;i<100;i++){
     const id=String(i).padStart(3,"0");
     insert.run("b-large-today-"+id,"bob-private",title,"2026-11-04");
