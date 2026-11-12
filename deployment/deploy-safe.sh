@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
-# Lumi production deployment. Execute a reviewed commit's script as root inside tmux.
+# Lumi production deployment. Always execute THIS file from the verified target
+# commit via deployment/DEPLOY.md, not the stale script on the checked-out main.
+# The old running script cannot bootstrap features introduced only in the target.
 set -Eeuo pipefail
 umask 022
 APP=/opt/ai-executive
