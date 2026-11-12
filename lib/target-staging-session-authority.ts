@@ -599,13 +599,13 @@ export class TargetStagingSessionAuthority {
   readMyPlanTwoDayTaskPage(
     actorUserId:string,areaFilter:MyPlanTaskAreaFilter,
     evaluationDate:string,nextDate:string,limit:number,
-    offsetToday:number,offsetTomorrow:number,
-  ):{today:MyPlanDayTaskPage;tomorrow:MyPlanDayTaskPage}|null {
+    offsetToday:number,offsetTomorrow:number,offsetUndated:number,
+  ):{today:MyPlanDayTaskPage;tomorrow:MyPlanDayTaskPage;undated:MyPlanDayTaskPage}|null {
     if(this.#closed)return null;
     try {
       const credential=this.#oneShotReadCredential(actorUserId);
       return credential?readPreflightedMyPlanTwoDayTaskPage(this.#store,credential,{
-        areaFilter,evaluationDate,nextDate,limit,offsetToday,offsetTomorrow,
+        areaFilter,evaluationDate,nextDate,limit,offsetToday,offsetTomorrow,offsetUndated,
       }):null;
     }catch{return null;}
   }
