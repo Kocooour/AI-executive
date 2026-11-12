@@ -4,7 +4,7 @@
  * No /api/target-staging request is intercepted or fulfilled here; page.on("request") only observes.
  * Synthetic data, default-off: only LUMI_TARGET_PERSONAL_ACCEPTANCE_E2E=true runs it. */
 import {test,expect} from "./fixtures";
-import type {Page} from "@playwright/test";
+import type {Page,Response} from "@playwright/test";
 
 test.skip(process.env.LUMI_TARGET_PERSONAL_ACCEPTANCE_E2E!=="true",
   "personal acceptance needs the real isolated target store; it is opt-in");
@@ -36,6 +36,15 @@ const count=(calls:Calls,method:string,pathname:RegExp)=>
   calls.filter(call=>call.method===method&&pathname.test(call.path)).length;
 const isPost=(path:string)=>(response:{url():string;request():{method():string}})=>
   response.request().method()==="POST"&&new URL(response.url()).pathname===path;
+// The id the server confirmed for a create: the command carries the client-generated id, and the 201 body echoes
+// it. Chromium may already have dropped the body once the dialog closes, so the echo is compared when readable.
+const createdId=async(response:Response,key:"taskId"|"noteId")=>{
+  const sent=(response.request().postDataJSON() as Record<string,string>)[key];
+  expect(sent).toMatch(/^[0-9a-f-]{36}$/);
+  const echoed=await response.json().then((body:Record<string,unknown>)=>body[key],()=>undefined);
+  if(echoed!==undefined)expect(echoed).toBe(sent);
+  return sent;
+};
 // Everything a page could keep on the client: web storage, cookies readable by script and the VALUES of every
 // IndexedDB object store (bounded), not just database names.
 const clientState=(page:Page)=>page.evaluate(async()=>{
@@ -117,8 +126,7 @@ for(const width of [390,1280]){
     await page.getByTestId("target-private-task-save").click();
     const taskResponse=await taskPost;
     expect(taskResponse.status()).toBe(201);
-    const {taskId}=await taskResponse.json() as {taskId:string};
-    expect(taskId).toMatch(/^[0-9a-f-]{36}$/);
+    const taskId=await createdId(taskResponse,"taskId");
     await expect(page.getByTestId("target-private-task-created")).toBeVisible();
     expect(count(calls,"POST",/^\/api\/target-staging\/tasks$/)).toBe(1);
 
@@ -198,7 +206,7 @@ for(const width of [390,1280]){
     await form.getByTestId("target-private-create-save").click();
     const noteResponse=await notePost;
     expect(noteResponse.status()).toBe(201);
-    const {noteId}=await noteResponse.json() as {noteId:string};
+    const noteId=await createdId(noteResponse,"noteId");
     await expect(page.getByTestId("target-private-note-areas")).toHaveCount(0);
     expect(count(calls,"POST",/^\/api\/target-staging\/notes$/)).toBe(1);
     const noteList=page.getByTestId("target-scope-list");
@@ -289,7 +297,7 @@ for(const width of [390,1280]){
     expect(refused.status()).toBe(401);
     expect(await refused.text()).not.toContain(projectRenamed);
     // The runtime revalidates when the tab becomes visible/focused (throttle 1 s). Bringing another tab to the
-    // front and back is a real visibility change; fall back to nothing synthetic.
+    // front and back is a real visibility change (no synthetic window event is dispatched).
     await page.waitForTimeout(1100);
     const other=await page.context().newPage();
     await other.bringToFront();
