@@ -71,47 +71,71 @@ for(const width of [390,1280]){
     const noteEdited="Poznámka "+token+" upravená";
     const calls=targetCalls(page);
     await page.setViewportSize({width,height:844});
-    const main=page.locator("main");
     const detail=page.getByTestId("target-detail");
+    const fab=page.locator('[data-target-private-capture-fab="'+(width===390?"mobile":"desktop")+'"]');
     // A task opened from its project returns to the project first, then closes.
     const closeDetail=async()=>{
       for(let step=0;step<3&&await detail.count()>0;step++){
-        await detail.getByRole("button",{name:/Zavřít|Zpět/}).first().click();
+        await detail.locator("button.inspectorClose").click();
         await page.waitForTimeout(150);
       }
       await expect(detail).toHaveCount(0);
     };
     const planRow=(title:string)=>page.locator('[data-detail-row^="task:"]').filter({hasText:title});
+    const today=page.getByRole("region",{name:/^Dnes a dřívější/});
+    const tomorrow=page.getByRole("region",{name:/^Zítra/});
+    const openMyPlan=async()=>{
+      await page.goto("/?view=MyPlanPreview&scope=personal");
+      await expect(page.getByTestId("target-my-plan")).toBeVisible();
+      await expect(today).toBeVisible(); // the day lists render only from a server answer
+      await expect(page.getByTestId("target-my-plan-unavailable")).toHaveCount(0);
+    };
+    const readsAfter=(mark:number,method:string,pathname:RegExp)=>
+      calls.slice(mark).filter(call=>call.method===method&&pathname.test(call.path)).length;
 
     // 1. The signed-in owner opens My Plan; it renders from the server.
-    await page.goto("/?view=MyPlanPreview&scope=personal");
-    await expect(page.getByTestId("target-my-plan")).toBeVisible();
-    await expect.poll(()=>count(calls,"GET",/\/my-plan\/slice$/)).toBeGreaterThan(0);
-    await expect(page.getByTestId("target-my-plan-unavailable")).toHaveCount(0);
-    await quiet(calls);
+    await openMyPlan();
+    expect(count(calls,"GET",/\/my-plan\/slice$/)).toBeGreaterThan(0);
 
-    // 2. Global Quick Capture: private task with an explicit Area choice, exactly one POST.
-    await page.locator('[data-target-private-capture-fab="'+(width===390?"mobile":"desktop")+'"]').click();
+    // 1b. Regression (concurrency): open My Plan and click Quick Capture at once, with no waiting. Every
+    // read of the app shares one queue, so the Area catalog is never refused with "Oblasti nelze ověřit".
+    await page.goto("/?view=MyPlanPreview&scope=personal");
+    await fab.click();
+    await page.getByTestId("target-capture-task-kind").click();
+    await expect(page.getByTestId("target-private-task-area")).toBeVisible();
+    await expect(page.getByText("Oblasti nelze ověřit")).toHaveCount(0);
+    await page.getByRole("dialog").getByRole("button",{name:"Zavřít"}).click();
+    await expect(page.getByTestId("target-private-task-capture")).toHaveCount(0);
+    await expect(page.getByTestId("target-my-plan-unavailable")).toHaveCount(0);
+
+    // 2. Global Quick Capture: private task with an explicit Area choice, exactly one POST (201).
+    await fab.click();
     await page.getByTestId("target-capture-task-kind").click();
     await page.getByTestId("target-private-task-area").selectOption({label:store.seed.areaTitle});
     await page.getByTestId("target-private-task-form").getByRole("textbox",{name:"Název úkolu"}).fill(taskTitle);
+    const taskPost=page.waitForResponse(isPost("/api/target-staging/tasks"));
     await page.getByTestId("target-private-task-save").click();
+    const taskResponse=await taskPost;
+    expect(taskResponse.status()).toBe(201);
+    const {taskId}=await taskResponse.json() as {taskId:string};
+    expect(taskId).toMatch(/^[0-9a-f-]{36}$/);
     await expect(page.getByTestId("target-private-task-created")).toBeVisible();
     expect(count(calls,"POST",/^\/api\/target-staging\/tasks$/)).toBe(1);
 
-    // 3. A new task has no day yet; the detail sets When = today and it appears in My Plan.
+    // 3. A new task has no day yet; the detail (of exactly the created task) sets When = today.
     await page.getByTestId("target-private-task-open").click();
     await expect(detail).toBeVisible();
+    await expect(page).toHaveURL(new RegExp("taskId="+taskId));
     await expect(detail).toContainText(taskTitle);
     await detail.getByTestId("target-detail-edit-when-today").click();
     await expect(detail.getByTestId("target-detail-edit-status")).toContainText("Termín „Kdy“ je uložen.");
     await closeDetail();
-    await expect(planRow(taskTitle)).toHaveCount(1);
+    await expect(today.locator('[data-detail-row="task:'+taskId+'"]')).toHaveCount(1);
 
-    // 4. When = tomorrow (My Plan button) moves it into tomorrow's list.
+    // 4. When = tomorrow (My Plan button) moves it from today's list into tomorrow's.
     await page.getByRole("button",{name:"Naplánovat osobně na zítřek: "+taskTitle}).click();
-    const tomorrow=page.locator("section.stagingMyPlanDay").nth(1);
-    await expect(tomorrow.locator('[data-detail-row^="task:"]').filter({hasText:taskTitle})).toHaveCount(1);
+    await expect(tomorrow.locator('[data-detail-row="task:'+taskId+'"]')).toHaveCount(1);
+    await expect(today.locator('[data-detail-row="task:'+taskId+'"]')).toHaveCount(0);
 
     // 5. Open the task detail and rename it.
     await planRow(taskTitle).click();
@@ -128,7 +152,6 @@ for(const width of [390,1280]){
     await page.goto("/?view=Projects&scope=personal");
     const list=page.getByTestId("target-scope-list");
     await expect(list).toContainText(seed.projectTitle);
-    await quiet(calls);
     await list.locator('[data-detail-row="project:'+seed.projectId+'"]').click();
     await expect(detail).toContainText(seed.taskTitle);
     const edit=detail.getByTestId("target-project-title-edit");
@@ -146,38 +169,42 @@ for(const width of [390,1280]){
     await expect(list).not.toContainText(seed.projectTitle);
 
     // 7. My Plan: mark the project task done, then reopen it with Undo.
-    await page.goto("/?view=MyPlanPreview&scope=personal");
+    await openMyPlan();
     await expect(planRow(seed.taskTitle)).toHaveCount(1);
-    await quiet(calls);
     await page.getByRole("button",{name:"Dokončit úkol: "+seed.taskTitle}).click();
     await expect(planRow(seed.taskTitle)).toHaveCount(0);
     await page.getByRole("button",{name:"Vrátit dokončení (Undo)"}).click();
     await expect(page.getByRole("status").filter({hasText:"Obnovení potvrzeno."})).toBeVisible();
     // GAP (docs/R3-PERSONAL-ACCEPTANCE.md): completing deletes the planned day, so a reopened task is
     // not listed in My Plan again. The reopened state itself is verified in the project detail.
-    await quiet(calls);
     await page.goto("/?view=Projects&scope=personal");
     await page.getByTestId("target-scope-list").locator('[data-detail-row="project:'+seed.projectId+'"]').click();
     await detail.locator('[data-detail-row="task:'+seed.taskId+'"]').click();
     await expect(detail.getByTestId("target-detail-edit-status-toggle")).toBeVisible();
-    await expect(detail).toContainText("Otevřeno");
+    await expect(detail.getByText("Otevřeno",{exact:true})).toBeVisible(); // the status line itself
+    await expect(detail.getByText("Dokončeno",{exact:true})).toHaveCount(0);
     await closeDetail();
 
-    // 8. Notes: create a private note, open it, edit and save.
+    // 8. Notes: create a private note (one POST, 201), open exactly that note, edit and save.
     await page.goto("/?view=Notes&scope=personal");
-    await expect(page.getByTestId("target-scope-list")).toBeVisible();
-    await page.locator('[data-target-private-capture-fab="'+(width===390?"mobile":"desktop")+'"]').click();
+    await expect(page.getByTestId("target-scope-list")).toHaveAttribute("data-state","ready");
+    await fab.click();
     await page.getByTestId("target-capture-note-kind").click();
     await page.getByTestId("target-private-area-select").selectOption({label:store.seed.areaTitle});
     const form=page.getByTestId("target-private-create-form");
     await form.getByRole("textbox",{name:"Název"}).fill(noteTitle);
     await form.getByRole("textbox",{name:"Text poznámky"}).fill("Tělo poznámky "+token);
+    const notePost=page.waitForResponse(isPost("/api/target-staging/notes"));
     await form.getByTestId("target-private-create-save").click();
+    const noteResponse=await notePost;
+    expect(noteResponse.status()).toBe(201);
+    const {noteId}=await noteResponse.json() as {noteId:string};
     await expect(page.getByTestId("target-private-note-areas")).toHaveCount(0);
     expect(count(calls,"POST",/^\/api\/target-staging\/notes$/)).toBe(1);
     const noteList=page.getByTestId("target-scope-list");
     await expect(noteList).toContainText(noteTitle);
-    await noteList.getByRole("button",{name:new RegExp(noteTitle)}).click();
+    await noteList.locator('[data-detail-row="note:'+noteId+'"]').click();
+    await expect(page).toHaveURL(new RegExp("noteId="+noteId));
     await expect(detail).toContainText("Tělo poznámky "+token);
     const noteEdit=detail.getByTestId("target-note-edit");
     await noteEdit.getByRole("button",{name:"Upravit poznámku"}).click();
@@ -188,14 +215,15 @@ for(const width of [390,1280]){
     await expect(detail).toContainText("Upravené tělo "+token);
     await closeDetail();
 
-    // 9. Main Search finds the renamed task, project and note by title.
+    // 9. Main Search finds the renamed task, project and note by title (every search is a fresh server read).
     const search=async()=>{
       const input=page.locator(".searchField input");
       await input.fill(token); // Focus/typing navigates to Search and never fetches.
       const section=page.getByTestId("target-main-title-search");
       await expect(section).toBeVisible();
-      await quiet(calls);
+      const mark=calls.length;
       await input.press("Enter");
+      await expect.poll(()=>readsAfter(mark,"GET",/\/title-search$/)).toBeGreaterThan(0);
       return section;
     };
     let results=await search();
@@ -205,14 +233,12 @@ for(const width of [390,1280]){
 
     // 10. Full reload: everything is served from the server, not from client state.
     const before=calls.length;
-    await page.goto("/?view=MyPlanPreview&scope=personal");
+    await openMyPlan();
     await expect(planRow(taskRenamed)).toHaveCount(1);
-    expect(calls.slice(before).some(call=>call.method==="GET"&&/\/my-plan\/slice$/.test(call.path))).toBe(true);
-    const clientState=await page.evaluate(async()=>{
-      const names=await indexedDB.databases();
-      return JSON.stringify([Object.entries(localStorage),Object.entries(sessionStorage),names.map(db=>db.name)]);
-    });
-    expect(clientState).not.toContain(taskRenamed);
+    expect(readsAfter(before,"GET",/\/my-plan\/slice$/)).toBeGreaterThan(0);
+    const stored=await clientState(page);
+    for(const secret of [token,taskRenamed,projectRenamed,noteEdited,"Tělo poznámky"])
+      expect(stored,"client state must not hold "+secret).not.toContain(secret);
     await page.goto("/?view=Projects&scope=personal");
     await expect(page.getByTestId("target-scope-list")).toContainText(projectRenamed);
     await page.goto("/?view=Notes&scope=personal");
@@ -222,39 +248,57 @@ for(const width of [390,1280]){
     await expect(results).toContainText(projectRenamed);
     await expect(results).toContainText(noteEdited);
 
-    // 11. Delete the task and the note; they disappear from My Plan / Notes / Search.
-    await page.goto("/?view=MyPlanPreview&scope=personal");
+    // 11. Delete the task and the note. Absence is asserted only after a fresh server read of that list.
+    await openMyPlan();
     await planRow(taskRenamed).click();
     await detail.getByTestId("target-detail-edit-delete").click();
     await detail.getByTestId("target-detail-edit-confirm-yes").click();
     await expect(detail.getByTestId("target-detail-edit-deleted")).toBeVisible();
+    const planMark=calls.length;
     await closeDetail();
     await page.getByRole("button",{name:"Obnovit"}).click();
+    await expect.poll(()=>readsAfter(planMark,"GET",/\/my-plan\/slice$/)).toBeGreaterThan(0);
+    await expect(today).toBeVisible();
+    await expect(tomorrow).toBeVisible();
+    await expect(page.getByTestId("target-my-plan-unavailable")).toHaveCount(0);
     await expect(planRow(taskRenamed)).toHaveCount(0);
     await page.goto("/?view=Notes&scope=personal");
-    await page.getByTestId("target-scope-list").getByRole("button",{name:new RegExp(noteEdited)}).click();
+    await expect(page.getByTestId("target-scope-list")).toContainText(noteEdited);
+    await page.getByTestId("target-scope-list").locator('[data-detail-row="note:'+noteId+'"]').click();
     await detail.getByTestId("target-detail-edit-delete").click();
     await detail.getByTestId("target-detail-edit-confirm-yes").click();
     await expect(detail.getByTestId("target-detail-edit-deleted")).toBeVisible();
+    const noteMark=calls.length;
     await closeDetail();
+    await expect.poll(()=>readsAfter(noteMark,"GET",/\/note-index\/global$/)).toBeGreaterThan(0);
+    await expect(page.getByTestId("target-scope-list")).toHaveAttribute("data-state","ready");
     await expect(page.getByTestId("target-scope-list")).not.toContainText(noteEdited);
-    results=await search();
-    await expect(results).toContainText(projectRenamed);
+    results=await search(); // fresh GET /title-search observed inside search()
+    await expect(results).toContainText(projectRenamed); // positive proof that the answer is the ready list
     await expect(results).not.toContainText(taskRenamed);
     await expect(results).not.toContainText(noteEdited);
+    // Every read of the whole journey stayed within the server's two concurrent read children.
+    expect(calls.peakReads).toBeLessThanOrEqual(2);
 
-    // 12. Without the owner cookie the server refuses generically and no title stays in the DOM.
-    await expect(results).toContainText(projectRenamed);
+    // 12. Without the owner cookie the server refuses generically and the page drops every title.
+    // NOTE: this proves CLIENT-side removal only; the stateless owner token itself stays valid on the server
+    // (see docs/R3-PERSONAL-ACCEPTANCE.md, gap 7).
+    await expect(page.getByTestId("target-main-title-search")).toContainText(projectRenamed);
     await page.context().clearCookies();
     const refused=await page.request.get("/api/target-staging/my-plan/slice?evaluationDate=2026-01-01&areaFilter=all&limit=50");
     expect(refused.status()).toBe(401);
     expect(await refused.text()).not.toContain(projectRenamed);
-    // The page itself revalidates on focus (runtime throttle: 1 s) and drops every title it showed.
+    // The runtime revalidates when the tab becomes visible/focused (throttle 1 s). Bringing another tab to the
+    // front and back is a real visibility change; fall back to nothing synthetic.
     await page.waitForTimeout(1100);
-    await page.evaluate(()=>window.dispatchEvent(new Event("focus")));
+    const other=await page.context().newPage();
+    await other.bringToFront();
+    await page.bringToFront();
+    await other.close();
     await expect(page.getByText(projectRenamed)).toHaveCount(0,{timeout:15_000});
     await expect(page.getByText(token)).toHaveCount(0);
     await page.reload();
+    await expect(page.locator('.authCard input[type="password"]')).toBeVisible();
     await expect(page.getByText(token)).toHaveCount(0);
     await expect(page.getByTestId("target-my-plan")).toHaveCount(0);
   });
