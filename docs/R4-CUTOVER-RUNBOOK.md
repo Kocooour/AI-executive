@@ -32,6 +32,33 @@ The old and target stores are distinct data domains. A backup of the legacy data
 
 This text is an approval **template**, not an approval. If the owner-approved plan needs data import, migration, cache disposal or replacement, list each exact path and irreversible effect in a **separate** decision before implementing. Until then, all production flags remain off.
 
+## Copy-only rehearsal commands and limitations
+
+Run on a **disposable/offline, previously quiesced snapshot only**, with destinations that do **not yet exist**. Never point these tools to a live server or run them as an agent on production. File-change checks and WAL/hash comparisons are insufficient to prove a coherent original snapshot under concurrent writers: the operator must first use an approved consistent snapshot or stop writers and verify the capture process independently.
+
+```bash
+node scripts/cutover-inventory.mjs /offline/legacy-copy /new/inventory-report
+# Optional, after the operator has checked the *configuration* without exposing
+# the actual secret: --integration-token-present true|false
+
+node deployment/rehearsal/cutover-restore-rehearsal.mjs \
+  /offline/legacy-copy /new/rehearsal-output \
+  --target-offline /offline/isolated-target-copy
+
+# A second, INDEPENDENTLY captured offline copy can be compared against the
+# first copy, including its non-SQLite artifacts:
+node deployment/rehearsal/cutover-restore-rehearsal.mjs \
+  --verify /offline/legacy-copy /offline/legacy-candidate /new/verify-output
+```
+
+**Privacy:** The JSON and console outputs contain no titles, identities, messages or secret values. The rehearsal *archive, restored tree and inspection copies* retain the **actual** private contents, encrypted credential blobs and recovery artifacts; every generated file is mode 0600 and directory 0700. Store the output under an operator-controlled, secure location, avoid committing or posting it, and apply the separately approved retention policy. Manifests report hash/count summaries, not names or contents.
+
+The rehearsal compares all copied files byte-for-byte (including legacy backups, credentials and companion artifacts), checks all SQLite rows, SQLite `integrity_check`, `foreign_key_check`, all table/index/trigger/view definitions and sequence contents, and verifies `VACUUM INTO` as an additional complete SQLite archive. Row-digest computation fails closed above **200,000 rows per table** or **16 MiB per encoded row**; an oversized store is a blocker for this tool, **not** permission to skip its verification.
+
+With `--target-offline`, the separate target directory must contain `lumi-target.sqlite`, `lumi-target.journal` and `lumi-target-witness.sqlite`. The archive restores their **bytes** and verifies both SQLite databases, but this does **not** prove journal↔witness↔target semantic consistency. A **separate supported target-store preflight, using only another offline copy**, must demonstrate the append-only journal, anti-rollback anchor, restore-generation and authorization invariants before owner approval. In particular, a mismatched target journal or witness blocks cutover even when directory hashes match. When the target flag is omitted, the report explicitly says `target.status = not_provided` and **cannot** be used as proof of a complete R4 recovery.
+
+The inventory reports actual legacy migration IDs only as a deterministic SHA-256 of the ordered list and distinguishes `environment_not_inspected` (unknown integration-token presence) from an explicit operator-supplied boolean attestation. The machine cannot establish whether an environment-only secret exists by looking at the legacy SQLite file. Gmail sync is reported as bounded aggregate checkpoint status; no mailbox data is printed.
+
 ## Devices and client-held copies (manual, no automation)
 
 The legacy browser uses IndexedDB database `ai-executive` (entities, relations, baseEntities, baseRelations). The isolated note-metadata path, when explicitly enabled, uses a separate IndexedDB `lumi-note-metadata-v1`; existing tabs and installed PWAs can preserve older copies and in-flight requests. No server-side tool can enumerate all private browser profiles, PWAs or offline devices.
