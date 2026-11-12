@@ -62,6 +62,35 @@ HTTP API. Testy používají pouze syntetická data, bez zapnutí produkce nebo 
    dialog bez známé aktuální identity nezačne zápis. Escape/Zavřít
    vrátí fokus na původní tlačítko/fallback FAB.
 
+## Bezpečné zrušení nepotvrzeného CREATE
+
+Pokud HTTP `CREATE` vrátí `429`, `403`, jiný neúspěch nebo timeout,
+klient zachová obsahově prázdný blokující marker. Samotné `not_recorded`
+nikdy **není** důkaz, že původní požadavek už nemůže později doběhnout.
+
+Uživatel může explicitně zvolit **Zrušit nepotvrzený zápis**.
+`POST /api/target-staging/tasks/create-cancel` přijímá jen neprůhledné
+`{commandId}` a vyžaduje skutečnou živou session, origin/protocol,
+restore generation, funkční staging a samostatnou write feature gate.
+Samostatný child pod serverovou identitou vloží trvalou actor+command
+cancel fence v pinned `BEGIN IMMEDIATE` transakci; původní CREATE
+pod stejným zámkem prověřuje tento fence před vložením úkolu.
+
+- `cancelled`: zápis nemohl uspět a žádný opožděný příkaz pod stejným
+  `commandId` už nesmí vytvořit úkol. Jedině poté klient smaže marker.
+- `committed`: CREATE vyhrál závod. Klient nechá blokaci a vyžaduje
+  ověření původního zápisu, které teprve může potvrdit autorizovaný
+  detail úkolu.
+- Chyby, odmítnutí, výpadky i `not_recorded` blokaci zachovávají.
+  Po změně identity/generation nelze cizí marker zrušit pouhým
+  přihlášením jiného účtu.
+
+Zrušovací marker je append-only staging metadata, bez titulku, Area,
+task ID a soukromého obsahu. Patří mimo legacy backup scope, má
+samostatný cap, tvar kontrolovaný canonical preflightem a journal witness.
+Systém zůstává default-off; release E2E i bezpečnostní review jsou
+stále podmínkou produkční aktivace.
+
 ## Bezpečnostní omezení a release kontrola
 
 Soukromý text úkolu se nikdy neukládá do `sessionStorage` ani
