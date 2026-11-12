@@ -4,6 +4,7 @@ import { existsSync, mkdtempSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { defineConfig, devices } from "@playwright/test";
+import { targetPersonalV1Env } from "./lib/target-personal-profile";
 
 // Browser tests run against a production build of this checkout with its own port, data
 // directory and throwaway credentials. Nothing here touches the data of a real instance.
@@ -26,6 +27,14 @@ if (!process.env.LUMI_E2E_RUN_DIR) {
   // long E2E run, making the CalDAV mock fail before its first test (EADDRINUSE).
   process.env.LUMI_E2E_CALDAV_PORT = String(20_000 + randomInt(10_000));
   process.env.LUMI_E2E_GMAIL_PORT = String(30_000 + randomInt(2_000));
+  // Opt-in personal acceptance: a REAL isolated target SQLite store inside the run dir (never a legacy or
+  // production path), created once per run; workers inherit the settings through the environment.
+  if (process.env.LUMI_TARGET_PERSONAL_ACCEPTANCE_E2E === "true") {
+    process.env.LUMI_E2E_TARGET_STORE = execFileSync(process.execPath, [
+      "--experimental-loader", path.join(__dirname, "scripts", "target-staging-ts-loader.mjs"),
+      path.join(__dirname, "e2e", "target-personal-store-setup.mjs"), process.env.LUMI_E2E_RUN_DIR, "e2e-owner",
+    ], { cwd: __dirname, stdio: ["ignore", "pipe", "ignore"] }).toString().trim().split("\n").pop() || "";
+  }
 }
 const runDir = process.env.LUMI_E2E_RUN_DIR;
 const passwordHash = process.env.LUMI_E2E_PASSWORD_HASH;
@@ -61,6 +70,10 @@ const privateNoteAreasTest = process.env.LUMI_PRIVATE_NOTE_AREAS_E2E === "true";
 const privateNoteCreateTest = process.env.LUMI_PRIVATE_NOTE_CREATE_E2E === "true";
 const privateTaskCreateTest = process.env.LUMI_PRIVATE_TASK_CREATE_E2E === "true";
 const globalCaptureTest = process.env.LUMI_TARGET_GLOBAL_CAPTURE_E2E === "true";
+// Single end-to-end acceptance: browser -> real route handlers -> real isolated target SQLite, every personal flag on.
+const personalAcceptanceTest = process.env.LUMI_TARGET_PERSONAL_ACCEPTANCE_E2E === "true";
+const personalStore = personalAcceptanceTest ? (JSON.parse(process.env.LUMI_E2E_TARGET_STORE || "null") as { directory: string; restoreGeneration: string; ownerUserId: string } | null) : null;
+if (personalAcceptanceTest && !personalStore) throw new Error("The personal acceptance target store was not created; unset LUMI_E2E_RUN_DIR and run again.");
 
 export default defineConfig({
   testDir: "e2e",
@@ -233,6 +246,12 @@ export default defineConfig({
       // actual modal, to exercise the focus-trapped inspector capture entry.
       ...(globalCaptureTest ? {
         AI_EXECUTIVE_TARGET_UI_DETAILS_ENABLED: "true",
+      } : {}),
+      ...(personalStore ? {
+        ...targetPersonalV1Env(),
+        AI_EXECUTIVE_TARGET_STAGING_DIRECTORY: personalStore.directory,
+        AI_EXECUTIVE_TARGET_STAGING_RESTORE_GENERATION: personalStore.restoreGeneration,
+        AI_EXECUTIVE_TARGET_STAGING_OWNER_USER_ID: personalStore.ownerUserId,
       } : {}),
       AI_EXECUTIVE_PASSWORD_HASH: passwordHash,
       AI_EXECUTIVE_SESSION_SECRET: sessionSecret,
