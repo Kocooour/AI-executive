@@ -148,7 +148,10 @@ for (const change of ["removed", "fingerprint-changed"] as const) {
     await expect(page.locator(".deferPopover")).toBeVisible();
 
     let found = false;
+    let intercepted = 0;
     let fulfilled = 0;
+    let release = () => {};
+    const held = new Promise<void>((resolve) => { release = resolve; });
     await page.route("**/api/attention?**", async (route) => {
       const response = await route.fetch();
       const data = await response.json();
@@ -160,15 +163,26 @@ for (const change of ["removed", "fingerprint-changed"] as const) {
           candidate.subjectId === taskId
             ? { ...candidate, sourceFingerprint: `${candidate.sourceFingerprint}-changed` }
             : candidate);
+      intercepted++;
+      // Keep the HTTP response blocked while checking that the date dialog is
+      // genuinely still open. Clicking Refresh with a pointer would dispatch an
+      // outside pointerdown and close the dialog before the response arrives.
+      await held;
       await route.fulfill({ response, json: { ...data, items } });
       fulfilled++;
     });
     try {
-      await page.getByRole("button", { name: "Obnovit" }).first().click();
-      // Zero popovers can be true *before* the intercepted response is sent.
-      // Wait for the exact modified GET to finish before testing UI revocation.
-      await expect.poll(() => fulfilled, { timeout: 20_000 }).toBeGreaterThan(0);
+      const refresh = page.getByRole("button", { name: "Obnovit" }).first();
+      await expect(refresh).toBeEnabled();
+      await refresh.focus();
+      await refresh.press("Enter"); // keyboard activation: no outside pointerdown
+      await expect.poll(() => intercepted, { timeout: 20_000 }).toBeGreaterThan(0);
       expect(found).toBe(true);
+      await expect(page.locator(".deferPopover")).toBeVisible();
+      await expect(chip).toHaveAttribute("aria-expanded", "true");
+      // Only the new server evidence may revoke the still-open dialog.
+      release();
+      await expect.poll(() => fulfilled, { timeout: 20_000 }).toBeGreaterThan(0);
       await expect(page.locator(".deferPopover")).toHaveCount(0);
       await expect(page.locator(".deferChoice, .deferApply, .deferClear")).toHaveCount(0);
       await expect(page.locator("#attention-title")).toBeFocused();
@@ -181,6 +195,7 @@ for (const change of ["removed", "fingerprint-changed"] as const) {
       // Even another React render must not resurrect the old open dialog.
       await expect(page.locator(".deferPopover")).toHaveCount(0);
     } finally {
+      release();
       await page.unrouteAll({ behavior: "ignoreErrors" });
     }
   });
