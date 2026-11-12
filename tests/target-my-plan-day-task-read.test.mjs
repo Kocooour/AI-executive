@@ -233,5 +233,10 @@ test("undated window returns only open private tasks without When or due date",(
   const snap=f.authority.readMyPlanTwoDayTaskPage("bob","all","2026-11-04","2026-11-05",100,0,0,0);
   assert.ok(snap);
   assert.deepEqual(ids(snap.undated),["p-child"]);
+  // Existing 7-argument readers (e.g. security matrix) must start the new bucket at zero.
+  const legacy=f.authority.readMyPlanTwoDayTaskPage(
+    "bob","all","2026-11-04","2026-11-05",100,0,0);
+  assert.ok(legacy);
+  assert.deepEqual(ids(legacy.undated),ids(snap.undated));
   assert.deepEqual(snap.today.tasks.map(t=>t.taskId).filter(id=>id==="p-empty"),["p-empty"]);
 });
