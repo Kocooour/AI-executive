@@ -4,6 +4,7 @@
 import type {TitleSearchFailure,TitleSearchScope,TitleSearchItem} from "./target-staging-title-search-client";
 import {detailIdOk,type TargetDetailGates,type TargetDetailRoute,type TargetDetailView} from "./target-detail-route";
 import type {TitleSearchSessionSnapshot} from "./target-staging-title-search-session";
+import type {TargetClientRuntime} from "./target-client-runtime";
 
 /** Topbar Enter is a deliberate submit, not a fetch-on-keystroke. */
 export const TARGET_MAIN_SEARCH_SUBMIT_EVENT="lumi-target-main-search-submit";
@@ -151,8 +152,9 @@ export function mainTitleSearchDetailRoute(
 // the existing details UI navigates to Projects/Notes/My Plan. No web storage,
 // auto-query or speculative prefetch. A revalidation (including same-login
 // ACL changes), hidden tab, blur, offline or pagehide invalidates the bridge.
-type SearchRuntime=NonNullable<Parameters<typeof subscribeMainTitleSearchAclInvalidation>[0]>;
-let returnBridge:{result:BoundMainTitleSearch;expires:number;stop:()=>void}|null=null;
+type SearchRuntime=NonNullable<Parameters<typeof subscribeMainTitleSearchAclInvalidation>[0]>&
+  Pick<TargetClientRuntime,"generation"|"subscribe"|"subscribeSecurityClear">;
+let returnBridge:{result:BoundMainTitleSearch;generation:string;expires:number;stop:()=>void}|null=null;
 export function clearMainTitleSearchReturn():void{
   const held=returnBridge;
   returnBridge=null;
@@ -163,22 +165,31 @@ export function rememberMainTitleSearchReturn(
 ):void{
   clearMainTitleSearchReturn();
   if(typeof window==="undefined"||typeof document==="undefined"||!runtime||
-    runtime.lastOutcome()!=="ok"||document.visibilityState==="hidden"||
-    !navigator.onLine||!visibleMainTitleSearchResult(result,binding,true)||
+    runtime.lastOutcome()!=="ok"||binding.generation!==runtime.generation()||
+    document.visibilityState==="hidden"||!navigator.onLine||
+    !visibleMainTitleSearchResult(result,binding,true)||
     result.snapshot.status!=="ready")return;
   const invalidate=()=>clearMainTitleSearchReturn();
   const onVisibility=()=>{if(document.visibilityState==="hidden")invalidate();};
   const stopAcl=subscribeMainTitleSearchAclInvalidation(runtime,invalidate);
+  // Successful actor rotations do not emit an ACL tick or failed outcome.
+  // Erase retained titles on *every* generation change (including A→B→A),
+  // and immediately on explicit sign-out or runtime security clear.
+  const stopGeneration=runtime.subscribe(invalidate);
+  const stopSecurity=runtime.subscribeSecurityClear(invalidate);
   window.addEventListener("pagehide",invalidate);
   window.addEventListener("blur",invalidate);
   window.addEventListener("offline",invalidate);
   document.addEventListener("visibilitychange",onVisibility);
   returnBridge={
+    generation:binding.generation,
     result:{...result,binding:{...binding},
       snapshot:{...result.snapshot,items:result.snapshot.items.map(item=>({...item}))}},
     expires:Date.now()+120000,
     stop:()=>{
       stopAcl();
+      stopGeneration();
+      stopSecurity();
       window.removeEventListener("pagehide",invalidate);
       window.removeEventListener("blur",invalidate);
       window.removeEventListener("offline",invalidate);
@@ -191,6 +202,7 @@ export function consumeMainTitleSearchReturn(
 ):BoundMainTitleSearch|null{
   const held=returnBridge;
   const valid=held!==null&&Date.now()<held.expires&&runtime?.lastOutcome()==="ok"&&
+    runtime.generation()===held.generation&&
     typeof document!=="undefined"&&document.visibilityState!=="hidden"&&
     typeof navigator!=="undefined"&&navigator.onLine&&
     visibleMainTitleSearchResult(held.result,binding,true)!==null;
