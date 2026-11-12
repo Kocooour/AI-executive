@@ -69,9 +69,17 @@ const receiptKey=(actor:string,commandId:string)=>PRIVATE_STRUCTURE_CREATE_RECEI
   keyHash(actor,commandId);
 const recoveryKey=(actor:string,commandId:string)=>PRIVATE_STRUCTURE_CREATE_RECOVERY_PREFIX+
   keyHash(actor,commandId);
-const digest=(kind:PrivateStructureKind,command:PrivateStructureCreateCommand)=>
-  createHash("sha256").update(JSON.stringify(["private-structure-create-v1",kind,command]))
-    .digest("hex");
+// Use a fixed field order; semantically identical JSON with reordered keys
+// must be an idempotent replay, never a conflict.
+const digest=(kind:PrivateStructureKind,command:PrivateStructureCreateCommand)=>{
+  const fields=kind==="project"
+    ?[command.projectId,(command as PrivateProjectCreateCommand).areaId]
+    :[(command as PrivateProjectTaskCreateCommand).taskId,command.projectId];
+  return createHash("sha256").update(JSON.stringify([
+    "private-structure-create-v1",kind,...fields,
+    command.restoreGeneration.toLowerCase(),command.title,
+  ])).digest("hex");
+};
 type Witness={kind:PrivateStructureKind;id:string;projectId:string;areaId:string;restoreGeneration:string};
 const witnessValue=(w:Witness)=>JSON.stringify(w);
 function parseWitness(value:string):Witness|null{
