@@ -31,8 +31,13 @@ function safeOutput(source, destination) {
   if (within(dst, src) || within(src, dst)) throw Error("source and output paths overlap");
   if (existsSync(dst) || (lstatSyncMaybe(dst) !== null)) throw Error("output must not exist");
   const configuredLive = process.env.AI_EXECUTIVE_DATA_DIR;
-  if (configuredLive && existsSync(configuredLive) && within(src, realpathSync(configuredLive)))
-    throw Error("source is within configured live data directory");
+  for (const name of ["AI_EXECUTIVE_DATA_DIR", "AI_EXECUTIVE_TARGET_STAGING_DIRECTORY"]) {
+    const liveConfigured = process.env[name];
+    if (!liveConfigured || !existsSync(liveConfigured)) continue;
+    const live = realpathSync(liveConfigured);
+    if (within(src, live) || within(live, src) || within(dst, live) || within(live, dst))
+      throw Error("configured live data overlap refused");
+  }
   return { src, dst };
 }
 function lstatSyncMaybe(file) {
@@ -66,7 +71,7 @@ function snapshotFiles(src, dst) {
   return path.join(privateDir, "store.sqlite");
 }
 
-function readInventory(db, source) {
+function readInventory(db, source, tokenAttestation) {
   const found = new Set(db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all().map(row => row.name));
   if (!found.has("entities")) throw Error("not a recognized legacy Lumi store");
   const integrity = db.prepare("PRAGMA integrity_check").all().every(row => Object.values(row)[0] === "ok");
@@ -150,7 +155,7 @@ function readInventory(db, source) {
   // Integration token is configured by AI_EXECUTIVE_INTEGRATION_TOKEN in the service
   // environment, which is deliberately NOT inspected by this offline database tool.
   // Do not turn "not inspected" into false: absence of a metadata row proves nothing.
-  const integrationTokenPresent = null;
+  const integrationTokenPresent = tokenAttestation;
   const userVersion = cleanInt(db.prepare("PRAGMA user_version").get().user_version);
   const migrations = found.has("schema_migrations")
     ? db.prepare("SELECT id FROM schema_migrations ORDER BY id").all().map(row => String(row.id))
@@ -180,21 +185,25 @@ function readInventory(db, source) {
     connectors: mail,
     credentials: {
       passkeys: tables.passkey_credentials || 0, pushTargets: tables.push_subscriptions || 0,
-      integrationTokenPresent, integrationTokenInspection: "environment_not_inspected",
+      integrationTokenPresent, integrationTokenInspection: tokenAttestation === null ? "environment_not_inspected" : "operator_attested",
     },
     backups: { files: backupFiles },
   };
 }
 
 function main() {
-  if (process.argv.length !== 4) throw Error("usage: node scripts/cutover-inventory.mjs <absolute-offline-copy-dir> <absolute-NEW-output-dir>");
-  const { src, dst } = safeOutput(process.argv[2], process.argv[3]);
+  const args = process.argv.slice(2);
+  if (!(args.length === 2 || (args.length === 4 && args[2] === "--integration-token-present" &&
+      (args[3] === "true" || args[3] === "false"))))
+    throw Error("usage: inventory <offline-copy> <new-output> [--integration-token-present true|false]");
+  const tokenAttestation = args.length === 4 ? args[3] === "true" : null;
+  const { src, dst } = safeOutput(args[0], args[1]);
   // Only create the new output directory once all collision/alias checks have passed.
   mkdirSync(dst, { mode: 0o700 });
   const copiedFile = snapshotFiles(src, dst);
   const db = new DatabaseSync(copiedFile, { readOnly: true });
   let report;
-  try { report = readInventory(db, src); } finally { db.close(); }
+  try { report = readInventory(db, src, tokenAttestation); } finally { db.close(); }
   const summary = [
     "R4 offline inventory (content-free; no production access)",
     "Legacy entities: " + report.entities.count,
