@@ -1,135 +1,179 @@
 /**
- * Global owner-cookie cutoff. Separate from target-staging durable sessions.
- * Reads never bootstrap a missing marker. Only a successful password/passkey
- * login initializes it. Invalid/missing state always fails authentication closed.
+ * Global owner-cookie cutoff (not the separate target durable sessions).
  *
- * Issuance and logout share a cross-process mkdir lock; a stale lock is an
- * operational error requiring manual intervention, never automatically stolen.
- * Cutoff writes use fsync + atomic rename + directory fsync.
+ * One persistent revocation value in a dedicated SQLite database in
+ * AI_EXECUTIVE_DATA_DIR. Readers NEVER initialize/repair it. Initialization
+ * is an explicit one-off operator action before the first deployment.
+ *
+ * BEGIN IMMEDIATE serializes issuers/logout across processes. SQLite's
+ * rollback journal releases locks automatically after crashes and commits
+ * monotonically; unlike a mkdir lock, no orphan lock needs manual removal.
  */
-import { randomUUID } from "node:crypto";
-import {
-  closeSync, fstatSync, fsyncSync, mkdirSync, openSync,
-  readFileSync, renameSync, rmdirSync, unlinkSync, writeSync, constants,
-} from "node:fs";
+import { DatabaseSync } from "node:sqlite";
+import { closeSync, constants, lstatSync, mkdirSync, openSync } from "node:fs";
 import path from "node:path";
 import { resolveDataDirectory } from "./data-dir";
 
-const STATE_NAME = "owner-session-valid-from.json";
-const LOCK_NAME = ".owner-session-valid-from.lock";
-const pauseWord = new Int32Array(new SharedArrayBuffer(4));
+const FILE = "owner-session-valid-from.sqlite";
+const MAX_ISSUANCE_WAIT_MS = 500;
+const SQLITE_BUSY_TIMEOUT_MS = 5_000;
 
-function paths() {
-  const directory = resolveDataDirectory();
-  return { directory, state: path.join(directory, STATE_NAME), lock: path.join(directory, LOCK_NAME) };
-}
-
-/** A null result means ENOENT only; any malformed/unreadable state throws. */
-function readCutoff(file: string): number | null {
-  let fd: number;
-  try { fd = openSync(file, constants.O_RDONLY | constants.O_NOFOLLOW); }
-  catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
-    throw error;
+export class OwnerSessionStateUnavailable extends Error {
+  constructor() {
+    super("Owner session revocation state unavailable");
+    this.name = "OwnerSessionStateUnavailable";
   }
-  try {
-    const stats = fstatSync(fd);
-    if (!stats.isFile() || (stats.mode & 0o077) !== 0 ||
-        stats.size < 1 || stats.size > 128) {
-      throw new Error("Owner-session revocation state is invalid");
-    }
-    let data: unknown;
-    try { data = JSON.parse(readFileSync(fd, "utf8")); }
-    catch { throw new Error("Owner-session revocation state is corrupt"); }
-    if (!data || typeof data !== "object" || Array.isArray(data) ||
-        Object.keys(data).length !== 2 ||
-        (data as { version?: unknown }).version !== 1 ||
-        !Number.isSafeInteger((data as { validFromMs?: unknown }).validFromMs) ||
-        (data as { validFromMs: number }).validFromMs < 0) {
-      throw new Error("Owner-session revocation state is corrupt");
-    }
-    return (data as { validFromMs: number }).validFromMs;
-  } finally { closeSync(fd); }
 }
 
-function publishCutoff(directory: string, state: string, validFromMs: number) {
-  const temporary = path.join(directory, `.owner-session-${randomUUID()}.tmp`);
-  let fd: number | null = null;
+function statePath() {
+  return path.join(resolveDataDirectory(), FILE);
+}
+
+function fileIdentity(file: string) {
+  const stat = lstatSync(file); // no implicit creation and no symlink following
+  if (!stat.isFile() || stat.nlink !== 1 || (stat.mode & 0o077) !== 0 ||
+      (typeof process.getuid === "function" && stat.uid !== process.getuid())) {
+    throw new OwnerSessionStateUnavailable();
+  }
+  return { dev: stat.dev, ino: stat.ino };
+}
+
+function openExisting(readOnly: boolean): DatabaseSync {
+  const file = statePath();
   try {
-    fd = openSync(temporary, "wx", 0o600);
-    const value = Buffer.from(JSON.stringify({ version: 1, validFromMs }) + "\n");
-    let offset = 0;
-    while (offset < value.length) {
-      const written = writeSync(fd, value, offset, value.length - offset);
-      if (written <= 0) throw new Error("Owner-session revocation write failed");
-      offset += written;
+    const before = fileIdentity(file);
+    const db = new DatabaseSync(file, { readOnly });
+    try {
+      const after = fileIdentity(file);
+      if (before.dev !== after.dev || before.ino !== after.ino) {
+        throw new OwnerSessionStateUnavailable();
+      }
+      db.exec("PRAGMA busy_timeout = " + SQLITE_BUSY_TIMEOUT_MS);
+      if (!readOnly) db.exec("PRAGMA synchronous = FULL");
+      return db;
+    } catch (error) {
+      db.close();
+      throw error;
     }
-    fsyncSync(fd);
-    closeSync(fd);
-    fd = null;
-    renameSync(temporary, state);
-    const directoryFd = openSync(directory, "r");
-    try { fsyncSync(directoryFd); } finally { closeSync(directoryFd); }
+  } catch {
+    throw new OwnerSessionStateUnavailable();
+  }
+}
+
+function cutoff(db: DatabaseSync): number {
+  const value = db.prepare(
+    "SELECT version, valid_from_ms FROM owner_session_cutoff WHERE id = 1",
+  ).get() as { version: number; valid_from_ms: number } | undefined;
+  if (!value || value.version !== 1 ||
+      !Number.isSafeInteger(value.valid_from_ms) || value.valid_from_ms <= 0) {
+    throw new OwnerSessionStateUnavailable();
+  }
+  return value.valid_from_ms;
+}
+
+function inTransaction<T>(readOnly: boolean, body: (db: DatabaseSync) => T): T {
+  const db = openExisting(readOnly);
+  let active = false;
+  try {
+    db.exec(readOnly ? "BEGIN" : "BEGIN IMMEDIATE");
+    active = true;
+    const result = body(db);
+    // A file swap during the transaction never authenticates an old handle.
+    const check = fileIdentity(statePath());
+    const opened = db.prepare("PRAGMA database_list").get() as { file?: string } | undefined;
+    if (!opened || opened.file !== statePath() || !Number.isInteger(check.ino)) {
+      throw new OwnerSessionStateUnavailable();
+    }
+    db.exec("COMMIT");
+    active = false;
+    return result;
+  } catch {
+    if (active) { try { db.exec("ROLLBACK"); } catch { /* fail closed */ } }
+    throw new OwnerSessionStateUnavailable();
   } finally {
-    if (fd !== null) closeSync(fd);
-    try { unlinkSync(temporary); }
-    catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+    db.close();
   }
 }
 
-function withWriterLock<T>(operation: (directory: string, state: string) => T): T {
-  const { directory, state, lock } = paths();
-  // Only writes (login/logout) may create a missing data directory.
+/**
+ * Explicit and irreversible provisioning command: creates the one state file.
+ * Refuses to overwrite an existing (including corrupt/symlink) path. If lost
+ * after a real deployment, rotate SESSION_SECRET before reprovisioning:
+ * a copied cookie must never be revalidated after restoring from backup.
+ */
+export function initializeOwnerSessionRevocationState(): void {
+  const directory = resolveDataDirectory();
   mkdirSync(directory, { recursive: true, mode: 0o700 });
-  let acquired = false;
-  for (let attempt = 0; attempt < 200; attempt++) {
-    try { mkdirSync(lock, { mode: 0o700 }); acquired = true; break; }
-    catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-      Atomics.wait(pauseWord, 0, 0, 5);
-    }
+  const file = statePath();
+  let fd: number;
+  try {
+    fd = openSync(file,
+      constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | constants.O_NOFOLLOW, 0o600);
+    closeSync(fd);
+  } catch {
+    throw new OwnerSessionStateUnavailable();
   }
-  if (!acquired) throw new Error("Owner-session revocation lock unavailable");
-  try { return operation(directory, state); }
-  finally { rmdirSync(lock); }
+  // Deliberately leave any partially initialized file in place. A crash while
+  // provisioning must require manual inspection, never silently retry/reset.
+  let db: DatabaseSync | null = null;
+  try {
+    db = new DatabaseSync(file);
+    db.exec("PRAGMA journal_mode = DELETE");
+    db.exec("PRAGMA synchronous = FULL");
+    db.exec("BEGIN IMMEDIATE");
+    db.exec(
+      "CREATE TABLE owner_session_cutoff (" +
+      "id INTEGER PRIMARY KEY CHECK (id = 1), " +
+      "version INTEGER NOT NULL CHECK (version = 1), " +
+      "valid_from_ms INTEGER NOT NULL CHECK (valid_from_ms > 0))",
+    );
+    db.prepare("INSERT INTO owner_session_cutoff(id, version, valid_from_ms) VALUES (1, 1, ?)")
+      .run(Date.now());
+    db.exec("COMMIT");
+    fileIdentity(file);
+  } catch {
+    try { db?.exec("ROLLBACK"); } catch { /* incomplete file fails closed */ }
+    throw new OwnerSessionStateUnavailable();
+  } finally {
+    db?.close();
+  }
 }
 
-/** Strict, live disk read for every authenticated request. Never self-heals. */
 export function ownerSessionIssuedAtIsValid(issuedAtMs: unknown, nowMs = Date.now()): boolean {
   if (!Number.isSafeInteger(issuedAtMs) || (issuedAtMs as number) <= 0 ||
       (issuedAtMs as number) > nowMs) return false;
   try {
-    const cutoff = readCutoff(paths().state);
-    return cutoff !== null && (issuedAtMs as number) > cutoff;
-  } catch { return false; }
+    return inTransaction(true, db => (issuedAtMs as number) > cutoff(db));
+  } catch {
+    return false;
+  }
 }
 
-/** Only call after validating password or a WebAuthn assertion. */
+/** Call only after a password or WebAuthn assertion has been verified. */
 export function issueOwnerSessionIssuedAt(): number {
-  return withWriterLock((directory, state) => {
-    let cutoff = readCutoff(state);
-    if (cutoff === null) {
-      cutoff = Date.now();
-      publishCutoff(directory, state, cutoff);
+  return inTransaction(false, db => {
+    const validFrom = cutoff(db);
+    const start = Date.now();
+    const pause = new Int32Array(new SharedArrayBuffer(4));
+    while (Date.now() <= validFrom) {
+      if (Date.now() - start > MAX_ISSUANCE_WAIT_MS) {
+        throw new OwnerSessionStateUnavailable();
+      }
+      Atomics.wait(pause, 0, 0, 1);
     }
-    // A logout can advance cutoff within the same millisecond. Never mint a
-    // future issuedAt; otherwise an older token could survive a later logout.
-    for (let attempt = 0; attempt < 200; attempt++) {
-      const issuedAt = Date.now();
-      if (issuedAt > cutoff) return issuedAt;
-      Atomics.wait(pauseWord, 0, 0, 1);
-    }
-    throw new Error("Owner-session clock is behind the revocation cutoff");
+    return Date.now();
   });
 }
 
-/** Invalidate every already-issued owner cookie, across all server processes. */
+/** A committed logout invalidates every earlier owner-cookie on all workers. */
 export function revokeAllOwnerSessions(): void {
-  withWriterLock((directory, state) => {
-    const previous = readCutoff(state);
-    if (previous === null) throw new Error("Owner-session revocation state missing");
+  inTransaction(false, db => {
+    const previous = cutoff(db);
     const next = Math.max(Date.now(), previous + 1);
-    if (!Number.isSafeInteger(next)) throw new Error("Owner-session revocation overflow");
-    publishCutoff(directory, state, next);
+    if (!Number.isSafeInteger(next)) throw new OwnerSessionStateUnavailable();
+    const updated = db.prepare(
+      "UPDATE owner_session_cutoff SET valid_from_ms = ? WHERE id = 1 AND valid_from_ms = ?",
+    ).run(next, previous);
+    if (updated.changes !== 1) throw new OwnerSessionStateUnavailable();
   });
 }
