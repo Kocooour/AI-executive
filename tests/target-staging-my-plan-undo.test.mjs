@@ -10,7 +10,7 @@ import {fetchMyPlanSlice} from "../lib/target-staging-my-plan-client.ts";
 
 const original={
   commandId:"123e4567-e89b-42d3-a456-426614174000",
-  taskId:"confirmed-task",status:"completed",
+  taskId:"confirmed-task",status:"completed",previousWhenOn:"2026-11-06",
   expectedRevision:"a".repeat(64),
   writeAreaId:"private-home",
   restoreGeneration:"765e4567-e89b-42d3-a456-426614174000",
@@ -25,6 +25,7 @@ const json=(body,status=200)=>Response.json(body,{
 const successRead={
   evaluationDate:"2026-11-06",areaFilter:"all",
   today:{tasks:[],hasMore:false},tomorrow:{tasks:[],hasMore:false},
+  undated:{tasks:[],hasMore:false},
   hasMore:false,nextCursor:null,
 };
 const params={evaluationDate:"2026-11-06",areaFilter:"all"};
@@ -57,6 +58,8 @@ test("P1: Undo receipt 503 preserves confirmed completion; later manual retry ob
   assert.equal(response.command.taskId,original.taskId);
   assert.equal(response.command.writeAreaId,original.writeAreaId);
   assert.equal(response.command.status,"open");
+  assert.deepEqual(response.command.undoOf,original);
+  assert.equal("previousWhenOn" in response.command,false);
   assert.equal(response.command.expectedRevision,refreshedRevision);
   assert.notEqual(response.command.commandId,original.commandId,
     "Undo must use a brand-new UUID even after receipt retries");
