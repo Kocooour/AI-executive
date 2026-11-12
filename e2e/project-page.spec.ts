@@ -71,7 +71,7 @@ async function seedWorld(page: Page, stamp: number) {
       entity(id.rich, "project", `Projekt B1${R} s kontextem`, {
         context: { why: "Současný web neprodává. Brzdí také nábor.", goals: ["Spustit do 30. 11.", "Udržet SEO"], doneWhen: "Web běží na produkční doméně", provenance: "owner", updatedAt: stamp } }),
       entity(id.bare, "project", `Projekt B1${R} bez kontextu`),
-      // A legacy project: free-text area label and no Area link (a new project without an Area would get "Nezařazeno").
+      // #109: the server normalizes the old free-text label into a real Nezařazeno Area link.
       entity(id.old, "project", `Projekt B1${R} starý cíl`, { goal: "Starý cíl projektu zůstane vidět", area: "Starý štítek" }),
       entity(id.t1, "task", `Úkol B1${R} první`, { deadline: day }),
       entity(id.t2, "task", `Úkol B1${R} druhý`),
@@ -107,8 +107,15 @@ test("project list: first sentence of why, progress, next step and one attention
     await expect(bare.locator("[data-project-attention]")).toHaveText("bez dalšího kroku");
     await expect(bare.locator("[data-project-attention]")).toHaveCount(1);
     // The former goal is read as "Hotovo, když" even before anything was saved.
-    const loose = page.locator('[data-project-group="none"]').locator(".taskRow", { hasText: `Projekt B1${R} starý cíl` });
-    await expect(loose).toBeVisible();
+    // #109: assert the persisted default Area and its actual project group.
+    const defaultArea = await page.evaluate(async (projectId) => {
+      const snapshot = await fetch("/api/store", { cache: "no-store" }).then((response) => response.json());
+      return snapshot.relations.find((relation: { sourceEntityId: string; relationType: string }) =>
+        relation.sourceEntityId === projectId && relation.relationType === "belongs_to_area")?.targetEntityId;
+    }, id.old);
+    expect(defaultArea).toBeTruthy();
+    await expect(page.locator(`[data-project-group="${defaultArea}"]`)
+      .locator(".taskRow", { hasText: `Projekt B1${R} starý cíl` })).toBeVisible();
   } finally {
     await cleanup(page, Object.values(id));
   }
@@ -253,7 +260,8 @@ test("browser Back restores a project across a shared workspace switch", async (
   const stamp = now();
   const projectId = `e2e-b1-history-project-${stamp}`;
   const otherWorkspaceId = `e2e-b1-history-shared-${stamp}`;
-  const workspaceEntityId = `workspace-${otherWorkspaceId}`;
+  // #109 canonical workspace entity ID.
+  const workspaceEntityId = `workspace:${otherWorkspaceId}`;
   const title = `Projekt B1${R} history scope`;
   expect(await seed(page, { entities: [
     entity(projectId, "project", title, { manualOrders: { "personal:project:all": -1_000_000 } }),

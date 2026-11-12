@@ -60,18 +60,18 @@ test("project task inspector URL survives reload, Back and Forward", async ({ pa
     await expect(page.locator(".projectPage")).toHaveAttribute("data-project-page", data.projectId);
     await page.locator(".projectTaskList .taskRow", { hasText: data.taskTitle })
       .getByRole("button", { name: data.taskTitle, exact: true }).click();
-    await expect(page.locator(".inspectorDetail")).toContainText(data.taskTitle);
+    await expect(page.locator(".inspectorDetail input.titleEdit")).toHaveValue(data.taskTitle);
     await expect(page).toHaveURL(new RegExp(`[?]view=Projects&projectId=${data.projectId}&taskId=${data.taskId}$`));
 
     await page.reload();
     await waitUntilSynced(page);
-    await expect(page.locator(".inspectorDetail")).toContainText(data.taskTitle);
+    await expect(page.locator(".inspectorDetail input.titleEdit")).toHaveValue(data.taskTitle);
     await expect(page.locator(".projectPage")).toHaveAttribute("data-project-page", data.projectId);
     await page.goBack();
     await expect(page.locator(".inspectorDetail")).toHaveCount(0);
     await expect(page.locator(".projectPage")).toHaveAttribute("data-project-page", data.projectId);
     await page.goForward();
-    await expect(page.locator(".inspectorDetail")).toContainText(data.taskTitle);
+    await expect(page.locator(".inspectorDetail input.titleEdit")).toHaveValue(data.taskTitle);
     await page.locator(".inspectorClose").click();
     await expect(page.locator(".inspectorDetail")).toHaveCount(0);
     await expect(page.locator(".projectPage")).toHaveAttribute("data-project-page", data.projectId);
@@ -88,11 +88,11 @@ test("note direct link reloads independently; direct Close is a safe list fallba
   try {
     await page.goto(`/?view=Notes&noteId=${data.noteId}`);
     await waitUntilSynced(page);
-    await expect(page.locator(".inspectorDetail")).toContainText(data.noteTitle);
+    await expect(page.locator(".inspectorDetail input.titleEdit")).toHaveValue(data.noteTitle);
     await expect(page).toHaveURL(new RegExp(`[?]view=Notes&noteId=${data.noteId}$`));
     await page.reload();
     await waitUntilSynced(page);
-    await expect(page.locator(".inspectorDetail")).toContainText(data.noteTitle);
+    await expect(page.locator(".inspectorDetail input.titleEdit")).toHaveValue(data.noteTitle);
     await page.locator(".inspectorClose").click();
     await expect(page.locator(".inspectorDetail")).toHaveCount(0);
     await expect(page).toHaveURL(/[?]view=Notes$/);
@@ -117,7 +117,8 @@ test("note URL and browser Back reload related context after switching legacy wo
   const data = scenario();
   const otherWorkspaceId = `ui01b-shared-${Date.now()}`;
   const sharedWorkspace = {
-    id: `workspace-${otherWorkspaceId}`, type: "workspace",
+    // #109 canonical entity ID prefix.
+    id: `workspace:${otherWorkspaceId}`, type: "workspace",
     title: "UI01b shared fixture", status: "active", workspaceId: otherWorkspaceId,
     properties: { kind: "shared", role: "owner", members: [{ id: "owner", role: "owner" }] },
     createdAt: Date.now(), updatedAt: Date.now(),
@@ -128,7 +129,7 @@ test("note URL and browser Back reload related context after switching legacy wo
     await page.evaluate((id) => localStorage.setItem("ai-executive-active-workspace", id), otherWorkspaceId);
     await page.goto(`/?view=Notes&noteId=${data.noteId}`);
     await waitUntilSynced(page);
-    await expect(page.locator(".inspectorDetail")).toContainText(data.noteTitle);
+    await expect(page.locator(".inspectorDetail input.titleEdit")).toHaveValue(data.noteTitle);
     await expect(page.locator(".inspectorDetail .contextStrip")).toContainText(data.projectTitle);
     await expect(page.locator(".appShell")).toHaveAttribute("data-workspace-tone", "personal");
     await expect(page).toHaveURL(new RegExp(`[?]view=Notes&noteId=${data.noteId}$`));
@@ -145,7 +146,7 @@ test("note URL and browser Back reload related context after switching legacy wo
     // Back must restore *both* the record and its related Context after
     // switching scope, not just the selected record's title.
     await page.goBack();
-    await expect(page.locator(".inspectorDetail")).toContainText(data.noteTitle);
+    await expect(page.locator(".inspectorDetail input.titleEdit")).toHaveValue(data.noteTitle);
     await expect(page.locator(".inspectorDetail .contextStrip")).toContainText(data.projectTitle);
     await expect(page.locator(".appShell")).toHaveAttribute("data-workspace-tone", "personal");
     await expect(page).toHaveURL(new RegExp(`[?]view=Notes&noteId=${data.noteId}$`));
@@ -181,7 +182,7 @@ test("current project relation rejects a stale legacy parent in a typed task URL
     await page.goto(`/?view=Projects&projectId=${actualProjectId}&taskId=${data.taskId}`);
     await waitUntilSynced(page);
     await expect(page.locator(".projectPage")).toHaveAttribute("data-project-page", actualProjectId);
-    await expect(page.locator(".inspectorDetail")).toContainText(data.taskTitle);
+    await expect(page.locator(".inspectorDetail input.titleEdit")).toHaveValue(data.taskTitle);
   } finally {
     expect(await updateStore(page, records, links, true)).toBe(200);
   }

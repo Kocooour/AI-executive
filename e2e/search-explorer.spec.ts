@@ -47,11 +47,16 @@ for (const width of [390, 1280]) {
     await expect(page.locator(".searchExplorer .searchState")).toContainText("Do pole nahoře");
     await search.fill(`servisni ${fixture.token}`);
     const results = page.locator(".searchExplorer .searchResults");
+    // #109 normalizes the project into a searchable Nezařazeno Area.
     // A visible relation in the same workspace can match the related task,
     // but the note in another workspace cannot appear in this view.
-    await expect(results.locator("article")).toHaveCount(2);
+    await expect(results.locator("article")).toHaveCount(3);
     await expect(results).toContainText(fixture.project);
     await expect(results).toContainText(fixture.task);
+    await expect(results).toContainText("Nezařazeno");
+    await expect(results.locator("article").filter({ hasText: fixture.project })).toHaveCount(1);
+    await expect(results.locator("article").filter({ hasText: fixture.task })).toHaveCount(1);
+    await expect(results.locator("article").filter({ hasText: "Nezařazeno" })).toHaveCount(1);
     await expect(results).not.toContainText(fixture.hidden);
     await expect(results.locator('article[data-match-source="related"]')).toContainText(fixture.task);
 
@@ -64,7 +69,7 @@ for (const width of [390, 1280]) {
     await page.locator('.searchKindFilters [data-search-kind="note"]').click();
     await expect(page.locator(".searchState")).toContainText("nebyla nalezena");
     await page.getByRole("button", { name: "Zobrazit všechny typy" }).click();
-    await expect(results.locator("article")).toHaveCount(2);
+    await expect(results.locator("article")).toHaveCount(3);
 
     const relatedTask = results.getByRole("button", {
       name: `Otevřít ${fixture.task} · Úkol · Shoda v související položce · Změněno i na jiném zařízení`,

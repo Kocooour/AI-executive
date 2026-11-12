@@ -204,7 +204,8 @@ test.describe("B2 project overview", () => {
     await expect(taskRow).toBeVisible();
     await taskRow.click();
     // This is the ordinary relation picker, not the Inbox triage action.
-    const projectPicker = page.locator(".fields > label", { hasText: "Projekt" }).locator("select");
+    // #404: inspect by the accessible label, not the removed .fields > label structure.
+    const projectPicker = page.locator("aside.detail").getByLabel("Projekt", { exact: true });
     await expect(projectPicker).toHaveCount(1);
     await projectPicker.selectOption({ label: name });
     await expect.poll(async () => page.evaluate(async ({ taskTitle, projectTitle }) => {
