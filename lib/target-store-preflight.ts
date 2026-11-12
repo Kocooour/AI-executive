@@ -15,6 +15,7 @@ import {
   TARGET_STAGING_PRIVATE_TASK_CREATE_CANCEL_PREFIX,
   TARGET_STAGING_PRIVATE_STRUCTURE_CREATE_RECEIPT_PREFIX,
   TARGET_STAGING_PRIVATE_STRUCTURE_CREATE_RECOVERY_PREFIX,
+  TARGET_STAGING_PRIVATE_STRUCTURE_CREATE_WITNESS_MAX_BYTES,
   TARGET_STAGING_TEMPORAL_STATUS_RECEIPT_PREFIX, TARGET_STAGING_TEMPORAL_DUE_ON_RECEIPT_PREFIX,
   TARGET_STAGING_PERSONAL_WHEN_RECEIPT_PREFIX,
   TARGET_STAGING_PERSONAL_ATTENTION_RECEIPT_PREFIX,
@@ -323,7 +324,9 @@ export function inspectIsolatedTargetStore(
         if (typeof row.key !== "string" ||
           !sha256Hex.test(row.key.slice(TARGET_STAGING_PRIVATE_STRUCTURE_CREATE_RECOVERY_PREFIX.length)) ||
           !structureReceiptHashes.has(row.key.slice(TARGET_STAGING_PRIVATE_STRUCTURE_CREATE_RECOVERY_PREFIX.length)) ||
-          typeof row.value !== "string" || row.value.length > 900) return false;
+          typeof row.value !== "string" ||
+          Buffer.byteLength(row.value, "utf8") >
+            TARGET_STAGING_PRIVATE_STRUCTURE_CREATE_WITNESS_MAX_BYTES) return false;
         try {
           const v: unknown = JSON.parse(row.value);
           if (!v || typeof v !== "object" || Array.isArray(v)) return false;
