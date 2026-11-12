@@ -141,7 +141,7 @@ for(const width of [390,1280]){
         .toHaveAttribute("data-reason","not-available");
       await expect(detail).toContainText("Tato položka není dostupná.");
       await expect(detail).not.toContainText(revoked.projectTitle);
-      await expect(detail.getByTestId("target-detail-project")).toHaveCount(0);
+      await expect(detail.locator(".targetDetailContent")).toHaveCount(0);
 
       // Simulate the same blur lifecycle that purges the one-use Search bridge
       // when the actor changes windows while reading the refused detail.
@@ -155,7 +155,11 @@ for(const width of [390,1280]){
       await expect(search.getByTestId("target-main-search-return")).toBeFocused();
 
       // Explicit new real HTTP Search must also hide the revoked project.
+      const fresh=page.waitForResponse(response=>
+        response.request().method()==="GET"&&
+        new URL(response.url()).pathname==="/api/target-staging/title-search");
       await input.press("Enter");
+      expect((await fresh).status()).toBe(200);
       await expect(search.getByText(revoked.projectTitle,{exact:true})).toHaveCount(0);
       await expect(search.locator('[data-detail-row="project:'+revoked.projectId+'"]'))
         .toHaveCount(0);
