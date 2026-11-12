@@ -12,7 +12,7 @@ import {resolveStagingHttpIdentity,stagingAnchorRefusal,stagingUnauthenticatedRe
 import {validPrivateTaskCreateCommand,type PrivateTaskCreateCommand}
   from "./target-private-task-create-writer";
 import {createPrivateTaskInChild,readPrivateTaskCreateStatusInChild,
-  readPrivateTaskCreateRecoveryInChild}
+  readPrivateTaskCreateRecoveryInChild,cancelPrivateTaskCreateInChild}
   from "./target-staging-task-create-process";
 import {readStagingTemporalDetailInChild,type StagingTemporalDetailResult}
   from "./target-staging-read-process";
@@ -75,7 +75,7 @@ export function releasePrivateTaskCreateCommittedStatus(
     return answer(404,"Not found");
   return Response.json({status:"committed"},{headers});
 }
-async function handle(request:Request,mode:"create"|"status"|"recovery"):Promise<Response>{
+async function handle(request:Request,mode:"create"|"status"|"recovery"|"cancel"):Promise<Response>{
   if(!enabled())return answer(404,"Not found");
   const anchor=stagingAnchorRefusal(request,true);if(anchor)return anchor;
   const identity=resolveStagingHttpIdentity(request);
@@ -93,23 +93,32 @@ async function handle(request:Request,mode:"create"|"status"|"recovery"):Promise
     const protocol=targetProtocolRefusal(request);if(protocol)return protocol;
     const limited=enforceRateLimit(request,mode==="create"?
       "target-staging-private-task-create":mode==="status"?
-      "target-staging-private-task-create-status":"target-staging-private-task-create-recovery",
+      "target-staging-private-task-create-status":mode==="cancel"?
+      "target-staging-private-task-create-cancel":"target-staging-private-task-create-recovery",
       mode==="create"?30:60,600_000);
     if(limited)return Response.json({error:"Too many requests"},
       {status:429,headers:{...headers,"retry-after":String(limited.retryAfter)}});
-    const data=await readJsonBody<unknown>(request,mode==="recovery"?128:16*1024,{strictUtf8:true});
+    const data=await readJsonBody<unknown>(request,mode==="recovery"||mode==="cancel"?128:16*1024,{strictUtf8:true});
     const legacy=legacySnapshotRefusal(data);if(legacy)return legacy;
-    const opaque=mode==="recovery"&&!!data&&typeof data==="object"&&!Array.isArray(data)&&
+    const opaque=(mode==="recovery"||mode==="cancel")&&!!data&&typeof data==="object"&&!Array.isArray(data)&&
       Object.keys(data).join(",")==="commandId"&&
       typeof (data as {commandId?:unknown}).commandId==="string"&&
       uuid.test((data as {commandId:string}).commandId);
-    if(mode==="recovery"?!opaque:!validPrivateTaskCreateCommand(data))
+    if(mode==="recovery"||mode==="cancel"?!opaque:!validPrivateTaskCreateCommand(data))
       return answer(400,"Invalid request");
-    const command=mode==="recovery"?null:data as PrivateTaskCreateCommand;
+    const command=mode==="recovery"||mode==="cancel"?null:data as PrivateTaskCreateCommand;
     const verified=verifyStagingIdentityBeforeRelease(request,identity,store);
     if(verified!=="ok")return stagingIdentityRefusal(verified);
     if(!unchanged(base))return answer(503,"Staging unavailable");
     const child={...base,...stagingChildSessionConfig(identity)};
+    if(mode==="cancel"){
+      const result=await cancelPrivateTaskCreateInChild(child,(data as {commandId:string}).commandId);
+      const current=verifyStagingIdentityBeforeRelease(request,identity,store);
+      if(current!=="ok")return stagingIdentityRefusal(current);
+      if(!unchanged(base)||!result||result.ok===false)
+        return answer(503,"Staging unavailable");
+      return Response.json({status:result.status},{headers});
+    }
     if(mode==="recovery"){
       const result=await readPrivateTaskCreateRecoveryInChild(
         child,(data as {commandId:string}).commandId);
@@ -176,7 +185,8 @@ async function handle(request:Request,mode:"create"|"status"|"recovery"):Promise
     if(error instanceof HttpInputError)return answer(error.status,error.message);
     logStagingFailure(mode==="status"?
       "target-staging/private-task-create-status":mode==="recovery"?
-      "target-staging/private-task-create-recovery":"target-staging/private-task-create",
+      "target-staging/private-task-create-recovery":mode==="cancel"?
+      "target-staging/private-task-create-cancel":"target-staging/private-task-create",
       "route_exception",error);
     return answer(503,"Staging unavailable");
   }
@@ -184,3 +194,4 @@ async function handle(request:Request,mode:"create"|"status"|"recovery"):Promise
 export const postPrivateTaskCreate=(request:Request)=>handle(request,"create");
 export const postPrivateTaskCreateStatus=(request:Request)=>handle(request,"status");
 export const postPrivateTaskCreateRecovery=(request:Request)=>handle(request,"recovery");
+export const postPrivateTaskCreateCancel=(request:Request)=>handle(request,"cancel");
