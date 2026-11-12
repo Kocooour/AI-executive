@@ -337,6 +337,78 @@ for(const [width,mode] of [[390,"visibility"],[1280,"offline"]] as const){
     expect(writes).toHaveLength(1);
   });
 }
+
+/** The original CREATE committed but was then deleted or lost Area access:
+ * detail-guarded status and recovery must fail, while the immutable
+ * actor+command receipt remains a content-free terminal proof. */
+for(const [width,reload] of [[390,false],[1280,true]] as const){
+  test("committed then inaccessible CREATE safely releases capture at "+
+    width+"px"+(reload?" after reload":""),async({page})=>{
+    await page.setViewportSize({width,height:844});
+    let creates=0,settlements=0,checks=0;
+    const writes=await setup(page,(route,cmd)=>{
+      creates++;
+      return creates===1?reply(route,{error:"Staging unavailable"},503):
+        reply(route,{ok:true,taskId:cmd.taskId},201);
+    });
+    await page.route("**/api/target-staging/tasks/create-status",route=>{
+      checks++;
+      return reply(route,{error:"Not found"},404);
+    });
+    await page.route("**/api/target-staging/tasks/create-recovery",route=>{
+      checks++;
+      expect(route.request().postDataJSON()).toEqual({
+        commandId:writes[0].commandId,
+      });
+      return reply(route,{error:"Not found"},404);
+    });
+    await page.route("**/api/target-staging/tasks/create-cancel",route=>{
+      settlements++;
+      expect(route.request().postDataJSON()).toEqual({
+        commandId:writes[0].commandId,
+      });
+      expect(route.request().postData()).not.toContain(writes[0].title);
+      return reply(route,{status:"settled"});
+    });
+    await page.goto("/?view=Calendar");
+    let modal=await openAndFill(page,width);
+    await page.getByTestId("target-private-task-save").click();
+    const unresolved=page.getByTestId("target-private-task-unresolved");
+    await expect(unresolved).toBeVisible();
+    const marker=await page.evaluate(()=>
+      sessionStorage.getItem("lumi-private-task-create-unresolved-v1"));
+    expect(marker).toContain(writes[0].commandId);
+    expect(marker).not.toContain(writes[0].title);
+    if(reload){
+      await page.reload();
+      await fab(page,width).click();
+      await page.getByTestId("target-capture-task-kind").click();
+      modal=page.getByTestId("target-private-task-capture");
+      await expect(modal).toBeVisible();
+    }
+    await page.getByTestId("target-private-task-receipt").click();
+    await expect(page.getByTestId("target-private-task-cancel")).toBeEnabled();
+    expect(checks).toBe(1);
+    expect(await page.evaluate(()=>
+      sessionStorage.getItem("lumi-private-task-create-unresolved-v1"))).toBe(marker);
+    await page.getByTestId("target-private-task-cancel").click();
+    await expect(unresolved).toHaveCount(0);
+    await expect(modal).toContainText("Původní zápis byl proveden");
+    expect(await page.evaluate(()=>
+      sessionStorage.getItem("lumi-private-task-create-unresolved-v1"))).toBe(null);
+    expect(settlements).toBe(1);
+    await expect(page.getByTestId("target-private-task-created")).toHaveCount(0);
+    await expect(page.getByTestId("target-private-task-area")).toBeEnabled();
+    await page.getByTestId("target-private-task-area").selectOption("private-a");
+    await page.getByTestId("target-private-task-form").getByRole("textbox",
+      {name:"Název úkolu"}).fill("Nový úkol po terminálním potvrzení");
+    await page.getByTestId("target-private-task-save").click();
+    await expect(page.getByTestId("target-private-task-created")).toBeVisible();
+    expect(writes).toHaveLength(2);
+    expect(writes[1].commandId).not.toBe(writes[0].commandId);
+    expect(writes[1].taskId).not.toBe(writes[0].taskId);
+  });
+}
 /** Integrates merged #391 Search with this default-off private task capture.
  * Both feature flags are ON only in this isolated synthetic browser profile.
  * No automatic local task insertion, Search request or production write. */
