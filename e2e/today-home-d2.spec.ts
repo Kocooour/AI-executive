@@ -323,11 +323,13 @@ test("Home: one primary action per attention item, the rest in the ⋯ menu, the
     // A waiting follow-up: Otevřít is the primary action.
     await expect(item(waiting.title).locator(".attentionOpenAction")).toHaveCount(1);
     await expect(item(waiting.title).locator(".deferChip")).toHaveCount(0);
-    // Snooze, dismiss and sources are not on the row; they are in the menu.
+    // #242: snooze/dismiss are in the menu, but sources moved to the Why disclosure.
     await expect(item(overdue.title).getByRole("menuitem")).toHaveCount(0);
     await item(overdue.title).getByRole("button", { name: /^Další akce/ }).click();
-    for (const name of ["Otevřít", "Odložit o 24 h", "Skrýt", "Zdroje"]) await expect(item(overdue.title).getByRole("menuitem", { name: new RegExp(`^${name}`) })).toBeVisible();
+    for (const name of ["Otevřít", "Odložit o 24 h", "Skrýt"]) await expect(item(overdue.title).getByRole("menuitem", { name: new RegExp(`^${name}`) })).toBeVisible();
     await page.keyboard.press("Escape");
+    await item(overdue.title).getByRole("button", { name: `Proč?: ${overdue.title}` }).click();
+    await expect(item(overdue.title).locator(".attentionSources")).toBeVisible();
 
     // One line of reason and source; the evaluation time is in the header once, and in the sources.
     await expect(item(overdue.title).locator(".attentionWhy")).toContainText("uplynul");

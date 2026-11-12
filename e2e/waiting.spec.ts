@@ -42,7 +42,9 @@ test("a task waiting for someone comes back on its follow-up date", async ({ pag
   const item = page.locator(".attentionItem", { hasText: title });
   await expect(item).toContainText("Nastal den připomenutí");
   await expect(item).toContainText("čeká na: Petra Nová");
-  await expect(item).toContainText("označeno jako čekající");
+  // #242: the detailed rule reason is now in Proč?, not the collapsed row.
+  await item.getByRole("button", { name: `Proč?: ${title}` }).click();
+  await expect(item.locator(".attentionMore")).toContainText("označeno jako čekající");
   // Ending the waiting ends the item.
   await page.goto(`/?task=${id}`);
   await waitUntilSynced(page);
