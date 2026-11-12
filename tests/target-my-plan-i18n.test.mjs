@@ -144,3 +144,15 @@ test("Czech My Plan copy matches the current approved snapshot (every value)",()
   const snapshot=JSON.parse(read("tests/fixtures/target-my-plan-copy-cs.json"));
   assert.deepEqual(flatten(myPlanCopy.cs),snapshot);
 });
+
+test("My Plan copy and navigation avoid internal implementation jargon",()=>{
+  const jargon=/staging|dueOn|\bCAS\b|\bPATCH\b|endpoint|offline fronta/i;
+  for(const language of ["cs","en"]){
+    for(const [key,value] of Object.entries(flatten(myPlanCopy[language]))){
+      assert.doesNotMatch(value,jargon,language+"."+key);
+    }
+  }
+  for(const file of ["app/ui/lumi-app-root.tsx","app/ui/views/sidebar.tsx","app/ui/views/mobile-nav.tsx"]){
+    assert.doesNotMatch(read(file),/serverový plán ze stagingu|server plan from staging|staging server/i,file);
+  }
+});
