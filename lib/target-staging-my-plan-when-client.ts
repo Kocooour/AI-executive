@@ -1,6 +1,7 @@
 /** R3-slice UI-04a: isolated, INACTIVE actor-private whenOn CAS transport.
  * No component imports this transport yet. Server is the only authority for
  * actor, assignment, Area ACL, private epoch, restore and atomic writes. */
+import {targetAppFetch} from "./target-app-fetch";
 import {validStatusTaskId} from "./target-staging-my-plan-status-client";
 
 export type MyPlanWhenFailure="signed-out"|"stale"|"unavailable"|
@@ -98,7 +99,7 @@ const writeOptions=(command:MyPlanWhenCommand,method:"PATCH"|"POST",
 export async function prepareMyPlanWhen(params:{
   taskId:string;areaId:string;whenOn:string|null;
   commandId?:string;signal?:AbortSignal;
-},fetchImpl:typeof fetch=fetch):Promise<MyPlanWhenPreparation>{
+},fetchImpl:typeof fetch=targetAppFetch):Promise<MyPlanWhenPreparation>{
   if(!validStatusTaskId(params.taskId)||typeof params.areaId!=="string"||
     !area.test(params.areaId)||!validMyPlanWhenDate(params.whenOn)||
     (params.commandId!==undefined&&!uuid.test(params.commandId)))
@@ -147,7 +148,7 @@ export async function prepareMyPlanWhen(params:{
 /** The POST is read-only. The *same original eight-field command* is necessary
  * to check a possibly committed PATCH. 'not_recorded' is NEVER a rollback proof. */
 export async function checkMyPlanWhenReceipt(
-  command:MyPlanWhenCommand,fetchImpl:typeof fetch=fetch,
+  command:MyPlanWhenCommand,fetchImpl:typeof fetch=targetAppFetch,
   signal?:AbortSignal,
 ):Promise<MyPlanWhenReceipt>{
   if(!validMyPlanWhenCommand(command))
@@ -173,7 +174,7 @@ export async function checkMyPlanWhenReceipt(
 /** Exactly ONE PATCH attempt. Ambiguous post-write results (including late
  * auth denial) may have committed, so only an original receipt can confirm. */
 export async function dispatchMyPlanWhen(
-  command:MyPlanWhenCommand,fetchImpl:typeof fetch=fetch,
+  command:MyPlanWhenCommand,fetchImpl:typeof fetch=targetAppFetch,
   signal?:AbortSignal,
 ):Promise<MyPlanWhenDispatch>{
   if(!validMyPlanWhenCommand(command))
@@ -208,7 +209,7 @@ export async function dispatchMyPlanWhen(
 export async function changeMyPlanWhen(
   params:{taskId:string;areaId:string;whenOn:string|null;
     commandId?:string;signal?:AbortSignal},
-  fetchImpl:typeof fetch=fetch,
+  fetchImpl:typeof fetch=targetAppFetch,
 ):Promise<MyPlanWhenDispatch>{
   const prepared=await prepareMyPlanWhen(params,fetchImpl);
   if(prepared.ok===false)return {kind:"rejected",reason:prepared.reason};

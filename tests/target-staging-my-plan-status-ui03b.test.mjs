@@ -86,7 +86,7 @@ test("manual receipt verification never resends a PATCH and blocks new status co
   const end=ui.indexOf("function resetFeedback()",start);
   assert.ok(start>0&&end>start);
   const method=ui.slice(start,end);
-  assert.match(method,/checkMyPlanStatusReceipt\(command,fetch,op\.controller\.signal\)/);
+  assert.match(method,/checkMyPlanStatusReceipt\(command,targetAppFetch,op\.controller\.signal\)/);
   assert.doesNotMatch(method,/dispatchMyPlanStatus|changeMyPlanStatus|fetch\(/);
   assert.match(method,/receipt\.kind==="committed"/);
   assert.match(method,/receipt\.reason==="signed-out"/);

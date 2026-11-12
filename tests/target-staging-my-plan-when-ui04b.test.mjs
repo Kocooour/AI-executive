@@ -98,7 +98,7 @@ test("UI-04b: synchronous cross-family lock and no stale visible rows during unc
   assert.match(method,/invalidate\("stale",true\); \/\/ Hide potentially stale rows/);
   assert.match(method,/op\.command=command/);
   assert.match(method,/uncertainWhen\.current=context; \/\/ In-memory only/);
-  assert.match(method,/const result=await dispatchMyPlanWhen\(command,fetch,op\.controller\.signal\)/);
+  assert.match(method,/const result=await dispatchMyPlanWhen\(command,targetAppFetch,op\.controller\.signal\)/);
   assert.match(method,/result\.kind==="uncertain"/);
   assert.match(method,/refreshAfterStatus\(\)/);
   assert.doesNotMatch(method,/localStorage|indexedDB|sessionStorage|serviceWorker/);

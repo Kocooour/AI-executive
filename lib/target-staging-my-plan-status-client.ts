@@ -2,6 +2,7 @@
  * Client-side proof is NEVER authority: server checks identity, ACL, store
  * generation, revision and current assignment for every command and receipt.
  * No writes are invoked until a later explicitly server-gated UI integration. */
+import {targetAppFetch} from "./target-app-fetch";
 export type MyPlanStatus="open"|"completed";
 export type MyPlanStatusCommand={
   commandId:string;taskId:string;status:MyPlanStatus;
@@ -75,7 +76,7 @@ const writeOptions=(command:MyPlanStatusCommand,method:"PATCH"|"POST",signal?:Ab
 export async function prepareMyPlanStatus(
   params:{taskId:string;areaId:string;status:MyPlanStatus;
     commandId?:string;signal?:AbortSignal},
-  fetchImpl:typeof fetch=fetch,
+  fetchImpl:typeof fetch=targetAppFetch,
 ):Promise<MyPlanStatusPreparation>{
   if(!validStatusTaskId(params.taskId)||!area.test(params.areaId)||
     !["open","completed"].includes(params.status)||
@@ -115,7 +116,7 @@ export async function prepareMyPlanStatus(
  * that a concurrent PATCH did not or will not commit. Never auto-resend. */
 export async function checkMyPlanStatusReceipt(
   command:MyPlanStatusCommand,
-  fetchImpl:typeof fetch=fetch,
+  fetchImpl:typeof fetch=targetAppFetch,
   signal?:AbortSignal,
 ):Promise<MyPlanStatusReceipt>{
   if(!validStatusCommand(command))return {kind:"unknown",reason:"invalid-request"};
@@ -139,7 +140,7 @@ export async function checkMyPlanStatusReceipt(
 /** A PATCH can commit before the response is lost. Treat all ambiguous
  * outcomes as pending and inspect the exact original receipt. No retries. */
 export async function dispatchMyPlanStatus(
-  command:MyPlanStatusCommand,fetchImpl:typeof fetch=fetch,
+  command:MyPlanStatusCommand,fetchImpl:typeof fetch=targetAppFetch,
   signal?:AbortSignal,
 ):Promise<MyPlanStatusDispatch>{
   if(!validStatusCommand(command))return {kind:"rejected",reason:"invalid-request"};
@@ -175,7 +176,7 @@ export async function dispatchMyPlanStatus(
 export async function changeMyPlanStatus(
   params:{taskId:string;areaId:string;status:MyPlanStatus;
     commandId?:string;signal?:AbortSignal},
-  fetchImpl:typeof fetch=fetch,
+  fetchImpl:typeof fetch=targetAppFetch,
 ):Promise<MyPlanStatusDispatch>{
   const prepared=await prepareMyPlanStatus(params,fetchImpl);
   if(prepared.ok===false)return {kind:"rejected",reason:prepared.reason};
