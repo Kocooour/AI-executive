@@ -1050,8 +1050,6 @@ test("R3-A3 Undo restores When atomically, rejects stale and revoked completions
   const whenCAS=await writePreview(whenGET,whenURL,"restore-undated",bob);
   const schedule={...whenCAS,taskId:"restore-undated",whenOn:"2026-11-04",
     commandId:randomUUID()};
-  delete schedule.whenOn; // preview's old value is not part of the command contract
-  schedule.whenOn="2026-11-04";
   await accepted(whenPATCH,whenURL,schedule,bob,{ok:true});
   assert.ok(ids((await ok(get(query(),bob))).today).includes("restore-undated"));
   const originalCAS=await writePreview(statusGET,statusURL,"restore-undated",bob);
