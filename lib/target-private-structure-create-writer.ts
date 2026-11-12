@@ -14,7 +14,8 @@ import {canWriteIsolatedTargetArea} from "./target-task-write-preflight";
 import type {TargetStagingReadStore} from "./target-task-staging-reader";
 import {TARGET_STAGING_MAX_RECEIPTS,TARGET_STAGING_AUDIT_MAX_EVENTS,
   TARGET_STAGING_PRIVATE_STRUCTURE_CREATE_RECEIPT_PREFIX,
-  TARGET_STAGING_PRIVATE_STRUCTURE_CREATE_RECOVERY_PREFIX}
+  TARGET_STAGING_PRIVATE_STRUCTURE_CREATE_RECOVERY_PREFIX,
+  TARGET_STAGING_PRIVATE_STRUCTURE_CREATE_WITNESS_MAX_BYTES}
   from "./target-store-bootstrap";
 
 const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -87,7 +88,7 @@ type Witness={kind:PrivateStructureKind;id:string;projectId:string;areaId:string
 const witnessValue=(w:Witness)=>JSON.stringify(w);
 function parseWitness(value:string):Witness|null{
   try{
-    if(value.length>900)return null;
+    if(Buffer.byteLength(value,"utf8")>TARGET_STAGING_PRIVATE_STRUCTURE_CREATE_WITNESS_MAX_BYTES)return null;
     const v:unknown=JSON.parse(value);
     if(!v||typeof v!=="object"||Array.isArray(v))return null;
     const w=v as Record<string,unknown>;
@@ -156,6 +157,11 @@ export function createPreflightedPrivateStructure(
       :(command as PrivateProjectTaskCreateCommand).taskId;
     const projectId=(command as PrivateProjectCreateCommand).projectId;
     const witness:Witness={kind,id,projectId,areaId,restoreGeneration:g};
+    const serializedWitness=witnessValue(witness);
+    // The bound is shared with canonical preflight. Fail BEFORE COMMIT if a
+    // future project-ID contract could overflow the content-free metadata value.
+    if(Buffer.byteLength(serializedWitness,"utf8")>
+      TARGET_STAGING_PRIVATE_STRUCTURE_CREATE_WITNESS_MAX_BYTES)return failed();
     const k=receiptKey(actor,command.commandId),wk=recoveryKey(actor,command.commandId);
     const hash=digest(kind,command);
     const prior=db.prepare("SELECT value FROM metadata WHERE key=?").get(k) as
@@ -164,7 +170,7 @@ export function createPreflightedPrivateStructure(
       if(prior.value!==hash)return {ok:false,reason:"idempotency_conflict"};
       const w=db.prepare("SELECT value FROM metadata WHERE key=?").get(wk) as
         {value:string}|undefined;
-      if(!w||w.value!==witnessValue(witness))return {ok:false,reason:"idempotency_conflict"};
+      if(!w||w.value!==serializedWitness)return {ok:false,reason:"idempotency_conflict"};
       return liveWitness(db,actor,witness)
         ?{ok:true,replayed:true}:{ok:false,reason:"unavailable"};
     }
@@ -205,7 +211,7 @@ export function createPreflightedPrivateStructure(
     }
     db.prepare("INSERT INTO metadata(key,value) VALUES(?,?)").run(k,hash);
     db.prepare("INSERT INTO metadata(key,value) VALUES(?,?)")
-      .run(wk,witnessValue(witness));
+      .run(wk,serializedWitness);
     if(!sessionLive()||!context.stillPinned())
       return {ok:false,reason:"session_revoked"};
     if(!context.commit({kind:kind==="project"?"project_create":"project_task_create",
