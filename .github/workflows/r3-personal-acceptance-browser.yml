@@ -1,0 +1,62 @@
+name: Focused R3 personal acceptance browser
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/r3-personal-acceptance-browser.yml"
+      - "app/page.tsx"
+      - "app/ui/lumi-app-root.tsx"
+      - "app/ui/target-*.tsx"
+      - "app/api/target-staging/**"
+      - "lib/target-*.ts"
+      - "scripts/target-staging-*.mjs"
+      - "e2e/target-personal-acceptance.spec.ts"
+      - "e2e/target-personal-store-setup.mjs"
+      - "tests/target-personal-profile.test.mjs"
+      - "playwright.config.ts"
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  chromium:
+    name: Personal acceptance on the real isolated store (Chromium)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    env:
+      CI: "true"
+      NEXT_TELEMETRY_DISABLED: "1"
+      NEXT_PUBLIC_LUMI_DESIGN_V1_PREVIEW: "1"
+      E2E_SKIP_BUILD: "1"
+      E2E_PORT: "3130"
+      LUMI_TARGET_PERSONAL_ACCEPTANCE_E2E: "true"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+      - name: Install pnpm
+        uses: pnpm/action-setup@v5
+        with:
+          version: 10.20.0
+      - name: Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+          cache: pnpm
+      - name: Locked dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Flag profile classification test
+        run: node --experimental-loader ./tests/ts-loader.mjs --test tests/target-personal-profile.test.mjs
+      - name: Build isolated UI
+        run: pnpm build
+      - name: Chromium
+        run: pnpm exec playwright install --with-deps chromium
+      - name: 390px and desktop acceptance (real routes, real isolated SQLite)
+        run: pnpm exec playwright test e2e/target-personal-acceptance.spec.ts --project=desktop
+      - name: Upload failure traces
+        if: failure()
+        uses: actions/upload-artifact@v6
+        with:
+          name: lumi-r3-personal-acceptance
+          path: |
+            test-results/
+            playwright-report/
+          retention-days: 7
+          if-no-files-found: ignore
