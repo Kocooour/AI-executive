@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import type { AuthenticationResponseJSON } from "@simplewebauthn/server";
 import { createSessionToken, sessionCookieName, sessionMaxAgeSeconds } from "../../../../../../lib/auth";
+import { OwnerSessionStateUnavailable } from "../../../../../../lib/owner-session-revocation";
 import { boundedString, enforceRateLimit, HttpInputError, readJsonBody, requireSameOrigin } from "../../../../../../lib/http-security";
 import { finishAuthentication } from "../../../../../../lib/passkeys";
 import { recordSecurityEvent } from "../../../../../../lib/security-audit";
@@ -30,7 +31,10 @@ export async function POST(request: Request) {
     recordSecurityEvent(request, "auth.passkey.login", "allowed");
     return result;
   } catch (error) {
-    const input = error instanceof HttpInputError ? error : new HttpInputError("Passkey sign-in failed", 401);
+    const input = error instanceof HttpInputError ? error
+      : error instanceof OwnerSessionStateUnavailable
+        ? new HttpInputError("Passkey sign-in is unavailable", 503)
+        : new HttpInputError("Passkey sign-in failed", 401);
     recordSecurityEvent(request, "auth.passkey.login", "failed", { reason: input.message });
     return NextResponse.json({ error: input.message }, { status: input.status });
   }
