@@ -3,6 +3,7 @@ import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import { test } from "node:test";
 import { createStagingReadRunner, parseStagingPersonalPage } from "../lib/target-staging-read-process.ts";
+import {MAX_MY_PLAN_SLICE_OUTPUT_BYTES} from "../lib/target-my-plan-read-limits.ts";
 
 const config = {
   stagingDirectory: "/synthetic/stage",
