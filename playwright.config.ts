@@ -104,9 +104,10 @@ export default defineConfig({
   },
   projects: [
     { name: "setup", testMatch: /.*\.setup\.ts/ },
-    // The webServer env below is run-wide: with the personal acceptance opt-in only its own spec may run against it.
+    // The webServer env below is run-wide: personal acceptance opt-in may run
+    // only the two real-store personal specs; other tests must not inherit it.
     { name: "desktop", use: { ...devices["Desktop Chrome"], storageState: sessionFile }, dependencies: ["setup"],
-      ...(personalAcceptanceTest ? { testMatch: /target-personal-acceptance\.spec\.ts/ } : {}) },
+      ...(personalAcceptanceTest ? { testMatch: /target-personal-(?:acceptance|my-plan)\.spec\.ts/ } : {}) },
   ],
   webServer: {
     command: `${process.env.E2E_SKIP_BUILD ? "" : "pnpm build && "}pnpm start --port ${port} --hostname 127.0.0.1`,
