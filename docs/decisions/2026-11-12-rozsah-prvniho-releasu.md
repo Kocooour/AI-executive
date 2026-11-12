@@ -18,6 +18,8 @@ Vlastník 2026-11-12 schválil návrh revize v bodech 1, 2 a 4 a u bodu 3 potvrd
 3. **Staré pohledy Domů, Inbox a Dnes zůstávají v cílovém režimu viditelné a jen pro čtení** podle rozhodnutí z 2026-11-09 („možnost 1“, [R3-FE-04A](../R3-FE-04A-DETAILS.md)). Návrh revize je v prvním releasu skrýt vlastník 2026-11-12 výslovně zamítl. Jejich přenesení na cílová data následuje po releasu.
 4. **Release 0:** nasadit `main` s vypnutými cílovými příznaky po úspěšné plné Browser E2E na přesném SHA, aby se ověřil nasazovací postup a odstranil drift nahromaděný od 2026-10-23.
 
+5. **Serverová revokace vlastnické relace před cutoverem.** Akceptace milníku A zjistila, že odhlášení jen maže cookie a bezstavový podepsaný token (`lib/auth.ts`) zůstává platný až 7 dní; zkopírovaná cookie po odhlášení dál četla soukromá data přes cílové API. Vlastník 2026-11-12 schválil minimální opravu: čas vydání v tokenu, jedna trvalá serverová hodnota „platné od“ a její posun při odhlášení. Vědomě přijatý důsledek: odhlášení odhlásí všechna zařízení a po nasazení je nutné jedno nové přihlášení; odhlašování po zařízeních patří do R5. Samostatný bezpečnostní PR mimo rozpočet milníku A, hotový před milníkem B.
+
 Mimo první release zůstávají vypnuté a tím jej neblokují: web-push (host politika), provider route AI bundle, Attention nad cílovými daty, note-sync a všechny preview příznaky.
 
 ## Co se neschvaluje
