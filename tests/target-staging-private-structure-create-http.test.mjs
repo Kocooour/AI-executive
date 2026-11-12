@@ -33,6 +33,7 @@ Object.assign(process.env,{
   AI_EXECUTIVE_TARGET_STAGING_HTTP_PROJECT_TASKS_CREATE_ENABLED:"true",
 });
 const {bootstrapIsolatedTargetStore}=await import("../lib/target-store-bootstrap.ts");
+const {inspectIsolatedTargetStore}=await import("../lib/target-store-preflight.ts");
 const {TARGET_STAGING_JOURNAL_FILENAME}=await import("../lib/target-staging-anchor-journal.ts");
 const {PRIVATE_STRUCTURE_CREATE_RECEIPT_PREFIX,
   PRIVATE_STRUCTURE_CREATE_RECOVERY_PREFIX}=await import("../lib/target-private-structure-create-writer.ts");
@@ -47,6 +48,13 @@ const {POST:CHILD_RECOVERY}=await import("../app/api/target-staging/project-task
 const {isTargetReadRequest}=await import("../lib/target-edit-fetch.ts");
 
 const fixtures=[];
+function assertValidStore(fx){
+  for(const mode of ["stage","r2-model"]){
+    const check=inspectIsolatedTargetStore({stagingDirectory:fx.stage.directory,
+      expectedOwnerUserId:"alice",expectedRestoreGeneration:fx.stage.restoreGeneration,mode});
+    assert.equal(check.ok,true,JSON.stringify(check));
+  }
+}
 function fixture(){
   const stage=bootstrapIsolatedTargetStore({
     stagingDirectory:path.join(root,randomUUID()),ownerUserId:"alice",
@@ -140,11 +148,13 @@ test("project and project-child create, replay and content-free ledger/journal",
   const initial=state(fx);
   const first=await checked(await cp(p),201);
   assert.equal(first.id,p.projectId);
+  assertValidStore(fx);
   assert.deepEqual(await checked(await cp(p),200),{ok:true,id:p.projectId,replayed:true});
   assert.deepEqual(await checked(await cs(p),200),{status:"committed",id:p.projectId});
   assert.deepEqual(await checked(await cr(p),200),{status:"committed",id:p.projectId});
   const t=child(fx,p.projectId);
   assert.deepEqual(await checked(await ct(t),201),{ok:true,id:t.taskId});
+  assertValidStore(fx);
   assert.deepEqual(await checked(await ct(t),200),{ok:true,id:t.taskId,replayed:true});
   assert.deepEqual(await checked(await cts(t),200),{status:"committed",id:t.taskId});
   assert.deepEqual(await checked(await ctr(t),200),{status:"committed",id:t.taskId});
@@ -257,4 +267,56 @@ test("tombstoned IDs cannot be reused even with a fresh command ID",async()=>{
   await checked(await cp(project(fx,{projectId:id})),404);
   await checked(await ct(child(fx,live,{taskId})),404);
   assert.equal(state(fx).receipts,0);
+});
+
+test("child creation accepts an existing private text-ID project with exact parent identity",async()=>{
+  const fx=fixture(),id="alice-private-project";
+  const db=new DatabaseSync(fx.stage.databasePath);
+  db.prepare("INSERT INTO projects(id,area_id,title) VALUES(?,?,?)")
+    .run(id,fx.stage.unassignedAreaId,"Existing private project");
+  db.close();
+  const t=child(fx,id);
+  assert.deepEqual(await checked(await ct(t),201),{ok:true,id:t.taskId});
+  assertValidStore(fx);
+  assert.deepEqual(await checked(await ct(t),200),{ok:true,id:t.taskId,replayed:true});
+  assert.deepEqual(await checked(await cts(t),200),{status:"committed",id:t.taskId});
+  assert.deepEqual(await checked(await ctr(t),200),{status:"committed",id:t.taskId});
+  const verify=new DatabaseSync(fx.stage.databasePath,{readOnly:true});
+  try{
+    const row=verify.prepare("SELECT project_id,area_id FROM tasks WHERE id=?").get(t.taskId);
+    assert.equal(row.project_id,id);
+    assert.equal(row.area_id,null);
+  }finally{verify.close();}
+  await checked(await ct(child(fx,id.toUpperCase())),404);
+  await checked(await ct(child(fx,"unknown-private-parent")),404);
+});
+
+test("canonical preflight fails closed on malformed structure recovery witnesses",async()=>{
+  const fx=fixture(),p=project(fx);
+  await checked(await cp(p),201);
+  assertValidStore(fx);
+  const db=new DatabaseSync(fx.stage.databasePath);
+  const row=db.prepare("SELECT key,value FROM metadata WHERE key LIKE ?").get(
+    PRIVATE_STRUCTURE_CREATE_RECOVERY_PREFIX+"%");
+  db.prepare("UPDATE metadata SET value=? WHERE key=?").run(
+    JSON.stringify({...JSON.parse(row.value),title:"must not appear in receipt"}),row.key);
+  db.close();
+  const invalid=inspectIsolatedTargetStore({stagingDirectory:fx.stage.directory,
+    expectedOwnerUserId:"alice",expectedRestoreGeneration:fx.stage.restoreGeneration});
+  assert.equal(invalid.ok,false);
+  assert.ok(invalid.issues.includes("metadata_invalid"),JSON.stringify(invalid));
+});
+
+test("canonical preflight rejects a receipt whose recovery witness was removed",async()=>{
+  const fx=fixture(),p=project(fx);
+  await checked(await cp(p),201);
+  assertValidStore(fx);
+  const db=new DatabaseSync(fx.stage.databasePath);
+  db.prepare("DELETE FROM metadata WHERE key LIKE ?").run(
+    PRIVATE_STRUCTURE_CREATE_RECOVERY_PREFIX+"%");
+  db.close();
+  const invalid=inspectIsolatedTargetStore({stagingDirectory:fx.stage.directory,
+    expectedOwnerUserId:"alice",expectedRestoreGeneration:fx.stage.restoreGeneration});
+  assert.equal(invalid.ok,false);
+  assert.ok(invalid.issues.includes("metadata_invalid"),JSON.stringify(invalid));
 });
