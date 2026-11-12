@@ -1,3 +1,4 @@
+import { releaseOwnerRead } from "../../../lib/owner-session-read-release";
 import { NextResponse } from "next/server";
 import {
   readSnapshot,
@@ -19,10 +20,7 @@ export const dynamic = "force-dynamic";
 
 /** Release gate after sensitive response serialization (testable with cross-process revocation). */
 export function releaseStoreReadIfLive(request: Request, serialized: NextResponse): NextResponse {
-  if (isAuthenticated(request)) return serialized;
-  return NextResponse.json({ error: "Authentication required" }, {
-    status: 401, headers: { "cache-control": "no-store" },
-  });
+  return releaseOwnerRead(request, serialized);
 }
 
 export async function GET(request: Request) {

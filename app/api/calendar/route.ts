@@ -1,3 +1,4 @@
+import { releaseOwnerRead } from "../../../lib/owner-session-read-release";
 import { NextResponse } from "next/server";
 import { fenceRestoredClient } from "../../../lib/restore-fence";
 import { isAuthenticated } from "../../../lib/auth";
@@ -32,10 +33,10 @@ export async function GET(request: Request) {
     if (!workspaceExists(workspaceId)) return NextResponse.json({ error: "Workspace not found" }, { status: 404 });
     const from = Number(url.searchParams.get("from") || Date.now() - 24 * 60 * 60_000);
     const to = Number(url.searchParams.get("to") || Date.now() + 14 * 24 * 60 * 60_000);
-    return NextResponse.json({
+    return releaseOwnerRead(request, NextResponse.json({
       sources: listCalendarSources().filter((source) => source.workspaceId === workspaceId),
       events: listCalendarEvents(workspaceId, from, to),
-    });
+    }));
   } catch (error) {
     return NextResponse.json({ error: error instanceof Error ? error.message : "Calendar read failed" }, { status: 400 });
   }
