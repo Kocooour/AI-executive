@@ -7,6 +7,7 @@ export type MyPlanStatus="open"|"completed";
 export type MyPlanStatusCommand={
   commandId:string;taskId:string;status:MyPlanStatus;
   expectedRevision:string;writeAreaId:string;restoreGeneration:string;
+  previousWhenOn?:string|null;
   undoOf?:Omit<MyPlanStatusCommand,"undoOf">;
 };
 export type MyPlanStatusFailure="signed-out"|"stale"|"unavailable"|
@@ -43,10 +44,19 @@ export function validStatusTaskId(value:unknown):value is string{
 export function validStatusCommand(value:unknown):value is MyPlanStatusCommand{
   if(!object(value))return false;
   const undo="undoOf" in value;
-  if(!keys(value,undo?[...known,"undoOf"]:known))return false;
+  const previous="previousWhenOn" in value;
+  if(!keys(value,[...known,...(undo?["undoOf"]:[]),
+       ...(previous?["previousWhenOn"]:[])]))return false;
+  if(previous&&(value.status!=="completed"||
+    (value.previousWhenOn!==null&&
+     (typeof value.previousWhenOn!=="string"||
+      !/^\d{4}-\d{2}-\d{2}$/.test(value.previousWhenOn)||
+      !Number.isFinite(Date.parse(value.previousWhenOn+"T00:00:00.000Z"))||
+      new Date(value.previousWhenOn+"T00:00:00.000Z").toISOString().slice(0,10)!==value.previousWhenOn))))return false;
   if(undo){
     if(value.status!=="open"||!object(value.undoOf)||
-      !keys(value.undoOf,known)||value.undoOf.status!=="completed"||
+      !("previousWhenOn" in value.undoOf)||
+      value.undoOf.status!=="completed"||
       !validStatusCommand(value.undoOf)||value.undoOf.taskId!==value.taskId||
       value.undoOf.writeAreaId!==value.writeAreaId||
       value.undoOf.restoreGeneration!==value.restoreGeneration||
@@ -87,12 +97,14 @@ const writeOptions=(command:MyPlanStatusCommand,method:"PATCH"|"POST",signal?:Ab
 export async function prepareMyPlanStatus(
   params:{taskId:string;areaId:string;status:MyPlanStatus;
     commandId?:string;signal?:AbortSignal;
-    undoOf?:Omit<MyPlanStatusCommand,"undoOf">},
+    undoOf?:Omit<MyPlanStatusCommand,"undoOf">;
+    previousWhenOn?:string|null},
   fetchImpl:typeof fetch=targetAppFetch,
 ):Promise<MyPlanStatusPreparation>{
   if(!validStatusTaskId(params.taskId)||!area.test(params.areaId)||
     !["open","completed"].includes(params.status)||
     (params.commandId!==undefined&&!uuid.test(params.commandId))||
+    (params.previousWhenOn!==undefined&&params.status!=="completed")||
     (params.undoOf!==undefined&&(params.status!=="open"||
       !validStatusCommand(params.undoOf)||params.undoOf.status!=="completed"||
       params.undoOf.taskId!==params.taskId||
@@ -123,6 +135,8 @@ export async function prepareMyPlanStatus(
       expectedRevision:json.expectedRevision,
       writeAreaId:json.writeAreaId,restoreGeneration:json.restoreGeneration,
       ...(params.undoOf?{undoOf:params.undoOf}:{}),
+      ...(Object.prototype.hasOwnProperty.call(params,"previousWhenOn")
+        ?{previousWhenOn:params.previousWhenOn}:{}),
     };
     return validStatusCommand(command)
       ?{ok:true,command}:{ok:false,reason:"invalid-response"};
