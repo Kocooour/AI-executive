@@ -195,12 +195,20 @@ test("focus management: the panel takes focus on open and Escape/close/backdrop 
   assert.match(state,/export function focusPendingRow/);
 });
 
-test("4b introduces only a separately gated private standalone note-create HTTP route; task/project create and target UI remain unavailable",()=>{
-  for(const file of ["app/api/target-staging/tasks/route.ts","app/api/target-staging/projects/route.ts"]){
-    const source=read(file);
-    assert.match(source,/export async function GET/,file);
-    assert.doesNotMatch(source,/export async function (POST|PUT|PATCH|DELETE)/,file);
-  }
+test("private note and task creation are independently gated; project create remains unavailable",()=>{
+  const taskRoute=read("app/api/target-staging/tasks/route.ts");
+  assert.match(taskRoute,/export async function GET/);
+  assert.match(taskRoute,/export async function POST/);
+  assert.match(taskRoute,/return postPrivateTaskCreate\(request\)/);
+  const privateTaskHttp=read("lib/target-private-task-create-http.ts");
+  assert.match(privateTaskHttp,/const enabled=\(\)=>flags\.every\(key=>process\.env\[key\]==="true"\)/);
+  for(const flag of ["AI_EXECUTIVE_TARGET_STAGING_HTTP_ENABLED",
+    "AI_EXECUTIVE_TARGET_STAGING_HTTP_WRITE_ENABLED",
+    "AI_EXECUTIVE_TARGET_STAGING_HTTP_TASKS_CREATE_ENABLED"])
+    assert.ok(privateTaskHttp.includes(flag),flag+" must gate isolated private task creation");
+  const projectRoute=read("app/api/target-staging/projects/route.ts");
+  assert.match(projectRoute,/export async function GET/);
+  assert.doesNotMatch(projectRoute,/export async function (POST|PUT|PATCH|DELETE)/);
   const noteRoute=read("app/api/target-staging/notes/route.ts");
   assert.match(noteRoute,/export async function POST/);
   assert.match(noteRoute,/AI_EXECUTIVE_TARGET_STAGING_HTTP_NOTES_CREATE_ENABLED/);
