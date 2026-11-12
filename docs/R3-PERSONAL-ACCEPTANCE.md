@@ -93,8 +93,9 @@ Dnes, Attention, push/notifikace, HumanWiki, produkční zapnutí.
    zahodí. Krytí: `tests/target-main-title-search-ui.test.mjs`,
    `e2e/target-main-title-search.spec.ts` (vypnuté příznaky),
    `e2e/target-personal-search-open.spec.ts` (real-store opt-in). Poslední
-   prohlížečový test čeká na zařazení do `playwright.config.ts` vlastníkem
-   integračního milníku; do té doby **nelze tvrdit, že akceptace prošla**.
+   prohlížečový test je nově zařazen do real-store opt-in profilu v
+   `playwright.config.ts`, se samostatnými seedovanými daty. **Akceptace je
+   ověřená až po úspěšném běhu obou scénářů v CI.**
 4. **Nově zachycený úkol bez „Kdy“ není v Mém plánu vidět.** Po zavření potvrzení
    („Zobrazit úkol“) se k němu z hlavního UI nelze dostat: Můj plán ukazuje jen
    naplánované dny, seznam úkolů cílový režim nemá a výsledky hledání nejsou
