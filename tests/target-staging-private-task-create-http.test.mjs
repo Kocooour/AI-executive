@@ -38,6 +38,7 @@ const {createSessionToken,sessionCookieName}=await import("../lib/auth.ts");
 const {POST}=await import("../app/api/target-staging/tasks/route.ts");
 const {POST:STATUS}=await import("../app/api/target-staging/tasks/create-status/route.ts");
 const {POST:RECOVER}=await import("../app/api/target-staging/tasks/create-recovery/route.ts");
+const {POST:CANCEL}=await import("../app/api/target-staging/tasks/create-cancel/route.ts");
 const {GET:GET_TASK}=await import("../app/api/target-staging/tasks/[taskId]/route.ts");
 const {parseTaskCreateReply,parseTaskCreateStatusReply,parseTaskCreateRecoveryReply}=
   await import("../lib/target-staging-task-create-process.ts");
@@ -101,6 +102,8 @@ const create=(cmd,cookie,headers)=>POST(request(base,cmd,cookie,headers));
 const recover=(cmd,cookie,headers)=>STATUS(request(base+"/create-status",cmd,cookie,headers));
 const recoverOpaque=(cmd,cookie,headers)=>RECOVER(
   request(base+"/create-recovery",{commandId:cmd.commandId},cookie,headers));
+const cancelOpaque=(cmd,cookie,headers)=>CANCEL(
+  request(base+"/create-cancel",{commandId:cmd.commandId},cookie,headers));
 async function checked(response,status){
   const value=await response.json();
   assert.equal(response.status,status,JSON.stringify(value));
@@ -301,4 +304,38 @@ test("opaque recovery stays content-free and actor-bound on real SQLite",async()
     assert.equal(JSON.stringify(rows).includes(cmd.commandId),false);
     assert.equal(JSON.stringify(rows).includes(cmd.taskId),true);
   }finally{db.close();}
+});
+
+test("terminal cancel HTTP is actor-scoped and blocks a late CREATE without new task",async()=>{
+  const fx=fixture(),cookie=session(fx,"alice"),cmd=command(fx);
+  const before=persistence(fx,cmd.taskId);
+  assert.deepEqual(await checked(await cancelOpaque(cmd,cookie),200),
+    {status:"cancelled"});
+  assert.deepEqual(await checked(await cancelOpaque(cmd,cookie),200),
+    {status:"cancelled"},"repeat cancellation is idempotent");
+  assert.deepEqual(await checked(await create(cmd,cookie),409),
+    {error:"Revision conflict"},"late CREATE must be rejected by the pinned fence");
+  const after=persistence(fx,cmd.taskId);
+  assert.equal(after.count,before.count);
+  assert.equal(after.receipts,before.receipts);
+  assert.equal(after.sequence,before.sequence);
+  assert.deepEqual(await checked(await recoverOpaque(cmd,cookie),200),
+    {status:"not_recorded"},"receipt is not proof that an old CREATE can still write");
+  const next=command(fx);
+  assert.deepEqual(await checked(await create(next,cookie),201),
+    {ok:true,taskId:next.taskId},"a new UUID can be created");
+});
+test("cancel cannot disguise committed task; invalid requests stay fail-closed",async()=>{
+  const fx=fixture(),cookie=session(fx,"alice"),cmd=command(fx);
+  assert.deepEqual(await checked(await create(cmd,cookie),201),
+    {ok:true,taskId:cmd.taskId});
+  const committed=persistence(fx,cmd.taskId);
+  assert.deepEqual(await checked(await cancelOpaque(cmd,cookie),200),
+    {status:"committed"});
+  assert.deepEqual(persistence(fx,cmd.taskId),committed);
+  assert.deepEqual(await checked(await CANCEL(request(base+"/create-cancel",
+    {commandId:cmd.commandId,actor:"alice"},cookie)),400),{error:"Invalid request"});
+  assert.equal((await cancelOpaque(cmd,null)).status,401);
+  assert.equal((await CANCEL(request(base+"/create-cancel",
+    {commandId:cmd.commandId},cookie,{origin:"https://foreign.invalid"}))).status,403);
 });
