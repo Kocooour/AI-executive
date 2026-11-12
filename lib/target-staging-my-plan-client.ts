@@ -2,6 +2,7 @@
  * The server remains the authority for identity, Area ACL, cursor and epochs.
  * No task data is cached, persisted, or projected into the legacy task store. */
 import {targetAppFetch} from "./target-app-fetch";
+import {MAX_MY_PLAN_SLICE_OUTPUT_BYTES} from "./target-my-plan-read-limits";
 export type MyPlanSliceFilter="all"|"personal"|"shared";
 export type MyPlanSliceTask={
   taskId:string;title:string;projectId:string|null;
@@ -185,10 +186,9 @@ async function fetchMyPlanUntilAbort(
   }
 }
 
-// R3-slice/BE-14. Two day buckets may each hold 100 title-rich tasks.
-// Eight MiB accommodates even JSON-escaped 4096-byte titles, yet bounds
-// hostile/corrupted responses before JSON.parse and the strict DTO allowlist.
-const MAX_MY_PLAN_RESPONSE_BYTES=8*1024*1024;
+// Three independently paged buckets can each hold 100 title-rich tasks.
+// Share the strictly bounded size with the child; never parse larger JSON.
+const MAX_MY_PLAN_RESPONSE_BYTES=MAX_MY_PLAN_SLICE_OUTPUT_BYTES;
 class InvalidMyPlanBody extends Error {}
 
 function discardMyPlanBody(response:Response):void{
