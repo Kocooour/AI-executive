@@ -3,7 +3,7 @@
 // Never open the original SQLite file: SQLite read-only connections may update -shm.
 // Writes only to a NEW, expressly named directory; do not run on production.
 import { DatabaseSync } from "node:sqlite";
-import { copyFileSync, existsSync, lstatSync, mkdirSync, readdirSync, realpathSync, readFileSync, statSync, writeFileSync, chmodSync, constants } from "node:fs";
+import { copyFileSync, existsSync, lstatSync, mkdirSync, readdirSync, realpathSync, writeFileSync, chmodSync, constants } from "node:fs";
 import path from "node:path";
 import { createHash } from "node:crypto";
 
@@ -89,17 +89,32 @@ function readInventory(db, source, tokenAttestation) {
   }
 
   // Workspace IDs can be emails/names. Assign anonymous local labels, never print IDs.
-  const entities = db.prepare("SELECT payload FROM entities").all();
-  const parsed = entities.map(row => {
+  // Do not materialize entire private JSON payloads in process memory.
+  // Multiple SQLite read-only cursor passes use the same copied database snapshot.
+  const MAX_ENTITY_ROWS = 200_000, MAX_ENTITY_BYTES = 16 * 1024 * 1024;
+  const stmt = db.prepare("SELECT payload FROM entities");
+  let entityCount = 0;
+  const workspaceSet = new Set();
+  function parseEntity(payload) {
+    if (Buffer.byteLength(String(payload)) > MAX_ENTITY_BYTES) throw Error("oversized entity payload");
     let value;
-    try { value = JSON.parse(String(row.payload)); } catch { return { workspace: null, kind: "other" }; }
-    const kind = ENTITY_KINDS.has(value?.type) ? value.type : "other";
-    return { kind, workspace: typeof value?.workspaceId === "string" && value.workspaceId ? value.workspaceId : null };
-  });
-  const workspaces = [...new Set(parsed.map(v => v.workspace).filter(Boolean))].sort();
+    try { value = JSON.parse(String(payload)); } catch { return { workspace: null, kind: "other" }; }
+    return {
+      kind: ENTITY_KINDS.has(value?.type) ? value.type : "other",
+      workspace: typeof value?.workspaceId === "string" && value.workspaceId ? value.workspaceId : null,
+    };
+  }
+  for (const row of stmt.iterate()) {
+    if (++entityCount > MAX_ENTITY_ROWS) throw Error("entity count exceeds safe inventory cap");
+    const parsed = parseEntity(row.payload);
+    if (parsed.workspace) workspaceSet.add(parsed.workspace);
+  }
+  const workspaceNames = [...workspaceSet].sort();
+  const aliases = new Map(workspaceNames.map((id, i) => [id, "workspace_" + (i + 1)]));
   const byKind = {}, byWorkspace = {};
-  for (const e of parsed) {
-    const workspaceLabel = e.workspace ? "workspace_" + (workspaces.indexOf(e.workspace) + 1) : "workspace_unknown";
+  for (const row of stmt.iterate()) {
+    const e = parseEntity(row.payload);
+    const workspaceLabel = aliases.get(e.workspace) || "workspace_unknown";
     byKind[e.kind] = (byKind[e.kind] || 0) + 1;
     if (!byWorkspace[workspaceLabel]) byWorkspace[workspaceLabel] = {};
     byWorkspace[workspaceLabel][e.kind] = (byWorkspace[workspaceLabel][e.kind] || 0) + 1;
@@ -166,9 +181,13 @@ function readInventory(db, source, tokenAttestation) {
     : createHash("sha256").update(JSON.stringify(migrations)).digest("hex");
   const backupsDir = path.join(source, "backups");
   let backupFiles = 0;
-  if (lstatSyncMaybe(backupsDir)?.isDirectory() && !lstatSync(backupsDir).isSymbolicLink()) {
+  const backupEntry = lstatSyncMaybe(backupsDir);
+  if (backupEntry?.isSymbolicLink()) throw Error("unsafe symlink to backups");
+  if (backupEntry?.isDirectory()) {
     for (const item of readdirSync(backupsDir, { withFileTypes: true })) {
-      if (item.isFile() && !item.isSymbolicLink()) backupFiles += 1;
+      if (item.isSymbolicLink()) throw Error("unsafe backup symlink");
+      if (item.isFile()) backupFiles += 1;
+      // Nested backup trees are inventoried by the full-directory rehearsal.
     }
   }
   return {
@@ -177,7 +196,7 @@ function readInventory(db, source, tokenAttestation) {
       appliedMigrationsSha256: migrationsSha256,
       migrationIdentity: migrations === null ? "unavailable" : "fingerprinted",
     },
-    entities: { count: entities.length, byKind, byWorkspace },
+    entities: { count: entityCount, byKind, byWorkspace },
     tables, lastModifiedRanges: timestampRanges,
     notes: { noteEntities: byKind.note || 0, revisionRows: tables.note_revisions || 0 },
     context: { claims: tables.context_claims || 0, evidence: tables.context_evidence || 0, sources: tables.context_sources || 0 },
