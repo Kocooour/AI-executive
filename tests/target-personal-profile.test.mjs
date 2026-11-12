@@ -87,7 +87,7 @@ test("every boolean target flag in the tracked sources is classified exactly onc
     assert.ok(found.has(flag),flag+" is classified but no longer exists in the sources");
   assert.ok(!excluded.some(flag=>profile.has(flag)));
   for(const flag of excluded)
-    assert.ok(/CLIENT_PREVIEW|INDEX_DETAIL_LINKS|ATTENTION|NOTIF|NOTE_SYNC|RELATIONS|HOME|GLOBAL_|DUE_/.test(flag),flag);
+    assert.ok(/CLIENT_PREVIEW|INDEX_DETAIL_LINKS|ATTENTION|NOTIF|NOTE_SYNC|RELATIONS|HOME|GLOBAL_|DUE_|PROJECTS_CREATE|PROJECT_TASKS_CREATE/.test(flag),flag);
   for(const flag of profile)assert.ok(!/CLIENT_PREVIEW|INDEX_DETAIL_LINKS|ATTENTION|NOTIF|NOTE_SYNC|HUMANWIKI/.test(flag),flag);
 });
 
