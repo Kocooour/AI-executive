@@ -173,6 +173,8 @@ test("project Area must be explicitly owner-private; foreign, shared, missing an
   await checked(await cp({...p,areaId:undefined}),400);
   await checked(await cp({...p,scope:"shared"}),400);
   await checked(await cp(project(fx,{restoreGeneration:randomUUID()})),409);
+  await checked(await cs(project(fx,{restoreGeneration:randomUUID()})),404);
+  assert.deepEqual(await checked(await cr(p),200),{status:"not_recorded"});
   assert.equal(state(fx).receipts,0);
 });
 test("child rejects foreign, missing, shared and client-supplied Areas",async()=>{
@@ -201,14 +203,14 @@ test("actor-scoped receipts forbid command reuse, and stolen commands cannot rep
   await checked(await cp({...p,title:"Changed"}),409);
   const bob=session(fx,"bob");
   await checked(await cp(p,bob.cookie),404);
-  await checked(await cr(p,bob.cookie),404);
+  assert.deepEqual(await checked(await cr(p,bob.cookie),200),{status:"not_recorded"});
   await checked(await cs(p,bob.cookie),404);
   const t=child(fx,p.projectId);
   await checked(await ct(t),201);
   await checked(await ct({...t,taskId:randomUUID()}),409);
   await checked(await ct({...t,title:"Changed"}),409);
   await checked(await ct(t,bob.cookie),404);
-  await checked(await ctr(t,bob.cookie),404);
+  assert.deepEqual(await checked(await ctr(t,bob.cookie),200),{status:"not_recorded"});
 });
 test("revoked durable session cannot create, confirm or recover",async()=>{
   const fx=fixture(),p=project(fx),live=session(fx,"alice");
