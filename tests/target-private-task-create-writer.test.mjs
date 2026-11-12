@@ -253,3 +253,40 @@ test("canonical UUID collides with legacy mixed-case live IDs and tombstones",()
     rejected("unavailable"),"lowercase ID must collide with uppercase legacy tombstone");
   assert.deepEqual(state(f),tombstoned);
 });
+
+test("terminal cancel fence wins against a late CREATE and is durable/idempotent",()=>{
+  const fx=fixture(),alice=fx.authority.issueWritable("alice");
+  assert.ok(alice);
+  const cmd=request(fx.stage,fx.stage.unassignedAreaId);
+  const before=state(fx);
+  assert.deepEqual(fx.authority.cancelPrivateTaskCreate(
+    alice.sessionToken,cmd.commandId),{ok:true,status:"cancelled"});
+  assert.deepEqual(fx.authority.cancelPrivateTaskCreate(
+    alice.sessionToken,cmd.commandId),{ok:true,status:"cancelled"});
+  assert.equal(readTask(fx.db,cmd.taskId),undefined);
+  assert.equal(receiptCount(fx.db),before.receipts);
+  assert.deepEqual(fx.authority.createPrivateTask(alice.sessionToken,cmd),
+    rejected("idempotency_conflict"),"a stale original POST must never write after cancel");
+  assert.equal(readTask(fx.db,cmd.taskId),undefined);
+  assert.deepEqual(inspectIsolatedTargetStore({stagingDirectory:fx.stage.directory}),
+    {ok:true,mode:"stage",issues:[]});
+  const next=request(fx.stage,fx.stage.unassignedAreaId);
+  assert.deepEqual(fx.authority.createPrivateTask(alice.sessionToken,next),{ok:true});
+  assert.ok(readTask(fx.db,next.taskId),"a fresh command can create after cancellation");
+});
+test("a committed task defeats later cancel; a foreign actor cannot cancel it",()=>{
+  const fx=fixture(),alice=fx.authority.issueWritable("alice"),
+    bob=fx.authority.issueWritable("bob");
+  assert.ok(alice&&bob);
+  const cmd=request(fx.stage,fx.stage.unassignedAreaId);
+  assert.deepEqual(fx.authority.cancelPrivateTaskCreate(
+    bob.sessionToken,cmd.commandId),{ok:true,status:"cancelled"},
+    "cancellation is keyed by actor; guessed UUID never affects another owner");
+  assert.deepEqual(fx.authority.createPrivateTask(alice.sessionToken,cmd),{ok:true});
+  const after=state(fx);
+  assert.deepEqual(fx.authority.cancelPrivateTaskCreate(
+    alice.sessionToken,cmd.commandId),{ok:true,status:"committed"});
+  assert.deepEqual(state(fx),after,"committed task and its receipt cannot be removed");
+  assert.deepEqual(inspectIsolatedTargetStore({stagingDirectory:fx.stage.directory}),
+    {ok:true,mode:"stage",issues:[]});
+});
