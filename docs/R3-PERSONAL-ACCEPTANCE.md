@@ -66,11 +66,13 @@ Dnes, Attention, push/notifikace, HumanWiki, produkční zapnutí.
 
 ## Nalezené mezery
 
-1. **Undo dokončení neobnoví naplánovaný den.** Dokončení smaže řádek osobního
-   plánu (trigger `personal_task_plan_task_reconcile`,
-   `lib/target-store-bootstrap.ts` :409); po Undo je úkol znovu otevřený,
-   ale v Mém plánu se neobjeví, dokud se znovu nenaplánuje. Test ověřuje
-   otevřený stav v detailu projektu. Reprodukce: naplánovat, Dokončit, Undo.
+1. **OPRAVENO v PR #409 — Undo obnovuje naplánovaný den.** Dokončení dál
+   bezpečně odstraní řádek plánu (`personal_task_plan_task_reconcile`), ale
+   potvrzení dokončení váže původní osobní den a nové Undo jej obnoví
+   atomicky s otevřením úkolu. Obnovu dovolí jen původní potvrzený příkaz,
+   nová CAS revize a aktuální oprávnění; revokace ani změna úkolu neobnoví
+   zastaralý plán. Ochrana: `tests/target-task-temporal-status-writer.test.mjs`
+   a `tests/target-staging-my-plan-slice-http.test.mjs` (R3-A3 Undo).
 2. **Závod při rychlém otevření Quick Capture — OPRAVENO v tomto PR.** Čtení
    Mého plánu, výběr Oblastí a `create-preview` šly mimo sdílenou frontu
    `lib/target-read-queue.ts`, ačkoli server povolí jen dva souběžné read
@@ -87,18 +89,20 @@ Dnes, Attention, push/notifikace, HumanWiki, produkční zapnutí.
 3. **Výsledky hledání nejsou otevíratelné** (`app/ui/target-main-title-search.tsx`,
    řádky `<li>` jsou jen text), takže znovu otevřený, ale neplánovaný úkol
    není z UI dosažitelný jinak než přes jeho projekt.
-4. **Nově zachycený úkol bez „Kdy“ není v Mém plánu vidět.** Po zavření potvrzení
-   („Zobrazit úkol“) se k němu z hlavního UI nelze dostat: Můj plán ukazuje jen
-   naplánované dny, seznam úkolů cílový režim nemá a výsledky hledání nejsou
-   otevíratelné (bod 3). [LUMI-FR-013](PRODUCT.md#lumi-fr-013) přitom říká, že Můj
-   plán obsahuje všechny soukromé úkoly uživatele. Test proto úkol plánuje
-   přímo z potvrzení. Řeší druhý PR milníku A.
-5. **Interní žargon v textech cílového režimu (neopraveno).**
-   `lib/target-my-plan-copy.ts:106` („stagingový přehled“), `:127`–`:128`
-   („Izolovaný stagingový…“, „novým CAS“), `:168` („dueOn“, „Každý zápis
-   vyžaduje nový CAS; žádná offline fronta.“), `:169` („serverové CAS“),
-   `app/ui/lumi-app-root.tsx:267` („ze stagingu“), `app/ui/views/sidebar.tsx:165`
-   a `app/ui/views/mobile-nav.tsx:43` („serverový plán ze stagingu“).
+4. **OPRAVENO v PR #409 — soukromé úkoly bez data jsou v Mém plánu.**
+   Třetí sekce „Bez data“ zobrazuje otevřené úkoly soukromých Oblastí bez
+   osobního „Kdy“ a bez termínu; úkoly v projektech dědí Oblast. Po potvrzeném
+   Quick Capture se přehled znovu autorizovaně načte, bez optimistického
+   doplňování. Ochrana: `tests/target-my-plan-day-task-read.test.mjs`,
+   `tests/target-staging-my-plan-slice-http.test.mjs` a
+   `e2e/target-personal-my-plan.spec.ts` (390/1280 px, skutečný store).
+   Pozn.: nový browser test vyžaduje rozšíření opt-in `testMatch` v
+   `playwright.config.ts` vlastníkem souběžného streamu.
+5. **OPRAVENO v PR #409 — interní žargon nahrazen srozumitelným textem.**
+   Česká i anglická verze Mého plánu, navigace a informační hlášky nyní
+   vysvětlují bezpečné ověřování a absenci offline ukládání bez interních
+   názvů implementace. Ochrana: `tests/target-my-plan-i18n.test.mjs` včetně
+   českého snapshotu a kontroly zakázaných technických výrazů.
 6. **Legacy Domů v cílovém režimu (ověřeno, zápis neprochází).** Na 1280 px ukazuje
    Domů legacy úkoly, sekci Pozornost, počty v postranním panelu a ikony řádků.
    V běhu na skutečném store: zaškrtnutí i „Kdy“ jsou `disabled`; položky
