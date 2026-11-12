@@ -6,10 +6,14 @@ import {useTargetGeneration,useTargetRuntime,useTargetSession} from "./target-da
 import {useTargetScope} from "./target-scope-state";
 import {useTargetGate} from "./use-target-gate";
 import {queuedTargetFetch} from "../../lib/target-read-queue";
+import {detailRowKey,focusPendingRow,openTargetDetail} from "./target-detail-state";
+import {detailCopy} from "../../lib/target-detail-copy";
+import type {TargetDetailGates} from "../../lib/target-detail-route";
 import {validTitleSearchQuery,type TitleSearchFailure} from "../../lib/target-staging-title-search-client";
 import {createStagingTitleSearchSession} from "../../lib/target-staging-title-search-session";
 import {
   mainTitleSearchCopy,subscribeMainTitleSearchAclInvalidation,
+  mainTitleSearchDetailRoute,rememberMainTitleSearchReturn,consumeMainTitleSearchReturn,
   visibleMainTitleSearchResult,TARGET_MAIN_SEARCH_SUBMIT_EVENT,
   type MainTitleSearchBinding,type BoundMainTitleSearch,type MainTitleSearchLanguage,
 } from "../../lib/target-main-title-search-ui";
@@ -25,10 +29,11 @@ function foregroundOnline():boolean{
   return typeof document!=="undefined"&&document.visibilityState!=="hidden"&&navigator.onLine;
 }
 
-export default function TargetMainTitleSearch({query,language="cs"}:{
-  query:string;language?:MainTitleSearchLanguage;
+export default function TargetMainTitleSearch({query,language="cs",details}:{
+  query:string;language?:MainTitleSearchLanguage;details:TargetDetailGates;
 }){
   const copy=mainTitleSearchCopy[language];
+  const rowCopy=detailCopy[language];
   const scope=useTargetScope();
   const generation=useTargetGeneration();
   const runtime=useTargetRuntime();
@@ -40,14 +45,24 @@ export default function TargetMainTitleSearch({query,language="cs"}:{
   const bindingRef=useRef(current);
   bindingRef.current=current;
   const epoch=useRef(0);
-  const [result,setResult]=useState<BoundMainTitleSearch|null>(null);
+  // An address navigation unmounts Search. Restore only the single-use, same-
+  // identity in-memory result, never web storage or an automatic HTTP query.
+  const fromReturn=useRef(false);
+  const [result,setResult]=useState<BoundMainTitleSearch|null>(()=>{
+    const value=consumeMainTitleSearchReturn(current,runtime);
+    fromReturn.current=Boolean(value);
+    return value;
+  });
+  const mounted=useRef(false);
   const statusRef=useRef<HTMLParagraphElement>(null);
   const submitRef=useRef<()=>void>(()=>{});
 
   // Query edits, navigation across Personal/Shared and auth rotation cannot
   // leave an older actor's data or a stale count on screen.
   useEffect(()=>{
+    if(!mounted.current){mounted.current=true;return;}
     ++epoch.current;
+    fromReturn.current=false;
     session?.reset();
     setResult(null);
   },[session,query,scope,generation]);
@@ -121,6 +136,7 @@ export default function TargetMainTitleSearch({query,language="cs"}:{
     const binding={...bindingRef.current};
     const input=query.trim();
     const run=++epoch.current;
+    fromReturn.current=false;
     session.reset();
     if(!validTitleSearchQuery(input)){
       setResult({binding,snapshot:session.getSnapshot(),failure:"invalid-request"});
@@ -141,6 +157,9 @@ export default function TargetMainTitleSearch({query,language="cs"}:{
   submitRef.current=search;
   function loadMore(){
     if(!session||!ready||!ready.hasMore||!foregroundOnline())return;
+    // After navigation, a new session has no valid paging cursor. The user
+    // explicitly starts a fresh server query before requesting another page.
+    if(fromReturn.current){search();return;}
     statusRef.current?.focus();
     const binding={...bindingRef.current};
     const run=++epoch.current;
@@ -152,6 +171,10 @@ export default function TargetMainTitleSearch({query,language="cs"}:{
         setResult({binding,snapshot:session.getSnapshot(),failure:"unavailable"});
     });
   }
+
+  // The detail closes back to Search. The originating keyed button has been
+  // remounted by now, so it wins focus over the shell\x27s neutral heading fallback.
+  useEffect(()=>{if(ready)focusPendingRow();},[ready]);
 
   return <section className="searchExplorer targetMainSearch" data-testid="target-main-title-search"
     aria-label={language==="cs"?"Autorizované hledání":"Authorized search"}>
@@ -181,14 +204,28 @@ export default function TargetMainTitleSearch({query,language="cs"}:{
     {ready&&<section aria-label={language==="cs"?"Autorizované výsledky":"Authorized results"}>
       {ready.items.length===0?<p className="searchState" role="status">{copy.empty}</p>:
         <ul className="targetMainSearchItems">
-          {ready.items.map(item=><li key={item.kind+":"+item.id} className="targetMainSearchItem"
-            data-kind={item.kind} data-area-kind={item.areaKind}>
-            <span className="targetMainSearchGlyph" aria-hidden="true"/>
-            <span className="targetMainSearchText">
-              <strong>{item.title}</strong>
-              <small>{copy[item.kind]} · {copy[item.areaKind==="private"?"personal":"shared"]}</small>
-            </span>
-          </li>)}
+          {ready.items.map(item=>{
+            const route=mainTitleSearchDetailRoute(item,details);
+            const body=<>
+              <span className="targetMainSearchGlyph" aria-hidden="true"/>
+              <span className="targetMainSearchText">
+                <strong>{item.title}</strong>
+                <small>{copy[item.kind]} · {copy[item.areaKind==="private"?"personal":"shared"]}</small>
+              </span>
+            </>;
+            const openLabel=item.kind==="project"?rowCopy.rowOpenProject(item.title):
+              item.kind==="note"?rowCopy.rowOpenNote(item.title):rowCopy.planOpenTask(item.title);
+            return <li key={item.kind+":"+item.id} className="targetMainSearchItem"
+              data-kind={item.kind} data-area-kind={item.areaKind}>
+              {route?<button type="button" className="targetMainSearchItemButton"
+                data-detail-row={detailRowKey(item.kind,item.id)} aria-label={openLabel}
+                onClick={event=>{
+                  if(shown)rememberMainTitleSearchReturn(shown,current,runtime);
+                  openTargetDetail(route,event.currentTarget);
+                }}>{body}</button>
+                :<span className="targetMainSearchRowContent">{body}</span>}
+            </li>;
+          })}
         </ul>}
       {ready.hasMore&&<button type="button" className="targetMainSearchMore"
         onClick={loadMore}>{copy.more}</button>}
