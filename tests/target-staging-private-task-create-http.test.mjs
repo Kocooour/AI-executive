@@ -331,11 +331,52 @@ test("cancel cannot disguise committed task; invalid requests stay fail-closed",
     {ok:true,taskId:cmd.taskId});
   const committed=persistence(fx,cmd.taskId);
   assert.deepEqual(await checked(await cancelOpaque(cmd,cookie),200),
-    {status:"committed"});
+    {status:"settled"});
   assert.deepEqual(persistence(fx,cmd.taskId),committed);
   assert.deepEqual(await checked(await CANCEL(request(base+"/create-cancel",
     {commandId:cmd.commandId,actor:"alice"},cookie)),400),{error:"Invalid request"});
   assert.equal((await cancelOpaque(cmd,null)).status,401);
   assert.equal((await CANCEL(request(base+"/create-cancel",
     {commandId:cmd.commandId},cookie,{origin:"https://foreign.invalid"}))).status,403);
+});
+
+test("deleted CREATE: signed actor gets terminal no-future-write proof without task data",async()=>{
+  const fx=fixture(),cookie=session(fx,"alice"),cmd=command(fx);
+  assert.deepEqual(await checked(await create(cmd,cookie),201),
+    {ok:true,taskId:cmd.taskId});
+  const {TargetStagingSessionAuthority}=await import("../lib/target-staging-session-authority.ts");
+  const authority=new TargetStagingSessionAuthority(fx.store);
+  try{
+    const write=authority.issueWritable("alice");
+    assert.ok(write);
+    const preview=authority.previewTaskTitleEdit(write.sessionToken,{taskId:cmd.taskId});
+    assert.equal(preview.ok,true);
+    assert.deepEqual(authority.deleteTask(write.sessionToken,{
+      taskId:cmd.taskId,commandId:randomUUID(),
+      expectedRevision:preview.snapshotRevision,writeAreaId:cmd.areaId,
+      restoreGeneration:cmd.restoreGeneration,
+    },true),{ok:true});
+  }finally{authority.close();}
+  const deleted=persistence(fx,cmd.taskId);
+  assert.equal(deleted.task,undefined);
+  assert.deepEqual(await checked(await recover(cmd,cookie),404),
+    {error:"Not found"},"detail-guarded status must not release deleted task");
+  assert.deepEqual(await checked(await recoverOpaque(cmd,cookie),404),
+    {error:"Not found"},"reload recovery must not reveal deleted task ID");
+  const settled=await checked(await cancelOpaque(cmd,cookie),200);
+  assert.deepEqual(settled,{status:"settled"},"immutable receipt is terminal proof");
+  assert.equal(JSON.stringify(settled).includes(cmd.taskId),false);
+  assert.deepEqual(await checked(await cancelOpaque(cmd,cookie),200),
+    {status:"settled"},"receipt-based terminal proof is idempotent");
+  assert.deepEqual(persistence(fx,cmd.taskId),deleted,
+    "settlement may not revive a task or mutate durable metadata");
+  assert.deepEqual(await checked(await create(cmd,cookie),404),
+    {error:"Not found"},"old command cannot insert after deletion");
+  assert.deepEqual(await checked(await create({...cmd,taskId:randomUUID()},cookie),409),
+    {error:"Revision conflict"},"old UUID with a different task ID conflicts");
+  const next=command(fx);
+  assert.deepEqual(await checked(await create(next,cookie),201),
+    {ok:true,taskId:next.taskId},"a new command UUID may create");
+  assert.equal((await cancelOpaque(cmd,null)).status,401,
+    "a missing authenticated session cannot query the original receipt");
 });

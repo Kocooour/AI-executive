@@ -186,7 +186,16 @@ test("revoked durable session and tombstoned IDs never create or resurrect tasks
   assert.deepEqual(f.authority.createPrivateTask(alice.sessionToken,{
     ...cmd,commandId:randomUUID(),
   }),rejected("unavailable"),"a different command cannot bypass tombstone ID lock");
-  assert.deepEqual(state(f),afterDelete);
+  assert.deepEqual(f.authority.cancelPrivateTaskCreate(
+    alice.sessionToken,cmd.commandId),{ok:true,status:"settled"},
+    "the receipt remains terminal after the task was deleted");
+  assert.deepEqual(f.authority.cancelPrivateTaskCreate(
+    alice.sessionToken,cmd.commandId),{ok:true,status:"settled"});
+  assert.deepEqual(state(f),afterDelete,
+    "terminal proof after deletion must not change task, receipt or journal");
+  const fresh=request(f.stage,f.stage.unassignedAreaId);
+  assert.deepEqual(f.authority.createPrivateTask(alice.sessionToken,fresh),{ok:true});
+  assert.ok(readTask(f.db,fresh.taskId));
 });
 
 test("canonical UUID rejects mixed-case aliases of both live and tombstoned tasks",()=>{
@@ -285,8 +294,8 @@ test("a committed task defeats later cancel; a foreign actor cannot cancel it",(
   assert.deepEqual(fx.authority.createPrivateTask(alice.sessionToken,cmd),{ok:true});
   const after=state(fx);
   assert.deepEqual(fx.authority.cancelPrivateTaskCreate(
-    alice.sessionToken,cmd.commandId),{ok:true,status:"committed"});
-  assert.deepEqual(state(fx),after,"committed task and its receipt cannot be removed");
+    alice.sessionToken,cmd.commandId),{ok:true,status:"settled"});
+  assert.deepEqual(state(fx),after,"settled proof cannot alter a task or its receipt");
   assert.deepEqual(inspectIsolatedTargetStore({stagingDirectory:fx.stage.directory}),
     {ok:true,mode:"stage",issues:[]});
 });

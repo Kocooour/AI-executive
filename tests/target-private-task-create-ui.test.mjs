@@ -305,7 +305,18 @@ test("safe cancellation accepts only the exact authenticated no-store terminal p
   ])assert.notEqual(await cancelPrivateTaskCreateCommand(cmd.commandId,signal,
     async()=>response),"cancelled","only an exact 200 with no-store releases");
   assert.equal(await cancelPrivateTaskCreateCommand(cmd.commandId,signal,
-    async()=>json({status:"committed"})),"committed");
+    async()=>json({status:"settled"})),"settled");
+  assert.equal(await cancelPrivateTaskCreateCommand(cmd.commandId,signal,
+    async()=>json({status:"committed"})),"unavailable",
+    "the task-status committed is not a terminal cancel proof");
+  for(const response of [
+    json({status:"settled",taskId:cmd.taskId}),
+    json({status:"settled"},401),json({status:"settled"},429),
+    new Response(JSON.stringify({status:"settled"}),{status:200,
+      headers:{"content-type":"application/json"}}),
+  ])assert.equal(await cancelPrivateTaskCreateCommand(cmd.commandId,signal,
+    async()=>response),"unavailable",
+    "only strict 200 no-store settled proof releases");
 });
 test("429/403 cannot clear an ambiguous CREATE; verified cancellation allows a NEW UUID",()=>withStorage(async()=>{
   const rt=runtime(),cmd=command(),signal=new AbortController().signal;
@@ -317,10 +328,10 @@ test("429/403 cannot clear an ambiguous CREATE; verified cancellation allows a N
   assert.equal(privateTaskCreateMarker(gen).kind,"blocked");
   let calls=0;
   const check=async(id)=>{calls++;assert.equal(id,cmd.commandId);
-    return calls===1?"denied":calls===2?"committed":"cancelled";};
+    return calls===1?"denied":calls===2?"unavailable":"cancelled";};
   assert.equal(await cancelTrackedPrivateTaskCreate(rt,gen,signal,check),"denied");
   assert.equal(privateTaskCreateMarker(gen).kind,"blocked");
-  assert.equal(await cancelTrackedPrivateTaskCreate(rt,gen,signal,check),"committed");
+  assert.equal(await cancelTrackedPrivateTaskCreate(rt,gen,signal,check),"unavailable");
   assert.equal(privateTaskCreateMarker(gen).kind,"blocked");
   assert.equal(await cancelTrackedPrivateTaskCreate(rt,gen,signal,check),"cancelled");
   assert.deepEqual(privateTaskCreateMarker(gen),{kind:"clear"});
@@ -350,3 +361,41 @@ test("cancellation UI keeps explicit manual action and no automatic release",()=
   assert.match(form,/phase==="cancelling"/);
   assert.match(form,/result==="cancelled"&&privateTaskCreateMarker/);
 });
+
+test("settled receipt releases without disclosing an inaccessible task ID",()=>withStorage(async()=>{
+  const rt=runtime(),cmd=command(),signal=new AbortController().signal,notices=[];
+  const unsubscribe=subscribePrivateTaskCreate(rt,gen,n=>notices.push(n));
+  assert.equal(await runPrivateTaskCreate(rt,gen,cmd,async()=>"uncertain"),"uncertain");
+  assert.equal(privateTaskCreateMarker(gen).kind,"blocked");
+  assert.equal(await checkTrackedPrivateTaskCreate(rt,gen,signal,
+    async()=>"denied"),"denied","a revoked/deleted task cannot authorize detail");
+  assert.equal(privateTaskCreateMarker(gen).kind,"blocked");
+  assert.equal(await cancelTrackedPrivateTaskCreate(rt,gen,signal,
+    async(id)=>{assert.equal(id,cmd.commandId);return "settled";}),"settled");
+  assert.deepEqual(privateTaskCreateMarker(gen),{kind:"clear"});
+  assert.equal(trackedPrivateTaskCreate(rt,gen),null);
+  assert.equal(lastConfirmedPrivateTask(rt,gen),null,
+    "terminal proof is not an authorized task detail");
+  assert.ok(notices.length>0);
+  assert.ok(notices.every(n=>n.confirmedTaskId===null));
+  assert.equal(await runPrivateTaskCreate(rt,gen,command(),async()=>"saved"),"saved");
+  unsubscribe();
+}));
+test("reload and changed actor or aborted signal cannot forge terminal settlement",()=>withStorage(async()=>{
+  const old=runtime(),cmd=command(),signal=new AbortController().signal;
+  assert.equal(await runPrivateTaskCreate(old,gen,cmd,async()=>"uncertain"),"uncertain");
+  const swapped=runtime("B".repeat(43));let called=false;
+  assert.equal(await cancelTrackedPrivateTaskCreate(swapped,"B".repeat(43),
+    signal,async()=>{called=true;return "settled";}),"unavailable");
+  assert.equal(called,false);
+  assert.equal(privateTaskCreateMarker(gen).kind,"blocked");
+  const reloaded=runtime(),abort=new AbortController();abort.abort();
+  assert.equal(await cancelTrackedPrivateTaskCreate(reloaded,gen,abort.signal,
+    async()=>{called=true;return "settled";}),"unavailable");
+  assert.equal(called,false);
+  assert.equal(privateTaskCreateMarker(gen).kind,"blocked");
+  assert.equal(await cancelTrackedPrivateTaskCreate(reloaded,gen,signal,
+    async(id)=>{assert.equal(id,cmd.commandId);return "settled";}),"settled");
+  assert.equal(privateTaskCreateMarker(gen).kind,"clear");
+  assert.equal(lastConfirmedPrivateTask(reloaded,gen),null);
+}));
