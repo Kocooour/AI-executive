@@ -240,14 +240,14 @@ test("passkey storage failures map to 503, not failed WebAuthn credentials", asy
 test("legacy serialized private response is withheld after another process commits logout", async () => {
   const token = await tokenFromLogin();
   const { NextResponse } = await import("next/server");
-  const { releaseStoreReadIfLive } = await import("../app/api/store/route.ts");
+  const { releaseOwnerRead } = await import("../lib/owner-session-read-release.ts");
   const serialized = NextResponse.json({ privateSentinel: "NEVER_RELEASE" });
   const externalLogout = spawnSync(process.execPath, [
     "--experimental-loader", "./tests/ts-loader.mjs", "--input-type=module", "-e",
     'import { revokeAllOwnerSessions } from "./lib/owner-session-revocation.ts"; revokeAllOwnerSessions();',
   ], { cwd: process.cwd(), env: process.env, encoding: "utf8" });
   assert.equal(externalLogout.status, 0, externalLogout.stderr);
-  const released = releaseStoreReadIfLive(request("/api/store", token), serialized);
+  const released = releaseOwnerRead(request("/api/store", token), serialized);
   assert.equal(released.status, 401);
   assert.equal((await released.text()).includes("NEVER_RELEASE"), false);
 });

@@ -18,11 +18,6 @@ import { AreaWriteInvalid } from "../../../lib/area-write-invariants";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-/** Release gate after sensitive response serialization (testable with cross-process revocation). */
-export function releaseStoreReadIfLive(request: Request, serialized: NextResponse): NextResponse {
-  return releaseOwnerRead(request, serialized);
-}
-
 export async function GET(request: Request) {
   if (!isAuthenticated(request)) {
     recordSecurityEvent(request, "store.read", "rejected", { reason: "unauthenticated" });
@@ -41,7 +36,7 @@ export async function GET(request: Request) {
   });
   // Final release gate. Another process may commit global logout while the
   // snapshot is being read/serialized; never release those bytes afterwards.
-  const released = releaseStoreReadIfLive(request, response);
+  const released = releaseOwnerRead(request, response);
   recordSecurityEvent(request, "store.read", released === response ? "allowed" : "rejected",
     released === response ? {} : { reason: "revoked-before-release" });
   return released;
