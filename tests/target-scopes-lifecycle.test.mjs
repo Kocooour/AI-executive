@@ -224,7 +224,8 @@ test("wiring: flags off -> legacy tree, lazy chunks only, no eager import, no re
   assert.match(helper,/input\.scopesOn&&input\.view==="Notes"&&input\.notesList\?"note":null/);
   assert.match(root_,/\{scopeSwitcher && <TargetScopeSwitcher language=\{language\} variant=/);
   // Legacy lists stay the fallback for every other case.
-  assert.match(root_,/: <EntityList app=\{app\} \/>/);
+  assert.match(root_,/: legacySearchSurfaces\.entityList\s*\? <EntityList app=\{app\} \/>/);
+  assert.match(root_,/\{legacySearchSurfaces\.heldBack && <HeldBack app=\{app\} \/>\}/);
   const page=read("app/page.tsx");
   assert.match(page,/targetScopes=\{config\?\.scopes\}/);
   assert.match(page,/: <LumiAppRoot \/>/);
@@ -371,7 +372,10 @@ test("wiring: lists keyed by kind in the root; legacy unresolved-link notice sup
   assert.match(root_,/<TargetScopeLists key=\{scopeList==="note"\?scopeList\+":"\+noteListRevision:scopeList\} kind=\{scopeList\}/);
   assert.match(root_,/setNoteListRevision\(v=>v\+1\)/);
   assert.match(root_,/app\.navigationUnavailable && !scopeList &&/);
-  assert.match(root_,/variant=\{scopeList === null \? "plan" : "lists"\}/);
+  // In Search, the global switcher uses the same list scope semantics; only
+  // an active target My Plan gets the plan variant.
+  assert.match(root_,/variant=\{targetPlan \? "plan" : "lists"\}/);
+  assert.match(root_,/scopeList !== null \|\| \(scopesOn && \(targetPlan \|\| \(targetSearch && view==="Search"\)\)\)/);
   const lists=read("app/ui/target-scope-lists.tsx");
   assert.match(lists,/state\.rowKind===kind&&state\.page\.scope===scope/);
   // Phone start ignores the scope key.

@@ -2,8 +2,9 @@
 import type { LumiApp } from "../use-lumi-app";
 import { mobileDesignV1Preview } from "../navigation";
 import { WorkspaceTile, workspaceTone } from "../workspace-appearance";
+import {TARGET_MAIN_SEARCH_SUBMIT_EVENT} from "../../../lib/target-main-title-search-ui";
 
-export function Topbar({ app }: { app: LumiApp }) {
+export function Topbar({ app, targetSearch = false }: { app: LumiApp; targetSearch?: boolean }) {
   const {
     activeWorkspaceId,
     activeWorkspaceTone,
@@ -54,6 +55,12 @@ export function Topbar({ app }: { app: LumiApp }) {
               value={query}
               onChange={(e) => setQuery(e.target.value)}
               onFocus={() => setView("Search")}
+              onKeyDown={(event) => {
+                if(targetSearch && event.key==="Enter"){
+                  event.preventDefault();
+                  window.dispatchEvent(new Event(TARGET_MAIN_SEARCH_SUBMIT_EVENT));
+                }
+              }}
               placeholder={tr("search")}
               aria-label={tr("search")}
             />

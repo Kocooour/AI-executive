@@ -113,7 +113,11 @@ test("unification: target mode shows the target project index, never the legacy 
 });
 
 test("unification: the legacy inspector is never rendered or opened in target views",()=>{
-  assert.match(rootSource,/const targetView = scopeList !== null \|\| targetPlan;/);
+  // Authorized target Search must suppress the legacy inspector in addition
+  // to the existing scoped lists and My Plan, without enabling legacy data.
+  assert.match(rootSource,/const targetView = scopeList !== null \|\| targetPlan \|\| \(targetSearch && view==="Search"\);/);
+  assert.match(rootSource,/\{view==="Search" && targetSearch\s*\? <TargetMainTitleSearch query=\{app\.query\}/);
+  assert.match(rootSource,/: <SearchResults app=\{app\} \/>\}/);
   assert.match(rootSource,/\{!\(scopesOn && targetView\) && <DetailPanel app=\{app\} \/>\}/);
   assert.match(rootSource,/const legacyInspector = Boolean\(app\.selected\) && !\(scopesOn && targetView\);/);
   assert.match(rootSource,/legacyInspector \|\| detailPanel \? " inspectorOpen" : ""/);
@@ -366,7 +370,8 @@ test("the refusal budget is shared per runtime (gate hook and My Plan)",()=>{
 test("mount rule: page.tsx wiring is checked literally, independent of targetDataNeeded",()=>{
   const page=read("app/page.tsx");
   assert.match(page,/const config = targetUiEnabled\(\) \? targetUiConfig\(process\.env\) : null;/);
-  assert.match(page,/const targetData = targetDataNeeded\(config\);/);
+  assert.match(page,/const targetSearch=Boolean\(config\)&&targetMainTitleSearchEnabled\(process\.env\);/);
+  assert.match(page,/const targetData = targetDataNeeded\(config\)\|\|targetSearch;/);
   assert.match(page,/return targetData\s*\?\s*<TargetDataProvider><LumiAppRoot\b[^\n]+\/><\/TargetDataProvider>\s*:\s*<LumiAppRoot\b[^\n]+\/>;/);
   const providerProps = page.match(/<TargetDataProvider><LumiAppRoot ([^\n]+)\/><\/TargetDataProvider>/)?.[1];
   assert.ok(providerProps,"target-data provider must wrap the authorized root");
@@ -379,6 +384,7 @@ test("mount rule: page.tsx wiring is checked literally, independent of targetDat
     "targetProjectEdit={Boolean(config?.details.project) && targetProjectTitleEditUiEnabled(process.env)}",
     "targetPrivateNoteAreas={Boolean(config?.scopes.notes)&&targetPrivateNoteAreaUiEnabled(process.env)}",
     "targetPrivateNoteCreate={Boolean(config?.scopes.notes)&&targetPrivateNoteCreateUiEnabled(process.env)}",
+    "targetSearch={targetSearch}",
     "humanWikiSourceStatusEnabled={humanWikiSourceStatusEnabled}",
   ]) assert.ok(providerProps.includes(prop),"missing expected root prop: "+prop);
   assert.match(page,/const humanWikiSourceStatusEnabled =\s*process\.env\.AI_EXECUTIVE_HUMANWIKI_SOURCE_WITNESS_UI_ENABLED === "true" &&\s*process\.env\.AI_EXECUTIVE_HUMANWIKI_SOURCE_WITNESS_STATUS_ENABLED === "true";/);

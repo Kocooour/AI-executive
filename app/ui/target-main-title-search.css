@@ -1,0 +1,46 @@
+/* R3-FE-05: in-shell title-only Search; mobile/desktop and light/dark.
+ * Target areas are text-labelled; tone is not the only access distinction. */
+.targetMainSearch {padding-bottom:24px;}
+.targetMainSearchIntro,.targetMainSearchActions p,.targetMainSearchPrivacy{
+  margin:0;color:var(--muted);line-height:1.5;font-size:.9rem;
+}
+.targetMainSearchActions{display:flex;align-items:center;flex-wrap:wrap;gap:12px;
+  justify-content:space-between;}
+.targetMainSearchActions p{flex:1 1 220px;}
+.targetMainSearchActions button,.targetMainSearchMore{
+  min-height:44px;padding:9px 17px;border-radius:10px;
+  border:1px solid var(--line);background:var(--surface);color:var(--text);
+  cursor:pointer;font:inherit;font-weight:600;
+}
+.targetMainSearchActions button:disabled{cursor:not-allowed;opacity:.55;}
+.targetMainSearchActions button:focus-visible,.targetMainSearchMore:focus-visible{
+  outline:3px solid var(--focus-ring);outline-offset:3px;
+}
+.targetMainSearchError{margin:0;padding:10px 14px;border:1px solid var(--line);
+  border-radius:10px;color:var(--text);}
+.targetMainSearchItems{list-style:none;display:grid;gap:6px;margin:0;padding:0;}
+.targetMainSearchItem{display:flex;gap:12px;align-items:center;min-height:56px;
+  padding:10px 14px;border-radius:13px;
+  background:var(--surface-subtle);color:var(--text);}
+.targetMainSearchItem[data-area-kind="private"]{
+  border-inline-start:3px solid #15803d;}
+.targetMainSearchItem[data-area-kind="shared"]{
+  border-inline-start:3px solid #2563eb;}
+.targetMainSearchGlyph{display:block;flex:none;width:17px;height:17px;border:2px solid currentColor;}
+.targetMainSearchItem[data-kind="project"] .targetMainSearchGlyph{border-radius:50%;}
+.targetMainSearchItem[data-kind="note"] .targetMainSearchGlyph{
+  border-radius:3px;border-top-width:5px;}
+.targetMainSearchText{min-width:0;display:grid;gap:3px;}
+.targetMainSearchText strong{overflow-wrap:anywhere;font-size:.95rem;}
+.targetMainSearchText small{font-size:.82rem;color:var(--muted);}
+.targetMainSearchMore{margin-top:12px;}
+.targetMainSearchPrivacy{margin-top:16px;}
+@media(max-width:700px){
+  .targetMainSearchActions{display:grid;gap:8px;}
+  .targetMainSearchActions p{flex:auto;}
+  .targetMainSearchActions button,.targetMainSearchMore{width:100%;}
+}
+:root[data-theme="dark"] .targetMainSearchItem[data-area-kind="private"]{
+  border-inline-start-color:#4ade80;}
+:root[data-theme="dark"] .targetMainSearchItem[data-area-kind="shared"]{
+  border-inline-start-color:#60a5fa;}

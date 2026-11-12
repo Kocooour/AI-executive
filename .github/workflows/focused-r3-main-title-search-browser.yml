@@ -1,0 +1,65 @@
+name: Focused R3 main title Search browser
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/focused-r3-main-title-search-browser.yml'
+      - 'e2e/target-main-title-search.spec.ts'
+      - 'playwright.config.ts'
+      - 'app/page.tsx'
+      - 'app/ui/lumi-app-root.tsx'
+      - 'app/ui/target-main-title-search.tsx'
+      - 'app/ui/target-main-title-search.css'
+      - 'app/ui/views/topbar.tsx'
+      - 'lib/target-main-title-search-ui.ts'
+      - 'lib/target-client-runtime.ts'
+      - 'lib/target-staging-title-search-client.ts'
+      - 'lib/target-staging-title-search-session.ts'
+      - 'tests/target-main-title-search-ui.test.mjs'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  main-title-search:
+    name: Main Search ${{ matrix.mode }} (Chromium, 390/1280px)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        mode: [on, off]
+    env:
+      LUMI_TARGET_MAIN_SEARCH_E2E: 'true'
+      LUMI_TARGET_MAIN_SEARCH_MODE: ${{ matrix.mode }}
+      NEXT_PUBLIC_LUMI_DESIGN_V1_PREVIEW: '1'
+      E2E_SKIP_BUILD: '1'
+    steps:
+      - name: Checkout isolated PR code
+        uses: actions/checkout@v5
+      - name: Install pnpm
+        uses: pnpm/action-setup@v5
+        with:
+          version: 10.20.0
+      - name: Set up Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: Install locked dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Build isolated Next.js test server
+        run: pnpm build
+      - name: Install targeted Chromium
+        run: pnpm exec playwright install --with-deps chromium
+      - name: Run ONLY main title Search browser acceptance
+        run: pnpm exec playwright test e2e/target-main-title-search.spec.ts --project=desktop
+      - name: Upload failure traces
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: main-title-search-${{ matrix.mode }}-traces
+          path: test-results/
+          if-no-files-found: ignore
+          retention-days: 5
