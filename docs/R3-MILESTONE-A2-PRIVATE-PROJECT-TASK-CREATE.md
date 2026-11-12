@@ -1,6 +1,6 @@
 # R3 milestone A (2/3) — owner-private project and project task create
 
-This is the **backend half** of milestone A package 2. It is isolated target-staging only, synthetic acceptance, **default off** and has no UI. It builds on #390/#393 and is stacked on #401.
+This is the **backend half** of milestone A package 2. It is isolated target-staging only, synthetic acceptance, **default off** and has no UI. It builds on #390/#393 and #401, which have been integrated into `main`.
 
 ## Commands
 
