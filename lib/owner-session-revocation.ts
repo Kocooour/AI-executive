@@ -73,6 +73,7 @@ function cutoff(db: DatabaseSync): number {
 
 function inTransaction<T>(readOnly: boolean, body: (db: DatabaseSync) => T): T {
   const db = openExisting(readOnly);
+  const expectedIdentity = fileIdentity(statePath());
   let active = false;
   try {
     db.exec(readOnly ? "BEGIN" : "BEGIN IMMEDIATE");
@@ -81,7 +82,8 @@ function inTransaction<T>(readOnly: boolean, body: (db: DatabaseSync) => T): T {
     // A file swap during the transaction never authenticates an old handle.
     const check = fileIdentity(statePath());
     const opened = db.prepare("PRAGMA database_list").get() as { file?: string } | undefined;
-    if (!opened || opened.file !== statePath() || !Number.isInteger(check.ino)) {
+    if (!opened || opened.file !== statePath() ||
+        check.dev !== expectedIdentity.dev || check.ino !== expectedIdentity.ino) {
       throw new OwnerSessionStateUnavailable();
     }
     db.exec("COMMIT");
