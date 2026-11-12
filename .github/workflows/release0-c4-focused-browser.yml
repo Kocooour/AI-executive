@@ -7,6 +7,8 @@ on:
     paths:
       - ".github/workflows/release0-c4-focused-browser.yml"
       - "app/ui/use-lumi-app.tsx"
+      - "app/ui/views/defer-popover.tsx"
+      - "tests/target-details-wiring.test.mjs"
       - "e2e/record-links-ui01.spec.ts"
       - "e2e/attention-open.spec.ts"
       - "e2e/project-page.spec.ts"
@@ -22,7 +24,7 @@ concurrency:
 
 jobs:
   focused-browser:
-    name: C4 six focused cases (Chromium)
+    name: C4 seven focused cases (Chromium)
     runs-on: ubuntu-24.04
     timeout-minutes: 25
     env:
@@ -48,7 +50,7 @@ jobs:
         run: pnpm build
       - name: Install focused Chromium
         run: pnpm exec playwright install --with-deps chromium
-      - name: Six focused failing or locally reported cases only
+      - name: Seven focused failing or locally reported cases only
         shell: bash
         run: |
           pnpm exec playwright test \
