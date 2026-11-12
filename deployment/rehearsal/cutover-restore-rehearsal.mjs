@@ -58,13 +58,18 @@ function safePaths(sources, output) {
   }
   // The environment cannot establish that a copy is truly offline, but can reject
   // known live locations. An operator must attest the copy is quiesced before use.
-  for (const name of ["AI_EXECUTIVE_DATA_DIR", "AI_EXECUTIVE_TARGET_STAGING_DIRECTORY"]) {
-    const configured = process.env[name];
-    if (!configured || !existsSync(configured)) continue;
-    const live = realpathSync(configured);
+  const liveCandidates = [
+    path.resolve(process.cwd(), ".data"), // implicit app default when env is unset
+    process.env.AI_EXECUTIVE_DATA_DIR,
+    process.env.AI_EXECUTIVE_TARGET_STAGING_DIRECTORY,
+  ];
+  for (const configured of liveCandidates) {
+    if (!configured) continue;
+    if (!path.isAbsolute(configured)) throw Error("live directory config must be absolute");
+    const live = existsSync(configured) ? realpathSync(configured) : path.resolve(configured);
     if (resolved.some(src => within(src, live) || within(live, src)) ||
         within(dst, live) || within(live, dst))
-      throw Error("configured live data location refused");
+      throw Error("known live data location refused");
   }
   return { resolved, dst };
 }
@@ -207,12 +212,15 @@ function checkTarget(targetDir, inspectionRoot, tag) {
 }
 function parseArgs() {
   const args = process.argv.slice(2);
+  // Require affirmative operator knowledge of the input's offline/quiesced
+  // capture. The flag alone does not constitute proof of snapshot consistency.
+  if (args.pop() !== "--offline-confirmed") throw Error("offline source confirmation required");
   if (args[0] === "--verify") {
-    if (args.length !== 4) throw Error("usage: --verify <offline-expected-dir> <offline-candidate-dir> <new-output-dir>");
+    if (args.length !== 4) throw Error("usage: --verify <offline-expected-dir> <offline-candidate-dir> <new-output-dir> --offline-confirmed");
     return { verify: true, sourceArgs: [args[1], args[2]], out: args[3], targetIndex: null, configIndex: null };
   }
   if (args.length < 2 || (args.length - 2) % 2 !== 0)
-    throw Error("usage: <offline-legacy> <new-output> [--target-offline <dir>] [--config-offline <dir>]");
+    throw Error("usage: <offline-legacy> <new-output> [--target-offline <dir>] [--config-offline <dir>] --offline-confirmed");
   const sourceArgs = [args[0]], selected = {};
   for (let i = 2; i < args.length; i += 2) {
     const kind = args[i] === "--target-offline" ? "target" : args[i] === "--config-offline" ? "config" : null;
