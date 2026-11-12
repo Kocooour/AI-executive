@@ -3,6 +3,7 @@
 // or in `developerOnly` (requests the app itself never makes, configuration errors); a test checks
 // that, so a new server message has to be classified.
 export const serverErrorKeys: Record<string, string> = {
+  "Logout unavailable": "serverError_logoutUnavailable",
   "Calendar URL must use HTTPS": "serverError_calendarUrlMustUseHttps",
   "Calendar URL must use public HTTPS on port 443": "serverError_calendarUrlMustUsePublicHttpsOnPort",
   "Calendar contains too many components": "serverError_calendarContainsTooManyComponents",
