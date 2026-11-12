@@ -24,21 +24,21 @@ test("a task whose planned day has passed is shown as needing attention", async 
   let id = "";
   await expect.poll(async () => (id = (await serverEntities(page)).find((entity) => entity.title === title)?.id || ""), { timeout: 20_000 }).not.toBe("");
   try {
-  await page.goto(`/?task=${id}`);
-  await waitUntilSynced(page);
-  const yesterday = await pragueDate(page, -1);
-  await page.locator(".detail input[type=date][aria-label='Kdy']").fill(yesterday);
-  await expectOnServer(page, (entity) => entity.id === id && entity.properties?.when === yesterday, true);
-  const item = await attentionItem(page, title);
-  await expect(item).toContainText("Naplánovaný den včera uplynul a úkol není hotový");
-  await expect(item.getByRole("button", { name: /^Proč\?:/ })).toBeVisible();
-  // Planned for tomorrow, it no longer needs attention.
-  await page.goto(`/?task=${id}`);
-  await waitUntilSynced(page);
-  const tomorrow = await pragueDate(page, 1);
-  await page.locator(".detail input[type=date][aria-label='Kdy']").fill(tomorrow);
-  await expectOnServer(page, (entity) => entity.id === id && entity.properties?.when === tomorrow, true);
-  await expect(await attentionItem(page, title)).toHaveCount(0);
+    await page.goto(`/?task=${id}`);
+    await waitUntilSynced(page);
+    const yesterday = await pragueDate(page, -1);
+    await page.locator(".detail input[type=date][aria-label='Kdy']").fill(yesterday);
+    await expectOnServer(page, (entity) => entity.id === id && entity.properties?.when === yesterday, true);
+    const item = await attentionItem(page, title);
+    await expect(item).toContainText("Naplánovaný den včera uplynul a úkol není hotový");
+    await expect(item.getByRole("button", { name: /^Proč\?:/ })).toBeVisible();
+    // Planned for tomorrow, it no longer needs attention.
+    await page.goto(`/?task=${id}`);
+    await waitUntilSynced(page);
+    const tomorrow = await pragueDate(page, 1);
+    await page.locator(".detail input[type=date][aria-label='Kdy']").fill(tomorrow);
+    await expectOnServer(page, (entity) => entity.id === id && entity.properties?.when === tomorrow, true);
+    await expect(await attentionItem(page, title)).toHaveCount(0);
   } finally {
     await removeTasks(page, [id]);
   }
@@ -55,56 +55,56 @@ test("a synced task edit disables stale quick actions while Attention refresh is
   let taskId = "";
   await expect.poll(async () => (taskId = (await serverEntities(page)).find((entity) => entity.title === title)?.id || ""), { timeout: 20_000 }).not.toBe("");
   try {
-  await page.goto(`/?task=${taskId}`);
-  await waitUntilSynced(page);
-  const yesterday = await pragueDate(page, -1);
-  await page.locator(".detail input[type=date][aria-label='Kdy']").fill(yesterday);
-  await expectOnServer(page, (entity) => entity.id === taskId && entity.properties?.when === yesterday, true);
-  const item = await attentionItem(page, title);
-  await expect(item.locator(".deferChip")).toBeVisible();
+    await page.goto(`/?task=${taskId}`);
+    await waitUntilSynced(page);
+    const yesterday = await pragueDate(page, -1);
+    await page.locator(".detail input[type=date][aria-label='Kdy']").fill(yesterday);
+    await expectOnServer(page, (entity) => entity.id === taskId && entity.properties?.when === yesterday, true);
+    const item = await attentionItem(page, title);
+    await expect(item.locator(".deferChip")).toBeVisible();
 
-  let release = () => {};
-  const held = new Promise<void>((resolve) => { release = resolve; });
-  let intercepted = 0;
-  await page.route("**/api/attention?**", async (route) => {
-    intercepted++;
-    await held;
-    // A superseded GET can be cancelled by the app while deliberately held.
-    // That is not a route-handler failure; unexpected errors must still fail.
+    let release = () => {};
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    let intercepted = 0;
+    await page.route("**/api/attention?**", async (route) => {
+      intercepted++;
+      await held;
+      // A superseded GET can be cancelled by the app while deliberately held.
+      // That is not a route-handler failure; unexpected errors must still fail.
+      try {
+        await route.continue();
+      } catch (error) {
+        if (!(error instanceof Error) || !/Route is already handled|Target .*closed/i.test(error.message)) throw error;
+      }
+    });
     try {
-      await route.continue();
-    } catch (error) {
-      if (!(error instanceof Error) || !/Route is already handled|Target .*closed/i.test(error.message)) throw error;
+      await item.locator(".attentionTitleButton").click();
+      await expect(page.locator(".detail input[type=date][aria-label='Kdy']")).toBeVisible();
+      const tomorrow = await pragueDate(page, 1);
+      await page.locator(".detail input[type=date][aria-label='Kdy']").fill(tomorrow);
+      await expectOnServer(page, (entity) => entity.id === taskId && entity.properties?.when === tomorrow, true);
+      await expect.poll(() => page.evaluate(() => [localStorage.getItem("ai-executive-server-synced"), localStorage.getItem("ai-executive-pending-sync")]), { timeout: 20_000 }).toEqual(["1", null]);
+      await page.getByRole("button", { name: "Zavřít", exact: true }).click();
+      const refresh = page.getByRole("button", { name: "Obnovit" }).first();
+      await expect(refresh).toBeEnabled(); // Sync is green, even though the Attention GET is held.
+      await refresh.click();
+      await expect.poll(() => intercepted).toBeGreaterThan(0);
+      await expect(item.locator(".attentionRowStale")).toContainText("Neaktuální");
+      await expect(item.locator(".deferChip")).toHaveCount(0);
+      await expect(item.getByRole("button", { name: `Otevřít: ${title}` })).toBeVisible();
+      await item.getByRole("button", { name: `Proč?: ${title}` }).click();
+      await expect(item.locator(".attentionExplanationChanged")).toContainText("od vyhodnocení změnil");
+      await expect(page.locator(".deferPopover")).toHaveCount(0);
+    } finally {
+      release();
+      // Wait for a held handler before closing its route: otherwise a late
+      // route.continue() can report "Route is already handled" during teardown.
+      await page.unrouteAll({ behavior: "ignoreErrors" });
     }
-  });
-  try {
-    await item.locator(".attentionTitleButton").click();
-    await expect(page.locator(".detail input[type=date][aria-label='Kdy']")).toBeVisible();
-    const tomorrow = await pragueDate(page, 1);
-    await page.locator(".detail input[type=date][aria-label='Kdy']").fill(tomorrow);
-    await expectOnServer(page, (entity) => entity.id === taskId && entity.properties?.when === tomorrow, true);
-    await expect.poll(() => page.evaluate(() => [localStorage.getItem("ai-executive-server-synced"), localStorage.getItem("ai-executive-pending-sync")]), { timeout: 20_000 }).toEqual(["1", null]);
-    await page.getByRole("button", { name: "Zavřít", exact: true }).click();
-    const refresh = page.getByRole("button", { name: "Obnovit" }).first();
-    await expect(refresh).toBeEnabled(); // Sync is green, even though the Attention GET is held.
-    await refresh.click();
-    await expect.poll(() => intercepted).toBeGreaterThan(0);
-    await expect(item.locator(".attentionRowStale")).toContainText("Neaktuální");
-    await expect(item.locator(".deferChip")).toHaveCount(0);
-    await expect(item.getByRole("button", { name: `Otevřít: ${title}` })).toBeVisible();
-    await item.getByRole("button", { name: `Proč?: ${title}` }).click();
-    await expect(item.locator(".attentionExplanationChanged")).toContainText("od vyhodnocení změnil");
-    await expect(page.locator(".deferPopover")).toHaveCount(0);
-  } finally {
-    release();
-    // Wait for a held handler before closing its route: otherwise a late
-    // route.continue() can report "Route is already handled" during teardown.
-    await page.unrouteAll({ behavior: "ignoreErrors" });
-  }
-  // The delayed old request is not itself proof of a fresh evaluation.
-  // Force an unblocked GET before asserting that yesterday's item is gone.
-  await page.getByRole("button", { name: "Obnovit" }).first().click();
-  await expect(item).toHaveCount(0);
+    // The delayed old request is not itself proof of a fresh evaluation.
+    // Force an unblocked GET before asserting that yesterday's item is gone.
+    await page.getByRole("button", { name: "Obnovit" }).first().click();
+    await expect(item).toHaveCount(0);
   } finally {
     await removeTasks(page, [taskId]);
   }
