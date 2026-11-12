@@ -309,14 +309,15 @@ test("safe cancellation accepts only the exact authenticated no-store terminal p
   assert.equal(await cancelPrivateTaskCreateCommand(cmd.commandId,signal,
     async()=>json({status:"committed"})),"unavailable",
     "the task-status committed is not a terminal cancel proof");
-  for(const response of [
-    json({status:"settled",taskId:cmd.taskId}),
-    json({status:"settled"},401),json({status:"settled"},429),
-    new Response(JSON.stringify({status:"settled"}),{status:200,
-      headers:{"content-type":"application/json"}}),
+  for(const [response,expected] of [
+    [json({status:"settled",taskId:cmd.taskId}),"unavailable"],
+    [json({status:"settled"},401),"denied"],
+    [json({status:"settled"},429),"unavailable"],
+    [new Response(JSON.stringify({status:"settled"}),{status:200,
+      headers:{"content-type":"application/json"}}),"unavailable"],
   ])assert.equal(await cancelPrivateTaskCreateCommand(cmd.commandId,signal,
-    async()=>response),"unavailable",
-    "only strict 200 no-store settled proof releases");
+    async()=>response),expected,
+    "only exact 200 no-store settled proof releases, 401 stays denied");
 });
 test("429/403 cannot clear an ambiguous CREATE; verified cancellation allows a NEW UUID",()=>withStorage(async()=>{
   const rt=runtime(),cmd=command(),signal=new AbortController().signal;
@@ -359,7 +360,8 @@ test("cancellation UI keeps explicit manual action and no automatic release",()=
   assert.match(form,/data-testid="target-private-task-cancel"/);
   assert.match(form,/cancelTrackedPrivateTaskCreate\(/);
   assert.match(form,/phase==="cancelling"/);
-  assert.match(form,/result==="cancelled"&&privateTaskCreateMarker/);
+  assert.match(form,/result==="cancelled"\|\|result==="settled"/);
+  assert.match(form,/privateTaskCreateMarker\(generation\)\.kind==="clear"/);
 });
 
 test("settled receipt releases without disclosing an inaccessible task ID",()=>withStorage(async()=>{
