@@ -84,9 +84,17 @@ Dnes, Attention, push/notifikace, HumanWiki, produkční zapnutí.
    `isTargetReadRequest` nově počítá i `create-preview`, `create-recovery`,
    `create-status`. Hlídá to krok 1b scénáře (klik na **+** bez čekání na obou
    šířkách), `peakReads ≤ 2` a `tests/target-app-fetch.test.mjs`.
-3. **Výsledky hledání nejsou otevíratelné** (`app/ui/target-main-title-search.tsx`,
-   řádky `<li>` jsou jen text), takže znovu otevřený, ale neplánovaný úkol
-   není z UI dosažitelný jinak než přes jeho projekt.
+3. **Výsledky hledání — opraveno v pracovním proudu C6 / issue #407.**
+   Při zapnutém odpovídajícím detailu je výsledek přístupné tlačítko,
+   které otevře existující serverem autorizovaný detail úkolu, projektu či
+   poznámky. Neplatné ID a vypnuté druhy detailu zůstávají textem. Po zavření
+   se fokus vrací na původní řádek pomocí jednorázového výsledku v paměti,
+   který se při změně oprávnění, identity, dotazu, rozsahu, skrytí či odpojení
+   zahodí. Krytí: `tests/target-main-title-search-ui.test.mjs`,
+   `e2e/target-main-title-search.spec.ts` (vypnuté příznaky),
+   `e2e/target-personal-search-open.spec.ts` (real-store opt-in). Poslední
+   prohlížečový test čeká na zařazení do `playwright.config.ts` vlastníkem
+   integračního milníku; do té doby **nelze tvrdit, že akceptace prošla**.
 4. **Nově zachycený úkol bez „Kdy“ není v Mém plánu vidět.** Po zavření potvrzení
    („Zobrazit úkol“) se k němu z hlavního UI nelze dostat: Můj plán ukazuje jen
    naplánované dny, seznam úkolů cílový režim nemá a výsledky hledání nejsou
