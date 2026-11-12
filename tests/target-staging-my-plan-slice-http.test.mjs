@@ -1007,3 +1007,88 @@ test("calendar rollover is local-day based across year end and leap day",async()
   assert.ok(ids(month.today).includes("b-leap"));
   assert.deepEqual(ids(month.tomorrow),[]);
 });
+
+
+test("R3-A3 undated HTTP section is private-only, paginated and actor-bound",async()=>{
+  const f=fixture(),bob=login(f,"bob"),carol=login(f,"carol");
+  const put=f.db.prepare(
+    "INSERT INTO tasks(id,area_id,title,assignee_user_id,due_on) VALUES (?,?,?,?,?)");
+  put.run("b-undated","bob-private","Bob unscheduled",null,null);
+  put.run("b-undated2","bob-private","Bob unscheduled 2",null,null);
+  put.run("c-undated","carol-private","Carol unscheduled",null,null);
+  put.run("s-undated","family-area","Shared unscheduled","bob",null);
+  put.run("b-finished","bob-private","Finished unscheduled",null,null);
+  f.db.prepare("UPDATE tasks SET status='completed',completed_at_ms=1793800000000 WHERE id='b-finished'").run();
+  f.db.prepare("INSERT INTO projects(id,area_id,title) VALUES ('bob-project','bob-private','Private project')").run();
+  f.db.prepare("INSERT INTO tasks(id,project_id,title) VALUES ('b-project-undated','bob-project','Project child')").run();
+  const page=await ok(get(query(),bob));
+  assert.deepEqual(ids(page.undated),["b-project-undated","b-undated","b-undated2"]);
+  assert.ok(page.undated.tasks.every(t=>t.areaKind==="private"&&
+    t.attentionOn===null&&t.whenOn===null&&t.dueOn===null));
+  assert.equal(unique(page),true);
+  assert.deepEqual(ids((await ok(get(query({areaFilter:"shared"}),bob))).undated),[]);
+  assert.deepEqual(ids((await ok(get(query(),carol))).undated),["c-undated"]);
+  const first=await ok(get(query({limit:"1"}),bob));
+  assert.deepEqual(ids(first.undated),["b-project-undated"]);
+  assert.equal(first.undated.hasMore,true);
+  const second=await ok(get(query({limit:"1",cursor:first.nextCursor}),bob));
+  assert.deepEqual(ids(second.undated),["b-undated"]);
+  const oldCursor=first.nextCursor;
+  f.db.prepare("INSERT INTO personal_task_plans(user_id,task_id,when_on) VALUES ('bob','b-undated','2026-11-04')").run();
+  assert.equal((await get(query({limit:"1",cursor:oldCursor}),bob)).status,409);
+  assert.deepEqual(ids((await ok(get(query(),bob))).undated),
+    ["b-project-undated","b-undated2"]);
+  assert.ok(!JSON.stringify(await ok(get(query(),bob))).includes("Carol unscheduled"));
+  assert.equal(durable.revokeAllDurableTargetStagingSessionsForUser(f.store,"bob").ok,true);
+  assert.notEqual((await get(query(),bob)).status,200);
+});
+
+test("R3-A3 Undo restores When atomically, rejects stale and revoked completions",async()=>{
+  const f=fixture(),bob=login(f,"bob");
+  f.db.prepare("INSERT INTO tasks(id,area_id,title) VALUES ('restore-undated','bob-private','Restore day')").run();
+  assert.ok(ids((await ok(get(query(),bob))).undated).includes("restore-undated"));
+  const whenCAS=await writePreview(whenGET,whenURL,"restore-undated",bob);
+  const schedule={...whenCAS,taskId:"restore-undated",whenOn:"2026-11-04",
+    commandId:randomUUID()};
+  delete schedule.whenOn; // preview's old value is not part of the command contract
+  schedule.whenOn="2026-11-04";
+  await accepted(whenPATCH,whenURL,schedule,bob,{ok:true});
+  assert.ok(ids((await ok(get(query(),bob))).today).includes("restore-undated"));
+  const originalCAS=await writePreview(statusGET,statusURL,"restore-undated",bob);
+  const complete={...originalCAS,taskId:"restore-undated",status:"completed",
+    previousWhenOn:"2026-11-04",commandId:randomUUID()};
+  await accepted(statusPATCH,statusURL,complete,bob,{ok:true});
+  await accepted(statusReceiptPOST,statusURL+"/receipt",complete,bob,{status:"committed"});
+  assert.equal(f.db.prepare("SELECT COUNT(*) AS n FROM personal_task_plans WHERE task_id='restore-undated'").get().n,0);
+  const freshCAS=await writePreview(statusGET,statusURL,"restore-undated",bob);
+  const undo={...freshCAS,taskId:"restore-undated",status:"open",
+    undoOf:complete,commandId:randomUUID()};
+  await accepted(statusPATCH,statusURL,undo,bob,{ok:true});
+  await accepted(statusReceiptPOST,statusURL+"/receipt",undo,bob,{status:"committed"});
+  assert.equal(f.db.prepare("SELECT when_on AS day FROM personal_task_plans WHERE task_id='restore-undated'").get().day,"2026-11-04");
+  assert.ok(ids((await ok(get(query(),bob))).today).includes("restore-undated"));
+  assert.equal((await writeCommand(statusPATCH,statusURL,{
+    ...undo,commandId:randomUUID(),
+  },bob)).status,409,"old completion cannot be undone twice");
+  const {inspectIsolatedTargetStore}=await import("../lib/target-store-preflight.ts");
+  assert.deepEqual(inspectIsolatedTargetStore({
+    stagingDirectory:f.stage.directory,expectedRestoreGeneration:f.stage.restoreGeneration,
+    mode:"r2-model",
+  }),{ok:true,mode:"r2-model",issues:[]});
+
+  // An actual shared assignment can be revoked between completion and Undo.
+  const privateWhen=await writePreview(whenGET,whenURL,"s-bob",bob);
+  const mark={...privateWhen,taskId:"s-bob",whenOn:"2026-11-04",
+    commandId:randomUUID()};
+  await accepted(whenPATCH,whenURL,mark,bob,{ok:true});
+  const sharedComplete={...await writePreview(statusGET,statusURL,"s-bob",bob),
+    taskId:"s-bob",status:"completed",previousWhenOn:"2026-11-04",
+    commandId:randomUUID()};
+  await accepted(statusPATCH,statusURL,sharedComplete,bob,{ok:true});
+  const sharedUndo={...await writePreview(statusGET,statusURL,"s-bob",bob),
+    taskId:"s-bob",status:"open",undoOf:sharedComplete,commandId:randomUUID()};
+  f.db.prepare("DELETE FROM area_members WHERE area_id='family-area' AND user_id='bob'").run();
+  assert.notEqual((await writeCommand(statusPATCH,statusURL,sharedUndo,bob)).status,200);
+  assert.equal(f.db.prepare("SELECT status FROM tasks WHERE id='s-bob'").get().status,"completed");
+  assert.equal(f.db.prepare("SELECT COUNT(*) AS n FROM personal_task_plans WHERE task_id='s-bob'").get().n,0);
+});
