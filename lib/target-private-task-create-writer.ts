@@ -20,6 +20,7 @@ import {
   TARGET_STAGING_MAX_RECEIPTS, TARGET_STAGING_AUDIT_MAX_EVENTS,
   TARGET_STAGING_PRIVATE_TASK_CREATE_RECEIPT_PREFIX,
   TARGET_STAGING_PRIVATE_TASK_CREATE_RECOVERY_PREFIX,
+  TARGET_STAGING_PRIVATE_TASK_CREATE_CANCEL_PREFIX,
 } from "./target-store-bootstrap";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -65,6 +66,9 @@ function receiptKey(actor: string, r: PrivateTaskCreateCommand): string {
 }
 function recoveryKey(actor:string,commandId:string):string{
   return TARGET_STAGING_PRIVATE_TASK_CREATE_RECOVERY_PREFIX+commandHash(actor,commandId);
+}
+function cancelKey(actor:string,commandId:string):string{
+  return TARGET_STAGING_PRIVATE_TASK_CREATE_CANCEL_PREFIX+commandHash(actor,commandId);
 }
 const HEX=/^[0-9a-f]{64}$/;
 function recoveryValue(r:PrivateTaskCreateCommand):string{
@@ -215,6 +219,10 @@ export function createPreflightedPrivateTask(
         return {ok:false,reason:"unavailable"};
       return {ok:true,replayed:true};
     }
+    // The cancel fence and CREATE serialize under the SAME BEGIN IMMEDIATE.
+    // A pending original request can never commit once its UUID is cancelled.
+    if(db.prepare("SELECT 1 FROM metadata WHERE key=?").get(cancelKey(actor,request.commandId)))
+      return {ok:false,reason:"idempotency_conflict"};
     // No task-ID reuse or overwrite, even after a tombstone. Do not disclose
     // which of an existing task or foreign tombstone caused the denial.
     const used = db.prepare(
@@ -260,4 +268,54 @@ export function createPreflightedPrivateTask(
     if (!context.commit({kind:"task_create", payload:{}})) return failed();
     return {ok:true};
   }, denied, failed);
+}
+
+/** Durable terminal no-commit proof for an uncertain CREATE. Only a signed
+ * actor plus opaque command UUID is accepted, never Area, task ID or title.
+ * It serializes with createPreflightedPrivateTask under the pinned SQLite lock.
+ */
+export type PrivateTaskCreateCancelResult =
+  |{ok:true;status:"cancelled"|"committed"}
+  |{ok:false;reason:"unauthorized"|"invalid_request"|"unavailable"|
+    "session_revoked"|"resync_required"|"write_failed"};
+export function cancelPreflightedPrivateTaskCreate(
+  store:TargetStagingReadStore,credential:TargetStagingReadCredential,
+  commandId:string,durableSessionTokenHash?:string,
+):PrivateTaskCreateCancelResult{
+  const denied=():PrivateTaskCreateCancelResult=>({ok:false,reason:"unauthorized"});
+  const failed=():PrivateTaskCreateCancelResult=>({ok:false,reason:"write_failed"});
+  if(typeof commandId!=="string"||!UUID.test(commandId))
+    return {ok:false,reason:"invalid_request"};
+  if(durableSessionTokenHash!==undefined&&
+    !isTargetStagingSessionTokenHash(durableSessionTokenHash))return denied();
+  return withPinnedTargetStagingWrite<PrivateTaskCreateCancelResult>(store,context=>{
+    const {db}=context,actor=verifiedActor(db,credential,true);
+    if(!actor)return denied();
+    const live=()=>durableSessionTokenHash===undefined||
+      lookupLiveTargetStagingSession(db,durableSessionTokenHash,Date.now())?.userId===actor;
+    if(!live())return {ok:false,reason:"session_revoked"};
+    const generation=db.prepare("SELECT value FROM metadata WHERE key='restore_generation'")
+      .get() as {value:string}|undefined;
+    if(!generation||generation.value.toLowerCase()!==store.expectedRestoreGeneration.toLowerCase())
+      return {ok:false,reason:"resync_required"};
+    const digest=commandHash(actor,commandId);
+    // A committed receipt wins: cancellation must never claim no-commit.
+    if(db.prepare("SELECT 1 FROM metadata WHERE key=?")
+      .get(PRIVATE_TASK_CREATE_RECEIPT_PREFIX+digest))
+      return {ok:true,status:"committed"};
+    const key=TARGET_STAGING_PRIVATE_TASK_CREATE_CANCEL_PREFIX+digest;
+    if(db.prepare("SELECT 1 FROM metadata WHERE key=?").get(key))
+      return {ok:true,status:"cancelled"};
+    const count=db.prepare("SELECT COUNT(*) AS n FROM metadata WHERE key LIKE ?")
+      .get(TARGET_STAGING_PRIVATE_TASK_CREATE_CANCEL_PREFIX+"%") as {n:number};
+    if(!Number.isSafeInteger(count.n)||count.n>=TARGET_STAGING_MAX_RECEIPTS)
+      return failed();
+    // A revoked Area cannot authorize a new CREATE, but its signed actor
+    // still needs to be able to cancel a pending write without Area access.
+    if(!context.stillPinned()||!context.noSidecars()||!live())return failed();
+    db.prepare("INSERT INTO metadata(key,value) VALUES (?,?)").run(key,"1");
+    if(!live()||!context.stillPinned())return {ok:false,reason:"session_revoked"};
+    return context.commit({kind:"task_create",payload:{cancel:1}})
+      ?{ok:true,status:"cancelled"}:failed();
+  },denied,failed);
 }
