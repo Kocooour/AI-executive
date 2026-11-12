@@ -1,6 +1,7 @@
 /** R3-CAPTURE-1: no-store, strict private Area chooser transport.
  * Titles/ids live in memory only and are discarded on identity changes.
  * The GET result is a UI hint, NEVER a write authorization grant. */
+import {targetAppFetch} from "./target-app-fetch";
 import {
   MAX_SCOPED_READ_AREAS, MAX_PRIVATE_NOTE_AREA_CATALOG_BYTES,
 } from "./target-staging-read-limits";
@@ -63,7 +64,7 @@ async function readBounded(response:Response,signal:AbortSignal){
   }
 }
 export async function loadPrivateNoteAreaChoices(
-  signal:AbortSignal,fetchImpl:typeof fetch=fetch,
+  signal:AbortSignal,fetchImpl:typeof fetch=targetAppFetch,
 ):Promise<PrivateNoteAreaRead>{
   if(signal.aborted)return {ok:false,reason:"aborted"};
   try{

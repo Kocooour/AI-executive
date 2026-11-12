@@ -1,6 +1,7 @@
 /** R3-slice/UI-01 and BE-14/15: read-only, browser-side staging My Plan transport.
  * The server remains the authority for identity, Area ACL, cursor and epochs.
  * No task data is cached, persisted, or projected into the legacy task store. */
+import {targetAppFetch} from "./target-app-fetch";
 export type MyPlanSliceFilter="all"|"personal"|"shared";
 export type MyPlanSliceTask={
   taskId:string;title:string;projectId:string|null;
@@ -237,7 +238,7 @@ async function readBoundedMyPlanJson(
 export async function fetchMyPlanSlice(
   params:{evaluationDate:string;areaFilter?:MyPlanSliceFilter;
     limit?:number;cursor?:string;signal?:AbortSignal},
-  fetchImpl:typeof fetch=fetch,
+  fetchImpl:typeof fetch=targetAppFetch,
 ):Promise<MyPlanReadResult> {
   const areaFilter=params.areaFilter??"all";
   const limit=params.limit??50;

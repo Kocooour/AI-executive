@@ -11,26 +11,52 @@ test.skip(process.env.LUMI_TARGET_PERSONAL_ACCEPTANCE_E2E!=="true",
 
 type Seed={areaTitle:string;projects:Record<string,{projectId:string;projectTitle:string;taskId:string;taskTitle:string}>};
 const store=JSON.parse(process.env.LUMI_E2E_TARGET_STORE||"null") as {seed:Seed}|null;
-type Calls={method:string;path:string}[]&{inFlight?:number};
+type Calls={method:string;path:string}[]&{peakReads?:number};
 const targetCalls=(page:Page)=>{
   const calls:Calls=[];
-  calls.inFlight=0;
-  const isTarget=(url:string)=>new URL(url).pathname.startsWith("/api/target-staging/");
+  calls.peakReads=0;
+  let reads=0;
+  // Reads (GET, except the in-process /session check) are served by staging read children; the server allows two at once.
+  const isRead=(method:string,pathname:string)=>method==="GET"&&pathname!=="/api/target-staging/session";
+  const target=(url:string)=>new URL(url).pathname.startsWith("/api/target-staging/");
   page.on("request",request=>{
-    if(!isTarget(request.url()))return;
-    calls.push({method:request.method(),path:new URL(request.url()).pathname});
-    calls.inFlight!++;
+    if(!target(request.url()))return;
+    const {pathname}=new URL(request.url());
+    calls.push({method:request.method(),path:pathname});
+    if(isRead(request.method(),pathname)){reads++;calls.peakReads=Math.max(calls.peakReads!,reads);}
   });
-  const done=(request:{url():string})=>{if(isTarget(request.url()))calls.inFlight!--;};
+  const done=(request:{url():string;method():string})=>{
+    if(target(request.url())&&isRead(request.method(),new URL(request.url()).pathname))reads--;
+  };
   page.on("requestfinished",done);
   page.on("requestfailed",done);
   return calls;
 };
-// The staging server runs at most two read children at once (503 beyond that; see "Nalezené mezery" in
-// docs/R3-PERSONAL-ACCEPTANCE.md). A user does not click within the first 400 ms; the journey waits for quiet.
-const quiet=(calls:Calls)=>expect.poll(()=>calls.inFlight,{timeout:15_000}).toBe(0);
 const count=(calls:Calls,method:string,pathname:RegExp)=>
   calls.filter(call=>call.method===method&&pathname.test(call.path)).length;
+const isPost=(path:string)=>(response:{url():string;request():{method():string}})=>
+  response.request().method()==="POST"&&new URL(response.url()).pathname===path;
+// Everything a page could keep on the client: web storage, cookies readable by script and the VALUES of every
+// IndexedDB object store (bounded), not just database names.
+const clientState=(page:Page)=>page.evaluate(async()=>{
+  const dump:unknown[]=[Object.entries(localStorage),Object.entries(sessionStorage),document.cookie];
+  for(const info of await indexedDB.databases()){
+    if(!info.name)continue;
+    const db=await new Promise<IDBDatabase>((resolve,reject)=>{
+      const request=indexedDB.open(info.name as string);
+      request.onsuccess=()=>resolve(request.result);request.onerror=()=>reject(request.error);
+    });
+    for(const name of Array.from(db.objectStoreNames)){
+      const rows=await new Promise<unknown[]>((resolve,reject)=>{
+        const request=db.transaction(name,"readonly").objectStore(name).getAll(undefined,500);
+        request.onsuccess=()=>resolve(request.result);request.onerror=()=>reject(request.error);
+      });
+      dump.push([info.name,name,rows]);
+    }
+    db.close();
+  }
+  return JSON.stringify(dump).slice(0,4_000_000);
+});
 
 for(const width of [390,1280]){
   test("one owner, private Areas only: the whole daily loop on the real store at "+width+"px",async({page})=>{

@@ -35,6 +35,7 @@ import {
 import {scopeFeedbackDecision} from "../../lib/target-my-plan-scope-feedback";
 import {subscribeTargetChange} from "../../lib/target-data-invalidation";
 import {myPlanCopy,type MyPlanCopy,type MyPlanLanguage} from "../../lib/target-my-plan-copy";
+import {targetAppFetch} from "../../lib/target-app-fetch";
 
 type StatusAction=
   |{kind:"idle"}
@@ -384,7 +385,7 @@ export function TargetStagingMyPlanPreview({
     let command:MyPlanStatusCommand;
     if(prior){
       const undo=await prepareConfirmedMyPlanUndo(
-        prior,fetch,op.controller.signal,
+        prior,targetAppFetch,op.controller.signal,
       );
       if(statusOperation.current!==op)return;
       if(op.privacyEpoch!==privacyEpoch.current){
@@ -441,7 +442,7 @@ export function TargetStagingMyPlanPreview({
     }
 
     op.command=command;
-    const result=await dispatchMyPlanStatus(command,fetch,op.controller.signal);
+    const result=await dispatchMyPlanStatus(command,targetAppFetch,op.controller.signal);
     if(statusOperation.current!==op)return;
     statusOperation.current=null;
     if(op.privacyEpoch!==privacyEpoch.current){
@@ -542,7 +543,7 @@ export function TargetStagingMyPlanPreview({
     let previousWhenOn:string|null;
     if(prior){
       const prepared=await prepareConfirmedWhenUndo(
-        prior,fetch,op.controller.signal);
+        prior,targetAppFetch,op.controller.signal);
       if(whenOperation.current!==op)return;
       if(op.privacyEpoch!==privacyEpoch.current){
         whenOperation.current=null;
@@ -572,7 +573,7 @@ export function TargetStagingMyPlanPreview({
       const prepared=await prepareMyPlanWhen({
         taskId:task.taskId,areaId:task.areaId,whenOn:target,
         signal:op.controller.signal,
-      },fetch);
+      },targetAppFetch);
       if(whenOperation.current!==op)return;
       if(op.privacyEpoch!==privacyEpoch.current){
         whenOperation.current=null;
@@ -602,7 +603,7 @@ export function TargetStagingMyPlanPreview({
     op.command=command;
     const context:UncertainWhen={command,previousWhenOn,undo};
     uncertainWhen.current=context; // In-memory only, before the first PATCH.
-    const result=await dispatchMyPlanWhen(command,fetch,op.controller.signal);
+    const result=await dispatchMyPlanWhen(command,targetAppFetch,op.controller.signal);
     if(whenOperation.current!==op)return;
     whenOperation.current=null;
     if(op.privacyEpoch!==privacyEpoch.current){
@@ -653,7 +654,7 @@ export function TargetStagingMyPlanPreview({
     whenOperation.current=op;
     setWhenAction({kind:"checking"});
     const receipt=await checkMyPlanWhenReceipt(
-      original.command,fetch,op.controller.signal);
+      original.command,targetAppFetch,op.controller.signal);
     if(whenOperation.current!==op)return;
     whenOperation.current=null;
     if(op.privacyEpoch!==privacyEpoch.current){
@@ -702,7 +703,7 @@ export function TargetStagingMyPlanPreview({
     };
     statusOperation.current=op;
     setAction({kind:"checking"});
-    const receipt=await checkMyPlanStatusReceipt(command,fetch,op.controller.signal);
+    const receipt=await checkMyPlanStatusReceipt(command,targetAppFetch,op.controller.signal);
     if(statusOperation.current!==op)return;
     statusOperation.current=null;
     if(op.privacyEpoch!==privacyEpoch.current){

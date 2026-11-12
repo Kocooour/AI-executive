@@ -1,5 +1,6 @@
 /** Strict same-origin/no-store private note CREATE preview/POST/receipt.
  * No automatic retry and no mutable body in persistent browser storage. */
+import {targetAppFetch} from "./target-app-fetch";
 import {validNoteEditText} from "./target-staging-note-edit-client";
 import {validNotePreviewId} from "./target-staging-note-preview-client";
 export type PrivateNoteCreateCommand={
@@ -65,7 +66,7 @@ function opts(body:unknown,signal:AbortSignal):RequestInit{
     redirect:"error",headers,body:JSON.stringify(body),signal};
 }
 export async function privateNoteCreatePreflight(
-  areaId:string,signal:AbortSignal,fetchImpl:typeof fetch=fetch,
+  areaId:string,signal:AbortSignal,fetchImpl:typeof fetch=targetAppFetch,
 ):Promise<CreatePreflight>{
   if(!validNotePreviewId(areaId)||signal.aborted)return {ok:false,reason:"unavailable"};
   try{
@@ -82,7 +83,7 @@ export async function privateNoteCreatePreflight(
   }catch{return {ok:false,reason:"unavailable"};}
 }
 export async function sendPrivateNoteCreate(
-  command:PrivateNoteCreateCommand,signal:AbortSignal,fetchImpl:typeof fetch=fetch,
+  command:PrivateNoteCreateCommand,signal:AbortSignal,fetchImpl:typeof fetch=targetAppFetch,
 ):Promise<CreateOutcome>{
   if(!validPrivateNoteCreateCommand(command)||signal.aborted)return "conflict";
   try{
@@ -103,7 +104,7 @@ export async function sendPrivateNoteCreate(
   }catch{return "uncertain";}
 }
 export async function recoverPrivateNoteCreate(
-  commandId:string,signal:AbortSignal,fetchImpl:typeof fetch=fetch,
+  commandId:string,signal:AbortSignal,fetchImpl:typeof fetch=targetAppFetch,
 ):Promise<CreateReceipt>{
   if(!uuid.test(commandId)||signal.aborted)return "unavailable";
   try{

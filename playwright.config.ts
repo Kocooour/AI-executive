@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { randomBytes, randomInt } from "node:crypto";
-import { existsSync, mkdtempSync } from "node:fs";
+import { existsSync, mkdtempSync, realpathSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { defineConfig, devices } from "@playwright/test";
@@ -14,6 +14,7 @@ export const e2ePassword = "browser-tests-only";
 
 // The runner loads this file again in every worker. Only the first load prepares the run: a
 // private directory (owner-only, unpredictable name) and credentials that exist for this run only.
+const personalOwnerUserId = "e2e-owner";
 if (!process.env.LUMI_E2E_RUN_DIR) {
   process.env.LUMI_E2E_RUN_DIR = mkdtempSync(path.join(os.tmpdir(), "lumi-e2e-"));
   process.env.LUMI_E2E_PASSWORD_HASH = execFileSync(process.execPath, [path.join(__dirname, "scripts", "hash-password.mjs")], { input: `${e2ePassword}\n` })
@@ -32,8 +33,8 @@ if (!process.env.LUMI_E2E_RUN_DIR) {
   if (process.env.LUMI_TARGET_PERSONAL_ACCEPTANCE_E2E === "true") {
     process.env.LUMI_E2E_TARGET_STORE = execFileSync(process.execPath, [
       "--experimental-loader", path.join(__dirname, "scripts", "target-staging-ts-loader.mjs"),
-      path.join(__dirname, "e2e", "target-personal-store-setup.mjs"), process.env.LUMI_E2E_RUN_DIR, "e2e-owner",
-    ], { cwd: __dirname, stdio: ["ignore", "pipe", "ignore"] }).toString().trim().split("\n").pop() || "";
+      path.join(__dirname, "e2e", "target-personal-store-setup.mjs"), process.env.LUMI_E2E_RUN_DIR, personalOwnerUserId, "1",
+    ], { cwd: __dirname, stdio: ["ignore", "pipe", "inherit"] }).toString().trim().split("\n").pop() || "";
   }
 }
 const runDir = process.env.LUMI_E2E_RUN_DIR;
@@ -72,8 +73,18 @@ const privateTaskCreateTest = process.env.LUMI_PRIVATE_TASK_CREATE_E2E === "true
 const globalCaptureTest = process.env.LUMI_TARGET_GLOBAL_CAPTURE_E2E === "true";
 // Single end-to-end acceptance: browser -> real route handlers -> real isolated target SQLite, every personal flag on.
 const personalAcceptanceTest = process.env.LUMI_TARGET_PERSONAL_ACCEPTANCE_E2E === "true";
-const personalStore = personalAcceptanceTest ? (JSON.parse(process.env.LUMI_E2E_TARGET_STORE || "null") as { directory: string; restoreGeneration: string; ownerUserId: string } | null) : null;
-if (personalAcceptanceTest && !personalStore) throw new Error("The personal acceptance target store was not created; unset LUMI_E2E_RUN_DIR and run again.");
+// Workers legitimately inherit LUMI_E2E_RUN_DIR and LUMI_E2E_TARGET_STORE from the first load; a caller-supplied pair is
+// still validated: the store must be exactly <run dir>/target-store with a UUID restore generation and the fixed owner.
+const personalStore = personalAcceptanceTest ? (() => {
+  const value = JSON.parse(process.env.LUMI_E2E_TARGET_STORE || "null") as { directory?: unknown; restoreGeneration?: unknown; ownerUserId?: unknown } | null;
+  const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+  if (!value || typeof value.directory !== "string" || typeof value.restoreGeneration !== "string" || value.ownerUserId !== personalOwnerUserId
+    || !uuid.test(value.restoreGeneration) || !existsSync(value.directory)
+    || realpathSync(value.directory) !== path.join(realpathSync(runDir), "target-store")) {
+    throw new Error("The personal acceptance target store is missing or invalid; unset LUMI_E2E_RUN_DIR and LUMI_E2E_TARGET_STORE and run again.");
+  }
+  return value as { directory: string; restoreGeneration: string; ownerUserId: string };
+})() : null;
 
 export default defineConfig({
   testDir: "e2e",
@@ -93,7 +104,9 @@ export default defineConfig({
   },
   projects: [
     { name: "setup", testMatch: /.*\.setup\.ts/ },
-    { name: "desktop", use: { ...devices["Desktop Chrome"], storageState: sessionFile }, dependencies: ["setup"] },
+    // The webServer env below is run-wide: with the personal acceptance opt-in only its own spec may run against it.
+    { name: "desktop", use: { ...devices["Desktop Chrome"], storageState: sessionFile }, dependencies: ["setup"],
+      ...(personalAcceptanceTest ? { testMatch: /target-personal-acceptance\.spec\.ts/ } : {}) },
   ],
   webServer: {
     command: `${process.env.E2E_SKIP_BUILD ? "" : "pnpm build && "}pnpm start --port ${port} --hostname 127.0.0.1`,

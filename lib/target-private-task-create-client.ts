@@ -1,6 +1,7 @@
 /** Exact-command, non-retrying private task CREATE transport.
  * The server's receipt is bound to ALL original fields, including the title.
  * A failed/aborted HTTP request after dispatch never proves non-commit. */
+import {targetAppFetch} from "./target-app-fetch";
 export type PrivateTaskCreateCommand={
   taskId:string;commandId:string;areaId:string;restoreGeneration:string;title:string;
 };
@@ -74,7 +75,7 @@ function opts(command:PrivateTaskCreateCommand,signal:AbortSignal):RequestInit{
     redirect:"error",headers:HEADERS,body:JSON.stringify(command),signal};
 }
 export async function sendPrivateTaskCreate(
-  command:PrivateTaskCreateCommand,signal:AbortSignal,fetchImpl:typeof fetch=fetch,
+  command:PrivateTaskCreateCommand,signal:AbortSignal,fetchImpl:typeof fetch=targetAppFetch,
 ):Promise<TaskCreateOutcome>{
   if(!validPrivateTaskCreateCommand(command)||signal.aborted)return "denied";
   try{
@@ -91,7 +92,7 @@ export async function sendPrivateTaskCreate(
   }catch{return "uncertain";}
 }
 export async function checkPrivateTaskCreateReceipt(
-  command:PrivateTaskCreateCommand,signal:AbortSignal,fetchImpl:typeof fetch=fetch,
+  command:PrivateTaskCreateCommand,signal:AbortSignal,fetchImpl:typeof fetch=targetAppFetch,
 ):Promise<TaskCreateReceipt>{
   if(!validPrivateTaskCreateCommand(command)||signal.aborted)return "unavailable";
   try{
@@ -109,7 +110,7 @@ export async function checkPrivateTaskCreateReceipt(
 /** Content-free title recovery after reload: the server verifies actor,
  * private Area and task before returning a navigable, opaque task ID. */
 export async function checkPrivateTaskCreateRecovery(
-  commandId:string,signal:AbortSignal,fetchImpl:typeof fetch=fetch,
+  commandId:string,signal:AbortSignal,fetchImpl:typeof fetch=targetAppFetch,
 ):Promise<TaskCreateRecoveryOutcome>{
   if(typeof commandId!=="string"||!uuid.test(commandId)||signal.aborted)
     return "unavailable";
@@ -140,7 +141,7 @@ export async function checkPrivateTaskCreateRecovery(
  * not_recorded, failed HTTP and detail-status committed never unlock. */
 export type TaskCreateCancellation="cancelled"|"settled"|"denied"|"unavailable";
 export async function cancelPrivateTaskCreateCommand(
-  commandId:string,signal:AbortSignal,fetchImpl:typeof fetch=fetch,
+  commandId:string,signal:AbortSignal,fetchImpl:typeof fetch=targetAppFetch,
 ):Promise<TaskCreateCancellation>{
   if(typeof commandId!=="string"||!uuid.test(commandId)||signal.aborted)
     return "unavailable";
