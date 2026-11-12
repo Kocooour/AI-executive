@@ -1,6 +1,26 @@
 # Lumi — aktuální roadmapa vývoje
 
-**R3-FE-6 — další UI iterace, draft 2026-11-11:** po sloučených #390 a #393 integruje [Quick Capture samostatného soukromého úkolu](R3-FE-06-PRIVATE-TASK-CAPTURE.md) do hlavního UI s výslovným výběrem Oblasti, jedním idempotentním POST a fail-closed recovery. Vypnuté ve výchozím nastavení. Actor-bound serverové recovery po reloadu je implementováno v tomto PR bez ukládání soukromého textu. Integrace s již sloučeným UI vyhledáváním #391 má cílenou společnou browser akceptaci v #396. Produkční flagy jsou nadále vypnuté; nezávislé bezpečnostní review a release E2E zůstávají branami. Třetí/poslední PR milníku. Neprobíhá R4 ani produkční cutover.
+## Cesta k prvnímu releasu — 2026-11-12
+
+**Aktualizováno 2026-11-12 podle `main` @ `c1f7862`.** Tento oddíl je platný plán; vše pod ním je historický záznam iterací. [Rozhodnutí vlastníka o rozsahu](decisions/2026-11-12-rozsah-prvniho-releasu.md): první release cílového modelu je **jeden uživatel a soukromé Oblasti**; sdílení a pozvánky jsou R5, HumanWiki H1-real je pozastaveno do [#400](https://github.com/Kocooour/AI-executive/issues/400).
+
+**Stav:** R0–R2 hotové na stagingu. R3 má sloučené čtení, detaily, úpravy, hledání i vytvoření soukromé poznámky a úkolu (#341 až #396), vše výchozím nastavením vypnuté. R4 nezahájeno. Plná Browser E2E před touto revizí naposledy prošla 2026-10-23 (SHA z PR #101).
+
+| Milník | Jeden akceptační test | Rozpočet | Stav |
+|---|---|---|---|
+| **Release 0 — `main` s vypnutými příznaky** | Plná `Browser E2E` na přesném SHA a nasazení přes `deployment/deploy-safe.sh` se zálohou a kontrolou služby | bez nového funkčního kódu; opravy jen pokud E2E selže | E2E spuštěna 2026-11-12 pro `c1f7862` ([run](https://github.com/Kocooour/AI-executive/actions/runs/43185075581)); nasazení provádí vlastník |
+| **A — denní smyčka na cílových datech** | [`e2e/target-personal-acceptance.spec.ts`](R3-PERSONAL-ACCEPTANCE.md): prohlížeč → skutečné route → skutečná izolovaná SQLite, profil `personal-v1`, 390 a 1280 px: přihlášení → Můj plán → zachycení úkolu → dokončení a Kdy → projekt → poznámka → hledání → reload → smazání → odhlášení | 1–3 PR | PR 1: profil příznaků + akceptační test. PR 2: vytvoření projektu a úkolu v projektu v soukromé Oblasti, Undo po vytvoření ([#397](https://github.com/Kocooour/AI-executive/issues/397)), skrytí starých pohledů Domů/Inbox/Dnes v cílovém režimu. PR 3: rezerva na nalezené mezery |
+| **B — R4 cutover** | Obnova z ověřené zálohy na zkušební instanci + plná `Browser E2E` na release SHA + důkaz BFCache ([#388](https://github.com/Kocooour/AI-executive/issues/388)) | 1–3 PR a provozní kroky | Nezahájeno. Vyžaduje produkční cílové úložiště (dnes jen `AI_EXECUTIVE_TARGET_STAGING_DIRECTORY`), inventuru dat/zařízení/integrací a **samostatný výslovný souhlas** s rozsahem cutoveru |
+
+**Mimo první release (zůstává vypnuto, neblokuje):** sdílené Oblasti a role, web-push, provider route AI bundle, Attention nad cílovými daty, note-sync, preview příznaky, HumanWiki.
+
+**Pravidla:** žádné další vypnuté řezy mimo tyto tři milníky; překročení rozpočtu = rozhodnutí vlastníka ([pravidla milníků](../AGENTS.md#outcome-based-milestone-governance-binding)). Zúžení rozsahu neoprávňuje k resetu dat ani k zapnutí příznaků v produkci.
+
+---
+
+## Historický záznam iterací
+
+**R3-FE-6 — sloučeno [#396](https://github.com/Kocooour/AI-executive/pull/396) 2026-11-12 (původní text z draftu 2026-11-11):** po sloučených #390 a #393 integruje [Quick Capture samostatného soukromého úkolu](R3-FE-06-PRIVATE-TASK-CAPTURE.md) do hlavního UI s výslovným výběrem Oblasti, jedním idempotentním POST a fail-closed recovery. Vypnuté ve výchozím nastavení. Actor-bound serverové recovery po reloadu je implementováno v tomto PR bez ukládání soukromého textu. Integrace s již sloučeným UI vyhledáváním #391 má cílenou společnou browser akceptaci v #396. Produkční flagy jsou nadále vypnuté; nezávislé bezpečnostní review a release E2E zůstávají branami. Třetí/poslední PR milníku. Neprobíhá R4 ani produkční cutover.
 
 **Aktualizováno 2026-11-09 podle `main` @ `33054ef`.** R2d staging dokončeno; #341/#344/#352 jsou sloučené v R3, další hlavní detaily a integrace zbývají. **H1-synthetic je uzavřeno po sloučení #355** (navázalo na #354). Zatím bez reálného importu a claims. Nový model zůstává default-off, R4 a souhlas s reálným importem nejsou splněny. [Čistý start](decisions/2026-10-26-cisty-start-d3.md) dle [LUMI-FR-013](PRODUCT.md#lumi-fr-013). Starší checkpointy níže jsou historické.
 
