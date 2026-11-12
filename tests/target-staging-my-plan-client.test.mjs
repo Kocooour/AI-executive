@@ -18,7 +18,9 @@ const page=(today,tomorrow,opts={})=>({
   evaluationDate:date,areaFilter:"all",
   today:{tasks:today,hasMore:opts.todayMore??false},
   tomorrow:{tasks:tomorrow,hasMore:opts.tomorrowMore??false},
-  hasMore:(opts.todayMore??false)||(opts.tomorrowMore??false),
+  undated:{tasks:opts.undated??[],hasMore:opts.undatedMore??false},
+  hasMore:(opts.todayMore??false)||(opts.tomorrowMore??false)||
+    (opts.undatedMore??false),
   nextCursor:opts.cursor??null,
 });
 const current=()=>page([task("old","2026-11-04")],
