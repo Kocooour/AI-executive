@@ -32,7 +32,9 @@ Object.assign(process.env,{
   AI_EXECUTIVE_TARGET_STAGING_HTTP_PROJECTS_CREATE_ENABLED:"true",
   AI_EXECUTIVE_TARGET_STAGING_HTTP_PROJECT_TASKS_CREATE_ENABLED:"true",
 });
-const {bootstrapIsolatedTargetStore}=await import("../lib/target-store-bootstrap.ts");
+const {bootstrapIsolatedTargetStore,
+  TARGET_STAGING_PRIVATE_STRUCTURE_CREATE_WITNESS_MAX_BYTES}
+  =await import("../lib/target-store-bootstrap.ts");
 const {inspectIsolatedTargetStore}=await import("../lib/target-store-preflight.ts");
 const {TARGET_STAGING_JOURNAL_FILENAME}=await import("../lib/target-staging-anchor-journal.ts");
 const {PRIVATE_STRUCTURE_CREATE_RECEIPT_PREFIX,
@@ -306,6 +308,44 @@ test("child creation accepts an existing private text-ID project with exact pare
   }finally{verify.close();}
   await checked(await ct(child(fx,id.toUpperCase())),404);
   await checked(await ct(child(fx,"unknown-private-parent")),404);
+});
+
+test("maximum-length escaped existing project IDs preserve preflight, replay and recovery",async()=>{
+  const fx=fixture();
+  // JSON.stringify expands quotes and backslashes. Both are legal 512-byte
+  // private project IDs even though their serialized witness exceeds 900 bytes.
+  const parentIds=[String.fromCharCode(92).repeat(512),String.fromCharCode(34).repeat(512)];
+  const db=new DatabaseSync(fx.stage.databasePath);
+  for(const id of parentIds){
+    db.prepare("INSERT INTO projects(id,area_id,title) VALUES(?,?,?)")
+      .run(id,fx.stage.unassignedAreaId,"Synthetic escaped private parent");
+  }
+  db.close();
+  assertValidStore(fx);
+  for(const id of parentIds){
+    const t=child(fx,id);
+    assert.deepEqual(await checked(await ct(t),201),{ok:true,id:t.taskId});
+    // A valid CREATE must not leave metadata that blocks the very next
+    // canonical preflight or read-only status and recovery.
+    assertValidStore(fx);
+    assert.deepEqual(await checked(await ct(t),200),{ok:true,id:t.taskId,replayed:true});
+    assert.deepEqual(await checked(await cts(t),200),{status:"committed",id:t.taskId});
+    assert.deepEqual(await checked(await ctr(t),200),{status:"committed",id:t.taskId});
+    const verify=new DatabaseSync(fx.stage.databasePath,{readOnly:true});
+    try{
+      const row=verify.prepare("SELECT project_id,area_id FROM tasks WHERE id=?").get(t.taskId);
+      assert.equal(row.project_id,id);
+      assert.equal(row.area_id,null);
+      const rows=verify.prepare("SELECT value FROM metadata WHERE key LIKE ?")
+        .all(PRIVATE_STRUCTURE_CREATE_RECOVERY_PREFIX+"%");
+      const witness=rows.find(r=>JSON.parse(r.value).projectId===id);
+      assert.ok(witness,"CREATE stores a recoverable witness for its exact parent ID");
+      const bytes=Buffer.byteLength(witness.value,"utf8");
+      assert.ok(bytes>900,"exercise the former broken 900-byte limit");
+      assert.ok(bytes<=TARGET_STAGING_PRIVATE_STRUCTURE_CREATE_WITNESS_MAX_BYTES);
+    }finally{verify.close();}
+  }
+  assertValidStore(fx);
 });
 
 test("canonical preflight fails closed on malformed structure recovery witnesses",async()=>{
