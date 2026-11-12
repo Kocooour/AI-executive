@@ -251,21 +251,38 @@ test("creation flags are independently default-off, recovery POSTs enter shared 
   assert.equal(state(fx).receipts,0);
 });
 test("tombstoned IDs cannot be reused even with a fresh command ID",async()=>{
-  const fx=fixture(),id=randomUUID(),taskId=randomUUID();
+  const fx=fixture(),id=randomUUID(),taskId=randomUUID(),live=randomUUID();
   const db=new DatabaseSync(fx.stage.databasePath);
   db.exec("PRAGMA foreign_keys=ON");
-  db.prepare("INSERT INTO projects(id,area_id,title) VALUES(?,?,?)")
-    .run(id,fx.stage.unassignedAreaId,"Deleted project");
-  db.prepare("DELETE FROM projects WHERE id=?").run(id);
-  const live=randomUUID();
-  db.prepare("INSERT INTO projects(id,area_id,title) VALUES(?,?,?)")
-    .run(live,fx.stage.unassignedAreaId,"Live project");
-  db.prepare("INSERT INTO tasks(id,project_id,title) VALUES(?,?,?)")
-    .run(taskId,live,"Deleted child");
-  db.prepare("DELETE FROM tasks WHERE id=?").run(taskId);
-  db.close();
+  db.exec("BEGIN IMMEDIATE");
+  try{
+    const nextSeq=()=>db.prepare("SELECT COALESCE(MAX(seq),0)+1 AS seq FROM change_log")
+      .get().seq;
+    const tombstoneProject=db.prepare(
+      "INSERT INTO project_tombstones(id,area_id,revision,change_seq,deleted_at_ms) VALUES(?,?,?,?,?)");
+    const tombstoneTask=db.prepare(
+      "INSERT INTO task_tombstones(id,area_id,revision,change_seq,deleted_at_ms) VALUES(?,?,?,?,?)");
+    db.prepare("INSERT INTO projects(id,area_id,title) VALUES(?,?,?)")
+      .run(id,fx.stage.unassignedAreaId,"Deleted project");
+    tombstoneProject.run(id,fx.stage.unassignedAreaId,1,nextSeq(),Date.now());
+    db.prepare("DELETE FROM projects WHERE id=?").run(id);
+    db.prepare("INSERT INTO projects(id,area_id,title) VALUES(?,?,?)")
+      .run(live,fx.stage.unassignedAreaId,"Live project");
+    db.prepare("INSERT INTO tasks(id,project_id,title) VALUES(?,?,?)")
+      .run(taskId,live,"Deleted child");
+    tombstoneTask.run(taskId,fx.stage.unassignedAreaId,1,nextSeq(),Date.now());
+    db.prepare("DELETE FROM tasks WHERE id=?").run(taskId);
+    db.exec("COMMIT");
+  }catch(error){
+    db.exec("ROLLBACK");
+    throw error;
+  }finally{db.close();}
+  // The fixtures must themselves pass canonical preflight. A raw DELETE without
+  // a matching next-revision tombstone fails SQLite's deletion guard.
+  assertValidStore(fx);
   await checked(await cp(project(fx,{projectId:id})),404);
   await checked(await ct(child(fx,live,{taskId})),404);
+  assertValidStore(fx);
   assert.equal(state(fx).receipts,0);
 });
 
