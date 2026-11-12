@@ -33,6 +33,7 @@ import type { TargetReadableNote } from "./target-note-access";
 import type { TargetNoteReadLiveGuard } from "./target-staging-durable-session";
 import { MAX_SCOPED_READ_AREAS, MAX_PRIVATE_NOTE_AREA_CATALOG_BYTES } from "./target-staging-read-limits";
 import { FEED_PAGE_LIMIT } from "./target-change-feed-read-model";
+import {MAX_MY_PLAN_SLICE_OUTPUT_BYTES} from "./target-my-plan-read-limits";
 import { NOTE_SYNC_CURSOR_LENGTH } from "./target-note-sync-cursor";
 import type { TargetNoteSyncPage } from "./target-note-sync-read-model";
 import type { FeedItem, TargetChangeFeedPage } from "./target-change-feed-read-model";
@@ -75,7 +76,9 @@ export function createStagingReadRunner(
       const script = path.join(cwd, "scripts", scriptName);
       // Do not weaken output limits for other staging read workers.
       const outputLimit = scriptName === "target-staging-private-note-areas-child.mjs"
-        ? MAX_PRIVATE_NOTE_AREA_CATALOG_BYTES : MAX_OUTPUT_BYTES;
+        ? MAX_PRIVATE_NOTE_AREA_CATALOG_BYTES
+        : scriptName === "target-staging-my-plan-slice-child.mjs"
+          ? MAX_MY_PLAN_SLICE_OUTPUT_BYTES : MAX_OUTPUT_BYTES;
       const environment = {
         NODE_ENV: process.env.NODE_ENV || "production",
         AI_EXECUTIVE_DATA_DIR: process.env.AI_EXECUTIVE_DATA_DIR || "",
