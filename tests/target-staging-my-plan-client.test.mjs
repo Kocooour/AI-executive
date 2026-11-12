@@ -6,6 +6,7 @@ import {
   appendMyPlanSlice,fetchMyPlanSlice,localMyPlanDate,
   parseMyPlanSlice,validMyPlanDate,
 } from "../lib/target-staging-my-plan-client.ts";
+import {MAX_MY_PLAN_SLICE_OUTPUT_BYTES} from "../lib/target-my-plan-read-limits.ts";
 
 const date="2026-11-05";
 const task=(id,on,areaKind="private")=>({
@@ -194,11 +195,13 @@ test("BE-14 bounds actual received bytes, not understated Content-Length",async(
   }));
   assert.deepEqual(result,{ok:false,reason:"invalid-response"});
   assert.equal(cancelled,true);
-  assert.ok(pulls<=12,"should not buffer unbounded response");
+  assert.ok(pulls<=Math.ceil(MAX_MY_PLAN_SLICE_OUTPUT_BYTES/(1024*1024))+2,
+    "reader must stop at the bounded limit, allowing at most one prefetched chunk");
 });
 
 test("BE-14 rejects oversized or malformed Content-Length before reading",async()=>{
-  for(const length of [String(8*1024*1024+1),"999999999999999999999",
+  for(const length of [String(MAX_MY_PLAN_SLICE_OUTPUT_BYTES+1),
+    "999999999999999999999",
     "1e7","-1","42,42","12x"]){
     let cancelled=false;
     const stream=new ReadableStream({cancel(){cancelled=true;}},{
