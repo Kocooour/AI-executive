@@ -30,10 +30,19 @@ export async function GET(request: Request) {
       headers: { "retry-after": String(limited.retryAfter) },
     });
   }
-  recordSecurityEvent(request, "store.read", "allowed");
-  return NextResponse.json(readSnapshot(), {
+  const response = NextResponse.json(readSnapshot(), {
     headers: { "cache-control": "no-store" },
   });
+  // Final release gate. Another process may commit global logout while the
+  // snapshot is being read/serialized; never release those bytes afterwards.
+  if (!isAuthenticated(request)) {
+    recordSecurityEvent(request, "store.read", "rejected", { reason: "revoked-before-release" });
+    return NextResponse.json({ error: "Authentication required" }, {
+      status: 401, headers: { "cache-control": "no-store" },
+    });
+  }
+  recordSecurityEvent(request, "store.read", "allowed");
+  return response;
 }
 
 export async function PUT(request: Request) {
