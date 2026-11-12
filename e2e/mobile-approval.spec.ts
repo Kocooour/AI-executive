@@ -179,7 +179,6 @@ test.describe("mobile proposal approval", () => {
     await page.getByRole("button", { name: "Zeptat se AI" }).click();
     // The original proposal is still readable because only capture changed.
     await expect(page.getByRole("button", { name: "Zkontrolovat návrh" })).toBeVisible();
-    await page.locator(".assistantHead").getByRole("button", { name: "Zavřít" }).click();
     await switchActiveWorkspace(otherWorkspaceId);
     await page.getByRole("button", { name: "Zeptat se AI" }).click();
     await expect(page.locator(".assistantMessages")).not.toContainText("Tajný úkol");
