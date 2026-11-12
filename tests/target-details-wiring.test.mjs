@@ -214,7 +214,8 @@ test("page: the provider mounts through the shared rule and the config reaches t
   const page=read("app/page.tsx");
   assert.match(page,/targetDataNeeded\(config\)/);
   assert.match(page,/targetDetails=\{config\?\.details\}/);
-  assert.match(page,/<LumiAppRoot \/>/);
+  // The HumanWiki owner panel is gated independently; the data provider remains absent when targetData is false.
+  assert.match(page, /:\s*<LumiAppRoot humanWikiSourceStatusEnabled=\{humanWikiSourceStatusEnabled\} \/>;/);
 });
 
 test("docs and workflow: the slice documentation and focused CI paths exist",()=>{
@@ -365,7 +366,23 @@ test("the refusal budget is shared per runtime (gate hook and My Plan)",()=>{
 test("mount rule: page.tsx wiring is checked literally, independent of targetDataNeeded",()=>{
   const page=read("app/page.tsx");
   assert.match(page,/const config = targetUiEnabled\(\) \? targetUiConfig\(process\.env\) : null;/);
-  assert.match(page,/const targetData = targetDataNeeded\(config\);\s*return targetData\s*\?\s*<TargetDataProvider><LumiAppRoot targetMyPlan=\{config\?\.myPlan\} targetScopes=\{config\?\.scopes\} targetDetails=\{config\?\.details\} targetEdits=\{config\?\.edits\} targetNoteEdit=\{Boolean\(config\?\.details\.note\) && targetNoteEditUiEnabled\(process\.env\)\} targetProjectEdit=\{Boolean\(config\?\.details\.project\) && targetProjectTitleEditUiEnabled\(process\.env\)\} targetPrivateNoteAreas=\{Boolean\(config\?\.scopes\.notes\)&&targetPrivateNoteAreaUiEnabled\(process\.env\)\} targetPrivateNoteCreate=\{Boolean\(config\?\.scopes\.notes\)&&targetPrivateNoteCreateUiEnabled\(process\.env\)\} \/><\/TargetDataProvider>\s*:\s*<LumiAppRoot \/>;/);
+  assert.match(page,/const targetData = targetDataNeeded\(config\);/);
+  assert.match(page,/return targetData\s*\?\s*<TargetDataProvider><LumiAppRoot\b[^\n]+\/><\/TargetDataProvider>\s*:\s*<LumiAppRoot\b[^\n]+\/>;/);
+  const providerProps = page.match(/<TargetDataProvider><LumiAppRoot ([^\n]+)\/><\/TargetDataProvider>/)?.[1];
+  assert.ok(providerProps,"target-data provider must wrap the authorized root");
+  for (const prop of [
+    "targetMyPlan={config?.myPlan}",
+    "targetScopes={config?.scopes}",
+    "targetDetails={config?.details}",
+    "targetEdits={config?.edits}",
+    "targetNoteEdit={Boolean(config?.details.note) && targetNoteEditUiEnabled(process.env)}",
+    "targetProjectEdit={Boolean(config?.details.project) && targetProjectTitleEditUiEnabled(process.env)}",
+    "targetPrivateNoteAreas={Boolean(config?.scopes.notes)&&targetPrivateNoteAreaUiEnabled(process.env)}",
+    "targetPrivateNoteCreate={Boolean(config?.scopes.notes)&&targetPrivateNoteCreateUiEnabled(process.env)}",
+    "humanWikiSourceStatusEnabled={humanWikiSourceStatusEnabled}",
+  ]) assert.ok(providerProps.includes(prop),"missing expected root prop: "+prop);
+  assert.match(page,/const humanWikiSourceStatusEnabled =\s*process\.env\.AI_EXECUTIVE_HUMANWIKI_SOURCE_WITNESS_UI_ENABLED === "true" &&\s*process\.env\.AI_EXECUTIVE_HUMANWIKI_SOURCE_WITNESS_STATUS_ENABLED === "true";/);
+  assert.match(page,/:\s*<LumiAppRoot humanWikiSourceStatusEnabled=\{humanWikiSourceStatusEnabled\} \/>;/);
   // The rule itself, literally: details are no consumer of their own.
   assert.match(read("lib/target-ui-config.ts"),/return config!==null&&\(config\.myPlan\.enabled\|\|config\.scopes\.projects\|\|config\.scopes\.notes\);/);
 });
