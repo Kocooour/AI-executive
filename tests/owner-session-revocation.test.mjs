@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { createHmac, scryptSync } from "node:crypto";
 import {
-  chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync,
+  existsSync, mkdirSync, mkdtempSync, readFileSync,
   renameSync, rmSync, unlinkSync, writeFileSync,
 } from "node:fs";
 import { spawn, spawnSync } from "node:child_process";
@@ -155,7 +155,12 @@ test("missing, malformed and symlinked cutoff fail closed; login never repairs c
     assert.equal(auth.isAuthenticated(authRequest(token)), false, "missing marker refuses auth");
     writeFileSync(marker, "{broken", { mode: 0o600 });
     assert.equal(auth.isAuthenticated(authRequest(token)), false, "corrupt marker refuses auth");
-    assert.rejects(tokenFromLogin(), /500/, "corrupt marker must not produce a new token");
+    const unavailableLogin = await passwordLogin(request("/api/auth/login", null, {
+      method: "POST", headers: { origin: url, "content-type": "application/json" },
+      body: JSON.stringify({ password }),
+    }));
+    assert.equal(unavailableLogin.status, 500, "corrupt marker must not produce a new token");
+    assert.equal(unavailableLogin.headers.get("set-cookie"), null);
     unlinkSync(marker);
     // A credential-authenticated new login may bootstrap after file loss.
     // The old signed cookie must remain dead after the reinitialization.
@@ -171,7 +176,6 @@ test("missing, malformed and symlinked cutoff fail closed; login never repairs c
     unlinkSync(marker);
   } finally {
     if (existsSync(marker)) unlinkSync(marker);
-    renameSync(backup, marker);
-    chmodSync(marker, 0o600);
+    unlinkSync(backup);
   }
 });
