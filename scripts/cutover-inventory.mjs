@@ -5,6 +5,7 @@
 import { DatabaseSync } from "node:sqlite";
 import { copyFileSync, existsSync, lstatSync, mkdirSync, readdirSync, realpathSync, readFileSync, statSync, writeFileSync, chmodSync, constants } from "node:fs";
 import path from "node:path";
+import { createHash } from "node:crypto";
 
 const TABLES = [
   "entities", "relations", "tombstones", "note_revisions", "context_subjects",
@@ -100,7 +101,15 @@ function readInventory(db, source) {
   }
 
   // Provider fields, when present, are matched against a fixed allowlist only.
-  const mail = { gmailPresent: false, icloudPresent: false, accounts: (tables.mail_accounts || 0) + (tables.mail_sync_accounts || 0), syncedMessageRows: tables.mail_sync_messages || 0 };
+  const mail = {
+    gmailPresent: false, icloudPresent: false,
+    accounts: tables.mail_accounts || 0,
+    syncingAccounts: tables.mail_sync_accounts || 0,
+    syncedMessageRows: tables.mail_sync_messages || 0,
+    // "absent" must not mean "not inspected"; status below exists only when schema supports it.
+    sync: { status: "not_available", neverSynced: null, everSynced: null, pending: null,
+      recoveryPending: null, lastSyncedAt: { earliest: null, latest: null } },
+  };
   for (const table of ["mail_accounts", "mail_sync_accounts", "calendar_accounts", "calendar_sources"]) {
     if (!found.has(table)) continue;
     const cols = new Set(db.prepare("PRAGMA table_info(" + quote(table) + ")").all().map(row => row.name));
@@ -112,11 +121,44 @@ function readInventory(db, source) {
     }
   }
 
-  const meta = found.has("metadata") ? db.prepare("SELECT key, value FROM metadata").all() : [];
-  const integrationTokenPresent = meta.some(row =>
-    typeof row.key === "string" && /^(?:integration[_-]?token|.*api[_-]?token(?:[_-]?hash)?)$/i.test(row.key)
-    && row.value != null && String(row.value).length > 0);
+  if (found.has("mail_sync_accounts")) {
+    const cols = new Set(db.prepare("PRAGMA table_info(mail_sync_accounts)").all().map(row => row.name));
+    if (cols.has("last_synced_at")) {
+      const pendingColumns = ["history_backlog_pending", "pending_event_id", "recovery_inbox_page_token", "recovery_sent_page_token"];
+      const present = pendingColumns.filter(col => cols.has(col));
+      const condition = present.map(col => col === "history_backlog_pending"
+        ? 'COALESCE("history_backlog_pending", 0) <> 0'
+        : quote(col) + ' IS NOT NULL').join(" OR ");
+      const pending = condition
+        ? Number(db.prepare("SELECT COUNT(*) AS n FROM mail_sync_accounts WHERE " + condition).get().n)
+        : null;
+      const recoveryCondition = ["recovery_inbox_page_token", "recovery_sent_page_token"].filter(col => cols.has(col))
+        .map(col => quote(col) + " IS NOT NULL").join(" OR ");
+      const syncedRange = db.prepare("SELECT MIN(last_synced_at) AS earliest, MAX(last_synced_at) AS latest FROM mail_sync_accounts").get();
+      mail.sync = {
+        status: present.length === pendingColumns.length ? "complete" : "partial",
+        neverSynced: Number(db.prepare("SELECT COUNT(*) AS n FROM mail_sync_accounts WHERE last_synced_at IS NULL").get().n),
+        everSynced: Number(db.prepare("SELECT COUNT(*) AS n FROM mail_sync_accounts WHERE last_synced_at IS NOT NULL").get().n),
+        pending,
+        recoveryPending: recoveryCondition
+          ? Number(db.prepare("SELECT COUNT(*) AS n FROM mail_sync_accounts WHERE " + recoveryCondition).get().n)
+          : null,
+        lastSyncedAt: { earliest: cleanInt(syncedRange.earliest), latest: cleanInt(syncedRange.latest) },
+      };
+    }
+  }
+  // Integration token is configured by AI_EXECUTIVE_INTEGRATION_TOKEN in the service
+  // environment, which is deliberately NOT inspected by this offline database tool.
+  // Do not turn "not inspected" into false: absence of a metadata row proves nothing.
+  const integrationTokenPresent = null;
   const userVersion = cleanInt(db.prepare("PRAGMA user_version").get().user_version);
+  const migrations = found.has("schema_migrations")
+    ? db.prepare("SELECT id FROM schema_migrations ORDER BY id").all().map(row => String(row.id))
+    : null;
+  // Cryptographic fingerprint distinguishes different migration sets with the same count.
+  // Names themselves never leave this process (do not risk leaking custom ID strings).
+  const migrationsSha256 = migrations === null ? null
+    : createHash("sha256").update(JSON.stringify(migrations)).digest("hex");
   const backupsDir = path.join(source, "backups");
   let backupFiles = 0;
   if (lstatSyncMaybe(backupsDir)?.isDirectory() && !lstatSync(backupsDir).isSymbolicLink()) {
@@ -126,7 +168,9 @@ function readInventory(db, source) {
   }
   return {
     format: "lumi-r4-content-free-inventory-v1", integrity: "ok", schema: {
-      sqliteUserVersion: userVersion, migrationRows: tables.schema_migrations || 0,
+      sqliteUserVersion: userVersion, migrationRows: migrations?.length ?? null,
+      appliedMigrationsSha256: migrationsSha256,
+      migrationIdentity: migrations === null ? "unavailable" : "fingerprinted",
     },
     entities: { count: entities.length, byKind, byWorkspace },
     tables, lastModifiedRanges: timestampRanges,
@@ -136,7 +180,7 @@ function readInventory(db, source) {
     connectors: mail,
     credentials: {
       passkeys: tables.passkey_credentials || 0, pushTargets: tables.push_subscriptions || 0,
-      integrationTokenPresent,
+      integrationTokenPresent, integrationTokenInspection: "environment_not_inspected",
     },
     backups: { files: backupFiles },
   };
@@ -157,6 +201,7 @@ function main() {
     "Notes/revisions: " + report.notes.noteEntities + "/" + report.notes.revisionRows,
     "Context claims/evidence: " + report.context.claims + "/" + report.context.evidence,
     "Work sessions: " + report.work.sessions,
+    "Gmail sync inspected: " + report.connectors.sync.status,
     "Passkeys/push targets: " + report.credentials.passkeys + "/" + report.credentials.pushTargets,
     "Backup files: " + report.backups.files,
     "SQLite integrity: " + report.integrity,
