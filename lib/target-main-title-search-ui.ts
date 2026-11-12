@@ -1,7 +1,8 @@
 /** R3-FE-05: default-off main-app title search, gated separately from read ACL.
  * No client flag, URL scope or UI state grants visibility: only the server does. */
 // Client-safe flags only: importing the server config would bundle node:crypto.
-import type {TitleSearchFailure,TitleSearchScope} from "./target-staging-title-search-client";
+import type {TitleSearchFailure,TitleSearchScope,TitleSearchItem} from "./target-staging-title-search-client";
+import {detailIdOk,type TargetDetailGates,type TargetDetailRoute} from "./target-detail-route";
 import type {TitleSearchSessionSnapshot} from "./target-staging-title-search-session";
 
 /** Topbar Enter is a deliberate submit, not a fetch-on-keystroke. */
@@ -126,3 +127,68 @@ export const mainTitleSearchCopy={
     failures:failures.en,
   },
 } as const;
+
+/** Open only kinds whose existing detail UI is enabled. Invalid legacy IDs
+ * remain text, as in Projects/Notes/My Plan. Server re-authorizes on open. */
+export function mainTitleSearchDetailRoute(
+  item:TitleSearchItem,gates:TargetDetailGates,
+):TargetDetailRoute|null{
+  if(!gates[item.kind]||!detailIdOk(item.id))return null;
+  if(item.kind==="project")return {kind:"project",id:item.id,view:"Projects"};
+  if(item.kind==="note")return {kind:"note",id:item.id,view:"Notes"};
+  // A task detail can read both standalone and project tasks by ID; the
+  // MyPlanPreview detail address does not require a valid projectId in the
+  // search DTO and remains server-authorized even for an undated task.
+  return {kind:"task",id:item.id,view:"MyPlanPreview"};
+}
+
+// A single-use, in-memory return bridge: the Search component unmounts while
+// the existing details UI navigates to Projects/Notes/My Plan. No web storage,
+// auto-query or speculative prefetch. A revalidation (including same-login
+// ACL changes), hidden tab, blur, offline or pagehide invalidates the bridge.
+type SearchRuntime=NonNullable<Parameters<typeof subscribeMainTitleSearchAclInvalidation>[0]>;
+let returnBridge:{result:BoundMainTitleSearch;expires:number;stop:()=>void}|null=null;
+export function clearMainTitleSearchReturn():void{
+  const held=returnBridge;
+  returnBridge=null;
+  held?.stop();
+}
+export function rememberMainTitleSearchReturn(
+  result:BoundMainTitleSearch,binding:MainTitleSearchBinding,runtime:SearchRuntime|null,
+):void{
+  clearMainTitleSearchReturn();
+  if(typeof window==="undefined"||typeof document==="undefined"||!runtime||
+    runtime.lastOutcome()!=="ok"||document.visibilityState==="hidden"||
+    !navigator.onLine||!visibleMainTitleSearchResult(result,binding,true)||
+    result.snapshot.status!=="ready")return;
+  const invalidate=()=>clearMainTitleSearchReturn();
+  const onVisibility=()=>{if(document.visibilityState==="hidden")invalidate();};
+  const stopAcl=subscribeMainTitleSearchAclInvalidation(runtime,invalidate);
+  window.addEventListener("pagehide",invalidate);
+  window.addEventListener("blur",invalidate);
+  window.addEventListener("offline",invalidate);
+  document.addEventListener("visibilitychange",onVisibility);
+  returnBridge={
+    result:{...result,binding:{...binding},
+      snapshot:{...result.snapshot,items:result.snapshot.items.map(item=>({...item}))}},
+    expires:Date.now()+120000,
+    stop:()=>{
+      stopAcl();
+      window.removeEventListener("pagehide",invalidate);
+      window.removeEventListener("blur",invalidate);
+      window.removeEventListener("offline",invalidate);
+      document.removeEventListener("visibilitychange",onVisibility);
+    },
+  };
+}
+export function consumeMainTitleSearchReturn(
+  binding:MainTitleSearchBinding,runtime:SearchRuntime|null,
+):BoundMainTitleSearch|null{
+  const held=returnBridge;
+  const valid=held!==null&&Date.now()<held.expires&&runtime?.lastOutcome()==="ok"&&
+    typeof document!=="undefined"&&document.visibilityState!=="hidden"&&
+    typeof navigator!=="undefined"&&navigator.onLine&&
+    visibleMainTitleSearchResult(held.result,binding,true)!==null;
+  clearMainTitleSearchReturn();
+  return valid&&held?held.result:null;
+}
