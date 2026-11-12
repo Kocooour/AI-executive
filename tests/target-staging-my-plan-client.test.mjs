@@ -352,3 +352,21 @@ test("BE-15 aborted signal never sends GET; overlapping reads stay ordered",asyn
   ]);
   assert.equal(calls,2);
 });
+
+test("My Plan browser accepts bounded JSON-escaped three-bucket pages at limits 50 and 100",async()=>{
+  const bigTitle="x"+String.fromCharCode(1).repeat(4095);
+  const rows=(prefix,on,limit)=>Array.from({length:limit},(_,i)=>({
+    ...task(prefix+String(i).padStart(3,"0"),on),title:bigTitle,
+  }));
+  for(const limit of [50,100]){
+    const payload=page(rows("d","2026-11-05",limit),
+      rows("t","2026-11-06",limit),{undated:rows("u",null,limit)});
+    const encoded=JSON.stringify(payload);
+    assert.ok(Buffer.byteLength(encoded,"utf8")>1024*1024);
+    const result=await fetchMyPlanSlice({...params,limit},async()=>goodResponse(payload));
+    assert.equal(result.ok,true,JSON.stringify(result).slice(0,100));
+    assert.equal(result.page.today.tasks.length,limit);
+    assert.equal(result.page.tomorrow.tasks.length,limit);
+    assert.equal(result.page.undated.tasks.length,limit);
+  }
+});
