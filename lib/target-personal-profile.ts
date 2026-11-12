@@ -65,6 +65,22 @@ export const TARGET_PERSONAL_V1_EXCLUDED:readonly {readonly flag:string;readonly
   {flag:"AI_EXECUTIVE_TARGET_STAGING_TITLE_SEARCH_CLIENT_PREVIEW_ENABLED",reason:"Client preview page, not the main app."},
 ];
 
+/** Non-boolean settings (not flags) an operator MUST also provide for the profile to work. Each names the
+ * exact variable; none is a secret in the profile itself (values are per installation). */
+export const TARGET_PERSONAL_V1_REQUIRED_SETTINGS:readonly {readonly name:string;readonly reason:string}[]=[
+  {name:"AI_EXECUTIVE_TARGET_STAGING_DIRECTORY",reason:"Absolute path of the isolated target store directory (never the live data dir)."},
+  {name:"AI_EXECUTIVE_TARGET_STAGING_OWNER_USER_ID",reason:"The single owner identity the owner cookie maps to."},
+  {name:"AI_EXECUTIVE_TARGET_STAGING_RESTORE_GENERATION",reason:"UUID restore generation of that store."},
+];
+
+/** Other non-boolean AI_EXECUTIVE_TARGET_* names that exist in the sources but are NOT operator settings
+ * of this profile (set internally for child processes, derived, or belonging to an excluded feature). */
+export const TARGET_PERSONAL_V1_NOT_SETTINGS:readonly {readonly name:string;readonly reason:string}[]=[
+  {name:"AI_EXECUTIVE_TARGET_STAGING_SESSION_HASH",reason:"Passed by the server to its own read child only."},
+  {name:"AI_EXECUTIVE_TARGET_STAGING_PROJECT_TITLE_PROOF_KEY",reason:"Child-only key derived from AI_EXECUTIVE_SESSION_SECRET; not set by operators."},
+  {name:"AI_EXECUTIVE_TARGET_STAGING_NOTE_SYNC_SECRET",reason:"Belongs to the excluded note-sync feature."},
+];
+
 /** Whole families that are never part of the profile (not AI_EXECUTIVE_TARGET_*). */
 export const TARGET_PERSONAL_V1_EXCLUDED_PREFIXES:readonly {readonly prefix:string;readonly reason:string}[]=[
   {prefix:"AI_EXECUTIVE_HUMANWIKI_",reason:"HumanWiki is a separate, out-of-scope integration."},

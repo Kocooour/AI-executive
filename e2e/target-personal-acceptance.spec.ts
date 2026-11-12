@@ -266,9 +266,9 @@ for(const width of [390,1280]){
     await expect(page.getByTestId("target-scope-list")).toContainText(noteEdited);
     await page.getByTestId("target-scope-list").locator('[data-detail-row="note:'+noteId+'"]').click();
     await detail.getByTestId("target-detail-edit-delete").click();
+    const noteMark=calls.length; // the list re-reads itself as soon as the delete commits
     await detail.getByTestId("target-detail-edit-confirm-yes").click();
     await expect(detail.getByTestId("target-detail-edit-deleted")).toBeVisible();
-    const noteMark=calls.length;
     await closeDetail();
     await expect.poll(()=>readsAfter(noteMark,"GET",/\/note-index\/global$/)).toBeGreaterThan(0);
     await expect(page.getByTestId("target-scope-list")).toHaveAttribute("data-state","ready");

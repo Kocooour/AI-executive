@@ -12,7 +12,17 @@ on:
       - "e2e/target-personal-acceptance.spec.ts"
       - "e2e/target-personal-store-setup.mjs"
       - "tests/target-personal-profile.test.mjs"
+      - "tests/target-app-fetch.test.mjs"
       - "playwright.config.ts"
+      - "e2e/fixtures.ts"
+      - "e2e/helpers.ts"
+      - "e2e/auth.setup.ts"
+      - "lib/auth.ts"
+      - "lib/http-security.ts"
+      - "lib/data-dir.ts"
+      - "app/api/auth/**"
+      - "scripts/hash-password.mjs"
+      - "tests/ts-loader.mjs"
   workflow_dispatch:
 permissions:
   contents: read
@@ -42,8 +52,8 @@ jobs:
           cache: pnpm
       - name: Locked dependencies
         run: pnpm install --frozen-lockfile
-      - name: Flag profile classification test
-        run: node --experimental-loader ./tests/ts-loader.mjs --test tests/target-personal-profile.test.mjs
+      - name: Flag profile classification and shared read-queue tests
+        run: node --experimental-loader ./tests/ts-loader.mjs --test tests/target-personal-profile.test.mjs tests/target-app-fetch.test.mjs
       - name: Build isolated UI
         run: pnpm build
       - name: Chromium
