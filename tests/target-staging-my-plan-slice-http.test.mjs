@@ -1090,3 +1090,26 @@ test("R3-A3 Undo restores When atomically, rejects stale and revoked completions
   assert.equal(f.db.prepare("SELECT status FROM tasks WHERE id='s-bob'").get().status,"completed");
   assert.equal(f.db.prepare("SELECT COUNT(*) AS n FROM personal_task_plans WHERE task_id='s-bob'").get().n,0);
 });
+
+test("R3-A3 real HTTP serves three large pages at both 50 and 100 with bounded output",async()=>{
+  const f=fixture(),bob=login(f,"bob");
+  const insert=f.db.prepare("INSERT INTO tasks(id,area_id,title,due_on) VALUES (?,?,?,?)");
+  const title="x"+"\\\"".repeat(4095);
+  for(let i=0;i<100;i++){
+    const id=String(i).padStart(3,"0");
+    insert.run("b-large-today-"+id,"bob-private",title,"2026-11-04");
+    insert.run("b-large-tomorrow-"+id,"bob-private",title,"2026-11-05");
+    insert.run("b-large-undated-"+id,"bob-private",title,null);
+  }
+  for(const limit of ["50","100"]){
+    const response=await get(query({limit}),bob);
+    assert.equal(response.status,200,"large valid pages must not be rejected by the child");
+    const page=await response.json();
+    assert.equal(page.today.tasks.length,Number(limit));
+    assert.equal(page.tomorrow.tasks.length,Number(limit));
+    assert.equal(page.undated.tasks.length,Number(limit));
+    assert.ok(Buffer.byteLength(JSON.stringify(page),"utf8")>1024*1024);
+    assert.equal(unique(page),true);
+    assert.ok(page.nextCursor,"remaining items have a signed continuation");
+  }
+});
