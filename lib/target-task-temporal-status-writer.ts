@@ -34,6 +34,8 @@ export interface TargetStagingTemporalStatusCommand {
   readonly expectedRevision: string;
   readonly writeAreaId: string;
   readonly restoreGeneration: string;
+  /** Captured personal day on completion; validated against the pinned store. */
+  readonly previousWhenOn?: string|null;
   /** Undo only: exact committed completion whose before-day is restored atomically. */
   readonly undoOf?: Omit<TargetStagingTemporalStatusCommand,"undoOf">;
 }
@@ -54,12 +56,19 @@ export function validTargetStagingTemporalStatusCommand(
   const v = input as Record<string,unknown>;
   const base="commandId,expectedRevision,restoreGeneration,status,taskId,writeAreaId";
   const undo=Object.prototype.hasOwnProperty.call(v,"undoOf");
-  if(Object.keys(v).sort().join(",")!==(undo?base.replace("taskId,","taskId,undoOf,"):base))return false;
+  const previous=Object.prototype.hasOwnProperty.call(v,"previousWhenOn");
+  const expected=undo?base.replace("taskId,","taskId,undoOf,"):
+    previous?base.replace("expectedRevision,","expectedRevision,previousWhenOn,"):base;
+  if(Object.keys(v).sort().join(",")!==expected||
+    (previous&&(v.status!=="completed"||
+      (v.previousWhenOn!==null&&(typeof v.previousWhenOn!=="string"||
+        temporalCalendarOrdinal(v.previousWhenOn)===null)))))return false;
   if(undo){
     const prior=v.undoOf;
     if(v.status!=="open"||!prior||typeof prior!=="object"||Array.isArray(prior))return false;
     const p=prior as Record<string,unknown>;
-    if(Object.keys(p).sort().join(",")!==base||p.status!=="completed"||
+    if(!Object.prototype.hasOwnProperty.call(p,"previousWhenOn")||
+      p.status!=="completed"||
       !validTargetStagingTemporalStatusCommand(p)||p.taskId!==v.taskId||
       p.writeAreaId!==v.writeAreaId||p.restoreGeneration!==v.restoreGeneration||
       p.commandId===v.commandId)return false;
@@ -86,16 +95,10 @@ export function temporalStatusReceiptDigest(
   return createHash("sha256").update(JSON.stringify([
     "temporal-status-v1",request.taskId,request.status,request.expectedRevision,
     request.writeAreaId,request.restoreGeneration.toLowerCase(),
+    ...(Object.prototype.hasOwnProperty.call(request,"previousWhenOn")
+      ?[request.previousWhenOn]:[]),
     ...(request.undoOf?[temporalStatusReceiptDigest(request.undoOf)]:[]),
   ])).digest("hex");
-}
-
-/** Opaque completion snapshot; never exposed through HTTP or a journal. */
-function undoSnapshotKey(actor:string,taskId:string,commandId:string):string{
-  const hash=createHash("sha256").update(JSON.stringify([
-    "my-plan-completion-undo-v1",actor,taskId,commandId.toLowerCase(),
-  ])).digest("hex");
-  return "r3:my-plan-completion-undo-v1:"+hash;
 }
 
 export function writePreflightedTemporalTaskStatus(
@@ -144,26 +147,20 @@ export function writePreflightedTemporalTaskStatus(
       const originalReceipt=db.prepare("SELECT value FROM metadata WHERE key=?")
         .get(temporalStatusReceiptKey(actor,request.taskId,original.commandId)) as
         {value:string}|undefined;
-      if(originalReceipt?.value!==temporalStatusReceiptDigest(original))
+      if(originalReceipt?.value!==temporalStatusReceiptDigest(original)||
+        row.revision<1||
+        targetTaskWriteRevision(db,request.taskId,row.revision-1)!==original.expectedRevision)
         return {ok:false,reason:"stale_revision"};
-      const stored=db.prepare("SELECT value FROM metadata WHERE key=?")
-        .get(undoSnapshotKey(actor,request.taskId,original.commandId)) as
-        {value:string}|undefined;
-      if(!stored)return {ok:false,reason:"stale_revision"};
-      let snapshot:unknown;
-      try{snapshot=JSON.parse(stored.value);}catch{return failed();}
-      if(!snapshot||typeof snapshot!=="object"||Array.isArray(snapshot))return failed();
-      const p=snapshot as Record<string,unknown>;
-      if(Object.keys(p).sort().join(",")!=="beforeWhenOn,completedRevision"||
-        !Number.isSafeInteger(p.completedRevision)||p.completedRevision!==row.revision||
-        (p.beforeWhenOn!==null&&(typeof p.beforeWhenOn!=="string"||
-          temporalCalendarOrdinal(p.beforeWhenOn)===null)))
-        return {ok:false,reason:"stale_revision"};
-      restoreWhenOn=p.beforeWhenOn as string|null;
+      restoreWhenOn=original.previousWhenOn??null;
     }
-    const previousPlan=request.status==="completed"?db.prepare(
-      "SELECT when_on AS whenOn FROM personal_task_plans WHERE user_id=? AND task_id=?"
-    ).get(actor,request.taskId) as {whenOn:string}|undefined:undefined;
+    if(request.status==="completed"&&
+       Object.prototype.hasOwnProperty.call(request,"previousWhenOn")){
+      const plan=db.prepare(
+        "SELECT when_on AS whenOn FROM personal_task_plans WHERE user_id=? AND task_id=?"
+      ).get(actor,request.taskId) as {whenOn:string}|undefined;
+      if((plan?.whenOn??null)!==request.previousWhenOn)
+        return {ok:false,reason:"stale_revision"};
+    }
     if (!context.stillPinned() || !context.noSidecars()) return denied();
     const existing=db.prepare("SELECT COUNT(*) AS n FROM metadata WHERE key LIKE ?")
       .get(TARGET_STAGING_TEMPORAL_STATUS_RECEIPT_PREFIX+"%") as {n:number};
@@ -177,12 +174,7 @@ export function writePreflightedTemporalTaskStatus(
     const next=db.prepare("SELECT revision FROM tasks WHERE id=?")
       .get(request.taskId) as {revision:number}|undefined;
     if (!next || next.revision!==row.revision+1) return failed();
-    if(request.status==="completed"){
-      db.prepare("INSERT INTO metadata(key,value) VALUES (?,?)").run(
-        undoSnapshotKey(actor,request.taskId,request.commandId),
-        JSON.stringify({beforeWhenOn:previousPlan?.whenOn??null,
-          completedRevision:next.revision}));
-    }else if(request.undoOf&&restoreWhenOn!==null){
+    if(request.undoOf&&restoreWhenOn!==null){
       // Reconcile trigger removed the old row on completion. Its INSERT guard
       // now checks CURRENT effective Area, assignment and task status again.
       db.prepare("INSERT INTO personal_task_plans(user_id,task_id,when_on) VALUES (?,?,?)")
