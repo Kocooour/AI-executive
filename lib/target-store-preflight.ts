@@ -11,6 +11,7 @@ import {
   TARGET_STAGING_RECEIPT_PREFIX, TARGET_STAGING_DELETE_RECEIPT_PREFIX,
   TARGET_STAGING_PRIVATE_TASK_CREATE_RECEIPT_PREFIX,
   TARGET_STAGING_PRIVATE_TASK_CREATE_RECOVERY_PREFIX,
+  TARGET_STAGING_PRIVATE_TASK_CREATE_CANCEL_PREFIX,
   TARGET_STAGING_TEMPORAL_STATUS_RECEIPT_PREFIX, TARGET_STAGING_TEMPORAL_DUE_ON_RECEIPT_PREFIX,
   TARGET_STAGING_PERSONAL_WHEN_RECEIPT_PREFIX,
   TARGET_STAGING_PERSONAL_ATTENTION_RECEIPT_PREFIX,
@@ -241,6 +242,8 @@ export function inspectIsolatedTargetStore(
         row.key.startsWith(TARGET_STAGING_PRIVATE_TASK_CREATE_RECEIPT_PREFIX));
       const privateTaskCreateRecoveries = rows.filter(row => typeof row.key === "string" &&
         row.key.startsWith(TARGET_STAGING_PRIVATE_TASK_CREATE_RECOVERY_PREFIX));
+      const privateTaskCreateCancels = rows.filter(row => typeof row.key === "string" &&
+        row.key.startsWith(TARGET_STAGING_PRIVATE_TASK_CREATE_CANCEL_PREFIX));
       const temporalReceipts = rows.filter(row => typeof row.key === "string" &&
         row.key.startsWith(TARGET_STAGING_TEMPORAL_STATUS_RECEIPT_PREFIX));
       const dueOnReceipts = rows.filter(row => typeof row.key === "string" &&
@@ -302,14 +305,19 @@ export function inspectIsolatedTargetStore(
             typeof x.restoreGeneration==="string"&&uuid.test(x.restoreGeneration);
         }catch{return false;}
       });
+      const taskCancelValid = privateTaskCreateCancels.every(row => typeof row.key === "string" &&
+        sha256Hex.test(row.key.slice(TARGET_STAGING_PRIVATE_TASK_CREATE_CANCEL_PREFIX.length)) &&
+        row.value === "1" && !taskReceiptHashes.has(
+          row.key.slice(TARGET_STAGING_PRIVATE_TASK_CREATE_CANCEL_PREFIX.length)));
       if (rows.length !== 6 + receipts.length + deleteReceipts.length + temporalReceipts.length + dueOnReceipts.length + privateWhenReceipts.length + attentionReceipts.length + noteReceipts.length +
             notificationReceipts.length + pushTargetReceipts.length + baselineMarkers.length +
-            noteDeleteReceipts.length + lifecycleReceipts.length + projectTitleCancels.length + privateTaskCreateReceipts.length + privateTaskCreateRecoveries.length ||
+            noteDeleteReceipts.length + lifecycleReceipts.length + projectTitleCancels.length + privateTaskCreateReceipts.length + privateTaskCreateRecoveries.length + privateTaskCreateCancels.length ||
           receipts.length > TARGET_STAGING_MAX_RECEIPTS ||
           deleteReceipts.length > TARGET_STAGING_MAX_RECEIPTS ||
           privateTaskCreateReceipts.length > TARGET_STAGING_MAX_RECEIPTS ||
           privateTaskCreateRecoveries.length > TARGET_STAGING_MAX_RECEIPTS ||
-          !taskRecoveryValid ||
+          privateTaskCreateCancels.length > TARGET_STAGING_MAX_RECEIPTS ||
+          !taskRecoveryValid || !taskCancelValid ||
           temporalReceipts.length > TARGET_STAGING_MAX_RECEIPTS ||
           dueOnReceipts.length > TARGET_STAGING_MAX_RECEIPTS ||
           privateWhenReceipts.length > TARGET_STAGING_MAX_RECEIPTS ||
@@ -343,6 +351,7 @@ export function inspectIsolatedTargetStore(
               row.key.startsWith(TARGET_STAGING_DELETE_RECEIPT_PREFIX) ||
                row.key.startsWith(TARGET_STAGING_PRIVATE_TASK_CREATE_RECEIPT_PREFIX) ||
               row.key.startsWith(TARGET_STAGING_PRIVATE_TASK_CREATE_RECOVERY_PREFIX) ||
+              row.key.startsWith(TARGET_STAGING_PRIVATE_TASK_CREATE_CANCEL_PREFIX) ||
               row.key.startsWith(TARGET_STAGING_TEMPORAL_STATUS_RECEIPT_PREFIX) ||
               row.key.startsWith(TARGET_STAGING_TEMPORAL_DUE_ON_RECEIPT_PREFIX) ||
               row.key.startsWith(TARGET_STAGING_PERSONAL_WHEN_RECEIPT_PREFIX) ||
