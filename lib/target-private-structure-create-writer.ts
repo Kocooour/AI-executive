@@ -221,6 +221,10 @@ export function readPrivateStructureCreateStatus(
   if(!w)return no();
   const witness=parseWitness(w.value);
   if(!witness||witness.kind!==kind||witness.areaId!==area||
+    witness.id!==(kind==="project"?command.projectId:
+      (command as PrivateProjectTaskCreateCommand).taskId)||
+    witness.projectId!==command.projectId||
+    witness.restoreGeneration!==command.restoreGeneration.toLowerCase()||
     !liveWitness(db,actor,witness))return no();
   return {ok:true,status:"committed"};
 }
