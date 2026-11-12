@@ -26,7 +26,9 @@ export class OwnerSessionStateUnavailable extends Error {
 }
 
 function statePath() {
-  return path.join(resolveDataDirectory(), FILE);
+  // Do not normalize a configured directory containing a symlink before "..".
+  const dir = resolveDataDirectory();
+  return dir.endsWith(path.sep) ? dir + FILE : dir + path.sep + FILE;
 }
 
 function fileIdentity(file: string) {
@@ -81,9 +83,7 @@ function inTransaction<T>(readOnly: boolean, body: (db: DatabaseSync) => T): T {
     const result = body(db);
     // A file swap during the transaction never authenticates an old handle.
     const check = fileIdentity(statePath());
-    const opened = db.prepare("PRAGMA database_list").get() as { file?: string } | undefined;
-    if (!opened || opened.file !== statePath() ||
-        check.dev !== expectedIdentity.dev || check.ino !== expectedIdentity.ino) {
+    if (check.dev !== expectedIdentity.dev || check.ino !== expectedIdentity.ino) {
       throw new OwnerSessionStateUnavailable();
     }
     db.exec("COMMIT");
