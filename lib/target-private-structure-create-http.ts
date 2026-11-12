@@ -144,7 +144,7 @@ async function handle(
       const check=verifyStagingIdentityBeforeRelease(request,identity,store);
       if(check!=="ok")return stagingIdentityRefusal(check);
       if(!unchanged(base,kind)||!result)return answer(503,"Staging unavailable");
-      if(!result.ok)return answer(result.reason==="idempotency_conflict"?409:404,
+      if(result.ok===false)return answer(result.reason==="idempotency_conflict"?409:404,
         result.reason==="idempotency_conflict"?"Revision conflict":"Not found");
       if(result.status==="not_recorded")
         return Response.json({status:"not_recorded"},{headers});
@@ -169,7 +169,7 @@ async function handle(
     if(result?.ok===false&&result.reason==="session_revoked")
       return stagingUnauthorizedRefusal(request,identity,store);
     if(!unchanged(base,kind)||!result)return answer(503,"Staging unavailable");
-    if(!result.ok){
+    if(result.ok===false){
       if(result.reason==="unavailable")return answer(404,"Not found");
       if(result.reason==="resync_required")return resyncRequiredResponse();
       if(result.reason==="idempotency_conflict")return answer(409,"Revision conflict");
