@@ -1,9 +1,16 @@
 "use client";
+import dynamic from "next/dynamic";
 import { type ContextClaimItem, type ContextInboxProposal, type ContextInboxTaskDraft } from "../types";
 import type { LumiApp } from "../use-lumi-app";
 import { ClaimEvidence, ContextSources, CoverageBadge } from "./context-evidence";
+// H1-real.9: no source-status UI chunk is loaded before the server opt-in
+// AND an active Context screen; never add a fifth navigation destination.
+const HumanWikiSourceStatusPanel = dynamic(
+  () => import("../humanwiki-source-status-panel").then(m => m.HumanWikiSourceStatusPanel),
+  { ssr: false },
+);
 
-export function ContextView({ app }: { app: LumiApp }) {
+export function ContextView({ app, humanWikiSourceStatusEnabled = false }: { app: LumiApp; humanWikiSourceStatusEnabled?: boolean }) {
   const {
     approveContextInbox,
     calendarWorkspaceSelection,
@@ -103,6 +110,7 @@ export function ContextView({ app }: { app: LumiApp }) {
     <>
           {view === "Context" && (
             <div className="contextWorkspace">
+              {humanWikiSourceStatusEnabled && <HumanWikiSourceStatusPanel key={app.activeWorkspaceId} language={language} />}
               <section className="contextOverview">
                 <div className="sectionHeading">
                   <div>

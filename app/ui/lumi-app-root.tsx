@@ -58,7 +58,7 @@ export type TargetScopesProps = { enabled: boolean; projects: boolean; notes: bo
 export type TargetEditsProps = TargetUiEdits;
 export type TargetMyPlanProps = { enabled: boolean; statusWrite: boolean; whenWrite: boolean };
 
-export function LumiAppRoot({ targetMyPlan, targetScopes, targetDetails, targetEdits, targetNoteEdit = false, targetProjectEdit = false, targetPrivateNoteAreas = false, targetPrivateNoteCreate = false, targetPrivateTaskCreate = false, targetSearch = false }: { targetMyPlan?: TargetMyPlanProps; targetScopes?: TargetScopesProps; targetDetails?: TargetDetailsProps; targetEdits?: TargetEditsProps; targetNoteEdit?: boolean; targetProjectEdit?: boolean; targetPrivateNoteAreas?: boolean; targetPrivateNoteCreate?: boolean; targetPrivateTaskCreate?: boolean; targetSearch?: boolean } = {}) {
+export function LumiAppRoot({ targetMyPlan, targetScopes, targetDetails, targetEdits, targetNoteEdit = false, targetProjectEdit = false, targetPrivateNoteAreas = false, targetPrivateNoteCreate = false, targetPrivateTaskCreate = false, targetSearch = false, humanWikiSourceStatusEnabled = false }: { targetMyPlan?: TargetMyPlanProps; targetScopes?: TargetScopesProps; targetDetails?: TargetDetailsProps; targetEdits?: TargetEditsProps; targetNoteEdit?: boolean; targetProjectEdit?: boolean; targetPrivateNoteAreas?: boolean; targetPrivateNoteCreate?: boolean; targetPrivateTaskCreate?: boolean; targetSearch?: boolean; humanWikiSourceStatusEnabled?: boolean } = {}) {
   // Owner decision 2026-11-09: with target scopes on, the single global scope governs the
   // sidebar projects, the inspector and quick capture (see docs/R3-FE-04A-DETAILS.md).
   const scopesOn = Boolean(targetScopes?.enabled);
@@ -315,7 +315,7 @@ export function LumiAppRoot({ targetMyPlan, targetScopes, targetDetails, targetE
           {view==="Search" && targetSearch
             ? <TargetMainTitleSearch query={app.query} language={language} />
             : <SearchResults app={app} />}
-          <ContextView app={app} />
+          <ContextView app={app} humanWikiSourceStatusEnabled={humanWikiSourceStatusEnabled} />
           <AgentsView app={app} />
           <SettingsView app={app} />
           {targetPlan && targetMyPlan
