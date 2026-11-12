@@ -138,9 +138,9 @@ async function ok(request){
   assert.equal(res.status,200,JSON.stringify(body));
   assert.equal(res.headers.get("cache-control"),"no-store");
   assert.deepEqual(Object.keys(body).sort(),[
-    "areaFilter","evaluationDate","hasMore","nextCursor","today","tomorrow",
+    "areaFilter","evaluationDate","hasMore","nextCursor","today","tomorrow","undated",
   ]);
-  for(const section of [body.today,body.tomorrow]){
+  for(const section of [body.today,body.tomorrow,body.undated]){
     assert.deepEqual(Object.keys(section).sort(),["hasMore","tasks"]);
     for(const task of section.tasks){
       for(const forbidden of ["userId","assigneeUserId","privateEpoch",
@@ -185,8 +185,9 @@ async function accepted(handler,url,command,cookie,expected){
   assert.equal(response.headers.get("cache-control"),"no-store");
   assert.deepEqual(body,expected);
 }
-const unique=page=>new Set([...ids(page.today),...ids(page.tomorrow)]).size===
-  ids(page.today).length+ids(page.tomorrow).length;
+const unique=page=>new Set([...ids(page.today),...ids(page.tomorrow),
+  ...ids(page.undated)]).size===ids(page.today).length+ids(page.tomorrow).length+
+  ids(page.undated).length;
 
 test("BE-09 My Plan -> private whenOn -> status -> receipts -> fresh Undo stays coherent",async()=>{
   const f=fixture(),bob=login(f,"bob"),carol=login(f,"carol");
