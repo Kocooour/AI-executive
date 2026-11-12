@@ -3,6 +3,7 @@ import { closeSync, constants, fstatSync, lstatSync, openSync, readSync, statSyn
 import { verifyTargetNoteLifecycleJournal } from "./target-note-lifecycle-preflight";
 import path from "node:path";
 import { createHash } from "node:crypto";
+import { isReadableStagingProjectId } from "./target-project-id";
 import { DatabaseSync } from "node:sqlite";
 import {
   TARGET_SCHEMA_SQL, TARGET_SCHEMA_V25_SQL, TARGET_STORE_FILENAME, TARGET_STORE_SCHEMA_VERSION,
@@ -12,6 +13,8 @@ import {
   TARGET_STAGING_PRIVATE_TASK_CREATE_RECEIPT_PREFIX,
   TARGET_STAGING_PRIVATE_TASK_CREATE_RECOVERY_PREFIX,
   TARGET_STAGING_PRIVATE_TASK_CREATE_CANCEL_PREFIX,
+  TARGET_STAGING_PRIVATE_STRUCTURE_CREATE_RECEIPT_PREFIX,
+  TARGET_STAGING_PRIVATE_STRUCTURE_CREATE_RECOVERY_PREFIX,
   TARGET_STAGING_TEMPORAL_STATUS_RECEIPT_PREFIX, TARGET_STAGING_TEMPORAL_DUE_ON_RECEIPT_PREFIX,
   TARGET_STAGING_PERSONAL_WHEN_RECEIPT_PREFIX,
   TARGET_STAGING_PERSONAL_ATTENTION_RECEIPT_PREFIX,
@@ -244,6 +247,10 @@ export function inspectIsolatedTargetStore(
         row.key.startsWith(TARGET_STAGING_PRIVATE_TASK_CREATE_RECOVERY_PREFIX));
       const privateTaskCreateCancels = rows.filter(row => typeof row.key === "string" &&
         row.key.startsWith(TARGET_STAGING_PRIVATE_TASK_CREATE_CANCEL_PREFIX));
+      const structureReceipts = rows.filter(row => typeof row.key === "string" &&
+        row.key.startsWith(TARGET_STAGING_PRIVATE_STRUCTURE_CREATE_RECEIPT_PREFIX));
+      const structureRecoveries = rows.filter(row => typeof row.key === "string" &&
+        row.key.startsWith(TARGET_STAGING_PRIVATE_STRUCTURE_CREATE_RECOVERY_PREFIX));
       const temporalReceipts = rows.filter(row => typeof row.key === "string" &&
         row.key.startsWith(TARGET_STAGING_TEMPORAL_STATUS_RECEIPT_PREFIX));
       const dueOnReceipts = rows.filter(row => typeof row.key === "string" &&
@@ -309,14 +316,43 @@ export function inspectIsolatedTargetStore(
         sha256Hex.test(row.key.slice(TARGET_STAGING_PRIVATE_TASK_CREATE_CANCEL_PREFIX.length)) &&
         row.value === "1" && !taskReceiptHashes.has(
           row.key.slice(TARGET_STAGING_PRIVATE_TASK_CREATE_CANCEL_PREFIX.length)));
+      const structureReceiptHashes = new Set(structureReceipts.map(row =>
+        typeof row.key === "string"
+          ? row.key.slice(TARGET_STAGING_PRIVATE_STRUCTURE_CREATE_RECEIPT_PREFIX.length) : ""));
+      const structureRecoveryValid = structureRecoveries.every(row => {
+        if (typeof row.key !== "string" ||
+          !sha256Hex.test(row.key.slice(TARGET_STAGING_PRIVATE_STRUCTURE_CREATE_RECOVERY_PREFIX.length)) ||
+          !structureReceiptHashes.has(row.key.slice(TARGET_STAGING_PRIVATE_STRUCTURE_CREATE_RECOVERY_PREFIX.length)) ||
+          typeof row.value !== "string" || row.value.length > 900) return false;
+        try {
+          const v: unknown = JSON.parse(row.value);
+          if (!v || typeof v !== "object" || Array.isArray(v)) return false;
+          const x = v as Record<string, unknown>;
+          return Object.keys(x).sort().join(",") === "areaId,id,kind,projectId,restoreGeneration" &&
+            (x.kind === "project" || x.kind === "project-task") &&
+            typeof x.id === "string" && uuid.test(x.id) && x.id === x.id.toLowerCase() &&
+            (x.kind === "project"
+              ? typeof x.projectId === "string" && uuid.test(x.projectId) &&
+                x.projectId === x.projectId.toLowerCase() && x.projectId === x.id
+              : isReadableStagingProjectId(x.projectId)) &&
+            typeof x.areaId === "string" && /^[A-Za-z0-9_.:@-]{1,120}$/.test(x.areaId) &&
+            typeof x.restoreGeneration === "string" && uuid.test(x.restoreGeneration);
+        } catch { return false; }
+      });
+      // The two namespaces must form complete actor+command pairs.
+      const structurePairsComplete = structureReceipts.length === structureRecoveries.length &&
+        structureRecoveryValid;
       if (rows.length !== 6 + receipts.length + deleteReceipts.length + temporalReceipts.length + dueOnReceipts.length + privateWhenReceipts.length + attentionReceipts.length + noteReceipts.length +
             notificationReceipts.length + pushTargetReceipts.length + baselineMarkers.length +
-            noteDeleteReceipts.length + lifecycleReceipts.length + projectTitleCancels.length + privateTaskCreateReceipts.length + privateTaskCreateRecoveries.length + privateTaskCreateCancels.length ||
+            noteDeleteReceipts.length + lifecycleReceipts.length + projectTitleCancels.length + privateTaskCreateReceipts.length + privateTaskCreateRecoveries.length + privateTaskCreateCancels.length + structureReceipts.length + structureRecoveries.length ||
           receipts.length > TARGET_STAGING_MAX_RECEIPTS ||
           deleteReceipts.length > TARGET_STAGING_MAX_RECEIPTS ||
           privateTaskCreateReceipts.length > TARGET_STAGING_MAX_RECEIPTS ||
           privateTaskCreateRecoveries.length > TARGET_STAGING_MAX_RECEIPTS ||
           privateTaskCreateCancels.length > TARGET_STAGING_MAX_RECEIPTS ||
+          structureReceipts.length > TARGET_STAGING_MAX_RECEIPTS ||
+          structureRecoveries.length > TARGET_STAGING_MAX_RECEIPTS ||
+          !structurePairsComplete ||
           !taskRecoveryValid || !taskCancelValid ||
           temporalReceipts.length > TARGET_STAGING_MAX_RECEIPTS ||
           dueOnReceipts.length > TARGET_STAGING_MAX_RECEIPTS ||
@@ -337,6 +373,7 @@ export function inspectIsolatedTargetStore(
           !receiptValid(receipts, TARGET_STAGING_RECEIPT_PREFIX) ||
           !receiptValid(deleteReceipts, TARGET_STAGING_DELETE_RECEIPT_PREFIX) ||
           !receiptValid(privateTaskCreateReceipts, TARGET_STAGING_PRIVATE_TASK_CREATE_RECEIPT_PREFIX) ||
+          !receiptValid(structureReceipts, TARGET_STAGING_PRIVATE_STRUCTURE_CREATE_RECEIPT_PREFIX) ||
           !receiptValid(temporalReceipts, TARGET_STAGING_TEMPORAL_STATUS_RECEIPT_PREFIX) ||
           !receiptValid(dueOnReceipts, TARGET_STAGING_TEMPORAL_DUE_ON_RECEIPT_PREFIX) ||
           !receiptValid(privateWhenReceipts, TARGET_STAGING_PERSONAL_WHEN_RECEIPT_PREFIX) ||
@@ -352,6 +389,8 @@ export function inspectIsolatedTargetStore(
                row.key.startsWith(TARGET_STAGING_PRIVATE_TASK_CREATE_RECEIPT_PREFIX) ||
               row.key.startsWith(TARGET_STAGING_PRIVATE_TASK_CREATE_RECOVERY_PREFIX) ||
               row.key.startsWith(TARGET_STAGING_PRIVATE_TASK_CREATE_CANCEL_PREFIX) ||
+              row.key.startsWith(TARGET_STAGING_PRIVATE_STRUCTURE_CREATE_RECEIPT_PREFIX) ||
+              row.key.startsWith(TARGET_STAGING_PRIVATE_STRUCTURE_CREATE_RECOVERY_PREFIX) ||
               row.key.startsWith(TARGET_STAGING_TEMPORAL_STATUS_RECEIPT_PREFIX) ||
               row.key.startsWith(TARGET_STAGING_TEMPORAL_DUE_ON_RECEIPT_PREFIX) ||
               row.key.startsWith(TARGET_STAGING_PERSONAL_WHEN_RECEIPT_PREFIX) ||
