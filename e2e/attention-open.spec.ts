@@ -61,7 +61,17 @@ test("a synced task edit disables stale quick actions while Attention refresh is
   let release = () => {};
   const held = new Promise<void>((resolve) => { release = resolve; });
   let intercepted = 0;
-  await page.route("**/api/attention?**", async (route) => { intercepted++; await held; await route.continue(); });
+  await page.route("**/api/attention?**", async (route) => {
+    intercepted++;
+    await held;
+    // A superseded GET can be cancelled by the app while deliberately held.
+    // That is not a route-handler failure; unexpected errors must still fail.
+    try {
+      await route.continue();
+    } catch (error) {
+      if (!(error instanceof Error) || !/Route is already handled|Target .*closed/i.test(error.message)) throw error;
+    }
+  });
   try {
     await item.locator(".attentionTitleButton").click();
     await expect(page.locator(".detail input[type=date][aria-label='Kdy']")).toBeVisible();
@@ -82,8 +92,13 @@ test("a synced task edit disables stale quick actions while Attention refresh is
     await expect(page.locator(".deferPopover")).toHaveCount(0);
   } finally {
     release();
-    await page.unroute("**/api/attention?**");
+    // Wait for a held handler before closing its route: otherwise a late
+    // route.continue() can report "Route is already handled" during teardown.
+    await page.unrouteAll({ behavior: "ignoreErrors" });
   }
+  // The delayed old request is not itself proof of a fresh evaluation.
+  // Force an unblocked GET before asserting that yesterday's item is gone.
+  await page.getByRole("button", { name: "Obnovit" }).first().click();
   await expect(item).toHaveCount(0);
 });
 
@@ -125,6 +140,7 @@ for (const change of ["removed", "fingerprint-changed"] as const) {
     await expect(page.locator(".deferPopover")).toBeVisible();
 
     let found = false;
+    let fulfilled = 0;
     await page.route("**/api/attention?**", async (route) => {
       const response = await route.fetch();
       const data = await response.json();
@@ -137,11 +153,15 @@ for (const change of ["removed", "fingerprint-changed"] as const) {
             ? { ...candidate, sourceFingerprint: `${candidate.sourceFingerprint}-changed` }
             : candidate);
       await route.fulfill({ response, json: { ...data, items } });
+      fulfilled++;
     });
     try {
       await page.getByRole("button", { name: "Obnovit" }).first().click();
-      await expect(page.locator(".deferPopover")).toHaveCount(0);
+      // Zero popovers can be true *before* the intercepted response is sent.
+      // Wait for the exact modified GET to finish before testing UI revocation.
+      await expect.poll(() => fulfilled, { timeout: 20_000 }).toBeGreaterThan(0);
       expect(found).toBe(true);
+      await expect(page.locator(".deferPopover")).toHaveCount(0);
       await expect(page.locator(".deferChoice, .deferApply, .deferClear")).toHaveCount(0);
       await expect(page.locator("#attention-title")).toBeFocused();
       if (change === "removed") {
@@ -153,7 +173,7 @@ for (const change of ["removed", "fingerprint-changed"] as const) {
       // Even another React render must not resurrect the old open dialog.
       await expect(page.locator(".deferPopover")).toHaveCount(0);
     } finally {
-      await page.unroute("**/api/attention?**");
+      await page.unrouteAll({ behavior: "ignoreErrors" });
     }
   });
 }
