@@ -43,12 +43,12 @@ požadavek není mockován (`page.on("request")` pouze počítá).
 ```
 NEXT_PUBLIC_LUMI_DESIGN_V1_PREVIEW=1 pnpm build
 LUMI_TARGET_PERSONAL_ACCEPTANCE_E2E=true E2E_SKIP_BUILD=1 \
-  pnpm exec playwright test e2e/target-personal-acceptance.spec.ts --project=desktop
+  pnpm exec playwright test e2e/target-personal-acceptance.spec.ts e2e/target-personal-my-plan.spec.ts --project=desktop
 ```
 
 Bez `LUMI_TARGET_PERSONAL_ACCEPTANCE_E2E=true` se test přeskočí a nevznikne
 žádný store. CI: `.github/workflows/r3-personal-acceptance-browser.yml`
-(port 3130, path filter, profilový unit test + build + jen tato spec).
+(port 3130, path filter, profilový unit test + build + obě real-store spec).
 
 ## Co se seeduje a proč
 
@@ -96,8 +96,8 @@ Dnes, Attention, push/notifikace, HumanWiki, produkční zapnutí.
    doplňování. Ochrana: `tests/target-my-plan-day-task-read.test.mjs`,
    `tests/target-staging-my-plan-slice-http.test.mjs` a
    `e2e/target-personal-my-plan.spec.ts` (390/1280 px, skutečný store).
-   Pozn.: nový browser test vyžaduje rozšíření opt-in `testMatch` v
-   `playwright.config.ts` vlastníkem souběžného streamu.
+   Playwright `testMatch` a CI nyní spouštějí obě real-store spec pouze při
+   explicitním opt-in; plný E2E běh zůstává předprodukční kontrolou.
 5. **OPRAVENO v PR #409 — interní žargon nahrazen srozumitelným textem.**
    Česká i anglická verze Mého plánu, navigace a informační hlášky nyní
    vysvětlují bezpečné ověřování a absenci offline ukládání bez interních
