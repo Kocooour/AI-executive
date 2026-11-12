@@ -173,6 +173,17 @@ test("current project relation rejects a stale legacy parent in a typed task URL
     ? { ...link, targetEntityId: actualProjectId } : link);
   expect(await updateStore(page, records, links)).toBe(200);
   try {
+    // Prove the server fixture really has the *current* project edge before
+    // blaming the URL resolver. A stale projectId property alone is not an edge.
+    const authoritativeParents = await page.evaluate(async (taskId) => {
+      const snapshot = await fetch("/api/store", { cache: "no-store" }).then((response) => response.json());
+      return snapshot.relations
+        .filter((relation: { sourceEntityId: string; relationType: string }) =>
+          relation.sourceEntityId === taskId && relation.relationType === "belongs_to_project")
+        .map((relation: { targetEntityId: string }) => relation.targetEntityId);
+    }, data.taskId);
+    expect(authoritativeParents).toEqual([actualProjectId]);
+
     await page.goto(`/?view=Projects&projectId=${data.projectId}&taskId=${data.taskId}`);
     await waitUntilSynced(page);
     await expect(page.locator(".inspectorDetail")).toHaveCount(0);
