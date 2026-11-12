@@ -34,22 +34,24 @@ This text is an approval **template**, not an approval. If the owner-approved pl
 
 ## Copy-only rehearsal commands and limitations
 
-Run on a **disposable/offline, previously quiesced snapshot only**, with destinations that do **not yet exist**. Never point these tools to a live server or run them as an agent on production. File-change checks and WAL/hash comparisons are insufficient to prove a coherent original snapshot under concurrent writers: the operator must first use an approved consistent snapshot or stop writers and verify the capture process independently.
+Run on a **disposable/offline, previously quiesced snapshot only**, with destinations that do **not yet exist**. Never point these tools to a live server or run them as an agent on production. Both commands require a final `--offline-confirmed` operator assertion; this flag is **not proof** that a source is consistent, offline or non-production. They reject the app's implicit `<cwd>/.data` directory even when `AI_EXECUTIVE_DATA_DIR` is unset, as well as any explicitly configured live legacy/target paths. An operator running outside the service environment must independently identify **all** live storage locations, not merely rely on these guards. File-change checks and WAL/hash comparisons are insufficient to prove a coherent original snapshot under concurrent writers: the operator must first use an approved consistent snapshot or stop writers and verify the capture process independently.
 
 ```bash
-node scripts/cutover-inventory.mjs /offline/legacy-copy /new/inventory-report
+node scripts/cutover-inventory.mjs /offline/legacy-copy /new/inventory-report --offline-confirmed
 # Optional, after the operator has checked the *configuration* without exposing
-# the actual secret: --integration-token-present true|false
+# the actual secret: append --integration-token-present true|false
+# immediately BEFORE the required --offline-confirmed flag
 
 node deployment/rehearsal/cutover-restore-rehearsal.mjs \
   /offline/legacy-copy /new/rehearsal-output \
   --target-offline /offline/isolated-target-copy \
-  --config-offline /offline/service-config-copy
+  --config-offline /offline/service-config-copy \
+  --offline-confirmed
 
 # A second, INDEPENDENTLY captured offline copy can be compared against the
 # first copy, including its non-SQLite artifacts:
 node deployment/rehearsal/cutover-restore-rehearsal.mjs \
-  --verify /offline/legacy-copy /offline/legacy-candidate /new/verify-output
+  --verify /offline/legacy-copy /offline/legacy-candidate /new/verify-output --offline-confirmed
 ```
 
 **Privacy:** The JSON and console outputs contain no titles, identities, messages or secret values. The rehearsal *archive, restored tree and inspection copies* retain the **actual** private contents, encrypted credential blobs and recovery artifacts; every generated file is mode 0600 and directory 0700. Store the output under an operator-controlled, secure location, avoid committing or posting it, and apply the separately approved retention policy. Manifests report hash/count summaries, not names or contents.
@@ -58,7 +60,7 @@ The rehearsal compares all copied files byte-for-byte (including legacy backups,
 
 With `--target-offline`, the separate target directory must contain `lumi-target.sqlite`, `lumi-target.journal` and `lumi-target-witness.sqlite`. The archive restores their **bytes** and verifies both SQLite databases, but this does **not** prove journal↔witness↔target semantic consistency. A **separate supported target-store preflight, using only another offline copy**, must demonstrate the append-only journal, anti-rollback anchor, restore-generation and authorization invariants before owner approval. In particular, a mismatched target journal or witness blocks cutover even when directory hashes match. When the target flag is omitted, the report explicitly says `target.status = not_provided` and **cannot** be used as proof of a complete R4 recovery. External environment files and service credentials located **outside** the data directory require an independently obtained, protected offline copy passed with `--config-offline`. Otherwise `externalConfiguration.status = not_provided` blocks any claim of complete credential recovery. Its presence proves byte preservation, not login/service compatibility; test those independently.
 
-The inventory reports actual legacy migration IDs only as a deterministic SHA-256 of the ordered list and distinguishes `environment_not_inspected` (unknown integration-token presence) from an explicit operator-supplied boolean attestation. The machine cannot establish whether an environment-only secret exists by looking at the legacy SQLite file. Gmail sync is reported as bounded aggregate checkpoint status; no mailbox data is printed.
+The inventory reports actual legacy migration IDs only as a deterministic SHA-256 of the ordered list and compares them with the **pinned, ordered application catalog from `lib/schema-migrations.ts`**. A strict prefix is `known_older` and has a `legacy-migrations-N` version label; a complete exact match is `known_current`. An unknown/non-prefix set is `unknown` with no trusted version label, even when the migration count matches. This reference catalog must be reviewed and updated whenever the app adds migrations; CI compares it to the current source list. The inventory distinguishes `environment_not_inspected` (unknown integration-token presence) from an explicit operator-supplied boolean attestation. The machine cannot establish whether an environment-only secret exists by looking at the legacy SQLite file. Gmail sync is reported as bounded aggregate checkpoint status; no mailbox data is printed.
 
 ## Devices and client-held copies (manual, no automation)
 
