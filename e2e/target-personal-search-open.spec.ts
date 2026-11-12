@@ -8,7 +8,7 @@ import {test,expect} from "./fixtures";
 test.skip(process.env.LUMI_TARGET_PERSONAL_ACCEPTANCE_E2E!=="true",
   "Search-open acceptance requires the isolated personal-v1 target store");
 
-type Seed={projects:Record<string,{
+type Seed={searchProjects:Record<string,{
   projectId:string;projectTitle:string;taskId:string;taskTitle:string;
 }>};
 const store=JSON.parse(process.env.LUMI_E2E_TARGET_STORE||"null") as {seed:Seed}|null;
@@ -18,7 +18,7 @@ for(const width of [390,1280]){
     async({page})=>{
       test.setTimeout(180_000);
       if(!store)throw new Error("The isolated target store was not created");
-      const seed=store.seed.projects[String(width)];
+      const seed=store.seed.searchProjects[String(width)];
       const token="search-open-"+width+"-"+Math.random().toString(36).slice(2,8);
       const noteTitle="Seed poznámka "+token;
       const taskEdited="Seed úkol upravený "+token;
