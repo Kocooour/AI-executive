@@ -5,25 +5,33 @@
  * Synthetic data, default-off: only LUMI_TARGET_PERSONAL_ACCEPTANCE_E2E=true runs it. */
 import {test,expect} from "./fixtures";
 import type {Page,Response} from "@playwright/test";
+import {isTargetReadRequest} from "../lib/target-edit-fetch";
 
 test.skip(process.env.LUMI_TARGET_PERSONAL_ACCEPTANCE_E2E!=="true",
   "personal acceptance needs the real isolated target store; it is opt-in");
 
 type Seed={areaTitle:string;projects:Record<string,{projectId:string;projectTitle:string;taskId:string;taskTitle:string}>};
 const store=JSON.parse(process.env.LUMI_E2E_TARGET_STORE||"null") as {seed:Seed}|null;
-type Calls={method:string;path:string}[]&{peakReads?:number};
+type Calls={method:string;path:string}[]&{peakReads?:number;postReads?:number};
 const targetCalls=(page:Page)=>{
   const calls:Calls=[];
   calls.peakReads=0;
+  calls.postReads=0;
   let reads=0;
-  // Reads (GET, except the in-process /session check) are served by staging read children; the server allows two at once.
-  const isRead=(method:string,pathname:string)=>method==="GET"&&pathname!=="/api/target-staging/session";
+  // A read is exactly what the client queue treats as one (lib/target-edit-fetch.ts): every GET and the POST-shaped
+  // reads (create-preview, create-status, create-recovery, receipt and status checks), each of which can spawn a staging
+  // read child. Only the /session check is excluded: it is answered in-process and never queued (lib/target-app-fetch.ts).
+  const isRead=(method:string,pathname:string)=>
+    pathname!=="/api/target-staging/session"&&isTargetReadRequest(pathname,{method});
   const target=(url:string)=>new URL(url).pathname.startsWith("/api/target-staging/");
   page.on("request",request=>{
     if(!target(request.url()))return;
     const {pathname}=new URL(request.url());
     calls.push({method:request.method(),path:pathname});
-    if(isRead(request.method(),pathname)){reads++;calls.peakReads=Math.max(calls.peakReads!,reads);}
+    if(isRead(request.method(),pathname)){
+      reads++;calls.peakReads=Math.max(calls.peakReads!,reads);
+      if(request.method()!=="GET")calls.postReads!++;
+    }
   });
   const done=(request:{url():string;method():string})=>{
     if(target(request.url())&&isRead(request.method(),new URL(request.url()).pathname))reads--;
@@ -287,6 +295,10 @@ for(const width of [390,1280]){
     await expect(results).not.toContainText(noteEdited);
     // Every read of the whole journey stayed within the server's two concurrent read children.
     expect(calls.peakReads).toBeLessThanOrEqual(2);
+    // The invariant above is only meaningful if POST-shaped reads were really counted: the journey issues at least
+    // the note create-preview and a receipt/status check.
+    expect(calls.postReads).toBeGreaterThan(0);
+    expect(count(calls,"POST",/\/notes\/create-preview$/)).toBeGreaterThan(0);
 
     // 12. Without the owner cookie the server refuses generically and the page drops every title.
     // NOTE: this proves CLIENT-side removal only; the stateless owner token itself stays valid on the server

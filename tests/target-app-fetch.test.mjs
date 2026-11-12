@@ -10,7 +10,7 @@ import {prepareMyPlanStatus} from "../lib/target-staging-my-plan-status-client.t
 import {prepareMyPlanWhen} from "../lib/target-staging-my-plan-when-client.ts";
 import {loadPrivateNoteAreaChoices} from "../lib/target-private-note-area-client.ts";
 import {privateNoteCreatePreflight} from "../lib/target-private-note-create-client.ts";
-import {sendPrivateTaskCreate,checkPrivateTaskCreateRecovery}
+import {sendPrivateTaskCreate,checkPrivateTaskCreateRecovery,checkPrivateTaskCreateReceipt}
   from "../lib/target-private-task-create-client.ts";
 
 const tick=()=>new Promise(resolve=>setTimeout(resolve,0));
@@ -64,6 +64,32 @@ test("My Plan, Area catalog and create-preview reads with the DEFAULT fetch shar
     await Promise.all(reads);
     assert.equal(server.peak,1);
     assert.equal(server.urls.length,6);
+  }finally{server.restore();}
+});
+
+test("POST-shaped reads overlap neither each other nor a GET read: one slot, counted by the shared predicate",async()=>{
+  const server=slowServer();
+  try{
+    const signal=new AbortController().signal;
+    const command={taskId:uuid,commandId:uuid,areaId:"a",restoreGeneration:uuid,title:"x"};
+    const reads=[
+      privateNoteCreatePreflight("area:x",signal),            // POST notes/create-preview
+      checkPrivateTaskCreateReceipt(command,signal),          // POST tasks/create-status
+      checkPrivateTaskCreateRecovery(uuid,signal),            // POST tasks/create-recovery
+      fetchMyPlanSlice({evaluationDate:"2026-11-12",areaFilter:"personal",signal}), // GET
+    ];
+    await tick();
+    assert.deepEqual(targetReadQueueState(),{active:1,waiting:3});
+    await server.drain();
+    await Promise.all(reads);
+    assert.equal(server.peak,1,"three POST reads and one GET never ran together");
+    assert.equal(server.urls.length,4);
+    // The browser acceptance counts reads with this same predicate; every request above must be counted.
+    for(const entry of server.urls){
+      const [method,url]=entry.split(" ");
+      assert.equal(isTargetReadRequest(url,{method}),true,entry);
+    }
+    assert.equal(server.urls.filter(entry=>entry.startsWith("POST ")).length,3);
   }finally{server.restore();}
 });
 
