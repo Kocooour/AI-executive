@@ -142,7 +142,7 @@ export function readAuthorizedMyPlanDayTaskPage(db:DatabaseSync,request:{
       (request.window==="undated"
         ?row.attentionOn!==null||row.dueOn!==null||row.whenOn!==null||
           row.areaKind!=="private"
-        :temporalCalendarOrdinal(row.attentionOn)===null)||
+        :row.attentionOn===null||temporalCalendarOrdinal(row.attentionOn)===null)||
       (row.whenOn===null?row.plannedRevision!==null:
         !safeInt(row.plannedRevision))||
       row.attentionOn!==([row.dueOn,row.whenOn]
