@@ -16,19 +16,24 @@ process.env.AI_EXECUTIVE_DATA_DIR = legacy;
 const { bootstrapIsolatedTargetStore } = await import("../lib/target-store-bootstrap.ts");
 const stage = bootstrapIsolatedTargetStore({ stagingDirectory: path.join(runDir, "target-store"), ownerUserId: owner });
 
-const seed = {
-  areaId: "area:e2e:rodina", areaTitle: "Rodina",
-  projectId: "project:e2e:domov", projectTitle: "Seed Projekt Domov",
-  taskId: "task:e2e:seed", taskTitle: "Seed úkol v projektu",
-};
+// One project with one task per viewport run, so the two runs never share a renamed row.
+const seed = { areaId: "area:e2e:rodina", areaTitle: "Rodina", projects: {} };
+for (const width of ["390", "1280"]) {
+  seed.projects[width] = {
+    projectId: `project:e2e:${width}`, projectTitle: `Seed Projekt ${width}`,
+    taskId: `task:e2e:${width}`, taskTitle: `Seed úkol v projektu ${width}`,
+  };
+}
 const db = new DatabaseSync(stage.databasePath);
 try {
   db.exec("PRAGMA foreign_keys=ON; PRAGMA busy_timeout=3000");
   const workspace = db.prepare("SELECT id FROM workspaces WHERE kind='personal' AND owner_user_id=?").get(owner);
   db.prepare("INSERT INTO areas(id,title,kind,workspace_id,owner_user_id) VALUES (?,?,'private',?,?)")
     .run(seed.areaId, seed.areaTitle, workspace.id, owner);
-  db.prepare("INSERT INTO projects(id,area_id,title) VALUES (?,?,?)").run(seed.projectId, seed.areaId, seed.projectTitle);
-  db.prepare("INSERT INTO tasks(id,project_id,title) VALUES (?,?,?)").run(seed.taskId, seed.projectId, seed.taskTitle);
+  for (const item of Object.values(seed.projects)) {
+    db.prepare("INSERT INTO projects(id,area_id,title) VALUES (?,?,?)").run(item.projectId, seed.areaId, item.projectTitle);
+    db.prepare("INSERT INTO tasks(id,project_id,title) VALUES (?,?,?)").run(item.taskId, item.projectId, item.taskTitle);
+  }
 } finally {
   db.close();
 }
