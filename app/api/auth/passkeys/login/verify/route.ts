@@ -1,20 +1,12 @@
 import { NextResponse } from "next/server";
 import type { AuthenticationResponseJSON } from "@simplewebauthn/server";
 import { createSessionToken, sessionCookieName, sessionMaxAgeSeconds } from "../../../../../../lib/auth";
-import { OwnerSessionStateUnavailable } from "../../../../../../lib/owner-session-revocation";
+import { passkeySignInError } from "../../../../../../lib/passkey-sign-in-error";
 import { boundedString, enforceRateLimit, HttpInputError, readJsonBody, requireSameOrigin } from "../../../../../../lib/http-security";
 import { finishAuthentication } from "../../../../../../lib/passkeys";
 import { recordSecurityEvent } from "../../../../../../lib/security-audit";
 
 export const runtime = "nodejs";
-
-/** Pure error classification; also covers verified WebAuthn + failed session storage. */
-export function passkeySignInError(error: unknown): HttpInputError {
-  return error instanceof HttpInputError ? error
-    : error instanceof OwnerSessionStateUnavailable
-      ? new HttpInputError("Passkey sign-in is unavailable", 503)
-      : new HttpInputError("Passkey sign-in failed", 401);
-}
 
 export async function POST(request: Request) {
   const limited = enforceRateLimit(request, "passkey-login-verify", 10, 15 * 60_000);

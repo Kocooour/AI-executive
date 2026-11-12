@@ -232,7 +232,7 @@ test("SQLite writer lock is released on SIGKILL; a fresh process can revoke", as
 });
 
 test("passkey storage failures map to 503, not failed WebAuthn credentials", async () => {
-  const { passkeySignInError } = await import("../app/api/auth/passkeys/login/verify/route.ts");
+  const { passkeySignInError } = await import("../lib/passkey-sign-in-error.ts");
   assert.equal(passkeySignInError(new cutoff.OwnerSessionStateUnavailable()).status, 503);
   assert.equal(passkeySignInError(new Error("bad assertion")).status, 401);
 });
