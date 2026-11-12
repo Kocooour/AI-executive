@@ -340,7 +340,7 @@ export function TargetStagingMyPlanPreview({
   /** The list DTO contains only open tasks. Completed rows disappear after
    * server refresh; a confirmed completion offers a distinct Undo action. */
   async function changeStatus(
-    task:{taskId:string;areaId:string},status:MyPlanStatus,
+    task:{taskId:string;areaId:string;whenOn?:string|null},status:MyPlanStatus,
   ){
     if(!statusWriteEnabled||statusOperation.current||whenOperation.current||
       whenAction.kind==="pending"||whenAction.kind==="checking"||
@@ -415,6 +415,7 @@ export function TargetStagingMyPlanPreview({
     }else{
       const prepared=await prepareMyPlanStatus({
         taskId:task.taskId,areaId:task.areaId,status,
+        ...(status==="completed"?{previousWhenOn:task.whenOn??null}:{}),
         signal:op.controller.signal,
       });
       if(statusOperation.current!==op)return;
