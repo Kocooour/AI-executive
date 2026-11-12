@@ -16,6 +16,30 @@ const TABLES = [
   "schema_migrations", "metadata",
 ];
 const ENTITY_KINDS = new Set(["workspace", "area", "project", "task", "note"]);
+// Pinned catalog from lib/schema-migrations.ts at this PR's base SHA.
+// Update this ordered, non-sensitive migration list whenever app migrations change.
+// Never infer "current" from a count or PRAGMA user_version alone.
+const KNOWN_LEGACY_MIGRATIONS = Object.freeze([
+  "2026-10-context-claims-three-level-sensitivity",
+  "2026-10-context-change-events-undo-linkage",
+  "2026-10-context-sources-and-evidence-records",
+  "2026-10-context-claims-legacy-synced-revision",
+  "2026-10-context-search-evidence-guard-index",
+  "2026-10-note-revisions",
+  "2026-10-calendar-accounts-caldav",
+  "2026-10-semantic-memory-outbox-v1",
+  "2026-10-semantic-memory-first-restore-trigger",
+  "2026-10-semantic-memory-cross-workspace-invalidation",
+  "2026-10-mail-gmail-readonly-v1",
+  "2026-10-mail-account-workspace-lifecycle",
+  "2026-10-mail-oauth-claim-through-completion",
+  "2026-10-mail-v4-optin-metadata-sync",
+  "2026-10-mail-v4-partial-event-checkpoint",
+  "2026-10-mail-v4-reconciliation-status",
+  "2026-10-mail-v4-discovery-checkpoints",
+  "2026-10-mail-v4-fixed-discovery-cutoff",
+  "2026-10-project-context-from-goal"
+]);
 const MODIFIED_FIELDS = ["updated_at", "changed_at", "last_sync_at", "last_seen_at", "created_at", "recorded_at", "started_at"];
 const quote = name => '"' + name.replaceAll('"', '""') + '"';
 const within = (child, parent) => child === parent || child.startsWith(parent + path.sep);
@@ -30,13 +54,20 @@ function safeOutput(source, destination) {
   const dst = path.join(parent, path.basename(destination));
   if (within(dst, src) || within(src, dst)) throw Error("source and output paths overlap");
   if (existsSync(dst) || (lstatSyncMaybe(dst) !== null)) throw Error("output must not exist");
-  const configuredLive = process.env.AI_EXECUTIVE_DATA_DIR;
-  for (const name of ["AI_EXECUTIVE_DATA_DIR", "AI_EXECUTIVE_TARGET_STAGING_DIRECTORY"]) {
-    const liveConfigured = process.env[name];
-    if (!liveConfigured || !existsSync(liveConfigured)) continue;
-    const live = realpathSync(liveConfigured);
+  // The app's unset AI_EXECUTIVE_DATA_DIR resolves to <cwd>/.data.
+  // Protect it even when the CLI inherits no production environment variables.
+  // This guard is a defense-in-depth check, not proof that any input is offline.
+  const liveCandidates = [
+    path.resolve(process.cwd(), ".data"),
+    process.env.AI_EXECUTIVE_DATA_DIR,
+    process.env.AI_EXECUTIVE_TARGET_STAGING_DIRECTORY,
+  ];
+  for (const candidate of liveCandidates) {
+    if (!candidate) continue;
+    if (!path.isAbsolute(candidate)) throw Error("live directory config must be absolute");
+    const live = existsSync(candidate) ? realpathSync(candidate) : path.resolve(candidate);
     if (within(src, live) || within(live, src) || within(dst, live) || within(live, dst))
-      throw Error("configured live data overlap refused");
+      throw Error("known live data overlap refused");
   }
   return { src, dst };
 }
@@ -179,6 +210,17 @@ function readInventory(db, source, tokenAttestation) {
   // Names themselves never leave this process (do not risk leaking custom ID strings).
   const migrationsSha256 = migrations === null ? null
     : createHash("sha256").update(JSON.stringify(migrations)).digest("hex");
+  // Actual app migrations are named and applied in registration order.
+  // A strict prefix is a recognized older release; unknown IDs or gaps remain
+  // UNKNOWN, even if the total count happens to match a known version.
+  const expected = migrations === null ? null
+    : KNOWN_LEGACY_MIGRATIONS.slice(0, migrations.length).sort();
+  const recognized = migrations !== null && migrations.length <= KNOWN_LEGACY_MIGRATIONS.length
+    && migrations.every((id, i) => id === expected[i]);
+  const migrationIdentity = migrations === null ? "unavailable"
+    : !recognized ? "unknown"
+    : migrations.length === KNOWN_LEGACY_MIGRATIONS.length ? "known_current" : "known_older";
+  const knownSchemaVersion = recognized ? "legacy-migrations-" + migrations.length : null;
   const backupsDir = path.join(source, "backups");
   let backupFiles = 0;
   const backupEntry = lstatSyncMaybe(backupsDir);
@@ -194,7 +236,8 @@ function readInventory(db, source, tokenAttestation) {
     format: "lumi-r4-content-free-inventory-v1", integrity: "ok", schema: {
       sqliteUserVersion: userVersion, migrationRows: migrations?.length ?? null,
       appliedMigrationsSha256: migrationsSha256,
-      migrationIdentity: migrations === null ? "unavailable" : "fingerprinted",
+      migrationIdentity, knownSchemaVersion,
+      expectedMigrationCount: KNOWN_LEGACY_MIGRATIONS.length,
     },
     entities: { count: entityCount, byKind, byWorkspace },
     tables, lastModifiedRanges: timestampRanges,
@@ -212,9 +255,12 @@ function readInventory(db, source, tokenAttestation) {
 
 function main() {
   const args = process.argv.slice(2);
+  // An explicit human/operator assertion is required, but cannot itself prove
+  // a coherent or detached offline capture.
+  if (args.pop() !== "--offline-confirmed") throw Error("offline source confirmation required");
   if (!(args.length === 2 || (args.length === 4 && args[2] === "--integration-token-present" &&
       (args[3] === "true" || args[3] === "false"))))
-    throw Error("usage: inventory <offline-copy> <new-output> [--integration-token-present true|false]");
+    throw Error("usage: inventory <offline-copy> <new-output> [--integration-token-present true|false] --offline-confirmed");
   const tokenAttestation = args.length === 4 ? args[3] === "true" : null;
   const { src, dst } = safeOutput(args[0], args[1]);
   // Only create the new output directory once all collision/alias checks have passed.
