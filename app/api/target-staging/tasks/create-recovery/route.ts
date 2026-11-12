@@ -2,4 +2,6 @@
 import {postPrivateTaskCreateRecovery} from "../../../../../lib/target-private-task-create-http";
 export const runtime="nodejs";
 export const dynamic="force-dynamic";
-export const POST=postPrivateTaskCreateRecovery;
+export async function POST(request: Request) {
+  return postPrivateTaskCreateRecovery(request);
+}
