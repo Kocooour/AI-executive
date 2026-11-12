@@ -14,12 +14,13 @@ import {validPrivateTaskAreaId,validPrivateTaskTitle,type PrivateTaskCreateComma
   "../../lib/target-private-task-create-client";
 import {privateTaskCreateMarker,trackedPrivateTaskCreate,
   runPrivateTaskCreate,checkTrackedPrivateTaskCreate,
-  recoverPrivateTaskCreate,subscribePrivateTaskCreate} from
+  recoverPrivateTaskCreate,cancelTrackedPrivateTaskCreate,
+  subscribePrivateTaskCreate} from
   "../../lib/target-private-task-create-coordinator";
 
 type Areas={kind:"loading"|"unavailable"|"signed-out";generation:string}|
   {kind:"ready";generation:string;items:PrivateNoteAreaChoice[]};
-type Phase="idle"|"checking"|"saving"|"uncertain"|"receipt"|"saved";
+type Phase="idle"|"checking"|"saving"|"uncertain"|"receipt"|"cancelling"|"saved";
 const text={
   cs:{title:"Nový soukromý úkol",select:"Cílová Oblast",choose:"Vyberte soukromou Oblast",
     loading:"Ověřuji soukromé Oblasti…",empty:"Nemáte dostupnou soukromou Oblast.",
@@ -34,7 +35,10 @@ const text={
     blocked:"Předchozí vytvoření úkolu není potvrzené. Další úkol nelze nyní vytvořit.",
     storage:"Úložiště záložky není dostupné; bezpečné vytvoření je zablokované.",
     lost:"Text původního příkazu není uložen. Výsledek lze bezpečně ověřit podle neprůhledného ID; do potvrzení je nový zápis zablokovaný.",
-    receipt:"Ověřit původní zápis",notRecorded:"Server dosud nepotvrdil zápis. To nevylučuje pozdější dokončení; další příkaz je blokovaný.",
+    receipt:"Ověřit původní zápis",cancel:"Zrušit nepotvrzený zápis",
+    cancelling:"Bezpečně ruším…",cancelled:"Původní zápis byl prokazatelně zrušen. Můžete vytvořit nový úkol.",
+    cancelCommitted:"Úkol už mohl být vytvořen. Ověřte původní zápis.",
+    cancelFailed:"Zrušení nelze potvrdit; vytváření dalších úkolů zůstává zablokované.",notRecorded:"Server dosud nepotvrdil zápis. To nevylučuje pozdější dokončení; další příkaz je blokovaný.",
     receiptFailed:"Zápis nelze bezpečně potvrdit. Ověření opakujte po obnovení oprávnění.",
     success:"Vytvoření úkolu bylo potvrzeno."},
   en:{title:"New private task",select:"Destination Area",choose:"Choose a private Area",
@@ -50,7 +54,10 @@ const text={
     blocked:"A previous task create is unconfirmed; new creation is blocked.",
     storage:"Tab storage is unavailable; safe creation is blocked.",
     lost:"The original private command text was not stored. Check the original create with its opaque ID; new creation remains blocked until confirmed.",
-    receipt:"Check original create",notRecorded:"The server has not confirmed this create. It could still commit later; new creation is blocked.",
+    receipt:"Check original create",cancel:"Cancel unresolved create",
+    cancelling:"Cancelling safely…",cancelled:"Original create was durably cancelled. You may create another task.",
+    cancelCommitted:"The task may have been created. Verify the original create.",
+    cancelFailed:"Cancellation is not confirmed; further task creation stays blocked.",notRecorded:"The server has not confirmed this create. It could still commit later; new creation is blocked.",
     receiptFailed:"The create could not be verified. Retry verification after access is restored.",
     success:"Task creation confirmed."},
 } as const;
@@ -188,7 +195,7 @@ export default function TargetPrivateTaskAreaChooser({
   }
   async function checkReceipt(){
     if(!runtime||!live()||!blocked||
-      tracked?.phase==="saving"||phase==="receipt")return;
+      tracked?.phase==="saving"||phase==="receipt"||phase==="cancelling")return;
     const current=++serial.current,controller=new AbortController();
     previewRef.current?.abort();previewRef.current=controller;
     setPhase("receipt");setMessage("");
@@ -206,6 +213,25 @@ export default function TargetPrivateTaskAreaChooser({
     }
     setPhase("uncertain");
     setMessage(result==="not_recorded"?c.notRecorded:c.receiptFailed);
+  }
+  async function cancelPending(){
+    if(!runtime||!live()||marker.kind!=="blocked"||
+      tracked?.phase==="saving"||phase==="receipt"||phase==="cancelling")return;
+    const current=++serial.current,controller=new AbortController();
+    previewRef.current?.abort();previewRef.current=controller;
+    setPhase("cancelling");setMessage("");
+    const timer=setTimeout(()=>controller.abort(),8000);
+    const result=await cancelTrackedPrivateTaskCreate(runtime,generation,controller.signal)
+      .catch(()=>"unavailable" as const);
+    clearTimeout(timer);
+    if(current!==serial.current||!mounted.current||!live())return;
+    setRevision(v=>v+1);
+    if(result==="cancelled"&&privateTaskCreateMarker(generation).kind==="clear"){
+      setName("");setChosen("");setPhase("idle");setMessage(c.cancelled);
+      setNonce(v=>v+1);return;
+    }
+    setPhase("uncertain");
+    setMessage(result==="committed"?c.cancelCommitted:c.cancelFailed);
   }
   void revision;
   return <div className="captureOverlay" onClick={onClose}>
@@ -231,8 +257,14 @@ export default function TargetPrivateTaskAreaChooser({
         {marker.kind==="blocked"&&!tracked&&<p role="note">{c.lost}</p>}
         {marker.kind==="blocked"&&<button type="button"
           data-testid="target-private-task-receipt"
-          disabled={!ready||phase==="receipt"}
+          disabled={!ready||phase==="receipt"||phase==="cancelling"}
           onClick={()=>{void checkReceipt();}}>{c.receipt}</button>}
+        {marker.kind==="blocked"&&tracked?.phase!=="saving"&&<button
+          type="button" data-testid="target-private-task-cancel"
+          disabled={!live()||phase==="receipt"||phase==="cancelling"}
+          onClick={()=>{void cancelPending();}}>
+          {phase==="cancelling"?c.cancelling:c.cancel}
+        </button>}
       </section>}
       {ready&&selected&&!blocked&&<form data-testid="target-private-task-form"
         onSubmit={event=>{void create(event);}}>
