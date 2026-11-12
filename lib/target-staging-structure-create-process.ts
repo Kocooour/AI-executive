@@ -1,5 +1,6 @@
 /** Strict subprocess boundary for private project and project-child task commands. */
 import {runStagingWriteChild} from "./target-staging-title-http-process";
+import {isReadableStagingProjectId} from "./target-project-id";
 import type {StagingPersonalReadConfig} from "./target-staging-read-process";
 import type {PrivateStructureKind,PrivateStructureCreateCommand,
   PrivateStructureCreateRecovery} from "./target-private-structure-create-writer";
@@ -45,7 +46,7 @@ export function parseStructureRecoveryReply(v:unknown):PrivateStructureCreateRec
     return {ok:false,reason:"unavailable"};
   if(r.ok===true&&keys==="areaId,id,ok,projectId,status"&&r.status==="committed"&&
     typeof r.id==="string"&&UUID.test(r.id)&&r.id===r.id.toLowerCase()&&
-    typeof r.projectId==="string"&&UUID.test(r.projectId)&&r.projectId===r.projectId.toLowerCase()&&
+    isReadableStagingProjectId(r.projectId)&&
     typeof r.areaId==="string"&&AREA.test(r.areaId))
     return {ok:true,status:"committed",id:r.id,projectId:r.projectId,areaId:r.areaId};
   return null;
