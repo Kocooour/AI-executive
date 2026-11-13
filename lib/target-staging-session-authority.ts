@@ -1,7 +1,8 @@
-import {createPreflightedPrivateStructure,validPrivateStructureCreateCommand,
+import {createPreflightedPrivateStructure,cancelPreflightedPrivateStructureCreate,
+  validPrivateStructureCreateCommand,
   type PrivateStructureKind,type PrivateStructureCreateCommand,
   type PrivateStructureCreateResult,type PrivateStructureCreateStatus,
-  type PrivateStructureCreateRecovery} from "./target-private-structure-create-writer";
+  type PrivateStructureCreateRecovery,type PrivateStructureCancelResult} from "./target-private-structure-create-writer";
 import type {TargetProjectTitleRecovery} from "./target-project-title-command-status";
 import {cancelTargetProjectTitle,validProjectTitleCancelCommand,type ProjectTitleCancelCommand,type ProjectTitleCancelResult} from "./target-project-title-cancel";
 import { writeTargetProjectTitle, validProjectTitleCommand, type ProjectTitleCommand, type ProjectTitleResult } from "./target-project-title-writer";
@@ -1375,6 +1376,16 @@ export class TargetStagingSessionAuthority {
       return {ok:false,reason:"invalid_request"};
     return createPreflightedPrivateStructure(this.#store,credential,kind,command,
       durableSessionTokenHash);
+  }
+  /** An actor-scoped terminal create fence, never an Area authorization. */
+  cancelPrivateStructureCreate(
+    sessionToken:string,kind:PrivateStructureKind,commandId:string,durableSessionTokenHash?:string,
+  ):PrivateStructureCancelResult{
+    const credential=this.#credential(sessionToken,true);
+    return credential
+      ?cancelPreflightedPrivateStructureCreate(this.#store,credential,kind,commandId,
+        durableSessionTokenHash)
+      :{ok:false,reason:"unauthorized"};
   }
   privateStructureCreateStatus(
     sessionToken:string,kind:PrivateStructureKind,command:PrivateStructureCreateCommand,

@@ -54,7 +54,7 @@ export function parseStructureRecoveryReply(v:unknown):PrivateStructureCreateRec
   return null;
 }
 async function run(config:StagingPersonalReadConfig,kind:PrivateStructureKind,
-  mode:"create"|"status"|"recovery",command:PrivateStructureCreateCommand|{commandId:string},
+  mode:"create"|"status"|"recovery"|"cancel",command:PrivateStructureCreateCommand|{commandId:string},
 ):Promise<unknown|null>{
   return runStagingWriteChild(config,"target-staging-structure-create-child.mjs",
     JSON.stringify({kind,mode,command}),
@@ -78,4 +78,24 @@ export async function readStructureCreateRecoveryInChild(
 ):Promise<PrivateStructureCreateRecovery|null>{
   if(!UUID.test(commandId))return null;
   return parseStructureRecoveryReply(await run(cfg,kind,"recovery",{commandId}));
+}
+
+export type StructureCancelReply=
+  |{ok:true;status:"cancelled"|"settled"}
+  |{ok:false;reason:"resync_required"|"session_revoked"|"write_failed"};
+export function parseStructureCancelReply(v:unknown):StructureCancelReply|null{
+  const r=record(v);if(!r)return null;
+  const k=Object.keys(r).sort().join(",");
+  if(k==="ok,status"&&r.ok===true&&(r.status==="cancelled"||r.status==="settled"))
+    return {ok:true,status:r.status};
+  if(k==="ok,reason"&&r.ok===false&&
+    (r.reason==="resync_required"||r.reason==="session_revoked"||r.reason==="write_failed"))
+    return {ok:false,reason:r.reason};
+  return null;
+}
+export async function cancelStructureCreateInChild(
+  cfg:StagingPersonalReadConfig,kind:PrivateStructureKind,commandId:string,
+):Promise<StructureCancelReply|null>{
+  if(!UUID.test(commandId))return null;
+  return parseStructureCancelReply(await run(cfg,kind,"cancel",{commandId}));
 }

@@ -16,12 +16,12 @@ try{
   if(!data||typeof data!=="object"||Array.isArray(data)||
     Object.keys(data).sort().join(",")!=="command,kind,mode"||
     !["project","project-task"].includes(data.kind)||
-    !["create","status","recovery"].includes(data.mode))throw Error("Invalid");
+    !["create","status","recovery","cancel"].includes(data.mode))throw Error("Invalid");
   if(process.env[data.kind==="project"
     ?"AI_EXECUTIVE_TARGET_STAGING_HTTP_PROJECTS_CREATE_ENABLED"
     :"AI_EXECUTIVE_TARGET_STAGING_HTTP_PROJECT_TASKS_CREATE_ENABLED"]!=="true")
     throw Error("Disabled");
-  const recovery=data.mode==="recovery";
+  const recovery=data.mode==="recovery"||data.mode==="cancel";
   const opaque=recovery&&data.command&&typeof data.command==="object"&&
     !Array.isArray(data.command)&&Object.keys(data.command).join(",")==="commandId"&&
     typeof data.command.commandId==="string"&&
@@ -42,7 +42,9 @@ try{
       ?auth.createPrivateStructure(issued.sessionToken,data.kind,data.command,resolved.sessionTokenHash)
       :data.mode==="status"
         ?auth.privateStructureCreateStatus(issued.sessionToken,data.kind,data.command)
-        :auth.privateStructureCreateRecovery(issued.sessionToken,data.kind,data.command.commandId);
+        :data.mode==="cancel"
+          ?auth.cancelPrivateStructureCreate(issued.sessionToken,data.kind,data.command.commandId,resolved.sessionTokenHash)
+          :auth.privateStructureCreateRecovery(issued.sessionToken,data.kind,data.command.commandId);
     if(result.ok===false&&result.reason==="invalid_request")throw Error("Invalid");
     process.stdout.write(JSON.stringify(result));
   }finally{auth.close();}
