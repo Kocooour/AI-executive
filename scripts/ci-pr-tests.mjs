@@ -34,6 +34,7 @@ const SECURITY = [
   "tests/target-area-policy.test.mjs",
   "tests/target-note-access.test.mjs",
   "tests/target-r2d-security-matrix.test.mjs",
+  "tests/target-personal-boundary-matrix.test.mjs",
   "tests/target-r2d-security-matrix-mutation-guards.test.mjs",
   "tests/target-staging-membership-command.test.mjs",
   "tests/target-staging-session-authority.test.mjs",
