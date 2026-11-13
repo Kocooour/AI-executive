@@ -118,7 +118,11 @@ export function useSync() {
   }
   // The generation this page started with: another tab's adoption matters only if it is newer.
   const loadedGeneration = useRef<number | undefined>(restoreGeneration.current);
-  const loadedWasSynced = useRef(localStorage.getItem("ai-executive-server-synced") === "1");
+  // Client components also render on the server, where localStorage does not exist.
+  // Capture this tab's previously-synced state only when browser storage is available.
+  const loadedWasSynced = useRef(
+    typeof localStorage !== "undefined" && localStorage.getItem("ai-executive-server-synced") === "1",
+  );
   // A fenced mutating API has already stopped in-tab writes synchronously;
   // its authenticated GET must finish that same adoption, not return early.
   const fencedRestore = useRef(false);
