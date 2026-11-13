@@ -624,7 +624,7 @@ export class TargetStagingSessionAuthority {
   /** BE-04: single actor-bound, pinned CAS + temporal guard read. */
   readTemporalStatusPreview(
     actorUserId: string, taskId: string,
-  ): {detail: TemporalTaskDetail; expectedRevision: string} | null {
+  ): {detail: TemporalTaskDetail; expectedRevision: string;previousWhenOn:string|null} | null {
     if (this.#closed) return null;
     try {
       const credential = this.#oneShotReadCredential(actorUserId);
