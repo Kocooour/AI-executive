@@ -13,6 +13,7 @@ on:
       - "e2e/attention-open.spec.ts"
       - "e2e/project-page.spec.ts"
       - "e2e/inspector-return-focus-ui01e.spec.ts"
+      - "e2e/detail-inspector-b2.spec.ts"
   workflow_dispatch:
 
 permissions:
@@ -24,9 +25,9 @@ concurrency:
 
 jobs:
   focused-browser:
-    name: C4 seven focused cases (Chromium)
+    name: C4 cases + C10 inspector acceptance (Chromium)
     runs-on: ubuntu-24.04
-    timeout-minutes: 25
+    timeout-minutes: 45
     env:
       CI: "true"
       NEXT_TELEMETRY_DISABLED: "1"
@@ -61,6 +62,26 @@ jobs:
             --project=desktop \
             --grep 'a synced task edit|a fresh Attention refresh|UI-01e: keyboard A|aggregate project deep links|current project relation rejects' \
             --trace=on
+      - name: C10 inspector specs independently (default-off production build)
+        shell: bash
+        run: |
+          pnpm exec playwright test e2e/detail-inspector-b2.spec.ts \
+            --project=desktop --workers=1 --trace=on
+          pnpm exec playwright test e2e/inspector-return-focus-ui01e.spec.ts \
+            --project=desktop --workers=1 --trace=on
+      - name: C10 ordered navigation then both complete inspector suites
+        shell: bash
+        run: |
+          # Playwright 1.56 --test-list preserves this intentional file order.
+          # One worker, one synthetic store, one browser run to expose pollution.
+          cat > "${RUNNER_TEMP}/release0-c10-inspector.test-list" <<'EOF'
+          e2e/record-links-ui01.spec.ts
+          e2e/project-page.spec.ts
+          e2e/detail-inspector-b2.spec.ts
+          e2e/inspector-return-focus-ui01e.spec.ts
+          EOF
+          pnpm exec playwright test --test-list "${RUNNER_TEMP}/release0-c10-inspector.test-list" \
+            --project=desktop --workers=1 --trace=on
       - name: Upload focused traces on failure
         if: failure()
         uses: actions/upload-artifact@v6
