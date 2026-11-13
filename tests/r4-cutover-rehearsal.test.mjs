@@ -93,10 +93,76 @@ test("inventory: content-free report and summary, no write to source", t => {
   assert.equal(report.connectors.sync.neverSynced, 1);
   assert.equal(report.connectors.sync.pending, 1);
   assert.equal(report.connectors.sync.recoveryPending, 1);
+  assert.equal(report.connectors.sync.reconciliationPending, null,
+    "older sync schema without message reconciliation must report unknown, not zero");
   assert.equal(report.connectors.sync.status, "complete");
   assert.match(report.schema.appliedMigrationsSha256, /^[a-f0-9]{64}$/);
   assert.equal(report.backups.files, 1);
   assert.equal(sha(path.join(source, "store.sqlite")), original);
+});
+
+test("inventory reports reconciliation backlog even after Gmail checkpoints clear", t => {
+  const { source, base } = fixture(t);
+  const file = path.join(source, "store.sqlite");
+  const db = new DatabaseSync(file);
+  try {
+    db.exec(`
+      CREATE TABLE mail_sync_messages (
+        account_id TEXT NOT NULL, message_id TEXT PRIMARY KEY,
+        subject TEXT NOT NULL, needs_reconcile INTEGER NOT NULL
+      );
+      UPDATE mail_sync_accounts SET
+        last_synced_at=1700000000000, history_backlog_pending=0,
+        pending_event_id=NULL, recovery_inbox_page_token=NULL,
+        recovery_sent_page_token=NULL;
+    `);
+    db.prepare("INSERT INTO mail_sync_messages VALUES (?,?,?,?)")
+      .run("account", "pending-id", SECRET, 1);
+    db.prepare("INSERT INTO mail_sync_messages VALUES (?,?,?,?)")
+      .run("account", "ready-id", SECRET, 0);
+  } finally { db.close(); }
+
+  const first = run(inventory, [source, path.join(base, "reconcile-present")]);
+  assert.equal(first.status, 0, first.stderr);
+  const firstReport = JSON.parse(readFileSync(path.join(base, "reconcile-present", "inventory.json"), "utf8"));
+  assert.equal(firstReport.connectors.sync.status, "complete");
+  assert.equal(firstReport.connectors.sync.pending, 0);
+  assert.equal(firstReport.connectors.sync.recoveryPending, 0);
+  assert.equal(firstReport.connectors.sync.reconciliationPending, 1,
+    "a cleared history cursor does not prove message reconciliation");
+  assert.equal(firstReport.connectors.syncedMessageRows, 2);
+  assert.equal(JSON.stringify(firstReport).includes(SECRET), false);
+  assert.equal(first.stdout.includes(SECRET), false);
+  assert.equal(first.stderr.includes(SECRET), false);
+
+  const updated = new DatabaseSync(file);
+  try {
+    updated.prepare("UPDATE mail_sync_messages SET needs_reconcile=0 WHERE message_id=?")
+      .run("pending-id");
+  } finally { updated.close(); }
+  const second = run(inventory, [source, path.join(base, "reconcile-clear")]);
+  assert.equal(second.status, 0, second.stderr);
+  const secondReport = JSON.parse(readFileSync(path.join(base, "reconcile-clear", "inventory.json"), "utf8"));
+  assert.equal(secondReport.connectors.sync.reconciliationPending, 0,
+    "supported schema with no backlog must report zero");
+  assert.equal(secondReport.connectors.sync.pending, 0);
+  assert.equal(secondReport.connectors.sync.recoveryPending, 0);
+});
+
+test("inventory marks reconciliation as unavailable when message schema lacks the field", t => {
+  const { source, base } = fixture(t);
+  const db = new DatabaseSync(path.join(source, "store.sqlite"));
+  try {
+    db.exec("CREATE TABLE mail_sync_messages (account_id TEXT, message_id TEXT, subject TEXT)");
+    db.prepare("INSERT INTO mail_sync_messages VALUES (?,?,?)").run("account", "legacy-id", SECRET);
+  } finally { db.close(); }
+  const out = path.join(base, "legacy-reconcile");
+  const result = run(inventory, [source, out]);
+  assert.equal(result.status, 0, result.stderr);
+  const report = JSON.parse(readFileSync(path.join(out, "inventory.json"), "utf8"));
+  assert.equal(report.connectors.syncedMessageRows, 1);
+  assert.equal(report.connectors.sync.reconciliationPending, null);
+  assert.equal(JSON.stringify(report).includes(SECRET), false);
 });
 
 test("inventory refuses aliases, overlapping paths and existing output", t => {
