@@ -855,11 +855,21 @@ test("rehearsal hides private SQLite table names and verifies special __proto__ 
       .map(row => row.name);
     assert.ok(tableNames.includes(privateTableName));
     assert.ok(tableNames.includes("__proto__"));
+    assert.equal(report.applicationTableCount, tableNames.length,
+      "special untrusted keys must be counted rather than silently lost");
   } finally { archive.close(); }
 
-  // The special key is not dropped during verification, including row digests.
+  // Verify two equal offline roots including the special-name table, then
+  // mutate that table and check that equality is actually rejected.
   const candidate = path.join(base, "changed-prototype");
   cpSync(source, candidate, { recursive: true });
+  chmodSync(candidate, lstatSync(source).mode & 0o7777);
+  const equalOutput = path.join(base, "equal-prototype");
+  const equal = run(rehearsal, ["--verify", source, candidate, equalOutput]);
+  assert.equal(equal.status, 0, equal.stderr);
+  const equalReport = readFileSync(path.join(equalOutput, "rehearsal.json"), "utf8");
+  assert.equal(equalReport.includes(SECRET), false);
+  assert.equal(equalReport.includes("__proto__"), false);
   const changed = new DatabaseSync(path.join(candidate, "store.sqlite"));
   try { changed.exec('UPDATE "__proto__" SET body = \'tampered\''); }
   finally { changed.close(); }
