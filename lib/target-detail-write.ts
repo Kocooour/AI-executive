@@ -21,7 +21,7 @@ import {
 import {prepareConfirmedMyPlanUndo} from "./target-staging-my-plan-undo";
 import {
   dispatchMyPlanWhen,checkMyPlanWhenReceipt,prepareMyPlanWhen,
-  type MyPlanWhenCommand,
+  readCurrentMyPlanWhenForCompletion,type MyPlanWhenCommand,
 } from "./target-staging-my-plan-when-client";
 import {prepareConfirmedWhenUndo} from "./target-staging-my-plan-when-undo";
 import {readStagingTaskPreview,type TaskPreview} from "./target-staging-task-preview-client";
@@ -226,8 +226,18 @@ function fromDispatch(
 async function runTaskStatus(input:Extract<WriteInput,{kind:"taskStatus"}>,d:Deps):Promise<Outcome>{
   const ctx=await readTaskWriteContext(input.taskId,input.areaId,d.fetch,d.signal);
   if(ctx.ok===false)return outcomeForFailure(ctx.reason);
+  // Every Undo must carry the ORIGINAL actor-private plan day. An authorized
+  // GET verifies the current Area and day; the status writer checks that same
+  // day atomically before completion so a stale read never becomes a write.
+  const before=input.status==="completed"
+    ?await readCurrentMyPlanWhenForCompletion({
+      taskId:input.taskId,areaId:input.areaId,signal:d.signal,
+    },d.fetch):null;
+  if(before&&before.ok===false)return outcomeForFailure(
+    before.reason==="stale"?"conflict":before.reason as EditFailure);
   const command:MyPlanStatusCommand={
     commandId:crypto.randomUUID(),taskId:input.taskId,status:input.status,...ctx.context,
+    ...(before&&before.ok?{previousWhenOn:before.whenOn}:{}),
   };
   if(!validStatusCommand(command))return {t:"error",reason:"invalid"};
   // Server Undo semantics as in My Plan: only a completion is undoable (reopening it).
