@@ -12,7 +12,10 @@ test("page and root pass the server-derived edit flags to the panel; absent flag
   assert.match(rootSource,/targetEdits\?: TargetEditsProps/);
   // Keep the server-derived edit and legacy note gates intact when the private
   // Quick Capture button is injected into the target detail panel.
-  assert.match(rootSource,/<TargetDetailPanel route=\{detailRoute\} language=\{language\} gates=\{detailGates\} edits=\{targetEdits\} noteEdit=\{targetNoteEdit && detailGates\.note\} projectEdit=\{targetProjectEdit && detailGates\.project\} onPrivateCapture=\{targetCapture\?\(\)=>openAreaChooser\(true\):undefined\} \/>/);
+  assert.match(rootSource,/<TargetDetailPanel route=\{detailRoute\} language=\{language\} gates=\{detailGates\} edits=\{targetEdits\}/);
+  assert.match(rootSource,/noteEdit=\{targetNoteEdit && detailGates\.note\} projectEdit=\{targetProjectEdit && detailGates\.project\}/);
+  assert.match(rootSource,/createTask=\{Boolean\(targetCreates\?\.projectTasks && detailGates\.project && detailGates\.task\)\}/);
+  assert.match(rootSource,/onPrivateCapture=\{targetCapture\?\(\)=>openAreaChooser\(true\):undefined\}/);
   assert.match(rootSource,/const targetCapture=Boolean\(scopesOn&&targetScopes\?\.notes&&targetPrivateNoteAreas&&\s*targetPrivateNoteCreate&&mobileDesignV1Preview\)/);
   // A click event on a global FAB must never stand in for an explicit
   // in-detail action (openAreaChooser(true)).
