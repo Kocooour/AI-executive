@@ -579,7 +579,9 @@ export function useLumiApp(options: { targetDetails?: boolean; targetUnified?: b
     closeDetail();
     setNavigationUnavailable(false);
     try {
-      const projectAddress = `${window.location.pathname}${searchForTarget({ kind: "project", id: project.id }, startupView, addressableViews)}`;
+      const projectAddress = `${window.location.pathname}${searchWithScope(
+        searchForTarget({ kind: "project", id: project.id }, startupView, addressableViews),
+        scopeFromSearch(window.location.search))}`;
       const current = targetFromSearch(window.location.search, addressableViews, startupView);
       if (current?.kind === "project" && current.id === project.id) {
         // Re-opening the same history entry is not a new Back origin.
@@ -640,7 +642,8 @@ export function useLumiApp(options: { targetDetails?: boolean; targetUnified?: b
       pendingProjectFocusRef.current = null;
       setOpenProjectId(null);
       // A direct link may have no in-app history. Close to the safe Projects list.
-      try { window.history.replaceState(null, "", `${window.location.pathname}${searchForView("Projects", startupView)}`); }
+      try { window.history.replaceState(null, "", `${window.location.pathname}${searchWithScope(
+        searchForView("Projects", startupView), scopeFromSearch(window.location.search))}`); }
       catch { /* The in-memory list remains available. */ }
     }
   }
