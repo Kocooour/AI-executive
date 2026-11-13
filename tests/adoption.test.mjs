@@ -143,6 +143,19 @@ test("a late ordinary sync cannot roll back a certified owner-adopted generation
   assert.equal(barrier.persistOrdinaryGeneration(storage, 5, 5), true);
 });
 
+test("ordinary pulls remain usable when rewriting an already-known generation is refused by storage", () => {
+  const storage = memoryStorage();
+  storage.setItem(barrier.ownerAdoptionGenerationKey, "4");
+  const original = storage.setItem;
+  storage.setItem = () => { throw new Error("browser quota denied writes"); };
+  assert.equal(barrier.persistOrdinaryGeneration(storage, 4, 4), true,
+    "a matching persisted generation needs no further writes");
+  assert.equal(barrier.persistOrdinaryGeneration(storage, 4, 5), false,
+    "a new generation must still refuse unsafe certification");
+  storage.setItem = original;
+  assert.equal(storage.getItem(barrier.ownerAdoptionGenerationKey), "4");
+});
+
 test("an unfinished owner restore cannot be mistaken for a completed adoption", () => {
   const storage = memoryStorage();
   storage.setItem("ai-executive-server-synced", "1");
