@@ -75,14 +75,31 @@ jobs:
         run: |
           # Playwright 1.56 --test-list preserves this intentional file order.
           # One worker, one synthetic store, one browser run to expose pollution.
-          cat > "${RUNNER_TEMP}/release0-c10-inspector.test-list" <<'EOF'
-          e2e/record-links-ui01.spec.ts
-          e2e/project-page.spec.ts
-          e2e/detail-inspector-b2.spec.ts
-          e2e/inspector-return-focus-ui01e.spec.ts
+          test_list="${RUNNER_TEMP}/release0-c10-inspector.test-list"
+          plan="${RUNNER_TEMP}/release0-c10-plan.txt"
+          results="${RUNNER_TEMP}/release0-c10-results.txt"
+          cat > "${test_list}" <<'EOF'
+          [desktop] › e2e/record-links-ui01.spec.ts
+          [desktop] › e2e/project-page.spec.ts
+          [desktop] › e2e/detail-inspector-b2.spec.ts
+          [desktop] › e2e/inspector-return-focus-ui01e.spec.ts
           EOF
-          pnpm exec playwright test --test-list "${RUNNER_TEMP}/release0-c10-inspector.test-list" \
-            --project=desktop --workers=1 --trace=on
+          # A previous green CLI invocation silently selected zero test cases.
+          # Fail closed unless all four intended spec files appear in --list.
+          pnpm exec playwright test --list --test-list "${test_list}" \
+            --project=desktop | tee "${plan}"
+          for spec in record-links-ui01 project-page detail-inspector-b2 inspector-return-focus-ui01e; do
+            grep -Fq "[desktop] › e2e/${spec}.spec.ts" "${plan}" || {
+              echo "C10 ordered gate selected no tests from ${spec}" >&2
+              exit 1
+            }
+          done
+          pnpm exec playwright test --test-list "${test_list}" \
+            --project=desktop --workers=1 --trace=on 2>&1 | tee "${results}"
+          grep -Eq '[[:space:]][1-9][0-9]* passed' "${results}" || {
+            echo "C10 ordered gate did not execute any passing browser tests" >&2
+            exit 1
+          }
       - name: Upload focused traces on failure
         if: failure()
         uses: actions/upload-artifact@v6
