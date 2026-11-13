@@ -53,6 +53,18 @@ function safePaths(sources, output) {
     if (!lstatSync(real).isDirectory()) throw Error("source must be an offline directory");
     return real;
   });
+  // Every input must represent a distinct offline tree. In --verify mode,
+  // accepting the same path twice would compare a snapshot against itself and
+  // produce false evidence of an independent backup. Canonical paths also
+  // collapse symlink aliases, and containment rejects nested source trees.
+  // Apply the rule to optional target/config inputs too, to prevent ambiguous
+  // archive provenance. None of these checks can prove independent capture.
+  for (let i = 0; i < resolved.length; i++) {
+    for (let j = i + 1; j < resolved.length; j++) {
+      if (within(resolved[i], resolved[j]) || within(resolved[j], resolved[i]))
+        throw Error("offline input directories must be distinct and non-overlapping");
+    }
+  }
   const dst = canonicalOutput(output);
   for (const src of resolved) {
     if (within(src, dst) || within(dst, src)) throw Error("source/destination overlap");
