@@ -36,7 +36,8 @@ const privateDOM = (page: Page, needle: string) => page.evaluate(secret => {
   const selectedArea = document.querySelector<HTMLSelectElement>('[data-testid="target-private-task-area"]');
   return {
     titleExposed: fields.some(field => field.value.includes(secret)) ||
-      (document.body.textContent || "").includes(secret),
+      (document.body.textContent || "").includes(secret) ||
+      document.documentElement.outerHTML.includes(secret),
     selectedArea: selectedArea?.value ?? null,
   };
 }, needle);
@@ -196,8 +197,17 @@ test("uncertain real-store POST keeps one UUID command barrier after reload", as
   await expect(taskForm(page)).toHaveCount(0);
   expect(await storageSnapshot(page)).not.toContain(secret);
   expect(writeCount, "no automatic second CREATE after reload").toBe(1);
+  const recoveryCommands: string[] = [];
+  page.on("request", request => {
+    if (new URL(request.url()).pathname === "/api/target-staging/tasks/create-recovery" &&
+        request.method() === "POST") {
+      recoveryCommands.push((request.postDataJSON() as { commandId: string }).commandId);
+    }
+  });
   await page.getByTestId("target-private-task-receipt").click();
   await expect(page.getByTestId("target-private-task-created")).toBeVisible();
+  expect(recoveryCommands, "receipt must check the original opaque UUID only")
+    .toEqual([command.commandId]);
   expect(writeCount, "receipt recovery is read-only; never retry CREATE").toBe(1);
   await expect.poll(() => page.evaluate(() =>
     sessionStorage.getItem("lumi-private-task-create-unresolved-v1"))).toBeNull();
