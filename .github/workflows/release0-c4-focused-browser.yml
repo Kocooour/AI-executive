@@ -11,6 +11,7 @@ on:
       - "app/ui/views/defer-popover.tsx"
       - "tests/target-details-wiring.test.mjs"
       - "e2e/record-links-ui01.spec.ts"
+      - "e2e/navigation-unavailable-ui01c.spec.ts"
       - "e2e/attention-open.spec.ts"
       - "e2e/project-page.spec.ts"
       - "e2e/inspector-return-focus-ui01e.spec.ts"
@@ -80,15 +81,16 @@ jobs:
           results="${RUNNER_TEMP}/release0-c10-results.txt"
           cat > "${test_list}" <<'EOF'
           [desktop] › e2e/record-links-ui01.spec.ts
+          [desktop] › e2e/navigation-unavailable-ui01c.spec.ts
           [desktop] › e2e/project-page.spec.ts
           [desktop] › e2e/detail-inspector-b2.spec.ts
           [desktop] › e2e/inspector-return-focus-ui01e.spec.ts
           EOF
           # A previous green CLI invocation silently selected zero test cases.
-          # Fail closed unless all four intended spec files appear in --list.
+          # Fail closed unless all five intended spec files appear in --list.
           pnpm exec playwright test --list --test-list "${test_list}" \
             --project=desktop | tee "${plan}"
-          for spec in record-links-ui01 project-page detail-inspector-b2 inspector-return-focus-ui01e; do
+          for spec in record-links-ui01 navigation-unavailable-ui01c project-page detail-inspector-b2 inspector-return-focus-ui01e; do
             grep -Fq "[desktop] › e2e/${spec}.spec.ts" "${plan}" || {
               echo "C10 ordered gate selected no tests from ${spec}" >&2
               exit 1
