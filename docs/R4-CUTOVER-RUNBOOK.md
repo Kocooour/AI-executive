@@ -102,25 +102,50 @@ After recovery verify SQLite integrity, table counts/hashes against the selected
 
 ---
 
-## Appendix — C15 Quick Capture BFCache release gate
 
-Status: **NOT CERTIFIED** until the evidence below exists on the exact release SHA. This
-runbook implements the verification procedure from [#388](https://github.com/Kocooour/AI-executive/issues/388)
-and the CI-harness work in [#425](https://github.com/Kocooour/AI-executive/issues/425).
-An ordinary successful PR check, a synthetic `PageTransitionEvent`, Back navigation
-with a full reload, or a previous commit's successful run is **not** a BFCache hit.
+## Appendix — C15/C17 Quick Capture BFCache release gate
 
-### Scope and safety
+**Status: NOT CERTIFIED.** This appendix implements [the owner's 2026-11-13
+decision on #388](https://github.com/Kocooour/AI-executive/issues/388#issuecomment-6866991120),
+the native harness [#425](https://github.com/Kocooour/AI-executive/issues/425)
+and strict-mode alignment [#429](https://github.com/Kocooour/AI-executive/issues/429).
+Neither an ordinary green PR run nor a synthetic lifecycle event is proof
+of the **exact release SHA** gate.
 
-- The target under test is the **entire** `personal-v1` flag profile from
-  `lib/target-personal-profile.ts`; the real-store browser suite provisions a
-  **disposable isolated SQLite** store with a private Area. Never point it at a
-  live/production data directory or import private personal content to obtain a hit.
-- A passing scoped browser gate does not replace the full Browser E2E run, backup
-  validation, authorization checks, restore/cutover approval, or the explicit
-  owner's R4 activation decision. Leave Quick Capture default-off until all gates pass.
-- Do not suppress BFCache, remove `no-store` for test convenience, emulate
-  `pageshow.persisted=true`, weaken the assertion, or skip the failing test.
+The pre-production Quick Capture gate requires **both**:
+
+1. **Native Chrome, automatically on the exact release SHA:** manual
+   `workflow_dispatch` of **Focused R3 personal acceptance browser** with
+   `target_sha` equal to the verified 40-character release commit. Its
+   `NATIVE_REAL_BFCACHE_EVIDENCE` artifacts at **390 and 1280 px** must show
+   the real initial and post-Back `pageshow` observations and one valid branch:
+   - `evaluatedBranch: "not_restored"` / `persisted === false`: **nonempty**
+     actual `Page.backForwardCacheNotUsed` reasons, a new document token,
+     cleared draft and selected private Area, **zero** attempted
+     `POST /api/target-staging/tasks`, a new direct completed authorized
+     session GET 200 before reopening the editor, then a new authorized
+     private Area GET 200 before reselection or Save. The abandoned text
+     must remain absent and unsubmittable even after reopening and empty Save.
+   - `evaluatedBranch: "restored"` / `persisted === true`: the **same**
+     existing strict checks (original document token, no private text/Area
+     restored, no CREATE, new completed direct session GET 200 **finished
+     before** private Area GET 200 begins, both before any further action,
+     and blank composer after reselection/Save). No relaxation of this path.
+   Missing initial `pageshow`, no post-Back event, no reasons for a
+   `not_restored` result, any leaked draft/selected Area or any CREATE **fails**.
+2. **Safari, manually on the same deployed SHA:** one documented real
+   Back navigation on a disposable staging instance in current Safari on
+   **macOS or iOS**, recording the actual `pageshow.persisted` true/false and
+   proving the private title and selected Area never remain visible or
+   submittable. A restoration with leaked draft is a **blocking defect**.
+   Follow section 3 and attach the filled evidence template.
+
+**Privacy boundary:** keep `Cache-Control: no-store`, auth, cookies and ACL
+unchanged. Do not simulate page lifecycle events, skip failed strict tests,
+force BFCache eligibility, or relax checks to turn a miss into a pass.
+Neither branch alone replaces full Browser E2E, separately verified full
+reload / uncertain POST, backup/restore checks or explicit owner approval.
+Quick Capture stays default-off until every R4 gate is met.
 
 ### C15 root-cause discovery: the earlier run could not exercise BFCache
 
@@ -139,14 +164,16 @@ owner session cookie, fills the real Quick Capture task form, performs a
 cross-document navigation and the browser's native `history.back()`, and
 records the original `pageshow.persisted`, private draft, selected Area,
 and fresh authorized reads. This is NOT a synthetic transition.
-The manual exact-SHA workflow enforces `persisted === true` in this independent
-witness; **a miss makes the release gate fail**. Ordinary PR CI also runs the
-witness but only establishes native-browser diagnostics when a hit is absent.
 
-Chrome can sometimes use BFCache even with `no-store`, but there are strict
-privacy exceptions: cookies changing and `no-store` XHR responses can evict
-entries. Do not infer the sole blocker from the main document header.
-See [Chrome's documented conditions](https://developer.chrome.com/docs/web-platform/bfcache-ccns).
+After #429, manual exact-SHA strict mode accepts **either** genuine BFCache
+restoration **or** an explained miss with complete privacy and fresh-read
+proof. PR runs still exercise the native-browser code but are not release
+certification.
+
+Chrome may sometimes use BFCache with `no-store`, subject to privacy
+exceptions (including changing cookies and `no-store` XHR responses).
+Do not infer a universal browser limitation from one result. See
+[Chrome's documented conditions](https://developer.chrome.com/docs/web-platform/bfcache-ccns).
 
 #### Native Chromium PR evidence — 13 November 2026 (not a BFCache hit)
 
@@ -181,53 +208,60 @@ also identified that checking resource *paths* alone could incorrectly
 accept failed session/Area responses. The updated native witness instruments
 CDP `Network.requestWillBeSent`, `Network.responseReceived`,
 `Network.loadingFinished` and `Network.loadingFailed` **before navigation**.
-On a true BFCache hit it now requires new **completed direct HTTP GET 200**
-responses, with the owner session response finished *before* the private
-Area GET begins, all before another user action. A `401`, `403`, `500`,
-aborted request, service-worker response or cached response does not satisfy
-this proof. The CDP collector tracks `Network.requestServedFromCache`,
-`fromDiskCache` and `fromPrefetchCache` to reject stale authorized reads.
-This strict positive-hit path remains **unobserved** until a real hit occurs.
 
-The required follow-up is still a **manual workflow_dispatch of both scoped
-workflows at the same exact release SHA in strict mode**, or, if CI cannot
-produce a hit, the supported Chrome/Safari staging manual witness from section 3.
-It must be accompanied by the separate full Browser E2E, backup/restore and
-owner sign-off gates.
+On a true BFCache hit the existing witness requires **new completed direct
+HTTP GET 200** responses for owner session and private Area in that order,
+before any new user action. A `401`, `403`, `500`, aborted request, service
+worker response or cached response does not qualify. CDP monitors
+`Network.requestWillBeSent`, `responseReceived`, `loadingFinished`,
+`loadingFailed` and cache flags before the initial navigation.
+
+On an explained **miss**, a fresh document must prove the session GET 200
+**before** opening a new editor; opening the task chooser can then trigger
+the private Area GET 200, which must finish before reselection/Save.
+Both paths check zero CREATE before/during Back, revalidation, reselection
+and empty Save, with sensitive values excluded from logs. The positive-hit
+path remains strict and unchanged by #429.
+
+After merging #429, dispatch **both** scoped workflows once at the
+integration-branch head as a **rehearsal only** and link the results to
+[#388](https://github.com/Kocooour/AI-executive/issues/388). This is
+not a release certificate: repeat on the actual release SHA and complete
+Safari, full E2E, backup/restore and owner-sign-off gates separately.
+
 
 ### 1. Pin and run the scoped CI gates
 
-1. Select the exact candidate **40-character commit SHA** (record it in the release
-   checklist). In GitHub Actions choose the workflow ref that contains these tests
-   and manually dispatch **Focused R3 global private capture browser** with
-   `target_sha` set to that commit.
-2. Manually dispatch **Focused R3 personal acceptance browser** with the **same**
-   `target_sha`. Both workflows check out exactly that SHA, assert
-   `git rev-parse HEAD == target_sha`, and run with
-   `LUMI_REAL_BFCACHE_E2E=true` for the native Chrome witness. The second runs the full `personal-v1`
-   isolated target store, not the legacy mocked target API.
-3. In both run summaries/logs, record the **actual checked-out SHA**, run URL,
-   Chromium version, job conclusion, and the browser evidence:
-   `NATIVE_REAL_BFCACHE_EVIDENCE` (authoritative real hit), alongside
-   `GLOBAL_CAPTURE_REAL_BFCACHE_EVIDENCE` / `REAL_BFCACHE_EVIDENCE`
-   (Playwright full-reload diagnostics only).
-   Download the `lumi-r3-global-capture` and
-   `lumi-r3-global-native-bfcache` (manual global gate) and
-   `lumi-r3-personal-acceptance` artifacts (Playwright attachments and
-   traces where present) before retention expires. Record which viewport
-   (390 or 1280 px) each result covers.
-4. **Pass only when the independent native Chromium's original, browser-fired** `pageshow` event has
-   `persisted === true` and the test passes privacy/wake assertions at
-   **both 390 and 1280 px** on the real-store profile. A no-hit diagnostic
-   is a *failed release gate*, not a pass. PR-triggered runs can validate
-   reload behavior but never certify a hit merely by succeeding.
-5. Confirm separately that full reload cleared the private draft and that
-   the real-store `uncertain` POST test observed **one original UUID pair**,
-   one committed CREATE, a blocked composer after reload, and a read-only
-   receipt recovery with **no second CREATE**.
+1. Select the exact **40-character release commit SHA** (and workflow ref
+   containing this gate). From GitHub Actions, dispatch **Focused R3 global
+   private capture browser** with `target_sha` set to this commit, then
+   dispatch **Focused R3 personal acceptance browser** with the same
+   `target_sha`. Both use `LUMI_REAL_BFCACHE_E2E=true` for the native job.
+   Each job checks `git rev-parse HEAD == target_sha`, uses a disposable
+   personal-v1 SQLite store and test-only session, and records the SHA.
+2. Collect both workflow URLs, job conclusions, checkout SHAs and browser
+   versions. Download artifacts `lumi-r3-global-capture`,
+   `lumi-r3-global-native-bfcache`, and `lumi-r3-personal-acceptance`.
+   The `GLOBAL_CAPTURE_REAL_BFCACHE_EVIDENCE` and `REAL_BFCACHE_EVIDENCE`
+   logs come from Playwright and **do not** certify a real restoration.
+   The authoritative native evidence is `NATIVE_REAL_BFCACHE_EVIDENCE`
+   (including `checkedOutSha`, `postBackObserved`, `evaluatedBranch`,
+   `cacheNotUsed`, `recordedNotRestoredReasonCount`,
+   `taskCreatePostCount` and `freshHttpReads`).
+3. For **both 390 and 1280 px**, confirm a native observed initial and
+   return `pageshow`, a valid `restored` or `not_restored` branch under
+   the exact SHA, zero CREATE, cleared private title and Area, and fresh
+   uncached authorized GET 200 evidence as described above.
+   A missing/unknown branch or miss without actual CDP reasons **fails**.
+   Ordinary PR runs can establish diagnostic coverage only.
+4. **Separately** verify full Reload clears the draft, and the real-store
+   `uncertain` POST scenario uses one original UUID pair, one committed
+   CREATE, blocked replay after Reload and read-only receipt recovery
+   **without a second CREATE**. Do not call this BFCache evidence.
+5. Complete section 3's **Safari** check on the same staged SHA. A green
+   native Chrome job **alone** never satisfies #388.
 
-For local *scoped* reproduction (only an isolated throwaway test instance;
-requires the repository and browser dependencies installed):
+Scoped local reproduction on disposable data only:
 
 ```sh
 LUMI_TARGET_PERSONAL_ACCEPTANCE_E2E=true LUMI_REAL_BFCACHE_E2E=true \
@@ -235,87 +269,125 @@ LUMI_TARGET_PERSONAL_ACCEPTANCE_E2E=true LUMI_REAL_BFCACHE_E2E=true \
   pnpm exec playwright test e2e/target-personal-native-bfcache.spec.ts --project=desktop
 ```
 
-Do not use `E2E_SKIP_BUILD=1` unless the production build of the same checkout
-already exists. This command does not by itself certify a future release SHA.
+Build the same checkout first; do not set `E2E_SKIP_BUILD=1` without a
+verified matching build. Local tests alone cannot certify a release.
 
-### 2. If CI does not restore from BFCache
 
-Do **not** conclude that BFCache is inherently impossible in headless Chromium
-from one miss. Preserve the failing job's original console evidence and the
-`navigation.notRestoredReasons` tree (including nested frame reasons); note
-`null` or unsupported separately rather than inventing a cause. Check the
-actual document response's `Cache-Control`, `unload` / `beforeunload`
-listeners, pending connections, active service worker, DevTools/CDP and
-headless-mode effects. Compare an ordinary supported browser build.
+### 2. Diagnose Chrome non-restoration or missing evidence
 
-On a failed Back navigation (a new document), the Chrome console can inspect:
+A genuine cache miss with **nonempty** browser CDP reasons and all strict
+privacy/wake checks is an **accepted `not_restored` branch**, not a
+release-gate failure by itself. Record exact reasons, version, SHA,
+document-token change and no-CREATE/fresh-GET proof. A miss without CDP
+`Page.backForwardCacheNotUsed` reasons **fails**; do not use an empty or
+unsupported `performance.navigation.notRestoredReasons` as substitute.
+Keep the failure artifact, check observed response headers, page events
+and native-CDP diagnostics. An unobserved initial or post-Back `pageshow`
+is also a hard failure, never a skip.
 
-```js
-const navigation = performance.getEntriesByType("navigation")[0];
-console.log({
-  type: navigation?.type,
-  reasons: navigation?.notRestoredReasons ?? "unavailable",
-});
-```
+Do not remove `no-store` or force the browser to restore. When a strict
+job fails, #388 remains blocked. An explained and passing native miss
+still requires the **independent Safari witness** in section 3 and the
+remaining exact-SHA release gates.
 
-An empty/unsupported `notRestoredReasons` value is **not** proof of a particular
-blocker. Log the Chrome version and navigation response headers as additional
-evidence. If an actual CI hit remains unavailable, keep #388 blocked and
-perform the manual procedure below on a disposable staging instance.
 
-### 3. Manual Chrome / Safari on staging
+### 3. Manual Safari on the exact-SHA staging instance (macOS or iOS)
 
-1. Deploy **the same candidate release SHA** to a disposable authenticated
-   staging instance, enable exactly the `personal-v1` flags (including
-   real target SQLite, owner session, and private Area), and verify the
-   deployed SHA. Do not use live data. Repeat at **390 px** and **1280 px**.
-2. In a current stable Chrome or Safari, open the page via a *real document
-   navigation* (not the Next.js client router), for example
-   `/?view=Calendar&scope=personal`. In DevTools enable **Preserve log**;
-   do not enable **Disable cache** or an artificial network condition.
-   Before leaving the page, register an observer in that page's console:
+**Do once per release SHA, not once per PR.** Use test-only data and an
+isolated authenticated staging instance, never production data. Record
+the deployed/checked-out SHA, Safari version and device/viewport.
+Use Safari on macOS, or Safari on iOS inspected remotely from a Mac.
+
+1. Provision a real disposable target SQLite and a private Area, with
+   exactly the `personal-v1` flags at the intended release SHA.
+   Confirm the deployed SHA and owner session. Open **Safari Web Inspector**
+   before the test (macOS: Develop → Show Web Inspector; iOS: inspect the
+   connected device/tab from macOS Safari's Develop menu).
+2. To capture **`persisted:false` even on a newly loaded document**, add
+   a temporary **Inspector Bootstrap Script** in Web Inspector → Sources →
+   create resource (`+`) → **Inspector Bootstrap Script**, using this code
+   (see [WebKit's documentation](https://webkit.org/web-inspector/inspector-bootstrap-script/)).
+   Unlike an ordinary listener typed into the console after load, this
+   instrumentation runs when **each** new page global is created. Keep Web
+   Inspector open and its console history preserved across navigation:
 
    ```js
-   window.addEventListener("pageshow", (event) => {
-     console.log("LUMI_REAL_PAGESHOW_PERSISTED", event.persisted);
-   });
+   if (window.top === window) {
+     window.addEventListener("pageshow", event => {
+       if (location.pathname === "/") {
+         console.info("LUMI_SAFARI_PAGESHOW", JSON.stringify({
+           persisted: event.persisted,
+           navigation: performance.getEntriesByType("navigation")[0]?.type ?? null
+         }));
+       }
+     });
+   }
    ```
 
-   The observer records only future events. It must be installed *before*
-   the cross-document navigation. Do not call `dispatchEvent` or construct
-   a `PageTransitionEvent` manually.
-3. Open global Quick Capture (+), choose **Úkol**, explicitly choose the
-   private **Oblast**, and type a unique sensitive **test-only** task title.
-   **Do not save.** Note its exact text and the selected Area only in a
-   secure test log (do not paste real private data into a public issue).
-4. Navigate the same tab to `/robots.txt` (a genuine full-document
-   navigation), then use the browser's **Back** button. The console must show
-   `LUMI_REAL_PAGESHOW_PERSISTED true` from the restored application
-   document. If it says false or has no such event, report **no hit**.
-5. On successful restoration, immediately verify that the old private title
-   is absent from all input values and DOM text, that the old Area is not
-   selected, and that reopening/selecting an Area reveals a blank title
-   (cannot submit the old value). Network logging must show a **fresh
-   successful owner-authorized `GET /api/target-staging/session`**, followed
-   by a new successful `GET /api/target-staging/notes/create-targets`,
-   **before** any new Area-dependent action. There must be **no**
-   `POST /api/target-staging/tasks` for the abandoned draft.
-6. On a *separate* attempt repeat with a full browser **Reload**; a blank
-   draft here proves only reload recovery, **not** BFCache. Separately
-   review the CI real-store `uncertain` POST test evidence; don't send
-   repeated live CREATEs to simulate a lost response.
+   This merely observes **browser-fired** events; do not call
+   `dispatchEvent` or create a fake `PageTransitionEvent`. Remove/disable
+   this temporary bootstrap script after evidence capture.
+3. Navigate the same tab **as a fresh document** to
+   `/?view=Calendar&scope=personal`. Confirm the initial instrumented
+   `LUMI_SAFARI_PAGESHOW` output with `persisted:false`. Open global
+   Quick Capture (+), choose **Úkol**, explicitly select the test private
+   **Oblast**, type a unique test-only private title and **do not Save**.
+   Verify the draft and Area were selected before leaving (do not publish
+   the private title in an issue).
+4. Navigate within the same tab to `/robots.txt`, then use Safari's
+   actual **Back** action. The inspector must show another **real**
+   `LUMI_SAFARI_PAGESHOW` event for the application and its precise
+   `persisted:true` or `persisted:false`; a missing observation is
+   **inconclusive/fail**, not an inferred `false`. Record the value.
+5. Immediately inspect the returned application's DOM and form:
+   the abandoned title must be absent from all input values, DOM text
+   and HTML, and the former private Area must **not** be selected.
+   Inspect Network: **no** `POST /api/target-staging/tasks` across the
+   full leave/Back/reopen process. Verify a fresh authorized
+   `GET /api/target-staging/session`; after reopening Quick Capture and
+   choosing Úkol, verify a fresh successful authorized
+   `GET /api/target-staging/notes/create-targets` before Area
+   reselection or Save. Reselect the same Area: the title must be
+   **empty**; pressing Save must **not** create a task or revive the draft.
+   A `persisted:true` result **with old text/Area or CREATE** is a blocking
+   security defect. The same privacy checks are mandatory on `false`.
+6. Run the full Reload scenario separately and verify an empty editor;
+   this does not replace the Back check. Compare the independent
+   real-store uncertain-POST CI receipt evidence. Record any unavailable
+   Safari diagnostic as `not available` rather than inventing a CDP reason.
 
-Chrome can expose `performance.getEntriesByType("navigation")[0].notRestoredReasons`
-on a failed restore. Safari may not expose the same diagnostic; record that
-fact explicitly, the exact Safari version, and the real `pageshow.persisted`
-result. Do not equate a page loading quickly with BFCache.
+**Safari evidence template (one record per exact release SHA):**
+
+```text
+Release SHA / deployed SHA (must match):
+Staging instance (non-sensitive identifier), owner/flag profile verified:
+Safari version; macOS or iOS version; device and viewport:
+Web Inspector bootstrap enabled; initial pageshow=false observed (yes/no):
+Real Back pageshow.persisted (true / false / NOT OBSERVED):
+Title absent immediately after Back (yes/no):
+Old private Area unselected (yes/no):
+New authorized session GET 200 (yes/no):
+New authorized private Area GET 200 before reselection/Save (yes/no):
+Reopened composer empty and unsendable (yes/no):
+POST /api/target-staging/tasks count (must be 0):
+Separate full Reload and uncertain-POST results/URLs:
+Inspector evidence location (redacted); tester and timestamp:
+Outcome PASS / FAIL / INCONCLUSIVE; blocking issue if any:
+```
+
+**Pass** only on an actual observed `true` or `false` with every private
+data invariant met and zero CREATE. An event missing, leaking draft,
+stale Area or automatic write is not a pass.
 
 ### 4. Closeout evidence for #388 and R4
 
-Attach or link: release SHA, tested/deployed SHA verification, full `personal-v1`
-flag list hash/version, browser name/version, workflow run URLs, viewport-specific
-`pageshow.persisted` values, `notRestoredReasons` if any, safe proof of draft/Area
-removal and authorized wake, reload fallback, one-UUID uncertain POST result,
-the separate full Browser E2E gate, backup/restore verification, and explicit
-owner approval. Mark gate **UNSATISFIED** if any is absent; do not merge an
-assumption of BFCache support into a production activation decision.
+Link both strict native Chrome workflow runs at the **exact release SHA**,
+per-viewport `evaluatedBranch` and CDP reasons if `not_restored`, proof
+of no stale title/Area or CREATE, fresh authorization, and the filled
+manual Safari form with an actual `pageshow.persisted` result.
+Attach separately the full-reload and one-UUID uncertain-POST checks,
+full Browser E2E, verified backup/restore and explicit owner approval.
+An automatic PR result or a successful integration-branch **rehearsal**
+is never a substitute for these release-SHA steps. Keep #388 open
+until **all** required conditions are satisfied and signed off.
+
