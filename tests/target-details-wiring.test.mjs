@@ -330,11 +330,13 @@ test("a typed link to another active target view switches to it and opens (addre
 });
 
 test("unified mode: legacy views stay visible read-only with a calm cs/en notice (owner decision 2026-11-09, option 1)",()=>{
-  assert.match(rootSource,/const legacyReadOnly = app\.legacyWritesDisabled && !targetView;/);
+  assert.match(rootSource,/const legacyReadOnly = app\.legacyWritesDisabled && !targetView && \["Home", "Inbox", "Today"\]\.includes\(view\);/);
   assert.match(rootSource,/\{legacyReadOnly && \(\s*<p className="navigationUnavailableNotice legacyReadOnlyNotice" role="status"/);
   const copy=read("lib/target-detail-copy.ts");
-  assert.match(copy,/Tento pohled zatím ukazuje dosavadní data; úpravy jsou v režimu serverových dat vypnuté\./);
-  assert.match(copy,/This view still shows the existing data; editing is switched off in server-data mode\./);
+  assert.match(copy,/Tady vidíte dřívější data jen pro čtení\. S aktuálními úkoly pracujte v Mém plánu\./);
+  assert.match(copy,/This view shows earlier data, read-only\. Work with your current tasks in My Plan\./);
+  assert.match(rootSource,/Otevřít Můj plán/);
+  assert.match(rootSource,/Open My Plan/);
   // The views themselves are not hidden.
   assert.doesNotMatch(rootSource,/legacyReadOnly \? null/);
 });

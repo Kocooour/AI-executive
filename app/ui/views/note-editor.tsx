@@ -110,7 +110,7 @@ export function NoteEditor({ app }: { app: LumiApp }) {
       {mode === "edit" ? (
         <textarea
           className="noteBody"
-          readOnly={app.legacyWritesDisabled} title={app.legacyReadOnlyHint}
+          disabled={app.legacyWritesDisabled} title={app.legacyReadOnlyHint}
           aria-labelledby={`noteText-${id}`}
           data-user-content
           maxLength={100000}

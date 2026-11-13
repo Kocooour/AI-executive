@@ -61,8 +61,8 @@ přihlášení se mapuje na tohoto staging vlastníka.
 
 ## Mimo rozsah
 
-Sdílené Oblasti, vytvoření projektu, úkol v projektu, legacy Domů/Doručené/
-Dnes, Attention, push/notifikace, HumanWiki, produkční zapnutí.
+Sdílené Oblasti, vytvoření projektu, úkol v projektu, legacy zápisy či
+migrace, Attention v cílovém modelu, push/notifikace, HumanWiki, produkční zapnutí.
 
 ## Nalezené mezery
 
