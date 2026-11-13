@@ -74,11 +74,11 @@ test("new target: exactly the required settings, private files, preflight, read-
   assert.match(initial[2], /^[a-f0-9-]{36}$/i);
   assert.deepEqual(readdirSync(dir).sort(), files);
   assert.equal(lstatSync(dir).mode & 0o7777, 0o700);
-  assert.equal(lstatSync(dir).uid, process.getuid());
+  assert.equal(lstatSync(dir).uid, process.geteuid());
   for (const name of files) {
     const st = lstatSync(path.join(dir, name));
     assert.ok(st.isFile());
-    assert.equal(st.uid, process.getuid(), name);
+    assert.equal(st.uid, process.geteuid(), name);
     assert.equal(st.mode & 0o7777, 0o600, name);
   }
   assert.deepEqual(readdirSync(base).sort(), ["legacy", "target"]);
@@ -204,7 +204,7 @@ test("foreign UID is rejected even with private POSIX modes (pure ownership poli
 });
 
 test("--check rejects foreign-owned directory or each companion without modifying it", {
-  skip: process.getuid?.() !== 0 ? "requires root to create a foreign-UID fixture" : false,
+  skip: process.geteuid?.() !== 0 ? "requires root to create a foreign-UID fixture" : false,
 }, t => {
   const { base, legacy } = fixture(t);
   const dir = path.join(base, "target");
