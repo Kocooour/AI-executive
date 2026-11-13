@@ -64,6 +64,21 @@ export function finishOwnerAdoptionFence(storage: Writable): void {
     throw new Error("OWNER_ADOPTION_FENCE_NOT_CLEARED");
 }
 
+// A failed final fence removal does NOT mean the original IndexedDB copy
+// survived. If the complete cleanup and new generation were already
+// committed, the marker can be removed idempotently under the same lock
+// on the next startup. Never finalize a partial cleanup or absent generation.
+export function ownerAdoptionReadyToFinish(storage: Enumerable): boolean {
+  const fence = storage.getItem(ownerAdoptionFenceKey);
+  if (fence === null) return true;
+  const generation = Number(fence);
+  if (!validGeneration(generation) || generation <= 0 || String(generation) !== fence ||
+      storage.getItem(ownerAdoptionGenerationKey) !== fence ||
+      storage.getItem("ai-executive-server-synced") !== "1") return false;
+  assertOwnerAdoptionCleanup(storage);
+  return true;
+}
+
 // Fail closed on even a single leftover local deletion/revival marker or draft.
 // Selective localStorage.removeItem failures must never be certified by a new
 // generation, or a tombstone can delete data from the restored server.

@@ -231,7 +231,7 @@ export function useLumiApp(options: { targetDetails?: boolean; targetUnified?: b
   // A workspace change invalidates both visible conversation content and replies still in flight.
   const assistantRequestVersion = useRef(0);
   const { items, relations, unsent, heldBack, heldReasons, syncStatus, setSyncStatus, serverRevision, syncQueue, localDataVersion, signedOut, pendingKey,
-    deletedKey, revivedKey, pendingDeletedIds, pendingRevivedIds, load, applySnapshot, replaceLocalWithServer, restoreGeneration, restoredSinceKnown, adoptServerCopy, showRestoredNotice, restoredNotice, dismissRestoredNotice, putSnapshot, syncToServer,
+    deletedKey, revivedKey, pendingDeletedIds, pendingRevivedIds, load, applySnapshot, replaceLocalWithServer, restoreGeneration, restoredSinceKnown, adoptServerCopy, finishInterruptedOwnerAdoption, showRestoredNotice, restoredNotice, dismissRestoredNotice, putSnapshot, syncToServer,
     pullFromServer, tabId, captureMarkers, clearSentMarkers,
     recoveryHeld, recoveryPreparing, recoveryReady, recoveryError, recoveryOffline, recoveryDownloadRequested,
     recoveryInspecting, recoveryInspection, recoveryInspectionError, inspectOfflineRecoveryFile,
@@ -1522,6 +1522,13 @@ export function useLumiApp(options: { targetDetails?: boolean; targetUnified?: b
       // Do not migrate, seed, or clean any local data while rescue is required.
       if (offlineRecoveryIsHeld()) {
         await load();
+        setSyncStatus("offline");
+        return;
+      }
+      // Resume a fully committed owner restore whose final localStorage
+      // fence removal failed before starting normal reads or migrations.
+      if (!(await finishInterruptedOwnerAdoption())) {
+        await load().catch(() => undefined);
         setSyncStatus("offline");
         return;
       }

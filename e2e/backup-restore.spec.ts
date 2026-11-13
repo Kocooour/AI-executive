@@ -636,6 +636,12 @@ test("a restore found by one tab reloads its sibling tab too: restored Context, 
     await openContext(tab1);
     await openContext(tab2);
     await expect(tab2.locator(".contextClaimCard", { hasText: predicate })).toBeVisible();
+    // Assert that the second tab really reloads, instead of merely
+    // becoming read-only after the first tab stamps a new generation.
+    await tab2.addInitScript(() => {
+      sessionStorage.setItem("e2e-sibling-reloaded",
+        String(Number(sessionStorage.getItem("e2e-sibling-reloaded") || "0") + 1));
+    });
     // The sibling holds a Context draft typed before the restore.
     await tab2.locator("#context-claim-editor").getByLabel("Vztah nebo vlastnost").fill("e2e.backup.stale-draft");
     await tab2.locator("#context-claim-editor").getByLabel("Hodnota", { exact: true }).fill("rozepsáno před obnovením");
@@ -644,6 +650,7 @@ test("a restore found by one tab reloads its sibling tab too: restored Context, 
     await remoteWakeUp(tab1);
     await expect(tab1.locator(".restoredNotice")).toContainText("Data byla obnovena ze zálohy.", { timeout: 30_000 });
     await expect(tab2.locator(".restoredNotice")).toContainText("Data byla obnovena ze zálohy.", { timeout: 30_000 });
+    expect(Number(await tab2.evaluate(() => sessionStorage.getItem("e2e-sibling-reloaded")))).toBeGreaterThan(0);
     await expect(tab2.locator(".contextClaimCard", { hasText: predicate })).toHaveCount(0);
     await expect(tab2.locator("#context-claim-editor").getByLabel("Vztah nebo vlastnost")).not.toHaveValue("e2e.backup.stale-draft");
     await expect(tab2.locator("#context-claim-editor").getByLabel("Hodnota", { exact: true })).toHaveValue("");
@@ -1159,4 +1166,55 @@ test("the backup section fits a 390 px screen and its controls are 44 px high", 
     return { covered: !(top === last || last.contains(top)), bottom: box.bottom, height: window.innerHeight };
   });
   expect(covered.covered).toBe(false);
+});
+
+test("a committed owner restore retries a failed final fence removal on reload without a false D2b hold", async ({ browser }) => {
+  const id = `e2e-backup-fence-retry-${stamp}`;
+  const { first, second } = await twoDevices(browser);
+  try {
+    await first.page.goto("/");
+    await waitUntilSynced(first.page);
+    await setStore(first.page, [task(id, "Záloha po opravě ochranné značky")]);
+    await second.page.goto("/?view=Inbox");
+    await waitUntilSynced(second.page);
+    const backup = await createManualBackup(first.page);
+    const oldGeneration = await second.page.evaluate(() => localStorage.getItem("ai-executive-restore-generation"));
+    expect(oldGeneration).not.toBeNull();
+
+    // Fail ONLY the final removeItem, after the replacement transaction,
+    // pending-marker cleanup and new generation have all committed.
+    await second.page.evaluate(() => {
+      const original = Storage.prototype.removeItem;
+      Storage.prototype.removeItem = function(this: Storage, key: string) {
+        if (key === "ai-executive-owner-adoption-fence") {
+          sessionStorage.setItem("e2e-owner-fence-remove-failed", "1");
+          throw new DOMException("Injected final-fence removal failure", "QuotaExceededError");
+        }
+        return original.call(this, key);
+      };
+    });
+    expect(await restoreByApi(first.page, backup)).toBe(200);
+    await remoteWakeUp(second.page);
+
+    // The tab reloads instead of creating an invalid D2b rescue hold.
+    // The new page no longer has the injected Storage prototype and can
+    // finish the committed adoption safely under the shared Web Lock.
+    await expect(second.page.locator(".restoredNotice")).toContainText("Data byla obnovena ze zálohy.", { timeout: 30_000 });
+    const state = await second.page.evaluate(() => ({
+      injected: sessionStorage.getItem("e2e-owner-fence-remove-failed"),
+      fence: localStorage.getItem("ai-executive-owner-adoption-fence"),
+      hold: localStorage.getItem("ai-executive-offline-recovery-hold"),
+      generation: localStorage.getItem("ai-executive-restore-generation"),
+    }));
+    expect(state.injected).toBe("1");
+    expect(state.fence).toBeNull();
+    expect(state.hold).toBeNull();
+    expect(Number(state.generation)).toBeGreaterThan(Number(oldGeneration));
+    await waitUntilSynced(second.page);
+    await expect(second.page.getByText("Záloha po opravě ochranné značky")).toBeVisible();
+    expect((await serverEntities(first.page)).some(entity => entity.id === id)).toBe(true);
+  } finally {
+    await first.context.close();
+    await second.context.close();
+  }
 });

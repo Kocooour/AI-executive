@@ -10,7 +10,7 @@ import { settleSyncOperation } from "../../../lib/sync-result";
 import { hasChangesBeyond, postToTabs, requestTimeout, tabChannelName, withSyncLock, type TabMessage } from "../../../lib/tab-coordination";
 import { markSignedIn } from "../../../lib/local-data";
 import { beginAdoption, isAdopting, isAdoptingInThisTab, setAfterRestoreFlag } from "../../../lib/adoption";
-import { advanceAdoptionGeneration, assertOwnerAdoptionCleanup, finishOwnerAdoptionFence, initializeAdoptionGeneration, ownerAdoptionFencePresent, startOwnerAdoptionFence } from "../../../lib/owner-adoption-barrier";
+import { advanceAdoptionGeneration, assertOwnerAdoptionCleanup, finishOwnerAdoptionFence, initializeAdoptionGeneration, ownerAdoptionFenceKey, ownerAdoptionFencePresent, ownerAdoptionReadyToFinish, startOwnerAdoptionFence } from "../../../lib/owner-adoption-barrier";
 import { restoredSinceKnownGeneration, restoreGenerationDecision } from "../../../lib/restore-generation-origin";
 import { clearNotesDrafts } from "../../../lib/notes-drafts";
 import { clearProjectContextDrafts } from "../../../lib/project-context-drafts";
@@ -97,6 +97,7 @@ export function useSync() {
   }
   // The generation this page started with: another tab's adoption matters only if it is newer.
   const loadedGeneration = useRef<number | undefined>(restoreGeneration.current);
+  const loadedWasSynced = useRef(localStorage.getItem("ai-executive-server-synced") === "1");
   // A fenced mutating API has already stopped in-tab writes synchronously;
   // its authenticated GET must finish that same adoption, not return early.
   const fencedRestore = useRef(false);
@@ -281,6 +282,23 @@ export function useSync() {
     }
     return false;
   }
+  // Resume ONLY an already-committed adoption that lost its final fence
+  // removal. If the new generation is not durably installed, keep the barrier
+  // closed; never claim the original offline records still exist.
+  async function finishInterruptedOwnerAdoption() {
+    if (!ownerAdoptionFencePresent()) return true;
+    try {
+      return await withOfflineRecoveryDataLock(async () => {
+        if (offlineRecoveryIsHeld()) return false;
+        if (!ownerAdoptionFencePresent()) return true;
+        if (!ownerAdoptionReadyToFinish(localStorage)) return false;
+        finishOwnerAdoptionFence(localStorage);
+        return true;
+      }, true);
+    } catch {
+      return false; // Still read-only; can retry on a later launch.
+    }
+  }
   async function adoptServerCopy(source: ServerSnapshot, notice = false) {
     // Only a server-certified owner restore authorizes discarding old local
     // data. A D2b hold always overrides that permission.
@@ -293,6 +311,7 @@ export function useSync() {
 
     let needsRecoveryHold = false;
     let adoptionCompleted = false;
+    let generationCommitted = false;
     try {
       // A cross-tab hold must not be inserted halfway through either the
       // IndexedDB replacement OR its localStorage marker/generation cleanup.
@@ -368,6 +387,10 @@ export function useSync() {
         if (localStorage.getItem("ai-executive-server-synced") !== "1")
           throw new Error("OWNER_ADOPTION_SYNC_BASE_NOT_PERSISTED");
         rememberGeneration(adoptedGeneration, true);
+        // All local data and metadata have committed. If only this final
+        // removal fails, reload and retry it; an equal-generation D2b hold
+        // would be invalid and could never export a rescue file.
+        generationCommitted = true;
         finishOwnerAdoptionFence(localStorage);
         serverRevision.current = source.revision;
         recoveryBaseRevision.current = source.revision;
@@ -377,6 +400,11 @@ export function useSync() {
       // No Web Locks, or an unexpected storage error: never start/continue a
       // destructive adoption without serialized access to the rescue barrier.
       console.error("Owner restore adoption could not be serialized:", error);
+      if (generationCommitted) {
+        setAfterRestoreFlag(notice ? "remote" : "sibling");
+        window.location.reload();
+        return false;
+      }
       needsRecoveryHold = true;
     }
     if (needsRecoveryHold) {
@@ -420,10 +448,14 @@ export function useSync() {
   // Another tab of this browser adopted restored data (its message, or the generation it stored): this one reloads too, without
   // announcing it again, and only when that generation is newer than the one this page started with.
   function reloadForRestore(generation: number | undefined, fromStorage = false) {
-    if (isAdopting() || signedOut.current) return;
-    // A page that never knew a generation learns the first one from storage without reloading; a message is a restore.
-    if (fromStorage && loadedGeneration.current === undefined) return;
-    if (typeof generation === "number" && loadedGeneration.current !== undefined && generation <= loadedGeneration.current) return;
+    // Cross-tab adoption blocking must not suppress its own completion event.
+    // An existing D2b hold, in contrast, must preserve this tab's rescue state.
+    if (isAdoptingInThisTab() || offlineRecoveryIsHeld() || signedOut.current ||
+        ownerAdoptionFencePresent()) return;
+    if (typeof generation !== "number" || !Number.isSafeInteger(generation) || generation < 0) return;
+    // Legacy previously-synced tabs may not have a stored generation.
+    if (fromStorage && loadedGeneration.current === undefined && !loadedWasSynced.current) return;
+    if (loadedGeneration.current !== undefined && generation <= loadedGeneration.current) return;
     beginAdoption();
     setAfterRestoreFlag("sibling");
     window.location.reload();
@@ -436,7 +468,10 @@ export function useSync() {
         // including blur/save callbacks racing the subsequent server GET.
         // The 409 carries no snapshot, so fetch the current authoritative one.
         if (restoreKind === "owner_restore" && !offlineRecoveryIsHeld()) {
-          if (isAdopting()) return;
+          if (isAdopting()) {
+            if (!isAdoptingInThisTab()) reloadForRestore(observedGeneration);
+            return;
+          }
           fencedRestore.current = true;
           beginAdoption();
           void (async () => {
@@ -473,6 +508,12 @@ export function useSync() {
         setSyncStatus("offline");
       }
       if (event.key === generationKey && event.newValue !== null) reloadForRestore(Number(event.newValue), true);
+      // The generation is stored while the shared fence is still active.
+      // A sibling may therefore need the later fence-removal notification.
+      if (event.key === ownerAdoptionFenceKey && event.newValue === null) {
+        const raw = localStorage.getItem(generationKey);
+        if (raw !== null) reloadForRestore(Number(raw), true);
+      }
     };
     window.addEventListener("storage", onStorage);
     return () => window.removeEventListener("storage", onStorage);
@@ -903,6 +944,7 @@ export function useSync() {
     restoredSinceKnown,
     rememberGeneration,
     adoptServerCopy,
+    finishInterruptedOwnerAdoption,
     restoredNotice,
     showRestoredNotice: () => setRestoredNotice(true),
     dismissRestoredNotice: () => setRestoredNotice(false),

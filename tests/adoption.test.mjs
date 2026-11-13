@@ -98,3 +98,26 @@ test("a single undeleted tombstone or context draft blocks owner adoption certif
   state.removeItem("ai-executive-project-context-drafts:old");
   assert.doesNotThrow(() => barrier.assertOwnerAdoptionCleanup(state));
 });
+
+test("only a fully committed owner adoption can finish a stale fence", () => {
+  const store = memoryStorage();
+  store.setItem("ai-executive-server-synced", "1");
+  barrier.startOwnerAdoptionFence(store, 7);
+  assert.equal(barrier.ownerAdoptionReadyToFinish(store), false, "old generation still current");
+  store.setItem(barrier.ownerAdoptionGenerationKey, "7");
+  assert.equal(barrier.ownerAdoptionReadyToFinish(store), true);
+  store.setItem("ai-executive-pending-deletions:e2e", "old-item");
+  assert.throws(() => barrier.ownerAdoptionReadyToFinish(store), /OWNER_ADOPTION_LOCAL_CLEANUP_INCOMPLETE/);
+  store.removeItem("ai-executive-pending-deletions:e2e");
+  const originalRemove = store.removeItem;
+  store.removeItem = key => {
+    if (key === barrier.ownerAdoptionFenceKey) throw new Error("injected fence removal failure");
+    originalRemove(key);
+  };
+  assert.throws(() => barrier.finishOwnerAdoptionFence(store), /injected fence removal failure/);
+  assert.equal(barrier.ownerAdoptionReadyToFinish(store), true, "commit remains recoverable after failed fence removal");
+  store.removeItem = originalRemove;
+  barrier.finishOwnerAdoptionFence(store);
+  assert.equal(store.getItem(barrier.ownerAdoptionFenceKey), null);
+});
+
