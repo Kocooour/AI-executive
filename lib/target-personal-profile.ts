@@ -54,6 +54,8 @@ export const TARGET_PERSONAL_V1_EXCLUDED:readonly {readonly flag:string;readonly
   {flag:"AI_EXECUTIVE_TARGET_STAGING_HTTP_NOTE_SYNC_ENABLED",reason:"Offline note sync is not part of the server-rendered daily loop."},
   {flag:"AI_EXECUTIVE_TARGET_STAGING_HTTP_NOTIFICATIONS_ENABLED",reason:"Notifications/push are out of scope."},
   {flag:"AI_EXECUTIVE_TARGET_STAGING_HTTP_NOTIFICATIONS_WRITE_ENABLED",reason:"Notification settings writes are out of scope."},
+  {flag:"AI_EXECUTIVE_TARGET_STAGING_HTTP_PROJECTS_CREATE_ENABLED",reason:"Backend-only private project creation, pending milestone A/3 UI."},
+  {flag:"AI_EXECUTIVE_TARGET_STAGING_HTTP_PROJECT_TASKS_CREATE_ENABLED",reason:"Backend-only private project-child task creation, pending milestone A/3 UI."},
   {flag:"AI_EXECUTIVE_TARGET_STAGING_HTTP_RELATIONS_ENABLED",reason:"Relations/backlinks are not used by the listed UI."},
   {flag:"AI_EXECUTIVE_TARGET_STAGING_HTTP_TEMPORAL_DUE_ON_WRITE_ENABLED",reason:"Shared deadline writes; the loop uses the actor-private When."},
   {flag:"AI_EXECUTIVE_TARGET_STAGING_HTTP_TEMPORAL_DUE_WINDOWS_ENABLED",reason:"Due-window reads are not consumed by the listed UI."},
