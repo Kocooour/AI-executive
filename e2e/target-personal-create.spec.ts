@@ -8,7 +8,7 @@ import type {Page} from "@playwright/test";
 test.skip(process.env.LUMI_TARGET_PERSONAL_ACCEPTANCE_E2E!=="true",
   "Requires isolated real target store and full personal profile flags");
 const store=JSON.parse(process.env.LUMI_E2E_TARGET_STORE||"null") as
-  {seed:{createAreaTitle:string}}|null;
+  {seed:{createAreaTitle:string;createLargeProjectId:string}}|null;
 const projectPath="/api/target-staging/projects";
 const childPath="/api/target-staging/project-tasks";
 const count=(pageCalls:{method:string;path:string}[],method:string,path:string)=>
@@ -129,5 +129,88 @@ for(const width of [390,1280]){
     await expect(page.getByTestId("target-scope-list")).toContainText(uncertainTitle);
     expect(count(calls,"POST",projectPath)-initial).toBe(1);
     expect(count(calls,"POST",projectPath+"/create-recovery")).toBeGreaterThan(0);
+  });
+}
+
+/** The author-visible success affordance must not depend on the first page of
+ * a 35-task project. All tasks are real SQLite rows, not mocked responses. */
+for(const width of [390,1280]){
+  test("A/3: open newly created child beyond first paginated page at "+width+"px",async({page})=>{
+    test.setTimeout(150_000);
+    if(!store)throw Error("No isolated target fixture");
+    await page.setViewportSize({width,height:844});
+    await page.goto("/?view=Projects&scope=personal");
+    const list=page.getByTestId("target-scope-list");
+    await expect(list).toHaveAttribute("data-state","ready");
+    await list.locator('[data-detail-row="project:'+store.seed.createLargeProjectId+'"]').click();
+    const detail=detailTask(page);
+    await expect(detail).toHaveAttribute("data-detail-kind","project");
+    await expect(detail).toContainText("Previously created task 0");
+    await detail.getByTestId("target-project-task-create-open").click();
+    const title="Page overflow "+width+" "+Math.random().toString(36).slice(2);
+    await detail.getByTestId("target-project-task-create-form")
+      .getByRole("textbox",{name:"Název"}).fill(title);
+    const pending=page.waitForResponse(r=>r.request().method()==="POST"&&
+      new URL(r.url()).pathname===childPath);
+    await detail.getByTestId("target-project-task-create-save").click();
+    const response=await pending;
+    expect(response.status()).toBe(201);
+    const {taskId,projectId}=response.request().postDataJSON() as Record<string,string>;
+    expect(projectId).toBe(store.seed.createLargeProjectId);
+    await expect(detail.getByTestId("target-project-task-created-open")).toBeVisible();
+    // UUID sorts AFTER the 0-create:000..034 fixture: no row on first page.
+    await expect(detail.locator('[data-detail-row="task:'+taskId+'"]')).toHaveCount(0);
+    await detail.getByTestId("target-project-task-created-open").click();
+    await expect(detail).toHaveAttribute("data-detail-kind","task");
+    await expect(detail).toContainText(title);
+    await page.reload();
+    await expect(detail).toHaveAttribute("data-detail-kind","task");
+    await expect(detail).toContainText(title);
+  });
+  test("A/3: terminally cancel an undelivered project create at "+width+"px",async({page})=>{
+    test.setTimeout(150_000);
+    if(!store)throw Error("No isolated target fixture");
+    await page.setViewportSize({width,height:844});
+    await page.goto("/?view=Projects&scope=personal");
+    await expect(page.getByTestId("target-scope-list")).toHaveAttribute("data-state","ready");
+    await page.getByTestId("target-project-create-open").click();
+    await page.getByTestId("target-project-create-area")
+      .selectOption({label:store.seed.createAreaTitle});
+    await page.getByTestId("target-project-create-form")
+      .getByRole("textbox",{name:"Název"}).fill("Undelivered "+width);
+    const calls=observe(page),initial=count(calls,"POST",projectPath);
+    // Fault injection only: abort BEFORE forwarding the original POST.
+    await page.route("**/api/target-staging/projects",route=>{
+      if(route.request().method()==="POST")return route.abort("failed");
+      return route.continue();
+    },{times:1});
+    await page.getByTestId("target-project-create-save").click();
+    await expect(page.getByTestId("target-structure-unresolved")).toBeVisible();
+    expect(count(calls,"POST",projectPath)-initial).toBe(1);
+    await page.reload();
+    await expect(page.getByTestId("target-scope-list")).toHaveAttribute("data-state","ready");
+    await page.getByTestId("target-project-create-open").click();
+    await expect(page.getByTestId("target-structure-unresolved")).toBeVisible();
+    const cancelled=page.waitForResponse(r=>r.request().method()==="POST"&&
+      new URL(r.url()).pathname===projectPath+"/create-cancel");
+    await page.getByTestId("target-structure-cancel").click();
+    const proof=await cancelled;
+    expect(proof.status()).toBe(200);
+    expect(await proof.json()).toEqual({status:"cancelled"});
+    await expect(page.getByTestId("target-structure-unresolved")).toHaveCount(0);
+    // The same tab is now safely free to create with a NEW command UUID.
+    await page.getByTestId("target-project-create-area")
+      .selectOption({label:store.seed.createAreaTitle});
+    const after="After cancellation "+width+" "+Math.random().toString(36).slice(2);
+    await page.getByTestId("target-project-create-form")
+      .getByRole("textbox",{name:"Název"}).fill(after);
+    const created=page.waitForResponse(r=>r.request().method()==="POST"&&
+      new URL(r.url()).pathname===projectPath);
+    await page.getByTestId("target-project-create-save").click();
+    expect((await created).status()).toBe(201);
+    await expect(page.getByTestId("target-project-created-open")).toBeVisible();
+    await page.getByTestId("target-project-created-open").click();
+    await expect(detailTask(page)).toHaveAttribute("data-detail-kind","project");
+    await expect(detailTask(page)).toContainText(after);
   });
 }

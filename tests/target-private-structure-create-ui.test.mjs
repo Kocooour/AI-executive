@@ -4,10 +4,10 @@ import {randomUUID} from "node:crypto";
 import {readFileSync} from "node:fs";
 import {
   validStructureCommand,sendStructureCreate,checkStructureCreateStatus,
-  recoverStructureCreate,
+  recoverStructureCreate,cancelStructureCreateCommand,
 } from "../lib/target-private-structure-create-client.ts";
 import {
-  structureCreateMarker,runStructureCreate,verifyStructureCreate,
+  structureCreateMarker,runStructureCreate,verifyStructureCreate,cancelStructureCreate,
 } from "../lib/target-private-structure-create-coordinator.ts";
 import {
   TARGET_PRIVATE_PROJECT_CREATE_FLAGS,TARGET_PROJECT_TASK_CREATE_FLAGS,
@@ -16,6 +16,7 @@ import {
 import {TARGET_PRIVATE_NOTE_AREA_UI_FLAGS}
   from "../lib/target-private-note-area-ui-gate.ts";
 import {isTargetReadRequest} from "../lib/target-edit-fetch.ts";
+import {loadStructureCreateTargets} from "../lib/target-private-structure-targets-client.ts";
 
 const headers={"content-type":"application/json","cache-control":"no-store"};
 const json=(v,status=200)=>new Response(JSON.stringify(v),{status,headers});
@@ -45,13 +46,19 @@ test("R3 A/3: project and child task UI flags default off, independent and exact
   assert.equal(targetProjectTaskCreateUiEnabled(all),true);
   for(const flag of Object.keys(all)){
     const reduced={...all,[flag]:undefined};
-    if(TARGET_PRIVATE_PROJECT_CREATE_FLAGS.includes(flag)||
-      TARGET_PRIVATE_NOTE_AREA_UI_FLAGS.includes(flag))
+    if(TARGET_PRIVATE_PROJECT_CREATE_FLAGS.includes(flag))
       assert.equal(targetPrivateProjectCreateUiEnabled(reduced),false,flag);
-    if(TARGET_PROJECT_TASK_CREATE_FLAGS.includes(flag)||
-      TARGET_PRIVATE_NOTE_AREA_UI_FLAGS.includes(flag))
+    if(TARGET_PROJECT_TASK_CREATE_FLAGS.includes(flag))
       assert.equal(targetProjectTaskCreateUiEnabled(reduced),false,flag);
   }
+  // Independent note flags may all be off while structure create remains enabled.
+  const noNotes={...all,AI_EXECUTIVE_TARGET_STAGING_HTTP_NOTES_CREATE_ENABLED:"false",
+    AI_EXECUTIVE_TARGET_STAGING_HTTP_NOTES_WRITE_ENABLED:"false",
+    AI_EXECUTIVE_TARGET_STAGING_HTTP_NOTES_ENABLED:"false",
+    AI_EXECUTIVE_TARGET_STAGING_HTTP_PRIVATE_NOTE_AREAS_ENABLED:"false",
+    AI_EXECUTIVE_TARGET_UI_PRIVATE_NOTE_AREAS_ENABLED:"false"};
+  assert.equal(targetPrivateProjectCreateUiEnabled(noNotes),true);
+  assert.equal(targetProjectTaskCreateUiEnabled(noNotes),true);
   assert.equal(targetPrivateProjectCreateUiEnabled({...all,
     AI_EXECUTIVE_TARGET_STAGING_HTTP_PROJECTS_CREATE_ENABLED:"false"}),false);
   assert.equal(targetProjectTaskCreateUiEnabled({...all,
@@ -172,4 +179,68 @@ test("R3 A/3: authorized screen wiring, no create in shared scope, no client Are
   assert.match(detail,/kind="project-task"/);
   assert.match(component,/projectId:projectId!/);
   assert.doesNotMatch(component,/taskId:id,commandId,projectId:projectId!,areaId/);
+});
+
+test("R3 A/3: structure-owned targets are strict and independent of note create",async()=>{
+  const signal=new AbortController().signal,area="area:e2e:create:private",gen=randomUUID();
+  let called=0;
+  const ok=await loadStructureCreateTargets(signal,async(url,options)=>{
+    called++;
+    assert.equal(url,"/api/target-staging/projects/create-targets");
+    assert.equal(options.method,"GET");
+    assert.equal(options.cache,"no-store");
+    return json({areas:[{id:area,title:"Tvoření"}],restoreGeneration:gen});
+  });
+  assert.equal(called,1);
+  assert.deepEqual(ok,{ok:true,areas:[{id:area,title:"Tvoření"}],restoreGeneration:gen});
+  for(const payload of [
+    {areas:[{id:area,title:"Tvoření"}],restoreGeneration:"invalid"},
+    {areas:[{id:area,title:"Tvoření"}],restoreGeneration:gen,actor:"secret"},
+    {areas:[{id:area,title:"Tvoření"},{id:area,title:"Duplicated"}],restoreGeneration:gen},
+  ])assert.equal((await loadStructureCreateTargets(signal,async()=>json(payload))).ok,false);
+});
+test("R3 A/3: cancellation only releases after terminal server fence, never on not_recorded",async()=>withStorage(async()=>{
+  for(const kind of ["project","project-task"]){
+    const actor=runtime(),cmd=kind==="project"?project():child();
+    assert.equal(await runStructureCreate(actor,generation,kind,cmd,
+      async()=>"uncertain"),"uncertain");
+    assert.equal(await verifyStructureCreate(actor,generation,new AbortController().signal,
+      async()=>"not_recorded"),"not_recorded");
+    assert.equal(structureCreateMarker().status,"blocked");
+    const unsuccessful=await cancelStructureCreate(actor,generation,new AbortController().signal,
+      async()=> "unavailable");
+    assert.equal(unsuccessful,"unavailable");
+    assert.equal(structureCreateMarker().status,"blocked");
+    let requests=0;
+    const cancelled=await cancelStructureCreate(actor,generation,new AbortController().signal,
+      async(k,id,signal)=>{
+        requests++;assert.equal(k,kind);assert.equal(id,cmd.commandId);
+        assert.equal(signal.aborted,false);return "cancelled";
+      });
+    assert.equal(cancelled,"cancelled");
+    assert.equal(requests,1);
+    assert.equal(structureCreateMarker().status,"clear");
+    assert.equal(await runStructureCreate(actor,generation,kind,
+      kind==="project"?project():child(),async()=>"saved"),"saved");
+    assert.equal(structureCreateMarker().status,"clear");
+  }
+}));
+test("R3 A/3: cancel HTTP requires exact opaque status and cannot be queued",async()=>{
+  const signal=new AbortController().signal,commandId=randomUUID();
+  for(const kind of ["project","project-task"]){
+    const path=kind==="project"?"/api/target-staging/projects":"/api/target-staging/project-tasks";
+    assert.equal(isTargetReadRequest(path+"/create-cancel",{method:"POST"}),false);
+    assert.equal(await cancelStructureCreateCommand(kind,commandId,signal,
+      async(url,opts)=>{
+        assert.equal(url,path+"/create-cancel");
+        assert.deepEqual(JSON.parse(opts.body),{commandId});
+        return json({status:"cancelled"});
+      }),"cancelled");
+    assert.equal(await cancelStructureCreateCommand(kind,commandId,signal,
+      async()=>json({status:"settled"})),"settled");
+    for(const reply of [json({status:"not_recorded"}),json({status:"cancelled",extra:true}),
+      json({error:"fail"},503)])
+      assert.equal(await cancelStructureCreateCommand(kind,commandId,signal,
+        async()=>reply),"unavailable");
+  }
 });
