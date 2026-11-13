@@ -7,18 +7,16 @@ import { navView, settingsSections, sidebarView, waitUntilSynced } from "./helpe
 
 // Projects of this scenario only: other scenarios add and delete projects of their own, so nothing here relies on
 // the seeded one. The project has no task (the attention dot) and is first in the manual order (the sidebar list).
-// `legacyLabel`: a project from before the Area model that has only a free-text area label and no Area link. A new
-// project without any Area is filed under "Nezařazeno" by the server (2a part 4), so "Bez oblasti" is only reachable
-// with such legacy data.
-async function seedProject(page: Page, id: string, title: string, legacyLabel = "") {
-  await page.evaluate(async ({ id, title, legacyLabel }) => {
+// #109: server writes normalize a project without Area into Nezařazeno.
+async function seedProject(page: Page, id: string, title: string) {
+  await page.evaluate(async ({ id, title }) => {
     const snapshot = await fetch("/api/store", { cache: "no-store" }).then((response) => response.json());
     const now = Date.now();
-    const project = { id, type: "project", title, status: "active", workspaceId: "personal", properties: { manualOrders: { "personal:project:all": -1_000_000 }, ...(legacyLabel ? { area: legacyLabel } : {}) }, createdAt: now, updatedAt: now };
+    const project = { id, type: "project", title, status: "active", workspaceId: "personal", properties: { manualOrders: { "personal:project:all": -1_000_000 },  }, createdAt: now, updatedAt: now };
     const response = await fetch("/api/store", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({
       baseRevision: snapshot.revision, restoreGeneration: snapshot.restoreGeneration, entities: [...snapshot.entities, project], relations: snapshot.relations, deletedIds: [], revivedIds: [] }) });
     if (!response.ok) throw new Error(`Seeding failed: ${response.status}`);
-  }, { id, title, legacyLabel });
+  }, { id, title });
 }
 async function removeProject(page: Page, id: string) {
   await page.evaluate(async (id) => {
@@ -104,11 +102,11 @@ test("active projects are listed under the navigation and open like in the Proje
   }
 });
 
-test("Projects are grouped under their area, then a legacy project without an area link under 'Bez oblasti'; reordering stays inside a group", async ({ page }) => {
+test("Projects remain grouped by Area; reordering stays inside a group", async ({ page }) => {
   await page.goto("/?view=Projects");
   await waitUntilSynced(page);
   const stamp = Date.now();
-  const ids = { area: `e2e-d1-area-${stamp}`, one: `e2e-d1-p1-${stamp}`, two: `e2e-d1-p2-${stamp}`, loose: `e2e-d1-p3-${stamp}` };
+  const ids = { area: `e2e-d1-area-${stamp}`, one: `e2e-d1-p1-${stamp}`, two: `e2e-d1-p2-${stamp}`, otherArea: `e2e-d1-area-other-${stamp}`, loose: `e2e-d1-p3-${stamp}` };
   const put = (add: boolean) => page.evaluate(async ({ ids, add, stamp }) => {
     const snapshot = await fetch("/api/store", { cache: "no-store" }).then((response) => response.json());
     const mine = new Set(Object.values(ids));
@@ -117,8 +115,10 @@ test("Projects are grouped under their area, then a legacy project without an ar
     const entities = snapshot.entities.filter((row: { id: string }) => !mine.has(row.id));
     const relations = snapshot.relations.filter((row: { sourceEntityId: string; targetEntityId: string }) => !mine.has(row.sourceEntityId) && !mine.has(row.targetEntityId));
     if (add) {
-      entities.push(entity(ids.area, "area", "Oblast D1", stamp), entity(ids.one, "project", "Projekt D1 první", stamp + 1), entity(ids.two, "project", "Projekt D1 druhý", stamp + 2), entity(ids.loose, "project", "Projekt D1 volný", stamp + 3, { area: "Starý štítek" }));
-      relations.push(relation(`e2e-d1-r1-${stamp}`, ids.one), relation(`e2e-d1-r2-${stamp}`, ids.two));
+      entities.push(entity(ids.area, "area", "Oblast D1", stamp), entity(ids.otherArea, "area", "Jiná oblast D1", stamp + 4), entity(ids.one, "project", "Projekt D1 první", stamp + 1), entity(ids.two, "project", "Projekt D1 druhý", stamp + 2), entity(ids.loose, "project", "Projekt D1 volný", stamp + 3));
+      relations.push(relation(`e2e-d1-r1-${stamp}`, ids.one), relation(`e2e-d1-r2-${stamp}`, ids.two),
+        { id: `e2e-d1-r3-${stamp}`, sourceEntityId: ids.loose, targetEntityId: ids.otherArea,
+          relationType: "belongs_to_area", workspaceId: "personal", createdAt: stamp });
     }
     const response = await fetch("/api/store", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({
       baseRevision: snapshot.revision, restoreGeneration: snapshot.restoreGeneration, entities, relations,
@@ -132,13 +132,12 @@ test("Projects are grouped under their area, then a legacy project without an ar
     const group = page.locator(`[data-project-group="${ids.area}"]`);
     await expect(group.getByRole("heading", { name: "Oblast D1" })).toBeVisible();
     await expect(group.locator(".taskRowOpen")).toHaveText(["Projekt D1 první", "Projekt D1 druhý"]);
-    const loose = page.locator('[data-project-group="none"]');
-    await expect(loose.getByRole("heading", { name: "Bez oblasti" })).toBeVisible();
+    // #109: the third project is in a distinct real Area, not "Bez oblasti".
+    const loose = page.locator(`[data-project-group="${ids.otherArea}"]`);
+    await expect(loose.getByRole("heading", { name: "Jiná oblast D1" })).toBeVisible();
     await expect(loose.locator(".taskRowOpen", { hasText: "Projekt D1 volný" })).toBeVisible();
     await expect(loose.locator(".taskRowOpen", { hasText: "Projekt D1 první" })).toHaveCount(0);
-    // "Bez oblasti" comes last; the add-project row is still there.
-    const headings = await page.locator(".projectGroupHeading").allInnerTexts();
-    expect(headings.at(-1)).toBe("Bez oblasti");
+    // Real Area grouping and the add-project row remain intact.
     await expect(page.getByPlaceholder("+ Přidat projekt")).toBeVisible();
     // Keyboard reorder moves a project inside its group; at the edge of the group it does nothing.
     const handle = group.locator("article", { hasText: "Projekt D1 druhý" }).locator(".dragHandle");
@@ -387,18 +386,6 @@ test("'Open source message' with accounts that fail to load shows the load error
   }
 });
 
-test("a legacy project without an area link is listed under 'Bez oblasti'", async ({ page }) => {
-  const id = `e2e-d1-loose-${Date.now()}`;
-  await page.goto("/?view=Projects");
-  await waitUntilSynced(page);
-  await seedProject(page, id, "Projekt D1 bez oblasti", "Starý štítek");
-  try {
-    await page.reload();
-    await waitUntilSynced(page);
-    const loose = page.locator('[data-project-group="none"]');
-    await expect(loose.getByRole("heading", { name: "Bez oblasti" })).toBeVisible();
-    await expect(loose.locator(".taskRowOpen", { hasText: "Projekt D1 bez oblasti" })).toBeVisible();
-  } finally {
-    await removeProject(page, id);
-  }
-});
+// #109 (D2a Area normalization): the former "Bez oblasti" fixture is
+// unreachable via /api/store. A true pre-normalization legacy snapshot would
+// require a separate storage-level test, not this server-seeded browser test.

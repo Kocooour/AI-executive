@@ -1,5 +1,9 @@
 import { expect, test } from "./fixtures";
 import type { Page } from "@playwright/test";
+// #404: the global index preview is default-off in Browser E2E and enabled
+// in global-index-preview-browser.yml's isolated synthetic server.
+test.skip(process.env.AI_EXECUTIVE_TARGET_STAGING_GLOBAL_INDEX_CLIENT_PREVIEW_ENABLED !== "true",
+  "Global index browser scenarios require explicit preview opt-in");
 
 // UI-09a only: intercept the real mounted React view's fetch in an isolated
 // Chromium context. This synthetic adapter deliberately IGNORES AbortSignal,

@@ -1,5 +1,8 @@
 /** Source can be enabled independently; details remain off by default. */
 import {test,expect} from "./fixtures";
+// #404: here only detail links are OFF; the global index preview must be ON.
+test.skip(process.env.AI_EXECUTIVE_TARGET_STAGING_GLOBAL_INDEX_CLIENT_PREVIEW_ENABLED !== "true",
+  "Cross-preview default-off assertion requires enabled global index preview");
 const index="/target-staging/global-index/preview";
 const indexApi="**/api/target-staging/global-index?*";
 const indexPage={
