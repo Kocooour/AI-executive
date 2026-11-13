@@ -6,6 +6,7 @@ import { DatabaseSync } from "node:sqlite";
 import { copyFileSync, existsSync, lstatSync, mkdirSync, readdirSync, realpathSync, writeFileSync, chmodSync, constants } from "node:fs";
 import path from "node:path";
 import { createHash } from "node:crypto";
+import { isWithinPath as within } from "./r4-path-boundary.mjs";
 
 const TABLES = [
   "entities", "relations", "tombstones", "note_revisions", "context_subjects",
@@ -42,7 +43,7 @@ const KNOWN_LEGACY_MIGRATIONS = Object.freeze([
 ]);
 const MODIFIED_FIELDS = ["updated_at", "changed_at", "last_sync_at", "last_seen_at", "created_at", "recorded_at", "started_at"];
 const quote = name => '"' + name.replaceAll('"', '""') + '"';
-const within = (child, parent) => child === parent || child.startsWith(parent + path.sep);
+
 const cleanInt = value => typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : null;
 const countRows = (db, table) => Number(db.prepare("SELECT COUNT(*) AS n FROM " + quote(table)).get().n);
 
