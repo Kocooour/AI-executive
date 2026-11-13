@@ -12,12 +12,14 @@ on:
       - "e2e/target-personal-acceptance.spec.ts"
       - "e2e/target-personal-bfcache.spec.ts"
       - "e2e/target-personal-native-bfcache.spec.ts"
+      - "e2e/target-personal-native-bfcache-gate.ts"
       - "e2e/target-personal-my-plan.spec.ts"
       - "e2e/target-personal-search-open.spec.ts"
       - "e2e/target-personal-create.spec.ts"
       - "e2e/target-personal-store-setup.mjs"
       - "tests/target-personal-profile.test.mjs"
       - "tests/target-app-fetch.test.mjs"
+      - "tests/target-personal-native-bfcache-gate.test.mjs"
       - "playwright.config.ts"
       - "e2e/fixtures.ts"
       - "e2e/helpers.ts"
@@ -48,8 +50,8 @@ jobs:
       E2E_SKIP_BUILD: "1"
       E2E_PORT: "3130"
       LUMI_TARGET_PERSONAL_ACCEPTANCE_E2E: "true"
-      # Scoped manual release gate: actual persisted=true required on a real-store
-      # navigation; PR runs still check the fallback without claiming a BFCache hit.
+      # Strict manual gate accepts a real restoration OR a browser-explained miss,
+      # each with full privacy/authorization/no-CREATE proof. PR runs are diagnostics.
       LUMI_REAL_BFCACHE_E2E: ${{ github.event_name == 'workflow_dispatch' && 'true' || 'false' }}
     steps:
       - name: Checkout
@@ -82,8 +84,8 @@ jobs:
           cache: pnpm
       - name: Locked dependencies
         run: pnpm install --frozen-lockfile
-      - name: Flag profile classification and shared read-queue tests
-        run: node --experimental-loader ./tests/ts-loader.mjs --test tests/target-personal-profile.test.mjs tests/target-app-fetch.test.mjs
+      - name: Flag profile, read-queue and native BFCache evidence decision tests
+        run: node --experimental-loader ./tests/ts-loader.mjs --test tests/target-personal-profile.test.mjs tests/target-app-fetch.test.mjs tests/target-personal-native-bfcache-gate.test.mjs
       - name: Build isolated UI
         run: pnpm build
       - name: Chromium

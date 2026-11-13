@@ -123,11 +123,10 @@ for (const width of [390, 1280]) {
     });
     expect(immediate.titleExposed, "private draft visible immediately after Back").toBe(false);
     expect(["", null], "Area retained immediately after Back").toContain(immediate.selectedArea);
-    // The manual release gate cannot pass on a fallback reload. Never simulate
-    // persisted=true, turn a miss into a skip, or claim a BFCache hit from Back alone.
-    // This Playwright test is intentionally the full-reload fallback test:
-    // native Chrome, without Playwright's --disable-back-forward-cache, owns
-    // the strict persisted=true release requirement (see native-bfcache.spec).
+    // Playwright cannot establish the native release gate: its BFCache is disabled.
+    // This separately tests the full-reload path; native Chrome proves either
+    // a real restoration or an explained miss, always with privacy invariants.
+    // Neither a simulated event nor this fallback certifies release #388.
     expect(browser.persisted,
       "Playwright should not claim a BFCache hit with its disabled cache").toBe(false);
     await expect.poll(() => trace.responses.slice(mark).some(value =>

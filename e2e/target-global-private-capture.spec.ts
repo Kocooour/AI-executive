@@ -214,8 +214,9 @@ test("BFCache lifecycle and real back navigation never revive private draft or A
   await page.goBack({waitUntil:"domcontentloaded"});
   const restored=await page.evaluate(()=>
     (window as Window & {__lumiBfcacheRestored?:boolean}).__lumiBfcacheRestored);
-  // Release-only browser gate MUST prove a real BFCache cache hit; the regular
-  // PR test separately exercises the persisted event path and reload fallback.
+  // This fixture-only Playwright test exercises synthetic lifecycle and reload.
+  // Release #388 instead requires an independent strict native Chrome witness:
+  // a real restore OR an explained miss, both with real-store privacy invariants.
   const reasons=await page.evaluate(()=>{
     const nav=performance.getEntriesByType("navigation")[0] as
       (PerformanceNavigationTiming & {notRestoredReasons?:unknown})|undefined;
@@ -230,7 +231,7 @@ test("BFCache lifecycle and real back navigation never revive private draft or A
   });
   // Playwright launches Chromium with --disable-back-forward-cache and its
   // goBack() cannot test an actual thaw. Native Chrome in the real-store
-  // workflow owns the release persisted=true proof; this synthetic suite
+  // workflow owns the strict two-branch real-store proof; this synthetic suite
   // continues to assert the pagehide/pageshow and real reload paths.
   expect(restored,"Playwright cannot certify a BFCache hit").toBe(false);
   if(restored){
