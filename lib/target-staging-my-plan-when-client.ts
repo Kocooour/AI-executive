@@ -155,9 +155,11 @@ export async function readCurrentMyPlanWhenForCompletion(
   fetchImpl:typeof fetch=targetAppFetch,
 ):Promise<{ok:true;whenOn:string|null}|{ok:false;reason:MyPlanWhenFailure}>{
   const result=await prepareMyPlanWhen({...params,whenOn:null},fetchImpl);
-  if(result.ok)return {ok:true,whenOn:result.previousWhenOn};
-  if(result.reason==="unchanged")return {ok:true,whenOn:null};
-  return result;
+  if(result.ok===false){
+    if(result.reason==="unchanged")return {ok:true,whenOn:null};
+    return {ok:false,reason:result.reason};
+  }
+  return {ok:true,whenOn:result.previousWhenOn};
 }
 
 /** The POST is read-only. The *same original eight-field command* is necessary
