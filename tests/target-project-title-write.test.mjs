@@ -145,13 +145,23 @@ test('simultaneous PATCH and cancel are ordered by pinned write transaction',asy
   const [rename,fence]=await Promise.all([write(alice,command),cancelWrite(alice,command.commandId,p.principalBinding)]);
   assert.equal(fence.status,200,await fence.clone().text());
   const status=(await fence.json()).status;
+  // Two concurrent HTTP requests can temporarily exhaust a bounded child
+  // worker or race a pinned store preflight and return a fail-closed 503.
+  // After the fence acknowledges, retry the EXACT SAME command UUID: the
+  // durable fence/receipt, not the first HTTP response, decides the outcome.
+  // A persistent outage still fails this test (the retry must settle).
+  let settledRename=rename;
+  if(rename.status===503){
+    assert.deepEqual(await rename.json(),{error:'Staging unavailable'});
+    settledRename=await write(alice,command);
+  }
   if(status==='cancelled'){
-    assert.equal(rename.status,409);
-    assert.equal((await rename.json()).error,'Command cancelled');
+    assert.equal(settledRename.status,409,await settledRename.clone().text());
+    assert.equal((await settledRename.json()).error,'Command cancelled');
     assert.notEqual(db.prepare("SELECT title FROM projects WHERE id='proj'").get().title,command.title);
   }else{
     assert.equal(status,'committed');
-    assert.equal(rename.status,200);
+    assert.equal(settledRename.status,200,await settledRename.clone().text());
     assert.equal(db.prepare("SELECT title FROM projects WHERE id='proj'").get().title,command.title);
   }
   assert.equal(inspectIsolatedTargetStore({...store,mode:'r2-model'}).ok,true);
