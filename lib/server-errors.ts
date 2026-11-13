@@ -225,6 +225,10 @@ export const developerOnly: ReadonlySet<string> = new Set([
   "OFFLINE_RECOVERY_HOLD_CORRUPT",
   "OFFLINE_RECOVERY_HELD",
   "OFFLINE_RECOVERY_LOCK_UNAVAILABLE",
+  // C9 startup-only Web Lock acquisition diagnostics; the recovery UI shows
+  // a localized fail-closed salvage state instead of raw internal error codes.
+  "OFFLINE_RECOVERY_LOCK_TIMEOUT_INVALID",
+  "OFFLINE_RECOVERY_LOCK_ACQUIRE_TIMEOUT",
   "OFFLINE_RECOVERY_WIPE_PRECEDED_HOLD",
   "OFFLINE_RECOVERY_GENERATION_INVALID",
   // Note metadata IndexedDB adapter errors are internal fail-closed signals,
