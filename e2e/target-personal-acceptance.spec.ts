@@ -191,15 +191,24 @@ for(const width of [390,1280]){
     await expect(planRow(seed.taskTitle)).toHaveCount(0);
     await page.getByRole("button",{name:"Vrátit dokončení (Undo)"}).click();
     await expect(page.getByRole("status").filter({hasText:"Obnovení potvrzeno."})).toBeVisible();
-    // GAP (docs/R3-PERSONAL-ACCEPTANCE.md): completing deletes the planned day, so a reopened task is
-    // not listed in My Plan again. The reopened state itself is verified in the project detail.
+    // The original personal day is atomically restored by My Plan Undo.
+    await expect(planRow(seed.taskTitle)).toHaveCount(1);
     await page.goto("/?view=Projects&scope=personal");
     await page.getByTestId("target-scope-list").locator('[data-detail-row="project:'+seed.projectId+'"]').click();
     await detail.locator('[data-detail-row="task:'+seed.taskId+'"]').click();
     await expect(detail.getByTestId("target-detail-edit-status-toggle")).toBeVisible();
     await expect(detail.getByText("Otevřeno",{exact:true})).toBeVisible(); // the status line itself
     await expect(detail.getByText("Dokončeno",{exact:true})).toHaveCount(0);
+    // Regression: detail completion must bind the actor's real planned day,
+    // and its Undo must restore that day through the real status route.
+    await detail.getByTestId("target-detail-edit-status-toggle").click();
+    await expect(detail.getByTestId("target-detail-edit-status")).toContainText("Stav úkolu je uložen.");
+    await expect(detail.getByTestId("target-detail-edit-undo")).toBeVisible();
+    await detail.getByTestId("target-detail-edit-undo").click();
+    await expect(detail.getByTestId("target-detail-edit-status")).toContainText("Úkol je znovu otevřen.");
     await closeDetail();
+    await openMyPlan();
+    await expect(planRow(seed.taskTitle)).toHaveCount(1);
 
     // 8. Notes: create a private note (one POST, 201), open exactly that note, edit and save.
     await page.goto("/?view=Notes&scope=personal");
