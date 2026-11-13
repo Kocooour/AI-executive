@@ -21,6 +21,7 @@ import { encodeOfflineRecoveryFile, offlineRecoveryFile } from "../../../lib/d2b
 import { readRawRecoveryDrafts, readRawRecoveryMarkers } from "../../../lib/d2b-recovery-local";
 import { inspectOfflineRecoveryBytes, type OfflineRecoveryReviewSummary } from "../../../lib/d2b-recovery-review";
 import { runLatestRecoveryInspection, type RecoveryInspectionState } from "../../../lib/d2b-recovery-review-request";
+import { captureUnreadableOwnerRescueStorage, encodeUnreadableOwnerRescue, unreadableOwnerRescueFilename, type RawOwnerRescueLocal } from "../../../lib/owner-adoption-rescue";
 
 // The local copy of the data and its synchronization with the server: the records on screen,
 // the sync status, the revision of the server copy this device knows, the counter of local writes
@@ -89,6 +90,10 @@ export function useSync() {
   const [recoveryPreparing, setRecoveryPreparing] = useState(false);
   const [recoveryReady, setRecoveryReady] = useState(false);
   const [recoveryError, setRecoveryError] = useState(false);
+  // A malformed crash fence cannot authenticate *any* restore generation.
+  // Offer an explicitly raw, local-only, never-auto-importable rescue instead
+  // of showing a D2b dialog whose download cannot be prepared.
+  const [unreadableOwnerFenceRecovery, setUnreadableOwnerFenceRecovery] = useState(false);
   // A local-only rescue does not claim fresh verification of the current server.
   const [recoveryOffline, setRecoveryOffline] = useState(false);
   const [recoveryDownloadRequested, setRecoveryDownloadRequested] = useState(false);
@@ -328,8 +333,12 @@ export function useSync() {
       if (state.status === "done") return true;
       if (state.status === "held") { setRecoveryHeld(true); setSyncStatus("offline"); return false; }
       if (state.status === "invalid") {
+        // No trustworthy observed generation is available for D2b; do NOT
+        // forge a generation or leave a dead "Prepare" button. The raw export
+        // preserves the remaining IDB rows and local markers for manual help.
+        setUnreadableOwnerFenceRecovery(true);
         setRecoveryHeld(true);
-        setRecoveryError(true);
+        setRecoveryError(false);
         setSyncStatus("offline");
         return false;
       }
@@ -354,7 +363,12 @@ export function useSync() {
       if (recoveryFence) await engageRecoveryForGeneration(
         recoveryFence.observedGeneration, recoveryFence.knownGeneration,
       );
-      else { setRecoveryHeld(true); setRecoveryError(true); setSyncStatus("offline"); }
+      else {
+        setUnreadableOwnerFenceRecovery(ownerAdoptionFencePresent());
+        setRecoveryHeld(true);
+        setRecoveryError(false);
+        setSyncStatus("offline");
+      }
       return false;
     }
   }
@@ -850,7 +864,7 @@ export function useSync() {
   // TWO explicit steps: prepare a private byte array, then download from the
   // next direct button click. A delayed synthetic click is unreliable on iOS.
   async function prepareOfflineRecoveryDownload() {
-    if (!offlineRecoveryIsHeld() || recoveryPreparing) return;
+    if ((!offlineRecoveryIsHeld() && !unreadableOwnerFenceRecovery) || recoveryPreparing) return;
     setRecoveryPreparing(true);
     setRecoveryReady(false);
     setRecoveryError(false);
@@ -858,6 +872,33 @@ export function useSync() {
     recoveryFileBytes.current = null;
     recoveryStorageSnapshot.current = null;
     try {
+      if (unreadableOwnerFenceRecovery) {
+        // A corrupt fence is NOT an authenticated generation. This raw-only
+        // backup is intentionally distinct from the D2b importable file.
+        if (offlineRecoveryIsHeld() || !ownerAdoptionFencePresent() ||
+            readOwnerAdoptionFence(localStorage) !== null ||
+            localStorage.getItem("ai-executive-wipe-pending") === "1")
+          throw new Error("OWNER_RESCUE_STATE_CHANGED");
+        const rawBefore = captureUnreadableOwnerRescueStorage(localStorage);
+        const localBefore: RawOwnerRescueLocal | null = await readLocalWithBase().then(
+          ([entities, relations, base]) => ({ entities, relations, base }),
+        ).catch(() => null);
+        const localAfter: RawOwnerRescueLocal | null = await readLocalWithBase().then(
+          ([entities, relations, base]) => ({ entities, relations, base }),
+        ).catch(() => null);
+        const rawAfter = captureUnreadableOwnerRescueStorage(localStorage);
+        if (JSON.stringify(rawBefore) !== JSON.stringify(rawAfter) ||
+            JSON.stringify(localBefore) !== JSON.stringify(localAfter) ||
+            readOwnerAdoptionFence(localStorage) !== null ||
+            localStorage.getItem("ai-executive-wipe-pending") === "1")
+          throw new Error("OWNER_RESCUE_UNSTABLE");
+        const bytes = encodeUnreadableOwnerRescue(localAfter, rawAfter);
+        recoveryStorageSnapshot.current = JSON.stringify(rawAfter);
+        recoveryFileBytes.current = bytes;
+        setRecoveryOffline(true);
+        setRecoveryReady(true);
+        return;
+      }
       const hold = readOfflineRecoveryHold();
       if (!hold) throw new Error("OFFLINE_RECOVERY_HOLD_INVALID");
       // Online validation is best effort. Even if the owner is signed out or
@@ -922,13 +963,21 @@ export function useSync() {
   }
   function downloadOfflineRecovery() {
     const bytes = recoveryFileBytes.current;
-    if (!recoveryHeld || !offlineRecoveryIsHeld() || !bytes) return;
+    if (!recoveryHeld || (!offlineRecoveryIsHeld() && !unreadableOwnerFenceRecovery) || !bytes) return;
     // localStorage reads are synchronous, so this check remains in the user's
     // direct click activation (required by mobile Safari). Reject stale bundles.
     try {
-      const current = JSON.stringify([readOfflineRecoveryHold(), readRawRecoveryDrafts(localStorage), readRawRecoveryMarkers(localStorage)]);
-      if (!recoveryStorageSnapshot.current || current !== recoveryStorageSnapshot.current)
-        throw new Error("OFFLINE_RECOVERY_UNSTABLE");
+      if (unreadableOwnerFenceRecovery) {
+        if (offlineRecoveryIsHeld() || !ownerAdoptionFencePresent() ||
+            readOwnerAdoptionFence(localStorage) !== null ||
+            localStorage.getItem("ai-executive-wipe-pending") === "1" ||
+            JSON.stringify(captureUnreadableOwnerRescueStorage(localStorage)) !== recoveryStorageSnapshot.current)
+          throw new Error("OWNER_RESCUE_UNSTABLE");
+      } else {
+        const current = JSON.stringify([readOfflineRecoveryHold(), readRawRecoveryDrafts(localStorage), readRawRecoveryMarkers(localStorage)]);
+        if (!recoveryStorageSnapshot.current || current !== recoveryStorageSnapshot.current)
+          throw new Error("OFFLINE_RECOVERY_UNSTABLE");
+      }
     } catch {
       recoveryFileBytes.current = null;
       recoveryStorageSnapshot.current = null;
@@ -940,7 +989,9 @@ export function useSync() {
     const url = URL.createObjectURL(blob);
     const anchor = document.createElement("a");
     anchor.href = url;
-    anchor.download = recoveryOffline ? offlineRecoveryFile.unverifiedFilename : offlineRecoveryFile.filename;
+    anchor.download = unreadableOwnerFenceRecovery
+      ? unreadableOwnerRescueFilename
+      : recoveryOffline ? offlineRecoveryFile.unverifiedFilename : offlineRecoveryFile.filename;
     anchor.style.display = "none";
     document.body.appendChild(anchor);
     try {
@@ -997,6 +1048,7 @@ export function useSync() {
 
   return {
     recoveryHeld,
+    unreadableOwnerFenceRecovery,
     recoveryPreparing,
     recoveryReady,
     recoveryError,

@@ -51,6 +51,11 @@ export function OfflineRecoveryDialog({ app }: { app: LumiApp }) {
               ? "Serverová data byla obnovena z jiné generace. Lumi zastavilo zápisy i přepsání místní kopie. Změny, poznámky a rozpracované texty zůstávají v tomto prohlížeči."
               : "The server's restore generation changed. Lumi has blocked writes and replacement of your local copy. Local edits, notes and drafts stay in this browser."}
         </p>
+        {app.unreadableOwnerFenceRecovery && <p role="alert">
+          {cs
+            ? "Ochranná značka obnovy je poškozená. Není možné ověřit původní generaci. Nabízíme jen nezpracovaný lokální export pro ruční záchranu, nikoli standardní záchranný soubor. Nelze ho importovat ani automaticky sloučit."
+            : "The restore marker is corrupt, so its generation cannot be verified. Only a raw local salvage file is available for manual recovery. It cannot be imported or merged automatically."}
+        </p>}
         {interruptedOwnerRestore && <p role="status">
           {cs
             ? "Předchozí obnova byla přerušena. Místní kopie už může být částečně nahrazená; záchranný soubor nemusí obsahovat všechny původní změny."
@@ -91,7 +96,7 @@ export function OfflineRecoveryDialog({ app }: { app: LumiApp }) {
             ? "Soubor je připravený. Klikněte na Stáhnout soubor; samotné připravení nic neukládá."
             : "The file is ready. Select Download file; preparing alone does not save it."}
         </p>}
-        <section aria-labelledby="offline-recovery-review-title">
+        {!app.unreadableOwnerFenceRecovery && <section aria-labelledby="offline-recovery-review-title">
           <h3 id="offline-recovery-review-title">
             {cs ? "3. Zkontrolovat uložený soubor" : "3. Inspect a saved recovery file"}
           </h3>
@@ -155,7 +160,7 @@ export function OfflineRecoveryDialog({ app }: { app: LumiApp }) {
                 : "Even zero changes is not consent to discard. Permissions and ownership require separate review. Synchronization remains blocked."}
             </p>
           </div>}
-        </section>
+        </section>}
         {app.recoveryDownloadRequested && <p role="status">
           {cs
             ? "Stahování bylo vyžádáno. Ověřte, že soubor skutečně existuje a lze ho bezpečně uchovat. Synchronizace zůstává zablokovaná."

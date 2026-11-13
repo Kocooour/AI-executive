@@ -233,7 +233,7 @@ export function useLumiApp(options: { targetDetails?: boolean; targetUnified?: b
   const { items, relations, unsent, heldBack, heldReasons, syncStatus, setSyncStatus, serverRevision, syncQueue, localDataVersion, signedOut, pendingKey,
     deletedKey, revivedKey, pendingDeletedIds, pendingRevivedIds, load, applySnapshot, replaceLocalWithServer, restoreGeneration, restoredSinceKnown, adoptServerCopy, finishInterruptedOwnerAdoption, showRestoredNotice, restoredNotice, dismissRestoredNotice, putSnapshot, syncToServer,
     pullFromServer, tabId, captureMarkers, clearSentMarkers,
-    recoveryHeld, recoveryPreparing, recoveryReady, recoveryError, recoveryOffline, recoveryDownloadRequested,
+    recoveryHeld, unreadableOwnerFenceRecovery, recoveryPreparing, recoveryReady, recoveryError, recoveryOffline, recoveryDownloadRequested,
     recoveryInspecting, recoveryInspection, recoveryInspectionError, inspectOfflineRecoveryFile,
     prepareOfflineRecoveryDownload, downloadOfflineRecovery } = useSync();
   // Reconcile each project independently against acknowledged base data and
@@ -4868,6 +4868,7 @@ export function useLumiApp(options: { targetDetails?: boolean; targetUnified?: b
     restoredNotice,
     dismissRestoredNotice,
     recoveryHeld,
+    unreadableOwnerFenceRecovery,
     recoveryPreparing,
     recoveryReady,
     recoveryError,

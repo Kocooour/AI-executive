@@ -1,11 +1,11 @@
 import { forServer } from "./sendable";
-import { db, readSyncBase } from "./db";
+import { adoptionTransaction, db, readSyncBase } from "./db";
 import { offlineRecoveryIsHeld, withOfflineRecoveryDataLock } from "./d2b-recovery-hold";
 import { clearAllMarkers, pendingDeletedIds, pendingRevivedIds } from "./pending-markers";
 import { clearNotesDrafts, keptNotesDrafts, notesDraftsKey } from "./notes-drafts";
 import { clearProjectContextDrafts, keptProjectContextDrafts } from "./project-context-drafts";
 import { clearOpenTexts } from "./open-texts";
-import { finishOwnerAdoptionFence } from "./owner-adoption-barrier";
+import { assertOwnerAdoptionCleanup, finishOwnerAdoptionFence } from "./owner-adoption-barrier";
 import { attentionCacheKey } from "./attention-cache";
 
 // Browser-side copies of server data and the bookkeeping of unsent changes.
@@ -95,11 +95,18 @@ export async function clearLocalData(timeoutMs = 4000) {
   clearProjectContextDrafts(localStorage);
   assertNotHeld();
   clearOpenTexts(localStorage);
+  // Some draft cleanup paths are best-effort. A verified wipe cannot claim
+  // completion until the protected draft and pending marker keys are absent.
+  assertOwnerAdoptionCleanup(localStorage);
   // Nothing local is left to push: the next start must take the server copy as it is, not merge.
   assertNotHeld();
   localStorage.setItem(serverSyncedKey, "1");
   assertNotHeld();
-  const wipe = db.transaction("rw", [db.entities, db.relations, db.baseEntities, db.baseRelations], async () => {
+  // The owner's already-authorized sign-out must be able to finish even if
+  // an abandoned owner-adoption fence remains. Only this transaction is
+  // exempt from the ordinary write guard, under the same recovery Web Lock.
+  // A D2b hold still rejects it inside the middleware.
+  const wipe = adoptionTransaction(async () => {
     await db.entities.clear();
     await db.relations.clear();
     await db.baseEntities.clear();
