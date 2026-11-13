@@ -46,15 +46,19 @@ const UI = [
   "tests/task-row-value.test.mjs",
   "tests/work-scope-navigation.test.mjs",
 ];
-const TOOLCHAIN = /^(?:package\.json|pnpm-lock\.yaml|pnpm-workspace\.yaml|tests\/ts-loader\.mjs|tests\/(?:fixtures|support)\/|scripts\/ci-pr-tests\.mjs|\.github\/workflows\/pr-checks\.yml)/;
+const TOOLCHAIN = /^(?:package\.json|pnpm-lock\.yaml|pnpm-workspace\.yaml|tests\/ts-loader\.mjs|tests\/(?:fixtures|support)\/)/;
 // File-reading tests cannot be discovered from imports. Keep these explicit.
 const FILE_INPUT_TESTS = [
   { path: /^docs\/design-system\//, tests: ["tests/design-tokens.test.mjs"] },
   { path: /^\.github\/workflows\/browser-e2e\.yml$/, tests: ["tests/browser-e2e-workflow.test.mjs"] },
+  // Known CI definitions and selector changes have explicit regression tests;
+  // unknown workflow and dependency changes still trigger the full suite.
+  { path: /^\.github\/workflows\/pr-checks\.yml$/, tests: ["tests/pr-checks-workflow.test.mjs", "tests/ci-pr-tests.test.mjs"] },
+  { path: /^scripts\/ci-pr-tests\.mjs$/, tests: ["tests/ci-pr-tests.test.mjs"] },
   { path: /^deployment\/deploy-safe\.sh$/, tests: ["tests/deploy-safe.test.mjs"] },
 ];
 // Fail closed for other changed workflow definitions, which can affect any check.
-const OTHER_WORKFLOWS = /^\.github\/workflows\/(?!browser-e2e\.yml$)/;
+const OTHER_WORKFLOWS = /^\.github\/workflows\/(?!browser-e2e\.yml$|pr-checks\.yml$)/;
 const SENSITIVE = /^(?:lib\/(?:auth\.ts|passkeys\.ts|http-security\.ts|security-|server-store\.ts|server-sync\.ts|db\.ts|data-dir\.ts|schema-migrations\.ts|backup-|mail-gmail\.ts|area-|target-|context(?:-|\.ts)|work-read-scope\.ts)|app\/api\/)/;
 
 // Build a reverse dependency graph from relative imports. Scanning the tracked
