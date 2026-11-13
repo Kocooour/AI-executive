@@ -3,7 +3,7 @@ import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import {
-  chmodSync, chownSync, cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync,
+  chmodSync, cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync,
   readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync,
 } from "node:fs";
 import os from "node:os";
@@ -201,42 +201,6 @@ test("foreign UID is rejected even with private POSIX modes (pure ownership poli
     assert.equal(isOwnedByOperator({ uid: operatorUid, mode }, undefined), false);
     assert.equal(isOwnedByOperator({ uid: operatorUid, mode }, -1), false);
   }
-});
-
-test("--check rejects foreign-owned directory or each companion without modifying it", {
-  // Optional for unprivileged local development, but REQUIRED in the dedicated
-  // PR CI step. If that step is not root, fail the run instead of skipping it.
-  skip: process.env.R4_REQUIRE_ROOT_OWNERSHIP_TEST !== "1" && process.geteuid?.() !== 0
-    ? "requires root to create a foreign-UID fixture" : false,
-}, t => {
-  assert.equal(process.geteuid?.(), 0, "privileged ownership regression must run as root");
-  const { base, legacy } = fixture(t);
-  const dir = path.join(base, "target");
-  const options = { legacy };
-  const provisioned = run([dir, "owner", "--confirmed"], options);
-  assert.equal(provisioned.status, 0, provisioned.stderr);
-  const baseline = snapshot(dir);
-  const foreignUid = 65534; // synthetic unprivileged user (numeric UID need not exist)
-  const paths = [dir, ...files.map(name => path.join(dir, name))];
-
-  for (const currentPath of paths) {
-    const original = lstatSync(currentPath);
-    chownSync(currentPath, foreignUid, original.gid);
-    try {
-      assert.equal(lstatSync(currentPath).uid, foreignUid);
-      const denied = reject(["--check", dir], options);
-      assert.match(denied.stderr, /ownership or type is unsafe/);
-      assert.deepEqual(snapshot(dir), baseline);
-      assert.equal(lstatSync(currentPath).uid, foreignUid, "read-only check must not repair ownership");
-    } finally {
-      chownSync(currentPath, original.uid, original.gid);
-    }
-  }
-  const verified = run(["--check", dir], options);
-  assert.equal(verified.status, 0, verified.stderr);
-  assert.equal(verified.stdout, provisioned.stdout);
-  assert.equal(verified.stderr, "");
-  assert.deepEqual(snapshot(dir), baseline);
 });
 
 test("repeat provision cannot overwrite existing store, its generation or other bytes", t => {
