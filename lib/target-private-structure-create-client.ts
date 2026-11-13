@@ -99,17 +99,21 @@ async function receipt(
     if(!record(data))return "unavailable";
     if(keys(data)==="status"&&data.status==="not_recorded")return "not_recorded";
     if(keys(data)==="id,status"&&data.status==="committed"&&typeof data.id==="string"&&
-      (kind==="project"?canonical(data.id):readableProjectId(data.id)))
+      canonical(data.id))
       return {status:"committed",id:data.id};
     return "unavailable";
   }catch{return "unavailable";}
 }
-export function checkStructureCreateStatus(
+export async function checkStructureCreateStatus(
   kind:StructureKind,command:StructureCreateCommand,signal:AbortSignal,
   fetchImpl:typeof fetch=targetAppFetch,
 ):Promise<StructureReceipt>{
-  if(!validStructureCommand(kind,command))return Promise.resolve("unavailable");
-  return receipt(kind,url(kind)+"/create-status",command,signal,fetchImpl);
+  if(!validStructureCommand(kind,command))return "unavailable";
+  const found=await receipt(kind,url(kind)+"/create-status",command,signal,fetchImpl);
+  // Unlike opaque reload recovery, exact-command status has the original ID.
+  // A mismatched response cannot release the unresolved marker.
+  return typeof found==="object"&&found.id!==expected(kind,command)
+    ?"unavailable":found;
 }
 export function recoverStructureCreate(
   kind:StructureKind,commandId:string,projectId:string|null,signal:AbortSignal,
