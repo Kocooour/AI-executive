@@ -1067,7 +1067,7 @@ test("6. revocation transitions in sequence: every channel is re-checked after e
 });
 
 // ================== HTTP spot checks: route-level parity behind default-off flags ==================
-const {createSessionToken,sessionCookieName}=await import("../lib/auth.ts");
+const {createSessionToken,sessionCookieName}=await import("./support/owner-session-test-cookie.mjs");
 const {GET:GLOBAL_INDEX}=await import("../app/api/target-staging/global-index/route.ts");
 const {GET:ATTENTION}=await import("../app/api/target-staging/attention/route.ts");
 const {GET:ATTENTION_PREVIEW}=await import("../app/api/target-staging/attention/command/route.ts");

@@ -44,7 +44,7 @@ Object.assign(process.env,{
 });
 const {bootstrapIsolatedTargetStore}=await import("../lib/target-store-bootstrap.ts");
 const durable=await import("../lib/target-staging-durable-session.ts");
-const {createSessionToken,sessionCookieName}=await import("../lib/auth.ts");
+const {createSessionToken,sessionCookieName}=await import("./support/owner-session-test-cookie.mjs");
 const {GET}=await import("../app/api/target-staging/my-plan/slice/route.ts");
 const {GET:statusGET,PATCH:statusPATCH}=
   await import("../app/api/target-staging/task-temporal/status/route.ts");
@@ -138,9 +138,9 @@ async function ok(request){
   assert.equal(res.status,200,JSON.stringify(body));
   assert.equal(res.headers.get("cache-control"),"no-store");
   assert.deepEqual(Object.keys(body).sort(),[
-    "areaFilter","evaluationDate","hasMore","nextCursor","today","tomorrow",
+    "areaFilter","evaluationDate","hasMore","nextCursor","today","tomorrow","undated",
   ]);
-  for(const section of [body.today,body.tomorrow]){
+  for(const section of [body.today,body.tomorrow,body.undated]){
     assert.deepEqual(Object.keys(section).sort(),["hasMore","tasks"]);
     for(const task of section.tasks){
       for(const forbidden of ["userId","assigneeUserId","privateEpoch",
@@ -185,8 +185,9 @@ async function accepted(handler,url,command,cookie,expected){
   assert.equal(response.headers.get("cache-control"),"no-store");
   assert.deepEqual(body,expected);
 }
-const unique=page=>new Set([...ids(page.today),...ids(page.tomorrow)]).size===
-  ids(page.today).length+ids(page.tomorrow).length;
+const unique=page=>new Set([...ids(page.today),...ids(page.tomorrow),
+  ...ids(page.undated)]).size===ids(page.today).length+ids(page.tomorrow).length+
+  ids(page.undated).length;
 
 test("BE-09 My Plan -> private whenOn -> status -> receipts -> fresh Undo stays coherent",async()=>{
   const f=fixture(),bob=login(f,"bob"),carol=login(f,"carol");
@@ -965,14 +966,17 @@ test("two-day atomic child keeps one complete epoch witness and live guard detec
     stagingDirectory:f.stage.directory,
     expectedRestoreGeneration:f.stage.restoreGeneration,
     ownerUserId:"alice",sessionTokenHash:hash,
-  },"all","2026-11-04","2026-11-05",2,{today:0,tomorrow:0});
+  },"all","2026-11-04","2026-11-05",2,{today:0,tomorrow:0,undated:0});
   const page=await read();
   assert.ok(page);
   assert.deepEqual(ids(page.today),["b-overdue","b-today"]);
   assert.deepEqual(ids(page.tomorrow),["b-next","b-next2"]);
   assert.deepEqual(page.today.linearization,page.tomorrow.linearization);
+  assert.deepEqual(page.today.linearization,page.undated.linearization);
   assert.deepEqual(page.today.areaEpochs,page.tomorrow.areaEpochs);
+  assert.deepEqual(page.today.areaEpochs,page.undated.areaEpochs);
   assert.equal(page.today.privateEpoch,page.tomorrow.privateEpoch);
+  assert.equal(page.today.privateEpoch,page.undated.privateEpoch);
   const verify=p=>verifyStagingReadBeforeRelease(
     new Request(base+query(),{headers:{cookie:bob}}),
     {kind:"session",tokenHash:hash},f.store,"alice",p.today.linearization,
@@ -1005,4 +1009,113 @@ test("calendar rollover is local-day based across year end and leap day",async()
   const month=await ok(get(query({evaluationDate:"2028-02-29"}),bob));
   assert.ok(ids(month.today).includes("b-leap"));
   assert.deepEqual(ids(month.tomorrow),[]);
+});
+
+
+test("R3-A3 undated HTTP section is private-only, paginated and actor-bound",async()=>{
+  const f=fixture(),bob=login(f,"bob"),carol=login(f,"carol");
+  const put=f.db.prepare(
+    "INSERT INTO tasks(id,area_id,title,assignee_user_id,due_on) VALUES (?,?,?,?,?)");
+  put.run("b-undated","bob-private","Bob unscheduled",null,null);
+  put.run("b-undated2","bob-private","Bob unscheduled 2",null,null);
+  put.run("c-undated","carol-private","Carol unscheduled",null,null);
+  put.run("s-undated","family-area","Shared unscheduled","bob",null);
+  put.run("b-finished","bob-private","Finished unscheduled",null,null);
+  f.db.prepare("UPDATE tasks SET status='completed',completed_at_ms=1793800000000 WHERE id='b-finished'").run();
+  f.db.prepare("INSERT INTO projects(id,area_id,title) VALUES ('bob-project','bob-private','Private project')").run();
+  f.db.prepare("INSERT INTO tasks(id,project_id,title) VALUES ('b-project-undated','bob-project','Project child')").run();
+  const page=await ok(get(query(),bob));
+  assert.deepEqual(ids(page.undated),["b-project-undated","b-undated","b-undated2"]);
+  assert.ok(page.undated.tasks.every(t=>t.areaKind==="private"&&
+    t.attentionOn===null&&t.whenOn===null&&t.dueOn===null));
+  assert.equal(unique(page),true);
+  assert.deepEqual(ids((await ok(get(query({areaFilter:"shared"}),bob))).undated),[]);
+  assert.deepEqual(ids((await ok(get(query(),carol))).undated),["c-undated"]);
+  const first=await ok(get(query({limit:"1"}),bob));
+  assert.deepEqual(ids(first.undated),["b-project-undated"]);
+  assert.equal(first.undated.hasMore,true);
+  const second=await ok(get(query({limit:"1",cursor:first.nextCursor}),bob));
+  assert.deepEqual(ids(second.undated),["b-undated"]);
+  const oldCursor=first.nextCursor;
+  f.db.prepare("INSERT INTO personal_task_plans(user_id,task_id,when_on) VALUES ('bob','b-undated','2026-11-04')").run();
+  assert.equal((await get(query({limit:"1",cursor:oldCursor}),bob)).status,409);
+  assert.deepEqual(ids((await ok(get(query(),bob))).undated),
+    ["b-project-undated","b-undated2"]);
+  assert.ok(!JSON.stringify(await ok(get(query(),bob))).includes("Carol unscheduled"));
+  assert.equal(durable.revokeAllDurableTargetStagingSessionsForUser(f.store,"bob").ok,true);
+  assert.notEqual((await get(query(),bob)).status,200);
+});
+
+test("R3-A3 Undo restores When atomically, rejects stale and revoked completions",async()=>{
+  const f=fixture(),bob=login(f,"bob");
+  f.db.prepare("INSERT INTO tasks(id,area_id,title) VALUES ('restore-undated','bob-private','Restore day')").run();
+  assert.ok(ids((await ok(get(query(),bob))).undated).includes("restore-undated"));
+  const whenCAS=await writePreview(whenGET,whenURL,"restore-undated",bob);
+  const schedule={...whenCAS,taskId:"restore-undated",whenOn:"2026-11-04",
+    commandId:randomUUID()};
+  await accepted(whenPATCH,whenURL,schedule,bob,{ok:true});
+  assert.ok(ids((await ok(get(query(),bob))).today).includes("restore-undated"));
+  const originalCAS=await writePreview(statusGET,statusURL,"restore-undated",bob);
+  const complete={...originalCAS,taskId:"restore-undated",status:"completed",
+    previousWhenOn:"2026-11-04",commandId:randomUUID()};
+  await accepted(statusPATCH,statusURL,complete,bob,{ok:true});
+  await accepted(statusReceiptPOST,statusURL+"/receipt",complete,bob,{status:"committed"});
+  assert.equal(f.db.prepare("SELECT COUNT(*) AS n FROM personal_task_plans WHERE task_id='restore-undated'").get().n,0);
+  const freshCAS=await writePreview(statusGET,statusURL,"restore-undated",bob);
+  const undo={...freshCAS,taskId:"restore-undated",status:"open",
+    undoOf:complete,commandId:randomUUID()};
+  await accepted(statusPATCH,statusURL,undo,bob,{ok:true});
+  await accepted(statusReceiptPOST,statusURL+"/receipt",undo,bob,{status:"committed"});
+  assert.equal(f.db.prepare("SELECT when_on AS day FROM personal_task_plans WHERE task_id='restore-undated'").get().day,"2026-11-04");
+  assert.ok(ids((await ok(get(query(),bob))).today).includes("restore-undated"));
+  assert.equal((await writeCommand(statusPATCH,statusURL,{
+    ...undo,commandId:randomUUID(),
+  },bob)).status,409,"old completion cannot be undone twice");
+  const {inspectIsolatedTargetStore}=await import("../lib/target-store-preflight.ts");
+  assert.deepEqual(inspectIsolatedTargetStore({
+    stagingDirectory:f.stage.directory,expectedRestoreGeneration:f.stage.restoreGeneration,
+    mode:"r2-model",
+  }),{ok:true,mode:"r2-model",issues:[]});
+
+  // An actual shared assignment can be revoked between completion and Undo.
+  const privateWhen=await writePreview(whenGET,whenURL,"s-bob",bob);
+  const mark={...privateWhen,taskId:"s-bob",whenOn:"2026-11-04",
+    commandId:randomUUID()};
+  await accepted(whenPATCH,whenURL,mark,bob,{ok:true});
+  const sharedComplete={...await writePreview(statusGET,statusURL,"s-bob",bob),
+    taskId:"s-bob",status:"completed",previousWhenOn:"2026-11-04",
+    commandId:randomUUID()};
+  await accepted(statusPATCH,statusURL,sharedComplete,bob,{ok:true});
+  const sharedUndo={...await writePreview(statusGET,statusURL,"s-bob",bob),
+    taskId:"s-bob",status:"open",undoOf:sharedComplete,commandId:randomUUID()};
+  // The canonical DB guard requires assigned tasks to be unassigned BEFORE
+  // membership removal. Both transitions invalidate the old actor CAS.
+  f.db.prepare("UPDATE tasks SET assignee_user_id=NULL WHERE id='s-bob'").run();
+  f.db.prepare("DELETE FROM area_members WHERE area_id='family-area' AND user_id='bob'").run();
+  assert.notEqual((await writeCommand(statusPATCH,statusURL,sharedUndo,bob)).status,200);
+  assert.equal(f.db.prepare("SELECT status FROM tasks WHERE id='s-bob'").get().status,"completed");
+  assert.equal(f.db.prepare("SELECT COUNT(*) AS n FROM personal_task_plans WHERE task_id='s-bob'").get().n,0);
+});
+
+test("R3-A3 real HTTP serves three large pages at both 50 and 100 with bounded output",async()=>{
+  const f=fixture(),bob=login(f,"bob");
+  const insert=f.db.prepare("INSERT INTO tasks(id,area_id,title,due_on) VALUES (?,?,?,?)");
+  const title="x"+String.fromCharCode(92).repeat(4095);
+  for(let i=0;i<100;i++){
+    const id=String(i).padStart(3,"0");
+    insert.run("b-large-today-"+id,"bob-private",title,"2026-11-04");
+    insert.run("b-large-tomorrow-"+id,"bob-private",title,"2026-11-05");
+    insert.run("b-large-undated-"+id,"bob-private",title,null);
+  }
+  for(const limit of ["50","100"]){
+    const response=await get(query({limit}),bob);
+    assert.equal(response.status,200,"large valid pages must not be rejected by the child");
+    const page=await response.json();
+    assert.equal(page.today.tasks.length,Number(limit));
+    assert.equal(page.tomorrow.tasks.length,Number(limit));
+    assert.equal(page.undated.tasks.length,Number(limit));
+    assert.ok(Buffer.byteLength(JSON.stringify(page),"utf8")>1024*1024);
+    assert.equal(unique(page),true);
+    assert.ok(page.nextCursor,"remaining items have a signed continuation");
+  }
 });

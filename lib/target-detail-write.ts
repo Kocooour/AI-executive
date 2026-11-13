@@ -30,7 +30,7 @@ import {
   buildNoteDeleteCommand,buildNoteEditCommand,buildTaskDeleteCommand,buildTaskTitleCommand,
   checkNoteDeleteReceipt,checkNoteEditReceipt,checkTaskDeleteReceipt,checkTaskTitleReceipt,
   dispatchNoteDelete,dispatchNoteEdit,dispatchTaskDelete,dispatchTaskTitle,
-  readNoteWriteContext,readTaskWriteContext,validTaskTitle,
+  readNoteWriteContext,readTaskWriteContext,readTaskCompletionContext,validTaskTitle,
   type EditFailure,type EditReceipt,
 } from "./target-staging-edit-clients";
 
@@ -224,11 +224,23 @@ function fromDispatch(
 }
 
 async function runTaskStatus(input:Extract<WriteInput,{kind:"taskStatus"}>,d:Deps):Promise<Outcome>{
-  const ctx=await readTaskWriteContext(input.taskId,input.areaId,d.fetch,d.signal);
+  // The status-owned preflight returns CAS and the original actor-private
+  // plan day atomically. An editor can complete an unassigned shared task
+  // without requiring the separate personal-When write feature or permission.
+  const ctx=input.status==="completed"
+    ?await readTaskCompletionContext(input.taskId,input.areaId,d.fetch,d.signal)
+    :await readTaskWriteContext(input.taskId,input.areaId,d.fetch,d.signal);
   if(ctx.ok===false)return outcomeForFailure(ctx.reason);
+  const originalDay="previousWhenOn" in ctx?ctx.previousWhenOn:undefined;
+  if(input.status==="completed"&&originalDay===undefined)
+    return {t:"error",reason:"invalid-response"};
+  if(originalDay!==undefined&&originalDay!==null&&typeof originalDay!=="string")
+    return {t:"error",reason:"invalid-response"};
   const command:MyPlanStatusCommand={
     commandId:crypto.randomUUID(),taskId:input.taskId,status:input.status,...ctx.context,
   };
+  if(originalDay===null)command.previousWhenOn=null;
+  else if(typeof originalDay==="string")command.previousWhenOn=originalDay;
   if(!validStatusCommand(command))return {t:"error",reason:"invalid"};
   // Server Undo semantics as in My Plan: only a completion is undoable (reopening it).
   const undoOf=():UndoHandle|null=>input.status!=="completed"?null:async(signal,hooks)=>{

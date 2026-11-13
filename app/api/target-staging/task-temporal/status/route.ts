@@ -38,7 +38,9 @@ export async function GET(request:Request):Promise<Response> {
   if (admitted) return admitted;
   try {
     const query=new URL(request.url).searchParams;
-    if ([...query.keys()].some(k=>k!=="taskId") ||
+    const completion=query.getAll("completion").length===1&&query.get("completion")==="1";
+    if ([...query.keys()].some(k=>k!=="taskId"&&k!=="completion") ||
+        (query.has("completion")&&!completion)||
         query.getAll("taskId").length!==1 ||
         !temporalStatusTaskId(query.get("taskId")))
       return refuse(400,"Invalid request");
@@ -58,10 +60,16 @@ export async function GET(request:Request):Promise<Response> {
     if (!temporalStatusUnchanged(base)) return refuse(503,"Staging unavailable");
     if (released==="stale"||preview?.ok===false)return refuse(404,"Not found");
     if (!preview)return refuse(503,"Staging unavailable");
+    // Only a completion preflight asks for the actor-private before-day.
+    // This witness comes from the SAME pinned status+CAS snapshot and needs
+    // neither a personal-When WRITE flag nor personal-plan assignment rights.
+    if(completion&&!Object.prototype.hasOwnProperty.call(preview,"previousWhenOn"))
+      return refuse(503,"Staging unavailable");
     return Response.json({
       expectedRevision:preview.expectedRevision,
       writeAreaId:preview.detail.task.areaId,
       restoreGeneration:base.expectedRestoreGeneration,
+      ...(completion?{previousWhenOn:preview.previousWhenOn}:{}),
     },{headers});
   } catch(error) {
     logStagingFailure("target-staging/task-temporal/status-preview","route_exception",error);

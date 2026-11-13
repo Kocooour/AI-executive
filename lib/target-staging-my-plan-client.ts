@@ -2,16 +2,17 @@
  * The server remains the authority for identity, Area ACL, cursor and epochs.
  * No task data is cached, persisted, or projected into the legacy task store. */
 import {targetAppFetch} from "./target-app-fetch";
+import {MAX_MY_PLAN_SLICE_OUTPUT_BYTES} from "./target-my-plan-read-limits";
 export type MyPlanSliceFilter="all"|"personal"|"shared";
 export type MyPlanSliceTask={
   taskId:string;title:string;projectId:string|null;
   areaId:string;areaKind:"private"|"shared";assignedToMe?:true;
-  dueOn:string|null;whenOn:string|null;attentionOn:string;
+  dueOn:string|null;whenOn:string|null;attentionOn:string|null;
 };
 export type MyPlanSliceDay={tasks:MyPlanSliceTask[];hasMore:boolean};
 export type MyPlanSlicePage={
   evaluationDate:string;areaFilter:MyPlanSliceFilter;
-  today:MyPlanSliceDay;tomorrow:MyPlanSliceDay;
+  today:MyPlanSliceDay;tomorrow:MyPlanSliceDay;undated:MyPlanSliceDay;
   hasMore:boolean;nextCursor:string|null;
 };
 export type MyPlanReadFailure="signed-out"|"stale"|"unavailable"|
@@ -23,6 +24,14 @@ export type MyPlanReadResult=
 const cursorPattern=/^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/;
 const datePattern=/^\d{4}-\d{2}-\d{2}$/;
 const filterValues:readonly string[]=["all","personal","shared"];
+/** SQLite orders task IDs by UTF-8 BINARY bytes, not JS UTF-16 code units. */
+function compareBinaryTaskIds(a:string,b:string):number{
+  const encoder=new TextEncoder(),left=encoder.encode(a),right=encoder.encode(b);
+  for(let i=0;i<Math.min(left.length,right.length);i++){
+    if(left[i]!==right[i])return left[i]-right[i];
+  }
+  return left.length-right.length;
+}
 function exactKeys(value:Record<string,unknown>,keys:string[]):boolean {
   return Object.keys(value).sort().join("|")===keys.sort().join("|");
 }
@@ -50,7 +59,7 @@ function nextMyPlanDate(value:string):string|null{
 function maybeDate(value:unknown):value is string|null {
   return value===null||validMyPlanDate(value);
 }
-function parseTask(value:unknown,filter:MyPlanSliceFilter):MyPlanSliceTask|null {
+function parseTask(value:unknown,filter:MyPlanSliceFilter,undated=false):MyPlanSliceTask|null {
   if(!record(value))return null;
   const keys=["taskId","title","projectId","areaId","areaKind",
     "dueOn","whenOn","attentionOn"];
@@ -65,14 +74,16 @@ function parseTask(value:unknown,filter:MyPlanSliceFilter):MyPlanSliceTask|null 
     (filter==="personal"&&value.areaKind!=="private")||
     (filter==="shared"&&value.areaKind!=="shared")||
     !maybeDate(value.dueOn)||!maybeDate(value.whenOn)||
-    !validMyPlanDate(value.attentionOn)||
-    value.attentionOn!==[value.dueOn,value.whenOn].filter(
-      (date):date is string=>typeof date==="string").sort()[0])return null;
+    (undated ? (value.areaKind!=="private"||value.dueOn!==null||
+       value.whenOn!==null||value.attentionOn!==null) :
+      (!validMyPlanDate(value.attentionOn)||
+       value.attentionOn!==[value.dueOn,value.whenOn].filter(
+        (date):date is string=>typeof date==="string").sort()[0])))return null;
   return value as MyPlanSliceTask;
 }
 function parseDay(
   value:unknown,filter:MyPlanSliceFilter,limit:number,
-  match:(date:string)=>boolean,seen:Set<string>,
+  match:(date:string|null)=>boolean,seen:Set<string>,undated=false,
 ):MyPlanSliceDay|null {
   if(!record(value)||!exactKeys(value,["tasks","hasMore"])||
     !Array.isArray(value.tasks)||value.tasks.length>limit||
@@ -81,9 +92,11 @@ function parseDay(
   const tasks:MyPlanSliceTask[]=[];
   let previousDate:string|null=null;
   for(const item of value.tasks){
-    const task=parseTask(item,filter);
+    const task=parseTask(item,filter,undated);
     if(!task||!match(task.attentionOn)||seen.has(task.taskId)||
-      (previousDate!==null&&task.attentionOn<previousDate))return null;
+      (undated ? (tasks.length>0&&
+         compareBinaryTaskIds(task.taskId,tasks[tasks.length-1].taskId)<=0) :
+        (previousDate!==null&&(task.attentionOn as string)<previousDate)))return null;
     seen.add(task.taskId);
     previousDate=task.attentionOn;
     tasks.push(task);
@@ -94,7 +107,7 @@ export function parseMyPlanSlice(
   value:unknown,params:{evaluationDate:string;areaFilter:MyPlanSliceFilter;limit:number},
 ):MyPlanSlicePage|null {
   if(!record(value)||!exactKeys(value,[
-    "evaluationDate","areaFilter","today","tomorrow","hasMore","nextCursor",
+    "evaluationDate","areaFilter","today","tomorrow","undated","hasMore","nextCursor",
   ])||value.evaluationDate!==params.evaluationDate||
     value.areaFilter!==params.areaFilter||
     typeof value.hasMore!=="boolean")return null;
@@ -105,14 +118,17 @@ export function parseMyPlanSlice(
     date=>date<=params.evaluationDate,seen);
   const tomorrow=parseDay(value.tomorrow,params.areaFilter,params.limit,
     date=>date===following,seen);
-  if(!today||!tomorrow||value.hasMore!==(today.hasMore||tomorrow.hasMore)||
+  const undated=parseDay(value.undated,params.areaFilter,params.limit,
+    date=>date===null,seen,true);
+  if(!today||!tomorrow||!undated||
+    value.hasMore!==(today.hasMore||tomorrow.hasMore||undated.hasMore)||
     (value.hasMore
       ?typeof value.nextCursor!=="string"||value.nextCursor.length>4096||
        !cursorPattern.test(value.nextCursor)
       :value.nextCursor!==null))return null;
   return {
     evaluationDate:params.evaluationDate,areaFilter:params.areaFilter,
-    today,tomorrow,hasMore:value.hasMore,
+    today,tomorrow,undated,hasMore:value.hasMore,
     nextCursor:value.nextCursor as string|null,
   };
 }
@@ -123,17 +139,22 @@ export function appendMyPlanSlice(
   if(!previous.hasMore||!previous.nextCursor||
     previous.areaFilter!==next.areaFilter||
     previous.evaluationDate!==next.evaluationDate)return null;
-  const seen=new Set([...previous.today.tasks,...previous.tomorrow.tasks]
-    .map(task=>task.taskId));
-  if([...next.today.tasks,...next.tomorrow.tasks].some(task=>seen.has(task.taskId)))
+  const seen=new Set([...previous.today.tasks,...previous.tomorrow.tasks,
+    ...previous.undated.tasks].map(task=>task.taskId));
+  if([...next.today.tasks,...next.tomorrow.tasks,...next.undated.tasks]
+    .some(task=>seen.has(task.taskId)))
     return null;
   const mergedToday=[...previous.today.tasks,...next.today.tasks];
   const mergedTomorrow=[...previous.tomorrow.tasks,...next.tomorrow.tasks];
-  if(mergedToday.some((task,i)=>i>0&&task.attentionOn<mergedToday[i-1].attentionOn)||
-    mergedTomorrow.some((task,i)=>i>0&&task.attentionOn<mergedTomorrow[i-1].attentionOn))
+  const mergedUndated=[...previous.undated.tasks,...next.undated.tasks];
+  if(mergedToday.some((task,i)=>i>0&&(task.attentionOn as string)<(mergedToday[i-1].attentionOn as string))||
+    mergedTomorrow.some((task,i)=>i>0&&(task.attentionOn as string)<(mergedTomorrow[i-1].attentionOn as string))||
+    mergedUndated.some((task,i)=>i>0&&
+      compareBinaryTaskIds(task.taskId,mergedUndated[i-1].taskId)<=0))
     return null;
   return {...next,today:{tasks:mergedToday,hasMore:next.today.hasMore},
-    tomorrow:{tasks:mergedTomorrow,hasMore:next.tomorrow.hasMore}};
+    tomorrow:{tasks:mergedTomorrow,hasMore:next.tomorrow.hasMore},
+    undated:{tasks:mergedUndated,hasMore:next.undated.hasMore}};
 }
 
 /** BE-15: settle My Plan reads on abort before HTTP headers arrive.
@@ -165,10 +186,9 @@ async function fetchMyPlanUntilAbort(
   }
 }
 
-// R3-slice/BE-14. Two day buckets may each hold 100 title-rich tasks.
-// Eight MiB accommodates even JSON-escaped 4096-byte titles, yet bounds
-// hostile/corrupted responses before JSON.parse and the strict DTO allowlist.
-const MAX_MY_PLAN_RESPONSE_BYTES=8*1024*1024;
+// Three independently paged buckets can each hold 100 title-rich tasks.
+// Share the strictly bounded size with the child; never parse larger JSON.
+const MAX_MY_PLAN_RESPONSE_BYTES=MAX_MY_PLAN_SLICE_OUTPUT_BYTES;
 class InvalidMyPlanBody extends Error {}
 
 function discardMyPlanBody(response:Response):void{

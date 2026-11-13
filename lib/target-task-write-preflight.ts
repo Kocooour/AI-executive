@@ -49,7 +49,11 @@ export function validTargetTaskTitleEditPreviewRequest(
  * canonical preflight and the writer re-checks the write ACL inside
  * BEGIN IMMEDIATE. It does not expose title, actor or task content.
  */
-export function targetTaskTitleEditRevision(db: DatabaseSync, taskId: string): string | null {
+export function targetTaskTitleEditRevision(
+  db: DatabaseSync, taskId: string, revisionOverride?: number,
+): string | null {
+  if(revisionOverride!==undefined&&(!Number.isSafeInteger(revisionOverride)||
+    revisionOverride<0))return null;
   try {
     const row = db.prepare(`
       SELECT t.id AS id, t.revision AS task_revision,
@@ -66,7 +70,7 @@ export function targetTaskTitleEditRevision(db: DatabaseSync, taskId: string): s
     if (!row) return null;
     return createHash("sha256").update(JSON.stringify([
       "lumi:r2:task-title-cas:v2", row.restore_generation,
-      row.id, row.task_revision, row.project_id, row.area_id, row.assignee_user_id,
+      row.id, revisionOverride??row.task_revision, row.project_id, row.area_id, row.assignee_user_id,
       row.effective_area_id, row.policy_revision, row.area_kind,
       row.workspace_id, row.owner_user_id,
     ])).digest("hex");

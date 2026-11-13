@@ -13,7 +13,7 @@ const ACTOR=/^[A-Za-z0-9_.:@-]{1,120}$/;
 const MAX_OFFSET=1_000_000;
 const MAX_LENGTH=4096;
 const TTL=15*60;
-export type MyPlanSlicePositions={today:number;tomorrow:number};
+export type MyPlanSlicePositions={today:number;tomorrow:number;undated:number};
 export type MyPlanSliceCursorContext={
   actorUserId:string;authenticationBinding:string;stagingDirectory:string;
   restoreGeneration:string;sessionSecret:string;
@@ -30,8 +30,8 @@ export type VerifiedMyPlanSliceCursor=
 export function validMyPlanSlicePositions(value:unknown):value is MyPlanSlicePositions{
   if(!value||typeof value!=="object"||Array.isArray(value))return false;
   const p=value as Record<string,unknown>;
-  return Object.keys(p).sort().join(",")==="today,tomorrow"&&
-    [p.today,p.tomorrow].every(n=>typeof n==="number"&&
+  return Object.keys(p).sort().join(",")==="today,tomorrow,undated"&&
+    [p.today,p.tomorrow,p.undated].every(n=>typeof n==="number"&&
       Number.isSafeInteger(n)&&n>=0&&n<=MAX_OFFSET);
 }
 function safe(c:MyPlanSliceCursorContext):boolean{
@@ -63,11 +63,12 @@ export function signMyPlanSliceCursor(
   expiresAt?:number,now=Math.floor(Date.now()/1000),
 ):string|null{
   if(!safe(c)||!HEX.test(revision)||!validMyPlanSlicePositions(positions)||
-    positions.today+positions.tomorrow===0||!Number.isSafeInteger(now))return null;
+    positions.today+positions.tomorrow+positions.undated===0||!Number.isSafeInteger(now))return null;
   const exp=expiresAt??now+TTL;
   if(!Number.isSafeInteger(exp)||exp<=now||exp>now+TTL)return null;
   const claims:Claims={v:1,scope:"my-plan-two-day",binding:binding(c),
-    rev:revision,positions:{today:positions.today,tomorrow:positions.tomorrow},
+    rev:revision,positions:{today:positions.today,tomorrow:positions.tomorrow,
+      undated:positions.undated},
     iat:now,exp};
   const payload=Buffer.from(JSON.stringify(claims),"utf8").toString("base64url");
   const signed=payload+"."+signature(payload,c.sessionSecret).toString("base64url");
@@ -96,7 +97,7 @@ export function verifyMyPlanSliceCursor(
       p.v!==1||p.scope!=="my-plan-two-day"||p.binding!==binding(c)||
       typeof p.rev!=="string"||!HEX.test(p.rev)||
       !validMyPlanSlicePositions(p.positions)||
-      p.positions.today+p.positions.tomorrow===0||
+      p.positions.today+p.positions.tomorrow+p.positions.undated===0||
       !Number.isSafeInteger(p.iat)||!Number.isSafeInteger(p.exp)||
       (p.iat as number)>now||(p.exp as number)<=(p.iat as number)||
       (p.exp as number)-(p.iat as number)>TTL)return invalid();

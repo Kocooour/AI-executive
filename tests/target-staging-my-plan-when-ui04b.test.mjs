@@ -35,6 +35,7 @@ const good=(body,status=200)=>Response.json(body,{
 const page={
   evaluationDate:"2026-11-06",areaFilter:"all",
   today:{tasks:[],hasMore:false},tomorrow:{tasks:[],hasMore:false},
+  undated:{tasks:[],hasMore:false},
   hasMore:false,nextCursor:null,
 };
 

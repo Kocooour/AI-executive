@@ -176,9 +176,17 @@ test('simultaneous PATCH and cancel are ordered by pinned write transaction',asy
   assert.equal(fence.status,200,await fence.clone().text());
   const status=(await fence.json()).status;
   if(status==='cancelled'){
-    assert.equal(rename.status,409);
-    assert.equal((await rename.json()).error,'Command cancelled');
+    // A pre-dispatch pinned READ may fail closed under the competing writer's
+    // rollback sidecar, returning 503. This is safe only if the durable fence
+    // still rejects the same UUID after contention has settled.
+    assert.ok(rename.status===409||rename.status===503,
+      "the cancelled operation must never report a successful write");
+    assert.equal((await rename.json()).error,
+      rename.status===409?'Command cancelled':'Staging unavailable');
     assert.notEqual(db.prepare("SELECT title FROM projects WHERE id='proj'").get().title,command.title);
+    const fenced=await write(alice,command);
+    assert.equal(fenced.status,409,"durable cancellation must reject the same UUID");
+    assert.equal((await fenced.json()).error,'Command cancelled');
   }else{
     assert.equal(status,'committed');
     assert.equal(rename.status,200);

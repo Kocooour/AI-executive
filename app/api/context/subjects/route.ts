@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { releaseOwnerRead } from "../../../../lib/owner-session-read-release";
 import { fenceRestoredClient } from "../../../../lib/restore-fence";
 import { isAuthenticated } from "../../../../lib/auth";
 import { archiveStandaloneSubject, createStandaloneSubject,
@@ -25,14 +26,14 @@ export async function GET(request: Request) {
     const url = new URL(request.url);
     const workspaceId = url.searchParams.get("workspaceId") || "";
     const historyId = url.searchParams.get("historyId");
-    if (historyId) return NextResponse.json({ history: listStandaloneSubjectHistory(workspaceId, historyId) });
+    if (historyId) return releaseOwnerRead(request, NextResponse.json({ history: listStandaloneSubjectHistory(workspaceId, historyId) }));
     const type = url.searchParams.get("type");
     const query = url.searchParams.get("query") || "";
     const subjects = type && (type === "person" || type === "organization") && query
       ? matchingStandaloneSubjects(workspaceId, type, query)
       : listStandaloneSubjects(workspaceId, { query, includeArchived: url.searchParams.get("includeArchived") === "true" });
-    return NextResponse.json({ subjects }, { headers: { "cache-control": "no-store" } });
-  } catch (error) { return errorResponse(error); }
+    return releaseOwnerRead(request, NextResponse.json({ subjects }, { headers: { "cache-control": "no-store" } }));
+  } catch (error) { return releaseOwnerRead(request, errorResponse(error)); }
 }
 
 export async function POST(request: Request) {

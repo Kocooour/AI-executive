@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { after, test } from "node:test";
-import { createSessionToken, sessionCookieName } from "../lib/auth.ts";
+import { createSessionToken, sessionCookieName } from "./support/owner-session-test-cookie.mjs";
 import { bootstrapIsolatedTargetStore } from "../lib/target-store-bootstrap.ts";
 import { verifyHumanWikiOwnerPrivateAreaLive } from "../lib/target-staging-durable-session.ts";
 import { withPinnedTargetStagingWrite } from "../lib/target-staging-pinned-write.ts";

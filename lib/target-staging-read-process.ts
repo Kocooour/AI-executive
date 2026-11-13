@@ -33,6 +33,7 @@ import type { TargetReadableNote } from "./target-note-access";
 import type { TargetNoteReadLiveGuard } from "./target-staging-durable-session";
 import { MAX_SCOPED_READ_AREAS, MAX_PRIVATE_NOTE_AREA_CATALOG_BYTES } from "./target-staging-read-limits";
 import { FEED_PAGE_LIMIT } from "./target-change-feed-read-model";
+import {MAX_MY_PLAN_SLICE_OUTPUT_BYTES} from "./target-my-plan-read-limits";
 import { NOTE_SYNC_CURSOR_LENGTH } from "./target-note-sync-cursor";
 import type { TargetNoteSyncPage } from "./target-note-sync-read-model";
 import type { FeedItem, TargetChangeFeedPage } from "./target-change-feed-read-model";
@@ -75,7 +76,9 @@ export function createStagingReadRunner(
       const script = path.join(cwd, "scripts", scriptName);
       // Do not weaken output limits for other staging read workers.
       const outputLimit = scriptName === "target-staging-private-note-areas-child.mjs"
-        ? MAX_PRIVATE_NOTE_AREA_CATALOG_BYTES : MAX_OUTPUT_BYTES;
+        ? MAX_PRIVATE_NOTE_AREA_CATALOG_BYTES
+        : scriptName === "target-staging-my-plan-slice-child.mjs"
+          ? MAX_MY_PLAN_SLICE_OUTPUT_BYTES : MAX_OUTPUT_BYTES;
       const environment = {
         NODE_ENV: process.env.NODE_ENV || "production",
         AI_EXECUTIVE_DATA_DIR: process.env.AI_EXECUTIVE_DATA_DIR || "",
@@ -1352,12 +1355,12 @@ export function parseStagingMyPlanDayPage(
 ):MyPlanDayTaskPage|null {
   if(!value||typeof value!=="object"||Array.isArray(value)||
     !["all","personal","shared"].includes(areaFilter)||
-    !["today","upcoming"].includes(window)||
+    !["today","upcoming","undated"].includes(window)||
     !Number.isSafeInteger(limit)||limit<1||limit>100)return null;
   const day=temporalCalendarOrdinal(evaluationDate);
   const through=throughDate===null?null:temporalCalendarOrdinal(throughDate);
-  if(day===null||(window==="today"?throughDate!==null:
-    through===null||through-day<1||through-day>90))return null;
+  if(day===null||(window==="upcoming"?through===null||through-day<1||through-day>90:
+    throughDate!==null))return null;
   const data=value as Record<string,unknown>;
   if(Object.keys(data).sort().join(",")!==
     "areaEpochs,areaFilter,evaluationDate,hasMore,linearization,ok,privateEpoch,revision,tasks,throughDate,window"||
@@ -1387,16 +1390,20 @@ export function parseStagingMyPlanDayPage(
       (areaFilter==="shared"&&!shared)||
       (t.dueOn!==null&&temporalCalendarOrdinal(t.dueOn)===null)||
       (t.whenOn!==null&&temporalCalendarOrdinal(t.whenOn)===null)||
-      typeof t.attentionOn!=="string"||temporalCalendarOrdinal(t.attentionOn)===null||
-      t.attentionOn!==[t.dueOn,t.whenOn].filter((d):d is string=>
-        typeof d==="string").sort()[0]||
-      (window==="today"?!(t.attentionOn<=evaluationDate):
-        !(t.attentionOn>evaluationDate&&t.attentionOn<=(throughDate as string)))||
+      (window==="undated" ? t.areaKind!=="private"||t.dueOn!==null||
+        t.whenOn!==null||t.attentionOn!==null :
+        typeof t.attentionOn!=="string"||temporalCalendarOrdinal(t.attentionOn)===null||
+        t.attentionOn!==[t.dueOn,t.whenOn].filter((d):d is string=>
+          typeof d==="string").sort()[0]||
+        (window==="today"?!(t.attentionOn<=evaluationDate):
+          !(t.attentionOn>evaluationDate&&t.attentionOn<=(throughDate as string))))||
       seen.has(t.taskId))return null;
     const prev=tasks[tasks.length-1];
-    if(prev&&(t.attentionOn<prev.attentionOn||
-      (t.attentionOn===prev.attentionOn&&
-       Buffer.compare(Buffer.from(t.taskId),Buffer.from(prev.taskId))<=0)))return null;
+    if(prev&&(window==="undated"
+      ? Buffer.compare(Buffer.from(t.taskId),Buffer.from(prev.taskId))<=0
+      : ((t.attentionOn as string)<(prev.attentionOn as string)||
+        (t.attentionOn===prev.attentionOn&&
+          Buffer.compare(Buffer.from(t.taskId),Buffer.from(prev.taskId))<=0))))return null;
     seen.add(t.taskId);
     // A malicious child must not relabel one Area across rows and let the
     // rowAreas map erase the earlier, conflicting Area kind.
@@ -1405,7 +1412,7 @@ export function parseStagingMyPlanDayPage(
     tasks.push({taskId:t.taskId,title:t.title,projectId:t.projectId as string|null,
       areaId:t.areaId,areaKind:t.areaKind as "private"|"shared",
       dueOn:t.dueOn as string|null,whenOn:t.whenOn as string|null,
-      attentionOn:t.attentionOn as string,
+      attentionOn:t.attentionOn as string|null,
       ...(shared?{assignedToMe:true as const}:{})});
   }
   const linearization=parseLinearization(data.linearization,rowAreas);
@@ -1588,27 +1595,32 @@ export async function readStagingAttentionInChild(
 export async function readStagingMyPlanTwoDayInChild(
   config:StagingPersonalReadConfig,areaFilter:MyPlanTaskAreaFilter,
   evaluationDate:string,nextDate:string,limit:number,
-  positions:{today:number;tomorrow:number},
-):Promise<{today:MyPlanDayTaskPage;tomorrow:MyPlanDayTaskPage}|null>{
+  positions:{today:number;tomorrow:number;undated:number},
+):Promise<{today:MyPlanDayTaskPage;tomorrow:MyPlanDayTaskPage;undated:MyPlanDayTaskPage}|null>{
   const payload=await runChild(config,"target-staging-my-plan-slice-child.mjs",[
     areaFilter,evaluationDate,nextDate,String(limit),
-    String(positions.today),String(positions.tomorrow),
+    String(positions.today),String(positions.tomorrow),String(positions.undated),
   ]);
   if(!payload||typeof payload!=="object"||Array.isArray(payload))return null;
   const p=payload as Record<string,unknown>;
-  if(Object.keys(p).sort().join(",")!=="ok,today,tomorrow"||
+  if(Object.keys(p).sort().join(",")!=="ok,today,tomorrow,undated"||
     p.ok!==true)return null;
   const today=parseStagingMyPlanDayPage(
     p.today,areaFilter,"today",evaluationDate,null,limit);
   const tomorrow=parseStagingMyPlanDayPage(
     p.tomorrow,areaFilter,"upcoming",evaluationDate,nextDate,limit);
-  if(!today||!tomorrow||today.privateEpoch!==tomorrow.privateEpoch||
+  const undated=parseStagingMyPlanDayPage(
+    p.undated,areaFilter,"undated",evaluationDate,null,limit);
+  if(!today||!tomorrow||!undated||
+    today.privateEpoch!==tomorrow.privateEpoch||today.privateEpoch!==undated.privateEpoch||
     JSON.stringify(today.linearization)!==JSON.stringify(tomorrow.linearization)||
-    JSON.stringify(today.areaEpochs)!==JSON.stringify(tomorrow.areaEpochs)){
+    JSON.stringify(today.linearization)!==JSON.stringify(undated.linearization)||
+    JSON.stringify(today.areaEpochs)!==JSON.stringify(tomorrow.areaEpochs)||
+    JSON.stringify(today.areaEpochs)!==JSON.stringify(undated.areaEpochs)){
     logStagingFailure("my_plan_slice","invalid_atomic_child_dto");
     return null;
   }
-  return {today,tomorrow};
+  return {today,tomorrow,undated};
 }
 
 /** A private when command preview transports no task title or another
@@ -1850,7 +1862,7 @@ export async function readStagingTemporalDetailInChild(
 
 /** BE-04: strict worker DTO; the CAS hash and task guard are from one read. */
 export type StagingTemporalStatusPreviewResult =
-  | {ok:true;detail:TemporalTaskDetail;expectedRevision:string}
+  | {ok:true;detail:TemporalTaskDetail;expectedRevision:string;previousWhenOn?:string|null}
   | {ok:false;reason:"inaccessible"};
 
 export function parseStagingTemporalStatusPreview(
@@ -1861,14 +1873,19 @@ export function parseStagingTemporalStatusPreview(
   if(Object.keys(v).sort().join(",")==="ok,reason"&&
     v.ok===false&&v.reason==="inaccessible")
     return {ok:false,reason:"inaccessible"};
-  if(v.ok!==true||Object.keys(v).sort().join(",")!=="detail,expectedRevision,ok"||
+  const fields=Object.keys(v).sort().join(",");
+  if(v.ok!==true||
+    (fields!=="detail,expectedRevision,ok"&&fields!=="detail,expectedRevision,ok,previousWhenOn")||
+    (fields.includes("previousWhenOn")&&v.previousWhenOn!==null&&
+      temporalCalendarOrdinal(v.previousWhenOn)===null)||
     typeof v.expectedRevision!=="string"||!REVISION.test(v.expectedRevision)||
     !v.detail||typeof v.detail!=="object"||Array.isArray(v.detail))return null;
   const parsed=parseStagingTemporalDetail({ok:true,...v.detail},taskId);
   if(!parsed||parsed.ok!==true)return null;
   const access=parsed.detail.linearization.areas[0]?.access;
   if(access!=="private-owner"&&access!=="editor"&&access!=="admin")return null;
-  return {ok:true,detail:parsed.detail,expectedRevision:v.expectedRevision};
+  return {ok:true,detail:parsed.detail,expectedRevision:v.expectedRevision,
+    ...(fields.includes("previousWhenOn")?{previousWhenOn:v.previousWhenOn as string|null}:{})};
 }
 
 export async function readStagingTemporalStatusPreviewInChild(

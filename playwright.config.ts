@@ -28,6 +28,20 @@ if (!process.env.LUMI_E2E_RUN_DIR) {
   // long E2E run, making the CalDAV mock fail before its first test (EADDRINUSE).
   process.env.LUMI_E2E_CALDAV_PORT = String(20_000 + randomInt(10_000));
   process.env.LUMI_E2E_GMAIL_PORT = String(30_000 + randomInt(2_000));
+  // Explicit provisioning for this NEW, throwaway browser-test data directory.
+  // Never initialize missing production state or replace an existing cutoff.
+  execFileSync(process.execPath, [
+    "--experimental-loader",
+    path.join(__dirname, "scripts", "target-staging-ts-loader.mjs"),
+    path.join(__dirname, "scripts", "owner-session-revocation-init.mjs"),
+    "--init",
+  ], {
+    cwd: __dirname,
+    env: {
+      ...process.env,
+      AI_EXECUTIVE_DATA_DIR: path.join(process.env.LUMI_E2E_RUN_DIR, "data"),
+    },
+  });
   // Opt-in personal acceptance: a REAL isolated target SQLite store inside the run dir (never a legacy or
   // production path), created once per run; workers inherit the settings through the environment.
   if (process.env.LUMI_TARGET_PERSONAL_ACCEPTANCE_E2E === "true") {
@@ -104,9 +118,10 @@ export default defineConfig({
   },
   projects: [
     { name: "setup", testMatch: /.*\.setup\.ts/ },
-    // The real-store opt-in runs only the two isolated personal acceptance specs; no other test may share its server.
+    // The webServer env below is run-wide: real-store opt-in must only run
+    // these three isolated acceptance specs, never other tests.
     { name: "desktop", use: { ...devices["Desktop Chrome"], storageState: sessionFile }, dependencies: ["setup"],
-      ...(personalAcceptanceTest ? { testMatch: /target-personal-(acceptance|search-open)\.spec\.ts/ } : {}) },
+      ...(personalAcceptanceTest ? { testMatch: /target-personal-(?:acceptance|my-plan|search-open|create)\.spec\.ts/ } : {}) },
   ],
   webServer: {
     command: `${process.env.E2E_SKIP_BUILD ? "" : "pnpm build && "}pnpm start --port ${port} --hostname 127.0.0.1`,

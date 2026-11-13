@@ -26,7 +26,7 @@ Object.assign(process.env,{
 });
 const {bootstrapIsolatedTargetStore}=await import("../lib/target-store-bootstrap.ts");
 const durable=await import("../lib/target-staging-durable-session.ts");
-const {createSessionToken,sessionCookieName}=await import("../lib/auth.ts");
+const {createSessionToken,sessionCookieName}=await import("./support/owner-session-test-cookie.mjs");
 const {GET}=await import("../app/api/target-staging/attention/route.ts");
 const {readStagingAttentionInChild,parseStagingAttentionPage}=
   await import("../lib/target-staging-read-process.ts");

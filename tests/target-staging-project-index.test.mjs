@@ -28,7 +28,7 @@ process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_HOME_ENABLED = "true";
 
 const { bootstrapIsolatedTargetStore } = await import("../lib/target-store-bootstrap.ts");
 const durable = await import("../lib/target-staging-durable-session.ts");
-const { createSessionToken, sessionCookieName } = await import("../lib/auth.ts");
+const { createSessionToken, sessionCookieName } = await import("./support/owner-session-test-cookie.mjs");
 const { GET } = await import("../app/api/target-staging/project-index/route.ts");
 const { GET: GET_HOME } = await import("../app/api/target-staging/home/my-plan/route.ts");
 const { GET: GET_SCOPED_HOME } = await import("../app/api/target-staging/home/summary/route.ts");
