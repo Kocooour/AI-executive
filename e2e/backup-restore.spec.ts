@@ -1361,7 +1361,9 @@ test("a paused ordinary pull never stamps its stale generation after a sibling o
     // actual recovery-data lock, so the owner's adoption can finish first.
     await delayed.evaluate(() => {
       const state = window as unknown as { e2eStampPending?: boolean; e2eStampComplete?: boolean; e2eReleaseStamp?: () => void };
-      const original = navigator.locks.request.bind(navigator.locks);
+      const realLocks = navigator.locks;
+      const original = (name: string, callback: () => Promise<unknown>) =>
+        realLocks.request(name, callback);
       Object.defineProperty(navigator, "locks", { configurable: true, value: {
         request: (name: string, callback: () => Promise<unknown>) => {
           if (name !== "ai-executive-recovery-data") return original(name, callback);
