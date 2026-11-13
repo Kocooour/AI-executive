@@ -108,7 +108,7 @@ function PlanDay({label,tasks,date,canComplete,onComplete,canWhen,onWhen,copy,on
                         onClick={event=>onOpenTask(task.taskId,event.currentTarget)}>
                         <strong>{task.title}</strong></button>
                     :<strong>{task.title}</strong>}
-                  {task.attentionOn<date&&
+                  {task.attentionOn!==null&&task.attentionOn<date&&
                     <small>{copy.attentionSince(humanDate(task.attentionOn,copy.locale))}</small>}
                   {task.dueOn&&<small>{copy.dueOn(humanDate(task.dueOn,copy.locale))}</small>}
                   {task.whenOn&&<small>{copy.plannedOn(humanDate(task.whenOn,copy.locale))}</small>}
@@ -340,7 +340,7 @@ export function TargetStagingMyPlanPreview({
   /** The list DTO contains only open tasks. Completed rows disappear after
    * server refresh; a confirmed completion offers a distinct Undo action. */
   async function changeStatus(
-    task:{taskId:string;areaId:string},status:MyPlanStatus,
+    task:{taskId:string;areaId:string;whenOn?:string|null},status:MyPlanStatus,
   ){
     if(!statusWriteEnabled||statusOperation.current||whenOperation.current||
       whenAction.kind==="pending"||whenAction.kind==="checking"||
@@ -349,7 +349,8 @@ export function TargetStagingMyPlanPreview({
       action.kind==="uncertain"||state.status!=="ready"||
       document.visibilityState!=="visible"||!navigator.onLine)return;
     if(status==="completed"&&
-      ![...state.page.today.tasks,...state.page.tomorrow.tasks].some(
+      ![...state.page.today.tasks,...state.page.tomorrow.tasks,
+        ...state.page.undated.tasks].some(
         row=>row.taskId===task.taskId&&row.areaId===task.areaId))return;
     if(status==="open"&&
       !(action.kind==="committed"&&action.status==="completed"&&
@@ -414,6 +415,7 @@ export function TargetStagingMyPlanPreview({
     }else{
       const prepared=await prepareMyPlanStatus({
         taskId:task.taskId,areaId:task.areaId,status,
+        ...(status==="completed"?{previousWhenOn:task.whenOn??null}:{}),
         signal:op.controller.signal,
       });
       if(statusOperation.current!==op)return;
@@ -519,7 +521,8 @@ export function TargetStagingMyPlanPreview({
         prior.command.writeAreaId!==task.areaId||
         prior.previousWhenOn!==target)return;
     }else{
-      const row=[...state.page.today.tasks,...state.page.tomorrow.tasks].find(
+      const row=[...state.page.today.tasks,...state.page.tomorrow.tasks,
+        ...state.page.undated.tasks].find(
         item=>item.taskId===task.taskId&&item.areaId===task.areaId);
       const today=date?myPlanWhenTarget(date,"today"):null;
       const tomorrow=date?myPlanWhenTarget(date,"tomorrow"):null;
@@ -989,6 +992,11 @@ export function TargetStagingMyPlanPreview({
       <PlanDay copy={copy} label={(followToday?copy.dayTomorrowPrefix:copy.dayNextPrefix)+
         nextHumanDate(date,copy.locale)}
         date={date} tasks={state.page.tomorrow.tasks}
+        canComplete={canComplete} onComplete={task=>{void changeStatus(task,"completed");}}
+        canWhen={canWhen} onWhen={(task,on)=>{void changeWhen(task,on);}}
+        onOpenTask={embedded?onOpenTask:undefined} openLabel={openTaskLabel}/>
+      <PlanDay copy={copy} label={copy.dayUndated}
+        date={date} tasks={state.page.undated.tasks}
         canComplete={canComplete} onComplete={task=>{void changeStatus(task,"completed");}}
         canWhen={canWhen} onWhen={(task,on)=>{void changeWhen(task,on);}}
         onOpenTask={embedded?onOpenTask:undefined} openLabel={openTaskLabel}/>

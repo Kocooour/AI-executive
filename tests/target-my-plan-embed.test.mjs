@@ -221,8 +221,9 @@ test("nav labels never claim legacy data in target mode",()=>{
   for(const file of ["app/ui/views/mobile-nav.tsx","app/ui/views/sidebar.tsx"]){
     const source=read(file);
     assert.match(source,/targetPlan = false/,file);
-    assert.match(source,/serverový plán ze stagingu/,file);
-    assert.match(source,/server plan from staging/,file);
+    assert.match(source,/Můj plán – aktuální úkoly ze serveru/,file);
+    assert.match(source,/My Plan – current tasks from the server/,file);
+    assert.doesNotMatch(source,/serverový plán ze stagingu|server plan from staging/,file);
   }
   const rootSource=read("app/ui/lumi-app-root.tsx");
   // Root wiring may grow extra independently gated props; the target-plan

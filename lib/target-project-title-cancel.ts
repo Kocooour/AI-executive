@@ -85,5 +85,5 @@ export function cancelTargetProjectTitle(
     // COMMIT and the anti-rollback witness are atomic; a missing confirm is not success.
     return context.commit({kind:"project_title",payload:{cancel:1}})
       ?{ok:true,status:"cancelled"}:failed();
-  },denied,failed);
+  },denied,failed,3_000); // Same bounded lock grace as the racing PATCH.
 }

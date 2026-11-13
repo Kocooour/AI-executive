@@ -43,12 +43,12 @@ požadavek není mockován (`page.on("request")` pouze počítá).
 ```
 NEXT_PUBLIC_LUMI_DESIGN_V1_PREVIEW=1 pnpm build
 LUMI_TARGET_PERSONAL_ACCEPTANCE_E2E=true E2E_SKIP_BUILD=1 \
-  pnpm exec playwright test e2e/target-personal-acceptance.spec.ts --project=desktop
+  pnpm exec playwright test e2e/target-personal-acceptance.spec.ts e2e/target-personal-my-plan.spec.ts --project=desktop
 ```
 
 Bez `LUMI_TARGET_PERSONAL_ACCEPTANCE_E2E=true` se test přeskočí a nevznikne
 žádný store. CI: `.github/workflows/r3-personal-acceptance-browser.yml`
-(port 3130, path filter, profilový unit test + build + jen tato spec).
+(port 3130, path filter, profilový unit test + build + obě real-store spec).
 
 ## Co se seeduje a proč
 
@@ -66,11 +66,13 @@ Dnes, Attention, push/notifikace, HumanWiki, produkční zapnutí.
 
 ## Nalezené mezery
 
-1. **Undo dokončení neobnoví naplánovaný den.** Dokončení smaže řádek osobního
-   plánu (trigger `personal_task_plan_task_reconcile`,
-   `lib/target-store-bootstrap.ts` :409); po Undo je úkol znovu otevřený,
-   ale v Mém plánu se neobjeví, dokud se znovu nenaplánuje. Test ověřuje
-   otevřený stav v detailu projektu. Reprodukce: naplánovat, Dokončit, Undo.
+1. **OPRAVENO v PR #409 — Undo obnovuje naplánovaný den.** Dokončení dál
+   bezpečně odstraní řádek plánu (`personal_task_plan_task_reconcile`), ale
+   potvrzení dokončení váže původní osobní den a nové Undo jej obnoví
+   atomicky s otevřením úkolu. Obnovu dovolí jen původní potvrzený příkaz,
+   nová CAS revize a aktuální oprávnění; revokace ani změna úkolu neobnoví
+   zastaralý plán. Ochrana: `tests/target-task-temporal-status-writer.test.mjs`
+   a `tests/target-staging-my-plan-slice-http.test.mjs` (R3-A3 Undo).
 2. **Závod při rychlém otevření Quick Capture — OPRAVENO v tomto PR.** Čtení
    Mého plánu, výběr Oblastí a `create-preview` šly mimo sdílenou frontu
    `lib/target-read-queue.ts`, ačkoli server povolí jen dva souběžné read
@@ -96,20 +98,20 @@ Dnes, Attention, push/notifikace, HumanWiki, produkční zapnutí.
    prohlížečový test je nově zařazen do real-store opt-in profilu v
    `playwright.config.ts`, se samostatnými seedovanými daty. **Akceptace je
    ověřená až po úspěšném běhu obou scénářů v CI.**
-4. **Nově zachycený úkol bez „Kdy“ není v Mém plánu vidět.** Můj plán
-   ukazuje jen naplánované dny, takže po zavření potvrzení („Zobrazit úkol“)
-   úkol z Mého plánu nelze otevřít. Při zapnutém autorizovaném hledání a detailu
-   jej však lze explicitně vyhledat a otevřít přes výsledky hledání (bod 3).
-   Zbývající problém se týká úplnosti Mého plánu, nikoliv otevírání výsledků:
-   [LUMI-FR-013](PRODUCT.md#lumi-fr-013) říká, že Můj plán obsahuje všechny
-   soukromé úkoly uživatele. Test proto úkol plánuje přímo z potvrzení.
-   Řeší druhý PR milníku A.
-5. **Interní žargon v textech cílového režimu (neopraveno).**
-   `lib/target-my-plan-copy.ts:106` („stagingový přehled“), `:127`–`:128`
-   („Izolovaný stagingový…“, „novým CAS“), `:168` („dueOn“, „Každý zápis
-   vyžaduje nový CAS; žádná offline fronta.“), `:169` („serverové CAS“),
-   `app/ui/lumi-app-root.tsx:267` („ze stagingu“), `app/ui/views/sidebar.tsx:165`
-   a `app/ui/views/mobile-nav.tsx:43` („serverový plán ze stagingu“).
+4. **OPRAVENO v PR #409 — soukromé úkoly bez data jsou v Mém plánu.**
+   Třetí sekce „Bez data“ zobrazuje otevřené úkoly soukromých Oblastí bez
+   osobního „Kdy“ a bez termínu; úkoly v projektech dědí Oblast. Po potvrzeném
+   Quick Capture se přehled znovu autorizovaně načte, bez optimistického
+   doplňování. Ochrana: `tests/target-my-plan-day-task-read.test.mjs`,
+   `tests/target-staging-my-plan-slice-http.test.mjs` a
+   `e2e/target-personal-my-plan.spec.ts` (390/1280 px, skutečný store).
+   Playwright `testMatch` a CI nyní spouštějí všechny tři real-store spec pouze při
+   explicitním opt-in; plný E2E běh zůstává předprodukční kontrolou.
+5. **OPRAVENO v PR #409 — interní žargon nahrazen srozumitelným textem.**
+   Česká i anglická verze Mého plánu, navigace a informační hlášky nyní
+   vysvětlují bezpečné ověřování a absenci offline ukládání bez interních
+   názvů implementace. Ochrana: `tests/target-my-plan-i18n.test.mjs` včetně
+   českého snapshotu a kontroly zakázaných technických výrazů.
 6. **Legacy Domů v cílovém režimu (ověřeno, zápis neprochází).** Na 1280 px ukazuje
    Domů legacy úkoly, sekci Pozornost, počty v postranním panelu a ikony řádků.
    V běhu na skutečném store: zaškrtnutí i „Kdy“ jsou `disabled`; položky

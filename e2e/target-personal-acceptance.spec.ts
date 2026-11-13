@@ -12,12 +12,14 @@ test.skip(process.env.LUMI_TARGET_PERSONAL_ACCEPTANCE_E2E!=="true",
 
 type Seed={areaTitle:string;projects:Record<string,{projectId:string;projectTitle:string;taskId:string;taskTitle:string}>};
 const store=JSON.parse(process.env.LUMI_E2E_TARGET_STORE||"null") as {seed:Seed}|null;
-type Calls={method:string;path:string}[]&{peakReads?:number;postReads?:number};
+type Calls={method:string;path:string}[]&{peakReads?:number;postReads?:number;unavailableReads?:number};
 const targetCalls=(page:Page)=>{
   const calls:Calls=[];
   calls.peakReads=0;
   calls.postReads=0;
+  calls.unavailableReads=0;
   let reads=0;
+  const outstanding=new Set<object>();
   // A read is exactly what the client queue treats as one (lib/target-edit-fetch.ts): every GET and the POST-shaped
   // reads (create-preview, create-status, create-recovery, receipt and status checks), each of which can spawn a staging
   // read child. Only the /session check is excluded: it is answered in-process and never queued (lib/target-app-fetch.ts).
@@ -29,14 +31,22 @@ const targetCalls=(page:Page)=>{
     const {pathname}=new URL(request.url());
     calls.push({method:request.method(),path:pathname});
     if(isRead(request.method(),pathname)){
+      outstanding.add(request);
       reads++;calls.peakReads=Math.max(calls.peakReads!,reads);
       if(request.method()!=="GET")calls.postReads!++;
     }
   });
-  const done=(request:{url():string;method():string})=>{
-    if(target(request.url())&&isRead(request.method(),new URL(request.url()).pathname))reads--;
+  // Fetch resolves on response headers and then releases the shared read-queue
+  // slot. requestfinished waits for the BODY consumer and overcounts active
+  // server readers while the next queued request is already in progress.
+  const done=(request:object)=>{
+    if(outstanding.delete(request))reads--;
   };
-  page.on("requestfinished",done);
+  page.on("response",response=>{
+    const request=response.request();
+    if(outstanding.has(request)&&response.status()===503)calls.unavailableReads!++;
+    done(request);
+  });
   page.on("requestfailed",done);
   return calls;
 };
@@ -191,15 +201,24 @@ for(const width of [390,1280]){
     await expect(planRow(seed.taskTitle)).toHaveCount(0);
     await page.getByRole("button",{name:"Vrátit dokončení (Undo)"}).click();
     await expect(page.getByRole("status").filter({hasText:"Obnovení potvrzeno."})).toBeVisible();
-    // GAP (docs/R3-PERSONAL-ACCEPTANCE.md): completing deletes the planned day, so a reopened task is
-    // not listed in My Plan again. The reopened state itself is verified in the project detail.
+    // The original personal day is atomically restored by My Plan Undo.
+    await expect(planRow(seed.taskTitle)).toHaveCount(1);
     await page.goto("/?view=Projects&scope=personal");
     await page.getByTestId("target-scope-list").locator('[data-detail-row="project:'+seed.projectId+'"]').click();
     await detail.locator('[data-detail-row="task:'+seed.taskId+'"]').click();
     await expect(detail.getByTestId("target-detail-edit-status-toggle")).toBeVisible();
     await expect(detail.getByText("Otevřeno",{exact:true})).toBeVisible(); // the status line itself
     await expect(detail.getByText("Dokončeno",{exact:true})).toHaveCount(0);
+    // Regression: detail completion must bind the actor's real planned day,
+    // and its Undo must restore that day through the real status route.
+    await detail.getByTestId("target-detail-edit-status-toggle").click();
+    await expect(detail.getByTestId("target-detail-edit-status")).toContainText("Stav úkolu je uložen.");
+    await expect(detail.getByTestId("target-detail-edit-undo")).toBeVisible();
+    await detail.getByTestId("target-detail-edit-undo").click();
+    await expect(detail.getByTestId("target-detail-edit-status")).toContainText("Úkol je znovu otevřen.");
     await closeDetail();
+    await openMyPlan();
+    await expect(planRow(seed.taskTitle)).toHaveCount(1);
 
     // 8. Notes: create a private note (one POST, 201), open exactly that note, edit and save.
     await page.goto("/?view=Notes&scope=personal");
@@ -293,8 +312,11 @@ for(const width of [390,1280]){
     await expect(results).toContainText(projectRenamed); // positive proof that the answer is the ready list
     await expect(results).not.toContainText(taskRenamed);
     await expect(results).not.toContainText(noteEdited);
-    // Every read of the whole journey stayed within the server's two concurrent read children.
+    // Read capacity is bounded at two actual server children. Compare pending
+    // requests only UNTIL response headers: subsequent body draining is not a
+    // server child, and counting until requestfinished inflates concurrency.
     expect(calls.peakReads).toBeLessThanOrEqual(2);
+    expect(calls.unavailableReads,"no target GET/receipt may exhaust child capacity").toBe(0);
     // The invariant above is only meaningful if POST-shaped reads were really counted: the journey issues at least
     // the note create-preview and a receipt/status check.
     expect(calls.postReads).toBeGreaterThan(0);

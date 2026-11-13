@@ -18,6 +18,8 @@ import {detailCopy} from "../../lib/target-detail-copy";
 import {myPlanCopy,type MyPlanLanguage} from "../../lib/target-my-plan-copy";
 import {targetMyPlanGate} from "../../lib/target-my-plan-embed";
 import {refusalBudgetFor} from "../../lib/target-refusal-budget";
+import {subscribePrivateTaskCreate} from "../../lib/target-private-task-create-coordinator";
+import {emitTargetChange} from "../../lib/target-data-invalidation";
 import "../target-staging/my-plan/preview/preview.css";
 import "./target-my-plan.css";
 import "./target-details.css";
@@ -35,6 +37,15 @@ export default function TargetMyPlan({gates,language="cs",scopeDriven=false,task
   const scope=useTargetScope();
   const runtime=useTargetRuntime();
   const generation=useTargetGeneration();
+  // Confirmed Quick Capture invalidates the My Plan read in the same tab.
+  // The task is never added optimistically: the view re-reads authorized data.
+  useEffect(()=>{
+    if(!runtime?.known()||runtime.generation()!==generation)return;
+    return subscribePrivateTaskCreate(runtime,generation,change=>{
+      if(change.confirmedTaskId)
+        emitTargetChange({kind:"task",id:change.confirmedTaskId,change:"updated"});
+    });
+  },[runtime,generation]);
   const subscribeOutcome=useMemo(
     ()=>(notify:()=>void)=>runtime?runtime.subscribeOutcome(notify):()=>{},[runtime]);
   const outcome=useSyncExternalStore(
