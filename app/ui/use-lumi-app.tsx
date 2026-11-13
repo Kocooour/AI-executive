@@ -1824,6 +1824,11 @@ export function useLumiApp(options: { targetDetails?: boolean; targetUnified?: b
         (!items.length && syncStatus !== "synced" && syncStatus !== "offline")) return;
     // R3-FE-4a: with target details on, a typed address is never resolved against local legacy records.
     const targetTyped = targetTypedNow();
+    // A typed legacy locator must not mutate selection while the authenticated
+    // snapshot is still loading. The resolver needs current entity AND relation
+    // ancestry: the check below used to run only after inspect()/setOpenProjectId().
+    if (!targetTyped && requestsTypedRecord(window.location.search) &&
+        syncStatus !== "synced" && syncStatus !== "offline") return;
     const route = targetTyped ? null : targetFromSearch(window.location.search, addressableViews, startupView);
     let resolvedTypedTarget = false;
     if (route?.kind === "project") {
@@ -1853,9 +1858,6 @@ export function useLumiApp(options: { targetDetails?: boolean; targetUnified?: b
         return;
       }
     }
-    // Do not classify a missing typed target until the authenticated snapshot
-    // has completed; incomplete local data is not evidence of inaccessibility.
-    if (!targetTyped && requestsTypedRecord(window.location.search) && syncStatus !== "synced" && syncStatus !== "offline") return;
     setNavigationUnavailable(!targetTyped && showUnavailableLink(window.location.search, resolvedTypedTarget));
     const taskId = new URLSearchParams(window.location.search).get("task");
     if (taskId) {
