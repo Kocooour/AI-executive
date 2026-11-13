@@ -32,9 +32,8 @@ export function validStructureCommand(kind:StructureKind,v:unknown):v is Structu
   return keys(v)==="commandId,projectId,restoreGeneration,taskId,title"&&
     canonical(v.taskId)&&readableProjectId(v.projectId);
 }
-const url=(kind:StructureKind,projectId?:string)=>kind==="project"
-  ?"/api/target-staging/projects"
-  :"/api/target-staging/projects/"+encodeURIComponent(projectId||"")+"/tasks";
+const url=(kind:StructureKind)=>kind==="project"
+  ?"/api/target-staging/projects":"/api/target-staging/project-tasks";
 const headers={accept:"application/json","content-type":"application/json","x-lumi-target-protocol":"1"};
 const opts=(body:unknown,signal:AbortSignal):RequestInit=>({
   method:"POST",credentials:"same-origin",cache:"no-store",redirect:"error",
@@ -77,7 +76,7 @@ export async function sendStructureCreate(
 ):Promise<StructureCreateResult>{
   if(!validStructureCommand(kind,command)||signal.aborted)return "denied";
   try{
-    const response=await fetchImpl(url(kind,command.projectId),opts(command,signal));
+    const response=await fetchImpl(url(kind),opts(command,signal));
     if(signal.aborted||![200,201].includes(response.status))return "uncertain";
     const data=await bounded(response,signal);
     if(!record(data)||keys(data)!==(response.status===201?"id,ok":"id,ok,replayed")||
@@ -110,7 +109,7 @@ export function checkStructureCreateStatus(
   fetchImpl:typeof fetch=targetAppFetch,
 ):Promise<StructureReceipt>{
   if(!validStructureCommand(kind,command))return Promise.resolve("unavailable");
-  return receipt(kind,url(kind,command.projectId)+"/create-status",command,signal,fetchImpl);
+  return receipt(kind,url(kind)+"/create-status",command,signal,fetchImpl);
 }
 export function recoverStructureCreate(
   kind:StructureKind,commandId:string,projectId:string|null,signal:AbortSignal,
@@ -118,5 +117,5 @@ export function recoverStructureCreate(
 ):Promise<StructureReceipt>{
   if(!canonical(commandId)||(kind==="project-task"&&!readableProjectId(projectId)))
     return Promise.resolve("unavailable");
-  return receipt(kind,url(kind,projectId??undefined)+"/create-recovery",{commandId},signal,fetchImpl);
+  return receipt(kind,url(kind)+"/create-recovery",{commandId},signal,fetchImpl);
 }
