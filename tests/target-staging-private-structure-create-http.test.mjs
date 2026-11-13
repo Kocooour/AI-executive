@@ -343,6 +343,10 @@ test("maximum-length escaped existing project IDs preserve preflight, replay and
       const bytes=Buffer.byteLength(witness.value,"utf8");
       assert.ok(bytes>900,"exercise the former broken 900-byte limit");
       assert.ok(bytes<=TARGET_STAGING_PRIVATE_STRUCTURE_CREATE_WITNESS_MAX_BYTES);
+      const reply=JSON.stringify({ok:true,status:"committed",id:t.taskId,
+        projectId:id,areaId:fx.stage.unassignedAreaId});
+      assert.ok(Buffer.byteLength(reply,"utf8")>1024,
+        "recovery child reply must exercise the generic writer's former 1024-byte limit");
     }finally{verify.close();}
   }
   assertValidStore(fx);
