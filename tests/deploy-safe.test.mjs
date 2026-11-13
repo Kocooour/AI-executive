@@ -329,7 +329,7 @@ scenarioCase("rowloss: rollback refuses to certify lost canonical rows", (r, f) 
 scenarioCase("firstrolloutunhealthy: failed new startup never re-enables pre-revocation owner cookies", (r, f) => {
   assert.notEqual(r.status, 0, "the synthetic first rollout must fail its readiness check");
   assert.match(r.output, /sluzba nebo lokalni\/HTTPS API nejsou dostupne/);
-  assert.match(r.output, /BEZPECNOSTNI BLOKACE: prvni nasazeni revokace relaci selhalo/);
+  assert.match(r.output, /BEZPECNOSTNI BLOKACE: neuspesne nasazeni nebo obnova revokace relaci/);
   assert.equal(r.head, newSha, "must not reset to pre-feature auth code");
   assert.equal(r.service, "inactive", "failed first rollout leaves all owner API traffic stopped");
   assert.equal(r.events.includes("start-b"), true, "new service was tried after cutoff init");
