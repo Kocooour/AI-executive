@@ -753,3 +753,68 @@ test("offline CLIs explain known failure causes without printing sensitive paths
     assert.equal(line.includes(source), false);
   }
 });
+
+test("inventory refuses TMPDIR within any known live store, nested or symlinked, before writing", t => {
+  const { source, base } = fixture(t);
+  const liveLegacy = path.join(base, "live-legacy");
+  const liveTarget = path.join(base, "live-target");
+  const implicitLive = path.join(base, ".data");
+  for (const dir of [liveLegacy, liveTarget, implicitLive]) {
+    mkdirSync(dir, { mode: 0o700 });
+    writeFileSync(path.join(dir, "sentinel"), SECRET);
+  }
+  const nestedTargetTmp = path.join(liveTarget, "scratch");
+  mkdirSync(nestedTargetTmp, { mode: 0o700 });
+  const legacyAlias = path.join(base, "live-legacy-alias");
+  symlinkSync(liveLegacy, legacyAlias, "dir");
+
+  const before = [liveLegacy, liveTarget, implicitLive, nestedTargetTmp]
+    .map(dir => [dir, readdirSync(dir).sort()]);
+  for (const [label, tempParent, configured] of [
+    ["legacy", liveLegacy, true],
+    ["legacy-alias", legacyAlias, true],
+    ["target", liveTarget, true],
+    ["target-nested", nestedTargetTmp, true],
+    ["implicit-cwd-default", implicitLive, false],
+  ]) {
+    const output = path.join(base, "refused-temp-" + label);
+    const result = spawnSync(process.execPath,
+      [inventory, source, output, "--offline-confirmed"], {
+        cwd: base, encoding: "utf8",
+        env: {
+          ...process.env, TMPDIR: tempParent, TMP: tempParent, TEMP: tempParent,
+          AI_EXECUTIVE_DATA_DIR: configured ? liveLegacy : "",
+          AI_EXECUTIVE_TARGET_STAGING_DIRECTORY: configured ? liveTarget : "",
+        },
+      });
+    assert.notEqual(result.status, 0, label + ": must reject private scratch in live storage");
+    assert.match(result.stderr, /temporary inspection directory overlaps known live data location/);
+    assert.equal(result.stderr.includes(SECRET), false, label + ": no private values in diagnostics");
+    assert.equal(result.stderr.includes(tempParent), false, label + ": no private paths in diagnostics");
+    assert.equal(existsSync(output), false, label + ": no report directory created");
+    for (const [dir, names] of before)
+      assert.deepEqual(readdirSync(dir).sort(), names, label + ": must not modify live files");
+  }
+});
+
+test("inventory allows safe TMPDIR beside, but outside, known live storage", t => {
+  const { source, base } = fixture(t);
+  const liveLegacy = path.join(base, "live-legacy");
+  const liveTarget = path.join(base, "live-target");
+  const safeTemp = path.join(base, "scratch-only");
+  for (const dir of [liveLegacy, liveTarget, safeTemp]) mkdirSync(dir, { mode: 0o700 });
+  const output = path.join(base, "safe-temp-report");
+  const result = spawnSync(process.execPath, [inventory, source, output, "--offline-confirmed"], {
+    cwd: base, encoding: "utf8",
+    env: {
+      ...process.env, TMPDIR: safeTemp, TMP: safeTemp, TEMP: safeTemp,
+      AI_EXECUTIVE_DATA_DIR: liveLegacy,
+      AI_EXECUTIVE_TARGET_STAGING_DIRECTORY: liveTarget,
+    },
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(readdirSync(output).sort(), ["inventory.json", "summary.txt"]);
+  assert.deepEqual(readdirSync(safeTemp), [], "private temp SQLite must be deleted");
+  assert.deepEqual(readdirSync(liveLegacy), []);
+  assert.deepEqual(readdirSync(liveTarget), []);
+});
