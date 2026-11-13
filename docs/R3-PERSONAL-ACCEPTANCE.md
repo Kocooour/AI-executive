@@ -86,9 +86,18 @@ Dnes, Attention, push/notifikace, HumanWiki, produkční zapnutí.
    `isTargetReadRequest` nově počítá i `create-preview`, `create-recovery`,
    `create-status`. Hlídá to krok 1b scénáře (klik na **+** bez čekání na obou
    šířkách), `peakReads ≤ 2` a `tests/target-app-fetch.test.mjs`.
-3. **Výsledky hledání nejsou otevíratelné** (`app/ui/target-main-title-search.tsx`,
-   řádky `<li>` jsou jen text), takže znovu otevřený, ale neplánovaný úkol
-   není z UI dosažitelný jinak než přes jeho projekt.
+3. **Výsledky hledání — opraveno v pracovním proudu C6 / issue #407.**
+   Při zapnutém odpovídajícím detailu je výsledek přístupné tlačítko,
+   které otevře existující serverem autorizovaný detail úkolu, projektu či
+   poznámky. Neplatné ID a vypnuté druhy detailu zůstávají textem. Po zavření
+   se fokus vrací na původní řádek pomocí jednorázového výsledku v paměti,
+   který se při změně oprávnění, identity, dotazu, rozsahu, skrytí či odpojení
+   zahodí. Krytí: `tests/target-main-title-search-ui.test.mjs`,
+   `e2e/target-main-title-search.spec.ts` (vypnuté příznaky),
+   `e2e/target-personal-search-open.spec.ts` (real-store opt-in). Poslední
+   prohlížečový test je nově zařazen do real-store opt-in profilu v
+   `playwright.config.ts`, se samostatnými seedovanými daty. **Akceptace je
+   ověřená až po úspěšném běhu obou scénářů v CI.**
 4. **OPRAVENO v PR #409 — soukromé úkoly bez data jsou v Mém plánu.**
    Třetí sekce „Bez data“ zobrazuje otevřené úkoly soukromých Oblastí bez
    osobního „Kdy“ a bez termínu; úkoly v projektech dědí Oblast. Po potvrzeném
@@ -96,7 +105,7 @@ Dnes, Attention, push/notifikace, HumanWiki, produkční zapnutí.
    doplňování. Ochrana: `tests/target-my-plan-day-task-read.test.mjs`,
    `tests/target-staging-my-plan-slice-http.test.mjs` a
    `e2e/target-personal-my-plan.spec.ts` (390/1280 px, skutečný store).
-   Playwright `testMatch` a CI nyní spouštějí obě real-store spec pouze při
+   Playwright `testMatch` a CI nyní spouštějí všechny tři real-store spec pouze při
    explicitním opt-in; plný E2E běh zůstává předprodukční kontrolou.
 5. **OPRAVENO v PR #409 — interní žargon nahrazen srozumitelným textem.**
    Česká i anglická verze Mého plánu, navigace a informační hlášky nyní

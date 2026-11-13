@@ -1,3 +1,4 @@
+import {postPrivateProjectCreate} from "../../../../lib/target-private-structure-create-http";
 import { logStagingFailure } from "../../../../lib/target-staging-failure-log";
 import path from "node:path";
 import {
@@ -117,3 +118,8 @@ export async function GET(request: Request): Promise<Response> {
   }
 }
 
+
+/** Milestone A/2: POST is separately default-off; existing GET is unchanged. */
+export async function POST(request:Request):Promise<Response>{
+  return postPrivateProjectCreate(request);
+}

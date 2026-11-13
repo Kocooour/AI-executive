@@ -12,6 +12,10 @@
 import { closeSync, constants, fstatSync, lstatSync, openSync, readdirSync, realpathSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import {readPrivateStructureCreateStatus,readPrivateStructureCreateRecovery,
+  type PrivateStructureKind,type PrivateStructureCreateCommand,
+  type PrivateStructureCreateStatus,type PrivateStructureCreateRecovery}
+  from "./target-private-structure-create-writer";
 import { readPrivateTaskCreateStatus,readPrivateTaskCreateRecovery,
   type PrivateTaskCreateCommand,type PrivateTaskCreateStatus,
   type PrivateTaskCreateRecovery } from "./target-private-task-create-writer";
@@ -295,6 +299,32 @@ export function readPreflightedPrivateTaskCreateRecovery(
       if(!preflight(db))return denied();
       const actor=verifiedActor(db,access,true);
       return actor?readPrivateTaskCreateRecovery(db,actor,commandId):denied();
+    },denied));
+}
+
+/** Milestone A/2: pinned read-only exact receipt and actor/project ACL. */
+export function readPreflightedPrivateStructureCreateStatus(
+  store:TargetStagingReadStore,access:TargetStagingReadCredential,
+  kind:PrivateStructureKind,command:PrivateStructureCreateCommand,
+):PrivateStructureCreateStatus{
+  const denied=():PrivateStructureCreateStatus=>({ok:false,reason:"unavailable"});
+  return withPreflightedStore<PrivateStructureCreateStatus>(store,denied,(db,preflight)=>
+    inReadSnapshot(db,()=>{
+      if(!preflight(db))return denied();
+      const actor=verifiedActor(db,access,true);
+      return actor?readPrivateStructureCreateStatus(db,actor,kind,command):denied();
+    },denied));
+}
+export function readPreflightedPrivateStructureCreateRecovery(
+  store:TargetStagingReadStore,access:TargetStagingReadCredential,
+  kind:PrivateStructureKind,commandId:string,
+):PrivateStructureCreateRecovery{
+  const denied=():PrivateStructureCreateRecovery=>({ok:false,reason:"unavailable"});
+  return withPreflightedStore<PrivateStructureCreateRecovery>(store,denied,(db,preflight)=>
+    inReadSnapshot(db,()=>{
+      if(!preflight(db))return denied();
+      const actor=verifiedActor(db,access,true);
+      return actor?readPrivateStructureCreateRecovery(db,actor,kind,commandId):denied();
     },denied));
 }
 

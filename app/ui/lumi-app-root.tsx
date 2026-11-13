@@ -313,7 +313,7 @@ export function LumiAppRoot({ targetMyPlan, targetScopes, targetDetails, targetE
           <HomeView app={app} />
           {view === "Today" && !targetPlan && <TodayTop app={app} />}
           {view==="Search" && targetSearch
-            ? <TargetMainTitleSearch query={app.query} language={language} />
+            ? <TargetMainTitleSearch query={app.query} language={language} details={detailGates} detailViews={targetViews} />
             : <SearchResults app={app} />}
           <ContextView app={app} humanWikiSourceStatusEnabled={humanWikiSourceStatusEnabled} />
           <AgentsView app={app} />
