@@ -1,6 +1,7 @@
 "use client";
 import { useLayoutEffect, useRef } from "react";
 import type { LumiApp } from "../use-lumi-app";
+import { ownerAdoptionFencePresent } from "../../../lib/owner-adoption-barrier";
 
 // Non-dismissible safety barrier: the local copy is never discarded by closing
 // a modal, reloading the page or acknowledging a download prompt.
@@ -10,6 +11,7 @@ export function OfflineRecoveryDialog({ app }: { app: LumiApp }) {
   const inspectRef = useRef(app.inspectOfflineRecoveryFile);
   inspectRef.current = app.inspectOfflineRecoveryFile;
   const cs = app.language === "cs";
+  const interruptedOwnerRestore = ownerAdoptionFencePresent();
   useLayoutEffect(() => {
     const dialog = ref.current;
     if (!dialog || !app.recoveryHeld) return;
@@ -45,6 +47,11 @@ export function OfflineRecoveryDialog({ app }: { app: LumiApp }) {
             ? "Serverová data byla obnovena z jiné generace. Lumi zastavilo zápisy i přepsání místní kopie. Změny, poznámky a rozpracované texty zůstávají v tomto prohlížeči."
             : "The server's restore generation changed. Lumi has blocked writes and replacement of your local copy. Local edits, notes and drafts stay in this browser."}
         </p>
+        {interruptedOwnerRestore && <p role="status">
+          {cs
+            ? "Předchozí obnova byla přerušena. Místní kopie už může být částečně nahrazená; záchranný soubor nemusí obsahovat všechny původní změny."
+            : "A previous restore was interrupted. The local copy may already be partially replaced; a recovery file may not include all earlier edits."}
+        </p>}
         <p>
           {cs
             ? "Soubor může obsahovat soukromé údaje. Uložte ho pouze na bezpečné místo. Export není automatické sloučení; pro opětovné zapnutí synchronizace bude potřeba samostatné bezpečné rozhodnutí."

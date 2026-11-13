@@ -6,6 +6,11 @@ export const ownerAdoptionGenerationKey = "ai-executive-restore-generation";
 type Readable = Pick<Storage, "getItem">;
 type Writable = Pick<Storage, "getItem" | "setItem" | "removeItem">;
 type Enumerable = Pick<Storage, "getItem" | "key" | "length">;
+export type OwnerAdoptionFence = Readonly<{
+  version: 1;
+  observedGeneration: number;
+  knownGeneration: number | null;
+}>;
 const validGeneration = (value: unknown): value is number =>
   typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
 
@@ -50,10 +55,33 @@ export function crossTabAdoptionBlocked(
 export function isCrossTabAdoptionBlocked() {
   return crossTabAdoptionBlocked(initialized ? knownInThisTab : undefined);
 }
-export function startOwnerAdoptionFence(storage: Writable, generation: number): void {
-  if (!validGeneration(generation) || storage.getItem(ownerAdoptionFenceKey) !== null)
+// The marker records the *original* generation too. If the browser crashes
+// before the new generation is stamped, the owner can resume a certified
+// restore, or export the still-recoverable local data without inventing a
+// known generation equal to the observed one.
+export function readOwnerAdoptionFence(storage: Readable): OwnerAdoptionFence | null {
+  const raw = storage.getItem(ownerAdoptionFenceKey);
+  if (raw === null) return null;
+  try {
+    const marker = JSON.parse(raw) as Partial<OwnerAdoptionFence>;
+    if (!marker || marker.version !== 1 || !validGeneration(marker.observedGeneration) ||
+        marker.observedGeneration === 0 ||
+        !(marker.knownGeneration === null || validGeneration(marker.knownGeneration)) ||
+        Object.keys(marker).length !== 3) return null;
+    return marker as OwnerAdoptionFence;
+  } catch { return null; }
+}
+export function startOwnerAdoptionFence(
+  storage: Writable, generation: number, knownGeneration?: number,
+): void {
+  if (!validGeneration(generation) || generation === 0 ||
+      !(knownGeneration === undefined || validGeneration(knownGeneration)) ||
+      storage.getItem(ownerAdoptionFenceKey) !== null)
     throw new Error("OWNER_ADOPTION_FENCE_UNAVAILABLE");
-  const value = String(generation);
+  const marker: OwnerAdoptionFence = {
+    version: 1, observedGeneration: generation, knownGeneration: knownGeneration ?? null,
+  };
+  const value = JSON.stringify(marker);
   storage.setItem(ownerAdoptionFenceKey, value);
   if (storage.getItem(ownerAdoptionFenceKey) !== value)
     throw new Error("OWNER_ADOPTION_FENCE_UNAVAILABLE");
@@ -69,11 +97,10 @@ export function finishOwnerAdoptionFence(storage: Writable): void {
 // committed, the marker can be removed idempotently under the same lock
 // on the next startup. Never finalize a partial cleanup or absent generation.
 export function ownerAdoptionReadyToFinish(storage: Enumerable): boolean {
-  const fence = storage.getItem(ownerAdoptionFenceKey);
-  if (fence === null) return true;
-  const generation = Number(fence);
-  if (!validGeneration(generation) || generation <= 0 || String(generation) !== fence ||
-      storage.getItem(ownerAdoptionGenerationKey) !== fence ||
+  const raw = storage.getItem(ownerAdoptionFenceKey);
+  if (raw === null) return true;
+  const fence = readOwnerAdoptionFence(storage);
+  if (!fence || storage.getItem(ownerAdoptionGenerationKey) !== String(fence.observedGeneration) ||
       storage.getItem("ai-executive-server-synced") !== "1") return false;
   assertOwnerAdoptionCleanup(storage);
   return true;
@@ -100,4 +127,25 @@ export function assertOwnerAdoptionCleanup(storage: Enumerable): void {
     if (key === null || exact.includes(key) || prefixes.some(prefix => key.startsWith(prefix)))
       throw new Error("OWNER_ADOPTION_LOCAL_CLEANUP_INCOMPLETE");
   }
+}
+
+/**
+ * Ordinary synchronization may only re-affirm the generation already known
+ * to this browser. It may NOT certify a different restore generation. Must be
+ * called while holding ai-executive-recovery-data Web Lock, so another tab's
+ * owner adoption cannot race the read/modify/write.
+ */
+export function persistOrdinaryGeneration(
+  storage: Writable, knownGeneration: number | undefined, generation: number,
+): boolean {
+  if (!validGeneration(generation) || storage.getItem(ownerAdoptionFenceKey) !== null)
+    return false;
+  const raw = storage.getItem(ownerAdoptionGenerationKey);
+  const persisted = raw === null ? undefined : Number(raw);
+  if (raw !== null && !validGeneration(persisted)) return false;
+  if (knownGeneration !== undefined && (generation !== knownGeneration || persisted !== knownGeneration))
+    return false;
+  if (persisted !== undefined && persisted !== generation) return false;
+  storage.setItem(ownerAdoptionGenerationKey, String(generation));
+  return storage.getItem(ownerAdoptionGenerationKey) === String(generation);
 }

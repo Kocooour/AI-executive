@@ -5,6 +5,7 @@ import { clearAllMarkers, pendingDeletedIds, pendingRevivedIds } from "./pending
 import { clearNotesDrafts, keptNotesDrafts, notesDraftsKey } from "./notes-drafts";
 import { clearProjectContextDrafts, keptProjectContextDrafts } from "./project-context-drafts";
 import { clearOpenTexts } from "./open-texts";
+import { finishOwnerAdoptionFence } from "./owner-adoption-barrier";
 import { attentionCacheKey } from "./attention-cache";
 
 // Browser-side copies of server data and the bookkeeping of unsent changes.
@@ -113,6 +114,9 @@ export async function clearLocalData(timeoutMs = 4000) {
   // after an unrelated restore, despite there being nothing local to recover.
   // Keep wipePending until these removals succeed (crash-safe retry).
   clearPurgedRestoreBaseline(localStorage);
+  // A fully authorized, verified sign-out also retires an abandoned owner
+  // restore fence. Partial wipes keep wipePending and cannot expose old rows.
+  finishOwnerAdoptionFence(localStorage);
   localStorage.removeItem(wipePendingKey);
   }, true);
 }
