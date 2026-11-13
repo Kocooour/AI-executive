@@ -1,8 +1,10 @@
-/** C15: BFCache witness in a REAL Chrome process.
+/** C15/C17: BFCache privacy witness in a REAL Chrome process.
  * Playwright launches Chromium with --disable-back-forward-cache. Even when
  * overridden, page.goBack() cannot synchronize with a BFCache thaw. This
  * standalone Chrome has neither that switch nor Playwright navigation control.
  * It uses the isolated personal-v1 SQLite server and test-owner session cookie.
+ * The strict release gate accepts restoration or a browser-explained miss,
+ * but both branches must prove private draft fencing and fresh authorization.
  */
 import {spawn} from "node:child_process";
 import {existsSync,mkdtempSync,readFileSync,rmSync} from "node:fs";
@@ -154,6 +156,7 @@ for(const width of [390,1280]){
     let phase="before initial navigation";
     let secret="";
     let preBack: {shows:boolean[];docToken:string}|null=null;
+    let postBackObserved=false;
     const cacheNotUsed: {reasons:{reason:string;type:string}[];frameId?:string}[]=[];
     // Record actual HTTP completions rather than inferring authorization from
     // PerformanceResourceTiming names (which have no method/status). Register
@@ -224,6 +227,8 @@ for(const width of [390,1280]){
       read.fromServiceWorker===false&&read.fromDiskCache===false&&
       read.fromPrefetchCache===false&&read.cacheServed!==true&&
       read.responseOrder!==undefined&&read.finishedOrder!==undefined&&!read.failed);
+    const recordedNotRestoredReasons=()=>cacheNotUsed.flatMap(entry=>entry.reasons)
+      .filter(reason=>typeof reason.reason==="string"&&reason.reason.trim().length>0);
     const unsubscribeNotUsed=cdp.on("Page.backForwardCacheNotUsed",event=>{
       const data=event as {frameId?:string;notRestoredExplanations?:{reason:string;type:string}[]};
       // Keep reasons and frame identity only: no cookies, paths or private data.
@@ -236,7 +241,12 @@ for(const width of [390,1280]){
       catch(snapshotError){browser={snapshotError:String(snapshotError)};}
       const record={status,phase,width,
         checkedOutSha:process.env.LUMI_TESTED_CHECKOUT_SHA??null,
-        preBack,cacheNotUsed,browser,
+        postBackObserved,
+        evaluatedBranch:postBackObserved
+          ?(browser.persisted===true?"restored":browser.persisted===false?"not_restored":null)
+          :null,
+        preBack,cacheNotUsed,
+        recordedNotRestoredReasonCount:recordedNotRestoredReasons().length,browser,
         taskCreatePostCount:taskCreatePosts.length,
         taskCreatePostStages:taskCreatePosts.map(post=>post.phase),
         // Only endpoint paths and outcomes; never include request bodies, task
@@ -258,6 +268,8 @@ for(const width of [390,1280]){
       return browser;
     }
     try{
+      if(strict)expect(process.env.LUMI_TESTED_CHECKOUT_SHA,
+        "Strict native evidence requires the verified checkout SHA").toMatch(/^[a-f0-9]{40}$/);
       await cdp.send("Network.enable");
       await cdp.send("Emulation.setDeviceMetricsOverride",{
         width,height:844,deviceScaleFactor:1,mobile:width===390});
@@ -311,6 +323,7 @@ for(const width of [390,1280]){
         "!!window.__lumiNative?.shows.length && ("+
         "window.__lumiShowsBeforeLeave===undefined || "+
         "window.__lumiNative.shows.length>window.__lumiShowsBeforeLeave)"));
+      postBackObserved=true;
       phase="asserting native Back privacy and authorization";
       const first=await evidence("observed");
       expect(first.titleVisible,"Private draft remains in DOM").toBe(false);
@@ -318,10 +331,10 @@ for(const width of [390,1280]){
       expect(["",null],"Old private Area remains selected").toContain(first.area);
       expect(taskCreatePosts,"Abandoned draft CREATE before/during native Back")
         .toHaveLength(0);
-      if(strict)expect(first.persisted,"Native pageshow.persisted was false; reasons="+
-        JSON.stringify({navigation:first.notRestoredReasons,cdp:cacheNotUsed})).toBe(true);
-      // The original document is preserved only on a genuine BFCache hit.
-      // A full reload is covered separately by the existing Playwright suite.
+      expect(typeof first.persisted,"Observed post-Back pageshow must have a boolean result")
+        .toBe("boolean");
+      // The original document token survives an actual cache restoration but
+      // MUST change on a cache miss. The two paths share the privacy invariants.
       if(first.persisted){
         // The genuinely resumed document must be the exact private editor
         // document we left, rather than a fresh navigation or SPA transition.
@@ -367,7 +380,61 @@ for(const width of [390,1280]){
         await pause(300);
         expect(taskCreatePosts,"Blank restored composer must not submit CREATE")
           .toHaveLength(0);
+      }else{
+        // Cache-Control: no-store is retained: an explained native cache miss
+        // is acceptable in strict mode, but an unexplained miss is not.
+        expect(first.documentToken,"A BFCache miss must create a new document")
+          .not.toBe(preBack?.docToken);
+        if(strict){
+          await waitFor("non-empty Page.backForwardCacheNotUsed reasons",async()=>
+            recordedNotRestoredReasons().length>0);
+          expect(recordedNotRestoredReasons(),
+            "Strict cache-miss evidence requires real browser reasons")
+            .not.toHaveLength(0);
+        }
+        // Prove a newly completed direct HTTP GET 200 for the owner session
+        // BEFORE any new editor action; cached, failed and SW reads are excluded.
+        const session=await waitFor("fresh authorized session after native Back",async()=>
+          successfulRead("/api/target-staging/session"));
+        expect(taskCreatePosts,"Automatic CREATE during cache-miss reload")
+          .toHaveLength(0);
+        phase="reopening private editor after newly authorized reload";
+        await waitFor("private capture after reload",()=>cdp.eval<boolean>(
+          "!!document.querySelector("+JSON.stringify(fab)+")"));
+        await cdp.eval("document.querySelector("+JSON.stringify(fab)+").click()");
+        await waitFor("fresh task chooser after reload",()=>cdp.eval<boolean>(
+          "!!document.querySelector('[data-testid=\"target-capture-task-kind\"]')"));
+        await cdp.eval("document.querySelector('[data-testid=\"target-capture-task-kind\"]').click()");
+        // A new document does not load Area choices until the user opens the
+        // task editor. The fresh Area GET must finish before selection/save.
+        const areaRead=await waitFor("new direct authorized private Area GET",async()=>
+          successfulRead("/api/target-staging/notes/create-targets"));
+        expect(session.finishedOrder,"Session authorization must precede private Area access")
+          .toBeLessThan(areaRead.requestOrder);
+        const label=JSON.stringify(store!.seed!.areaTitle);
+        await waitFor("new authorized private Area choices",()=>cdp.eval<boolean>(
+          "Array.from(document.querySelector('[data-testid=\"target-private-task-area\"]')?.options||[]).some(x=>x.textContent==="+label+")"));
+        const fresh=await cdp.eval<any>(snapshotExpression(secret));
+        expect(fresh.titleVisible,"Old private text resurfaced after reopening").toBe(false);
+        expect(["",null],"Old Area selection resurfaced after reopening").toContain(fresh.area);
+        expect(taskCreatePosts,"Reopening must not replay abandoned CREATE").toHaveLength(0);
+        await evidence("wake-authorized");
+        await cdp.eval("(()=>{const s=document.querySelector('[data-testid=\"target-private-task-area\"]');"+
+          "s.value=Array.from(s.options).find(x=>x.textContent==="+label+").value;"+
+          "s.dispatchEvent(new Event('change',{bubbles:true}))})()");
+        await waitFor("new empty task composer after cache miss",()=>cdp.eval<boolean>(
+          "!!document.querySelector('[data-testid=\"target-private-task-form\"] input')"));
+        const newTitle=await cdp.eval<string>(
+          "document.querySelector('[data-testid=\"target-private-task-form\"] input').value");
+        expect(newTitle,"Abandoned draft became submittable after cache miss").toBe("");
+        expect(taskCreatePosts,"Unexpected CREATE after new Area selection").toHaveLength(0);
+        phase="attempting empty-composer save after explained cache miss";
+        await cdp.eval("document.querySelector('[data-testid=\"target-private-task-save\"]').click()");
+        await pause(300);
+        expect(taskCreatePosts,"Blank composer after cache miss must not submit CREATE")
+          .toHaveLength(0);
       }
+      await evidence("wake-authorized");
     }catch(error){
       // Attach and log the state even when native pageshow never fires:
       // a broken observer, a reload and a genuine BFCache miss are distinct.
