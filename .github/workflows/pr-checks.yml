@@ -65,10 +65,6 @@ jobs:
         if: steps.scope.outputs.code == 'true'
         run: pnpm typecheck
 
-      - name: Focused PR unit tests (including ACL/security when affected)
-        if: steps.scope.outputs.code == 'true'
-        run: node scripts/ci-pr-tests.mjs --test
-
       # Normal runner is not root, so the foreign-UID integration regression
       # would be skipped. Exercise it under sudo against synthetic /tmp only.
       - name: Privileged R4 ownership regression
@@ -78,6 +74,10 @@ jobs:
             "$(command -v node)" --experimental-loader ./tests/ts-loader.mjs \
             --test --test-name-pattern='^--check rejects foreign-owned directory or each companion without modifying it$' \
             tests/target-store-provision.test.mjs
+
+      - name: Focused PR unit tests (including ACL/security when affected)
+        if: steps.scope.outputs.code == 'true'
+        run: node scripts/ci-pr-tests.mjs --test
 
       - name: Production build
         if: steps.scope.outputs.code == 'true'
