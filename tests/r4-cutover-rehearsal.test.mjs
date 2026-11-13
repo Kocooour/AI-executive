@@ -129,6 +129,60 @@ test("rehearsal: archival backup restored to a fresh directory with matching tab
   assert.equal(report.tables.entities.count, 2);
 });
 
+test("rehearsal --verify rejects duplicate or overlapping sources before creating output", t => {
+  const { source, base } = fixture(t);
+  const alias = path.join(base, "offline-alias");
+  symlinkSync(source, alias, "dir");
+  const nested = path.join(source, "nested-copy");
+  mkdirSync(nested);
+
+  const examples = [
+    [source, source, "identical"],
+    [source, alias, "symlink-alias"],
+    [alias, source, "reverse-alias"],
+    [source, nested, "nested"],
+    [nested, source, "parent"],
+  ];
+  for (const [expected, candidate, name] of examples) {
+    const out = path.join(base, "verify-input-" + name);
+    const result = run(rehearsal, ["--verify", expected, candidate, out]);
+    assert.notEqual(result.status, 0, "must reject " + name);
+    assert.equal(existsSync(out), false, "must not create output for " + name);
+    assert.equal(result.stdout.includes(SECRET), false);
+    assert.equal(result.stderr.includes(SECRET), false);
+  }
+});
+
+test("rehearsal rejects overlapping optional target/config inputs", t => {
+  const { source, base } = fixture(t);
+  const alias = path.join(base, "offline-alias");
+  symlinkSync(source, alias, "dir");
+  const nested = path.join(source, "nested-config");
+  mkdirSync(nested);
+  for (const [flag, extra, name] of [
+    ["--config-offline", source, "same-config"],
+    ["--config-offline", nested, "nested-config"],
+    ["--target-offline", alias, "alias-target"],
+  ]) {
+    const output = path.join(base, "nonverify-" + name);
+    const result = run(rehearsal, [source, output, flag, extra]);
+    assert.notEqual(result.status, 0, "must reject overlapping " + name);
+    assert.equal(existsSync(output), false);
+  }
+});
+
+test("rehearsal --verify still accepts separate independent input directories", t => {
+  const { source, base } = fixture(t);
+  const candidate = path.join(base, "independent-copy");
+  cpSync(source, candidate, { recursive: true });
+  const out = path.join(base, "verify-distinct");
+  const result = run(rehearsal, ["--verify", source, candidate, out]);
+  assert.equal(result.status, 0, result.stderr);
+  const report = JSON.parse(readFileSync(path.join(out, "rehearsal.json"), "utf8"));
+  assert.equal(report.verdict, "equal");
+  assert.equal(report.mode, "verify-copies");
+});
+
 test("rehearsal --verify rejects a tampered row", t => {
   const { source, base } = fixture(t);
   const candidate = path.join(base, "tampered");
