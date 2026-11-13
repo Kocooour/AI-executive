@@ -1,3 +1,5 @@
+import { ownerAdoptionFenceKey } from "./owner-adoption-barrier";
+
 // Persistent, browser-wide STOP marker for a restore-generation mismatch.
 // This marker carries only counters; never private tasks, drafts, titles or IDs.
 // Do not clear it during this phase: recovery and consent to discard are distinct.
@@ -147,6 +149,7 @@ export async function beginOfflineRecoveryHoldSafely(
     const persisted = previous === null ? NaN : Number(previous);
     if (storage.getItem(offlineRecoveryHoldKey) === null &&
         storage.getItem(offlineRecoveryIntentKey) === null &&
+        storage.getItem(ownerAdoptionFenceKey) === null &&
         validNumber(observedGeneration) && observedGeneration > (knownGeneration ?? 0) &&
         validNumber(persisted) && persisted >= observedGeneration) {
       throw new Error("OFFLINE_RECOVERY_ADOPTION_PRECEDED_HOLD");

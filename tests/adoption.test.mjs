@@ -4,6 +4,7 @@ import test from "node:test";
 const adoption = await import("../lib/adoption.ts");
 const markers = await import("../lib/pending-markers.ts");
 const drafts = await import("../lib/notes-drafts.ts");
+const barrier = await import("../lib/owner-adoption-barrier.ts");
 
 // A Dexie DBCore stand-in: records the writes that reach the database.
 function fakeCore() {
@@ -70,4 +71,28 @@ test("after adoption has begun no pending mark, deletion, restoration or notes d
   assert.deepEqual([...storage.store.keys()], []);
   assert.deepEqual(markers.pendingDeletedIds(storage), []);
   assert.deepEqual(drafts.keptNotesDrafts(storage), []);
+});
+
+test("a sibling cannot write while owner adoption is fenced or after another tab advances generation", () => {
+  const state = memoryStorage();
+  assert.equal(barrier.crossTabAdoptionBlocked(undefined, state), false);
+  state.setItem(barrier.ownerAdoptionGenerationKey, "4");
+  assert.equal(barrier.crossTabAdoptionBlocked(4, state), false);
+  barrier.startOwnerAdoptionFence(state, 5);
+  assert.equal(barrier.crossTabAdoptionBlocked(4, state), true);
+  assert.equal(barrier.crossTabAdoptionBlocked(5, state), true);
+  barrier.finishOwnerAdoptionFence(state);
+  state.setItem(barrier.ownerAdoptionGenerationKey, "5");
+  assert.equal(barrier.crossTabAdoptionBlocked(4, state), true);
+  assert.equal(barrier.crossTabAdoptionBlocked(5, state), false);
+});
+test("a single undeleted tombstone or context draft blocks owner adoption certification", () => {
+  const state = memoryStorage();
+  state.setItem("ai-executive-pending-deletions:e2e", "task-1");
+  assert.throws(() => barrier.assertOwnerAdoptionCleanup(state), /OWNER_ADOPTION_LOCAL_CLEANUP_INCOMPLETE/);
+  state.removeItem("ai-executive-pending-deletions:e2e");
+  state.setItem("ai-executive-project-context-drafts:old", "unsent");
+  assert.throws(() => barrier.assertOwnerAdoptionCleanup(state), /OWNER_ADOPTION_LOCAL_CLEANUP_INCOMPLETE/);
+  state.removeItem("ai-executive-project-context-drafts:old");
+  assert.doesNotThrow(() => barrier.assertOwnerAdoptionCleanup(state));
 });

@@ -52,7 +52,7 @@ function put(storage: DraftStorage, draft: KeptNotesDraft) {
 
 // Older versions kept all drafts in one value; they are moved to keys of their own.
 function migrateLegacy(storage: DraftStorage) {
-  if (offlineRecoveryIsHeld()) return;
+  if (isAdopting()) return;
   const raw = storage.getItem(notesDraftsKey);
   if (raw === null) return;
   const parsed = parse(raw);
@@ -87,7 +87,7 @@ export function keptNotesDrafts(storage: DraftStorage): KeptNotesDraft[] {
 
 // The drafts of one page (its notes were typed against data a restored backup replaced).
 export function clearPageNotesDrafts(storage: DraftStorage, page: string) {
-  if (offlineRecoveryIsHeld()) return;
+  if (isAdopting()) return;
   removeAllWithPrefix(storage, `${notesDraftsKey}:${page}:`);
 }
 
@@ -108,7 +108,7 @@ export function keepNotesDraft(storage: DraftStorage, page: string, id: string, 
 // After `saved` was saved for the task: the draft is gone if nothing was typed since; if typing
 // went on during the save, the draft now starts from what was saved.
 export function settleNotesDraft(storage: DraftStorage, page: string, id: string, saved: string) {
-  if (offlineRecoveryIsHeld()) return;
+  if (isAdopting()) return;
   const kept = get(storage, page, id);
   if (!kept) return;
   if (kept.text === saved) storage.removeItem(draftKey(page, id));
@@ -117,7 +117,7 @@ export function settleNotesDraft(storage: DraftStorage, page: string, id: string
 
 // Drops a draft, but only the version that was looked at (a newer key press keeps it).
 export function dropNotesDraft(storage: DraftStorage, draft: KeptNotesDraft) {
-  if (offlineRecoveryIsHeld()) return;
+  if (isAdopting()) return;
   const kept = get(storage, draft.page, draft.id);
   if (!kept || kept.at !== draft.at) return;
   storage.removeItem(draftKey(draft.page, draft.id));

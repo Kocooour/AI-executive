@@ -9,7 +9,8 @@ import { writeTime } from "../../../lib/clock";
 import { settleSyncOperation } from "../../../lib/sync-result";
 import { hasChangesBeyond, postToTabs, requestTimeout, tabChannelName, withSyncLock, type TabMessage } from "../../../lib/tab-coordination";
 import { markSignedIn } from "../../../lib/local-data";
-import { beginAdoption, isAdopting, setAfterRestoreFlag } from "../../../lib/adoption";
+import { beginAdoption, isAdopting, isAdoptingInThisTab, setAfterRestoreFlag } from "../../../lib/adoption";
+import { advanceAdoptionGeneration, assertOwnerAdoptionCleanup, finishOwnerAdoptionFence, initializeAdoptionGeneration, ownerAdoptionFencePresent, startOwnerAdoptionFence } from "../../../lib/owner-adoption-barrier";
 import { restoredSinceKnownGeneration, restoreGenerationDecision } from "../../../lib/restore-generation-origin";
 import { clearNotesDrafts } from "../../../lib/notes-drafts";
 import { clearProjectContextDrafts } from "../../../lib/project-context-drafts";
@@ -52,10 +53,18 @@ export function useSync() {
     const stored = Number(localStorage.getItem(generationKey));
     if (localStorage.getItem(generationKey) !== null && Number.isSafeInteger(stored)) restoreGeneration.current = stored;
   }
-  function rememberGeneration(value: number | undefined) {
-    if (typeof value !== "number" || !Number.isSafeInteger(value)) return;
+  initializeAdoptionGeneration(restoreGeneration.current);
+  function rememberGeneration(value: number | undefined, strictly = false) {
+    if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) return;
+    if (strictly) {
+      localStorage.setItem(generationKey, String(value));
+      if (localStorage.getItem(generationKey) !== String(value))
+        throw new Error("OWNER_ADOPTION_GENERATION_NOT_PERSISTED");
+    } else {
+      try { localStorage.setItem(generationKey, String(value)); } catch { /* kept in memory */ }
+    }
     restoreGeneration.current = value;
-    try { localStorage.setItem(generationKey, String(value)); } catch { /* storage unavailable: kept in memory */ }
+    advanceAdoptionGeneration(value);
   }
   // Shown after the data was restored from a backup elsewhere and this device's unsent changes were discarded.
   const [restoredNotice, setRestoredNotice] = useState(false);
@@ -278,9 +287,9 @@ export function useSync() {
     if (restoreGenerationDecision(
       restoredSinceKnown(source.restoreGeneration), source.restoreKind, offlineRecoveryIsHeld(),
     ) === "hold") return engageRecoveryForGeneration(source.restoreGeneration);
-    if (isAdopting() && !fencedRestore.current) return true;
+    if (isAdoptingInThisTab() && !fencedRestore.current) return true;
     fencedRestore.current = false;
-    if (!isAdopting()) beginAdoption();
+    if (!isAdoptingInThisTab()) beginAdoption();
 
     let needsRecoveryHold = false;
     let adoptionCompleted = false;
@@ -289,7 +298,7 @@ export function useSync() {
       // IndexedDB replacement OR its localStorage marker/generation cleanup.
       // The lock is also used by D2b holds and owner-authorized sign-out.
       await withOfflineRecoveryDataLock(async () => {
-        if (offlineRecoveryIsHeld()) { needsRecoveryHold = true; return; }
+        if (offlineRecoveryIsHeld() || ownerAdoptionFencePresent()) { needsRecoveryHold = true; return; }
         if (signedOut.current || localStorage.getItem("ai-executive-signed-out") === "1" ||
             localStorage.getItem("ai-executive-wipe-pending") === "1") return;
         // Another tab can complete adoption while this one waits for the lock.
@@ -304,7 +313,10 @@ export function useSync() {
           return;
         }
 
-        // An in-flight save or pull computed from the old copy is now obsolete.
+        // Synchronously fence ALL sibling writes before creating the
+        // overlapping IndexedDB readwrite transaction. Existing transactions
+        // run before ours; later ones see this marker and are refused.
+        startOwnerAdoptionFence(localStorage, source.restoreGeneration);
         localDataVersion.current += 2;
         try {
           await adoptionTransaction(async () => {
@@ -340,16 +352,21 @@ export function useSync() {
           }
         }
 
-        // This entire commit belongs to the same cross-tab critical section.
-        // No other tab can persist a rescue hold over a half-adopted copy.
-        const attempt = (work: () => void) => { try { work(); } catch { /* storage unavailable */ } };
-        attempt(() => clearAllMarkers(localStorage));
-        attempt(() => clearNotesDrafts(localStorage));
-        attempt(() => clearProjectContextDrafts(localStorage));
-        attempt(() => { localStorage.removeItem(pendingKey); localStorage.setItem("ai-executive-server-synced", "1"); });
+        // Selective removeItem errors must never be certified as a complete
+        // purge. Keep the durable write fence on any failure and install D2b
+        // hold after releasing the shared Web Lock.
+        clearAllMarkers(localStorage);
+        clearNotesDrafts(localStorage);
+        clearProjectContextDrafts(localStorage);
+        localStorage.removeItem(pendingKey);
+        assertOwnerAdoptionCleanup(localStorage);
+        localStorage.setItem("ai-executive-server-synced", "1");
+        if (localStorage.getItem("ai-executive-server-synced") !== "1")
+          throw new Error("OWNER_ADOPTION_SYNC_BASE_NOT_PERSISTED");
+        rememberGeneration(source.restoreGeneration, true);
+        finishOwnerAdoptionFence(localStorage);
         serverRevision.current = source.revision;
         recoveryBaseRevision.current = source.revision;
-        rememberGeneration(source.restoreGeneration);
         adoptionCompleted = true;
       }, true);
     } catch (error) {
@@ -474,7 +491,7 @@ export function useSync() {
     revivedIds: string[] = [],
     generation: number | undefined = restoreGeneration.current,
   ) {
-    if (offlineRecoveryIsHeld()) throw new Error("OFFLINE_RECOVERY_HELD");
+    if (isAdopting()) throw new Error("OFFLINE_RECOVERY_OR_ADOPTION_FENCED");
     return fetch("/api/store", {
       signal: requestTimeout(),
       method: "PUT",
@@ -545,6 +562,10 @@ export function useSync() {
         mergedWithServer = true;
         const current = (await response.json()) as ServerSnapshot;
         if (current.code === "restored") {
+          if (isAdopting()) {
+            if (reportFailure) throw new Error("SYNC_NOT_CONFIRMED");
+            return;
+          }
           // The data was restored from a backup since this device last synchronized: what is unsent here was made against
           // data that no longer exists, and merging it would put that data back. Only a browser that never synchronized
           // (nothing from before to protect) learns the number and goes on.
