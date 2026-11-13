@@ -125,6 +125,10 @@ migrace, Attention v cílovém modelu, push/notifikace, HumanWiki, produkční z
    profilu se nyní historická kopie pouze načte z `GET /api/store` do
    paměti: nezakládají se ukázková data, nemigruje se IndexedDB a čekající
    změny se neodesílají; běžný režim synchronizace zůstává beze změny.
+   Regrese navíc kontroluje disabled mobilního dokončení, odolnost vůči změně
+   v další záložce, navigaci při vypnutém Mém plánu a všechny mutační
+   legacy HTTP metody. Vedle GET snapshotu porovnává přímo relevantní
+   kanonické SQLite tabulky včetně Pozornosti a pracovních bloků.
    Regrese: `e2e/target-personal-acceptance.spec.ts`, oba viewporty
    **390/1280 px**, skutečné HTTP route handlery, autentizovaný izolovaný target
    store; po explicitním testovacím zasetí legacy úkolů se porovnává

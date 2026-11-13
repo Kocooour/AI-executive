@@ -335,6 +335,12 @@ test("unified mode: legacy views stay visible read-only with a calm cs/en notice
   const copy=read("lib/target-detail-copy.ts");
   assert.match(copy,/Tady vidíte dřívější data jen pro čtení\. S aktuálními úkoly pracujte v Mém plánu\./);
   assert.match(copy,/This view shows earlier data, read-only\. Work with your current tasks in My Plan\./);
+  assert.match(rootSource,/const legacyMyPlanAvailable = Boolean\(targetMyPlan\?\.enabled && mobileDesignV1Preview\);/);
+  assert.match(rootSource,/\{legacyMyPlanAvailable && <>/);
+  assert.match(rootSource,/Můj plán zde zatím není dostupný/);
+  assert.match(rootSource,/My Plan is not available here yet/);
+  assert.match(read("app/ui/views/detail-panel.tsx"),/disabled=\{!taskPreviewMayToggle \|\| app\.legacyWritesDisabled\}/);
+  assert.match(read("app/ui/hooks/use-sync.ts"),/!signedOut\.current && !legacyReadOnly/);
   assert.match(rootSource,/Otevřít Můj plán/);
   assert.match(rootSource,/Open My Plan/);
   // The views themselves are not hidden.

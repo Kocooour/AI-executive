@@ -294,7 +294,7 @@ export function DetailPanel({ app }: { app: LumiApp }) {
                         : taskPreviewDueTone === "dueSoon"
                           ? language === "cs" ? " · Blíží se termín" : " · Due soon"
                           : ""}`}
-                  disabled={!taskPreviewMayToggle}
+                  disabled={!taskPreviewMayToggle || app.legacyWritesDisabled}
                   onClick={() => {
                     if (!taskPreviewMayToggle) return;
                     if (selectedTask.status === "completed") void reopenTask(selectedTask);

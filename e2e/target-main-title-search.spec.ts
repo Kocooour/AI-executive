@@ -135,6 +135,11 @@ for(const width of [390,1280]){
     await page.setViewportSize({width,height:844});
     const http=await interceptSearch(page);
     await prepareLegacy(page);
+    // Scopes and Search are on, but target My Plan is off in this profile.
+    // A read-only legacy banner must not claim the target plan is navigable.
+    const banner = page.getByTestId("legacy-read-only-notice");
+    await expect(banner).toContainText("Můj plán zde zatím není dostupný");
+    await expect(banner.getByRole("button",{name:"Otevřít Můj plán"})).toHaveCount(0);
     const input=page.locator(".searchField input");
     await input.fill("school"); // Focus navigates to Search, never fetches.
     const search=page.getByTestId("target-main-title-search");

@@ -4,6 +4,8 @@
  * No /api/target-staging request is intercepted or fulfilled here; page.on("request") only observes.
  * Synthetic data, default-off: only LUMI_TARGET_PERSONAL_ACCEPTANCE_E2E=true runs it. */
 import {test,expect} from "./fixtures";
+import { DatabaseSync } from "node:sqlite";
+import path from "node:path";
 import type {Page,Response} from "@playwright/test";
 import {isTargetReadRequest} from "../lib/target-edit-fetch";
 
@@ -347,6 +349,28 @@ for(const width of [390,1280]){
 }
 
 
+// GET /api/store excludes lifecycle tables. Compare relevant legacy SQLite rows
+// directly as well, so an unintended Attention/session/action write is detected.
+const legacyDbRows = () => {
+  if (!process.env.LUMI_E2E_RUN_DIR) throw new Error("Missing isolated E2E run directory");
+  const db = new DatabaseSync(path.join(process.env.LUMI_E2E_RUN_DIR, "data", "store.sqlite"), { readOnly: true });
+  try {
+    const tables = [
+      "metadata", "entities", "relations", "tombstones",
+      "attention_states", "attention_history", "work_sessions",
+      "work_session_intervals", "work_session_commands", "work_session_events",
+      "ai_proposals", "ai_action_history",
+    ];
+    const available = new Set((db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'")
+      .all() as { name: string }[]).map(row => row.name));
+    return JSON.stringify(Object.fromEntries(tables.filter(name => available.has(name)).map(name => [
+      name, db.prepare(`SELECT * FROM ${name}`).all().map(row => JSON.stringify(row)).sort(),
+    ])));
+  } finally {
+    db.close();
+  }
+};
+
 // C13: the real target profile must expose legacy Home/Inbox/Today for reading
 // without ever turning the historical local-first store into a migration source.
 for (const width of [390, 1280]) {
@@ -354,18 +378,21 @@ for (const width of [390, 1280]) {
     test.setTimeout(90_000);
     if (!store) throw new Error("Requires the real isolated target store");
     await page.setViewportSize({ width, height: 844 });
-    const unexpectedPuts: string[] = [];
+    const unexpectedWrites: string[] = [];
     let seeding = false;
     page.on("request", request => {
-      if (!seeding && request.method() === "PUT" &&
-          new URL(request.url()).pathname === "/api/store")
-        unexpectedPuts.push(request.url());
+      const pathname = new URL(request.url()).pathname;
+      // Target staging uses POST-shaped reads; all other API mutation
+      // verbs are forbidden here, including Attention and work sessions.
+      if (!seeding && ["POST", "PUT", "PATCH", "DELETE"].includes(request.method()) &&
+          pathname.startsWith("/api/") && !pathname.startsWith("/api/target-staging/"))
+        unexpectedWrites.push(request.method() + " " + pathname);
     });
     // Even a brand-new browser in target mode may read the old server copy,
     // but it may not seed IndexedDB or upload a synthesized baseline.
     await page.goto("/?view=Home");
     await expect(page.getByTestId("legacy-read-only-notice")).toBeVisible();
-    expect(unexpectedPuts, "target startup cannot PUT a baseline").toEqual([]);
+    expect(unexpectedWrites, "target startup must not write to any legacy API").toEqual([]);
 
     // Seed only through the ordinary real legacy HTTP route. It is the sole
     // allowed PUT in this scenario and is excluded from observed UI requests.
@@ -398,6 +425,7 @@ for (const width of [390, 1280]) {
       seeding = false;
     }
     const before = await (await page.request.get("/api/store")).body();
+    const beforeDb = legacyDbRows();
 
     for (const [view, title] of [["Home", homeTitle], ["Inbox", inboxTitle], ["Today", homeTitle]] as const) {
       await page.goto("/?view=" + view);
@@ -411,11 +439,30 @@ for (const width of [390, 1280]) {
         : page.locator(".taskRow").filter({ hasText: title }).first();
       await expect(row).toBeVisible();
       await expect(row.locator("button.check")).toBeDisabled();
+      if (view === "Home") {
+        // A sibling running an older client can announce a changed IndexedDB
+        // snapshot. This tab must continue showing the server's historical data.
+        const sibling = await page.context().newPage();
+        try {
+          await sibling.goto("/?view=Home");
+          await expect(sibling.locator(".homeTaskList article").filter({ hasText: title })).toBeVisible();
+          await sibling.evaluate(() => {
+            const channel = new BroadcastChannel("ai-executive-tabs");
+            channel.postMessage({ type: "changed", from: "older-legacy-tab" });
+            channel.close();
+          });
+          await page.waitForTimeout(250);
+          await expect(row).toBeVisible();
+        } finally {
+          await sibling.close();
+        }
+      }
       await row.click();
       const inspector = page.locator("aside.inspectorDetail");
       await expect(inspector).toBeVisible();
       await expect(inspector.locator(".titleEdit")).toHaveValue(title);
       await expect(inspector.locator(".titleEdit")).toHaveJSProperty("readOnly", true);
+      if (width === 390) await expect(inspector.locator(".taskPreviewCheck")).toBeDisabled();
       await expect(inspector.locator(".taskDetailMoreList select")).toBeDisabled();
       await expect(inspector.locator(".taskDetailEssentials input[type=date]").first()).toBeDisabled();
       await expect(inspector.locator(".taskDetailMoreActions button.danger")).toBeDisabled();
@@ -429,8 +476,9 @@ for (const width of [390, 1280]) {
     await page.getByTestId("legacy-read-only-notice")
       .getByRole("button", { name: "Otevřít Můj plán" }).click();
     await expect(page.getByTestId("target-my-plan")).toBeVisible();
-    expect(unexpectedPuts, "no browser-requested legacy snapshot PUT").toEqual([]);
+    expect(unexpectedWrites, "no browser-requested legacy API mutation").toEqual([]);
     const after = await (await page.request.get("/api/store")).body();
-    expect(after.equals(before), "legacy store bytes must stay unchanged").toBe(true);
+    expect(after.equals(before), "legacy store GET response bytes must stay unchanged").toBe(true);
+    expect(legacyDbRows(), "canonical legacy SQLite tables must stay unchanged").toBe(beforeDb);
   });
 }

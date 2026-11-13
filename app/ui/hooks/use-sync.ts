@@ -380,11 +380,14 @@ export function useSync({ legacyReadOnly = false }: { legacyReadOnly?: boolean }
     if (typeof BroadcastChannel === "undefined") return;
     const channel = new BroadcastChannel(tabChannelName);
     channel.onmessage = (event: MessageEvent<TabMessage>) => {
-      if (event.data?.type === "changed" && event.data.from !== tabId.current && !signedOut.current) void load().catch(() => undefined);
+      // A read-only target tab must never replace its server snapshot with an
+      // older IndexedDB copy after a sibling announces a local mutation.
+      if (event.data?.type === "changed" && event.data.from !== tabId.current && !signedOut.current && !legacyReadOnly)
+        void load().catch(() => undefined);
       if (event.data?.type === "restore-adopted" && event.data.from !== tabId.current) reloadForRestore(event.data.generation);
     };
     return () => channel.close();
-  }, []);
+  }, [legacyReadOnly]);
   async function putSnapshot(
     entities: Entity[],
     snapshotRelations: any[],
