@@ -115,7 +115,7 @@ async function nativeBrowser(width:number){
       "addEventListener('pageshow',e=>window.__lumiNative.shows.push(e.persisted))"});
     return {profile,chrome,cdp};
   }catch(e){
-    chrome.kill("SIGKILL");rmSync(profile,{recursive:true,force:true});throw e;
+    chrome.kill("SIGKILL");rmSync(profile,{recursive:true,force:true,maxRetries:20,retryDelay:100});throw e;
   }
 }
 function snapshotExpression(secret:string){
@@ -128,7 +128,11 @@ function snapshotExpression(secret:string){
     "(Number.isInteger(offset)?offset:0)).map(x=>new URL(x.name).pathname);"+
     "return {url:location.href,shows:window.__lumiNative?.shows??[],"+
     "persisted:window.__lumiNative?.shows?.includes(true)===true,"+
-    "navigationType:nav?.type??'missing',notRestoredReasons:nav?.notRestoredReasons??null,"+
+    "navigationType:nav?.type??'missing',"+
+    "notRestoredReasons:nav?.notRestoredReasons?"+
+    "{reasons:nav.notRestoredReasons.reasons??null,"+
+    "children:nav.notRestoredReasons.children?.map(x=>({reasons:x.reasons??null,url:x.url??null}))??null}:"+
+    "null,","+
     "userAgent:navigator.userAgent,titleVisible:inputs.some(x=>x.value.includes(secret))||"+
     "document.documentElement.outerHTML.includes(secret),"+
     "area:select?.value??null,reads:reads.filter(x=>x.startsWith('/api/target-staging/')),"+
@@ -164,7 +168,8 @@ for(const width of [390,1280]){
         JSON.stringify(secret)+");x.dispatchEvent(new Event('input',{bubbles:true}))})()");
       await waitFor("React-bound draft",()=>cdp.eval<boolean>(
         "document.querySelector('[data-testid=\"target-private-task-form\"] input')?.value==="+JSON.stringify(secret)));
-      await cdp.eval("window.__lumiBeforeLeave=performance.getEntriesByType('resource').length");
+      await cdp.eval("window.__lumiBeforeLeave=performance.getEntriesByType('resource').length;"+
+        "window.__lumiShowsBeforeLeave=window.__lumiNative?.shows.length??0");
       // Both navigations are native browser actions; no Playwright goBack and
       // no synthetic PageTransitionEvent. Keep the private response no-store.
       await cdp.eval("location.assign('/robots.txt');true");
@@ -172,6 +177,13 @@ for(const width of [390,1280]){
       await cdp.eval("history.back();true");
       await waitFor("native browser back",()=>cdp.eval<boolean>(
         "location.search.includes('view=Calendar')"));
+      // A navigation can commit to the destination before its pageshow
+      // actually fires. An earlier snapshot saw shows:[] and incorrectly
+      // classified that in-flight navigation as a BFCache miss.
+      await waitFor("actual browser-fired pageshow after Back",()=>cdp.eval<boolean>(
+        "!!window.__lumiNative?.shows.length && ("+
+        "window.__lumiShowsBeforeLeave===undefined || "+
+        "window.__lumiNative.shows.length>window.__lumiShowsBeforeLeave)"));
       const first=await cdp.eval<any>(snapshotExpression(secret));
       const evidence={width,checkedOutSha:process.env.LUMI_TESTED_CHECKOUT_SHA??null,
         ...first};
@@ -224,7 +236,7 @@ for(const width of [390,1280]){
       }
     }finally{
       cdp.close();chrome.kill("SIGKILL");
-      rmSync(profile,{recursive:true,force:true});
+      rmSync(profile,{recursive:true,force:true,maxRetries:20,retryDelay:100});
     }
   });
 }
