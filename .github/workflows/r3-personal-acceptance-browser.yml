@@ -11,6 +11,7 @@ on:
       - "scripts/target-staging-*.mjs"
       - "e2e/target-personal-acceptance.spec.ts"
       - "e2e/target-personal-bfcache.spec.ts"
+      - "e2e/target-personal-native-bfcache.spec.ts"
       - "e2e/target-personal-my-plan.spec.ts"
       - "e2e/target-personal-search-open.spec.ts"
       - "e2e/target-personal-store-setup.mjs"
@@ -38,7 +39,7 @@ jobs:
   chromium:
     name: Personal acceptance on the real isolated store (Chromium)
     runs-on: ubuntu-24.04
-    timeout-minutes: 35
+    timeout-minutes: 40
     env:
       CI: "true"
       NEXT_TELEMETRY_DISABLED: "1"
@@ -91,6 +92,8 @@ jobs:
         run: pnpm exec playwright test e2e/target-personal-acceptance.spec.ts e2e/target-personal-my-plan.spec.ts e2e/target-personal-search-open.spec.ts --project=desktop
       - name: Real Back / BFCache, full reload and uncertain POST (real SQLite, 390/1280)
         run: pnpm exec playwright test e2e/target-personal-bfcache.spec.ts --project=desktop
+      - name: Native Chromium BFCache witness (no Playwright disable flag)
+        run: pnpm exec playwright test e2e/target-personal-native-bfcache.spec.ts --project=desktop
       - name: Upload BFCache evidence and failure traces
         if: always()
         uses: actions/upload-artifact@v6
