@@ -11,6 +11,8 @@ import {existsSync,mkdtempSync,readFileSync,rmSync} from "node:fs";
 import path from "node:path";
 import {randomUUID} from "node:crypto";
 import {chromium,test,expect} from "@playwright/test";
+import {matchingNativeBackReasons,validateNativeBackEvidence} from "./target-personal-native-bfcache-gate";
+import type {NativeBackEvidence,NativeCacheNotUsedEvent} from "./target-personal-native-bfcache-gate";
 
 test.skip(process.env.LUMI_TARGET_PERSONAL_ACCEPTANCE_E2E!=="true",
   "Requires isolated personal-v1 real-store profile");
@@ -156,8 +158,13 @@ for(const width of [390,1280]){
     let phase="before initial navigation";
     let secret="";
     let preBack: {shows:boolean[];docToken:string}|null=null;
+    let initialPageShowObserved=false;
     let postBackObserved=false;
-    const cacheNotUsed: {reasons:{reason:string;type:string}[];frameId?:string}[]=[];
+    let evaluatedBranch:"restored"|"not_restored"|null=null;
+    let topFrameId:string|null=null;
+    let returnedLoaderId:string|null=null;
+    let backReasonStartIndex:number|null=null;
+    const cacheNotUsed:NativeCacheNotUsedEvent[]=[];
     // Record actual HTTP completions rather than inferring authorization from
     // PerformanceResourceTiming names (which have no method/status). Register
     // before navigation: wake requests can race a post-Back CDP snapshot.
@@ -227,26 +234,35 @@ for(const width of [390,1280]){
       read.fromServiceWorker===false&&read.fromDiskCache===false&&
       read.fromPrefetchCache===false&&read.cacheServed!==true&&
       read.responseOrder!==undefined&&read.finishedOrder!==undefined&&!read.failed);
-    const recordedNotRestoredReasons=()=>cacheNotUsed.flatMap(entry=>entry.reasons)
-      .filter(reason=>typeof reason.reason==="string"&&reason.reason.trim().length>0);
     const unsubscribeNotUsed=cdp.on("Page.backForwardCacheNotUsed",event=>{
-      const data=event as {frameId?:string;notRestoredExplanations?:{reason:string;type:string}[]};
-      // Keep reasons and frame identity only: no cookies, paths or private data.
-      cacheNotUsed.push({frameId:data.frameId,reasons:(data.notRestoredExplanations||[])
-        .map(reason=>({reason:reason.reason,type:reason.type}))});
+      const data=event as {frameId?:string;loaderId?:string;
+        notRestoredExplanations?:{reason:string;type:string}[]};
+      // Record frame AND loader identity. The explanation for an old page
+      // navigation, or for a child frame, cannot certify the current Back.
+      cacheNotUsed.push({frameId:data.frameId,loaderId:data.loaderId,
+        reasons:(data.notRestoredExplanations||[])
+          .map(reason=>({reason:reason.reason,type:reason.type}))});
     });
+    function backObservation(browser:Record<string,unknown>):NativeBackEvidence{
+      return {
+        initialPageShowObserved,postBackPageShowObserved:postBackObserved,
+        persisted:typeof browser.persisted==="boolean"?browser.persisted:null,
+        originalDocumentToken:preBack?.docToken??null,
+        returnedDocumentToken:typeof browser.documentToken==="string"?browser.documentToken:null,
+        topFrameId,returnedLoaderId,backReasonStartIndex,cacheNotUsed,
+      };
+    }
     async function evidence(status:"observed"|"wake-authorized"|"completed"|"failure",error?:unknown){
       let browser:Record<string,unknown>;
       try{browser=await cdp.eval<Record<string,unknown>>(snapshotExpression(secret));}
       catch(snapshotError){browser={snapshotError:String(snapshotError)};}
       const record={status,phase,width,
         checkedOutSha:process.env.LUMI_TESTED_CHECKOUT_SHA??null,
-        postBackObserved,
-        evaluatedBranch:postBackObserved
-          ?(browser.persisted===true?"restored":browser.persisted===false?"not_restored":null)
-          :null,
+        postBackObserved,initialPageShowObserved,evaluatedBranch,
+        topFrameId,returnedLoaderId,backReasonStartIndex,
         preBack,cacheNotUsed,
-        recordedNotRestoredReasonCount:recordedNotRestoredReasons().length,browser,
+        recordedNotRestoredReasonCount:matchingNativeBackReasons(
+          backObservation(browser)).length,browser,
         taskCreatePostCount:taskCreatePosts.length,
         taskCreatePostStages:taskCreatePosts.map(post=>post.phase),
         // Only endpoint paths and outcomes; never include request bodies, task
@@ -279,6 +295,7 @@ for(const width of [390,1280]){
       phase="awaiting initial native pageshow";
       await waitFor("initial browser-fired pageshow",()=>cdp.eval<boolean>(
         "window.__lumiNative?.shows?.includes(false)===true"));
+      initialPageShowObserved=true;
       const fab='[data-target-private-capture-fab="'+(width===390?"mobile":"desktop")+'"]';
       await waitFor("authenticated global capture",()=>cdp.eval<boolean>(
         "!!document.querySelector("+JSON.stringify(fab)+")"));
@@ -309,6 +326,14 @@ for(const width of [390,1280]){
       // no synthetic PageTransitionEvent. Keep the private response no-store.
       await cdp.eval("location.assign('/robots.txt');true");
       await waitFor("robots.txt",()=>cdp.eval<boolean>("location.pathname==='/robots.txt'"));
+      // Frame identity is stable for same-tab Back; loader identity is not.
+      // Save the event boundary BEFORE history.back() so earlier CDP misses
+      // cannot satisfy this navigation's strict evidence requirement.
+      const beforeBackFrame=(await cdp.send("Page.getFrameTree"))
+        .frameTree?.frame as {id?:string}|undefined;
+      if(!beforeBackFrame?.id)throw Error("No top-level frame before native Back");
+      topFrameId=beforeBackFrame.id;
+      backReasonStartIndex=cacheNotUsed.length;
       // Only requests begun after this marker may certify a fresh wake.
       backReadMark=networkOrder;
       phase="native history.back";
@@ -324,6 +349,11 @@ for(const width of [390,1280]){
         "window.__lumiShowsBeforeLeave===undefined || "+
         "window.__lumiNative.shows.length>window.__lumiShowsBeforeLeave)"));
       postBackObserved=true;
+      const afterBackFrame=(await cdp.send("Page.getFrameTree"))
+        .frameTree?.frame as {id?:string;loaderId?:string}|undefined;
+      expect(afterBackFrame?.id,"Back changed top-level frame identity")
+        .toBe(topFrameId);
+      returnedLoaderId=afterBackFrame?.loaderId??null;
       phase="asserting native Back privacy and authorization";
       const first=await evidence("observed");
       expect(first.titleVisible,"Private draft remains in DOM").toBe(false);
@@ -331,8 +361,14 @@ for(const width of [390,1280]){
       expect(["",null],"Old private Area remains selected").toContain(first.area);
       expect(taskCreatePosts,"Abandoned draft CREATE before/during native Back")
         .toHaveLength(0);
-      expect(typeof first.persisted,"Observed post-Back pageshow must have a boolean result")
-        .toBe("boolean");
+      // The native CDP event may arrive just after the pageshow observer.
+      // In strict mode wait specifically for a reason associated with the
+      // post-Back top-level frame AND the returned loader, never stale events.
+      if(strict&&first.persisted===false)
+        await waitFor("CDP reasons for the returned top-level Back loader",async()=>
+          matchingNativeBackReasons(backObservation(first)).length>0);
+      evaluatedBranch=validateNativeBackEvidence(backObservation(first),{strict});
+      expect(evaluatedBranch).toBe(first.persisted?"restored":"not_restored");
       // The original document token survives an actual cache restoration but
       // MUST change on a cache miss. The two paths share the privacy invariants.
       if(first.persisted){
@@ -385,13 +421,8 @@ for(const width of [390,1280]){
         // is acceptable in strict mode, but an unexplained miss is not.
         expect(first.documentToken,"A BFCache miss must create a new document")
           .not.toBe(preBack?.docToken);
-        if(strict){
-          await waitFor("non-empty Page.backForwardCacheNotUsed reasons",async()=>
-            recordedNotRestoredReasons().length>0);
-          expect(recordedNotRestoredReasons(),
-            "Strict cache-miss evidence requires real browser reasons")
-            .not.toHaveLength(0);
-        }
+        // Strict validation already required a matching browser CDP reason
+        // for this precise Back/loader (or rejected the unexplained miss).
         // Prove a newly completed direct HTTP GET 200 for the owner session
         // BEFORE any new editor action; cached, failed and SW reads are excluded.
         const session=await waitFor("fresh authorized session after native Back",async()=>
