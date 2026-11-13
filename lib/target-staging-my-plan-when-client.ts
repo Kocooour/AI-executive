@@ -145,23 +145,6 @@ export async function prepareMyPlanWhen(params:{
   }catch{return {ok:false,reason:params.signal?.aborted?"aborted":"invalid-response"};}
 }
 
-/** Read ONLY the actor-authorized current plan for a detail completion. Reuse
- * the exact private-CAS preview validator: a validated "unchanged" response
- * from the null-target probe proves the current plan is null. This helper
- * never dispatches a write, and the completion writer rechecks the plan
- * inside its pinned transaction to close the preview-to-write race. */
-export async function readCurrentMyPlanWhenForCompletion(
-  params:{taskId:string;areaId:string;signal?:AbortSignal},
-  fetchImpl:typeof fetch=targetAppFetch,
-):Promise<{ok:true;whenOn:string|null}|{ok:false;reason:MyPlanWhenFailure}>{
-  const result=await prepareMyPlanWhen({...params,whenOn:null},fetchImpl);
-  if(result.ok===false){
-    if(result.reason==="unchanged")return {ok:true,whenOn:null};
-    return {ok:false,reason:result.reason};
-  }
-  return {ok:true,whenOn:result.previousWhenOn};
-}
-
 /** The POST is read-only. The *same original eight-field command* is necessary
  * to check a possibly committed PATCH. 'not_recorded' is NEVER a rollback proof. */
 export async function checkMyPlanWhenReceipt(
