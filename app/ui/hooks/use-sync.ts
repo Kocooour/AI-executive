@@ -301,6 +301,10 @@ export function useSync() {
         if (offlineRecoveryIsHeld() || ownerAdoptionFencePresent()) { needsRecoveryHold = true; return; }
         if (signedOut.current || localStorage.getItem("ai-executive-signed-out") === "1" ||
             localStorage.getItem("ai-executive-wipe-pending") === "1") return;
+        // Invalid or missing certification must never erase the browser copy.
+        const adoptedGeneration = source.restoreGeneration;
+        if (typeof adoptedGeneration !== "number" || !Number.isSafeInteger(adoptedGeneration) ||
+            adoptedGeneration <= 0) { needsRecoveryHold = true; return; }
         // Another tab can complete adoption while this one waits for the lock.
         // Never let an obsolete snapshot overwrite the already adopted copy.
         const persisted = localStorage.getItem(generationKey);
@@ -316,7 +320,7 @@ export function useSync() {
         // Synchronously fence ALL sibling writes before creating the
         // overlapping IndexedDB readwrite transaction. Existing transactions
         // run before ours; later ones see this marker and are refused.
-        startOwnerAdoptionFence(localStorage, source.restoreGeneration);
+        startOwnerAdoptionFence(localStorage, adoptedGeneration);
         localDataVersion.current += 2;
         try {
           await adoptionTransaction(async () => {
@@ -363,7 +367,7 @@ export function useSync() {
         localStorage.setItem("ai-executive-server-synced", "1");
         if (localStorage.getItem("ai-executive-server-synced") !== "1")
           throw new Error("OWNER_ADOPTION_SYNC_BASE_NOT_PERSISTED");
-        rememberGeneration(source.restoreGeneration, true);
+        rememberGeneration(adoptedGeneration, true);
         finishOwnerAdoptionFence(localStorage);
         serverRevision.current = source.revision;
         recoveryBaseRevision.current = source.revision;

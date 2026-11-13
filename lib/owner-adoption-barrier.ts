@@ -38,7 +38,13 @@ export function crossTabAdoptionBlocked(
     const raw = storage.getItem(ownerAdoptionGenerationKey);
     if (raw === null) return known !== undefined;
     const generation = Number(raw);
-    return !validGeneration(generation) || (known !== undefined && generation !== known);
+    if (!validGeneration(generation)) return true;
+    // Legacy pages can have a synchronized local copy without having ever
+    // stored the generation counter. A newer certified generation must not
+    // be treated as their own merely because `known` is missing.
+    if (known === undefined)
+      return generation > 0 && storage.getItem("ai-executive-server-synced") === "1";
+    return generation !== known;
   } catch { return true; }
 }
 export function isCrossTabAdoptionBlocked() {

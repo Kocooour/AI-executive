@@ -77,6 +77,8 @@ test("a sibling cannot write while owner adoption is fenced or after another tab
   const state = memoryStorage();
   assert.equal(barrier.crossTabAdoptionBlocked(undefined, state), false);
   state.setItem(barrier.ownerAdoptionGenerationKey, "4");
+  state.setItem("ai-executive-server-synced", "1");
+  assert.equal(barrier.crossTabAdoptionBlocked(undefined, state), true, "legacy synced tab has no generation");
   assert.equal(barrier.crossTabAdoptionBlocked(4, state), false);
   barrier.startOwnerAdoptionFence(state, 5);
   assert.equal(barrier.crossTabAdoptionBlocked(4, state), true);
