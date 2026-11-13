@@ -1668,3 +1668,108 @@ for (const mode of ["missing", "rejected"] as const) {
     }
   });
 }
+
+test("a valid owner fence with a recovery lock held forever still allows raw rescue without unlocking it", async ({ browser }, testInfo) => {
+  // Both pages must share the SAME origin lock namespace and local IndexedDB.
+  const context = await browser.newContext({ storageState: sessionFile, locale: "cs-CZ" });
+  const holder = await context.newPage();
+  const recovering = await context.newPage();
+  const id = `e2e-backup-busy-recovery-lock-${stamp}`;
+  const draftKey = "ai-executive-notes-drafts:busy-recovery-lock";
+  let fence = "";
+  try {
+    await holder.goto("/");
+    await waitUntilSynced(holder);
+    await recovering.goto("/?view=Inbox");
+    await waitUntilSynced(recovering);
+    fence = await recovering.evaluate(async ({ id, draftKey }) => {
+      const known = Number(localStorage.getItem("ai-executive-restore-generation") || "0");
+      const db = await new Promise<IDBDatabase>((resolve, reject) => {
+        const req = indexedDB.open("ai-executive");
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => reject(req.error);
+      });
+      await new Promise<void>((resolve, reject) => {
+        const tx = db.transaction("entities", "readwrite");
+        tx.objectStore("entities").put({
+          id, type: "task", title: "Neodeslaný úkol při obsazeném zámku",
+          status: "open", workspaceId: "personal", properties: { inbox: true },
+          createdAt: Date.now(), updatedAt: Date.now() + 60000,
+        });
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => reject(tx.error);
+      });
+      db.close();
+      localStorage.setItem(draftKey, "Lokální text zůstává zachovaný");
+      const marker = JSON.stringify({
+        version: 1, observedGeneration: known + 1, knownGeneration: known,
+      });
+      localStorage.setItem("ai-executive-owner-adoption-fence", marker);
+      return marker;
+    }, { id, draftKey });
+
+    // Hold the ACTUAL browser Web Lock from a sibling page; do not simulate
+    // a rejected request. The recovering tab has to abort its queued request
+    // and offer a salvage download while this lock is STILL held.
+    await holder.evaluate(() => {
+      const state = window as unknown as { e2eReleaseRecoveryLock?: () => void; e2eRecoveryLockHeld?: boolean };
+      void navigator.locks.request("ai-executive-recovery-data", async () => {
+        state.e2eRecoveryLockHeld = true;
+        await new Promise<void>(resolve => { state.e2eReleaseRecoveryLock = resolve; });
+      });
+    });
+    await holder.waitForFunction(() =>
+      (window as unknown as { e2eRecoveryLockHeld?: boolean }).e2eRecoveryLockHeld === true);
+
+    await recovering.reload();
+    const dialog = recovering.getByRole("alertdialog", { name: "Lokální změny jsou chráněné" });
+    await expect(dialog).toBeVisible({ timeout: 20_000 });
+    await expect(dialog.getByText(/Nepodařilo se získat bezpečnostní zámek/)).toBeVisible();
+    await dialog.getByRole("button", { name: "1. Připravit záchranný soubor" }).click();
+    const save = dialog.getByRole("button", { name: "2. Stáhnout soubor" });
+    await expect(save).toBeEnabled();
+    const [download] = await Promise.all([recovering.waitForEvent("download"), save.click()]);
+    expect(download.suggestedFilename()).toBe("lumi-interrupted-restore-raw-unverified.json");
+    const file = testInfo.outputPath("busy-web-lock-recovery.json");
+    await download.saveAs(file);
+    const raw = JSON.parse(readFileSync(file, "utf8"));
+    expect(raw).toMatchObject({
+      format: "lumi-owner-adoption-raw-rescue",
+      reason: "owner-adoption-lock-unavailable",
+      verified: false, complete: false, autoImportPermitted: false,
+    });
+    expect(raw.local.entities.some((entity: { id: string }) => entity.id === id)).toBe(true);
+    expect(raw.storage).toContainEqual({ key: draftKey, value: "Lokální text zůstává zachovaný" });
+    expect(raw.storage).toContainEqual({ key: "ai-executive-owner-adoption-fence", value: fence });
+
+    const lockStillHeld = await holder.evaluate(async () =>
+      (await navigator.locks.query()).held?.some(lock => lock.name === "ai-executive-recovery-data"));
+    expect(lockStillHeld).toBe(true);
+    const persisted = await recovering.evaluate(async id => {
+      const db = await new Promise<IDBDatabase>((resolve, reject) => {
+        const req = indexedDB.open("ai-executive");
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => reject(req.error);
+      });
+      const item = await new Promise<{ id: string } | undefined>((resolve, reject) => {
+        const req = db.transaction("entities").objectStore("entities").get(id);
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => reject(req.error);
+      });
+      db.close();
+      return {
+        item, fence: localStorage.getItem("ai-executive-owner-adoption-fence"),
+        hold: localStorage.getItem("ai-executive-offline-recovery-hold"),
+      };
+    }, id);
+    expect(persisted.item?.id).toBe(id);
+    expect(persisted.fence).toBe(fence);
+    expect(persisted.hold).toBeNull();
+    expect((await serverEntities(holder)).some(entity => entity.id === id)).toBe(false);
+  } finally {
+    await holder.evaluate(() => {
+      (window as unknown as { e2eReleaseRecoveryLock?: () => void }).e2eReleaseRecoveryLock?.();
+    }).catch(() => undefined);
+    await context.close();
+  }
+});

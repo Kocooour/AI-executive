@@ -116,6 +116,48 @@ export async function withOfflineRecoveryDataLock<T>(work: () => Promise<T>, des
   return work(); // Non-browser tests; recovery hold remains fail-closed if storage fails.
 }
 
+// Startup alone needs a bounded wait for this lock: another tab can stay alive
+// forever while holding it. Abort ONLY the pending request, never an acquired
+// lock or a callback already replacing the local database. Failure keeps the
+// durable owner-adoption fence intact, allowing read-only raw rescue instead.
+export async function withOfflineRecoveryStartupLock<T>(
+  work: () => Promise<T>, acquireTimeoutMs = 3_000,
+): Promise<T> {
+  const locks = typeof navigator !== "undefined"
+    ? (navigator as Navigator & { locks?: {
+      request<TValue>(
+        name: string, options: { signal: AbortSignal }, callback: () => Promise<TValue>,
+      ): Promise<TValue>;
+    } }).locks
+    : undefined;
+  if (!locks || typeof locks.request !== "function")
+    throw new Error("OFFLINE_RECOVERY_LOCK_UNAVAILABLE");
+  if (!Number.isFinite(acquireTimeoutMs) || acquireTimeoutMs <= 0)
+    throw new Error("OFFLINE_RECOVERY_LOCK_TIMEOUT_INVALID");
+
+  const controller = new AbortController();
+  let acquired = false;
+  const timeout = setTimeout(() => {
+    if (!acquired) controller.abort();
+  }, acquireTimeoutMs);
+  try {
+    return await locks.request(recoveryDataLockName, { signal: controller.signal }, async () => {
+      // A rejected/aborted queued request must never begin a destructive
+      // callback even if a faulty lock implementation dispatches it late.
+      if (controller.signal.aborted) throw new Error("OFFLINE_RECOVERY_LOCK_ACQUIRE_TIMEOUT");
+      acquired = true;
+      clearTimeout(timeout);
+      return work(); // No timeout after acquisition: finish the transition.
+    });
+  } catch (error) {
+    if (!acquired && controller.signal.aborted)
+      throw new Error("OFFLINE_RECOVERY_LOCK_ACQUIRE_TIMEOUT");
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 // Stop writes in this tab immediately. Other tabs receive the persistent stop
 // only after taking the same lock that guards local-data deletion. This gives
 // a total order to the two destructive/locking transitions: there can be no

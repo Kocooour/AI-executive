@@ -7,6 +7,7 @@ const markers = await import("../lib/pending-markers.ts");
 const drafts = await import("../lib/notes-drafts.ts");
 const barrier = await import("../lib/owner-adoption-barrier.ts");
 const unreadable = await import("../lib/owner-adoption-rescue.ts");
+const recoveryLock = await import("../lib/d2b-recovery-hold.ts");
 
 // A Dexie DBCore stand-in: records the writes that reach the database.
 function fakeCore() {
@@ -222,5 +223,67 @@ test("C9 focused workflow triggers when each restore safety module or unit regre
   ]) {
     assert.ok(pullRequestPaths.some(pattern => matches(file, pattern)),
       `C9 PR workflow must run when ${file} changes`);
+  }
+});
+
+test("startup recovery lock times out ONLY before acquisition and never runs a late callback", async () => {
+  const priorNavigator = Object.getOwnPropertyDescriptor(globalThis, "navigator");
+  let pendingCallback;
+  let acquisitionSignal;
+  let ran = false;
+  Object.defineProperty(globalThis, "navigator", {
+    configurable: true,
+    value: { locks: {
+      request(name, options, callback) {
+        assert.equal(name, "ai-executive-recovery-data");
+        acquisitionSignal = options.signal;
+        pendingCallback = callback;
+        return new Promise((_resolve, reject) => {
+          options.signal.addEventListener("abort", () =>
+            reject(Object.assign(new Error("request aborted"), { name: "AbortError" })), { once: true });
+        });
+      },
+    } },
+  });
+  try {
+    await assert.rejects(
+      recoveryLock.withOfflineRecoveryStartupLock(async () => { ran = true; }, 20),
+      /OFFLINE_RECOVERY_LOCK_ACQUIRE_TIMEOUT/,
+    );
+    assert.equal(acquisitionSignal.aborted, true, "only the queued lock was cancelled");
+    assert.equal(ran, false, "destructive callback never ran");
+    await assert.rejects(pendingCallback(), /OFFLINE_RECOVERY_LOCK_ACQUIRE_TIMEOUT/,
+      "even a buggy late callback must fail closed");
+    assert.equal(ran, false);
+  } finally {
+    if (priorNavigator) Object.defineProperty(globalThis, "navigator", priorNavigator);
+    else delete globalThis.navigator;
+  }
+});
+
+test("startup lock acquisition timeout is disarmed as soon as its callback starts", async () => {
+  const priorNavigator = Object.getOwnPropertyDescriptor(globalThis, "navigator");
+  let acquiredSignal;
+  let release;
+  Object.defineProperty(globalThis, "navigator", {
+    configurable: true,
+    value: { locks: {
+      request(_name, options, callback) {
+        acquiredSignal = options.signal;
+        return callback(); // Callback acquired the lock immediately.
+      },
+    } },
+  });
+  try {
+    const work = recoveryLock.withOfflineRecoveryStartupLock(
+      () => new Promise(resolve => { release = resolve; }), 20,
+    );
+    await new Promise(resolve => setTimeout(resolve, 45));
+    assert.equal(acquiredSignal.aborted, false, "no abort after entry, even when work exceeds the acquisition timeout");
+    release("committed");
+    assert.equal(await work, "committed");
+  } finally {
+    if (priorNavigator) Object.defineProperty(globalThis, "navigator", priorNavigator);
+    else delete globalThis.navigator;
   }
 });

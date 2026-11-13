@@ -15,7 +15,7 @@ import { restoredSinceKnownGeneration, restoreGenerationDecision } from "../../.
 import { clearNotesDrafts } from "../../../lib/notes-drafts";
 import { clearProjectContextDrafts } from "../../../lib/project-context-drafts";
 import { installRestoreFence } from "../../../lib/restore-fence-client";
-import { beginOfflineRecoveryHoldSafely, offlineRecoveryIsHeld, offlineRecoveryHoldKey, offlineRecoveryIntentKey, readOfflineRecoveryHold, recoveryExportPlan, recoveryPullDecision, withOfflineRecoveryDataLock } from "../../../lib/d2b-recovery-hold";
+import { beginOfflineRecoveryHoldSafely, offlineRecoveryIsHeld, offlineRecoveryHoldKey, offlineRecoveryIntentKey, readOfflineRecoveryHold, recoveryExportPlan, recoveryPullDecision, withOfflineRecoveryDataLock, withOfflineRecoveryStartupLock } from "../../../lib/d2b-recovery-hold";
 import { prepareOfflineRecovery } from "../../../lib/d2b-offline-reconciliation";
 import { encodeOfflineRecoveryFile, offlineRecoveryFile } from "../../../lib/d2b-offline-recovery-file";
 import { readRawRecoveryDrafts, readRawRecoveryMarkers } from "../../../lib/d2b-recovery-local";
@@ -318,7 +318,10 @@ export function useSync() {
     if (!ownerAdoptionFencePresent()) return true;
     let recoveryFence: OwnerAdoptionFence | null = null;
     try {
-      const state = await withOfflineRecoveryDataLock(async () => {
+      // Fail closed if another tab never releases the exclusive recovery lock.
+      // Only acquiring it is timed out: once entered, the critical section
+      // must run to completion, without a late aborted cleanup or replay.
+      const state = await withOfflineRecoveryStartupLock(async () => {
         if (offlineRecoveryIsHeld()) return { status: "held" } as const;
         if (!ownerAdoptionFencePresent()) return { status: "done" } as const;
         const fence = readOwnerAdoptionFence(localStorage);
