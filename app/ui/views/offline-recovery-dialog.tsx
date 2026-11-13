@@ -62,7 +62,7 @@ export function OfflineRecoveryDialog({ app }: { app: LumiApp }) {
                 : "The server is unavailable or the restore could not be verified. Your local data stays protected. Reload when the connection works again, or save a copy for manual recovery."
               : cs
                 ? "Obnovu nelze nyní bezpečně dokončit, protože jiná záložka může pracovat se stejnými daty. Místní změny zůstávají chráněné. Uložte si jejich kopii pro ruční záchranu; soubor nelze automaticky importovat ani sloučit."
-                : "The restore cannot finish safely right now because another tab may be using the same data. Your local changes remain protected. You can save a copy for manual recovery, but it cannot be imported or merged automatically."
+                : "The restore cannot finish safely right now because another tab may be using the same data. Your local changes remain protected. You can save a copy for manual recovery, but it cannot be imported or merged automatically."}
         </p>}
         {interruptedOwnerRestore && <p role="status">
           {cs
