@@ -63,7 +63,7 @@ test("R3 A/3: strict, exact command contract, lowercase new UUIDs and legacy par
   assert.equal(validStructureCommand("project",p),true);
   assert.equal(validStructureCommand("project-task",t),true);
   assert.equal(validStructureCommand("project-task",{...t,areaId:"private-area"}),false);
-  assert.equal(validStructureCommand("project-task",{...t,projectId:"not a valid id"}),false);
+  assert.equal(validStructureCommand("project-task",{...t,projectId:"..invalid\n"}),false);
   assert.equal(validStructureCommand("project-task",{...t,projectId:"abc/def"}),true);
   assert.equal(validStructureCommand("project",{...p,projectId:p.projectId.toUpperCase()}),false);
   assert.equal(validStructureCommand("project-task",{...t,taskId:t.taskId.toUpperCase()}),false);
@@ -168,7 +168,8 @@ test("R3 A/3: authorized screen wiring, no create in shared scope, no client Are
   const component=readFileSync(new URL("../app/ui/target-private-project-create.tsx",import.meta.url),"utf8");
   assert.match(list,/scope!=="shared"/);
   assert.match(detail,/page\.project\.areaKind==="private"/);
-  assert.match(component,/kind==="project-task"/);
+  assert.match(component,/kind==="project"/);
+  assert.match(detail,/kind="project-task"/);
   assert.match(component,/projectId:projectId!/);
   assert.doesNotMatch(component,/taskId:id,commandId,projectId:projectId!,areaId/);
 });
