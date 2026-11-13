@@ -8,7 +8,8 @@ try {
   const issued = authority.issueWritable(actor);
   if (!issued) throw Error('cannot issue test credential');
   writeFileSync(readyPath,'ready');
-  const deadline = Date.now()+10000;
+  // Deadlock watchdog only: scheduling latency never determines CAS correctness.
+  const deadline = Date.now() + 120_000;
   while (!existsSync(goPath)) {
     if (Date.now()>deadline) throw Error('barrier timeout');
     await new Promise(resolve=>setTimeout(resolve,10));
