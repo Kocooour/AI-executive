@@ -247,6 +247,46 @@ test("a browser that has NEVER synchronized retains local work when a restored-g
   }
 });
 
+test("an ordinary pull and save work when storage refuses redundant generation writes", async ({ browser }) => {
+  const id = `e2e-backup-storage-readonly-${stamp}`;
+  const title = "Běžný pull: bez zbytečného přepsání generace";
+  const changed = "Běžný pull: následná změna je uložena";
+  const { first, second } = await twoDevices(browser);
+  try {
+    await first.page.goto("/");
+    await second.page.goto("/?view=Inbox");
+    await waitUntilSynced(first.page);
+    await waitUntilSynced(second.page);
+    const generation = await second.page.evaluate(() => localStorage.getItem("ai-executive-restore-generation"));
+    expect(generation).not.toBeNull();
+    // Simulate a browser whose storage can no longer write this specific key.
+    // A normal revision change already has the correct durable generation.
+    await second.page.evaluate(() => {
+      const original = Storage.prototype.setItem;
+      Storage.prototype.setItem = function(key: string, value: string) {
+        if (this === localStorage && key === "ai-executive-restore-generation")
+          throw new DOMException("Storage is read-only", "QuotaExceededError");
+        return original.call(this, key, value);
+      };
+    });
+    await setStore(first.page, [task(id, title)]);
+    await remoteWakeUp(second.page);
+    await expect(second.page.locator("article", { hasText: title }).first()).toBeVisible({ timeout: 20_000 });
+    expect(await second.page.evaluate(() => localStorage.getItem("ai-executive-restore-generation"))).toBe(generation);
+    // The application must remain editable, not just display an offline copy.
+    await second.page.locator("article", { hasText: title }).first().click();
+    const edit = second.page.locator("input.titleEdit");
+    await edit.fill(changed);
+    await edit.blur();
+    await expect.poll(async () => (await serverEntities(first.page)).find((entity) => entity.id === id)?.title,
+      { timeout: 30_000 }).toBe(changed);
+  } finally {
+    await second.context.close();
+    await cleanUp(first.page);
+    await first.context.close();
+  }
+});
+
 test("restoring a full backup returns records, Context with its Undo step, sources and note versions", async ({ page }) => {
   const kept = `e2e-backup-kept-${stamp}`, removed = `e2e-backup-removed-${stamp}`, added = `e2e-backup-added-${stamp}`, noteId = `e2e-backup-note-${stamp}`;
   await page.goto("/");
