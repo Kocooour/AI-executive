@@ -6,6 +6,7 @@
 import {TARGET_UI_FLAGS} from "./target-staging-session-generation";
 import {myPlanStagingWriteUiEnabled} from "./target-staging-my-plan-ui-write-gate";
 import {myPlanStagingWhenUiEnabled} from "./target-staging-my-plan-when-ui-gate";
+import {targetPrivateProjectCreateUiEnabled,targetProjectTaskCreateUiEnabled} from "./target-private-structure-create-ui-gate";
 
 export type TargetUiEnv=Record<string,string|undefined>;
 export const TARGET_UI_MY_PLAN_FLAGS=[
@@ -73,6 +74,7 @@ export type TargetUiConfig={
   scopes:{enabled:boolean;projects:boolean;notes:boolean};
   details:{task:boolean;project:boolean;note:boolean};
   edits:TargetUiEdits;
+  creates:{projects:boolean;projectTasks:boolean};
 };
 
 /** The provider (and its session check) mounts only when some screen consumes it.
@@ -93,7 +95,10 @@ export function targetUiConfig(env:TargetUiEnv):TargetUiConfig|null {
   const edits=all(TARGET_UI_EDITS_FLAGS);
   const taskContext=edits&&detailTask&&all(TARGET_UI_EDIT_TASK_CONTEXT_FLAGS);
   const noteWrite=edits&&detailNote&&all(TARGET_UI_EDIT_NOTE_FLAGS);
-  return {details:{
+  return {creates:{
+    projects:targetPrivateProjectCreateUiEnabled(env),
+    projectTasks:targetProjectTaskCreateUiEnabled(env),
+  },details:{
     task:detailTask,
     project:details,
     note:detailNote,
