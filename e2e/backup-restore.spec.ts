@@ -65,14 +65,22 @@ async function cleanUp(page: Page) {
       await fetch("/api/context/sources", { method: "POST", headers: { "content-type": "application/json" },
         body: JSON.stringify({ action: "archive", idempotencyKey: crypto.randomUUID(), workspaceId: "personal", id: source.id, expectedRevision: source.revision }) });
     }
-    const snapshot = await fetch("/api/store", { cache: "no-store" }).then((response) => response.json());
-    const mine = snapshot.entities.filter((entity: { id: string }) => entity.id.startsWith("e2e-backup-"));
-    if (mine.length) {
-      await fetch("/api/store", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ baseRevision: snapshot.revision, restoreGeneration: snapshot.restoreGeneration,
-        entities: snapshot.entities.filter((entity: { id: string }) => !entity.id.startsWith("e2e-backup-")),
-        // Tasks carry their Area link (2a part 4): it goes with the task.
-        relations: snapshot.relations.filter((link: { sourceEntityId: string; targetEntityId: string }) => !link.sourceEntityId.startsWith("e2e-backup-") && !link.targetEntityId.startsWith("e2e-backup-")),
-        deletedIds: mine.map((entity: { id: string }) => entity.id), revivedIds: [] }) });
+    // A parallel app pull may advance the CAS revision after GET and before
+    // cleanup PUT. Retry the same scoped deletion rather than silently leaving
+    // e2e-backup-* records in the NEXT test's snapshot.
+    for (let attempt = 0; attempt < 6; attempt += 1) {
+      const snapshot = await fetch("/api/store", { cache: "no-store" }).then((response) => response.json());
+      const mine = snapshot.entities.filter((entity: { id: string }) => entity.id.startsWith("e2e-backup-"));
+      if (!mine.length) break;
+      const response = await fetch("/api/store", { method: "PUT", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ baseRevision: snapshot.revision, restoreGeneration: snapshot.restoreGeneration,
+          entities: snapshot.entities.filter((entity: { id: string }) => !entity.id.startsWith("e2e-backup-")),
+          relations: snapshot.relations.filter((link: { sourceEntityId: string; targetEntityId: string }) =>
+            !link.sourceEntityId.startsWith("e2e-backup-") && !link.targetEntityId.startsWith("e2e-backup-")),
+          deletedIds: mine.map((entity: { id: string }) => entity.id), revivedIds: [] }) });
+      if (!response.ok && response.status !== 409)
+        throw new Error(`backup test cleanup refused (${response.status})`);
+      if (attempt === 5) throw new Error("backup test cleanup failed after six CAS retries");
     }
   }, marker);
 }
@@ -141,8 +149,12 @@ test("an unsent note edit survives an unrelated server revision without a restor
     );
     await expect(second.page.locator(".restoredNotice")).toHaveCount(0);
   } finally {
-    await first.context.close();
     await second.context.close();
+    // This browser-only scenario has its own contexts; do not depend on the
+    // generic page-fixture afterEach cleanup racing the next backup snapshot.
+    await cleanUp(first.page);
+    expect((await serverEntities(first.page)).some((entity) => entity.id === id || entity.id === unrelated)).toBe(false);
+    await first.context.close();
   }
 });
 
