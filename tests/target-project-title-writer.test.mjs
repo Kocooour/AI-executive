@@ -127,28 +127,46 @@ test('a session expiring during a replay cannot reveal the receipt outcome',()=>
 });
 
 
-// Event-driven file barriers: the old 10-second deadline measured scheduler
-// load and cold Node startup rather than the project's CAS invariant.
-function waitForWorkerMarkers(markers, workers) {
+// A barrier checks each worker against ITS marker. One worker may exit after
+// publishing its result while the other still computes. The generous deadline
+// only detects deadlock; it is not the CAS performance assertion.
+const workerExited = worker => worker.exitCode !== null || worker.signalCode !== null;
+function waitForWorkerMarkers(markers, workers, requireExit = false) {
   return new Promise((resolve, reject) => {
     let settled = false;
-    const watcher = watch(root, () => check());
+    const watcher = watch(root, check);
+    const timeout = setTimeout(() => finish(new Error('CAS worker barrier stalled: ' + markers.join(', '))), 120_000);
     const onExit = () => check();
-    for (const worker of workers) worker.on('exit', onExit);
+    const onError = error => finish(error);
+    for (const worker of workers) { worker.on('exit', onExit); worker.on('error', onError); }
     function finish(error) {
       if (settled) return;
       settled = true;
+      clearTimeout(timeout);
       watcher.close();
-      for (const worker of workers) worker.off('exit', onExit);
+      for (const worker of workers) { worker.off('exit', onExit); worker.off('error', onError); }
       if (error) reject(error); else resolve();
     }
     function check() {
-      if (markers.every(existsSync)) return finish();
-      if (workers.some(worker => worker.exitCode !== null || worker.signalCode !== null))
-        finish(new Error('CAS worker exited without its synchronization marker'));
+      for (const [i, worker] of workers.entries()) {
+        if (workerExited(worker) && (!existsSync(markers[i]) || worker.exitCode !== 0)) {
+          return finish(new Error('CAS worker ' + i + ' exited (' + worker.exitCode + '/' +
+            worker.signalCode + ') before completing ' + markers[i] +
+            ': ' + (worker.capturedStderr || '').slice(-3000)));
+        }
+      }
+      // The result phase also joins both processes: files are fully written and
+      // SQLite handles are closed before the parent parses JSON / starts another test.
+      if (markers.every(existsSync) && (!requireExit || workers.every(workerExited))) finish();
     }
     check();
   });
+}
+async function stopWorkers(workers) {
+  const exited = workers.map(worker => workerExited(worker) ? Promise.resolve() :
+    new Promise(resolve => { worker.once('exit', resolve); worker.once('error', resolve); }));
+  for (const worker of workers) if (!workerExited(worker)) worker.kill('SIGKILL');
+  await Promise.all(exited);
 }
 
 test('two processes racing the same project CAS commit at most one change',async()=>{
@@ -160,21 +178,24 @@ test('two processes racing the same project CAS commit at most one change',async
    const input=path.join(root,'input'+i);
    writeFileSync(input,JSON.stringify({store,command:{projectId:'race',commandId:randomUUID(),title:'After '+i,
      expectedRevision:page.page.revision,writeAreaId:stage.unassignedAreaId,restoreGeneration:stage.restoreGeneration,principalBinding:proof('alice','race',stage.restoreGeneration)}}));
-   return spawn(process.execPath,['--experimental-loader','./tests/ts-loader.mjs','./tests/support/project-title-race-child.mjs',input,ready[i],go,results[i]],{stdio:'ignore',cwd:process.cwd()});
+   const worker=spawn(process.execPath,['--experimental-loader','./tests/ts-loader.mjs','./tests/support/project-title-race-child.mjs',input,ready[i],go,results[i]],{stdio:['ignore','ignore','pipe'],cwd:process.cwd()});
+   worker.capturedStderr='';
+   worker.stderr.on('data', data => { worker.capturedStderr=(worker.capturedStderr+data.toString()).slice(-3000); });
+   return worker;
  });
  try {
    // Both real workers reach the barrier before beginning the same pinned CAS.
    // Slow scheduling cannot decide this test; only their DB outcomes can.
    await waitForWorkerMarkers(ready, workers);
    writeFileSync(go,'go');
-   await waitForWorkerMarkers(results, workers);
+   await waitForWorkerMarkers(results, workers, true);
    const outcome=results.map(file=>JSON.parse(readFileSync(file,'utf8')));
    assert.equal(outcome.filter(result=>result.ok).length,1,JSON.stringify(outcome));
    assert.deepEqual(outcome.filter(result=>!result.ok),[{ok:false,reason:'stale_revision'}]);
    assert.equal(db.prepare("SELECT COUNT(*) AS n FROM project_title_audit WHERE project_id='race'").get().n,1);
    assert.ok(['After 0','After 1'].includes(db.prepare("SELECT title FROM projects WHERE id='race'").get().title),
      'the only persisted title is the winner of the one CAS commit');
- } finally {for(const worker of workers)worker.kill();}
+ } finally {await stopWorkers(workers);}
 });
 
 
@@ -184,17 +205,18 @@ test('session revoked in another process before the pending write prevents every
  const page=readAuthorizedProjectTasksPage(db,{actorUserId:'alice',projectId:'revoked-race',limit:1,offset:0,restoreGeneration:stage.restoreGeneration});
  const input=path.join(root,'revoke-input'),ready=path.join(root,'revoke-ready'),go=path.join(root,'revoke-go'),result=path.join(root,'revoke-result');
  writeFileSync(input,JSON.stringify({store,durableHash:hashTargetStagingSessionToken(issued.sessionToken),command:{projectId:'revoked-race',commandId:randomUUID(),title:'After',expectedRevision:page.page.revision,writeAreaId:stage.unassignedAreaId,restoreGeneration:stage.restoreGeneration,principalBinding:proof('alice','revoked-race',stage.restoreGeneration)}}));
- const worker=spawn(process.execPath,['--experimental-loader','./tests/ts-loader.mjs','./tests/support/project-title-race-child.mjs',input,ready,go,result],{stdio:'ignore',cwd:process.cwd()});
+ const worker=spawn(process.execPath,['--experimental-loader','./tests/ts-loader.mjs','./tests/support/project-title-race-child.mjs',input,ready,go,result],{stdio:['ignore','ignore','pipe'],cwd:process.cwd()});
+ worker.capturedStderr='';
+ worker.stderr.on('data', data => { worker.capturedStderr=(worker.capturedStderr+data.toString()).slice(-3000); });
  try {
-   const deadline=Date.now()+10000;
-   while(!existsSync(ready)){if(Date.now()>deadline) throw Error('worker not ready');await new Promise(r=>setTimeout(r,20));}
+   await waitForWorkerMarkers([ready],[worker]);
    assert.equal(revokeDurableTargetStagingSession(store,issued.sessionId).ok,true);
    writeFileSync(go,'go');
-   while(!existsSync(result)){if(Date.now()>deadline) throw Error('worker did not finish');await new Promise(r=>setTimeout(r,20));}
+   await waitForWorkerMarkers([result],[worker],true);
    assert.deepEqual(JSON.parse(readFileSync(result,'utf8')),{ok:false,reason:'session_revoked'});
    assert.equal(db.prepare("SELECT title FROM projects WHERE id='revoked-race'").get().title,'Before');
    assert.equal(db.prepare("SELECT COUNT(*) AS n FROM project_title_audit WHERE project_id='revoked-race'").get().n,0);
- } finally {worker.kill();}
+ } finally {await stopWorkers([worker]);}
 });
 
 test('untrusted post-COMMIT journal confirmation never acknowledges a project title as saved',()=>{
