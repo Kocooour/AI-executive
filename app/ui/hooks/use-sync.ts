@@ -333,7 +333,7 @@ export function useSync() {
           }
         } catch { /* Interrupted localStorage cleanup; replay the certified adoption. */ }
         return { status: "resume", fence } as const;
-      }, true);
+      });
       if (state.status === "done") return true;
       if (state.status === "held") { setRecoveryHeld(true); setSyncStatus("offline"); return false; }
       if (state.status === "invalid") {
