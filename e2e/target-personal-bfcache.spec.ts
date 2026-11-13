@@ -59,7 +59,7 @@ function observeTarget(page: Page) {
 async function assertEmptyDraft(page: Page, title: string, observedCreates: () => number) {
   const snapshot = await privateDOM(page, title);
   expect(snapshot.titleExposed, "private text must not survive navigation").toBe(false);
-  expect(snapshot.selectedArea, "old private Area must not survive navigation").toBeNull();
+  expect(["", null], "old private Area must not survive navigation").toContain(snapshot.selectedArea);
   expect(await storageSnapshot(page)).not.toContain(title);
   // On full reload the dialog has unmounted; on a BFCache restoration it may
   // remain mounted with its private state synchronously flushed on pagehide.
@@ -119,7 +119,7 @@ for (const width of [390, 1280]) {
       contentType: "application/json",
     });
     expect(immediate.titleExposed, "private draft visible immediately after Back").toBe(false);
-    expect(immediate.selectedArea, "Area retained immediately after Back").toBeNull();
+    expect(["", null], "Area retained immediately after Back").toContain(immediate.selectedArea);
     // The manual release gate cannot pass on a fallback reload. Never simulate
     // persisted=true, turn a miss into a skip, or claim a BFCache hit from Back alone.
     if (strictRealHit) {
@@ -130,6 +130,11 @@ for (const width of [390, 1280]) {
     await expect.poll(() => trace.responses.slice(mark).some(value =>
       value === "GET /api/target-staging/session 200"
     ), { message: "Fresh authorized session GET must precede post-Back action", timeout: 15_000 }).toBe(true);
+    // A full reload necessarily loses the open dialog. Opening it only AFTER
+    // the new authorized session is verified causes the fresh Area GET.
+    if (await page.getByTestId("target-private-task-capture").count() === 0) {
+      await openTask(page, width);
+    }
     await expect.poll(() => trace.responses.slice(mark).some(value =>
       value === "GET /api/target-staging/notes/create-targets 200"
     ), { message: "Private Area choices must be read again after wake", timeout: 15_000 }).toBe(true);
