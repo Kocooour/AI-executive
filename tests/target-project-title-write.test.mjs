@@ -143,17 +143,41 @@ test('simultaneous PATCH and cancel are ordered by pinned write transaction',asy
   const p=await (await preview(new Request(base+'title',{headers:headers(alice)}),ctx)).json();
   const command={commandId:randomUUID(),title:'Race winner title',
     expectedRevision:p.snapshotRevision,writeAreaId:p.writeAreaId,restoreGeneration:p.restoreGeneration,principalBinding:p.principalBinding};
-  const [rename,fence]=await Promise.all([write(alice,command),cancelWrite(alice,command.commandId,p.principalBinding)]);
+  const oldTitle=db.prepare("SELECT title FROM projects WHERE id='proj'").get().title;
+  const oldAudit=db.prepare("SELECT COUNT(*) AS n FROM project_title_audit WHERE project_id='proj'").get().n;
+  let [rename,fence]=await Promise.all([write(alice,command),cancelWrite(alice,command.commandId,p.principalBinding)]);
   assert.equal(fence.status,200,await fence.clone().text());
   const status=(await fence.json()).status;
+  assert.ok(status==='cancelled'||status==='committed','fence must settle to a durable outcome');
+
+  // This unscheduled HTTP race tests the final linearized outcome, not the
+  // initial lock-acquisition latency: under parallel CI load, the first PATCH
+  // may get a genuine bounded 503 before the concurrent cancellation settles.
+  // Reconcile ONLY the same command UUID after the fence has responded.
+  // The separate pinned-journal companion below still requires BOTH operations
+  // to succeed on their FIRST attempt within the real 200ms budget.
+  if(rename.status===503){
+    assert.deepEqual(await rename.json(),{error:'Staging unavailable'});
+    for(let attempt=0;attempt<3;attempt++){
+      rename=await write(alice,command);
+      if(rename.status!==503)break;
+      assert.deepEqual(await rename.json(),{error:'Staging unavailable'});
+    }
+  }
   if(status==='cancelled'){
-    assert.equal(rename.status,409);
-    assert.equal((await rename.json()).error,'Command cancelled');
-    assert.notEqual(db.prepare("SELECT title FROM projects WHERE id='proj'").get().title,command.title);
+    assert.equal(rename.status,409,await rename.clone().text());
+    assert.deepEqual(await rename.json(),{error:'Command cancelled'});
+    assert.equal(db.prepare("SELECT title FROM projects WHERE id='proj'").get().title,oldTitle);
+    assert.equal(db.prepare("SELECT COUNT(*) AS n FROM project_title_audit WHERE project_id='proj'").get().n,
+      oldAudit,'a cancelled command must not produce an audit entry');
   }else{
-    assert.equal(status,'committed');
-    assert.equal(rename.status,200);
+    assert.equal(rename.status,200,await rename.clone().text());
+    const body=await rename.json();
+    assert.equal(body.ok,true);
+    assert.equal(body.principalBinding,p.principalBinding);
     assert.equal(db.prepare("SELECT title FROM projects WHERE id='proj'").get().title,command.title);
+    assert.equal(db.prepare("SELECT COUNT(*) AS n FROM project_title_audit WHERE project_id='proj'").get().n,
+      oldAudit+1,'even if HTTP retried, exactly one project-title commit is allowed');
   }
   assert.equal(inspectIsolatedTargetStore({...store,mode:'r2-model'}).ok,true);
 });
