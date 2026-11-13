@@ -46,6 +46,7 @@ import type {TargetUiEdits} from "../../lib/target-ui-config";
 import {NoteEdits,TaskEdits,kindHasEdits,useDetailEdits,type DetailEditApi} from "./target-detail-edit";
 import TargetNoteEditor from "./target-note-editor";
 import TargetProjectTitleEditor from "./target-project-title-editor";
+import TargetPrivateStructureCreate from "./target-private-project-create";
 import {TARGET_PROJECT_TITLE_UPDATED} from "../../lib/target-project-title-edit-ui-gate";
 import "./target-details.css";
 
@@ -138,10 +139,10 @@ function UnavailablePanel({language,onPrivateCapture}:{language:DetailLanguage;o
   </Shell>;
 }
 
-function Content({content,route,copy,gates,more,onMore,edit,noteEdit,projectEdit,onCommitted,onAccessRefused,language}:{
+function Content({content,route,copy,gates,more,onMore,edit,noteEdit,projectEdit,createTask,onCommitted,onAccessRefused,language}:{
   content:TargetDetailContent;route:TargetDetailRoute;copy:DetailCopy;gates:TargetDetailGates;
   more:boolean;onMore:()=>void;edit:DetailEditApi|null;
-  noteEdit:boolean;projectEdit:boolean;onCommitted:()=>void;onAccessRefused:()=>void;language:DetailLanguage;
+  noteEdit:boolean;projectEdit:boolean;createTask:boolean;onCommitted:()=>void;onAccessRefused:()=>void;language:DetailLanguage;
 }){
   const area=(kind:"private"|"shared")=>kind==="shared"?copy.areaShared:copy.areaPrivate;
   if(content.kind==="task"){
@@ -193,6 +194,10 @@ function Content({content,route,copy,gates,more,onMore,edit,noteEdit,projectEdit
       onCommitted={onCommitted}
       onAccessRefused={()=>{window.dispatchEvent(new Event(TARGET_PROJECT_TITLE_UPDATED));onAccessRefused();}}/>}
     <h3>{copy.tasksHeading}</h3>
+    {createTask&&gates.task&&page.project.areaKind==="private"&&
+      <TargetPrivateStructureCreate kind="project-task" language={language}
+        projectId={page.project.id} areaId={page.project.areaId}
+        onCommitted={()=>onCommitted()}/>}
     {page.tasks.length===0&&!page.hasMore
       ?<p className="targetDetailMuted">{copy.tasksEmpty}</p>
       :<ul className="targetDetailTasks">
@@ -212,8 +217,8 @@ function Content({content,route,copy,gates,more,onMore,edit,noteEdit,projectEdit
   </article>;
 }
 
-function DetailBody({route,language,gates,edits,noteEdit,projectEdit,onPrivateCapture}:{
-  route:TargetDetailRoute;language:DetailLanguage;gates:TargetDetailGates;edits?:TargetUiEdits;noteEdit:boolean;projectEdit:boolean;
+function DetailBody({route,language,gates,edits,noteEdit,projectEdit,createTask,onPrivateCapture}:{
+  route:TargetDetailRoute;language:DetailLanguage;gates:TargetDetailGates;edits?:TargetUiEdits;noteEdit:boolean;projectEdit:boolean;createTask:boolean;
   onPrivateCapture?:()=>void;
 }){
   const copy=detailCopy[language];
@@ -408,22 +413,24 @@ function DetailBody({route,language,gates,edits,noteEdit,projectEdit,onPrivateCa
       {content&&state.kind==="ready"&&
         <Content content={content} route={route} copy={copy} gates={gates}
           more={state.more} onMore={()=>{void more();}} edit={edit}
-          noteEdit={noteEdit} projectEdit={projectEdit} onCommitted={reload} onAccessRefused={invalidateAndReload}
+          noteEdit={noteEdit} projectEdit={projectEdit} createTask={createTask} onCommitted={reload} onAccessRefused={invalidateAndReload}
           language={language}/>}
-      {content&&!(noteEdit&&content.kind==="note")&&!(projectEdit&&content.kind==="project")&&!(edit&&kindHasEdits(content.kind,edits))&&
+      {content&&!(noteEdit&&content.kind==="note")&&!(projectEdit&&content.kind==="project")&&
+        !(createTask&&content.kind==="project"&&content.page.project.areaKind==="private")&&
+        !(edit&&kindHasEdits(content.kind,edits))&&
         <p className="targetDetailNote">{copy.readOnlyNote}</p>}
     </>}
   </Shell>;
 }
 
-export default function TargetDetailPanel({route,language="cs",gates,edits,noteEdit=false,projectEdit=false,onPrivateCapture}:{
+export default function TargetDetailPanel({route,language="cs",gates,edits,noteEdit=false,projectEdit=false,createTask=false,onPrivateCapture}:{
   /** null: the address asked for something that cannot be opened. */
   route:TargetDetailRoute|null;language?:DetailLanguage;gates:TargetDetailGates;
   /** R3-FE-4b: which edits exist at all (server-derived flags); absent = read-only as in 4a. */
-  edits?:TargetUiEdits;noteEdit?:boolean;projectEdit?:boolean;
+  edits?:TargetUiEdits;noteEdit?:boolean;projectEdit?:boolean;createTask?:boolean;
   onPrivateCapture?:()=>void;
 }){
   if(route===null)return <UnavailablePanel language={language} onPrivateCapture={onPrivateCapture}/>;
   // Keyed by target: another item is a new session, never a reuse of old content.
-  return <DetailBody key={detailRouteKey(route)} route={route} language={language} gates={gates} edits={edits} noteEdit={noteEdit&&gates.note} projectEdit={projectEdit&&gates.project} onPrivateCapture={onPrivateCapture}/>;
+  return <DetailBody key={detailRouteKey(route)} route={route} language={language} gates={gates} edits={edits} noteEdit={noteEdit&&gates.note} projectEdit={projectEdit&&gates.project} createTask={createTask&&gates.project&&gates.task} onPrivateCapture={onPrivateCapture}/>;
 }
