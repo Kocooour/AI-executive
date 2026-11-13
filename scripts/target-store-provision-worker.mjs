@@ -51,7 +51,7 @@ function canonicalProspective(input) {
 // A sticky parent owned by root/the operator (e.g. /tmp) protects entries
 // owned by this operator while permitting an ordinary private child.
 function assertTrustedParent(stat) {
-  const uid = process.getuid?.();
+  const uid = process.geteuid?.();
   if (typeof uid !== "number" || !stat?.isDirectory() || stat.isSymbolicLink() ||
       (stat.uid !== uid && stat.uid !== 0))
     fail("target parent ownership is untrusted");
@@ -105,7 +105,7 @@ function assertPrivateStore(directory) {
   // Enforce ownership before each read-only preflight and after validation.
   // A 0700 directory or 0600 file owned by another UID can still be modified
   // concurrently by that owner if this command is run with elevated privileges.
-  const operatorUid = process.getuid?.();
+  const operatorUid = process.geteuid?.();
   const dirStat = lstatSync(directory);
   if (!dirStat.isDirectory() || dirStat.isSymbolicLink() ||
       !isOwnedByOperator(dirStat, operatorUid))
