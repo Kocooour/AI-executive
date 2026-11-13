@@ -80,14 +80,18 @@ function safeOutput(source, destination) {
     process.env.AI_EXECUTIVE_DATA_DIR,
     process.env.AI_EXECUTIVE_TARGET_STAGING_DIRECTORY,
   ];
+  const livePaths = [];
   for (const candidate of liveCandidates) {
     if (!candidate) continue;
     if (!path.isAbsolute(candidate)) throw new R4OperatorError("live directory config must be absolute");
     const live = existsSync(candidate) ? realpathSync(candidate) : path.resolve(candidate);
+    livePaths.push(live);
     if (within(src, live) || within(live, src) || within(dst, live) || within(live, dst))
       throw new R4OperatorError("known live data overlap refused");
   }
-  return { src, dst };
+  // Return these same canonical boundaries so a TMPDIR override cannot route
+  // the private inspection copy into the live legacy/target store.
+  return { src, dst, livePaths };
 }
 function lstatSyncMaybe(file) {
   try { return lstatSync(file); } catch (error) { if (error.code === "ENOENT") return null; throw error; }
@@ -345,13 +349,20 @@ function main() {
       (args[3] === "true" || args[3] === "false"))))
     throw new R4OperatorError("usage: inventory <offline-copy> <new-output> [--integration-token-present true|false] --offline-confirmed");
   const tokenAttestation = args.length === 4 ? args[3] === "true" : null;
-  const { src, dst } = safeOutput(args[0], args[1]);
+  const { src, dst, livePaths } = safeOutput(args[0], args[1]);
   // Read private SQLite bytes only in a separate, mode-0700 scratch directory.
   // The operator-facing output may contain ONLY the content-free JSON/summary,
   // even if inspection fails. A normal return or thrown error clears the scratch.
+  // os.tmpdir() honors operator/environment overrides such as TMPDIR: check
+  // the canonical parent against the *same* known-live paths as the report.
+  // Only reject a parent inside live storage; a general /tmp directory may
+  // legitimately contain a separate live subtree without overlapping it.
   const scratchParent = realpathSync(os.tmpdir());
   if (within(scratchParent, src))
     throw new R4OperatorError("temporary inspection directory must be outside the offline source");
+  if (livePaths.some(live => within(scratchParent, live)))
+    throw new R4OperatorError("temporary inspection directory overlaps known live data location");
+  // All safety checks precede the first scratch or report directory creation.
   const scratch = mkdtempSync(path.join(scratchParent, "lumi-r4-inventory-"));
   let report;
   try {
