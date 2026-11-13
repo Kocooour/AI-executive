@@ -273,34 +273,51 @@ test('contended first-attempt project PATCH and cancel settle with the real 200m
   const input=path.join(gate,'input.json');
   writeFileSync(input,JSON.stringify({store,command}));
   const script=path.resolve('tests/support/project-title-contention-child.mjs');
-  const launch=mode=>spawn(process.execPath,[
-    '--experimental-loader','./tests/ts-loader.mjs',script,mode,input,gate,
-  ],{stdio:'ignore',cwd:process.cwd()});
-  const marker=name=>path.join(gate,name);
-  // Only child process exits without its own marker are errors. A successful
-  // leader may exit before the follower has written its result.
-  const waitFor=(names,workers)=>{
-    return new Promise((resolve,reject)=>{
-      let settled=false;
-      const watcher=watch(gate,()=>check());
-      const onExit=()=>check();
-      for(const [worker] of workers)worker.on('exit',onExit);
-      function finish(error){
-        if(settled)return;
-        settled=true;
-        watcher.close();
-        for(const [worker] of workers)worker.off('exit',onExit);
-        if(error)reject(error);else resolve();
-      }
-      function check(){
-        if(names.every(name=>existsSync(marker(name))))return finish();
-        for(const [worker,required] of workers){
-          if((worker.exitCode!==null||worker.signalCode!==null)&&!existsSync(marker(required)))
-            return finish(new Error('contention child exited without '+required));
-        }
-      }
-      check();
+  const launch=mode=>{
+    const child=spawn(process.execPath,[
+      '--experimental-loader','./tests/ts-loader.mjs',script,mode,input,gate,
+    ],{stdio:['ignore','ignore','pipe'],cwd:process.cwd()});
+    child.capturedStderr='';
+    child.stderr.on('data',data=>{
+      child.capturedStderr=(child.capturedStderr+data.toString()).slice(-3000);
     });
+    return child;
+  };
+  const marker=name=>path.join(gate,name);
+  const exited=child=>child.exitCode!==null||child.signalCode!==null;
+  // A result marker alone does not prove JSON is complete or a SQLite lock
+  // released. For the final barrier, join each child before reading results.
+  const waitFor=(names,workers,requireExit=false)=>new Promise((resolve,reject)=>{
+    let settled=false;
+    const watcher=watch(gate,check);
+    const timeout=setTimeout(()=>finish(new Error('contention barrier stalled: '+names.join(', '))),120_000);
+    const onExit=()=>check();
+    const onError=error=>finish(error);
+    for(const [worker] of workers){worker.on('exit',onExit);worker.on('error',onError);}
+    function finish(error){
+      if(settled)return;
+      settled=true;
+      clearTimeout(timeout);
+      watcher.close();
+      for(const [worker] of workers){worker.off('exit',onExit);worker.off('error',onError);}
+      if(error)reject(error);else resolve();
+    }
+    function check(){
+      for(const [worker,required] of workers){
+        if(exited(worker)&&(!existsSync(marker(required))||worker.exitCode!==0))
+          return finish(new Error('contention child exited ('+worker.exitCode+'/'+
+            worker.signalCode+') before '+required+': '+worker.capturedStderr));
+      }
+      if(names.every(name=>existsSync(marker(name)))&&
+         (!requireExit||workers.every(([worker])=>exited(worker))))finish();
+    }
+    check();
+  });
+  const stop=async workers=>{
+    const ends=workers.map(worker=>exited(worker)?Promise.resolve():
+      new Promise(resolve=>{worker.once('exit',resolve);worker.once('error',resolve);}));
+    for(const worker of workers)if(!exited(worker))worker.kill('SIGKILL');
+    await Promise.all(ends);
   };
   const follower=launch('follower');
   let leader;
@@ -311,7 +328,7 @@ test('contended first-attempt project PATCH and cancel settle with the real 200m
     leader=launch('leader');
     await waitFor(['leader-ready'],[[leader,'leader-ready'],[follower,'follower-result']]);
     await waitFor(['leader-result','follower-result'],
-      [[leader,'leader-result'],[follower,'follower-result']]);
+      [[leader,'leader-result'],[follower,'follower-result']],true);
     assert.equal(existsSync(marker('follower-contended')),true,
       'follower must have seen a real SQLite journal, not run after release');
     const first=JSON.parse(readFileSync(marker('leader-result'),'utf8'));
@@ -323,7 +340,6 @@ test('contended first-attempt project PATCH and cancel settle with the real 200m
     assert.equal(db.prepare('SELECT COUNT(*) AS n FROM project_title_audit WHERE project_id=?').get(id).n,1);
     assert.equal(inspectIsolatedTargetStore({...store,mode:'r2-model'}).ok,true);
   }finally{
-    if(leader)leader.kill();
-    follower.kill();
+    await stop([...(leader?[leader]:[]),follower]);
   }
 });
