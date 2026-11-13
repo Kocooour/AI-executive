@@ -720,19 +720,15 @@ export function useLumiApp(options: { targetDetails?: boolean; targetUnified?: b
     setSelected(null);
     setContext(null);
   }
-  // User-driven Close/Back follows the actual in-tab origin. A pasted URL has
-  // no known in-app predecessor, so it replaces itself with the safe parent
-  // project or view list rather than escaping to a different site.
+  // Close dismisses the inspector; only browser Back traverses A → B history.
+  // Replace B with its parent list/project rather than pushing another entry:
+  // Back cannot reopen the just-closed B, but earlier A remains navigable.
+  // This also handles pasted/reloaded URLs with no in-tab predecessor.
   function closeInspector() {
     const target = targetFromSearch(window.location.search, addressableViews, startupView);
-    const isLinked = (target?.kind === "task" || target?.kind === "note") &&
-      inspectorSelectionRef.current?.id === target.id;
-    if (!isLinked) { closeDetail(); return; }
-    if (window.history.state?.lumiRecord === target.id) {
-      window.history.back();
-      return;
-    }
+    pendingRecordRef.current = null;
     closeDetail();
+    if (target?.kind !== "task" && target?.kind !== "note") return;
     const search = target.projectId
       ? searchForTarget({ kind: "project", id: target.projectId }, startupView, addressableViews)
       : searchForView(target.view, startupView);
