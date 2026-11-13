@@ -48,8 +48,8 @@ jobs:
       E2E_SKIP_BUILD: "1"
       E2E_PORT: "3130"
       LUMI_TARGET_PERSONAL_ACCEPTANCE_E2E: "true"
-      # Scoped manual release gate: actual persisted=true required on a real-store
-      # navigation; PR runs still check the fallback without claiming a BFCache hit.
+      # Strict manual gate accepts a real restoration OR a browser-explained miss,
+      # each with full privacy/authorization/no-CREATE proof. PR runs are diagnostics.
       LUMI_REAL_BFCACHE_E2E: ${{ github.event_name == 'workflow_dispatch' && 'true' || 'false' }}
     steps:
       - name: Checkout
