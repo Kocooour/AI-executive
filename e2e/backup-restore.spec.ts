@@ -1266,10 +1266,31 @@ test("restart safely completes a certified owner adoption interrupted before its
       localStorage.setItem("ai-executive-owner-adoption-fence",
         JSON.stringify({ version: 1, observedGeneration: generation, knownGeneration: known }));
     }, { generation: latest, known: Number(oldGeneration) });
+    // A free startup Web Lock must be ACQUIRED and used for certified replay,
+    // rather than silently falling through the read-only raw rescue fallback.
+    await second.page.addInitScript(() => {
+      const locks = navigator.locks;
+      const request = locks.request;
+      Object.defineProperty(locks, "request", {
+        configurable: true,
+        value: (...args: unknown[]) => {
+          if (args[0] === "ai-executive-recovery-data" && args.length === 3) {
+            const [name, options, callback] = args as [string, { signal: AbortSignal }, () => Promise<unknown>];
+            return Reflect.apply(request, locks, [name, options, async () => {
+              sessionStorage.setItem("e2e-owner-restart-lock-acquired", "1");
+              return callback();
+            }]);
+          }
+          return Reflect.apply(request, locks, args);
+        },
+      });
+    });
     await second.page.reload();
     await expect(second.page.locator(".restoredNotice"))
       .toContainText("Data byla obnovena ze zálohy.", { timeout: 30_000 });
     await waitUntilSynced(second.page);
+    expect(await second.page.evaluate(() => sessionStorage.getItem("e2e-owner-restart-lock-acquired"))).toBe("1");
+    await expect(second.page.getByRole("alertdialog", { name: "Lokální změny jsou chráněné" })).toHaveCount(0);
     const state = await second.page.evaluate(async ({ id, markerKey }) => {
       const db = await new Promise<IDBDatabase>((resolve, reject) => {
         const req = indexedDB.open("ai-executive"); req.onsuccess = () => resolve(req.result); req.onerror = () => reject(req.error);
@@ -1723,10 +1744,35 @@ test("a valid owner fence with a recovery lock held forever still allows raw res
       return marker;
     }, { id, draftKey });
 
+    // Observe the REAL queued Web Locks request and its AbortSignal. A bad
+    // startup-lock argument can otherwise produce the same rescue dialog
+    // without attempting (or timing out) the lock request at all.
+    await recovering.addInitScript(() => {
+      const locks = navigator.locks;
+      const request = locks.request;
+      Object.defineProperty(locks, "request", {
+        configurable: true,
+        value: (...args: unknown[]) => {
+          if (args[0] === "ai-executive-recovery-data") {
+            sessionStorage.setItem("e2e-owner-startup-lock-requested", "1");
+            const options = args[1] as { signal?: AbortSignal } | undefined;
+            options?.signal?.addEventListener("abort", () => {
+              sessionStorage.setItem("e2e-owner-startup-lock-aborted", "1");
+            }, { once: true });
+          }
+          return Reflect.apply(request, locks, args);
+        },
+      });
+    });
     await recovering.reload();
     const dialog = recovering.getByRole("alertdialog", { name: "Lokální změny jsou chráněné" });
     await expect(dialog).toBeVisible({ timeout: 20_000 });
     await expect(dialog.getByText(/Nepodařilo se získat bezpečnostní zámek/)).toBeVisible();
+    const attempted = await recovering.evaluate(() => ({
+      requested: sessionStorage.getItem("e2e-owner-startup-lock-requested"),
+      aborted: sessionStorage.getItem("e2e-owner-startup-lock-aborted"),
+    }));
+    expect(attempted).toEqual({ requested: "1", aborted: "1" });
     await dialog.getByRole("button", { name: "1. Připravit záchranný soubor" }).click();
     const save = dialog.getByRole("button", { name: "2. Stáhnout soubor" });
     await expect(save).toBeEnabled();
