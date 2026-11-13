@@ -2635,7 +2635,7 @@ export function useLumiApp(options: { targetDetails?: boolean; targetUnified?: b
     setOfflineRetry(result === "unavailable" ? "failed" : "");
     window.setTimeout(() => setOfflineRetry((state) => (state === "failed" ? "" : state)), 4_000);
   }
-  const attentionState = useAttention({ writesBlocked: blockLegacyWrite, authState, offlineView, activeWorkspaceId, syncStatus, items, pendingDeletedIds, tr, language, signingOut: () => signedOut.current || document.body.inert });
+  const attentionState = useAttention({ writesBlocked: blockLegacyWrite, readOnly: captureDisabled, authState, offlineView, activeWorkspaceId, syncStatus, items, pendingDeletedIds, tr, language, signingOut: () => signedOut.current || document.body.inert });
   const calendarTomorrowDate = new Date(`${calendarToday}T12:00:00Z`);
   calendarTomorrowDate.setUTCDate(calendarTomorrowDate.getUTCDate() + 1);
   const calendarTomorrow = calendarTomorrowDate.toISOString().slice(0, 10);

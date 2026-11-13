@@ -379,9 +379,13 @@ for (const width of [390, 1280]) {
     if (!store) throw new Error("Requires the real isolated target store");
     await page.setViewportSize({ width, height: 844 });
     const unexpectedWrites: string[] = [];
+    const attentionReads: string[] = [];
     let seeding = false;
     page.on("request", request => {
-      const pathname = new URL(request.url()).pathname;
+      const url = new URL(request.url());
+      const pathname = url.pathname;
+      if (request.method() === "GET" && pathname === "/api/attention")
+        attentionReads.push(url.searchParams.get("readOnly") || "missing");
       // Target staging uses POST-shaped reads; all other API mutation
       // verbs are forbidden here, including Attention and work sessions.
       if (!seeding && ["POST", "PUT", "PATCH", "DELETE"].includes(request.method()) &&
@@ -413,7 +417,7 @@ for (const width of [390, 1280]) {
           body: JSON.stringify({
             baseRevision: current.revision, restoreGeneration: current.restoreGeneration,
             entities: [...current.entities,
-              task("c13:" + homeTitle, homeTitle, { today: true }),
+              task("c13:" + homeTitle, homeTitle, { today: true, deadline: "2020-01-01" }),
               task("c13:" + inboxTitle, inboxTitle, { inbox: true })],
             relations: current.relations, deletedIds: [], revivedIds: [],
           }),
@@ -440,6 +444,9 @@ for (const width of [390, 1280]) {
       await expect(row).toBeVisible();
       await expect(row.locator("button.check")).toBeDisabled();
       if (view === "Home") {
+        // A past deadline must generate a real candidate. Previously even this
+        // GET implicitly INSERTed into attention_states and attention_history.
+        await expect(page.locator(".attentionItem").filter({ hasText: homeTitle })).toBeVisible();
         // A sibling running an older client can announce a changed IndexedDB
         // snapshot. This tab must continue showing the server's historical data.
         const sibling = await page.context().newPage();
@@ -477,6 +484,9 @@ for (const width of [390, 1280]) {
       .getByRole("button", { name: "Otevřít Můj plán" }).click();
     await expect(page.getByTestId("target-my-plan")).toBeVisible();
     expect(unexpectedWrites, "no browser-requested legacy API mutation").toEqual([]);
+    expect(attentionReads.length, "real Attention reads were exercised").toBeGreaterThan(0);
+    expect(attentionReads, "all Attention reads must use the non-mutating projection")
+      .toEqual(attentionReads.map(() => "1"));
     const after = await (await page.request.get("/api/store")).body();
     expect(after.equals(before), "legacy store GET response bytes must stay unchanged").toBe(true);
     expect(legacyDbRows(), "canonical legacy SQLite tables must stay unchanged").toBe(beforeDb);

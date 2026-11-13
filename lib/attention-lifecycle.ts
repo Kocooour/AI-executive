@@ -43,7 +43,10 @@ function transitionMissing(previous: StateRow, state: "resolved" | "superseded",
 
 const datedRules = new Set(["deadline", "waiting_follow_up", "planned_date_passed"]);
 
-export function reconcileAttention(workspaceId: string, candidates: AttentionItem[], now: number, ongoing: Set<string> = new Set()) {
+// persist=false projects the *current* lifecycle exactly as a normal reconcile
+// would display it, without changing any stored state or writing history. Target
+// mode only reads the historical store; the legacy scheduler still persists.
+export function reconcileAttention(workspaceId: string, candidates: AttentionItem[], now: number, ongoing: Set<string> = new Set(), persist = true) {
   const database = getDatabase();
   const rows = database.prepare("SELECT * FROM attention_states WHERE workspace_id=?").all(workspaceId) as unknown as StateRow[];
   const byKey = new Map(rows.map((row) => [row.attention_key, row]));
@@ -55,15 +58,16 @@ export function reconcileAttention(workspaceId: string, candidates: AttentionIte
     const fingerprint = attentionFingerprint(candidate);
     const previous = byKey.get(candidate.attentionKey);
     let state = previous?.state || "active";
-    if (!previous) transition(candidate, undefined, "active", fingerprint, null, "detected", now);
-    else if (previous.source_fingerprint !== fingerprint) {
-      transition(candidate, previous, "active", fingerprint, null, "source_changed", now);
+    if (!previous) {
+      if (persist) transition(candidate, undefined, "active", fingerprint, null, "detected", now);
+    } else if (previous.source_fingerprint !== fingerprint) {
+      if (persist) transition(candidate, previous, "active", fingerprint, null, "source_changed", now);
       state = "active";
     } else if (state === "snoozed" && (previous.snooze_until === null || previous.snooze_until <= now)) {
-      transition(candidate, previous, "active", fingerprint, null, "snooze_expired", now);
+      if (persist) transition(candidate, previous, "active", fingerprint, null, "snooze_expired", now);
       state = "active";
     } else if (state === "resolved" || state === "superseded") {
-      transition(candidate, previous, "active", fingerprint, null, "condition_returned", now);
+      if (persist) transition(candidate, previous, "active", fingerprint, null, "condition_returned", now);
       state = "active";
     }
     if (state === "active") visible.push({ ...candidate, sourceFingerprint: fingerprint, lifecycleState: "active" });
@@ -77,7 +81,7 @@ export function reconcileAttention(workspaceId: string, candidates: AttentionIte
       // A follow-up moved to a later date (or cleared) of a task that still waits replaces the old
       // one too, even though the new one is not due yet.
       || ((previous.rule_id === "waiting_follow_up" || previous.rule_id === "planned_date_passed") && ongoing.has(`${previous.rule_id}:${previous.subject_id}`));
-    transitionMissing(previous, replacement ? "superseded" : "resolved", now);
+    if (persist) transitionMissing(previous, replacement ? "superseded" : "resolved", now);
   }
   return { items: visible, hidden };
 }
