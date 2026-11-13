@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 
 const adoption = await import("../lib/adoption.ts");
@@ -183,4 +184,43 @@ test("malformed owner-fence salvage preserves raw user data without exporting ot
   assert.equal(JSON.parse(new TextDecoder().decode(
     unreadable.encodeUnreadableOwnerRescue(null, captured, 12345),
   )).indexedDbReadable, false);
+});
+
+test("valid owner adoption fence can be saved as non-importable raw rescue when its Web Lock is unavailable", () => {
+  const store = memoryStorage();
+  barrier.startOwnerAdoptionFence(store, 9, 8);
+  const captured = unreadable.captureUnreadableOwnerRescueStorage(store);
+  const bytes = unreadable.encodeUnreadableOwnerRescue(
+    null, captured, 12345, "owner-adoption-lock-unavailable",
+  );
+  const bundle = JSON.parse(new TextDecoder().decode(bytes));
+  assert.equal(bundle.reason, "owner-adoption-lock-unavailable");
+  assert.equal(bundle.verified, false);
+  assert.equal(bundle.complete, false);
+  assert.equal(bundle.autoImportPermitted, false);
+  assert.equal(bundle.indexedDbReadable, false);
+  assert.equal(bundle.storage.find(x => x.key === barrier.ownerAdoptionFenceKey).value,
+    store.getItem(barrier.ownerAdoptionFenceKey));
+  assert.equal(barrier.ownerAdoptionFencePresent(store), true);
+  assert.throws(() => unreadable.encodeUnreadableOwnerRescue(
+    null, captured, 12345, "unsupported-fence-reason",
+  ), /OWNER_RESCUE_INVALID/);
+});
+
+test("C9 focused workflow triggers when each restore safety module or unit regression changes", () => {
+  const yml = readFileSync(new URL("../.github/workflows/release0-backup-restore-browser.yml", import.meta.url), "utf8");
+  const pullRequestPaths = yml.split("  workflow_dispatch:")[0]
+    .split("\n").map(line => /^\s+- "([^"]+)"$/.exec(line)?.[1]).filter(Boolean);
+  const matches = (filename, pattern) => new RegExp("^" + pattern.split("*")
+    .map(part => part.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+    .join("[^/]*") + "$").test(filename);
+  for (const file of [
+    "lib/local-data.ts",
+    "lib/owner-adoption-barrier.ts",
+    "lib/owner-adoption-rescue.ts",
+    "tests/adoption.test.mjs",
+  ]) {
+    assert.ok(pullRequestPaths.some(pattern => matches(file, pattern)),
+      `C9 PR workflow must run when ${file} changes`);
+  }
 });

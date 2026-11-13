@@ -1564,3 +1564,107 @@ test("an authorized wipe retries a selectively failed final fence removal before
     await expect(page.getByRole("alertdialog", { name: "Lokální změny jsou chráněné" })).toHaveCount(0);
   } finally { await context.close(); }
 });
+
+for (const mode of ["missing", "rejected"] as const) {
+  test(`a valid owner adoption fence can export raw rescue when the recovery Web Lock is ${mode}`, async ({ browser }, testInfo) => {
+    const id = `e2e-backup-valid-fence-no-lock-${mode}-${stamp}`;
+    const draftKey = `ai-executive-notes-drafts:lock-unavailable-${mode}`;
+    const { first, second } = await twoDevices(browser);
+    try {
+      await first.page.goto("/");
+      await waitUntilSynced(first.page);
+      await second.page.goto("/?view=Inbox");
+      await waitUntilSynced(second.page);
+      const expectedFence = await second.page.evaluate(async ({ id, draftKey }) => {
+        const oldGeneration = Number(localStorage.getItem("ai-executive-restore-generation") || "0");
+        const db = await new Promise<IDBDatabase>((resolve, reject) => {
+          const req = indexedDB.open("ai-executive");
+          req.onsuccess = () => resolve(req.result);
+          req.onerror = () => reject(req.error);
+        });
+        await new Promise<void>((resolve, reject) => {
+          const tx = db.transaction("entities", "readwrite");
+          tx.objectStore("entities").put({
+            id, type: "task", title: "Pouze místní nezapsaný úkol",
+            status: "open", workspaceId: "personal", properties: { inbox: true },
+            createdAt: Date.now(), updatedAt: Date.now() + 60000,
+          });
+          tx.oncomplete = () => resolve();
+          tx.onerror = () => reject(tx.error);
+        });
+        db.close();
+        localStorage.setItem(draftKey, "Neuložený místní text při chybě zámku");
+        const value = JSON.stringify({
+          version: 1, observedGeneration: oldGeneration + 1, knownGeneration: oldGeneration,
+        });
+        localStorage.setItem("ai-executive-owner-adoption-fence", value);
+        return value;
+      }, { id, draftKey });
+
+      // Failure happens BEFORE the recovery callback can read the fence.
+      // Other APIs stay intact for "rejected"; "missing" explicitly tests a
+      // browser that does not expose the Web Locks API at all.
+      await second.page.addInitScript(({ mode }) => {
+        const realLocks = navigator.locks;
+        Object.defineProperty(navigator, "locks", {
+          configurable: true,
+          value: mode === "missing" ? undefined : {
+            request: (name: string, callback: () => Promise<unknown>) =>
+              name === "ai-executive-recovery-data"
+                ? Promise.reject(new Error("Injected recovery lock rejection"))
+                : realLocks.request(name, callback),
+          },
+        });
+      }, { mode });
+      await second.page.reload();
+      const dialog = second.page.getByRole("alertdialog", { name: "Lokální změny jsou chráněné" });
+      await expect(dialog).toBeVisible({ timeout: 30_000 });
+      await expect(dialog.getByText(/Nepodařilo se získat bezpečnostní zámek/)).toBeVisible();
+      await dialog.getByRole("button", { name: "1. Připravit záchranný soubor" }).click();
+      const downloadButton = dialog.getByRole("button", { name: "2. Stáhnout soubor" });
+      await expect(downloadButton).toBeEnabled();
+      const [download] = await Promise.all([
+        second.page.waitForEvent("download"),
+        downloadButton.click(),
+      ]);
+      expect(download.suggestedFilename()).toBe("lumi-interrupted-restore-raw-unverified.json");
+      const file = testInfo.outputPath(`valid-owner-fence-${mode}-salvage.json`);
+      await download.saveAs(file);
+      const bundle = JSON.parse(readFileSync(file, "utf8"));
+      expect(bundle).toMatchObject({
+        format: "lumi-owner-adoption-raw-rescue",
+        reason: "owner-adoption-lock-unavailable",
+        verified: false, complete: false, autoImportPermitted: false,
+      });
+      expect(bundle.local.entities.some((item: { id: string }) => item.id === id)).toBe(true);
+      expect(bundle.storage).toContainEqual({ key: draftKey, value: "Neuložený místní text při chybě zámku" });
+      expect(bundle.storage).toContainEqual({
+        key: "ai-executive-owner-adoption-fence", value: expectedFence,
+      });
+      const retained = await second.page.evaluate(async id => {
+        const db = await new Promise<IDBDatabase>((resolve, reject) => {
+          const req = indexedDB.open("ai-executive");
+          req.onsuccess = () => resolve(req.result);
+          req.onerror = () => reject(req.error);
+        });
+        const row = await new Promise<{ id: string } | undefined>((resolve, reject) => {
+          const req = db.transaction("entities").objectStore("entities").get(id);
+          req.onsuccess = () => resolve(req.result);
+          req.onerror = () => reject(req.error);
+        });
+        db.close();
+        return {
+          row, fence: localStorage.getItem("ai-executive-owner-adoption-fence"),
+          hold: localStorage.getItem("ai-executive-offline-recovery-hold"),
+        };
+      }, id);
+      expect(retained.row?.id).toBe(id);
+      expect(retained.fence).toBe(expectedFence);
+      expect(retained.hold).toBeNull();
+      expect((await serverEntities(first.page)).some(item => item.id === id)).toBe(false);
+    } finally {
+      await first.context.close();
+      await second.context.close();
+    }
+  });
+}
