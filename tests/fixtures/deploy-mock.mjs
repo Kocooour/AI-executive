@@ -234,12 +234,12 @@ switch (name) {
     const url = args[args.length - 1];
     if (scenario === "httpsfail" && get("head") === target &&
         url.startsWith("https://")) process.exit(22);
+    // The first deployment must fail ALL 60 readiness retries, not merely
+    // the first request. The explicitly selected synthetic recovery can then
+    // succeed without changing production script behavior.
     if (scenario === "firstrolloutunhealthy" && get("head") === target &&
         url.includes("/manifest.webmanifest") &&
-        !fs.existsSync(stateFile("first-rollout-readiness-failed"))) {
-      set("first-rollout-readiness-failed", "1");
-      process.exit(22);
-    }
+        process.env.LUMI_TEST_RECOVERY_MODE !== "true") process.exit(22);
     if (scenario === "unhealthy" && get("head") === target &&
         url.includes("/manifest.webmanifest")) process.exit(22);
     const code = url.includes("/api/store") ? 401 : 200;

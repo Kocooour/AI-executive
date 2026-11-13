@@ -143,7 +143,8 @@ function sandbox(scenario) {
   };
   function execute({ recovery = false } = {}) {
     const result = spawnSync("bash", ["-c", script, "--", newSha, ...(recovery ? ["--recover-stopped"] : [])], {
-      cwd: root, env, encoding: "utf8", timeout: 40000, maxBuffer: 3 * 1024 * 1024,
+      cwd: root, env: { ...env, LUMI_TEST_RECOVERY_MODE: recovery ? "true" : "false" },
+      encoding: "utf8", timeout: 40000, maxBuffer: 3 * 1024 * 1024,
     });
     assert.ifError(result.error);
     return {
