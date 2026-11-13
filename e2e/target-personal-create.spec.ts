@@ -266,6 +266,7 @@ for(const width of [390,1280]){
     await page.setViewportSize({width,height:844});
     const a=store.seed.createLargeProjectId,home="/?view=Projects&scope=personal";
     const detail=detailTask(page),list=page.getByTestId("target-scope-list");
+    const calls=observe(page);
     await page.goto(home);
     await expect(list).toHaveAttribute("data-state","ready");
     let bUrl="";
@@ -296,12 +297,17 @@ for(const width of [390,1280]){
       expect(body.projectId).toBe(a);
       const response=await route.fetch();
       expect(response.status()).toBe(201);
-      taskId=body.taskId;forwarded++;
+      taskId=body.taskId;
       await route.abort("failed");
+      // The original CREATE is fully committed and the reply has been dropped.
+      // The marker can appear BEFORE the async route handler finishes.
+      forwarded++;
     },{times:1});
     await detail.getByTestId("target-project-task-create-save").click();
     await expect(detail.getByTestId("target-structure-unresolved")).toBeVisible();
-    expect(forwarded).toBe(1);
+    await expect.poll(()=>forwarded,{timeout:20_000}).toBe(1);
+    expect(count(calls,"POST",childPath)).toBe(1);
+    // Only now is it safe to navigate away without aborting the real POST.
     await page.goto(width===390?bUrl:home);
     if(width===390){
       await expect(detail).toHaveAttribute("data-detail-kind","project");
@@ -320,6 +326,7 @@ for(const width of [390,1280]){
     expect(taskUrl).toContain(taskId);
     expect(new URL(taskUrl).searchParams.get("projectId")).toBe(a);
     expect(forwarded).toBe(1);
+    expect(count(calls,"POST",childPath)).toBe(1);
     await detail.locator(".targetDetailParent .targetDetailLink").click();
     await expect(detail).toHaveAttribute("data-detail-kind","project");
     expect(new URL(page.url()).searchParams.get("projectId")).toBe(a);
