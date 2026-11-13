@@ -10,6 +10,7 @@ on:
       - "lib/target-*.ts"
       - "scripts/target-staging-*.mjs"
       - "e2e/target-personal-acceptance.spec.ts"
+      - "e2e/target-personal-bfcache.spec.ts"
       - "e2e/target-personal-my-plan.spec.ts"
       - "e2e/target-personal-search-open.spec.ts"
       - "e2e/target-personal-store-setup.mjs"
@@ -32,7 +33,7 @@ jobs:
   chromium:
     name: Personal acceptance on the real isolated store (Chromium)
     runs-on: ubuntu-24.04
-    timeout-minutes: 25
+    timeout-minutes: 35
     env:
       CI: "true"
       NEXT_TELEMETRY_DISABLED: "1"
@@ -40,6 +41,9 @@ jobs:
       E2E_SKIP_BUILD: "1"
       E2E_PORT: "3130"
       LUMI_TARGET_PERSONAL_ACCEPTANCE_E2E: "true"
+      # Scoped manual release gate: actual persisted=true required on a real-store
+      # navigation; PR runs still check the fallback without claiming a BFCache hit.
+      LUMI_REAL_BFCACHE_E2E: ${{ github.event_name == 'workflow_dispatch' && 'true' || 'false' }}
     steps:
       - name: Checkout
         uses: actions/checkout@v5
@@ -63,6 +67,8 @@ jobs:
       - name: 390px and desktop acceptance incl. My Plan, Search and ACL (real SQLite)
         # Each filename is explicit: Playwright CLI filters even with testMatch.
         run: pnpm exec playwright test e2e/target-personal-acceptance.spec.ts e2e/target-personal-my-plan.spec.ts e2e/target-personal-search-open.spec.ts --project=desktop
+      - name: Real Back / BFCache, full reload and uncertain POST (real SQLite, 390/1280)
+        run: pnpm exec playwright test e2e/target-personal-bfcache.spec.ts --project=desktop
       - name: Upload failure traces
         if: failure()
         uses: actions/upload-artifact@v6
