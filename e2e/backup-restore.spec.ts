@@ -1682,6 +1682,21 @@ test("a valid owner fence with a recovery lock held forever still allows raw res
     await waitUntilSynced(holder);
     await recovering.goto("/?view=Inbox");
     await waitUntilSynced(recovering);
+    // Hold the ACTUAL browser Web Lock from a sibling page; do not simulate
+    // a rejected request. The recovering tab has to abort its queued request
+    // and offer a salvage download while this lock is STILL held.
+    await holder.evaluate(() => {
+      const state = window as unknown as { e2eReleaseRecoveryLock?: () => void; e2eRecoveryLockHeld?: boolean };
+      void navigator.locks.request("ai-executive-recovery-data", async () => {
+        state.e2eRecoveryLockHeld = true;
+        await new Promise<void>(resolve => { state.e2eReleaseRecoveryLock = resolve; });
+      });
+    });
+    await holder.waitForFunction(() =>
+      (window as unknown as { e2eRecoveryLockHeld?: boolean }).e2eRecoveryLockHeld === true);
+
+    // Add the local unsent data only after the holder owns the lock, so no
+    // focus-triggered pull from the holder can race this fixture.
     fence = await recovering.evaluate(async ({ id, draftKey }) => {
       const known = Number(localStorage.getItem("ai-executive-restore-generation") || "0");
       const db = await new Promise<IDBDatabase>((resolve, reject) => {
@@ -1707,19 +1722,6 @@ test("a valid owner fence with a recovery lock held forever still allows raw res
       localStorage.setItem("ai-executive-owner-adoption-fence", marker);
       return marker;
     }, { id, draftKey });
-
-    // Hold the ACTUAL browser Web Lock from a sibling page; do not simulate
-    // a rejected request. The recovering tab has to abort its queued request
-    // and offer a salvage download while this lock is STILL held.
-    await holder.evaluate(() => {
-      const state = window as unknown as { e2eReleaseRecoveryLock?: () => void; e2eRecoveryLockHeld?: boolean };
-      void navigator.locks.request("ai-executive-recovery-data", async () => {
-        state.e2eRecoveryLockHeld = true;
-        await new Promise<void>(resolve => { state.e2eReleaseRecoveryLock = resolve; });
-      });
-    });
-    await holder.waitForFunction(() =>
-      (window as unknown as { e2eRecoveryLockHeld?: boolean }).e2eRecoveryLockHeld === true);
 
     await recovering.reload();
     const dialog = recovering.getByRole("alertdialog", { name: "Lokální změny jsou chráněné" });
