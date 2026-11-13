@@ -415,9 +415,8 @@ function DetailBody({route,language,gates,edits,noteEdit,projectEdit,createTask,
           more={state.more} onMore={()=>{void more();}} edit={edit}
           noteEdit={noteEdit} projectEdit={projectEdit} createTask={createTask} onCommitted={reload} onAccessRefused={invalidateAndReload}
           language={language}/>}
-      {content&&!(noteEdit&&content.kind==="note")&&!(projectEdit&&content.kind==="project")&&
+      {content&&!(noteEdit&&content.kind==="note")&&!(projectEdit&&content.kind==="project")&&!(edit&&kindHasEdits(content.kind,edits))&&
         !(createTask&&content.kind==="project"&&content.page.project.areaKind==="private")&&
-        !(edit&&kindHasEdits(content.kind,edits))&&
         <p className="targetDetailNote">{copy.readOnlyNote}</p>}
     </>}
   </Shell>;
