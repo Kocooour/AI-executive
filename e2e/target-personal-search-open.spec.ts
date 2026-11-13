@@ -143,11 +143,10 @@ for(const width of [390,1280]){
       await expect(detail).not.toContainText(revoked.projectTitle);
       await expect(detail.locator(".targetDetailContent")).toHaveCount(0);
 
-      // Simulate the same blur lifecycle that purges the one-use Search bridge
-      // when the actor changes windows while reading the refused detail.
-      // After close there is no authorized originating row to focus: use the
-      // neutral Search instruction rather than a stale, inaccessible title.
-      await page.evaluate(()=>window.dispatchEvent(new Event("blur")));
+      // Close in the SAME foreground window: no blur, visibility change,
+      // auth refresh or forced runtime ACL tick may erase the Search bridge for
+      // the implementation. The detail's real not-available answer must purge
+      // that cached result itself before ordinary Close/Back.
       await detail.locator("button.inspectorClose").click();
       await expect(detail).toHaveCount(0);
       await expect(page).toHaveURL(/view=Search/);
