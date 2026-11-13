@@ -18,6 +18,32 @@ with a full reload, or a previous commit's successful run is **not** a BFCache h
 - Do not suppress BFCache, remove `no-store` for test convenience, emulate
   `pageshow.persisted=true`, weaken the assertion, or skip the failing test.
 
+## C15 root-cause discovery: the earlier run could not exercise BFCache
+
+The 2026-11-13 PR run for #427 logged `persisted:false` at 390 and 1280 px,
+with `notRestoredReasons:null`. **This did not identify an application-level
+blocker**: Playwright 1.56 starts Chromium with
+`--disable-back-forward-cache` and `page.goBack()` cannot handle a genuine
+BFCache thaw (see [Playwright navigation docs](https://playwright.dev/docs/navigations#backforward-cache-bfcache)).
+The browser had no opportunity to produce the required real hit.
+
+The corrected suite **does not remove `Cache-Control: no-store` or modify app
+security**. The new `e2e/target-personal-native-bfcache.spec.ts` launches an
+independent Chromium process without Playwright's BFCache-disabling switch.
+It loads the actual isolated personal-v1 application using the disposable
+owner session cookie, fills the real Quick Capture task form, performs a
+cross-document navigation and the browser's native `history.back()`, and
+records the original `pageshow.persisted`, private draft, selected Area,
+and fresh authorized reads. This is NOT a synthetic transition.
+The manual exact-SHA workflow enforces `persisted === true` in this independent
+witness; **a miss makes the release gate fail**. Ordinary PR CI also runs the
+witness but only establishes native-browser diagnostics when a hit is absent.
+
+Chrome can sometimes use BFCache even with `no-store`, but there are strict
+privacy exceptions: cookies changing and `no-store` XHR responses can evict
+entries. Do not infer the sole blocker from the main document header.
+See [Chrome's documented conditions](https://developer.chrome.com/docs/web-platform/bfcache-ccns).
+
 ## 1. Pin and run the scoped CI gates
 
 1. Select the exact candidate **40-character commit SHA** (record it in the release
@@ -27,16 +53,19 @@ with a full reload, or a previous commit's successful run is **not** a BFCache h
 2. Manually dispatch **Focused R3 personal acceptance browser** with the **same**
    `target_sha`. Both workflows check out exactly that SHA, assert
    `git rev-parse HEAD == target_sha`, and run with
-   `LUMI_REAL_BFCACHE_E2E=true`. The second runs the full `personal-v1`
+   `LUMI_REAL_BFCACHE_E2E=true` for the native Chrome witness. The second runs the full `personal-v1`
    isolated target store, not the legacy mocked target API.
 3. In both run summaries/logs, record the **actual checked-out SHA**, run URL,
    Chromium version, job conclusion, and the browser evidence:
-   `GLOBAL_CAPTURE_REAL_BFCACHE_EVIDENCE` / `REAL_BFCACHE_EVIDENCE`.
+   `NATIVE_REAL_BFCACHE_EVIDENCE` (authoritative real hit), alongside
+   `GLOBAL_CAPTURE_REAL_BFCACHE_EVIDENCE` / `REAL_BFCACHE_EVIDENCE`
+   (Playwright full-reload diagnostics only).
    Download the `lumi-r3-global-capture` and
+   `lumi-r3-global-native-bfcache` (manual global gate) and
    `lumi-r3-personal-acceptance` artifacts (Playwright attachments and
    traces where present) before retention expires. Record which viewport
    (390 or 1280 px) each result covers.
-4. **Pass only when the original, browser-fired** `pageshow` event has
+4. **Pass only when the independent native Chromium's original, browser-fired** `pageshow` event has
    `persisted === true` and the test passes privacy/wake assertions at
    **both 390 and 1280 px** on the real-store profile. A no-hit diagnostic
    is a *failed release gate*, not a pass. PR-triggered runs can validate
@@ -52,7 +81,7 @@ requires the repository and browser dependencies installed):
 ```sh
 LUMI_TARGET_PERSONAL_ACCEPTANCE_E2E=true LUMI_REAL_BFCACHE_E2E=true \
   NEXT_PUBLIC_LUMI_DESIGN_V1_PREVIEW=1 \
-  pnpm exec playwright test e2e/target-personal-bfcache.spec.ts --project=desktop
+  pnpm exec playwright test e2e/target-personal-native-bfcache.spec.ts --project=desktop
 ```
 
 Do not use `E2E_SKIP_BUILD=1` unless the production build of the same checkout
