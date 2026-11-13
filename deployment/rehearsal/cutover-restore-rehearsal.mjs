@@ -9,12 +9,13 @@ import {
   openSync, readSync, readdirSync, realpathSync, writeFileSync,
 } from "node:fs";
 import path from "node:path";
+import { isWithinPath as within } from "../../scripts/r4-path-boundary.mjs";
 
 const MAX_ROWS_PER_TABLE = 200_000;
 const MAX_ROW_BYTES = 16 * 1024 * 1024;
 const TARGET_REQUIRED = ["lumi-target.sqlite", "lumi-target.journal", "lumi-target-witness.sqlite"];
 const quote = name => '"' + name.replaceAll('"', '""') + '"';
-const within = (child, parent) => child === parent || child.startsWith(parent + path.sep);
+
 const sha = value => createHash("sha256").update(value).digest("hex");
 function statOrNull(file) {
   try { return lstatSync(file); }
