@@ -14,6 +14,11 @@ on:
       - "e2e/target-global-private-capture.spec.ts"
       - "playwright.config.ts"
   workflow_dispatch:
+    inputs:
+      target_sha:
+        description: "Exact 40-character release commit SHA to check out and certify"
+        required: true
+        type: string
 permissions:
   contents: read
 jobs:
@@ -35,6 +40,18 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.target_sha || github.sha }}
+      - name: Prove exact target checkout (manual release)
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          TARGET_SHA: ${{ inputs.target_sha }}
+        run: |
+          [[ "$TARGET_SHA" =~ ^[a-f0-9]{40}$ ]] || exit 1
+          ACTUAL_SHA="$(git rev-parse HEAD)"
+          echo "target_sha=$TARGET_SHA checked_out_sha=$ACTUAL_SHA"
+          [[ "$ACTUAL_SHA" == "$TARGET_SHA" ]] || exit 1
+          echo "Verified checkout SHA: $ACTUAL_SHA" >> "$GITHUB_STEP_SUMMARY"
       - name: Install pnpm
         uses: pnpm/action-setup@v5
         with:
@@ -54,8 +71,8 @@ jobs:
         run: pnpm exec playwright install --with-deps chromium
       - name: Scoped global capture acceptance
         run: pnpm exec playwright test e2e/target-global-private-capture.spec.ts --project=desktop
-      - name: Upload failure traces
-        if: failure()
+      - name: Upload BFCache evidence and failure traces
+        if: always()
         uses: actions/upload-artifact@v6
         with:
           name: lumi-r3-global-capture
