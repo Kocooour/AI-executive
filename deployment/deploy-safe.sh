@@ -345,7 +345,9 @@ echo "Exkluzivni zamek nasazeni: OK"
 echo "=== PRE-FLIGHT ==="
 [[ "$TARGET" =~ ^[0-9a-f]{40}$ ]] || die "zadej uplny 40mistny SHA"
 if [ "$RECOVERY_MODE" = 1 ]; then
-  ! systemctl is-active --quiet "$SERVICE" ||
+  # Only an explicitly inactive unit is safe; failed/activating/unknown
+  # systemd states are not proof that all old workers have stopped.
+  test "$(systemctl is-active "$SERVICE")" = inactive ||
     die "rezim obnovy vyzaduje zastavenou sluzbu"
 else
   test "$(systemctl is-active "$SERVICE")" = active || die "sluzba nebezi"
