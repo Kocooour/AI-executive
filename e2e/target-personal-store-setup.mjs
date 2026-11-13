@@ -29,7 +29,9 @@ const stage = bootstrapIsolatedTargetStore({ stagingDirectory: path.join(runDir,
 
 // Distinct project/task fixtures per viewport AND per spec: each real-store
 // acceptance mutates titles, so parallel or sequential specs must not collide.
-const seed = { areaId: "area:e2e:rodina", areaTitle: "Rodina", projects: {}, searchProjects: {}, revokeProjects: {} };
+const seed = { areaId: "area:e2e:rodina", areaTitle: "Rodina",
+  createAreaId: "area:e2e:create:private", createAreaTitle: "Tvoření",
+  projects: {}, searchProjects: {}, revokeProjects: {} };
 for (const width of ["390", "1280"]) {
   seed.projects[width] = {
     projectId: `project:e2e:${width}`, projectTitle: `Seed Projekt ${width}`,
@@ -53,6 +55,9 @@ try {
   const workspace = db.prepare("SELECT id FROM workspaces WHERE kind='personal' AND owner_user_id=?").get(owner);
   db.prepare("INSERT INTO areas(id,title,kind,workspace_id,owner_user_id) VALUES (?,?,'private',?,?)")
     .run(seed.areaId, seed.areaTitle, workspace.id, owner);
+  // A/3: distinct writable private Area for browser-only project-create coverage.
+  db.prepare("INSERT INTO areas(id,title,kind,workspace_id,owner_user_id) VALUES (?, ?, 'private', ?, ?)")
+    .run(seed.createAreaId, seed.createAreaTitle, workspace.id, owner);
   for (const item of [...Object.values(seed.projects), ...Object.values(seed.searchProjects)]) {
     db.prepare("INSERT INTO projects(id,area_id,title) VALUES (?,?,?)").run(item.projectId, seed.areaId, item.projectTitle);
     db.prepare("INSERT INTO tasks(id,project_id,title) VALUES (?,?,?)").run(item.taskId, item.projectId, item.taskTitle);
