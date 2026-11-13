@@ -27,7 +27,7 @@ process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_ENABLED = "true";
 process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_WRITE_ENABLED = "true";
 const { writeFields } = await import("./support/target-write-contract.mjs");
 const { bootstrapIsolatedTargetStore } = await import("../lib/target-store-bootstrap.ts");
-const { createSessionToken, sessionCookieName } = await import("../lib/auth.ts");
+const { createSessionToken, sessionCookieName } = await import("./support/owner-session-test-cookie.mjs");
 const { GET, PATCH } = await import("../app/api/target-staging/tasks/[taskId]/title/route.ts");
 const { POST: STATUS } = await import("../app/api/target-staging/tasks/[taskId]/title/status/route.ts");
 

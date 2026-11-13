@@ -31,7 +31,7 @@ const {readAuthorizedTitleSearchPage,validAuthorizedTitleQuery}=
   await import("../lib/target-authorized-title-search.ts");
 const {TargetStagingSessionAuthority}=await import("../lib/target-staging-session-authority.ts");
 const durable=await import("../lib/target-staging-durable-session.ts");
-const {createSessionToken,sessionCookieName}=await import("../lib/auth.ts");
+const {createSessionToken,sessionCookieName}=await import("./support/owner-session-test-cookie.mjs");
 const {GET:searchGET}=await import("../app/api/target-staging/title-search/route.ts");
 const {parseStagingTitleSearchPage}=await import("../lib/target-staging-read-process.ts");
 const {createStagingTitleSearchSession}=

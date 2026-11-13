@@ -47,13 +47,21 @@ for (const width of [390, 1280]) {
     await expect(page.locator(".searchExplorer .searchState")).toContainText("Do pole nahoře");
     await search.fill(`servisni ${fixture.token}`);
     const results = page.locator(".searchExplorer .searchResults");
+    // #109 normalizes the project into a searchable Nezařazeno Area.
     // A visible relation in the same workspace can match the related task,
     // but the note in another workspace cannot appear in this view.
-    await expect(results.locator("article")).toHaveCount(2);
+    await expect(results.locator("article")).toHaveCount(3);
     await expect(results).toContainText(fixture.project);
     await expect(results).toContainText(fixture.task);
+    await expect(results).toContainText("Nezařazeno");
+    await expect(results.locator("article").filter({ hasText: fixture.project })).toHaveCount(1);
+    await expect(results.locator("article").filter({ hasText: fixture.task })).toHaveCount(1);
+    await expect(results.locator("article").filter({ hasText: "Nezařazeno" })).toHaveCount(1);
     await expect(results).not.toContainText(fixture.hidden);
-    await expect(results.locator('article[data-match-source="related"]')).toContainText(fixture.task);
+    // Both the Area and task can match through a relation; require one task.
+    const relatedTaskResult = results.locator('article[data-match-source="related"][data-result-type="task"]');
+    await expect(relatedTaskResult).toHaveCount(1);
+    await expect(relatedTaskResult).toContainText(fixture.task);
 
     const filter = page.locator('.searchKindFilters [data-search-kind="task"]');
     await expect(filter).toHaveAttribute("aria-pressed", "false");
@@ -64,7 +72,7 @@ for (const width of [390, 1280]) {
     await page.locator('.searchKindFilters [data-search-kind="note"]').click();
     await expect(page.locator(".searchState")).toContainText("nebyla nalezena");
     await page.getByRole("button", { name: "Zobrazit všechny typy" }).click();
-    await expect(results.locator("article")).toHaveCount(2);
+    await expect(results.locator("article")).toHaveCount(3);
 
     const relatedTask = results.getByRole("button", {
       name: `Otevřít ${fixture.task} · Úkol · Shoda v související položce · Změněno i na jiném zařízení`,
@@ -72,7 +80,7 @@ for (const width of [390, 1280]) {
     });
     await expect(relatedTask).toHaveAccessibleName(
       `Otevřít ${fixture.task} · Úkol · Shoda v související položce · Změněno i na jiném zařízení`);
-    await expect(results.locator('[data-match-source="related"] .conflictMark'))
+    await expect(relatedTaskResult.locator(".conflictMark"))
       .toHaveAttribute("aria-label", "Změněno i na jiném zařízení");
     await relatedTask.click();
     await expect(page.locator(".detail")).toBeVisible();

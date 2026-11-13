@@ -34,7 +34,7 @@ const {
   TARGET_STAGING_MAX_RECEIPTS, TARGET_STAGING_MAX_TOMBSTONES,
 } = await import("../lib/target-store-bootstrap.ts");
 const { PROTOCOL, writeFields } = await import("./support/target-write-contract.mjs");
-const { createSessionToken, sessionCookieName } = await import("../lib/auth.ts");
+const { createSessionToken, sessionCookieName } = await import("./support/owner-session-test-cookie.mjs");
 const durable = await import("../lib/target-staging-durable-session.ts");
 const { TargetStagingSessionAuthority } = await import("../lib/target-staging-session-authority.ts");
 const { inspectIsolatedTargetStore } = await import("../lib/target-store-preflight.ts");

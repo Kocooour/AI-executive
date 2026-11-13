@@ -104,6 +104,14 @@ cp -a "$REPO" "$OLD_DIR"
 rm -rf "$OLD_DIR/.git" "$OLD_DIR/.data" "$OLD_DIR/test-results"
 find "$OLD_DIR" -maxdepth 1 -name '.env*' ! -name .env.example -delete
 chown -R "$OLD_USER:$OLD_USER" "$OLD_HOME" && chmod 0750 "$OLD_HOME"
+# This rehearsal runs the *current* checkout as both old and new instances:
+# provision the isolated old instance once, as the account that owns it.
+if [ -f "$OLD_DIR/scripts/owner-session-revocation-init.mjs" ]; then
+  runuser -u "$OLD_USER" -- env AI_EXECUTIVE_DATA_DIR="$OLD_DIR/.data" "$NODE" \
+    --experimental-loader "$OLD_DIR/scripts/target-staging-ts-loader.mjs" \
+    "$OLD_DIR/scripts/owner-session-revocation-init.mjs" --init ||
+    { echo "Rehearsal: old owner cutoff provisioning failed" >&2; exit 1; }
+fi
 HASH=$(printf '%s\n' "$PASSWORD" | (cd "$REPO" && "$NODE" scripts/hash-password.mjs 2>/dev/null) | tail -n 1)
 SECRET=$(head -c 48 /dev/urandom | base64 -w0)
 # Like the real .env: it also sets the variables the new unit owns (they must be stripped on migration).
@@ -260,6 +268,16 @@ HOME_LISTING_BEFORE=$(find "$OLD_HOME" -printf '%y %p %s %T@\n' | sort | sha256s
 
 # --- procedure step 7-8: new instance ----------------------------------------------------------
 step "Procedure steps 7-8: new instance as $NEW_USER"
+if [ -f "$OPT/scripts/owner-session-revocation-init.mjs" ]; then
+  check "new: persistent cutoff survived the account migration" \
+    runuser -u "$NEW_USER" -- env AI_EXECUTIVE_DATA_DIR="$STATE" "$NODE" \
+    --experimental-loader "$OPT/scripts/target-staging-ts-loader.mjs" \
+    "$OPT/scripts/owner-session-revocation-init.mjs" --check
+  check_not "new: revocation state cannot be silently reinitialized" \
+    runuser -u "$NEW_USER" -- env AI_EXECUTIVE_DATA_DIR="$STATE" "$NODE" \
+    --experimental-loader "$OPT/scripts/target-staging-ts-loader.mjs" \
+    "$OPT/scripts/owner-session-revocation-init.mjs" --init
+fi
 mapfile -t ENV_ARGS < <(grep -vE '^\s*(#|$)' "$ENVFILE")
 if start_instance "$NEW_USER" "$OPT" "$NEW_PORT" "$LOGS/new.log" NODE_ENV=production PORT="$NEW_PORT" AI_EXECUTIVE_DATA_DIR="$STATE" "${ENV_ARGS[@]}"; then ok "new instance started as $NEW_USER on $NEW_PORT"; else bad "new instance started"; tail -n 20 "$LOGS/new.log"; exit 1; fi
 NEW_PID=$STARTED_PID

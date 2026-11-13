@@ -1,3 +1,4 @@
+import { releaseOwnerRead } from "../../../lib/owner-session-read-release";
 import { NextResponse } from "next/server";
 import { authenticationBinding, isAuthenticated } from "../../../lib/auth";
 import { buildDayPlan } from "../../../lib/day-plan";
@@ -21,7 +22,7 @@ export async function GET(request: Request) {
     return NextResponse.json({ error: "Invalid workspace or date" }, { status: 400 });
   }
   try {
-    return NextResponse.json(buildDayPlan(workspaceId, date), { headers: { "cache-control": "no-store" } });
+    return releaseOwnerRead(request, NextResponse.json(buildDayPlan(workspaceId, date), { headers: { "cache-control": "no-store" } }));
   } catch (error) {
     return NextResponse.json({ error: error instanceof Error ? error.message : "Day plan failed" }, { status: 404 });
   }

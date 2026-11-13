@@ -1,3 +1,4 @@
+import { releaseOwnerRead } from "../../../lib/owner-session-read-release";
 import { NextResponse } from "next/server";
 import { fenceRestoredClient } from "../../../lib/restore-fence";
 import { isAuthenticated } from "../../../lib/auth";
@@ -14,7 +15,7 @@ export async function GET(request: Request) {
   if (limited) return NextResponse.json({ error: limited.error }, { status: limited.status });
   try {
     const workspaceId = new URL(request.url).searchParams.get("workspaceId") || "";
-    return NextResponse.json(getWorkSession(workspaceId), { headers: { "cache-control": "no-store" } });
+    return releaseOwnerRead(request, NextResponse.json(getWorkSession(workspaceId), { headers: { "cache-control": "no-store" } }));
   } catch (error) {
     const status = error instanceof WorkSessionError ? error.status : error instanceof HttpInputError ? error.status : 400;
     return NextResponse.json({ error: error instanceof Error ? error.message : "Work session unavailable" }, { status });

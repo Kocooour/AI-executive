@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { releaseOwnerRead } from "../../../../lib/owner-session-read-release";
 import { isAuthenticated } from "../../../../lib/auth";
 import { boundedString, enforceRateLimit, HttpInputError, readJsonBody, requireSameOrigin } from "../../../../lib/http-security";
 import { passkeySummaries } from "../../../../lib/passkeys";
@@ -13,7 +14,7 @@ export async function GET(request: Request) {
     recordSecurityEvent(request, "auth.passkey.read", "rejected", { reason: "unauthenticated" });
     return NextResponse.json({ error: "Authentication required" }, { status: 401 });
   }
-  return NextResponse.json({ passkeys: passkeySummaries() }, { headers: { "cache-control": "no-store" } });
+  return releaseOwnerRead(request, NextResponse.json({ passkeys: passkeySummaries() }, { headers: { "cache-control": "no-store" } }));
 }
 
 export async function DELETE(request: Request) {

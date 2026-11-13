@@ -1,3 +1,4 @@
+import { releaseOwnerRead } from "../../../lib/owner-session-read-release";
 import { NextResponse } from "next/server";
 import { fenceRestoredClient } from "../../../lib/restore-fence";
 import { isAuthenticated } from "../../../lib/auth";
@@ -36,7 +37,7 @@ export async function GET(request: Request) {
           projectActivity: "stored_project_task_confirmed_context", deletedTaskHistory: false, externalActivity: false } };
     });
     if (!result) return NextResponse.json({ error: "Workspace unavailable" }, { status: 404 });
-    return NextResponse.json(result, { headers: { "cache-control": "private, no-store" } });
+    return releaseOwnerRead(request, NextResponse.json(result, { headers: { "cache-control": "private, no-store" } }));
   } catch {
     return NextResponse.json({ error: "Attention evaluation failed" }, { status: 500, headers: { "cache-control": "private, no-store" } });
   }

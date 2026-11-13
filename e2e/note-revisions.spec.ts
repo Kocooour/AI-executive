@@ -255,8 +255,9 @@ test("text typed into a note that another device deletes meanwhile is kept, not 
   }, id);
   await page.evaluate(() => window.dispatchEvent(new Event("focus")));
   await waitUntilSynced(page);
-  await page.locator("input.titleEdit").focus().catch(() => undefined);
-  await page.mouse.click(5, 5);
+  // #404: after remote deletion the inspector closes safely. Do not focus
+  // a title input that no longer exists; the typed draft must stay on-device.
+  await expect(page.locator(".inspectorDetail")).toHaveCount(0);
   // The text is not thrown away: it stays kept in this device.
   await expect.poll(() => page.evaluate((noteId) => Object.keys(localStorage).some((key) => key.endsWith(`note-body:${noteId}`)
     && JSON.parse(localStorage.getItem(key) || "{}").text === "typed before it was deleted"), id), { timeout: 20_000 }).toBe(true);
@@ -380,7 +381,7 @@ test("a crashed page's text for a note deleted elsewhere is kept in the device",
   expect(await keptBodyText(page, id)).toEqual(["typed before the crash"]);
 });
 
-test("using my text when the note was deleted elsewhere keeps the text", async ({ page }) => {
+test("deletion while resolving a note conflict closes the inspector but keeps my text", async ({ page }) => {
   const id = `e2e-note-mine-gone-${Date.now()}`;
   await page.goto("/");
   await waitUntilSynced(page);
@@ -397,9 +398,11 @@ test("using my text when the note was deleted elsewhere keeps the text", async (
   await otherDeviceDeletes(page, id);
   await page.evaluate(() => window.dispatchEvent(new Event("focus")));
   await waitUntilSynced(page);
-  await conflict.getByRole("button", { name: "Použít můj text" }).click();
-  await expect(page.locator(".noteStatus[data-state]")).toHaveAttribute("data-state", "noteSaveFailed", { timeout: 20_000 });
-  expect(await keptBodyText(page, id)).toEqual(["my text"]);
+  // #404: the remote delete closes the inspector before a stale conflict
+  // action can save to a deleted note. The draft remains locally recoverable.
+  await expect(page.locator(".inspectorDetail")).toHaveCount(0);
+  await expect(conflict).toHaveCount(0);
+  await expect.poll(() => keptBodyText(page, id), { timeout: 20_000 }).toEqual(["my text"]);
 });
 
 test("another open tab never takes over a note text this tab set aside while editing another note", async ({ page, context }) => {

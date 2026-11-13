@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { releaseOwnerRead } from "../../../../lib/owner-session-read-release";
 import { fenceRestoredClient } from "../../../../lib/restore-fence";
 import { isAuthenticated } from "../../../../lib/auth";
 import { ContextCommandError } from "../../../../lib/context-commands";
@@ -20,10 +21,10 @@ export async function GET(request: Request) {
   try {
     const url = new URL(request.url);
     const sources = listContextSources(url.searchParams.get("workspaceId") || "", { includeArchived: url.searchParams.get("includeArchived") === "true" });
-    return NextResponse.json({ schemaVersion: 1, sources }, { headers: { "cache-control": "no-store" } });
+    return releaseOwnerRead(request, NextResponse.json({ schemaVersion: 1, sources }, { headers: { "cache-control": "no-store" } }));
   } catch (error) {
     const status = error instanceof ContextCommandError ? error.status : 400;
-    return NextResponse.json({ error: error instanceof Error ? error.message : "Context sources are unavailable" }, { status });
+    return releaseOwnerRead(request, NextResponse.json({ error: error instanceof Error ? error.message : "Context sources are unavailable" }, { status }));
   }
 }
 

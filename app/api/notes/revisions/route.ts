@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { releaseOwnerRead } from "../../../../lib/owner-session-read-release";
 import { isAuthenticated } from "../../../../lib/auth";
 import { enforceRateLimit } from "../../../../lib/http-security";
 import { answerRevisionQuery } from "../../../../lib/note-revisions";
@@ -29,5 +30,5 @@ export async function GET(request: Request) {
   const answer = answerRevisionQuery(getDatabase(), params.get("noteId") || "", params.get("revision"));
   recordSecurityEvent(request, "note.revisions.read", answer.status === 200 ? "allowed" : "rejected",
     answer.status === 200 ? { count: answer.count ?? null } : { reason: answer.status === 404 ? "not-found" : "invalid-request" });
-  return NextResponse.json(answer.body, { status: answer.status, headers });
+  return releaseOwnerRead(request, NextResponse.json(answer.body, { status: answer.status, headers }));
 }

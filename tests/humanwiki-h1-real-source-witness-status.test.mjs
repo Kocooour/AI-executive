@@ -6,7 +6,7 @@ import https from "node:https";
 import os from "node:os";
 import path from "node:path";
 import { before, after, test } from "node:test";
-import { createSessionToken, sessionCookieName } from "../lib/auth.ts";
+import { createSessionToken, sessionCookieName } from "./support/owner-session-test-cookie.mjs";
 import { bootstrapIsolatedTargetStore } from "../lib/target-store-bootstrap.ts";
 import {
   bootstrapHumanWikiConsentPrivateLedger, withHumanWikiConsentPrivateLedger,

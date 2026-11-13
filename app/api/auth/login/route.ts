@@ -8,6 +8,7 @@ import {
 } from "../../../../lib/auth";
 import { enforceRateLimit, HttpInputError, readJsonBody, requireSameOrigin } from "../../../../lib/http-security";
 import { recordSecurityEvent } from "../../../../lib/security-audit";
+import { OwnerSessionStateUnavailable } from "../../../../lib/owner-session-revocation";
 
 export const runtime = "nodejs";
 
@@ -51,7 +52,7 @@ export async function POST(request: Request) {
     return response;
   } catch (error) {
     recordSecurityEvent(request, "auth.login", "failed", { reason: "invalid-request" });
-    const status = error instanceof HttpInputError ? error.status : 500;
+    const status = error instanceof HttpInputError ? error.status : error instanceof OwnerSessionStateUnavailable ? 503 : 500;
     return NextResponse.json(
       { error: error instanceof HttpInputError ? error.message : "Login failed" },
       { status },

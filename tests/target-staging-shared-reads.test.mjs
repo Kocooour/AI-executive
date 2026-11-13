@@ -27,7 +27,7 @@ process.env.AI_EXECUTIVE_SESSION_SECRET = "synthetic-r2id2b-session-secret-2026-
 process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_ENABLED = "true";
 
 const { bootstrapIsolatedTargetStore } = await import("../lib/target-store-bootstrap.ts");
-const { createSessionToken, sessionCookieName } = await import("../lib/auth.ts");
+const { createSessionToken, sessionCookieName } = await import("./support/owner-session-test-cookie.mjs");
 const durable = await import("../lib/target-staging-durable-session.ts");
 const identityLib = await import("../lib/target-staging-http-identity.ts");
 const readProcess = await import("../lib/target-staging-read-process.ts");

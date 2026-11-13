@@ -1,3 +1,4 @@
+import { releaseOwnerRead } from "../../../lib/owner-session-read-release";
 import { NextResponse } from "next/server";
 import {
   getNotificationState,
@@ -31,7 +32,7 @@ export async function GET(request: Request) {
       headers: { "retry-after": String(limited.retryAfter) },
     });
   }
-  return NextResponse.json(getNotificationState());
+  return releaseOwnerRead(request, NextResponse.json(getNotificationState()));
 }
 
 export async function POST(request: Request) {

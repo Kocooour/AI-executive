@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { releaseOwnerRead } from "../../../../lib/owner-session-read-release";
 import { isAuthenticated } from "../../../../lib/auth";
 import { ContextCommandError } from "../../../../lib/context-commands";
 import { explainOwnerClaim } from "../../../../lib/context-search";
@@ -20,10 +21,10 @@ export async function GET(request: Request) {
     const params = new URL(request.url).searchParams;
     const result = explainOwnerClaim(params.get("workspaceId") || "", params.get("claimId") || "");
     recordSecurityEvent(request, "context.explain", "allowed", { workspaceId: result.workspaceId, objectId: result.claim.id });
-    return NextResponse.json(result, { headers });
+    return releaseOwnerRead(request, NextResponse.json(result, { headers }));
   } catch (error) {
     recordSecurityEvent(request, "context.explain", "failed", { reason: error instanceof ContextCommandError ? error.code : "invalid_request" });
-    return NextResponse.json({ error: error instanceof Error ? error.message : "Context history unavailable" },
-      { status: error instanceof ContextCommandError ? error.status : 400, headers });
+    return releaseOwnerRead(request, NextResponse.json({ error: error instanceof Error ? error.message : "Context history unavailable" },
+      { status: error instanceof ContextCommandError ? error.status : 400, headers }));
   }
 }

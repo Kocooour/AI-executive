@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { releaseOwnerRead } from "../../../../../lib/owner-session-read-release";
 import { isAuthenticated } from "../../../../../lib/auth";
 import { HttpInputError, enforceRateLimit, readJsonBody, requireSameOrigin } from "../../../../../lib/http-security";
 import { MailError, readGmailMessages } from "../../../../../lib/mail-gmail";
@@ -24,7 +25,7 @@ export async function POST(request: Request) {
     if (body.q !== undefined && typeof body.q !== "string") throw new MailError("Mail query is invalid", 400);
     const result = await readGmailMessages({ workspaceId, accountId, folder, q: body.q as string | undefined });
     recordSecurityEvent(request, "mail.gmail.messages.read", "allowed", { provider: "gmail" });
-    return json(result);
+    return releaseOwnerRead(request, json(result));
   } catch (error) {
     recordSecurityEvent(request, "mail.gmail.messages.read", "rejected", { provider: "gmail" });
     return json({ error: error instanceof MailError || error instanceof HttpInputError ? error.message : "Gmail request failed" },

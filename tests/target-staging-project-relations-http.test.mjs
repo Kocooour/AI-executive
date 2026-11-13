@@ -31,7 +31,7 @@ process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_NOTES_ENABLED = "true";
 process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_RELATIONS_ENABLED = "true";
 const { bootstrapIsolatedTargetStore } = await import("../lib/target-store-bootstrap.ts");
 const durable = await import("../lib/target-staging-durable-session.ts");
-const { createSessionToken, sessionCookieName } = await import("../lib/auth.ts");
+const { createSessionToken, sessionCookieName } = await import("./support/owner-session-test-cookie.mjs");
 const { GET } = await import("../app/api/target-staging/projects/[projectId]/relations/route.ts");
 const { parseStagingStructuralRelations } =
   await import("../lib/target-staging-read-process.ts");

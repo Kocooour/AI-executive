@@ -1,3 +1,4 @@
+import { releaseOwnerRead } from "../../../lib/owner-session-read-release";
 import { NextResponse } from "next/server";
 import { fenceRestoredClient } from "../../../lib/restore-fence";
 import { isAuthenticated } from "../../../lib/auth";
@@ -25,7 +26,7 @@ export async function GET(request: Request) {
     const url = new URL(request.url);
     const workspaceId = url.searchParams.get("workspaceId") || "";
     const includeArchived = url.searchParams.get("includeArchived") === "true";
-    return NextResponse.json({ items: listOwnerPACTContext(workspaceId, includeArchived) });
+    return releaseOwnerRead(request, NextResponse.json({ items: listOwnerPACTContext(workspaceId, includeArchived) }));
   } catch (error) {
     return NextResponse.json({ error: error instanceof Error ? error.message : "Context read failed" }, { status: 400 });
   }

@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { releaseOwnerRead } from "../../../../lib/owner-session-read-release";
 import { fenceRestoredClient } from "../../../../lib/restore-fence";
 import { isAuthenticated } from "../../../../lib/auth";
 import { CalDavAuthError, CalDavError } from "../../../../lib/caldav";
@@ -43,7 +44,7 @@ export async function GET(request: Request) {
   if (!isAuthenticated(request)) return json({ error: "Authentication required" }, 401);
   const limited = enforceRateLimit(request, "calendar-read", 300, 10 * 60_000);
   if (limited) return json({ error: limited.error }, limited.status);
-  return json({ account: getICloudAccountState() });
+  return releaseOwnerRead(request, json({ account: getICloudAccountState() }));
 }
 
 export async function POST(request: Request) {

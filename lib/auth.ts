@@ -1,4 +1,5 @@
 import { createHash, createHmac, scrypt as scryptCallback, timingSafeEqual } from "node:crypto";
+import { issueOwnerSessionIssuedAt, ownerSessionIssuedAtIsValid } from "./owner-session-revocation";
 export const sessionCookieName = "ai_executive_session";
 export const sessionMaxAgeSeconds = 7 * 24 * 60 * 60;
 
@@ -96,8 +97,9 @@ export function authenticationBinding(request: Request) {
 }
 
 export function createSessionToken(maxAgeSeconds = sessionMaxAgeSeconds) {
+  const issuedAt = issueOwnerSessionIssuedAt();
   const payload = encode(
-    JSON.stringify({ subject: "owner", expiresAt: Date.now() + maxAgeSeconds * 1000 }),
+    JSON.stringify({ subject: "owner", issuedAt, expiresAt: issuedAt + maxAgeSeconds * 1000 }),
   );
   return `${payload}.${sign(payload)}`;
 }
@@ -120,7 +122,11 @@ export function isAuthenticated(request: Request) {
   }
   try {
     const data = JSON.parse(Buffer.from(payload, "base64url").toString("utf8"));
-    return data.subject === "owner" && Number(data.expiresAt) > Date.now();
+    return data.subject === "owner" &&
+      Number.isSafeInteger(data.expiresAt) &&
+      data.expiresAt > Date.now() &&
+      data.expiresAt - data.issuedAt <= sessionMaxAgeSeconds * 1000 &&
+      ownerSessionIssuedAtIsValid(data.issuedAt);
   } catch {
     return false;
   }

@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
-# Lumi production deployment. Execute a reviewed commit's script as root inside tmux.
+# Lumi production deployment. Always execute THIS file from the verified target
+# commit via deployment/DEPLOY.md, not the stale script on the checked-out main.
+# The old running script cannot bootstrap features introduced only in the target.
 set -Eeuo pipefail
 umask 022
 APP=/opt/ai-executive
@@ -9,10 +11,14 @@ BACKUP_DIR=/var/backups/ai-executive
 SERVICE=ai-executive
 HTTPS_BASE=https://vm13861.tail412944.ts.net:8443
 TARGET="${1:-}"
+RECOVERY_MODE=0
 PREV=""
 BACKUP=""
 STOPPED=0
 CHANGED=0
+# Fail closed if a revocation initialization could have begun, even if the
+# feature commit was not completely installed.
+OWNER_CUTOFF_INIT_ATTEMPTED=0
 BACKUP_VALIDATED=0
 # An integrity mismatch while the service was stopped is a known data incident.
 # Rolling back code must not claim the affected Gmail consent/index survived.
@@ -20,6 +26,14 @@ MAIL_PRESTART_INTEGRITY_FAILED=0
 MAIL_PRESTART_SNAPSHOT_FAILED=0
 
 die() { echo "STOP: $*" >&2; exit 1; }
+
+# Explicit opt-in after a failed first rollout has left the service stopped.
+# Never interpret a stopped service as permission to recover automatically.
+if [ "$#" -eq 2 ] && [ "$2" = "--recover-stopped" ]; then
+  RECOVERY_MODE=1
+else
+  [ "$#" -eq 1 ] || die "pouziti: deploy-safe.sh <target-sha> [--recover-stopped]"
+fi
 
 # A root build can leave .next/BUILD_ID mode 0600. Never make the build world-writable.
 fix_build_permissions() {
@@ -243,6 +257,26 @@ on_exit() {
     echo "KRITICKA CHYBA: sluzba stale bezi; nelze bezpecne sestavovat rollback." >&2
     exit "$rc"
   fi
+  # A failure before ANY code switch or cutoff-init attempt can safely restore
+  # the still-checked-out old service: this deployment has not revoked cookies.
+  # Recheck HEAD and the cutoff path, not merely a missing file or a boolean
+  # computed at preflight. A possibly provisioned/lost cutoff fails closed.
+  if [ "${OWNER_SESSION_FIRST_ROLLOUT:-0}" = 1 ] &&
+     [ "$RECOVERY_MODE" != 1 ] &&
+     [ "$CHANGED" = 0 ] &&
+     [ "$OWNER_CUTOFF_INIT_ATTEMPTED" = 0 ] &&
+     [ "$(git rev-parse HEAD)" = "$PREV" ] &&
+     [ ! -e "$DATA/owner-session-valid-from.sqlite" ] &&
+     [ ! -L "$DATA/owner-session-valid-from.sqlite" ]; then
+    echo "Prvni rollout selhal pred zmenou kodu a pred pokusem o inicializaci: obnovuji puvodni sluzbu." >&2
+  # After switching code (or attempting cutoff init), never reenable old
+  # cookie validation by restarting pre-feature $PREV without secret rotation.
+  elif [ "${OWNER_SESSION_FIRST_ROLLOUT:-0}" = 1 ] || [ "$RECOVERY_MODE" = 1 ]; then
+    echo "BEZPECNOSTNI BLOKACE: neuspesne nasazeni nebo obnova revokace relaci." >&2
+    echo "Sluzba zustava zastavena, bez automatickeho rollbacku a navratu k predchozi autentizaci." >&2
+    echo "Oprav a nasad verzi s kontrolou revokace, nebo pred rucnim spustenim stare verze rotuj AI_EXECUTIVE_SESSION_SECRET." >&2
+    exit "$rc"
+  fi
   if [ "$CHANGED" = 1 ]; then
     echo "Vracim pouze kod na $PREV; produkcni data neobnovuji." >&2
     (
@@ -322,7 +356,14 @@ echo "Exkluzivni zamek nasazeni: OK"
 
 echo "=== PRE-FLIGHT ==="
 [[ "$TARGET" =~ ^[0-9a-f]{40}$ ]] || die "zadej uplny 40mistny SHA"
-test "$(systemctl is-active "$SERVICE")" = active || die "sluzba nebezi"
+if [ "$RECOVERY_MODE" = 1 ]; then
+  # Only an explicitly inactive unit is safe; failed/activating/unknown
+  # systemd states are not proof that all old workers have stopped.
+  test "$(systemctl is-active "$SERVICE")" = inactive ||
+    die "rezim obnovy vyzaduje zastavenou sluzbu"
+else
+  test "$(systemctl is-active "$SERVICE")" = active || die "sluzba nebezi"
+fi
 test "$(systemctl show "$SERVICE" -p User --value)" = ai-executive || die "jiny ucet sluzby"
 test "$(systemctl show "$SERVICE" -p WorkingDirectory --value)" = "$APP" || die "jiny adresar sluzby"
 test -f "$DATA/store.sqlite" && test -f "$ENVFILE" || die "chybi data nebo env"
@@ -337,8 +378,33 @@ test -z "$(git status --porcelain)" || die "lokalni zmeny v repozitari"
 PREV="$(git rev-parse HEAD)"
 git fetch --no-tags origin main
 test "$(git rev-parse FETCH_HEAD)" = "$TARGET" || die "cil se neshoduje s origin/main"
-test "$PREV" != "$TARGET" || die "verze uz bezi"
+if [ "$RECOVERY_MODE" != 1 ]; then
+  test "$PREV" != "$TARGET" || die "verze uz bezi"
+fi
 git merge-base --is-ancestor "$PREV" "$TARGET" || die "nelze fast-forward"
+if [ "$RECOVERY_MODE" = 1 ]; then
+  # Recovery from a fail-closed, stopped deployment: only when the checked-out
+  # version AND the reviewed target enforce the existing persistent cutoff.
+  # This intentionally does not cover failures before first provisioning.
+  git cat-file -e "$PREV:lib/owner-session-revocation.ts" 2>/dev/null ||
+    die "obnova vyzaduje jiz nasazenou verzi s revokaci relaci"
+  git cat-file -e "$TARGET:lib/owner-session-revocation.ts" 2>/dev/null ||
+    die "cil obnovy neobsahuje revokaci relaci"
+  test -f "$APP/scripts/owner-session-revocation-init.mjs" ||
+    die "chybi kontrolni prikaz revokace relaci"
+  runuser -u ai-executive -- env AI_EXECUTIVE_DATA_DIR="$DATA" /usr/bin/node \
+    --experimental-loader "$APP/scripts/target-staging-ts-loader.mjs" \
+    "$APP/scripts/owner-session-revocation-init.mjs" --check ||
+    die "stav revokace relaci chybi nebo je neplatny; nikdy neobnovuj automaticky"
+  echo "=== OBOVA ZASTAVENE SLUZBY: revokacni stav overen ==="
+fi
+# The only automatic initial provisioning allowed is a real first code rollout.
+# Never recreate missing revocation history during a subsequent deploy/restart.
+OWNER_SESSION_FIRST_ROLLOUT=0
+if git cat-file -e "$TARGET:lib/owner-session-revocation.ts" 2>/dev/null &&
+   ! git cat-file -e "$PREV:lib/owner-session-revocation.ts" 2>/dev/null; then
+  OWNER_SESSION_FIRST_ROLLOUT=1
+fi
 git diff --quiet "$PREV" "$TARGET" -- deployment/ai-executive.service || die "systemd jednotka se zmenila"
 echo "Stavajici: $PREV"
 echo "Cil:       $TARGET"
@@ -416,13 +482,38 @@ BACKUP_VALIDATED=1
 
 echo "=== FAST-FORWARD A BUILD ==="
 CHANGED=1
-git merge --ff-only "$TARGET"
+if [ "$PREV" != "$TARGET" ]; then
+  git merge --ff-only "$TARGET"
+fi
 test "$(git rev-parse HEAD)" = "$TARGET"
 umask 022
 pnpm install --frozen-lockfile
 pnpm build
 fix_build_permissions
 test -z "$(git status --porcelain)"
+
+# Verify owner-cookie cutoff before the new app can start. First-time init is
+# authorized ONLY when this code is newly introduced in the deployed commit.
+# Existing state is never overwritten; missing state on later deploys fails closed.
+if git cat-file -e "$TARGET:lib/owner-session-revocation.ts" 2>/dev/null; then
+  OWNER_CUTOFF="$DATA/owner-session-valid-from.sqlite"
+  test -f "$APP/scripts/owner-session-revocation-init.mjs" ||
+    die "chybi prikaz pro inicializaci vlastnicke relace"
+  if [ ! -e "$OWNER_CUTOFF" ] && [ ! -L "$OWNER_CUTOFF" ]; then
+    [ "$OWNER_SESSION_FIRST_ROLLOUT" = 1 ] ||
+      die "zmizel revokacni stav; obnov puvodni stav nebo pred novou inicializaci vymen session secret"
+    echo "=== JEDNORAZOVA INICIALIZACE REVOKACE RELACE ==="
+    OWNER_CUTOFF_INIT_ATTEMPTED=1
+    runuser -u ai-executive -- env AI_EXECUTIVE_DATA_DIR="$DATA" /usr/bin/node \
+      --experimental-loader "$APP/scripts/target-staging-ts-loader.mjs" \
+      "$APP/scripts/owner-session-revocation-init.mjs" --init ||
+      die "inicializace revokacniho stavu selhala"
+  fi
+  runuser -u ai-executive -- env AI_EXECUTIVE_DATA_DIR="$DATA" /usr/bin/node \
+    --experimental-loader "$APP/scripts/target-staging-ts-loader.mjs" \
+    "$APP/scripts/owner-session-revocation-init.mjs" --check ||
+    die "neplatny revokacni stav vlastnickych relaci"
+fi
 
 # Deployment/code-build work cannot silently alter consent or indexed mail
 # while the service remains stopped. Snapshot before any user traffic resumes.

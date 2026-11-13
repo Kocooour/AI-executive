@@ -292,7 +292,8 @@ test.describe("B3 mobile Quick Capture", () => {
         status: 200, contentType: "application/json",
         body: JSON.stringify({ suggestion: {
           projectId: "", projectTitle: "", areaId: "", areaTitle: "",
-          priority: "none", estimatedMinutes: 0, scheduledStart: "",
+          // #404: native duration input requires at least 1 minute.
+          priority: "none", estimatedMinutes: 15, scheduledStart: "",
           scheduledEnd: "", scheduledDate: "", scheduledOptions: [],
           confidence: "medium", reasons: [], constraints: [],
           newProjectSuggestion: {

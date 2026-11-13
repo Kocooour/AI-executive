@@ -45,6 +45,9 @@ const publicHandlers: Record<string, { statuses: number[]; reason: string; conte
 };
 // Handlers that authenticate with the integration bearer token instead of the session cookie.
 const bearerHandlers = new Set(["POST /api/integrations/aifred", "POST /api/integrations/aifred/tools"]);
+// #404: 404 is allowed only for these explicitly default-off API namespaces.
+const defaultOffPrefixes = ["/api/target-staging/", "/api/humanwiki/"] as const;
+const mayBeHidden = (url: string) => defaultOffPrefixes.some((prefix) => url.startsWith(prefix));
 
 const addressOf = (name: string) => {
   let hash = 0;
@@ -76,7 +79,7 @@ test("without a session every handler refuses, except the documented public ones
   for (const { key, method, url } of handlers) {
     const publicRule = publicHandlers[key];
     const response = await send(anonymous, method, url, { origin: baseURL! }, publicRule?.contentType);
-    const allowed = publicRule ? publicRule.statuses : [401, 403];
+    const allowed = publicRule ? publicRule.statuses : mayBeHidden(url) ? [401, 403, 404] : [401, 403];
     if (!allowed.includes(response.status())) failures.push(`${key} answered ${response.status()}, expected ${allowed.join(" or ")}`);
     if (!publicRule && response.status() === 200) failures.push(`${key} answered 200 without a session`);
   }
@@ -91,7 +94,8 @@ test("a request from another origin, or with none, does not get through to a han
     if (!mutating.has(method) || bearerHandlers.has(key)) continue;
     for (const headers of [{ origin: "https://evil.example" }, {}] as Array<Record<string, string>>) {
       const response = await send(owner, method, url, headers);
-      if (response.status() !== 403) failures.push(`${key} with ${headers.origin ?? "no origin"} answered ${response.status()}, expected 403`);
+      const allowed = mayBeHidden(url) ? [403, 404] : [403];
+      if (!allowed.includes(response.status())) failures.push(`${key} with ${headers.origin ?? "no origin"} answered ${response.status()}, expected ${allowed.join(" or ")}`);
     }
   }
   expect(failures).toEqual([]);

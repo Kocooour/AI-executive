@@ -32,7 +32,7 @@ const {bootstrapIsolatedTargetStore,
   TARGET_STAGING_PERSONAL_WHEN_RECEIPT_PREFIX:PREFIX}=
   await import("../lib/target-store-bootstrap.ts");
 const durable=await import("../lib/target-staging-durable-session.ts");
-const {createSessionToken,sessionCookieName}=await import("../lib/auth.ts");
+const {createSessionToken,sessionCookieName}=await import("./support/owner-session-test-cookie.mjs");
 const {GET,PATCH}=await import("../app/api/target-staging/task-temporal/personal-when/command/route.ts");
 const {POST}=await import("../app/api/target-staging/task-temporal/personal-when/command/receipt/route.ts");
 const {

@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { releaseOwnerRead } from "../../../../lib/owner-session-read-release";
 import { fenceRestoredClient } from "../../../../lib/restore-fence";
 import { isAuthenticated } from "../../../../lib/auth";
 import {
@@ -47,20 +48,20 @@ export async function GET(request: Request) {
     const url = new URL(request.url);
     const workspaceId = url.searchParams.get("workspaceId") || "";
     const claimId = url.searchParams.get("claimId") || "";
-    if (claimId) return NextResponse.json({ history: listClaimHistory(workspaceId, claimId) });
+    if (claimId) return releaseOwnerRead(request, NextResponse.json({ history: listClaimHistory(workspaceId, claimId) }));
     const projectId = url.searchParams.get("projectId") || undefined;
     const claims = listOwnerClaims(workspaceId, {
       includeArchived: url.searchParams.get("includeArchived") === "true",
       projectId,
     });
     const today = currentContextDate();
-    return NextResponse.json({
+    return releaseOwnerRead(request, NextResponse.json({
       schemaVersion: 1,
       claims: claims.map((claim) => ({ ...claim, eligibleForAI: isEligibleClaim(claim, projectId, today) })),
-    });
+    }));
   } catch (error) {
     const status = error instanceof ContextCommandError ? error.status : 400;
-    return NextResponse.json({ error: error instanceof Error ? error.message : "Context claims are unavailable" }, { status });
+    return releaseOwnerRead(request, NextResponse.json({ error: error instanceof Error ? error.message : "Context claims are unavailable" }, { status }));
   }
 }
 

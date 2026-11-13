@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createSessionToken, sessionCookieName } from "../lib/auth.ts";
+import { createSessionToken, sessionCookieName } from "./support/owner-session-test-cookie.mjs";
 import { GET } from "../app/api/humanwiki/readiness/route.ts";
 import { POST } from "../app/api/humanwiki/import/route.ts";
 

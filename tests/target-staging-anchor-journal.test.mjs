@@ -31,7 +31,7 @@ process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_WRITE_ENABLED = "true";
 
 const { bootstrapIsolatedTargetStore } = await import("../lib/target-store-bootstrap.ts");
 const { inspectIsolatedTargetStore } = await import("../lib/target-store-preflight.ts");
-const { createSessionToken, sessionCookieName } = await import("../lib/auth.ts");
+const { createSessionToken, sessionCookieName } = await import("./support/owner-session-test-cookie.mjs");
 const durable = await import("../lib/target-staging-durable-session.ts");
 const journalLib = await import("../lib/target-staging-anchor-journal.ts");
 const witnessLib = await import("../lib/target-staging-anchor-witness.ts");
