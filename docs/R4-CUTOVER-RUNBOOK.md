@@ -35,34 +35,34 @@ This text is an approval **template**, not an approval. If the owner-approved pl
 
 ## Target-store provision and check (#422; no activation)
 
-The operator selects an absolute **new, non-existing** target directory under an already existing parent and an explicit single owner ID. The CLI refuses symlink/path aliases, overlap with configured legacy or existing target staging storage, and overlap with the implicit \`<cwd>/.data\` default. It bootstraps a private isolated store using the existing library, runs the supported **read-only** semantic preflight (schema, owner, restore generation, journal and witness) and publishes it only into a freshly created destination. It creates the directory with mode 0700 and the three store files with mode 0600. Re-running provision against an existing path fails without overwriting it. On a caught failure, the CLI removes only its own newly created working/output directories; a hard kill can leave an operator-private temporary directory that must be inspected.
+The operator selects an absolute **new, non-existing** target directory under an already existing parent and an explicit single owner ID. The CLI refuses symlink/path aliases, overlap with configured legacy or existing target staging storage, and overlap with the implicit `<cwd>/.data` default. It bootstraps a private isolated store using the existing library, runs the supported **read-only** semantic preflight (schema, owner, restore generation, journal and witness) and publishes it only into a freshly created destination. It creates the directory with mode 0700 and the three store files with mode 0600. Re-running provision against an existing path fails without overwriting it. On a caught failure, the CLI removes only its own newly created working/output directories; a hard kill can leave an operator-private temporary directory that must be inspected.
 
-\`\`\`bash
+```bash
 node scripts/target-store-provision.mjs /absolute/new/target-store owner-user-id --confirmed
 node scripts/target-store-provision.mjs --check /absolute/new/target-store
-\`\`\`
+```
 
 A successful command prints **only** the three existing, exact settings:
 
-\`\`\`text
+```text
 AI_EXECUTIVE_TARGET_STAGING_DIRECTORY=/absolute/new/target-store
 AI_EXECUTIVE_TARGET_STAGING_OWNER_USER_ID=owner-user-id
 AI_EXECUTIVE_TARGET_STAGING_RESTORE_GENERATION=<UUID from this store>
-\`\`\`
+```
 
-Save those values in restricted operator evidence; do not publish the actual values in PR descriptions or enable flags. The final \`--confirmed\` is permission to create a **new empty store only**, not production cutover approval. \`--check\` never creates, repairs or alters any file; a failed preflight or unsafe permissions block further action. Neither command performs legacy import, migration, credential reset or deployment changes.
+Save those values in restricted operator evidence; do not publish the actual values in PR descriptions or enable flags. The final `--confirmed` is permission to create a **new empty store only**, not production cutover approval. `--check` never creates, repairs or alters any file; a failed preflight or unsafe permissions block further action. Neither command performs legacy import, migration, credential reset or deployment changes.
 
 After creating the target and **independently capturing a coherent, protected offline copy** of its complete directory, the archive/rehearsal required by #412 must include it:
 
-\`\`\`bash
+```bash
 node deployment/rehearsal/cutover-restore-rehearsal.mjs \
   /offline/legacy-copy /new/rehearsal-output \
   --target-offline /offline/target-store-copy \
   --offline-confirmed
 node scripts/target-store-provision.mjs --check /offline/target-store-copy
-\`\`\`
+```
 
-The rehearsal proves **byte/SQLite copy fidelity**, not journal/witness semantic validity or independent snapshot consistency. The separate \`--check\` provides the latter semantic preflight **only on the detached copy**, not cutover readiness. Before any deployment, still require owner approval, legacy/client/identity gates, verified independent backup/recovery, and exact-SHA release E2E.
+The rehearsal proves **byte/SQLite copy fidelity**, not journal/witness semantic validity or independent snapshot consistency. The separate `--check` provides the latter semantic preflight **only on the detached copy**, not cutover readiness. Before any deployment, still require owner approval, legacy/client/identity gates, verified independent backup/recovery, and exact-SHA release E2E.
 
 ## Copy-only rehearsal commands and limitations
 
