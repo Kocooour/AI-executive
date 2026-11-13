@@ -6,7 +6,7 @@
 
 ## Immutable safety boundary
 
-Neither this runbook nor any tool in #408 authorizes a production cutover, database/cache reset, migration, deletion, credential rotation, target flag activation, or replacement of persisted state. An agent **must not** run #408 tools against production. Only read-only observations of a pre-existing, independently captured **offline** copy and writes into **new, explicitly named, empty** output directories are in scope. Do not open the live SQLite file even for a "read-only" check: a SQLite connection may create or update WAL/SHM files. Keep copies of WAL with the main SQLite file; a bare copy of an active WAL-mode main file is not evidence of a consistent backup.
+Neither this runbook nor any tool in #408 authorizes a production cutover, database/cache reset, migration, deletion, credential rotation, target flag activation, or replacement of persisted state. The separate #422 tool may provision ONLY a brand-new isolated target directory on an operator-approved path, with explicit confirmation and preflight; this is not runtime activation or approval to operate on production data. An agent **must not** run #408 tools against production. Only read-only observations of a pre-existing, independently captured **offline** copy and writes into **new, explicitly named, empty** output directories are in scope. Do not open the live SQLite file even for a "read-only" check: a SQLite connection may create or update WAL/SHM files. Keep copies of WAL with the main SQLite file; a bare copy of an active WAL-mode main file is not evidence of a consistent backup.
 
 The old and target stores are distinct data domains. A backup of the legacy database (including the app's format-v2 owner-data export) is **not** a complete archival backup of credentials, passkeys, push subscriptions, integration secrets or target-store journal/witness state. Preserve the complete offline directory snapshot as the archive; treat app exports as additional, narrower recovery artifacts.
 
@@ -19,6 +19,7 @@ The old and target stores are distinct data domains. A backup of the legacy data
 | 2 | Confirm owner-session revocation from #402 is merged, explicitly provisioned and functional. | Init proof, successful owner logout/re-login, copied-cookie denial, clean CI |
 | 3 | Resolve #388 BFCache lifecycle failures and demonstrate stale/returning clients cannot write old state. | Focused BFCache/restore-generation barrier evidence, exact test SHA |
 | 4 | Capture a **consistent** archival snapshot while writers are quiesced or through an approved atomic filesystem/SQLite backup procedure. Preserve legacy DB + WAL, backups, credentials, integration state and, if present, target DB plus append-only journal and witness as one recovery unit. | Immutable archive identifier, restrictive permissions, file manifest/checksums, protected retention location |
+| 4a | After owner approval of the intended **new** target path and single-owner ID, use `scripts/target-store-provision.mjs` to create and verify that isolated store. Create no legacy data; leave all target flags off. Include a consistent, detached target-directory copy in the archive and step 6 with `--target-offline`. | Exact three operator settings (kept private), read-only `--check` and synthetically proven rehearsal; no activation |
 | 5 | Run `scripts/cutover-inventory.mjs` on the offline copy, giving a new output location. Review only aggregated counts, timestamp ranges and boolean presence. | Content-free JSON, short summary, secret-content rejection tests |
 | 6 | Run the copy-only rehearsal in `deployment/rehearsal/` using a new empty output location. Check copied files, table rows, SHA-256 digests and SQLite `integrity_check` plus tamper/missing-table/non-empty-destination negative tests. **One-source copy fidelity is not independent backup verification.** | Private backup manifest and scoped copy-fidelity report; optional comparison of two separate input paths; independent capture still requires external evidence |
 | 7 | Confirm the proposed target production store location and settings in [R4 target decision draft](R4-TARGET-STORE-DECISION-DRAFT.md); verify its own journal/witness/restore-generation plan and archival recovery, without implementing the switchover. | Owner-reviewed configuration proposal; no target flags enabled |
@@ -31,6 +32,37 @@ The old and target stores are distinct data domains. A backup of the legacy data
 > Schvaluji samostatné produkční nasazení cílového modelu Lumi pouze pro jednoho vlastníka a soukromé Oblasti, na přesně určeném commitu `<40-znakový SHA>`, s cílovým úložištěm `<ověřená absolutní cesta>`, se zachováním nedotčeného archivního originálu `<identifikátor zálohy>`, ověřenou obnovou a rollback plánem `<odkaz>`. Výslovně schvaluji pouze konkrétně vyjmenované přepínače a datové kroky v předloženém plánu. Neschvaluji smazání jiných databází, lokálních kopií, záloh ani přihlašovacích údajů.
 
 This text is an approval **template**, not an approval. If the owner-approved plan needs data import, migration, cache disposal or replacement, list each exact path and irreversible effect in a **separate** decision before implementing. Until then, all production flags remain off.
+
+## Target-store provision and check (#422; no activation)
+
+The operator selects an absolute **new, non-existing** target directory under an already existing parent and an explicit single owner ID. The CLI refuses symlink/path aliases, overlap with configured legacy or existing target staging storage, and overlap with the implicit \`<cwd>/.data\` default. It bootstraps a private isolated store using the existing library, runs the supported **read-only** semantic preflight (schema, owner, restore generation, journal and witness) and publishes it only into a freshly created destination. It creates the directory with mode 0700 and the three store files with mode 0600. Re-running provision against an existing path fails without overwriting it. On a caught failure, the CLI removes only its own newly created working/output directories; a hard kill can leave an operator-private temporary directory that must be inspected.
+
+\`\`\`bash
+node scripts/target-store-provision.mjs /absolute/new/target-store owner-user-id --confirmed
+node scripts/target-store-provision.mjs --check /absolute/new/target-store
+\`\`\`
+
+A successful command prints **only** the three existing, exact settings:
+
+\`\`\`text
+AI_EXECUTIVE_TARGET_STAGING_DIRECTORY=/absolute/new/target-store
+AI_EXECUTIVE_TARGET_STAGING_OWNER_USER_ID=owner-user-id
+AI_EXECUTIVE_TARGET_STAGING_RESTORE_GENERATION=<UUID from this store>
+\`\`\`
+
+Save those values in restricted operator evidence; do not publish the actual values in PR descriptions or enable flags. The final \`--confirmed\` is permission to create a **new empty store only**, not production cutover approval. \`--check\` never creates, repairs or alters any file; a failed preflight or unsafe permissions block further action. Neither command performs legacy import, migration, credential reset or deployment changes.
+
+After creating the target and **independently capturing a coherent, protected offline copy** of its complete directory, the archive/rehearsal required by #412 must include it:
+
+\`\`\`bash
+node deployment/rehearsal/cutover-restore-rehearsal.mjs \
+  /offline/legacy-copy /new/rehearsal-output \
+  --target-offline /offline/target-store-copy \
+  --offline-confirmed
+node scripts/target-store-provision.mjs --check /offline/target-store-copy
+\`\`\`
+
+The rehearsal proves **byte/SQLite copy fidelity**, not journal/witness semantic validity or independent snapshot consistency. The separate \`--check\` provides the latter semantic preflight **only on the detached copy**, not cutover readiness. Before any deployment, still require owner approval, legacy/client/identity gates, verified independent backup/recovery, and exact-SHA release E2E.
 
 ## Copy-only rehearsal commands and limitations
 
