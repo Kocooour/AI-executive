@@ -129,6 +129,10 @@ test("main Search copy is bilingual and never calls All my personal work",()=>{
   assert.match(cs.intro,/Vše není Můj plán/);
   assert.match(en.intro,/All is not My Plan/);
   assert.ok(cs.count(3).includes("3")&&en.count(3).includes("3"));
+  assert.equal(cs.refresh,"Obnovit hledání");
+  assert.equal(en.refresh,"Refresh search");
+  assert.notEqual(cs.more,cs.refresh,"a stale cursor must not be labeled Load more");
+  assert.notEqual(en.more,en.refresh);
 });
 test("shell switches exactly the Search view to server titles; no new bottom nav link",()=>{
   const root=readFileSync("app/ui/lumi-app-root.tsx","utf8");
