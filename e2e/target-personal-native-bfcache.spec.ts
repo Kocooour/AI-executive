@@ -235,7 +235,7 @@ for(const width of [390,1280]){
       cacheNotUsed.push({frameId:data.frameId,reasons:(data.notRestoredExplanations||[])
         .map(reason=>({reason:reason.reason,type:reason.type}))});
     });
-    async function evidence(status:"observed"|"wake-authorized"|"failure",error?:unknown){
+    async function evidence(status:"observed"|"wake-authorized"|"completed"|"failure",error?:unknown){
       let browser:Record<string,unknown>;
       try{browser=await cdp.eval<Record<string,unknown>>(snapshotExpression(secret));}
       catch(snapshotError){browser={snapshotError:String(snapshotError)};}
@@ -434,7 +434,9 @@ for(const width of [390,1280]){
         expect(taskCreatePosts,"Blank composer after cache miss must not submit CREATE")
           .toHaveLength(0);
       }
-      await evidence("wake-authorized");
+      // Final record is captured AFTER the empty Save attempt, so CREATE=0
+      // covers the entire native navigation and re-opening lifecycle.
+      await evidence("completed");
     }catch(error){
       // Attach and log the state even when native pageshow never fires:
       // a broken observer, a reload and a genuine BFCache miss are distinct.
