@@ -1,6 +1,8 @@
 /** Strict subprocess boundary for private project and project-child task commands. */
 import {runStagingWriteChild} from "./target-staging-title-http-process";
 import {isReadableStagingProjectId} from "./target-project-id";
+import {TARGET_STAGING_PRIVATE_STRUCTURE_CREATE_WITNESS_MAX_BYTES}
+  from "./target-store-bootstrap";
 import type {StagingPersonalReadConfig} from "./target-staging-read-process";
 import type {PrivateStructureKind,PrivateStructureCreateCommand,
   PrivateStructureCreateRecovery} from "./target-private-structure-create-writer";
@@ -55,7 +57,11 @@ async function run(config:StagingPersonalReadConfig,kind:PrivateStructureKind,
   mode:"create"|"status"|"recovery",command:PrivateStructureCreateCommand|{commandId:string},
 ):Promise<unknown|null>{
   return runStagingWriteChild(config,"target-staging-structure-create-child.mjs",
-    JSON.stringify({kind,mode,command}));
+    JSON.stringify({kind,mode,command}),
+    // Recovery may echo a previously accepted 512-byte existing project ID.
+    // JSON escaping can double the bytes, so the shared witness bound is safe.
+    // Keep create/status on the generic worker's 1024-byte output limit.
+    mode==="recovery"?TARGET_STAGING_PRIVATE_STRUCTURE_CREATE_WITNESS_MAX_BYTES:undefined);
 }
 export async function createStructureInChild(
   cfg:StagingPersonalReadConfig,kind:PrivateStructureKind,command:PrivateStructureCreateCommand,
