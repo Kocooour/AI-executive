@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
-import {mkdtempSync,mkdirSync,rmSync} from 'node:fs';
+import {mkdtempSync,mkdirSync,rmSync,writeFileSync,readFileSync,existsSync,watch} from 'node:fs';
+import {spawn} from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
 import {DatabaseSync} from 'node:sqlite';
@@ -142,27 +143,41 @@ test('simultaneous PATCH and cancel are ordered by pinned write transaction',asy
   const p=await (await preview(new Request(base+'title',{headers:headers(alice)}),ctx)).json();
   const command={commandId:randomUUID(),title:'Race winner title',
     expectedRevision:p.snapshotRevision,writeAreaId:p.writeAreaId,restoreGeneration:p.restoreGeneration,principalBinding:p.principalBinding};
-  const [rename,fence]=await Promise.all([write(alice,command),cancelWrite(alice,command.commandId,p.principalBinding)]);
+  const oldTitle=db.prepare("SELECT title FROM projects WHERE id='proj'").get().title;
+  const oldAudit=db.prepare("SELECT COUNT(*) AS n FROM project_title_audit WHERE project_id='proj'").get().n;
+  let [rename,fence]=await Promise.all([write(alice,command),cancelWrite(alice,command.commandId,p.principalBinding)]);
   assert.equal(fence.status,200,await fence.clone().text());
   const status=(await fence.json()).status;
-  // Two concurrent HTTP requests can temporarily exhaust a bounded child
-  // worker or race a pinned store preflight and return a fail-closed 503.
-  // After the fence acknowledges, retry the EXACT SAME command UUID: the
-  // durable fence/receipt, not the first HTTP response, decides the outcome.
-  // A persistent outage still fails this test (the retry must settle).
-  let settledRename=rename;
-  if(rename.status===503){
+  assert.ok(status==='cancelled'||status==='committed','fence must settle to a durable outcome');
+
+  // This unscheduled HTTP race tests the final linearized outcome, not the
+  // initial lock-acquisition latency: under parallel CI load, the first PATCH
+  // may get a genuine bounded 503 before the concurrent cancellation settles.
+  // Preserve #418's same-UUID retry while retaining C11's bounded retries,
+  // terminal-status, one-audit-row and persisted-title assertions.
+  // Reconcile ONLY the same command UUID after the fence has responded.
+  // The separate pinned-journal companion below still requires BOTH operations
+  // to succeed on their FIRST attempt within the real 200ms budget.
+  for(let attempt=0;rename.status===503 && attempt<3;attempt++){
     assert.deepEqual(await rename.json(),{error:'Staging unavailable'});
-    settledRename=await write(alice,command);
+    rename=await write(alice,command);
   }
+  assert.notEqual(rename.status,503,
+    'a settled fence must make the identical command UUID resolve as committed or cancelled');
   if(status==='cancelled'){
-    assert.equal(settledRename.status,409,await settledRename.clone().text());
-    assert.equal((await settledRename.json()).error,'Command cancelled');
-    assert.notEqual(db.prepare("SELECT title FROM projects WHERE id='proj'").get().title,command.title);
+    assert.equal(rename.status,409,await rename.clone().text());
+    assert.deepEqual(await rename.json(),{error:'Command cancelled'});
+    assert.equal(db.prepare("SELECT title FROM projects WHERE id='proj'").get().title,oldTitle);
+    assert.equal(db.prepare("SELECT COUNT(*) AS n FROM project_title_audit WHERE project_id='proj'").get().n,
+      oldAudit,'a cancelled command must not produce an audit entry');
   }else{
-    assert.equal(status,'committed');
-    assert.equal(settledRename.status,200,await settledRename.clone().text());
+    assert.equal(rename.status,200,await rename.clone().text());
+    const body=await rename.json();
+    assert.equal(body.ok,true);
+    assert.equal(body.principalBinding,p.principalBinding);
     assert.equal(db.prepare("SELECT title FROM projects WHERE id='proj'").get().title,command.title);
+    assert.equal(db.prepare("SELECT COUNT(*) AS n FROM project_title_audit WHERE project_id='proj'").get().n,
+      oldAudit+1,'even if HTTP retried, exactly one project-title commit is allowed');
   }
   assert.equal(inspectIsolatedTargetStore({...store,mode:'r2-model'}).ok,true);
 });
@@ -250,4 +265,105 @@ test('A-preview to B-PATCH cannot cross a shared-editor identity boundary',async
  const afterSwitch=await send(actorB,cmd);
  assert.equal(afterSwitch.status,404,'B cannot replay A committed command');
  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM project_title_audit").get().n,beforeAudit+1);
+});
+
+
+/**
+ * C11 companion to the existing simultaneous PATCH/cancel race.
+ * The previous test's eventual 200/409 could hide a first-attempt 503 (and
+ * any replay). This test enforces REAL pinned contention: a PATCH child holds
+ * its BEGIN IMMEDIATE transaction immediately after the journal intent fsync.
+ * The cancel child signals only after it has observed the real SQLite sidecar;
+ * this signal releases the PATCH without a parent sleep or speculative retry.
+ * The cancel must succeed on its ONE attempt under the real 200ms budget.
+ */
+test('contended first-attempt project PATCH and cancel settle with the real 200ms writer budget',async()=>{
+  process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_PROJECT_TITLE_WRITE_ENABLED='true';
+  const id='budget-'+randomUUID();
+  db.prepare('INSERT INTO projects(id,area_id,title) VALUES (?,?,?)').run(id,stage.unassignedAreaId,'Before budget race');
+  const actor=cookie('alice');
+  const url='http://localhost:3001/api/target-staging/projects/'+id+'/title';
+  const context={params:Promise.resolve({projectId:id})};
+  const previewResponse=await preview(new Request(url,{headers:headers(actor)}),context);
+  assert.equal(previewResponse.status,200);
+  const p=await previewResponse.json();
+  const command={
+    projectId:id,commandId:randomUUID(),title:'Committed before cancel',
+    expectedRevision:p.snapshotRevision,writeAreaId:p.writeAreaId,
+    restoreGeneration:p.restoreGeneration,principalBinding:p.principalBinding,
+  };
+  const gate=path.join(root,'contended-'+randomUUID());
+  mkdirSync(gate);
+  const input=path.join(gate,'input.json');
+  writeFileSync(input,JSON.stringify({store,command}));
+  const script=path.resolve('tests/support/project-title-contention-child.mjs');
+  const launch=mode=>{
+    const child=spawn(process.execPath,[
+      '--experimental-loader','./tests/ts-loader.mjs',script,mode,input,gate,
+    ],{stdio:['ignore','ignore','pipe'],cwd:process.cwd()});
+    child.capturedStderr='';
+    child.stderr.on('data',data=>{
+      child.capturedStderr=(child.capturedStderr+data.toString()).slice(-3000);
+    });
+    return child;
+  };
+  const marker=name=>path.join(gate,name);
+  const exited=child=>child.exitCode!==null||child.signalCode!==null;
+  // A result marker alone does not prove JSON is complete or a SQLite lock
+  // released. For the final barrier, join each child before reading results.
+  const waitFor=(names,workers,requireExit=false)=>new Promise((resolve,reject)=>{
+    let settled=false;
+    const watcher=watch(gate,check);
+    const timeout=setTimeout(()=>finish(new Error('contention barrier stalled: '+names.join(', '))),120_000);
+    const onExit=()=>check();
+    const onError=error=>finish(error);
+    for(const [worker] of workers){worker.on('exit',onExit);worker.on('error',onError);}
+    function finish(error){
+      if(settled)return;
+      settled=true;
+      clearTimeout(timeout);
+      watcher.close();
+      for(const [worker] of workers){worker.off('exit',onExit);worker.off('error',onError);}
+      if(error)reject(error);else resolve();
+    }
+    function check(){
+      for(const [worker,required] of workers){
+        if(exited(worker)&&(!existsSync(marker(required))||worker.exitCode!==0))
+          return finish(new Error('contention child exited ('+worker.exitCode+'/'+
+            worker.signalCode+') before '+required+': '+worker.capturedStderr));
+      }
+      if(names.every(name=>existsSync(marker(name)))&&
+         (!requireExit||workers.every(([worker])=>exited(worker))))finish();
+    }
+    check();
+  });
+  const stop=async workers=>{
+    const ends=workers.map(worker=>exited(worker)?Promise.resolve():
+      new Promise(resolve=>{worker.once('exit',resolve);worker.once('error',resolve);}));
+    for(const worker of workers)if(!exited(worker))worker.kill('SIGKILL');
+    await Promise.all(ends);
+  };
+  const follower=launch('follower');
+  let leader;
+  try{
+    // Credential issuance preflights SQLite: it must finish BEFORE the other
+    // process holds the real pinned write lock, not inside the measured race.
+    await waitFor(['follower-ready'],[[follower,'follower-ready']]);
+    leader=launch('leader');
+    await waitFor(['leader-ready'],[[leader,'leader-ready'],[follower,'follower-result']]);
+    await waitFor(['leader-result','follower-result'],
+      [[leader,'leader-result'],[follower,'follower-result']],true);
+    assert.equal(existsSync(marker('follower-contended')),true,
+      'follower must have seen a real SQLite journal, not run after release');
+    const first=JSON.parse(readFileSync(marker('leader-result'),'utf8'));
+    const second=JSON.parse(readFileSync(marker('follower-result'),'utf8'));
+    assert.deepEqual(first,{ok:true},'the PATCH must commit on its FIRST attempt');
+    assert.deepEqual(second,{ok:true,status:'committed'},
+      'the ONE cancellation attempt must observe the committed PATCH, not return retryable 503');
+    assert.equal(db.prepare('SELECT title FROM projects WHERE id=?').get(id).title,command.title);
+    assert.equal(db.prepare('SELECT COUNT(*) AS n FROM project_title_audit WHERE project_id=?').get(id).n,1);
+    assert.equal(inspectIsolatedTargetStore({...store,mode:'r2-model'}).ok,true);
+  }finally{
+    await stop([...(leader?[leader]:[]),follower]);
+  }
 });
