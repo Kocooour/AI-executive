@@ -10,6 +10,7 @@ import {
 } from "node:fs";
 import path from "node:path";
 import { isWithinPath as within } from "../../scripts/r4-path-boundary.mjs";
+import { R4OperatorError, safeFailureReason } from "../../scripts/r4-cli-errors.mjs";
 
 const MAX_ROWS_PER_TABLE = 200_000;
 const MAX_ROW_BYTES = 16 * 1024 * 1024;
@@ -34,23 +35,23 @@ function fileSha256(file) {
 }
 function assertSafeFile(file) {
   const stat = statOrNull(file);
-  if (!stat || !stat.isFile() || stat.isSymbolicLink()) throw Error("missing/unsafe regular file");
+  if (!stat || !stat.isFile() || stat.isSymbolicLink()) throw new R4OperatorError("missing/unsafe regular file");
   return stat;
 }
 function canonicalOutput(output) {
-  if (!path.isAbsolute(output)) throw Error("absolute output required");
+  if (!path.isAbsolute(output)) throw new R4OperatorError("absolute output required");
   const basename = path.basename(output);
-  if (basename === "." || basename === "..") throw Error("unsafe output basename");
+  if (basename === "." || basename === "..") throw new R4OperatorError("unsafe output basename");
   const parent = realpathSync(path.dirname(output));
   const result = path.join(parent, basename);
-  if (statOrNull(result)) throw Error("destination exists (must be new)");
+  if (statOrNull(result)) throw new R4OperatorError("destination exists (must be new)");
   return result;
 }
 function safePaths(sources, output) {
-  if (sources.some(source => !path.isAbsolute(source))) throw Error("absolute source required");
+  if (sources.some(source => !path.isAbsolute(source))) throw new R4OperatorError("absolute source required");
   const resolved = sources.map(source => {
     const real = realpathSync(source);
-    if (!lstatSync(real).isDirectory()) throw Error("source must be an offline directory");
+    if (!lstatSync(real).isDirectory()) throw new R4OperatorError("source must be an offline directory");
     return real;
   });
   // Every input must represent a distinct offline tree. In --verify mode,
@@ -62,12 +63,12 @@ function safePaths(sources, output) {
   for (let i = 0; i < resolved.length; i++) {
     for (let j = i + 1; j < resolved.length; j++) {
       if (within(resolved[i], resolved[j]) || within(resolved[j], resolved[i]))
-        throw Error("offline input directories must be distinct and non-overlapping");
+        throw new R4OperatorError("offline input directories must be distinct and non-overlapping");
     }
   }
   const dst = canonicalOutput(output);
   for (const src of resolved) {
-    if (within(src, dst) || within(dst, src)) throw Error("source/destination overlap");
+    if (within(src, dst) || within(dst, src)) throw new R4OperatorError("source/destination overlap");
   }
   // The environment cannot establish that a copy is truly offline, but can reject
   // known live locations. An operator must attest the copy is quiesced before use.
@@ -78,11 +79,11 @@ function safePaths(sources, output) {
   ];
   for (const configured of liveCandidates) {
     if (!configured) continue;
-    if (!path.isAbsolute(configured)) throw Error("live directory config must be absolute");
+    if (!path.isAbsolute(configured)) throw new R4OperatorError("live directory config must be absolute");
     const live = existsSync(configured) ? realpathSync(configured) : path.resolve(configured);
     if (resolved.some(src => within(src, live) || within(live, src)) ||
         within(dst, live) || within(live, dst))
-      throw Error("known live data location refused");
+      throw new R4OperatorError("known live data location refused");
   }
   return { resolved, dst };
 }
@@ -110,14 +111,14 @@ function listTree(root) {
       const file = path.join(absolute, entry.name);
       const rel = path.join(relative, entry.name);
       const st = lstatSync(file);
-      if (st.isSymbolicLink()) throw Error("symlinks are not accepted in an offline snapshot");
+      if (st.isSymbolicLink()) throw new R4OperatorError("symlinks are not accepted in an offline snapshot");
       if (st.isDirectory()) {
         result.push({ relative: rel, kind: "directory", ...fileMetadata(st) });
         visit(file, rel);
       } else if (st.isFile()) {
         result.push({ relative: rel, kind: "file", bytes: st.size, digest: fileSha256(file), ...fileMetadata(st) });
       } else {
-        throw Error("non-regular filesystem entry refused");
+        throw new R4OperatorError("non-regular filesystem entry refused");
       }
     }
   };
@@ -134,11 +135,11 @@ function originalMetadataHash(entries) {
 }
 function assertPrivateCopyModes(root, entries) {
   if ((lstatSync(root).mode & 0o7777) !== 0o700)
-    throw Error("private archive root permissions mismatch");
+    throw new R4OperatorError("private archive root permissions mismatch");
   for (const item of entries) {
     const mode = lstatSync(path.join(root, item.relative)).mode & 0o7777;
     if (mode !== (item.kind === "directory" ? 0o700 : 0o600))
-      throw Error("private archive file permissions mismatch");
+      throw new R4OperatorError("private archive file permissions mismatch");
   }
 }
 function copyTree(src, dst) {
@@ -158,10 +159,10 @@ function copyTree(src, dst) {
   }
   const after = sourceTreeManifest(src);
   if (originalMetadataHash(original) !== originalMetadataHash(after))
-    throw Error("offline source content or metadata changed during copy");
+    throw new R4OperatorError("offline source content or metadata changed during copy");
   const written = listTree(dst);
   if (manifestHash(entries) !== manifestHash(written))
-    throw Error("archived file manifest mismatch");
+    throw new R4OperatorError("archived file manifest mismatch");
   assertPrivateCopyModes(dst, written);
   return original;
 }
@@ -171,7 +172,7 @@ function copyDatabaseForInspection(sourceDir, root, name) {
   assertSafeFile(source);
   for (const suffix of ["", "-wal"]) {
     if (!statOrNull(source + suffix)) {
-      if (suffix === "") throw Error("missing SQLite source");
+      if (suffix === "") throw new R4OperatorError("missing SQLite source");
       continue;
     }
     assertSafeFile(source + suffix);
@@ -192,9 +193,9 @@ function encodeCell(value) {
 function describe(db) {
   const integrity = db.prepare("PRAGMA integrity_check").all();
   if (integrity.length !== 1 || Object.values(integrity[0])[0] !== "ok")
-    throw Error("SQLite integrity_check failed");
+    throw new R4OperatorError("SQLite integrity_check failed");
   if (db.prepare("PRAGMA foreign_key_check").all().length !== 0)
-    throw Error("SQLite foreign_key_check failed");
+    throw new R4OperatorError("SQLite foreign_key_check failed");
   // Include indexes, triggers and views (especially privacy deletion triggers)
   // as well as all application tables. SQLite's sqlite_sequence affects AUTOINCREMENT.
   const definitions = db.prepare(
@@ -203,17 +204,17 @@ function describe(db) {
     "AND type IN ('table','index','trigger','view') ORDER BY type,name"
   ).all();
   const tables = definitions.filter(item => item.type === "table");
-  if (!tables.length) throw Error("no application tables");
+  if (!tables.length) throw new R4OperatorError("no application tables");
   const schemaSha256 = sha(JSON.stringify(definitions.map(x => [x.type, x.name, x.tbl_name, x.sql])));
   const fingerprints = {};
   for (const { name, sql } of tables) {
     const rowHashes = [];
     for (const row of db.prepare("SELECT * FROM " + quote(name)).iterate()) {
-      if (rowHashes.length >= MAX_ROWS_PER_TABLE) throw Error("table exceeds safe row limit");
+      if (rowHashes.length >= MAX_ROWS_PER_TABLE) throw new R4OperatorError("table exceeds safe row limit");
       const sorted = Object.entries(row).sort(([a], [b]) => a.localeCompare(b))
         .map(([key, value]) => [key, encodeCell(value)]);
       const encoded = JSON.stringify(sorted);
-      if (Buffer.byteLength(encoded) > MAX_ROW_BYTES) throw Error("row exceeds safe size limit");
+      if (Buffer.byteLength(encoded) > MAX_ROW_BYTES) throw new R4OperatorError("row exceeds safe size limit");
       rowHashes.push(sha(encoded));
     }
     rowHashes.sort();
@@ -236,15 +237,15 @@ function assertEqualDescriptions(a, b) {
   if (a.schemaSha256 !== b.schemaSha256 ||
       a.version !== b.version ||
       a.application !== b.application)
-    throw Error("schema objects or SQLite metadata mismatch");
+    throw new R4OperatorError("schema objects or SQLite metadata mismatch");
   const x = Object.keys(a.tables).sort(), y = Object.keys(b.tables).sort();
-  if (JSON.stringify(x) !== JSON.stringify(y)) throw Error("missing/extra table");
+  if (JSON.stringify(x) !== JSON.stringify(y)) throw new R4OperatorError("missing/extra table");
   for (const table of x) {
     const before = a.tables[table], after = b.tables[table];
     if (before.count !== after.count ||
         before.schemaSha256 !== after.schemaSha256 ||
         before.rowsSha256 !== after.rowsSha256)
-      throw Error("row count, schema or content mismatch");
+      throw new R4OperatorError("row count, schema or content mismatch");
   }
 }
 function checkTarget(targetDir, inspectionRoot, tag) {
@@ -257,17 +258,17 @@ function parseArgs() {
   const args = process.argv.slice(2);
   // Require affirmative operator knowledge of the input's offline/quiesced
   // capture. The flag alone does not constitute proof of snapshot consistency.
-  if (args.pop() !== "--offline-confirmed") throw Error("offline source confirmation required");
+  if (args.pop() !== "--offline-confirmed") throw new R4OperatorError("offline source confirmation required");
   if (args[0] === "--verify") {
-    if (args.length !== 4) throw Error("usage: --verify <offline-expected-dir> <offline-candidate-dir> <new-output-dir> --offline-confirmed");
+    if (args.length !== 4) throw new R4OperatorError("usage: --verify <offline-expected-dir> <offline-candidate-dir> <new-output-dir> --offline-confirmed");
     return { verify: true, sourceArgs: [args[1], args[2]], out: args[3], targetIndex: null, configIndex: null };
   }
   if (args.length < 2 || (args.length - 2) % 2 !== 0)
-    throw Error("usage: <offline-legacy> <new-output> [--target-offline <dir>] [--config-offline <dir>] --offline-confirmed");
+    throw new R4OperatorError("usage: <offline-legacy> <new-output> [--target-offline <dir>] [--config-offline <dir>] --offline-confirmed");
   const sourceArgs = [args[0]], selected = {};
   for (let i = 2; i < args.length; i += 2) {
     const kind = args[i] === "--target-offline" ? "target" : args[i] === "--config-offline" ? "config" : null;
-    if (!kind || selected[kind] !== undefined) throw Error("invalid or repeated offline source option");
+    if (!kind || selected[kind] !== undefined) throw new R4OperatorError("invalid or repeated offline source option");
     selected[kind] = sourceArgs.length;
     sourceArgs.push(args[i + 1]);
   }
@@ -298,7 +299,7 @@ function main() {
     const candidateSnapshot = copyTree(resolved[1], path.join(restored, "candidate"));
     privateManifest.trees.candidate = candidateSnapshot;
     if (originalMetadataHash(expectedSnapshot) !== originalMetadataHash(candidateSnapshot))
-      throw Error("offline candidate content or metadata mismatch");
+      throw new R4OperatorError("offline candidate content or metadata mismatch");
   } else {
     copyTree(expectedDir, candidateDir);
   }
@@ -311,7 +312,7 @@ function main() {
   const actual = inspect(actualDatabase);
   assertEqualDescriptions(expected, actual);
   if (manifestHash(expectedManifest) !== manifestHash(candidateManifest))
-    throw Error("restored directory manifest mismatch");
+    throw new R4OperatorError("restored directory manifest mismatch");
 
   // Independent VACUUM INTO on a disposable copy. Unlike an app-format-2
   // filtered export, the resulting archive contains all SQLite tables.
@@ -337,7 +338,7 @@ function main() {
     const targetEntries = targetSnapshot.entries;
     copyTree(targetArchive, targetRestored);
     if (manifestHash(targetEntries) !== manifestHash(listTree(targetRestored)))
-      throw Error("target security archive restore mismatch");
+      throw new R4OperatorError("target security archive restore mismatch");
     const before = checkTarget(targetArchive, inspectionRoot, "target-before");
     const after = checkTarget(targetRestored, inspectionRoot, "target-after");
     assertEqualDescriptions(before.target, after.target);
@@ -357,7 +358,7 @@ function main() {
     const entries = configSnapshot.entries;
     copyTree(archivedConfig, restoredConfig);
     if (manifestHash(entries) !== manifestHash(listTree(restoredConfig)))
-      throw Error("configuration artifact restore mismatch");
+      throw new R4OperatorError("configuration artifact restore mismatch");
     config = { status: "bytes_verified", files: entries.filter(x => x.kind === "file").length,
       manifestSha256: manifestHash(entries) };
   }
@@ -372,8 +373,13 @@ function main() {
   // is intentionally recorded, NOT applied without separately approved restore.
   const report = {
     format: "lumi-r4-rehearsal-v2",
+    // Comparing an archive with its own restored copy proves copy fidelity,
+    // NOT that an independently captured snapshot is correct. --verify uses
+    // distinct input roots but cannot establish independent acquisition.
     verdict: "equal",
     mode: args.verify ? "verify-copies" : "archival-backup-restoration",
+    verificationScope: args.verify ? "distinct_offline_inputs_equal" : "single_source_copy_fidelity",
+    independentCaptureEstablished: false,
     sqliteIntegrity: "ok",
     applicationTableCount: Object.keys(expected.tables).length,
     schemaSha256: expected.schemaSha256,
@@ -395,13 +401,17 @@ function main() {
   };
   writeFileSync(path.join(dst, "rehearsal.json"), JSON.stringify(report, null, 2) + "\n",
     { mode: 0o600, flag: "wx" });
-  process.stdout.write("R4 OFFLINE rehearsal: PASS; " + report.applicationTableCount +
-    " tables; table rows, schema objects, SQLite integrity and directory backup/restore match. " +
-    "Target coverage: " + target.status + "; external configuration: " + config.status + ". This is NOT cutover approval.\n");
+  const outcome = args.verify
+    ? "DISTINCT INPUT COPIES EQUAL (independent capture NOT proven)"
+    : "SINGLE-SOURCE COPY FIDELITY VERIFIED (NOT independent verification)";
+  process.stdout.write("R4 OFFLINE rehearsal: " + outcome + "; " + report.applicationTableCount +
+    " tables; rows, schema objects and SQLite integrity checked. " +
+    "Target coverage: " + target.status + "; external configuration: " + config.status +
+    ". This is NOT cutover approval.\n");
 }
 try { main(); }
 catch (error) {
   // Do not reveal sensitive SQLite errors, source paths or user-controlled names.
-  console.error("R4 offline rehearsal: FAIL (" + (error instanceof Error ? error.constructor.name : "error") + ")");
+  console.error("R4 offline rehearsal: FAIL — " + safeFailureReason(error) + " (private paths and values suppressed)");
   process.exitCode = 1;
 }
