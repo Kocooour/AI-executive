@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
-import {mkdtempSync,mkdirSync,rmSync,writeFileSync,existsSync,readFileSync,copyFileSync,renameSync} from 'node:fs';
+import {mkdtempSync,mkdirSync,rmSync,writeFileSync,existsSync,readFileSync,copyFileSync,renameSync,watch} from 'node:fs';
 import {spawn} from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
@@ -127,6 +127,30 @@ test('a session expiring during a replay cannot reveal the receipt outcome',()=>
 });
 
 
+// Event-driven file barriers: the old 10-second deadline measured scheduler
+// load and cold Node startup rather than the project's CAS invariant.
+function waitForWorkerMarkers(markers, workers) {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const watcher = watch(root, () => check());
+    const onExit = () => check();
+    for (const worker of workers) worker.on('exit', onExit);
+    function finish(error) {
+      if (settled) return;
+      settled = true;
+      watcher.close();
+      for (const worker of workers) worker.off('exit', onExit);
+      if (error) reject(error); else resolve();
+    }
+    function check() {
+      if (markers.every(existsSync)) return finish();
+      if (workers.some(worker => worker.exitCode !== null || worker.signalCode !== null))
+        finish(new Error('CAS worker exited without its synchronization marker'));
+    }
+    check();
+  });
+}
+
 test('two processes racing the same project CAS commit at most one change',async()=>{
  db.prepare("INSERT INTO projects(id,area_id,title) VALUES ('race',?,'Before')").run(stage.unassignedAreaId);
  const page=readAuthorizedProjectTasksPage(db,{actorUserId:'alice',projectId:'race',limit:1,offset:0,restoreGeneration:stage.restoreGeneration});
@@ -139,14 +163,17 @@ test('two processes racing the same project CAS commit at most one change',async
    return spawn(process.execPath,['--experimental-loader','./tests/ts-loader.mjs','./tests/support/project-title-race-child.mjs',input,ready[i],go,results[i]],{stdio:'ignore',cwd:process.cwd()});
  });
  try {
-   const deadline=Date.now()+10000;
-   while (!ready.every(existsSync)) {if(Date.now()>deadline) throw Error('workers not ready');await new Promise(r=>setTimeout(r,20));}
+   // Both real workers reach the barrier before beginning the same pinned CAS.
+   // Slow scheduling cannot decide this test; only their DB outcomes can.
+   await waitForWorkerMarkers(ready, workers);
    writeFileSync(go,'go');
-   while (!results.every(existsSync)) {if(Date.now()>deadline) throw Error('workers did not finish');await new Promise(r=>setTimeout(r,20));}
+   await waitForWorkerMarkers(results, workers);
    const outcome=results.map(file=>JSON.parse(readFileSync(file,'utf8')));
    assert.equal(outcome.filter(result=>result.ok).length,1,JSON.stringify(outcome));
    assert.deepEqual(outcome.filter(result=>!result.ok),[{ok:false,reason:'stale_revision'}]);
    assert.equal(db.prepare("SELECT COUNT(*) AS n FROM project_title_audit WHERE project_id='race'").get().n,1);
+   assert.ok(['After 0','After 1'].includes(db.prepare("SELECT title FROM projects WHERE id='race'").get().title),
+     'the only persisted title is the winner of the one CAS commit');
  } finally {for(const worker of workers)worker.kill();}
 });
 
