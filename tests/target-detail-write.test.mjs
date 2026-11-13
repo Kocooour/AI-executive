@@ -20,7 +20,9 @@ function harness(handlers,over={}){
   });
   return {server,controller,committed,refusals:()=>refusals,setOnline:v=>{online=v;}};
 }
-const preflight=()=>({[STATUS_PREFLIGHT]:()=>json(ctx()),[TASK_DETAIL]:()=>json(taskBody("O"),200,{"x-lumi-task-revision":REV})});
+const preflight=()=>({[STATUS_PREFLIGHT]:()=>json(ctx()),
+  [WHEN_PREFLIGHT]:()=>whenPreflight(null),
+  [TASK_DETAIL]:()=>json(taskBody("O"),200,{"x-lumi-task-revision":REV})});
 const whenPreflight=(whenOn=null)=>json({expectedRevision:REV,expectedPrivateEpoch:1,expectedPlanRevision:null,whenOn,writeAreaId:"area1",restoreGeneration:GEN});
 
 test("reducer: every outcome of a pending write",()=>{
@@ -135,12 +137,14 @@ test("status: complete -> committed with Undo (reopen with a NEW command); resto
   await h.controller.run({kind:"taskStatus",taskId:TASK,areaId:"area1",status:"completed"});
   assert.equal(h.controller.getState().undoable,true);
   const first=h.server.calls.find(c=>c.method==="PATCH").body;
-  assert.deepEqual(Object.keys(first).sort(),["commandId","expectedRevision","restoreGeneration","status","taskId","writeAreaId"]);
+  assert.deepEqual(Object.keys(first).sort(),["commandId","expectedRevision","previousWhenOn","restoreGeneration","status","taskId","writeAreaId"]);
+  assert.equal(first.previousWhenOn,null,"the verified missing personal day is pinned");
   assert.equal(first.status,"completed");
   await h.controller.undo();
   const patches=h.server.calls.filter(c=>c.method==="PATCH");
   assert.equal(patches.length,2);
   assert.equal(patches[1].body.status,"open");
+  assert.deepEqual(patches[1].body.undoOf,first,"Undo must link to the exact confirmed completion");
   assert.notEqual(patches[1].body.commandId,first.commandId);
   assert.equal(h.controller.getState().undone,true);
 
@@ -149,6 +153,34 @@ test("status: complete -> committed with Undo (reopen with a NEW command); resto
   assert.deepEqual([restore.controller.getState().kind,restore.controller.getState().undoable],["committed",false]);
 });
 
+test("detail completion retains a scheduled personal day and Undo restores it",async()=>{
+  const date="2026-11-12";
+  const h=harness({...preflight(),[WHEN_PREFLIGHT]:()=>whenPreflight(date),
+    [STATUS_PATCH]:()=>json({ok:true}),[STATUS_RECEIPT]:()=>json({status:"committed"})});
+  await h.controller.run({kind:"taskStatus",taskId:TASK,areaId:"area1",status:"completed"});
+  const first=h.server.calls.find(c=>c.method==="PATCH").body;
+  assert.equal(first.previousWhenOn,date);
+  assert.equal(h.server.count(WHEN_PREFLIGHT),1,"the day is read-only and actor-authorized");
+  assert.equal(h.controller.getState().undoable,true);
+  await h.controller.undo();
+  const patches=h.server.calls.filter(c=>c.method==="PATCH");
+  assert.equal(patches.length,2);
+  assert.deepEqual(patches[1].body.undoOf,first);
+  assert.equal(patches[1].body.status,"open");
+  assert.equal(h.controller.getState().undone,true);
+});
+
+test("detail completion refuses stale/private When preview before any PATCH",async()=>{
+  for(const response of [json({error:"unavailable"},503),
+    json({error:"not authorized"},403),
+    json({...ctx(),whenOn:"not-a-day",expectedPrivateEpoch:0,expectedPlanRevision:null})]){
+    const h=harness({...preflight(),[WHEN_PREFLIGHT]:()=>response,
+      [STATUS_PATCH]:()=>json({ok:true})});
+    await h.controller.run({kind:"taskStatus",taskId:TASK,areaId:"area1",status:"completed"});
+    assert.equal(h.server.count(STATUS_PATCH),0,"no completion without a verified personal day");
+    assert.equal(h.controller.hasUndo(),false);
+  }
+});
 test("When: committed with Undo back to the previous value",async()=>{
   const h=harness({[WHEN_PREFLIGHT]:()=>whenPreflight("2026-11-12"),[WHEN_PATCH]:()=>json({ok:true}),
     [WHEN_RECEIPT]:()=>json({status:"committed"})});
