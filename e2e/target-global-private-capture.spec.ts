@@ -219,7 +219,7 @@ test("BFCache lifecycle and real back navigation never revive private draft or A
   const reasons=await page.evaluate(()=>{
     const nav=performance.getEntriesByType("navigation")[0] as
       (PerformanceNavigationTiming & {notRestoredReasons?:unknown})|undefined;
-    return {navigationType:nav?.type??"unavailable",
+    return {browserUserAgent:navigator.userAgent,navigationType:nav?.type??"unavailable",
       notRestoredReasons:nav?.notRestoredReasons??null};
   });
   const evidence={persisted:restored,...reasons,mode:"mocked target API",checkedOutSha:process.env.LUMI_TESTED_CHECKOUT_SHA??null};
