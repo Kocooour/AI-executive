@@ -192,6 +192,10 @@ test("synthetic provision -> --check -> archived target-offline rehearsal", t =>
   assert.equal(run(["--check", dir], { legacy }).stdout, created.stdout);
   const offline = path.join(base, "offline-target-copy");
   cpSync(dir, offline, { recursive: true });
+  // Node cpSync may create the destination root with a default 0755 mode;
+  // a real offline capture must restrict the root before semantic --check.
+  chmodSync(offline, 0o700);
+  for (const name of files) chmodSync(path.join(offline, name), 0o600);
   const checkedCopy = run(["--check", offline], { legacy });
   assert.equal(checkedCopy.status, 0, checkedCopy.stderr);
   assert.equal(rows(checkedCopy.stdout)[2], rows(created.stdout)[2]);
