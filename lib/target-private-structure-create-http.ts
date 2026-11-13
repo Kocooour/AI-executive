@@ -90,7 +90,11 @@ async function releaseCommitted(
       result.detail.linearization.areas[0]?.access!=="private-owner")
       return answer(404,"Not found");
   }
-  return Response.json({status:"committed",id},{headers});
+  // The child parent comes from the receipt witness AND the current live
+  // task-detail ACL/linearization check above. Never take it from the caller's
+  // currently open project, or expose an Area/title in this receipt.
+  return Response.json(kind==="project"?{status:"committed",id}:
+    {status:"committed",id,projectId},{headers});
 }
 async function handle(
   request:Request,kind:PrivateStructureKind,mode:"create"|"status"|"recovery"|"cancel",

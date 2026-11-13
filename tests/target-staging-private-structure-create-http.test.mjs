@@ -179,8 +179,8 @@ test("project and project-child create, replay and content-free ledger/journal",
   assert.deepEqual(await checked(await ct(t),201),{ok:true,id:t.taskId});
   assertValidStore(fx);
   assert.deepEqual(await checked(await ct(t),200),{ok:true,id:t.taskId,replayed:true});
-  assert.deepEqual(await checked(await cts(t),200),{status:"committed",id:t.taskId});
-  assert.deepEqual(await checked(await ctr(t),200),{status:"committed",id:t.taskId});
+  assert.deepEqual(await checked(await cts(t),200),{status:"committed",id:t.taskId,projectId:t.projectId});
+  assert.deepEqual(await checked(await ctr(t),200),{status:"committed",id:t.taskId,projectId:t.projectId});
   const after=state(fx);
   assert.equal(after.projects,initial.projects+1);
   assert.equal(after.tasks,initial.tasks+1);
@@ -319,8 +319,8 @@ test("child creation accepts an existing private text-ID project with exact pare
   assert.deepEqual(await checked(await ct(t),201),{ok:true,id:t.taskId});
   assertValidStore(fx);
   assert.deepEqual(await checked(await ct(t),200),{ok:true,id:t.taskId,replayed:true});
-  assert.deepEqual(await checked(await cts(t),200),{status:"committed",id:t.taskId});
-  assert.deepEqual(await checked(await ctr(t),200),{status:"committed",id:t.taskId});
+  assert.deepEqual(await checked(await cts(t),200),{status:"committed",id:t.taskId,projectId:t.projectId});
+  assert.deepEqual(await checked(await ctr(t),200),{status:"committed",id:t.taskId,projectId:t.projectId});
   const verify=new DatabaseSync(fx.stage.databasePath,{readOnly:true});
   try{
     const row=verify.prepare("SELECT project_id,area_id FROM tasks WHERE id=?").get(t.taskId);
@@ -350,8 +350,8 @@ test("maximum-length escaped existing project IDs preserve preflight, replay and
     // canonical preflight or read-only status and recovery.
     assertValidStore(fx);
     assert.deepEqual(await checked(await ct(t),200),{ok:true,id:t.taskId,replayed:true});
-    assert.deepEqual(await checked(await cts(t),200),{status:"committed",id:t.taskId});
-    assert.deepEqual(await checked(await ctr(t),200),{status:"committed",id:t.taskId});
+    assert.deepEqual(await checked(await cts(t),200),{status:"committed",id:t.taskId,projectId:t.projectId});
+    assert.deepEqual(await checked(await ctr(t),200),{status:"committed",id:t.taskId,projectId:t.projectId});
     const verify=new DatabaseSync(fx.stage.databasePath,{readOnly:true});
     try{
       const row=verify.prepare("SELECT project_id,area_id FROM tasks WHERE id=?").get(t.taskId);
@@ -438,7 +438,7 @@ test("settled cancellation returns content-free proof and never deletes a commit
   const t=child(fx,p.projectId);
   await checked(await ct(t),201);
   assert.deepEqual(await checked(await tc(t),200),{status:"settled"});
-  assert.deepEqual(await checked(await ctr(t),200),{status:"committed",id:t.taskId});
+  assert.deepEqual(await checked(await ctr(t),200),{status:"committed",id:t.taskId,projectId:t.projectId});
   assert.equal(state(fx).cancels,0);
   assertValidStore(fx);
 });

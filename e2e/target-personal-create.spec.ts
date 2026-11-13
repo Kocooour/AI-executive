@@ -258,3 +258,75 @@ for(const width of [390,1280]){
     expect(new URL(page.url()).searchParams.get("projectId")).toBe(originalId);
   });
 }
+
+for(const width of [390,1280]){
+  test("A/3: recovering child from another context preserves parent "+width,async({page})=>{
+    test.setTimeout(180_000);
+    if(!store)throw Error("Missing isolated store");
+    await page.setViewportSize({width,height:844});
+    const a=store.seed.createLargeProjectId,home="/?view=Projects&scope=personal";
+    const detail=detailTask(page),list=page.getByTestId("target-scope-list");
+    await page.goto(home);
+    await expect(list).toHaveAttribute("data-state","ready");
+    let bUrl="";
+    if(width===390){
+      await page.getByTestId("target-project-create-open").click();
+      await page.getByTestId("target-project-create-area")
+        .selectOption({label:store.seed.createAreaTitle});
+      const bTitle="Second project "+Math.random();
+      await page.getByTestId("target-project-create-form").getByRole("textbox",{name:"Název"}).fill(bTitle);
+      await page.getByTestId("target-project-create-save").click();
+      await expect(page.getByTestId("target-project-created-open")).toBeVisible();
+      await page.getByTestId("target-project-created-open").click();
+      await expect(detail).toContainText(bTitle);
+      bUrl=page.url();
+      expect(new URL(bUrl).searchParams.get("projectId")).not.toBe(a);
+      await page.goto(home);
+      await expect(list).toHaveAttribute("data-state","ready");
+    }
+    await list.locator('[data-detail-row="project:'+a+'"]').click();
+    await expect(detail).toHaveAttribute("data-detail-kind","project");
+    await detail.getByTestId("target-project-task-create-open").click();
+    const title="Cross-project task "+width+" "+Math.random();
+    await detail.getByTestId("target-project-task-create-form")
+      .getByRole("textbox",{name:"Název"}).fill(title);
+    let taskId="",forwarded=0;
+    await page.route("**/api/target-staging/project-tasks",async route=>{
+      const body=route.request().postDataJSON() as {projectId:string;taskId:string};
+      expect(body.projectId).toBe(a);
+      const response=await route.fetch();
+      expect(response.status()).toBe(201);
+      taskId=body.taskId;forwarded++;
+      await route.abort("failed");
+    },{times:1});
+    await detail.getByTestId("target-project-task-create-save").click();
+    await expect(detail.getByTestId("target-structure-unresolved")).toBeVisible();
+    expect(forwarded).toBe(1);
+    await page.goto(width===390?bUrl:home);
+    if(width===390){
+      await expect(detail).toHaveAttribute("data-detail-kind","project");
+      await detail.getByTestId("target-project-task-create-open").click();
+    }else{
+      await expect(list).toHaveAttribute("data-state","ready");
+      await page.getByTestId("target-project-create-open").click();
+    }
+    await expect(page.getByTestId("target-structure-unresolved")).toBeVisible();
+    await page.getByTestId(width===390?"target-structure-verify":"target-structure-cancel").click();
+    await expect(page.getByTestId("target-structure-unresolved")).toHaveCount(0);
+    await page.getByTestId("target-project-task-created-open").click();
+    await expect(detail).toHaveAttribute("data-detail-kind","task");
+    await expect(detail).toContainText(title);
+    const taskUrl=page.url();
+    expect(taskUrl).toContain(taskId);
+    expect(new URL(taskUrl).searchParams.get("projectId")).toBe(a);
+    expect(forwarded).toBe(1);
+    await detail.locator(".targetDetailParent .targetDetailLink").click();
+    await expect(detail).toHaveAttribute("data-detail-kind","project");
+    expect(new URL(page.url()).searchParams.get("projectId")).toBe(a);
+    await page.goto(taskUrl);
+    await expect(detail).toHaveAttribute("data-detail-kind","task");
+    await detail.locator("button.inspectorClose").click();
+    await expect(detail).toHaveAttribute("data-detail-kind","project");
+    expect(new URL(page.url()).searchParams.get("projectId")).toBe(a);
+  });
+}

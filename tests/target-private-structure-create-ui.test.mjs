@@ -87,6 +87,10 @@ test("R3 A/3: one create POST, exact success or uncertain; status/recovery are q
     ["project-task",child(),null,"/api/target-staging/project-tasks"],
   ]){
     const expected=kind==="project"?cmd.projectId:cmd.taskId;
+    const httpCommitted=kind==="project"
+      ?{status:"committed",id:expected}
+      :{status:"committed",id:expected,projectId:cmd.projectId};
+    const decodedCommitted={...httpCommitted,kind};
     let posts=0;
     const fetcher=async(url,options)=>{
       posts++;
@@ -110,20 +114,33 @@ test("R3 A/3: one create POST, exact success or uncertain; status/recovery are q
     const status=await checkStructureCreateStatus(kind,cmd,signal,async(url,options)=>{
       assert.equal(url,path+"/create-status");
       assert.deepEqual(JSON.parse(options.body),cmd);
-      return json({status:"committed",id:expected});
+      return json(httpCommitted);
     });
-    assert.deepEqual(status,{status:"committed",id:expected});
+    assert.deepEqual(status,decodedCommitted);
     assert.equal(await checkStructureCreateStatus(kind,cmd,signal,
       async()=>json({status:"committed",id:randomUUID()})),"unavailable");
     const recovery=await recoverStructureCreate(kind,cmd.commandId,null,signal,
       async(url,options)=>{
         assert.equal(url,path+"/create-recovery");
         assert.deepEqual(JSON.parse(options.body),{commandId:cmd.commandId});
-        return json({status:"committed",id:expected});
+        return json(httpCommitted);
       });
-    assert.deepEqual(recovery,{status:"committed",id:expected});
+    assert.deepEqual(recovery,decodedCommitted);
     assert.equal(await checkStructureCreateStatus(kind,cmd,signal,
       async()=>json({status:"not_recorded"})),"not_recorded");
+    if(kind==="project-task"){
+      // Neither an unbound response nor another authorized project's ID
+      // can release the original uncertain child command.
+      for(const malformed of [
+        {status:"committed",id:expected},
+        {status:"committed",id:expected,projectId:"other-private-parent"},
+        {status:"committed",id:expected,projectId:cmd.projectId,areaId:"private"},
+      ]){
+        assert.equal(await checkStructureCreateStatus(kind,cmd,signal,
+          async()=>json(malformed)),"unavailable");
+      }
+    }else assert.equal(await recoverStructureCreate(kind,cmd.commandId,null,signal,
+      async()=>json({...httpCommitted,projectId:"leaked"})),"unavailable");
     assert.equal(isTargetReadRequest(path+"/create-status",{method:"POST"}),true);
     assert.equal(isTargetReadRequest(path+"/create-recovery",{method:"POST"}),true);
     assert.equal(isTargetReadRequest(path,{method:"POST"}),false);
@@ -148,8 +165,8 @@ test("R3 A/3: dropped response blocks duplicate POST; not_recorded never release
     async()=> "not_recorded"),"not_recorded");
   assert.equal(structureCreateMarker().status,"blocked");
   assert.deepEqual(await verifyStructureCreate(actor,generation,ownerScope,new AbortController().signal,
-    async()=>({status:"committed",id:cmd.projectId})),
-    {status:"committed",id:cmd.projectId});
+    async()=>({status:"committed",kind:"project",id:cmd.projectId})),
+    {status:"committed",kind:"project",id:cmd.projectId});
   assert.equal(structureCreateMarker().status,"clear");
 }));
 
@@ -164,9 +181,10 @@ test("R3 A/3: reload retains only opaque command ID; verified recovery clears it
     async(kind,id,parent)=>{
       assert.equal(kind,"project-task");assert.equal(id,cmd.commandId);
       assert.equal(parent,null);
-      return {status:"committed",id:cmd.taskId};
+      return {status:"committed",kind:"project-task",id:cmd.taskId,projectId:cmd.projectId};
     });
-  assert.deepEqual(result,{status:"committed",id:cmd.taskId});
+  assert.deepEqual(result,{status:"committed",kind:"project-task",
+    id:cmd.taskId,projectId:cmd.projectId});
   assert.equal(structureCreateMarker().status,"clear");
 }));
 
@@ -279,8 +297,11 @@ test("R3 A/3: settled receipt recovers an authorized created ID; revoked record 
       new AbortController().signal,
       async()=>{requests++;return "settled";},
       async(k,commandId)=>{requests++;assert.equal(k,kind);assert.equal(commandId,cmd.commandId);
-        return {status:"committed",id};});
-    assert.deepEqual(response,{status:"settled",id});
+        return kind==="project"?{status:"committed",kind,id}:
+          {status:"committed",kind,id,projectId:cmd.projectId};});
+    assert.deepEqual(response,{status:"settled",receipt:kind==="project"
+      ?{status:"committed",kind,id}
+      :{status:"committed",kind,id,projectId:cmd.projectId}});
     assert.equal(requests,2);
     assert.equal(structureCreateMarker().status,"clear");
   }
@@ -289,6 +310,21 @@ test("R3 A/3: settled receipt recovers an authorized created ID; revoked record 
     async()=> "uncertain"),"uncertain");
   assert.deepEqual(await cancelStructureCreate(actor,generation,ownerScope,
     new AbortController().signal,async()=> "settled",async()=> "denied"),
-    {status:"settled",id:null},"a hidden/deleted/foreign row must not be surfaced");
+    {status:"settled",receipt:null},"a hidden/deleted/foreign row must not be surfaced");
   assert.equal(structureCreateMarker().status,"clear");
 }));
+
+test("R3 A/3: recovery handles maximum escaped private project IDs without leaking Areas",async()=>{
+  const signal=new AbortController().signal;
+  for(const parent of [String.fromCharCode(92).repeat(512),
+    String.fromCharCode(34).repeat(512)]){
+    const t=child(parent);
+    const response={status:"committed",id:t.taskId,projectId:parent};
+    assert.ok(Buffer.byteLength(JSON.stringify(response),"utf8")>1024);
+    const result=await recoverStructureCreate("project-task",t.commandId,null,signal,
+      async()=>json(response));
+    assert.deepEqual(result,{...response,kind:"project-task"});
+    assert.equal(await checkStructureCreateStatus("project-task",t,signal,
+      async()=>json(response)).then(v=>typeof v==="object"?v.projectId:null),parent);
+  }
+});

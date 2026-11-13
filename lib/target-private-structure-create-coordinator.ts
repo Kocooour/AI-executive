@@ -6,7 +6,7 @@ import type {TargetClientRuntime} from "./target-client-runtime";
 import {sendStructureCreate,checkStructureCreateStatus,recoverStructureCreate,
   cancelStructureCreateCommand,
   validStructureCommand,type StructureKind,type StructureCreateCommand,
-  type StructureReceipt,type StructureCreateResult} from "./target-private-structure-create-client";
+  type StructureReceipt,type StructureCommittedReceipt,type StructureCreateResult} from "./target-private-structure-create-client";
 const KEY="lumi-private-structure-create-unresolved-v1";
 const uuid=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const generationPattern=/^[A-Za-z0-9_-]{43}$/;
@@ -136,7 +136,7 @@ export async function verifyStructureCreate(
  * releasing the marker, then return a navigable ID only when authorized. */
 export type StructureCancelOutcome=
   |"cancelled"|"denied"|"unavailable"
-  |{status:"settled";id:string|null};
+  |{status:"settled";receipt:StructureCommittedReceipt|null};
 export async function cancelStructureCreate(
   runtime:Runtime,generation:string,ownerScope:string,signal:AbortSignal,
   cancel:typeof cancelStructureCreateCommand=cancelStructureCreateCommand,
@@ -162,6 +162,6 @@ export async function cancelStructureCreate(
     active.delete(runtime);entry.unregister();
   }
   if(result==="cancelled")return result;
-  return {status:"settled",id:typeof found==="object"&&found.status==="committed"
-    ?found.id:null};
+  return {status:"settled",receipt:typeof found==="object"&&found.status==="committed"
+    ?found:null};
 }

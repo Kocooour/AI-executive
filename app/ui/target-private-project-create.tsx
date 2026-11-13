@@ -13,7 +13,7 @@ import {validPrivateTaskAreaId,validPrivateTaskTitle} from "../../lib/target-pri
 import {structureCreateMarker,runStructureCreate,verifyStructureCreate,
   cancelStructureCreate,trackedStructureCreate}
   from "../../lib/target-private-structure-create-coordinator";
-import type {StructureKind,StructureCreateCommand}
+import type {StructureKind,StructureCreateCommand,StructureCommittedReceipt}
   from "../../lib/target-private-structure-create-client";
 
 type Props={
@@ -70,13 +70,13 @@ export default function TargetPrivateStructureCreate({
   const [nonce,setNonce]=useState(0);
   const [phase,setPhase]=useState<"idle"|"checking"|"saving"|"verifying"|"uncertain">("idle");
   const [message,setMessage]=useState("");
-  const [savedId,setSavedId]=useState("");
+  const [saved,setSaved]=useState<StructureCommittedReceipt|null>(null);
   const [revision,setRevision]=useState(0);
   const controller=useRef<AbortController|null>(null);
   const serial=useRef(0),pending=useRef(false),mounted=useRef(true);
   const hide=()=>{
     serial.current++;controller.current?.abort();
-    setName("");setSelected("");setSavedId("");setExpanded(false);
+    setName("");setSelected("");setSaved(null);setExpanded(false);
     setCatalog({status:"unavailable",generation,restoreGeneration:"",ownerScope:"",areas:[]});
     // The opaque unresolved marker survives hide; private draft does not.
     pending.current=false;setPhase("idle");setMessage("");
@@ -87,7 +87,7 @@ export default function TargetPrivateStructureCreate({
   },[]);
   useEffect(()=>{
     serial.current++;controller.current?.abort();pending.current=false;
-    setName("");setSelected("");setSavedId("");setExpanded(false);
+    setName("");setSelected("");setSaved(null);setExpanded(false);
     setMessage("");setPhase("idle");setCatalog({status:"loading",generation,restoreGeneration:"",ownerScope:"",areas:[]});
   },[generation,kind,projectId,areaId]);
   function live(){
@@ -135,6 +135,15 @@ export default function TargetPrivateStructureCreate({
     typeof projectId==="string"&&!!projectId&&validPrivateTaskAreaId(areaId)&&
     catalog.status==="ready"&&catalog.areas.some(a=>a.id===areaId);
   const canSave=expanded&&live()&&!blocked&&!pending.current&&phase==="idle"&&available;
+  function showCommitted(receipt:StructureCommittedReceipt){
+    // Refresh only the list whose current parent actually matches the
+    // recovered item. Never treat a task recovered from project A as a task
+    // created in the presently open project B.
+    setSaved(receipt);
+    if(receipt.kind===kind&&
+      (receipt.kind==="project"||receipt.projectId===projectId))
+      onCommitted(receipt.id);
+  }
   async function create(event:FormEvent<HTMLFormElement>){
     event.preventDefault();
     if(!canSave||!runtime||!validPrivateTaskTitle(name)||!live()){
@@ -145,7 +154,7 @@ export default function TargetPrivateStructureCreate({
     if(!chosenArea||catalog.status!=="ready"||!catalog.restoreGeneration||!catalog.ownerScope||
       structureCreateMarker().status!=="clear")return;
     pending.current=true;
-    setMessage("");setSavedId("");
+    setMessage("");setSaved(null);
     const id=crypto.randomUUID(),commandId=crypto.randomUUID();
     const command:StructureCreateCommand=kind==="project"
       ?{projectId:id,commandId,areaId:chosenArea,restoreGeneration:catalog.restoreGeneration,title:name}
@@ -157,8 +166,9 @@ export default function TargetPrivateStructureCreate({
       pending.current=false;
       setRevision(n=>n+1);
       if(result==="saved"&&structureCreateMarker().status==="clear"){
-        setName("");setPhase("idle");setMessage(c.success);setSavedId(id);
-        onCommitted(id);
+        setName("");setPhase("idle");setMessage(c.success);
+        showCommitted(kind==="project"?{status:"committed",kind,id}:
+          {status:"committed",kind,id,projectId:projectId!});
       }else{setPhase("uncertain");setMessage(c.uncertain);}
     });
   }
@@ -178,13 +188,14 @@ export default function TargetPrivateStructureCreate({
       structureCreateMarker().status==="clear"){
       setPhase("idle");setName("");
       if(result==="cancelled"){
-        setSavedId("");setMessage(c.cancelled);
+        setSaved(null);setMessage(c.cancelled);
       }else{
-        const knownId=marker.marker.kind===kind?result.id:null;
-        setSavedId(knownId??"");
-        setMessage(knownId?c.settled:c.settledUnknown);
-        // Treat an already-committed operation as a CREATE, not a cancel.
-        if(knownId)onCommitted(knownId);
+        // Recovery is actor-scoped and includes the server-authorized parent
+        // of a child. The tab marker's kind can differ from this form's kind.
+        const receipt=result.receipt;
+        setMessage(receipt?c.settled:c.settledUnknown);
+        if(receipt)showCommitted(receipt);
+        else setSaved(null);
       }
       if(kind==="project")setNonce(n=>n+1);
     }else{setPhase("uncertain");setMessage(c.cancelFailed);}
@@ -204,9 +215,7 @@ export default function TargetPrivateStructureCreate({
     if(typeof result==="object"&&result.status==="committed"&&
       structureCreateMarker().status==="clear"){
       setName("");setPhase("idle");setMessage(c.success);
-      if(marker.marker.kind===kind){
-        setSavedId(result.id);onCommitted(result.id);
-      }else setSavedId("");
+      showCommitted(result);
     }else{setPhase("uncertain");setMessage(result==="not_recorded"?c.notRecorded:c.verifyFailed);}
   }
   void revision;
@@ -246,11 +255,12 @@ export default function TargetPrivateStructureCreate({
           {phase==="checking"?c.checking:phase==="saving"?c.saving:c.submit}</button>
       </form>}
       {message&&<p role={message===c.success||message===c.cancelled||message===c.settled||message===c.settledUnknown?"status":"alert"}>{message}</p>}
-      {savedId&&<button type="button" data-testid={kind==="project"?"target-project-created-open":"target-project-task-created-open"}
-        onClick={event=>openTargetDetail(kind==="project"
-          ?{kind:"project",id:savedId,view:"Projects"}
-          :{kind:"task",id:savedId,view:"Projects",projectId:projectId!},event.currentTarget)}>
-        {kind==="project"?c.openProject:c.openTask}</button>}
+      {saved&&<button type="button"
+        data-testid={saved.kind==="project"?"target-project-created-open":"target-project-task-created-open"}
+        onClick={event=>openTargetDetail(saved.kind==="project"
+          ?{kind:"project",id:saved.id,view:"Projects"}
+          :{kind:"task",id:saved.id,view:"Projects",projectId:saved.projectId},event.currentTarget)}>
+        {saved.kind==="project"?c.openProject:c.openTask}</button>}
       <button type="button" onClick={()=>{
         if(phase==="saving"||phase==="verifying"||phase==="checking")return;
         setName("");setSelected("");setExpanded(false);setMessage("");

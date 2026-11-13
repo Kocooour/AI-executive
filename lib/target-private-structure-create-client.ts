@@ -15,8 +15,14 @@ export type ProjectTaskCreateCommand={
 };
 export type StructureCreateCommand=ProjectCreateCommand|ProjectTaskCreateCommand;
 export type StructureCreateResult="saved"|"denied"|"uncertain";
+/** The parent of a recovered task is authorized by the server's live detail
+ * read, not the form or a client-stored command. Kind is derived from the
+ * endpoint being queried (never trusted from the HTTP body). */
+export type StructureCommittedReceipt=
+  |{status:"committed";kind:"project";id:string}
+  |{status:"committed";kind:"project-task";id:string;projectId:string};
 export type StructureReceipt=
-  |{status:"committed";id:string}
+  |StructureCommittedReceipt
   |"not_recorded"|"denied"|"unavailable";
 
 const uuid=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -39,13 +45,13 @@ const opts=(body:unknown,signal:AbortSignal):RequestInit=>({
   method:"POST",credentials:"same-origin",cache:"no-store",redirect:"error",
   headers,body:JSON.stringify(body),signal,
 });
-async function bounded(res:Response,signal:AbortSignal):Promise<unknown>{
+async function bounded(res:Response,signal:AbortSignal,maxBytes=1024):Promise<unknown>{
   if(res.redirected||res.headers.get("content-type")?.split(";")[0].trim().toLowerCase()!=="application/json"||
     !(res.headers.get("cache-control")||"").split(",").some(x=>x.trim().toLowerCase()==="no-store")||
     !res.body)throw Error("response");
   const len=res.headers.get("content-length");
   if(len!==null&&(!/^(0|[1-9][0-9]*)$/.test(len)||!Number.isSafeInteger(Number(len))||
-    Number(len)>1024))throw Error("length");
+    Number(len)>maxBytes))throw Error("length");
   const reader=res.body.getReader(),decoder=new TextDecoder("utf-8",{fatal:true});
   let text="",size=0,done=false;
   const cancel=()=>{void reader.cancel().catch(()=>{});};
@@ -57,7 +63,7 @@ async function bounded(res:Response,signal:AbortSignal):Promise<unknown>{
       if(signal.aborted)throw Error("aborted");
       if(part.done){done=true;break;}
       size+=part.value.byteLength;
-      if(size>1024)throw Error("oversize");
+      if(size>maxBytes)throw Error("oversize");
       text+=decoder.decode(part.value,{stream:true});
     }
     text+=decoder.decode();
@@ -95,12 +101,17 @@ async function receipt(
     if(signal.aborted)return "unavailable";
     if([401,403,404].includes(response.status))return "denied";
     if(response.status!==200)return "unavailable";
-    const data=await bounded(response,signal);
+    // Parent IDs may be 512 bytes; JSON escaping may exceed 1024 bytes.
+    const data=await bounded(response,signal,2048);
     if(!record(data))return "unavailable";
     if(keys(data)==="status"&&data.status==="not_recorded")return "not_recorded";
-    if(keys(data)==="id,status"&&data.status==="committed"&&typeof data.id==="string"&&
-      canonical(data.id))
-      return {status:"committed",id:data.id};
+    if(data.status==="committed"&&canonical(data.id)){
+      if(kind==="project"&&keys(data)==="id,status")
+        return {status:"committed",kind,id:data.id};
+      if(kind==="project-task"&&keys(data)==="id,projectId,status"&&
+        readableProjectId(data.projectId))
+        return {status:"committed",kind,id:data.id,projectId:data.projectId};
+    }
     return "unavailable";
   }catch{return "unavailable";}
 }
@@ -112,7 +123,10 @@ export async function checkStructureCreateStatus(
   const found=await receipt(kind,url(kind)+"/create-status",command,signal,fetchImpl);
   // Unlike opaque reload recovery, exact-command status has the original ID.
   // A mismatched response cannot release the unresolved marker.
-  return typeof found==="object"&&found.id!==expected(kind,command)
+  return typeof found==="object"&&
+    (found.id!==expected(kind,command)||
+      (found.kind==="project-task"&&
+        found.projectId!==(command as ProjectTaskCreateCommand).projectId))
     ?"unavailable":found;
 }
 export function recoverStructureCreate(
