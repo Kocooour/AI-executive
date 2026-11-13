@@ -56,6 +56,7 @@ function reject(args, options, candidate, hint = "") {
   const result = run(args, options);
   assert.notEqual(result.status, 0, hint + result.stderr);
   assert.equal(result.stdout, "");
+  assert.match(result.stderr, /^R4 target provision: FAIL — [^\n]+\n$/);
   if (candidate) assert.equal(existsSync(candidate), false, hint);
   return result;
 }
@@ -65,6 +66,7 @@ test("new target: exactly the required settings, private files, preflight, read-
   const dir = path.join(base, "target");
   const first = run([dir, "owner:alpha", "--confirmed"], { legacy });
   assert.equal(first.status, 0, first.stderr);
+  assert.equal(first.stderr, "", "success must not print even runtime warnings");
   const initial = rows(first.stdout);
   assert.equal(initial[0], dir);
   assert.equal(initial[1], "owner:alpha");
@@ -82,6 +84,7 @@ test("new target: exactly the required settings, private files, preflight, read-
   const stats = files.map(name => lstatSync(path.join(dir, name)).mtimeMs);
   const checked = run(["--check", dir], { legacy });
   assert.equal(checked.status, 0, checked.stderr);
+  assert.equal(checked.stderr, "", "read-only check must not print runtime warnings");
   assert.equal(checked.stdout, first.stdout);
   assert.deepEqual(snapshot(dir), before);
   assert.deepEqual(files.map(name => lstatSync(path.join(dir, name)).mtimeMs), stats);
@@ -153,6 +156,39 @@ test("reject target symlinks, dangling links and normalized/path aliases before 
   assert.equal(existsSync(path.join(base, "target")), false);
 });
 
+test("reject unsafe writable ancestors without writes; permit sticky protected parent", t => {
+  const { base, legacy } = fixture(t);
+  const options = { legacy };
+  const parent = path.join(base, "writable-parent");
+  mkdirSync(parent, { mode: 0o700 });
+  const sentinel = path.join(parent, "sentinel");
+  writeFileSync(sentinel, "never overwrite", { mode: 0o600 });
+  for (const mode of [0o770, 0o707, 0o777]) {
+    chmodSync(parent, mode);
+    const candidate = path.join(parent, "new-target");
+    const denied = reject([candidate, "owner", "--confirmed"], options, candidate);
+    assert.match(denied.stderr, /unsafe group\/other write permissions/);
+    assert.equal(readFileSync(sentinel, "utf8"), "never overwrite");
+    assert.deepEqual(readdirSync(parent), ["sentinel"]);
+  }
+  // A sticky parent owned by the operator is safe against other UIDs
+  // replacing the operator-owned target; /tmp has the same root-owned model.
+  chmodSync(parent, 0o1777);
+  const target = path.join(parent, "sticky-target");
+  const created = run([target, "owner", "--confirmed"], options);
+  assert.equal(created.status, 0, created.stderr);
+  assert.equal(created.stderr, "");
+  const before = snapshot(target);
+  assert.equal(run(["--check", target], options).status, 0);
+
+  // A later mode regression on an ancestor must block --check without repair.
+  chmodSync(parent, 0o777);
+  const deniedCheck = reject(["--check", target], options);
+  assert.match(deniedCheck.stderr, /unsafe group\/other write permissions/);
+  assert.deepEqual(snapshot(target), before);
+  assert.equal(readFileSync(sentinel, "utf8"), "never overwrite");
+});
+
 test("repeat provision cannot overwrite existing store, its generation or other bytes", t => {
   const { base, legacy } = fixture(t);
   const dir = path.join(base, "created-once");
@@ -164,6 +200,7 @@ test("repeat provision cannot overwrite existing store, its generation or other 
   assert.deepEqual(snapshot(dir), before);
   const checked = run(["--check", dir], { legacy });
   assert.equal(checked.status, 0, checked.stderr);
+  assert.equal(checked.stderr, "", "read-only check must not print runtime warnings");
   assert.equal(checked.stdout, first.stdout);
   assert.deepEqual(readdirSync(base).sort(), ["created-once", "legacy"]);
 });
