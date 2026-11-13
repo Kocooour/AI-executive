@@ -303,8 +303,11 @@ test("rehearsal: archival backup restored to a fresh directory with matching tab
   assert.match(result.stdout, /NOT independent verification/);
   assert.doesNotMatch(result.stdout, /\bPASS\b/);
   assert.equal(report.sqliteIntegrity, "ok");
-  assert.equal(report.tables.entities.count, 2);
-  assert.match(report.tables.entities.rowsSha256, /^[0-9a-f]{64}$/);
+  assert.equal(report.format, "lumi-r4-rehearsal-v3");
+  assert.ok(Array.isArray(report.tables));
+  assert.equal(report.tables.length, report.applicationTableCount);
+  assert.deepEqual(report.tables.map(row => row.id), report.tables.map((_, i) => "table_" + (i + 1)));
+  assert.ok(report.tables.some(row => row.count === 2 && /^[0-9a-f]{64}$/.test(row.rowsSha256)));
   assert.equal(sha(path.join(source, "store.sqlite")), original);
   assert.ok(existsSync(path.join(out, "archive/archival-store.sqlite")));
   assert.ok(existsSync(path.join(out, "archive/legacy/backups/private.backup")));
@@ -312,7 +315,7 @@ test("rehearsal: archival backup restored to a fresh directory with matching tab
   assert.equal(readFileSync(path.join(out, "restored/legacy/backups/private.backup"), "utf8"), SECRET);
   assert.equal(report.target.status, "not_provided");
   assert.match(report.schemaSha256, /^[a-f0-9]{64}$/);
-  assert.equal(report.tables.entities.count, 2);
+  assert.ok(report.tables.every(row => /^[a-f0-9]{64}$/.test(row.schemaSha256)));
 });
 
 test("rehearsal --verify rejects duplicate or overlapping sources before creating output", t => {
@@ -817,4 +820,51 @@ test("inventory allows safe TMPDIR beside, but outside, known live storage", t =
   assert.deepEqual(readdirSync(safeTemp), [], "private temp SQLite must be deleted");
   assert.deepEqual(readdirSync(liveLegacy), []);
   assert.deepEqual(readdirSync(liveTarget), []);
+});
+
+test("rehearsal hides private SQLite table names and verifies special __proto__ identifiers", t => {
+  const { source, base } = fixture(t);
+  const privateTableName = "customer-" + SECRET + "@example.org";
+  const sqlite = path.join(source, "store.sqlite");
+  const db = new DatabaseSync(sqlite);
+  try {
+    db.exec('CREATE TABLE "' + privateTableName + '" (id TEXT PRIMARY KEY, body TEXT)');
+    db.prepare('INSERT INTO "' + privateTableName + '" VALUES (?,?)').run("x", SECRET);
+    db.exec('CREATE TABLE "__proto__" (id TEXT PRIMARY KEY, body TEXT)');
+    db.prepare('INSERT INTO "__proto__" VALUES (?,?)').run("x", "original");
+  } finally { db.close(); }
+
+  const output = path.join(base, "private-names-rehearsal");
+  const ok = run(rehearsal, [source, output]);
+  assert.equal(ok.status, 0, ok.stderr);
+  const text = readFileSync(path.join(output, "rehearsal.json"), "utf8");
+  const report = JSON.parse(text);
+  assert.equal(report.format, "lumi-r4-rehearsal-v3");
+  assert.equal(report.applicationTableCount, report.tables.length);
+  assert.deepEqual(report.tables.map(row => row.id),
+    report.tables.map((_, index) => "table_" + (index + 1)));
+  for (const publicText of [text, ok.stdout, ok.stderr]) {
+    assert.equal(publicText.includes(SECRET), false, "sensitive SQLite identifier must remain private");
+    assert.equal(publicText.includes(privateTableName), false);
+    assert.equal(publicText.includes("__proto__"), false, "special untrusted SQLite keys must not be public");
+  }
+  // The protected database archive still has its full original schema.
+  const archive = new DatabaseSync(path.join(output, "archive", "legacy", "store.sqlite"), { readOnly: true });
+  try {
+    const tableNames = archive.prepare("SELECT name FROM sqlite_master WHERE type='table'").all()
+      .map(row => row.name);
+    assert.ok(tableNames.includes(privateTableName));
+    assert.ok(tableNames.includes("__proto__"));
+  } finally { archive.close(); }
+
+  // The special key is not dropped during verification, including row digests.
+  const candidate = path.join(base, "changed-prototype");
+  cpSync(source, candidate, { recursive: true });
+  const changed = new DatabaseSync(path.join(candidate, "store.sqlite"));
+  try { changed.exec('UPDATE "__proto__" SET body = \'tampered\''); }
+  finally { changed.close(); }
+  const bad = run(rehearsal, ["--verify", source, candidate, path.join(base, "bad-prototype")]);
+  assert.notEqual(bad.status, 0, "a mismatch in __proto__ must not be silently skipped");
+  assert.equal(bad.stderr.includes(SECRET), false);
+  assert.equal(bad.stderr.includes(privateTableName), false);
 });
