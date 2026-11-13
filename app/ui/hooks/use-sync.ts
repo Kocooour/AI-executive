@@ -14,7 +14,7 @@ import { restoredSinceKnownGeneration, restoreGenerationDecision } from "../../.
 import { clearNotesDrafts } from "../../../lib/notes-drafts";
 import { clearProjectContextDrafts } from "../../../lib/project-context-drafts";
 import { installRestoreFence } from "../../../lib/restore-fence-client";
-import { beginOfflineRecoveryHoldSafely, offlineRecoveryIsHeld, offlineRecoveryHoldKey, offlineRecoveryIntentKey, readOfflineRecoveryHold, recoveryExportPlan, recoveryPullDecision } from "../../../lib/d2b-recovery-hold";
+import { beginOfflineRecoveryHoldSafely, offlineRecoveryIsHeld, offlineRecoveryHoldKey, offlineRecoveryIntentKey, readOfflineRecoveryHold, recoveryExportPlan, recoveryPullDecision, withOfflineRecoveryDataLock } from "../../../lib/d2b-recovery-hold";
 import { prepareOfflineRecovery } from "../../../lib/d2b-offline-reconciliation";
 import { encodeOfflineRecoveryFile, offlineRecoveryFile } from "../../../lib/d2b-offline-recovery-file";
 import { readRawRecoveryDrafts, readRawRecoveryMarkers } from "../../../lib/d2b-recovery-local";
@@ -262,7 +262,8 @@ export function useSync() {
     try {
       await beginOfflineRecoveryHoldSafely(restoreGeneration.current, observedGeneration);
     } catch (error) {
-      if (error instanceof Error && error.message === "OFFLINE_RECOVERY_WIPE_PRECEDED_HOLD") {
+      if (error instanceof Error && (error.message === "OFFLINE_RECOVERY_WIPE_PRECEDED_HOLD" ||
+          error.message === "OFFLINE_RECOVERY_ADOPTION_PRECEDED_HOLD")) {
         signedOut.current = true;
         window.location.replace("/");
         return false;
@@ -272,74 +273,110 @@ export function useSync() {
     return false;
   }
   async function adoptServerCopy(source: ServerSnapshot, notice = false) {
-    // Only a certified server-side owner restore authorizes discarding the
-    // replaced legacy snapshot. A future partition recovery or unknown origin
-    // retains the D2b rescue hold; an existing hold is never silently cleared.
+    // Only a server-certified owner restore authorizes discarding old local
+    // data. A D2b hold always overrides that permission.
     if (restoreGenerationDecision(
       restoredSinceKnown(source.restoreGeneration), source.restoreKind, offlineRecoveryIsHeld(),
     ) === "hold") return engageRecoveryForGeneration(source.restoreGeneration);
     if (isAdopting() && !fencedRestore.current) return true;
     fencedRestore.current = false;
     if (!isAdopting()) beginAdoption();
+
+    let needsRecoveryHold = false;
+    let adoptionCompleted = false;
     try {
-      // Anything computed from the old copy (a save in progress, a pull) is discarded.
-      localDataVersion.current += 2;
-      try {
-        await adoptionTransaction(async () => {
-          await db.entities.clear();
-          await db.relations.clear();
-          await db.baseEntities.clear();
-          await db.baseRelations.clear();
-          if (source.entities.length) { await db.entities.bulkAdd(source.entities); await db.baseEntities.bulkAdd(source.entities); }
-          if (source.relations.length) { await db.relations.bulkAdd(source.relations); await db.baseRelations.bulkAdd(source.relations); }
-        });
-      } catch (error) {
-        // A different tab could have persisted a hold while this adoption transaction
-        // was pending. Never fall back to a destructive wipe in that case.
-        if (offlineRecoveryIsHeld()) {
-          setRecoveryHeld(true);
-          setSyncStatus("offline");
-          return false;
+      // A cross-tab hold must not be inserted halfway through either the
+      // IndexedDB replacement OR its localStorage marker/generation cleanup.
+      // The lock is also used by D2b holds and owner-authorized sign-out.
+      await withOfflineRecoveryDataLock(async () => {
+        if (offlineRecoveryIsHeld()) { needsRecoveryHold = true; return; }
+        if (signedOut.current || localStorage.getItem("ai-executive-signed-out") === "1" ||
+            localStorage.getItem("ai-executive-wipe-pending") === "1") return;
+        // Another tab can complete adoption while this one waits for the lock.
+        // Never let an obsolete snapshot overwrite the already adopted copy.
+        const persisted = localStorage.getItem(generationKey);
+        const latest = persisted === null ? undefined : Number(persisted);
+        if (typeof source.restoreGeneration === "number" && Number.isSafeInteger(source.restoreGeneration) &&
+            typeof latest === "number" && Number.isSafeInteger(latest) &&
+            (latest > source.restoreGeneration ||
+              (latest === source.restoreGeneration && restoreGeneration.current !== latest))) {
+          adoptionCompleted = true; // A sibling already completed the replacement.
+          return;
         }
-        // The local copy could not be replaced (storage full or refused): it must not stay as it is, so it is emptied; the
-        // reloaded page then takes the server's data as a first synchronization. As a last resort the database is deleted.
-        console.error("Replacing the local copy failed; it is emptied instead:", error instanceof Error ? error.message : error);
+
+        // An in-flight save or pull computed from the old copy is now obsolete.
+        localDataVersion.current += 2;
         try {
           await adoptionTransaction(async () => {
-            await db.entities.clear(); await db.relations.clear(); await db.baseEntities.clear(); await db.baseRelations.clear();
+            await db.entities.clear();
+            await db.relations.clear();
+            await db.baseEntities.clear();
+            await db.baseRelations.clear();
+            if (source.entities.length) { await db.entities.bulkAdd(source.entities); await db.baseEntities.bulkAdd(source.entities); }
+            if (source.relations.length) { await db.relations.bulkAdd(source.relations); await db.baseRelations.bulkAdd(source.relations); }
           });
-        } catch (clearError) {
+        } catch (error) {
+          // A failed replace can be recovered by an empty local store or by
+          // deleting the DB, but only while the SAME recovery lock is held.
+          // Never attempt these fallbacks after a hold was observed.
+          if (offlineRecoveryIsHeld()) { needsRecoveryHold = true; return; }
+          console.error("Replacing the local copy failed; it is emptied instead:",
+            error instanceof Error ? error.message : error);
           try {
-            await db.delete();
-          } catch (deleteError) {
-            // No destructive operation succeeded. Do NOT stamp the new
-            // generation or erase unsent markers/drafts: a surviving old copy
-            // would otherwise appear current and could be sent to the server.
-            console.error("Could not replace, clear or delete the pre-restore local copy:", clearError, deleteError);
-            await engageRecoveryForGeneration(source.restoreGeneration);
-            return false;
+            await adoptionTransaction(async () => {
+              await db.entities.clear(); await db.relations.clear();
+              await db.baseEntities.clear(); await db.baseRelations.clear();
+            });
+          } catch (clearError) {
+            try {
+              await db.delete();
+            } catch (deleteError) {
+              console.error("Could not replace, clear or delete the pre-restore local copy:", clearError, deleteError);
+              // Do NOT acquire the same lock recursively: it would deadlock.
+              // The hold is installed immediately after releasing this lock.
+              needsRecoveryHold = true;
+              return;
+            }
           }
         }
-      }
-      const attempt = (work: () => void) => { try { work(); } catch { /* storage unavailable */ } };
-      attempt(() => clearAllMarkers(localStorage));
-      attempt(() => clearNotesDrafts(localStorage));
-      attempt(() => clearProjectContextDrafts(localStorage));
-      attempt(() => { localStorage.removeItem(pendingKey); localStorage.setItem("ai-executive-server-synced", "1"); });
-      serverRevision.current = source.revision;
-      recoveryBaseRevision.current = source.revision;
-      rememberGeneration(source.restoreGeneration);
-    } finally {
-      if (offlineRecoveryIsHeld()) {
-        setRecoveryHeld(true);
-        setSyncStatus("offline");
-      } else {
-        setAfterRestoreFlag(notice ? "remote" : "sibling");
-        postToTabs({ type: "restore-adopted", from: tabId.current, generation: source.restoreGeneration });
-        window.location.reload();
-      }
+
+        // This entire commit belongs to the same cross-tab critical section.
+        // No other tab can persist a rescue hold over a half-adopted copy.
+        const attempt = (work: () => void) => { try { work(); } catch { /* storage unavailable */ } };
+        attempt(() => clearAllMarkers(localStorage));
+        attempt(() => clearNotesDrafts(localStorage));
+        attempt(() => clearProjectContextDrafts(localStorage));
+        attempt(() => { localStorage.removeItem(pendingKey); localStorage.setItem("ai-executive-server-synced", "1"); });
+        serverRevision.current = source.revision;
+        recoveryBaseRevision.current = source.revision;
+        rememberGeneration(source.restoreGeneration);
+        adoptionCompleted = true;
+      }, true);
+    } catch (error) {
+      // No Web Locks, or an unexpected storage error: never start/continue a
+      // destructive adoption without serialized access to the rescue barrier.
+      console.error("Owner restore adoption could not be serialized:", error);
+      needsRecoveryHold = true;
     }
-    return !offlineRecoveryIsHeld();
+    if (needsRecoveryHold) {
+      await engageRecoveryForGeneration(source.restoreGeneration);
+      return false;
+    }
+    if (!adoptionCompleted) {
+      signedOut.current = true;
+      window.location.replace("/");
+      return false;
+    }
+    if (offlineRecoveryIsHeld()) {
+      // Includes a pre-existing hold which acquired the lock after our commit.
+      setRecoveryHeld(true);
+      setSyncStatus("offline");
+      return false;
+    }
+    setAfterRestoreFlag(notice ? "remote" : "sibling");
+    postToTabs({ type: "restore-adopted", from: tabId.current, generation: source.restoreGeneration });
+    window.location.reload();
+    return true;
   }
   async function replaceLocalWithServer(snapshot?: ServerSnapshot, notice = false) {
     if (signedOut.current) return false;

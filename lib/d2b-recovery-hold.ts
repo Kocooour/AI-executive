@@ -138,6 +138,19 @@ export async function beginOfflineRecoveryHoldSafely(
         throw error;
       throw new Error("OFFLINE_RECOVERY_HOLD_UNAVAILABLE");
     }
+    // A certified owner adoption may have acquired the lock and committed its
+    // IndexedDB + localStorage transition before this hold could acquire it.
+    // In that case the *old* data no longer exist: do not claim to protect
+    // them or install a permanent false hold over the newly adopted copy.
+    // The stale tab must reload instead. An existing real hold always wins.
+    const previous = storage.getItem("ai-executive-restore-generation");
+    const persisted = previous === null ? NaN : Number(previous);
+    if (storage.getItem(offlineRecoveryHoldKey) === null &&
+        storage.getItem(offlineRecoveryIntentKey) === null &&
+        validNumber(observedGeneration) && observedGeneration > (knownGeneration ?? 0) &&
+        validNumber(persisted) && persisted >= observedGeneration) {
+      throw new Error("OFFLINE_RECOVERY_ADOPTION_PRECEDED_HOLD");
+    }
     return beginOfflineRecoveryHold(knownGeneration, observedGeneration);
   });
 }

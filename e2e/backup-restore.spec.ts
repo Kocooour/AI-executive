@@ -798,6 +798,160 @@ test("failed replacement, fallback clear and database deletion keep the old gene
   }
 });
 
+// Force each side of the race to queue behind a known Web Lock holder.
+// No sleeps: navigator.locks.query confirms the order before the gate opens.
+async function gateRecoveryLock(page: Page) {
+  await page.evaluate(() => {
+    const gate = window as typeof window & { e2eRecoveryLockHeld?: boolean; e2eReleaseRecoveryLock?: () => void };
+    void navigator.locks.request("ai-executive-recovery-data", async () => {
+      await new Promise<void>((resolve) => {
+        gate.e2eReleaseRecoveryLock = resolve;
+        gate.e2eRecoveryLockHeld = true;
+      });
+    });
+  });
+  await expect.poll(() => page.evaluate(async () =>
+    (await navigator.locks.query()).held?.some((lock) => lock.name === "ai-executive-recovery-data") ?? false)).toBe(true);
+}
+async function pendingRecoveryLocks(page: Page, count: number) {
+  await expect.poll(() => page.evaluate(async () =>
+    (await navigator.locks.query()).pending?.filter((lock) => lock.name === "ai-executive-recovery-data").length ?? 0),
+  { timeout: 15_000 }).toBe(count);
+}
+
+test("owner adoption and D2b recovery hold serialize across sibling tabs, regardless of which acquires the lock first", async ({ browser }) => {
+  for (const firstToLock of ["hold", "adopt"] as const) {
+    const ownerContext = await browser.newContext({ storageState: sessionFile, locale: "cs-CZ" });
+    const tabs = await browser.newContext({ storageState: sessionFile, locale: "cs-CZ" });
+    const owner = await ownerContext.newPage(), adopter = await tabs.newPage(), holder = await tabs.newPage();
+    const taskId = `e2e-backup-lock-${firstToLock}-${stamp}`;
+    const localId = `e2e-backup-lock-local-${firstToLock}-${stamp}`;
+    const markerKey = `ai-executive-pending-deletions:0000000000000-e2e-${firstToLock}`;
+    const draftKey = `ai-executive-notes-drafts:e2e:${localId}`;
+    try {
+      await owner.goto("/");
+      await waitUntilSynced(owner);
+      await setStore(owner, [task(taskId, "Záloha: chráněný souběh")]);
+      await adopter.goto("/?view=Inbox");
+      await waitUntilSynced(adopter);
+      await holder.goto("/?view=Inbox");
+      await waitUntilSynced(holder);
+      const oldGeneration = await adopter.evaluate(() => localStorage.getItem("ai-executive-restore-generation"));
+      expect(oldGeneration).not.toBeNull();
+      const name = await createManualBackup(owner);
+      await gateRecoveryLock(adopter);
+      expect(await restoreByApi(owner, name)).toBe(200);
+      // Both tabs still have the original generation and unsent local content.
+      // The holder receives an uncertified generation (D2b path), while the
+      // adopter reads the certified owner restore. They compete for one lock.
+      await adopter.evaluate(async ({ id, marker, draft }) => {
+        const db = await new Promise<IDBDatabase>((resolve, reject) => {
+          const request = indexedDB.open("ai-executive");
+          request.onsuccess = () => resolve(request.result);
+          request.onerror = () => reject(request.error);
+        });
+        await new Promise<void>((resolve, reject) => {
+          const tx = db.transaction("entities", "readwrite");
+          tx.objectStore("entities").put({ id, type: "task", title: "Lokální před obnovením",
+            status: "open", workspaceId: "personal", properties: { inbox: true },
+            createdAt: Date.now(), updatedAt: Date.now() + 60_000 });
+          tx.oncomplete = () => resolve();
+          tx.onerror = () => reject(tx.error);
+        });
+        db.close();
+        localStorage.setItem(marker, id);
+        localStorage.setItem(draft, JSON.stringify({ id, page: "e2e", text: "Rozpracovaný text", base: "", at: Date.now() }));
+        localStorage.setItem("ai-executive-pending-sync", "1");
+      }, { id: localId, marker: markerKey, draft: draftKey });
+      await holder.route("**/api/store", async (route) => {
+        if (route.request().method() !== "GET") return route.continue();
+        const response = await route.fetch();
+        const snapshot = await response.json();
+        delete snapshot.restoreKind;
+        await route.fulfill({ response, json: snapshot });
+      });
+      if (firstToLock === "hold") {
+        await remoteWakeUp(holder);
+        await pendingRecoveryLocks(adopter, 1);
+        await remoteWakeUp(adopter);
+      } else {
+        await remoteWakeUp(adopter);
+        await pendingRecoveryLocks(adopter, 1);
+        await remoteWakeUp(holder);
+      }
+      await pendingRecoveryLocks(adopter, 2);
+      await adopter.evaluate(() => (window as typeof window & { e2eReleaseRecoveryLock: () => void }).e2eReleaseRecoveryLock());
+      if (firstToLock === "hold") {
+        await expect(holder.getByRole("alertdialog", { name: "Lokální změny jsou chráněné" })).toBeVisible({ timeout: 30_000 });
+        await expect(adopter.getByRole("alertdialog", { name: "Lokální změny jsou chráněné" })).toBeVisible({ timeout: 30_000 });
+      } else {
+        await expect(adopter.locator(".restoredNotice")).toContainText("Data byla obnovena ze zálohy.", { timeout: 30_000 });
+        await expect(holder.getByRole("alertdialog", { name: "Lokální změny jsou chráněné" })).toHaveCount(0);
+      }
+      const state = await holder.evaluate(async ({ id, marker, draft }) => {
+        const db = await new Promise<IDBDatabase>((resolve, reject) => {
+          const request = indexedDB.open("ai-executive");
+          request.onsuccess = () => resolve(request.result);
+          request.onerror = () => reject(request.error);
+        });
+        const record = await new Promise<unknown>((resolve, reject) => {
+          const request = db.transaction("entities").objectStore("entities").get(id);
+          request.onsuccess = () => resolve(request.result);
+          request.onerror = () => reject(request.error);
+        });
+        db.close();
+        return { record, marker: localStorage.getItem(marker), draft: localStorage.getItem(draft),
+          generation: localStorage.getItem("ai-executive-restore-generation"),
+          hold: localStorage.getItem("ai-executive-offline-recovery-hold") };
+      }, { id: localId, marker: markerKey, draft: draftKey });
+      if (firstToLock === "hold") {
+        expect(state.record).toMatchObject({ id: localId });
+        expect(state.marker).toBe(localId);
+        expect(state.draft).toContain("Rozpracovaný text");
+        expect(state.generation).toBe(oldGeneration);
+        expect(state.hold).not.toBeNull();
+        await holder.reload();
+        await expect(holder.getByRole("alertdialog", { name: "Lokální změny jsou chráněné" })).toBeVisible();
+      } else {
+        expect(state.record).toBeUndefined();
+        expect(state.marker).toBeNull();
+        expect(state.draft).toBeNull();
+        expect(Number(state.generation)).toBeGreaterThan(Number(oldGeneration));
+        expect(state.hold).toBeNull(); // The late hold must not be installed over adopted data.
+      }
+      expect((await serverEntities(owner)).map((entry) => entry.id)).not.toContain(localId);
+    } finally {
+      await ownerContext.close();
+      await tabs.close();
+    }
+  }
+});
+
+test("owner adoption without Web Locks fails closed instead of replacing local data", async ({ browser }) => {
+  const { first, second } = await twoDevices(browser);
+  try {
+    await first.page.goto("/");
+    await waitUntilSynced(first.page);
+    await second.page.goto("/?view=Inbox");
+    await waitUntilSynced(second.page);
+    const name = await createManualBackup(first.page);
+    const before = await second.page.evaluate(() => localStorage.getItem("ai-executive-restore-generation"));
+    expect(await restoreByApi(first.page, name)).toBe(200);
+    await second.page.evaluate(() => {
+      Object.defineProperty(navigator, "locks", { configurable: true, value: undefined });
+      localStorage.setItem("ai-executive-pending-sync", "1");
+    });
+    await remoteWakeUp(second.page);
+    await expect(second.page.getByRole("alertdialog", { name: "Lokální změny jsou chráněné" }))
+      .toBeVisible({ timeout: 30_000 });
+    expect(await second.page.evaluate(() => localStorage.getItem("ai-executive-restore-generation"))).toBe(before);
+    expect(await second.page.evaluate(() => localStorage.getItem("ai-executive-pending-sync"))).toBe("1");
+  } finally {
+    await first.context.close();
+    await second.context.close();
+  }
+});
+
 test("a browser that never stored a generation and holds an offline change adopts the restored data when the server has been restored", async ({ browser }) => {
   const kept = `e2e-backup-dormant-${stamp}`, local = `e2e-backup-dormant-local-${stamp}`;
   const { first, second } = await twoDevices(browser);
