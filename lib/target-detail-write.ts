@@ -238,9 +238,9 @@ async function runTaskStatus(input:Extract<WriteInput,{kind:"taskStatus"}>,d:Dep
     return {t:"error",reason:"invalid-response"};
   const command:MyPlanStatusCommand={
     commandId:crypto.randomUUID(),taskId:input.taskId,status:input.status,...ctx.context,
-    ...(originalDay===null||typeof originalDay==="string"
-      ?{previousWhenOn:originalDay}:{}),
   };
+  if(originalDay===null)command.previousWhenOn=null;
+  else if(typeof originalDay==="string")command.previousWhenOn=originalDay;
   if(!validStatusCommand(command))return {t:"error",reason:"invalid"};
   // Server Undo semantics as in My Plan: only a completion is undoable (reopening it).
   const undoOf=():UndoHandle|null=>input.status!=="completed"?null:async(signal,hooks)=>{
