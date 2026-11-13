@@ -228,7 +228,9 @@ test("private note, standalone task and project creation have independent defaul
   assert.match(projectHttp,/AI_EXECUTIVE_TARGET_STAGING_HTTP_WRITE_ENABLED/);
   assert.match(projectHttp,/process\.env\.AI_EXECUTIVE_TARGET_STAGING_HTTP_PROJECTS_CREATE_ENABLED==="true"/);
   const projectProfile=read("lib/target-personal-profile.ts");
-  assert.match(projectProfile,/\{flag:"AI_EXECUTIVE_TARGET_STAGING_HTTP_PROJECTS_CREATE_ENABLED"/);
+  assert.match(projectProfile,/^\s+"AI_EXECUTIVE_TARGET_STAGING_HTTP_PROJECTS_CREATE_ENABLED",/m);
+  assert.match(projectProfile,/^\s+"AI_EXECUTIVE_TARGET_STAGING_HTTP_PROJECT_TASKS_CREATE_ENABLED",/m);
+  assert.doesNotMatch(projectProfile,/\{flag:"AI_EXECUTIVE_TARGET_STAGING_HTTP_PROJECTS_CREATE_ENABLED"/);
   const noteRoute=read("app/api/target-staging/notes/route.ts");
   assert.match(noteRoute,/export async function POST/);
   assert.match(noteRoute,/AI_EXECUTIVE_TARGET_STAGING_HTTP_NOTES_CREATE_ENABLED/);
