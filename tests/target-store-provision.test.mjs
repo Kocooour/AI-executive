@@ -287,13 +287,13 @@ test("runbook provisions and checks under the deployed service UID, not root", (
   assert.match(operatorStep, /test "\$SERVICE_USER" = ai-executive/);
   assert.match(operatorStep, /test "\$SERVICE_GROUP" = ai-executive/);
   assert.match(operatorStep, /test "\$SERVICE_UID" -ne 0/);
-  assert.match(operatorStep, /test "\$MAINPID" -gt 0/);
+  assert.match(operatorStep, /if \[ "\$MAINPID" -gt 0 \]; then/);
   const commands = operatorStep.match(/runuser -u "\$SERVICE_USER" -g "\$SERVICE_GROUP" -- env -i/g) ?? [];
   assert.equal(commands.length, 2, "provision and --check must both drop to service UID");
   assert.match(operatorStep, /node scripts\/target-store-provision\.mjs "\$TARGET_DIR" "\$OWNER_USER_ID" --confirmed/);
   assert.match(operatorStep, /node scripts\/target-store-provision\.mjs --check "\$TARGET_DIR"/);
   assert.match(operatorStep, /ProtectSystem=strict/);
   assert.match(operatorStep, /StateDirectory=ai-executive/);
-  assert.match(operatorStep, /least-privilege.*unit change/);
+  assert.match(operatorStep, /least-privilege.*writable-directory change/);
   assert.match(operatorStep, /root-owned\/previously existing target must \*\*not\*\* be fixed with.*chown/);
 });
