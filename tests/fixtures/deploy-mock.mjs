@@ -132,8 +132,27 @@ switch (name) {
     else if (verb === "status" && args[1] === "--porcelain") {}
     else if (verb === "rev-parse") console.log(args[1] === "FETCH_HEAD" ? target : get("head"));
     else if (verb === "fetch" || verb === "merge-base" || verb === "diff") {}
-    else if (verb === "merge" && args[1] === "--ff-only") {
+    else if (verb === "cat-file" && args[1] === "-e") {
+      // Synthetic pre-feature -> revocation-feature transition. Earlier deploy
+      // tests intentionally do not advertise this module in either commit.
+      if (["firstrolloutunhealthy", "firstrolloutpartialcopy"].includes(scenario) &&
+          args[2] === target + ":lib/owner-session-revocation.ts") break;
+      process.exit(1);
+    } else if (verb === "merge" && args[1] === "--ff-only") {
       set("head", target); log("merge");
+      if (["firstrolloutunhealthy", "firstrolloutpartialcopy"].includes(scenario)) {
+        // The target commit introduces the real provisioning CLI and its
+        // dependencies; copy only into this temporary synthetic checkout.
+        for (const file of [
+          "scripts/owner-session-revocation-init.mjs",
+          "scripts/target-staging-ts-loader.mjs",
+          "lib/owner-session-revocation.ts", "lib/data-dir.ts",
+        ]) {
+          const destination = path.join(app, file);
+          fs.mkdirSync(path.dirname(destination), { recursive: true });
+          fs.copyFileSync(new URL("../../" + file, import.meta.url), destination);
+        }
+      }
     } else if (verb === "reset" && args[1] === "--hard") {
       set("head", before); log("reset");
     } else process.exit(8);
@@ -194,7 +213,10 @@ switch (name) {
     break;
   }
   case "cp": {
-    if (scenario === "partialcopy" && args[args.length - 2] === path.join(root, "var/lib/ai-executive")) {
+    if ((scenario === "partialcopy" ||
+         (scenario === "firstrolloutpartialcopy" && !fs.existsSync(stateFile("copyfailed")))) &&
+        args[args.length - 2] === path.join(root, "var/lib/ai-executive")) {
+      if (scenario === "firstrolloutpartialcopy") set("copyfailed", "1");
       const destination = args[args.length - 1];
       fs.mkdirSync(destination, { recursive: true });
       fs.writeFileSync(path.join(destination, "incomplete"), Buffer.alloc(512 * 1024));
@@ -215,6 +237,12 @@ switch (name) {
     const url = args[args.length - 1];
     if (scenario === "httpsfail" && get("head") === target &&
         url.startsWith("https://")) process.exit(22);
+    // The first deployment must fail ALL 60 readiness retries, not merely
+    // the first request. The explicitly selected synthetic recovery can then
+    // succeed without changing production script behavior.
+    if (scenario === "firstrolloutunhealthy" && get("head") === target &&
+        url.includes("/manifest.webmanifest") &&
+        process.env.LUMI_TEST_RECOVERY_MODE !== "true") process.exit(22);
     if (scenario === "unhealthy" && get("head") === target &&
         url.includes("/manifest.webmanifest")) process.exit(22);
     const code = url.includes("/api/store") ? 401 : 200;

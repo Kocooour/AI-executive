@@ -195,11 +195,14 @@ export function DetailPanel({ app }: { app: LumiApp }) {
   // Each selected entity owns its focus origin. A stale opener from task A
   // must never be reused when task B is opened from another surface.
   const returnFocusRef = useRef<InspectorPendingReturn | null>(null);
+  const previousSelectionRef = useRef<string | null>(selected?.id ?? null);
   const lastFocusScopeRef = useRef({ workspaceId: app.activeWorkspaceId, view });
   useEffect(() => {
     const previousScope = lastFocusScopeRef.current;
     const scopeChanged = previousScope.workspaceId !== app.activeWorkspaceId || previousScope.view !== view;
     lastFocusScopeRef.current = { workspaceId: app.activeWorkspaceId, view };
+    const previousSelection = previousSelectionRef.current;
+    previousSelectionRef.current = selected?.id ?? null;
     const active = document.activeElement;
     returnFocusRef.current = advanceInspectorReturnFocus(
       returnFocusRef.current,
@@ -210,6 +213,22 @@ export function DetailPanel({ app }: { app: LumiApp }) {
       view,
       scopeChanged,
     );
+    // Clicking B's unfocusable row background while A is still inspected leaves
+    // focus in A's panel. Restore B's visible row instead of A's stale opener.
+    // A direct/reloaded link has no preceding selection and cannot borrow it.
+    if (!returnFocusRef.current && previousSelection && selected &&
+        previousSelection !== selected.id && !scopeChanged) {
+      const opener = [...document.querySelectorAll<HTMLButtonElement>(".content .taskRowOpen")]
+        .find((button) => button.closest<HTMLElement>("[data-drop-entity]")?.dataset.dropEntity === selected.id &&
+          button.isConnected && button.getClientRects().length > 0);
+      if (opener) {
+        returnFocusRef.current = {
+          origin: { entityId: selected.id, workspaceId: app.activeWorkspaceId, view },
+          opener,
+        };
+        inspectorRef.current?.focus();
+      }
+    }
   }, [selected?.id, app.activeWorkspaceId, view]);
   return (
     <>

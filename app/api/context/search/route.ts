@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { releaseOwnerRead } from "../../../../lib/owner-session-read-release";
 import { isAuthenticated } from "../../../../lib/auth";
 import { ContextCommandError } from "../../../../lib/context-commands";
 import { searchContext } from "../../../../lib/context-search";
@@ -26,10 +27,10 @@ export async function GET(request: Request) {
       cursor: params.get("cursor") || undefined,
     });
     recordSecurityEvent(request, "context.search", "allowed", { workspaceId: result.workspaceId });
-    return NextResponse.json(result, { headers });
+    return releaseOwnerRead(request, NextResponse.json(result, { headers }));
   } catch (error) {
     recordSecurityEvent(request, "context.search", "failed", { reason: error instanceof ContextCommandError ? error.code : "invalid_request" });
-    return NextResponse.json({ error: error instanceof Error ? error.message : "Context read failed" },
-      { status: error instanceof ContextCommandError ? error.status : 400, headers });
+    return releaseOwnerRead(request, NextResponse.json({ error: error instanceof Error ? error.message : "Context read failed" },
+      { status: error instanceof ContextCommandError ? error.status : 400, headers }));
   }
 }

@@ -1,3 +1,4 @@
+import { releaseOwnerRead } from "../../../lib/owner-session-read-release";
 import { NextResponse } from "next/server";
 import { fenceRestoredClient } from "../../../lib/restore-fence";
 import { isAuthenticated } from "../../../lib/auth";
@@ -21,12 +22,12 @@ export async function GET(request: Request) {
   if (!readSnapshot().entities.some((entity) => entity.type === "workspace" && entity.workspaceId === workspaceId)) {
     return NextResponse.json({ error: "Workspace not found" }, { status: 404 });
   }
-  return NextResponse.json({
+  return releaseOwnerRead(request, NextResponse.json({
     // Morning and evening briefings were removed; clients cached before that still read this field.
     briefings: [],
     agents: listPACTAgents().filter((agent) => agent.id !== "aifred"),
     agentRuns: listPACTRuns(workspaceId, 40),
-  });
+  }));
 }
 
 export async function POST(request: Request) {

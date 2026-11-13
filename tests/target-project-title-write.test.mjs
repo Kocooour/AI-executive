@@ -153,6 +153,8 @@ test('simultaneous PATCH and cancel are ordered by pinned write transaction',asy
   // This unscheduled HTTP race tests the final linearized outcome, not the
   // initial lock-acquisition latency: under parallel CI load, the first PATCH
   // may get a genuine bounded 503 before the concurrent cancellation settles.
+  // Preserve #418's same-UUID retry while retaining C11's bounded retries,
+  // terminal-status, one-audit-row and persisted-title assertions.
   // Reconcile ONLY the same command UUID after the fence has responded.
   // The separate pinned-journal companion below still requires BOTH operations
   // to succeed on their FIRST attempt within the real 200ms budget.

@@ -33,7 +33,7 @@ const {bootstrapIsolatedTargetStore,
   TARGET_STAGING_PERSONAL_PUSH_TARGET_RECEIPT_PREFIX:TARGET_PREFIX}=
   await import("../lib/target-store-bootstrap.ts");
 const durable=await import("../lib/target-staging-durable-session.ts");
-const {createSessionToken,sessionCookieName}=await import("../lib/auth.ts");
+const {createSessionToken,sessionCookieName}=await import("./support/owner-session-test-cookie.mjs");
 const {GET,PATCH}=await import("../app/api/target-staging/notifications/settings/route.ts");
 const {POST}=await import("../app/api/target-staging/notifications/targets/route.ts");
 const {parseStagingNotificationSettings,readStagingNotificationSettingsInChild}=

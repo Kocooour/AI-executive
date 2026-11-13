@@ -118,6 +118,8 @@ test("UI-01e: switching A directly to B without closing A cannot steal B's retur
     await expect(page.locator("aside.inspectorDetail .titleEdit")).toHaveValue(nameB);
     await page.locator(".inspectorClose").click();
     await expect(page.locator("aside.inspectorDetail")).toHaveCount(0);
+    await expect(page).toHaveURL(/[?]view=Inbox$/);
+    await expect(openerB).toBeFocused();
     await expect(openerA).not.toBeFocused();
 
     // When B itself is opened by keyboard while A remains inspected,

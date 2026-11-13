@@ -3,6 +3,7 @@
 // or in `developerOnly` (requests the app itself never makes, configuration errors); a test checks
 // that, so a new server message has to be classified.
 export const serverErrorKeys: Record<string, string> = {
+  "Logout unavailable": "serverError_logoutUnavailable",
   "Calendar URL must use HTTPS": "serverError_calendarUrlMustUseHttps",
   "Calendar URL must use public HTTPS on port 443": "serverError_calendarUrlMustUsePublicHttpsOnPort",
   "Calendar contains too many components": "serverError_calendarContainsTooManyComponents",
@@ -146,6 +147,9 @@ export const serverErrorKeys: Record<string, string> = {
 // Server messages a user does not meet in normal use: requests the app never sends, broken or
 // tampered data, configuration errors, internal markers. They are shown as they are.
 export const developerOnly: ReadonlySet<string> = new Set([
+  // Export download cancellation closes a Node/Web stream after owner logout.
+  // This exception is internal to the stream and is never returned as a UI JSON error.
+  "Owner session revoked during export",
   // H1-real.0 deny-only POST route intentionally has no client/UI consumer.
   // A generic 404 conceals the otherwise nonexistent import capability.
   "Not found",

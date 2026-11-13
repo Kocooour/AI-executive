@@ -34,7 +34,7 @@ const {bootstrapIsolatedTargetStore,TARGET_STAGING_PRIVATE_TASK_CREATE_RECEIPT_P
 const {TARGET_STAGING_JOURNAL_FILENAME}=
   await import("../lib/target-staging-anchor-journal.ts");
 const durable=await import("../lib/target-staging-durable-session.ts");
-const {createSessionToken,sessionCookieName}=await import("../lib/auth.ts");
+const {createSessionToken,sessionCookieName}=await import("./support/owner-session-test-cookie.mjs");
 const {POST}=await import("../app/api/target-staging/tasks/route.ts");
 const {POST:STATUS}=await import("../app/api/target-staging/tasks/create-status/route.ts");
 const {POST:RECOVER}=await import("../app/api/target-staging/tasks/create-recovery/route.ts");
