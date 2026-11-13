@@ -231,7 +231,7 @@ test("BFCache lifecycle and real back navigation never revive private draft or A
   });
   // Playwright launches Chromium with --disable-back-forward-cache and its
   // goBack() cannot test an actual thaw. Native Chrome in the real-store
-  // workflow owns the release persisted=true proof; this synthetic suite
+  // workflow owns the strict two-branch real-store proof; this synthetic suite
   // continues to assert the pagehide/pageshow and real reload paths.
   expect(restored,"Playwright cannot certify a BFCache hit").toBe(false);
   if(restored){
