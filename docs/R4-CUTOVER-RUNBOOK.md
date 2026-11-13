@@ -44,6 +44,51 @@ privacy exceptions: cookies changing and `no-store` XHR responses can evict
 entries. Do not infer the sole blocker from the main document header.
 See [Chrome's documented conditions](https://developer.chrome.com/docs/web-platform/bfcache-ccns).
 
+### Native Chromium PR evidence — 13 November 2026 (not a BFCache hit)
+
+[Focused R3 personal acceptance browser, run 43511945915](https://github.com/Kocooour/AI-executive/actions/runs/43511945915)
+finished **successfully** as an automatic PR workflow, but had
+`LUMI_REAL_BFCACHE_E2E=false`: that green result demonstrates the fallback
+and native-browser diagnostic harness, **not** the strict release gate.
+It ran PR head `52a5e778e181832a3686a4dbefcd704c6cdd7358` through the
+GitHub PR test merge checkout
+`54dffa0d09442cca5b972c322fa4b3121a7c135d` (see
+`checkedOutSha` in the log), **not** an exact candidate release-SHA dispatch.
+
+The independently spawned **HeadlessChrome/141.0.0.0 on Linux** used native
+`history.back()` on the real disposable `personal-v1` SQLite profile.
+At **both 390 px and 1280 px** the original `pageshow` observer was active,
+but the return had `persisted:false` and a **different document token**.
+CDP `Page.backForwardCacheNotUsed` reported all three explanations:
+
+- `MainResourceHasCacheControlNoStore` — **Circumstantial**
+- `JsNetworkRequestReceivedCacheControlNoStoreResource` — **Circumstantial**
+- `BrowsingInstanceNotSwapped` — **Circumstantial**
+
+The document response was
+`Cache-Control: private, no-cache, no-store, max-age=0, must-revalidate`.
+These are **observed Chrome explanations**, not a proof that BFCache is
+fundamentally impossible in all CI Chromiums, in other Chrome versions or
+in Safari. Do **not** remove private `no-store`, disable auth, simulate
+`persisted:true`, or treat a full reload as a hit. Keep #388 open.
+
+Review [#5898604644](https://github.com/Kocooour/AI-executive/pull/427#pullrequestreview-5898604644)
+also identified that checking resource *paths* alone could incorrectly
+accept failed session/Area responses. The updated native witness instruments
+CDP `Network.requestWillBeSent`, `Network.responseReceived`,
+`Network.loadingFinished` and `Network.loadingFailed` **before navigation**.
+On a true BFCache hit it now requires new **completed direct HTTP GET 200**
+responses, with the owner session response finished *before* the private
+Area GET begins, all before another user action. A `401`, `403`, `500`,
+aborted request or service-worker response does not satisfy this proof.
+This strict positive-hit path remains **unobserved** until a real hit occurs.
+
+The required follow-up is still a **manual workflow_dispatch of both scoped
+workflows at the same exact release SHA in strict mode**, or, if CI cannot
+produce a hit, the supported Chrome/Safari staging manual witness from section 3.
+It must be accompanied by the separate full Browser E2E, backup/restore and
+owner sign-off gates.
+
 ## 1. Pin and run the scoped CI gates
 
 1. Select the exact candidate **40-character commit SHA** (record it in the release
