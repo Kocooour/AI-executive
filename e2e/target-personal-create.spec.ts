@@ -118,11 +118,16 @@ for(const width of [390,1280]){
     await expect(page.getByTestId("target-structure-unresolved")).toBeVisible();
     expect(forwarded).toBe(1);
     expect(count(calls,"POST",projectPath)-initial).toBe(1);
+    // Reload discards the original private command, retaining ONLY the opaque
+    // tab marker. Recovery must use create-recovery, never resend the create.
+    await page.reload();
+    await expect(page.getByTestId("target-scope-list")).toHaveAttribute("data-state","ready");
+    await page.getByTestId("target-project-create-open").click();
+    await expect(page.getByTestId("target-structure-unresolved")).toBeVisible();
     await page.getByTestId("target-structure-verify").click();
     await expect(page.getByTestId("target-structure-unresolved")).toHaveCount(0);
     await expect(page.getByTestId("target-scope-list")).toContainText(uncertainTitle);
     expect(count(calls,"POST",projectPath)-initial).toBe(1);
-    expect(count(calls,"POST",projectPath+"/create-status")+
-      count(calls,"POST",projectPath+"/create-recovery")).toBeGreaterThan(0);
+    expect(count(calls,"POST",projectPath+"/create-recovery")).toBeGreaterThan(0);
   });
 }
