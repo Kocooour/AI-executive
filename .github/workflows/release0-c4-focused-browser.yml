@@ -74,20 +74,38 @@ jobs:
       - name: C10 ordered navigation then both complete inspector suites
         shell: bash
         run: |
-          # Playwright 1.56 --test-list preserves this intentional file order.
-          # One worker, one synthetic store, one browser run to expose pollution.
+          # Build the list from Playwright's own full test names, not file-only
+          # selectors (which silently selected zero tests in Playwright 1.56).
           test_list="${RUNNER_TEMP}/release0-c10-inspector.test-list"
+          discovery="${RUNNER_TEMP}/release0-c10-discovery.txt"
           plan="${RUNNER_TEMP}/release0-c10-plan.txt"
           results="${RUNNER_TEMP}/release0-c10-results.txt"
-          cat > "${test_list}" <<'EOF'
-          [desktop] › e2e/record-links-ui01.spec.ts
-          [desktop] › e2e/navigation-unavailable-ui01c.spec.ts
-          [desktop] › e2e/project-page.spec.ts
-          [desktop] › e2e/detail-inspector-b2.spec.ts
-          [desktop] › e2e/inspector-return-focus-ui01e.spec.ts
-          EOF
-          # A previous green CLI invocation silently selected zero test cases.
-          # Fail closed unless all five intended spec files appear in --list.
+          pnpm exec playwright test \
+            e2e/record-links-ui01.spec.ts \
+            e2e/navigation-unavailable-ui01c.spec.ts \
+            e2e/project-page.spec.ts \
+            e2e/detail-inspector-b2.spec.ts \
+            e2e/inspector-return-focus-ui01e.spec.ts \
+            --project=desktop --list | tee "${discovery}"
+          node - "${discovery}" "${test_list}" <<'NODE'
+          const fs = require("node:fs");
+          const lines = fs.readFileSync(process.argv[2], "utf8")
+            .replace(/\x1b\[[0-9;]*m/g, "").split(/\r?\n/);
+          const specs = ["record-links-ui01", "navigation-unavailable-ui01c",
+            "project-page", "detail-inspector-b2", "inspector-return-focus-ui01e"];
+          const selected = [];
+          for (const spec of specs) {
+            const marker = `[desktop] › e2e/${spec}.spec.ts:`;
+            const matches = lines.filter((line) => line.includes(marker))
+              .map((line) => line.trim());
+            if (!matches.length) throw new Error(`No discovered tests in ${spec}`);
+            selected.push(...matches);
+          }
+          fs.writeFileSync(process.argv[3], selected.join("\n") + "\n");
+          console.log(`C10 selected ${selected.length} actual tests in required file order`);
+          NODE
+          # Fail closed before launching the browser unless each file was
+          # selected by Playwright's own parser, and later at least one test ran.
           pnpm exec playwright test --list --test-list "${test_list}" \
             --project=desktop | tee "${plan}"
           for spec in record-links-ui01 navigation-unavailable-ui01c project-page detail-inspector-b2 inspector-return-focus-ui01e; do
