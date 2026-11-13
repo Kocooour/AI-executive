@@ -5,6 +5,7 @@ const adoption = await import("../lib/adoption.ts");
 const markers = await import("../lib/pending-markers.ts");
 const drafts = await import("../lib/notes-drafts.ts");
 const barrier = await import("../lib/owner-adoption-barrier.ts");
+const unreadable = await import("../lib/owner-adoption-rescue.ts");
 
 // A Dexie DBCore stand-in: records the writes that reach the database.
 function fakeCore() {
@@ -152,4 +153,34 @@ test("an unfinished owner restore cannot be mistaken for a completed adoption", 
   assert.throws(() => barrier.ownerAdoptionReadyToFinish(storage), /LOCAL_CLEANUP_INCOMPLETE/);
   storage.removeItem("ai-executive-pending-deletions:stale");
   assert.equal(barrier.ownerAdoptionReadyToFinish(storage), true);
+});
+
+test("malformed owner-fence salvage preserves raw user data without exporting other origin storage keys", () => {
+  const store = memoryStorage();
+  store.setItem("ai-executive-owner-adoption-fence", "{truncated");
+  store.setItem("ai-executive-notes-drafts:page:task", "{unparsed draft");
+  store.setItem("ai-executive-pending-deletions:op", "task-1");
+  store.setItem("oauth-secret-token", "MUST_NOT_EXPORT");
+  store.setItem("ai-executive-language", "cs");
+  const captured = unreadable.captureUnreadableOwnerRescueStorage(store);
+  assert.deepEqual(captured.map(x => x.key), [
+    "ai-executive-notes-drafts:page:task",
+    "ai-executive-owner-adoption-fence",
+    "ai-executive-pending-deletions:op",
+  ].sort((a, b) => a.localeCompare(b)));
+  assert.equal(captured.some(x => x.value === "MUST_NOT_EXPORT"), false);
+  const local = { entities: [{ id: "task-1", title: "offline local" }], relations: [], base: null };
+  const bytes = unreadable.encodeUnreadableOwnerRescue(local, captured, 12345);
+  const file = JSON.parse(new TextDecoder().decode(bytes));
+  assert.equal(file.format, "lumi-owner-adoption-raw-rescue");
+  assert.equal(file.verified, false);
+  assert.equal(file.complete, false);
+  assert.equal(file.autoImportPermitted, false);
+  assert.equal(file.indexedDbReadable, true);
+  assert.equal(file.local.entities[0].id, "task-1");
+  assert.equal(file.storage.find(x => x.key === "ai-executive-owner-adoption-fence").value, "{truncated");
+  assert.throws(() => unreadable.encodeUnreadableOwnerRescue(null, [], 12345), /OWNER_RESCUE_INVALID/);
+  assert.equal(JSON.parse(new TextDecoder().decode(
+    unreadable.encodeUnreadableOwnerRescue(null, captured, 12345),
+  )).indexedDbReadable, false);
 });
