@@ -1276,7 +1276,7 @@ export function restoreDatabaseFile(file: string, hooks: RestoreHooks = {}) {
         bumpRestoreGeneration(database);
         hooks.verifyAfter?.(database);
         database.exec("COMMIT");
-        return { ...next, restoreGeneration: readRestoreGeneration(database) };
+        return { ...next, restoreGeneration: readRestoreGeneration(database), restoreKind: readRestoreKind(database) };
       } catch (error) {
         try { database.exec("ROLLBACK"); } catch { /* the original error matters */ }
         throw error;

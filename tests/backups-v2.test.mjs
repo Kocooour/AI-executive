@@ -143,6 +143,8 @@ test("restore returns every included table to the backup, keeps excluded tables,
   const migrationsBefore = dump(db(), "schema_migrations");
 
   const snapshot = store.restoreBackup(backup.name);
+  assert.equal(snapshot.restoreKind, "owner_restore", "full backup restore response must certify its origin");
+  assert.equal(snapshot.restoreGeneration, store.readSnapshot().restoreGeneration);
 
   for (const table of replaced.filter((name) => !scope.storeTables.includes(name))) {
     assert.equal(dump(db(), table), backedUp[table], `${table} is not as in the backup`);
@@ -160,7 +162,7 @@ test("restore returns every included table to the backup, keeps excluded tables,
   assert.deepEqual(dumpAll(keptSeedable), excludedBefore);
   assert.equal(dump(db(), "schema_migrations"), migrationsBefore);
   // Metadata other than the store revision is untouched (push keys stay).
-  const metadata = (text) => JSON.parse(text).filter((row) => !["revision", "updatedAt", "restoreGeneration"].includes(row.key));
+  const metadata = (text) => JSON.parse(text).filter((row) => !["revision", "updatedAt", "restoreGeneration", "restoreGenerationOrigin"].includes(row.key));
   assert.deepEqual(metadata(dump(db(), "metadata")), metadata(metadataBefore));
 
   // Entities: as in the backup, with the same ids; what the backup did not know is tombstoned; the revision moves on.
@@ -169,6 +171,7 @@ test("restore returns every included table to the backup, keeps excluded tables,
   assert.deepEqual(after.entities.find((entity) => entity.id === "note:1").content, "text one");
   assert.equal(after.revision, before.revision + 1);
   assert.equal(snapshot.revision, after.revision);
+  assert.equal(after.restoreKind, "owner_restore");
   assert.ok(after.tombstones.some((tombstone) => tombstone.id === "task:2"));
   assert.equal(after.tombstones.some((tombstone) => tombstone.id === "task:1"), false);
 
@@ -735,6 +738,7 @@ test("a save made before a restore is refused whole, whatever its base revision;
   store.restoreBackup(backup.name);
   const restored = store.readSnapshot();
   assert.equal(restored.restoreGeneration, generation + 1);
+  assert.equal(restored.restoreKind, "owner_restore");
   const dailyBefore = files("-daily.sqlite").length;
   for (const old of [undefined, generation, 0, generation + 7]) {
     const refused = save(old);
@@ -764,6 +768,7 @@ test("a save made before a restore is refused whole, whatever its base revision;
   // The generation is not part of a backup: restoring never lowers it.
   const file = new DatabaseSync(path.join(backupsDir, backup.name), { readOnly: true });
   assert.equal(file.prepare("SELECT 1 FROM metadata WHERE key = 'restoreGeneration'").get(), undefined);
+  assert.equal(file.prepare("SELECT 1 FROM metadata WHERE key = 'restoreGenerationOrigin'").get(), undefined);
   file.close();
 });
 
