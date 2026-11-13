@@ -25,6 +25,8 @@ const available = [
   "tests/work-scope-switcher.test.mjs",
   "tests/design-tokens.test.mjs",
   "tests/browser-e2e-workflow.test.mjs",
+  "tests/pr-checks-workflow.test.mjs",
+  "tests/ci-pr-tests.test.mjs",
   "tests/deploy-safe.test.mjs",
 ];
 
@@ -134,6 +136,26 @@ test("P2: editing Browser E2E workflow selects its dedicated regression", () => 
   const out = chooseTests([".github/workflows/browser-e2e.yml"], available);
   assert.equal(out.full, false);
   assert.ok(out.selected.includes("tests/browser-e2e-workflow.test.mjs"));
+});
+
+test("known PR Checks workflow changes run focused workflow/security checks", () => {
+  const out = chooseTests([
+    ".github/workflows/pr-checks.yml",
+    "tests/target-store-provision.test.mjs",
+  ], [...available, "tests/target-store-provision.test.mjs"]);
+  assert.equal(out.full, false, "CI workflow edit must not force unrelated full suite");
+  assert.ok(out.selected.includes("tests/pr-checks-workflow.test.mjs"));
+  assert.ok(out.selected.includes("tests/ci-pr-tests.test.mjs"));
+  assert.ok(out.selected.includes("tests/target-store-provision.test.mjs"));
+});
+
+test("selector changes run dedicated tests without degrading unknown workflow checks", () => {
+  const selected = chooseTests(["scripts/ci-pr-tests.mjs"], available);
+  assert.equal(selected.full, false);
+  assert.ok(selected.selected.includes("tests/ci-pr-tests.test.mjs"));
+  const unknown = chooseTests([".github/workflows/unknown-security.yml"], available);
+  assert.equal(unknown.full, true);
+  assert.equal(unknown.selected.length, available.length);
 });
 
 test("P2: unknown workflow changes conservatively run the full unit suite", () => {
