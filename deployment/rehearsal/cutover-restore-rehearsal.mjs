@@ -97,8 +97,11 @@ function ensureDir(parent, name) {
 function fileMetadata(st) {
   return { mode: st.mode & 0o7777, uid: st.uid, gid: st.gid };
 }
-function privateSourceManifest(root, entries) {
-  return { root: fileMetadata(lstatSync(root)), entries };
+// Capture the source root together with its descendants. The input-root
+// owner/mode controls service access and must be part of both source stability
+// checks and --verify equality, not just recorded in the private report.
+function sourceTreeManifest(root) {
+  return { root: fileMetadata(lstatSync(root)), entries: listTree(root) };
 }
 function listTree(root) {
   const result = [];
@@ -141,7 +144,8 @@ function assertPrivateCopyModes(root, entries) {
 function copyTree(src, dst) {
   mkdirSync(dst, { mode: 0o700 });
   chmodSync(dst, 0o700);
-  const entries = listTree(src);
+  const original = sourceTreeManifest(src);
+  const entries = original.entries;
   for (const item of entries) {
     const dest = path.join(dst, item.relative);
     if (item.kind === "directory") {
@@ -152,14 +156,14 @@ function copyTree(src, dst) {
       chmodSync(dest, 0o600);
     }
   }
-  const after = listTree(src);
-  if (originalMetadataHash(entries) !== originalMetadataHash(after))
+  const after = sourceTreeManifest(src);
+  if (originalMetadataHash(original) !== originalMetadataHash(after))
     throw Error("offline source content or metadata changed during copy");
   const written = listTree(dst);
   if (manifestHash(entries) !== manifestHash(written))
     throw Error("archived file manifest mismatch");
   assertPrivateCopyModes(dst, written);
-  return entries;
+  return original;
 }
 function copyDatabaseForInspection(sourceDir, root, name) {
   const local = ensureDir(root, name.replaceAll(".", "-"));
@@ -286,13 +290,14 @@ function main() {
   const expectedDir = path.join(archive, "legacy");
   const candidateDir = args.verify
     ? resolved[1] : path.join(restored, "legacy");
-  const expectedManifest = copyTree(resolved[0], expectedDir);
-  privateManifest.trees.legacy = privateSourceManifest(resolved[0], expectedManifest);
+  const expectedSnapshot = copyTree(resolved[0], expectedDir);
+  const expectedManifest = expectedSnapshot.entries;
+  privateManifest.trees.legacy = expectedSnapshot;
   if (args.verify) {
     // Candidate is also copied, so SQLite is never opened on either source.
-    const candidateOriginal = copyTree(resolved[1], path.join(restored, "candidate"));
-    privateManifest.trees.candidate = privateSourceManifest(resolved[1], candidateOriginal);
-    if (originalMetadataHash(expectedManifest) !== originalMetadataHash(candidateOriginal))
+    const candidateSnapshot = copyTree(resolved[1], path.join(restored, "candidate"));
+    privateManifest.trees.candidate = candidateSnapshot;
+    if (originalMetadataHash(expectedSnapshot) !== originalMetadataHash(candidateSnapshot))
       throw Error("offline candidate content or metadata mismatch");
   } else {
     copyTree(expectedDir, candidateDir);
@@ -327,8 +332,9 @@ function main() {
     // immutable journal and witness, and verify byte-for-byte restore as a unit.
     const targetArchive = path.join(archive, "target");
     const targetRestored = path.join(restored, "target");
-    const targetEntries = copyTree(resolved[args.targetIndex], targetArchive);
-    privateManifest.trees.target = privateSourceManifest(resolved[args.targetIndex], targetEntries);
+    const targetSnapshot = copyTree(resolved[args.targetIndex], targetArchive);
+    privateManifest.trees.target = targetSnapshot;
+    const targetEntries = targetSnapshot.entries;
     copyTree(targetArchive, targetRestored);
     if (manifestHash(targetEntries) !== manifestHash(listTree(targetRestored)))
       throw Error("target security archive restore mismatch");
@@ -346,8 +352,9 @@ function main() {
     // they require a separately prepared OFFLINE copy. Never print their names.
     const archivedConfig = path.join(archive, "configuration");
     const restoredConfig = path.join(restored, "configuration");
-    const entries = copyTree(resolved[args.configIndex], archivedConfig);
-    privateManifest.trees.configuration = privateSourceManifest(resolved[args.configIndex], entries);
+    const configSnapshot = copyTree(resolved[args.configIndex], archivedConfig);
+    privateManifest.trees.configuration = configSnapshot;
+    const entries = configSnapshot.entries;
     copyTree(archivedConfig, restoredConfig);
     if (manifestHash(entries) !== manifestHash(listTree(restoredConfig)))
       throw Error("configuration artifact restore mismatch");
