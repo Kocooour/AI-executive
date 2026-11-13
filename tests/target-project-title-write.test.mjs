@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
-import {mkdtempSync,mkdirSync,rmSync} from 'node:fs';
+import {mkdtempSync,mkdirSync,rmSync,writeFileSync,readFileSync,existsSync,watch} from 'node:fs';
+import {spawn} from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
 import {DatabaseSync} from 'node:sqlite';
@@ -240,4 +241,86 @@ test('A-preview to B-PATCH cannot cross a shared-editor identity boundary',async
  const afterSwitch=await send(actorB,cmd);
  assert.equal(afterSwitch.status,404,'B cannot replay A committed command');
  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM project_title_audit").get().n,beforeAudit+1);
+});
+
+
+/**
+ * C11 companion to the existing simultaneous PATCH/cancel race.
+ * The previous test's eventual 200/409 could hide a first-attempt 503 (and
+ * any replay). This test enforces REAL pinned contention: a PATCH child holds
+ * its BEGIN IMMEDIATE transaction immediately after the journal intent fsync.
+ * The cancel child signals only after it has observed the real SQLite sidecar;
+ * this signal releases the PATCH without a parent sleep or speculative retry.
+ * The cancel must succeed on its ONE attempt under the real 200ms budget.
+ */
+test('contended first-attempt project PATCH and cancel settle with the real 200ms writer budget',async()=>{
+  process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_PROJECT_TITLE_WRITE_ENABLED='true';
+  const id='budget-'+randomUUID();
+  db.prepare('INSERT INTO projects(id,area_id,title) VALUES (?,?,?)').run(id,stage.unassignedAreaId,'Before budget race');
+  const actor=cookie('alice');
+  const url='http://localhost:3001/api/target-staging/projects/'+id+'/title';
+  const context={params:Promise.resolve({projectId:id})};
+  const previewResponse=await preview(new Request(url,{headers:headers(actor)}),context);
+  assert.equal(previewResponse.status,200);
+  const p=await previewResponse.json();
+  const command={
+    projectId:id,commandId:randomUUID(),title:'Committed before cancel',
+    expectedRevision:p.snapshotRevision,writeAreaId:p.writeAreaId,
+    restoreGeneration:p.restoreGeneration,principalBinding:p.principalBinding,
+  };
+  const gate=path.join(root,'contended-'+randomUUID());
+  mkdirSync(gate);
+  const input=path.join(gate,'input.json');
+  writeFileSync(input,JSON.stringify({store,command}));
+  const script=path.resolve('tests/support/project-title-contention-child.mjs');
+  const launch=mode=>spawn(process.execPath,[
+    '--experimental-loader','./tests/ts-loader.mjs',script,mode,input,gate,
+  ],{stdio:'ignore',cwd:process.cwd()});
+  const marker=name=>path.join(gate,name);
+  // Only child process exits without its own marker are errors. A successful
+  // leader may exit before the follower has written its result.
+  const waitFor=(names,workers)=>{
+    return new Promise((resolve,reject)=>{
+      let settled=false;
+      const watcher=watch(gate,()=>check());
+      const onExit=()=>check();
+      for(const [worker] of workers)worker.on('exit',onExit);
+      function finish(error){
+        if(settled)return;
+        settled=true;
+        watcher.close();
+        for(const [worker] of workers)worker.off('exit',onExit);
+        if(error)reject(error);else resolve();
+      }
+      function check(){
+        if(names.every(name=>existsSync(marker(name))))return finish();
+        for(const [worker,required] of workers){
+          if((worker.exitCode!==null||worker.signalCode!==null)&&!existsSync(marker(required)))
+            return finish(new Error('contention child exited without '+required));
+        }
+      }
+      check();
+    });
+  };
+  const leader=launch('leader');
+  let follower;
+  try{
+    await waitFor(['leader-ready'],[[leader,'leader-ready']]);
+    follower=launch('follower');
+    await waitFor(['leader-result','follower-result'],
+      [[leader,'leader-result'],[follower,'follower-result']]);
+    assert.equal(existsSync(marker('follower-contended')),true,
+      'follower must have seen a real SQLite journal, not run after release');
+    const first=JSON.parse(readFileSync(marker('leader-result'),'utf8'));
+    const second=JSON.parse(readFileSync(marker('follower-result'),'utf8'));
+    assert.deepEqual(first,{ok:true},'the PATCH must commit on its FIRST attempt');
+    assert.deepEqual(second,{ok:true,status:'committed'},
+      'the ONE cancellation attempt must observe the committed PATCH, not return retryable 503');
+    assert.equal(db.prepare('SELECT title FROM projects WHERE id=?').get(id).title,command.title);
+    assert.equal(db.prepare('SELECT COUNT(*) AS n FROM project_title_audit WHERE project_id=?').get(id).n,1);
+    assert.equal(inspectIsolatedTargetStore({...store,mode:'r2-model'}).ok,true);
+  }finally{
+    leader.kill();
+    if(follower)follower.kill();
+  }
 });
