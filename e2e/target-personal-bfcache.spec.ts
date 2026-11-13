@@ -112,7 +112,7 @@ for (const width of [390, 1280]) {
         notRestoredReasons: navigation?.notRestoredReasons ?? null,
       };
     });
-    const evidence = { width, cacheControl, immediate, browser, head: process.env.GITHUB_SHA ?? null };
+    const evidence = { width, cacheControl, immediate, browser, checkedOutSha: process.env.LUMI_TESTED_CHECKOUT_SHA ?? null };
     console.log("REAL_BFCACHE_EVIDENCE " + JSON.stringify(evidence));
     await test.info().attach("real-bfcache-" + width + ".json", {
       body: Buffer.from(JSON.stringify(evidence, null, 2)),
