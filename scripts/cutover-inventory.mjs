@@ -158,9 +158,11 @@ function readInventory(db, source, tokenAttestation) {
     accounts: tables.mail_accounts || 0,
     syncingAccounts: tables.mail_sync_accounts || 0,
     syncedMessageRows: tables.mail_sync_messages || 0,
-    // "absent" must not mean "not inspected"; status below exists only when schema supports it.
+    // "absent" must not mean "not inspected"; status only describes the
+    // account checkpoint schema, not whether Gmail is fully synchronized.
     sync: { status: "not_available", neverSynced: null, everSynced: null, pending: null,
-      recoveryPending: null, lastSyncedAt: { earliest: null, latest: null } },
+      recoveryPending: null, reconciliationPending: null,
+      lastSyncedAt: { earliest: null, latest: null } },
   };
   for (const table of ["mail_accounts", "mail_sync_accounts", "calendar_accounts", "calendar_sources"]) {
     if (!found.has(table)) continue;
@@ -173,6 +175,19 @@ function readInventory(db, source, tokenAttestation) {
     }
   }
 
+  // Gmail reconciliation is stored in *message* rows, independently of the
+  // history and discovery checkpoints in mail_sync_accounts. A cleared cursor
+  // must never imply that stale indexed messages have been reconciled.
+  // "null" means an older/unavailable schema; zero means explicitly inspected.
+  let reconciliationPending = null;
+  if (found.has("mail_sync_messages")) {
+    const messageCols = new Set(db.prepare("PRAGMA table_info(mail_sync_messages)").all().map(row => row.name));
+    if (messageCols.has("needs_reconcile")) {
+      reconciliationPending = Number(db.prepare(
+        "SELECT COUNT(*) AS n FROM mail_sync_messages WHERE needs_reconcile=1"
+      ).get().n);
+    }
+  }
   if (found.has("mail_sync_accounts")) {
     const cols = new Set(db.prepare("PRAGMA table_info(mail_sync_accounts)").all().map(row => row.name));
     if (cols.has("last_synced_at")) {
@@ -195,6 +210,7 @@ function readInventory(db, source, tokenAttestation) {
         recoveryPending: recoveryCondition
           ? Number(db.prepare("SELECT COUNT(*) AS n FROM mail_sync_accounts WHERE " + recoveryCondition).get().n)
           : null,
+        reconciliationPending,
         lastSyncedAt: { earliest: cleanInt(syncedRange.earliest), latest: cleanInt(syncedRange.latest) },
       };
     }
