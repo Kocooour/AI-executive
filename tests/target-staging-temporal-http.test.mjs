@@ -28,7 +28,7 @@ Object.assign(process.env, {
 });
 const { bootstrapIsolatedTargetStore } = await import("../lib/target-store-bootstrap.ts");
 const durable = await import("../lib/target-staging-durable-session.ts");
-const { createSessionToken, sessionCookieName } = await import("../lib/auth.ts");
+const { createSessionToken, sessionCookieName } = await import("./support/owner-session-test-cookie.mjs");
 const { GET } = await import("../app/api/target-staging/task-temporal/route.ts");
 const { GET: GET_DETAIL } = await import("../app/api/target-staging/task-temporal/detail/route.ts");
 const { readStagingTemporalPageInChild, parseStagingTemporalPage,

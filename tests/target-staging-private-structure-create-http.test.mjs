@@ -40,7 +40,8 @@ const {TARGET_STAGING_JOURNAL_FILENAME}=await import("../lib/target-staging-anch
 const {PRIVATE_STRUCTURE_CREATE_RECEIPT_PREFIX,
   PRIVATE_STRUCTURE_CREATE_RECOVERY_PREFIX}=await import("../lib/target-private-structure-create-writer.ts");
 const durable=await import("../lib/target-staging-durable-session.ts");
-const {createSessionToken,sessionCookieName}=await import("../lib/auth.ts");
+// Use the test-only provisioned owner-cookie fixture; production must fail closed.
+const {createSessionToken,sessionCookieName}=await import("./support/owner-session-test-cookie.mjs");
 const {POST:PROJECT}=await import("../app/api/target-staging/projects/route.ts");
 const {POST:PROJECT_STATUS}=await import("../app/api/target-staging/projects/create-status/route.ts");
 const {POST:PROJECT_RECOVERY}=await import("../app/api/target-staging/projects/create-recovery/route.ts");

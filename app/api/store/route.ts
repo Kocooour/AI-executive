@@ -1,3 +1,4 @@
+import { releaseOwnerRead } from "../../../lib/owner-session-read-release";
 import { NextResponse } from "next/server";
 import {
   readSnapshot,
@@ -30,10 +31,15 @@ export async function GET(request: Request) {
       headers: { "retry-after": String(limited.retryAfter) },
     });
   }
-  recordSecurityEvent(request, "store.read", "allowed");
-  return NextResponse.json(readSnapshot(), {
+  const response = NextResponse.json(readSnapshot(), {
     headers: { "cache-control": "no-store" },
   });
+  // Final release gate. Another process may commit global logout while the
+  // snapshot is being read/serialized; never release those bytes afterwards.
+  const released = releaseOwnerRead(request, response);
+  recordSecurityEvent(request, "store.read", released === response ? "allowed" : "rejected",
+    released === response ? {} : { reason: "revoked-before-release" });
+  return released;
 }
 
 export async function PUT(request: Request) {
