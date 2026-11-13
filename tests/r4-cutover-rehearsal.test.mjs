@@ -473,6 +473,29 @@ test("rehearsal protects original ownership/mode in private manifest while archi
   assert.equal(lstatSync(path.join(out, "restored", "legacy", "backups", "private.backup")).mode & 0o7777, 0o600);
 });
 
+test("verify-copies rejects a root-directory-only mode mismatch", t => {
+  const { source, base } = fixture(t);
+  const candidate = path.join(base, "root-only-mode-change");
+  cpSync(source, candidate, { recursive: true });
+  // No file content, nested directory, or file metadata is changed. Only the
+  // input root differs, which must be included in original-metadata equality.
+  chmodSync(source, 0o700);
+  chmodSync(candidate, 0o750);
+  assert.notEqual(lstatSync(source).mode & 0o7777, lstatSync(candidate).mode & 0o7777);
+  const sourceDigest = sha(path.join(source, "store.sqlite"));
+  const candidateDigest = sha(path.join(candidate, "store.sqlite"));
+  assert.equal(sourceDigest, candidateDigest);
+  const output = path.join(base, "root-mode-verification");
+  const result = run(rehearsal, ["--verify", source, candidate, output]);
+  assert.notEqual(result.status, 0, "root metadata mismatch must not pass");
+  assert.equal(existsSync(path.join(output, "rehearsal.json")), false,
+    "failed verification must not claim PASS");
+  assert.equal(result.stdout.includes(SECRET), false);
+  assert.equal(result.stderr.includes(SECRET), false);
+  assert.equal(sha(path.join(source, "store.sqlite")), sourceDigest);
+  assert.equal(sha(path.join(candidate, "store.sqlite")), candidateDigest);
+});
+
 test("verify-copies fails closed when original permissions differ despite identical bytes", t => {
   const { source, base } = fixture(t);
   const candidate = path.join(base, "changed-mode");
