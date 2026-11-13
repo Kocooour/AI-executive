@@ -230,3 +230,99 @@ test("every discovered target-staging handler respects the exact first-release s
     JSON.stringify({ enabled, excluded, writes }));
   assert.deepEqual(failures, [], failures.join("\n"));
 });
+
+
+/**
+ * A valid session and a matching Origin must not authorize Bob to read or
+ * mutate Alice's private data. CSRF checks alone are not an ACL witness.
+ * Use genuinely valid write contracts from Alice's own previews so a 400 for
+ * malformed JSON cannot accidentally make this test pass.
+ */
+test("same-origin cross-owner reads and valid private writes are rejected independently of CSRF", async () => {
+  db.prepare("INSERT INTO projects(id,area_id,title) VALUES ('bob-project','bob-private','Private for Bob project')").run();
+  db.prepare("INSERT INTO tasks(id,area_id,title) VALUES ('bob-task','bob-private','Private for Bob task')").run();
+  db.prepare("INSERT INTO notes(id,area_id,title,body) VALUES ('bob-note','bob-private','Private for Bob note','Bob only')").run();
+  const ownerSession = issueDurableTargetStagingSession(store, "alice", 900);
+  assert.equal(ownerSession.ok, true);
+  const aliceCookie = TARGET_STAGING_SESSION_COOKIE + "=" + ownerSession.sessionToken;
+  const target = { projectId: "alice-project", taskId: "alice-task", noteId: "alice-note" };
+  const call = async (route, method, cookie, body, search = "") => {
+    const mod = await import(pathToFileURL(path.join(directory, route, "route.ts")).href);
+    const relative = route.replace(/\[(\w+)\]/g, (_match, key) => target[key]);
+    const context = { params: Promise.resolve(Object.fromEntries(
+      [...route.matchAll(/\[(\w+)\]/g)].map(([, key]) => [key, target[key]]),
+    )) };
+    const response = await mod[method](new Request(host + "/api/target-staging/" + relative + search, {
+      method, headers: headers(cookie, host),
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    }), context);
+    return response;
+  };
+  const state = () => ({
+    ...countState(),
+    aliceProject: db.prepare("SELECT * FROM projects WHERE id='alice-project'").get(),
+    aliceTask: db.prepare("SELECT * FROM tasks WHERE id='alice-task'").get(),
+    aliceNote: db.prepare("SELECT * FROM notes WHERE id='alice-note'").get(),
+  });
+  // Each endpoint is authenticated and returns Bob's own fixture, proving the
+  // response did not simply fail closed before reaching the authorized model.
+  for (const [route, query, own] of [
+    ["tasks", "", "bob-task"],
+    ["projects", "", "bob-project"],
+    ["project-index", "", "bob-project"],
+    ["note-index/global", "", "bob-note"],
+    ["title-search", "?q=Private", "bob-project"],
+  ]) {
+    const before = state();
+    const response = await call(route, "GET", bobCookie, undefined, query);
+    const text = await response.text();
+    assert.equal(response.status, 200, "GET " + route + " returned " + response.status + ": " + text.slice(0, 180));
+    assert.ok(text.includes(own), "GET " + route + " must show Bob's own authorized record");
+    assert.doesNotMatch(text, /alice-(?:project|task|note)|Private (?:project|task|note)|Secret/,
+      "GET " + route + " leaked Alice's private fixture");
+    assert.deepEqual(state(), before, "GET " + route + " mutated the target store");
+  }
+  const preview = async route => {
+    const response = await call(route, "GET", aliceCookie);
+    assert.equal(response.status, 200, "Alice must obtain a real owner preview for " + route);
+    return response.json();
+  };
+  const project = await preview("projects/[projectId]/title");
+  const task = await preview("tasks/[taskId]/title");
+  const note = await preview("notes/[noteId]/edit");
+  const writes = [
+    ["PATCH", "projects/[projectId]/title", {
+      commandId: randomUUID(), title: "Cross-owner overwrite",
+      expectedRevision: project.snapshotRevision, writeAreaId: project.writeAreaId,
+      restoreGeneration: project.restoreGeneration, principalBinding: project.principalBinding,
+    }],
+    ["PATCH", "tasks/[taskId]/title", {
+      commandId: randomUUID(), title: "Cross-owner overwrite",
+      expectedRevision: task.snapshotRevision, writeAreaId: stage.unassignedAreaId,
+      restoreGeneration: stage.restoreGeneration,
+    }],
+    ["PATCH", "notes/[noteId]/edit", {
+      commandId: randomUUID(), title: "Cross-owner overwrite", body: "Should never persist",
+      expectedRevision: note.expectedRevision, writeAreaId: note.writeAreaId,
+      restoreGeneration: note.restoreGeneration,
+    }],
+    ["DELETE", "notes/[noteId]", {
+      commandId: randomUUID(), expectedRevision: note.expectedRevision,
+      writeAreaId: note.writeAreaId, restoreGeneration: note.restoreGeneration,
+    }],
+    ["POST", "notes", {
+      areaId: stage.unassignedAreaId, body: "Cannot create in Alice's Area",
+      commandId: randomUUID(), noteId: randomUUID(), restoreGeneration: stage.restoreGeneration,
+      title: "Cross-owner create",
+    }],
+  ];
+  for (const [method, route, body] of writes) {
+    const before = state();
+    const response = await call(route, method, bobCookie, body);
+    const text = await response.text();
+    assert.equal(response.status, 404, method + " " + route + " returned " + response.status + ": " + text.slice(0, 180));
+    assert.deepEqual(JSON.parse(text), { error: "Not found" },
+      method + " " + route + " must refuse generically, not reveal Alice's data");
+    assert.deepEqual(state(), before, method + " " + route + " changed the target store");
+  }
+});
