@@ -2,11 +2,12 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
-import { copyFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
+import { isWithinPath } from "../scripts/r4-path-boundary.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const inventory = path.join(root, "scripts/cutover-inventory.mjs");
@@ -365,4 +366,65 @@ test("inventory labels only exact known migration prefixes as known schema versi
   assert.equal(unknown.migrationRows, older.migrationRows);
   assert.equal(unknown.migrationIdentity, "unknown");
   assert.equal(unknown.knownSchemaVersion, null);
+});
+
+
+test("root-aware path containment rejects the root overlap without visiting real root", () => {
+  // Pure function only: do not run either CLI against '/'.
+  assert.equal(isWithinPath("/", "/"), true);
+  assert.equal(isWithinPath("/tmp/new-output", "/"), true);
+  assert.equal(isWithinPath("/tmp/new-output", "/tmp"), true);
+  assert.equal(isWithinPath("/tmp", "/tmp"), true);
+  assert.equal(isWithinPath("/tmp/sibling", "/tmp/source"), false);
+  assert.equal(isWithinPath("/tmp-evasion", "/tmp"), false);
+  assert.equal(isWithinPath("/tmp/source", "/tmp/source/sub"), false);
+  assert.equal(isWithinPath("/tmp/source/sub", "/tmp/source"), true);
+});
+
+test("rehearsal protects original ownership/mode in private manifest while archived copies stay private", t => {
+  const { source, base } = fixture(t);
+  const backup = path.join(source, "backups", "private.backup");
+  const sensitiveName = "secret-" + SECRET + ".bak";
+  const secret = path.join(source, "backups", sensitiveName);
+  writeFileSync(secret, SECRET, { mode: 0o640 });
+  chmodSync(backup, 0o640);
+  chmodSync(path.join(source, "backups"), 0o750);
+  const original = lstatSync(backup);
+  const out = path.join(base, "manifest-verified");
+  const result = run(rehearsal, [source, out]);
+  assert.equal(result.status, 0, result.stderr);
+  const privateFile = path.join(out, "archive", "private-file-manifest.json");
+  const content = readFileSync(privateFile, "utf8");
+  const privateManifest = JSON.parse(content);
+  const reportText = readFileSync(path.join(out, "rehearsal.json"), "utf8");
+  const report = JSON.parse(reportText);
+  const items = privateManifest.trees.legacy.entries;
+  const file = items.find(row => row.relative === path.join("backups", "private.backup"));
+  const dir = items.find(row => row.relative === "backups");
+  assert.equal(file.mode, 0o640);
+  assert.equal(file.uid, original.uid);
+  assert.equal(file.gid, original.gid);
+  assert.equal(dir.mode, 0o750);
+  assert.match(file.digest, /^[0-9a-f]{64}$/);
+  assert.equal(report.privateManifestSha256, createHash("sha256").update(content).digest("hex"));
+  assert.equal(privateManifest.trees.legacy.root.mode, lstatSync(source).mode & 0o7777);
+  assert.equal(privateManifest.format, "lumi-r4-private-file-manifest-v1");
+  assert.equal(items.some(row => row.relative.includes(sensitiveName)), true);
+  assert.equal(reportText.includes(SECRET), false);
+  assert.equal(result.stdout.includes(SECRET), false);
+  assert.equal(result.stderr.includes(SECRET), false);
+  assert.equal(lstatSync(privateFile).mode & 0o7777, 0o600);
+  assert.equal(lstatSync(path.join(out, "archive", "legacy", "backups", "private.backup")).mode & 0o7777, 0o600);
+  assert.equal(lstatSync(path.join(out, "archive", "legacy", "backups")).mode & 0o7777, 0o700);
+  assert.equal(lstatSync(path.join(out, "restored", "legacy", "backups", "private.backup")).mode & 0o7777, 0o600);
+});
+
+test("verify-copies fails closed when original permissions differ despite identical bytes", t => {
+  const { source, base } = fixture(t);
+  const candidate = path.join(base, "changed-mode");
+  cpSync(source, candidate, { recursive: true });
+  chmodSync(path.join(candidate, "backups", "private.backup"), 0o640);
+  const result = run(rehearsal, ["--verify", source, candidate, path.join(base, "mode-verify")]);
+  assert.notEqual(result.status, 0);
+  assert.equal(result.stderr.includes(SECRET), false);
 });
