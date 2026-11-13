@@ -79,6 +79,15 @@ function ensureDir(parent, name) {
   mkdirSync(dir, { mode: 0o700 });
   return dir;
 }
+// Capture ORIGINAL metadata for the operator-only recovery manifest. Never
+// chown archived copies or make secrets world-readable: the archive itself
+// must remain 0700/0600 under the operator account.
+function fileMetadata(st) {
+  return { mode: st.mode & 0o7777, uid: st.uid, gid: st.gid };
+}
+function privateSourceManifest(root, entries) {
+  return { root: fileMetadata(lstatSync(root)), entries };
+}
 function listTree(root) {
   const result = [];
   const visit = (absolute, relative) => {
@@ -88,10 +97,10 @@ function listTree(root) {
       const st = lstatSync(file);
       if (st.isSymbolicLink()) throw Error("symlinks are not accepted in an offline snapshot");
       if (st.isDirectory()) {
-        result.push({ relative: rel, kind: "directory" });
+        result.push({ relative: rel, kind: "directory", ...fileMetadata(st) });
         visit(file, rel);
       } else if (st.isFile()) {
-        result.push({ relative: rel, kind: "file", bytes: st.size, digest: fileSha256(file) });
+        result.push({ relative: rel, kind: "file", bytes: st.size, digest: fileSha256(file), ...fileMetadata(st) });
       } else {
         throw Error("non-regular filesystem entry refused");
       }
@@ -100,27 +109,44 @@ function listTree(root) {
   visit(root, "");
   return result;
 }
+// Public evidence is only a single SHA-256 of the content/path list; a full
+// file-level manifest including original permissions and owners is private.
 function manifestHash(entries) {
-  // Store neither file names nor personal content in public-facing evidence.
+  return sha(JSON.stringify(entries.map(x => [x.relative, x.kind, x.bytes ?? null, x.digest ?? null])));
+}
+function originalMetadataHash(entries) {
   return sha(JSON.stringify(entries));
+}
+function assertPrivateCopyModes(root, entries) {
+  if ((lstatSync(root).mode & 0o7777) !== 0o700)
+    throw Error("private archive root permissions mismatch");
+  for (const item of entries) {
+    const mode = lstatSync(path.join(root, item.relative)).mode & 0o7777;
+    if (mode !== (item.kind === "directory" ? 0o700 : 0o600))
+      throw Error("private archive file permissions mismatch");
+  }
 }
 function copyTree(src, dst) {
   mkdirSync(dst, { mode: 0o700 });
+  chmodSync(dst, 0o700);
   const entries = listTree(src);
   for (const item of entries) {
     const dest = path.join(dst, item.relative);
-    if (item.kind === "directory") mkdirSync(dest, { mode: 0o700 });
-    else {
+    if (item.kind === "directory") {
+      mkdirSync(dest, { mode: 0o700 });
+      chmodSync(dest, 0o700);
+    } else {
       copyFileSync(path.join(src, item.relative), dest, constants.COPYFILE_EXCL);
       chmodSync(dest, 0o600);
     }
   }
   const after = listTree(src);
-  if (manifestHash(entries) !== manifestHash(after))
-    throw Error("offline source changed during copy");
+  if (originalMetadataHash(entries) !== originalMetadataHash(after))
+    throw Error("offline source content or metadata changed during copy");
   const written = listTree(dst);
   if (manifestHash(entries) !== manifestHash(written))
     throw Error("archived file manifest mismatch");
+  assertPrivateCopyModes(dst, written);
   return entries;
 }
 function copyDatabaseForInspection(sourceDir, root, name) {
@@ -236,15 +262,26 @@ function main() {
   const args = parseArgs();
   const { resolved, dst } = safePaths(args.sourceArgs, args.out);
   mkdirSync(dst, { mode: 0o700 });
+  chmodSync(dst, 0o700);
+  const privateManifest = {
+    format: "lumi-r4-private-file-manifest-v1",
+    archivePolicy: "private copy modes 0700 directories / 0600 files, owned by running operator",
+    recoveryPolicy: "operator must reapply recorded source uid/gid/mode on approved isolated restore; never do so to this archive",
+    trees: {},
+  };
   const archive = ensureDir(dst, "archive");
   const restored = ensureDir(dst, "restored");
   const expectedDir = path.join(archive, "legacy");
   const candidateDir = args.verify
     ? resolved[1] : path.join(restored, "legacy");
   const expectedManifest = copyTree(resolved[0], expectedDir);
+  privateManifest.trees.legacy = privateSourceManifest(resolved[0], expectedManifest);
   if (args.verify) {
     // Candidate is also copied, so SQLite is never opened on either source.
-    copyTree(resolved[1], path.join(restored, "candidate"));
+    const candidateOriginal = copyTree(resolved[1], path.join(restored, "candidate"));
+    privateManifest.trees.candidate = privateSourceManifest(resolved[1], candidateOriginal);
+    if (originalMetadataHash(expectedManifest) !== originalMetadataHash(candidateOriginal))
+      throw Error("offline candidate content or metadata mismatch");
   } else {
     copyTree(expectedDir, candidateDir);
   }
@@ -279,6 +316,7 @@ function main() {
     const targetArchive = path.join(archive, "target");
     const targetRestored = path.join(restored, "target");
     const targetEntries = copyTree(resolved[args.targetIndex], targetArchive);
+    privateManifest.trees.target = privateSourceManifest(resolved[args.targetIndex], targetEntries);
     copyTree(targetArchive, targetRestored);
     if (manifestHash(targetEntries) !== manifestHash(listTree(targetRestored)))
       throw Error("target security archive restore mismatch");
@@ -297,14 +335,22 @@ function main() {
     const archivedConfig = path.join(archive, "configuration");
     const restoredConfig = path.join(restored, "configuration");
     const entries = copyTree(resolved[args.configIndex], archivedConfig);
+    privateManifest.trees.configuration = privateSourceManifest(resolved[args.configIndex], entries);
     copyTree(archivedConfig, restoredConfig);
     if (manifestHash(entries) !== manifestHash(listTree(restoredConfig)))
       throw Error("configuration artifact restore mismatch");
     config = { status: "bytes_verified", files: entries.filter(x => x.kind === "file").length,
       manifestSha256: manifestHash(entries) };
   }
-  // The whole offline snapshot is preserved with original paths in mode 0700/0600;
-  // JSON evidence contains only digests/counters and no path, title or secret.
+  // This file is private evidence: original relative filenames, hashes, uid,
+  // gid and permissions. It is deliberately NOT embedded in public JSON/console.
+  // The manifest must remain available alongside the private archived trees.
+  const privateManifestText = JSON.stringify(privateManifest, null, 2) + "\n";
+  const privateManifestSha256 = sha(privateManifestText);
+  writeFileSync(path.join(archive, "private-file-manifest.json"), privateManifestText,
+    { mode: 0o600, flag: "wx" });
+  // The archive stores private bytes at 0600/0700. Original owner/mode data
+  // is intentionally recorded, NOT applied without separately approved restore.
   const report = {
     format: "lumi-r4-rehearsal-v2",
     verdict: "equal",
@@ -313,6 +359,8 @@ function main() {
     applicationTableCount: Object.keys(expected.tables).length,
     schemaSha256: expected.schemaSha256,
     archiveSha256,
+    privateManifestSha256,
+    privateManifestFormat: privateManifest.format,
     snapshot: {
       files: expectedManifest.filter(x => x.kind === "file").length,
       manifestSha256: manifestHash(expectedManifest),
