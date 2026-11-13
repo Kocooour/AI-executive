@@ -158,6 +158,95 @@ test("an unsent note edit survives an unrelated server revision without a restor
   }
 });
 
+test("a browser that has NEVER synchronized retains local work when a restored-generation 409 arrives", async ({ browser }) => {
+  const id = `e2e-backup-first-sync-local-${stamp}`;
+  const ownerContext = await browser.newContext({ storageState: sessionFile, locale: "cs-CZ" });
+  const freshContext = await browser.newContext({ storageState: sessionFile, locale: "cs-CZ" });
+  const owner = await ownerContext.newPage(), fresh = await freshContext.newPage();
+  let releaseInitialStore: () => void = () => undefined;
+  try {
+    await owner.goto("/");
+    await waitUntilSynced(owner);
+    const backup = await createManualBackup(owner);
+    expect(await restoreByApi(owner, backup)).toBe(200);
+    const generation = await owner.evaluate(async () =>
+      (await fetch("/api/store", { cache: "no-store" }).then(r => r.json())).restoreGeneration as number);
+    expect(generation).toBeGreaterThan(0);
+
+    // Hold ONLY the initial store GET. This fresh browser has never loaded
+    // a server snapshot, but its IndexedDB already has a real offline record.
+    // Allow the later GET used to verify the 409 certificate.
+    let firstStoreGet = true;
+    await fresh.route("**/api/store", async route => {
+      if (route.request().method() !== "GET") return route.continue();
+      if (firstStoreGet) {
+        firstStoreGet = false;
+        await new Promise<void>(resolve => { releaseInitialStore = resolve; });
+      }
+      await route.continue();
+    });
+    await fresh.goto("/", { waitUntil: "domcontentloaded" });
+    await fresh.waitForFunction(() => Boolean((window as typeof window & { __lumiRestoreFence?: boolean }).__lumiRestoreFence));
+    await fresh.evaluate(async taskId => {
+      const database = await new Promise<IDBDatabase>((resolve, reject) => {
+        const request = indexedDB.open("ai-executive");
+        request.onupgradeneeded = () => {
+          const store = request.result.createObjectStore("entities", { keyPath: "id" });
+          for (const field of ["type", "status", "workspaceId", "updatedAt"]) store.createIndex(field, field);
+        };
+        request.onsuccess = () => resolve(request.result);
+        request.onerror = () => reject(request.error);
+      });
+      await new Promise<void>((resolve, reject) => {
+        const tx = database.transaction("entities", "readwrite");
+        tx.objectStore("entities").put({ id: taskId, type: "task", title: "Jen v tomto nikdy nesynchronizovaném prohlížeči",
+          status: "open", workspaceId: "personal", properties: { inbox: true }, createdAt: Date.now(), updatedAt: Date.now() });
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => reject(tx.error);
+      });
+      database.close();
+      localStorage.removeItem("ai-executive-server-synced");
+      localStorage.removeItem("ai-executive-restore-generation");
+      localStorage.setItem("ai-executive-pending-sync", "1");
+    }, id);
+
+    const refused = await fresh.evaluate(async () => {
+      const response = await fetch("/api/context/claims", { method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action: "create", workspaceId: "personal", id: crypto.randomUUID(),
+          idempotencyKey: crypto.randomUUID(), expectedRevision: 0,
+          subject: { entityId: "workspace:personal" }, predicate: "e2e.backup.no-sync",
+          literal: { type: "string", value: "must not erase local task" }, freshness: "current", sensitivity: "normal" }) });
+      return { status: response.status, code: (await response.json()).code };
+    });
+    expect(refused).toEqual({ status: 409, code: "restored" });
+    await expect(fresh.getByRole("alertdialog", { name: "Lokální změny jsou chráněné" }))
+      .toBeVisible({ timeout: 30_000 });
+    const local = await fresh.evaluate(async taskId => {
+      const db = await new Promise<IDBDatabase>((resolve, reject) => {
+        const req = indexedDB.open("ai-executive"); req.onsuccess = () => resolve(req.result); req.onerror = () => reject(req.error);
+      });
+      const entity = await new Promise<{ id: string } | undefined>((resolve, reject) => {
+        const req = db.transaction("entities").objectStore("entities").get(taskId);
+        req.onsuccess = () => resolve(req.result); req.onerror = () => reject(req.error);
+      });
+      db.close();
+      return { entity, pending: localStorage.getItem("ai-executive-pending-sync"),
+        generation: localStorage.getItem("ai-executive-restore-generation"),
+        hold: localStorage.getItem("ai-executive-offline-recovery-hold") };
+    }, id);
+    expect(local.entity?.id).toBe(id);
+    expect(local.pending).toBe("1");
+    expect(local.generation).toBeNull();
+    expect(local.hold).not.toBeNull();
+    expect((await serverEntities(owner)).some(entity => entity.id === id)).toBe(false);
+  } finally {
+    releaseInitialStore();
+    await freshContext.close();
+    await ownerContext.close();
+  }
+});
+
 test("restoring a full backup returns records, Context with its Undo step, sources and note versions", async ({ page }) => {
   const kept = `e2e-backup-kept-${stamp}`, removed = `e2e-backup-removed-${stamp}`, added = `e2e-backup-added-${stamp}`, noteId = `e2e-backup-note-${stamp}`;
   await page.goto("/");
