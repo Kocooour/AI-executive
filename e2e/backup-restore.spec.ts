@@ -1404,3 +1404,163 @@ test("a paused ordinary pull never stamps its stale generation after a sibling o
     expect((await serverEntities(owner)).some(entity => entity.id === id)).toBe(true);
   } finally { await ownerContext.close(); await tabs.close(); }
 });
+
+test("a corrupt owner fence offers a real raw-only local rescue download, never a false D2b bundle", async ({ browser }, testInfo) => {
+  const id = `e2e-backup-invalid-fence-${stamp}`;
+  const { first, second } = await twoDevices(browser);
+  const draftKey = "ai-executive-notes-drafts:corrupt-fence-rescue";
+  try {
+    await first.page.goto("/");
+    await waitUntilSynced(first.page);
+    await second.page.goto("/?view=Inbox");
+    await waitUntilSynced(second.page);
+    await second.page.evaluate(async ({ id, draftKey }) => {
+      const db = await new Promise<IDBDatabase>((resolve, reject) => {
+        const req = indexedDB.open("ai-executive");
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => reject(req.error);
+      });
+      await new Promise<void>((resolve, reject) => {
+        const tx = db.transaction("entities", "readwrite");
+        tx.objectStore("entities").put({
+          id, type: "task", title: "Zachránit lokální změnu",
+          status: "open", workspaceId: "personal", properties: { inbox: true },
+          createdAt: Date.now(), updatedAt: Date.now() + 60000,
+        });
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => reject(tx.error);
+      });
+      db.close();
+      localStorage.setItem(draftKey, "rozpracovaná poznámka");
+      localStorage.setItem("ai-executive-owner-adoption-fence", "{neplatná značka");
+    }, { id, draftKey });
+    await second.page.reload();
+    const dialog = second.page.getByRole("alertdialog", { name: "Lokální změny jsou chráněné" });
+    await expect(dialog).toBeVisible({ timeout: 30_000 });
+    await expect(dialog.getByText(/Ochranná značka obnovy je poškozená/)).toBeVisible();
+    await dialog.getByRole("button", { name: "1. Připravit záchranný soubor" }).click();
+    await expect(dialog.getByRole("button", { name: "2. Stáhnout soubor" })).toBeEnabled();
+
+    const [download] = await Promise.all([
+      second.page.waitForEvent("download"),
+      dialog.getByRole("button", { name: "2. Stáhnout soubor" }).click(),
+    ]);
+    expect(download.suggestedFilename()).toBe("lumi-interrupted-restore-raw-unverified.json");
+    const file = testInfo.outputPath("corrupt-owner-fence-rescue.json");
+    await download.saveAs(file);
+    const data = JSON.parse(readFileSync(file, "utf8"));
+    expect(data).toMatchObject({
+      format: "lumi-owner-adoption-raw-rescue",
+      version: 1, verified: false, complete: false, autoImportPermitted: false,
+    });
+    expect(data.local.entities.some((entry: { id: string }) => entry.id === id)).toBe(true);
+    expect(data.storage).toContainEqual({ key: draftKey, value: "rozpracovaná poznámka" });
+    expect(data.storage).toContainEqual({
+      key: "ai-executive-owner-adoption-fence", value: "{neplatná značka",
+    });
+    const after = await second.page.evaluate(key => ({
+      fence: localStorage.getItem("ai-executive-owner-adoption-fence"),
+      draft: localStorage.getItem(key),
+      hold: localStorage.getItem("ai-executive-offline-recovery-hold"),
+    }), draftKey);
+    expect(after.fence).toBe("{neplatná značka");
+    expect(after.draft).toBe("rozpracovaná poznámka");
+    expect(after.hold).toBeNull();
+  } finally {
+    await first.context.close();
+    await second.context.close();
+  }
+});
+
+test("an authorized wipe retries a selectively failed final fence removal before attempting owner recovery", async ({ browser }) => {
+  const context = await browser.newContext({ storageState: sessionFile, locale: "cs-CZ" });
+  const page = await context.newPage();
+  const id = `e2e-backup-signout-wipe-retry-${stamp}`;
+  try {
+    await page.goto("/");
+    await waitUntilSynced(page);
+    await page.evaluate(async id => {
+      const known = Number(localStorage.getItem("ai-executive-restore-generation") || "0");
+      const db = await new Promise<IDBDatabase>((resolve, reject) => {
+        const req = indexedDB.open("ai-executive");
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => reject(req.error);
+      });
+      await new Promise<void>((resolve, reject) => {
+        const tx = db.transaction("entities", "readwrite");
+        tx.objectStore("entities").put({
+          id, type: "task", title: "Musí být bezpečně odstraněno",
+          status: "open", workspaceId: "personal", properties: { inbox: true },
+          createdAt: Date.now(), updatedAt: Date.now() + 60000,
+        });
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => reject(tx.error);
+      });
+      db.close();
+      // These are the durable markers of an already-authorized but interrupted
+      // sign-out, not a new permission to discard unsent data.
+      localStorage.setItem("ai-executive-owner-adoption-fence",
+        JSON.stringify({ version: 1, observedGeneration: known + 1, knownGeneration: known }));
+      localStorage.setItem("ai-executive-wipe-pending", "1");
+      localStorage.setItem("ai-executive-signed-out", "1");
+    }, id);
+    // The first restarted wipe clears IDB and the restore baseline, then
+    // fails ONLY at the very last owner-fence removeItem.
+    await page.addInitScript(() => {
+      if (sessionStorage.getItem("e2e-last-fence-remove-attempted")) return;
+      const original = Storage.prototype.removeItem;
+      Storage.prototype.removeItem = function(this: Storage, key: string) {
+        if (key === "ai-executive-owner-adoption-fence") {
+          sessionStorage.setItem("e2e-last-fence-remove-attempted", "1");
+          throw new DOMException("Injected final wipe fence failure", "QuotaExceededError");
+        }
+        return original.call(this, key);
+      };
+    });
+    await page.reload();
+    await expect.poll(() => page.evaluate(() =>
+      sessionStorage.getItem("e2e-last-fence-remove-attempted"))).toBe("1");
+    const first = await page.evaluate(() => ({
+      wipe: localStorage.getItem("ai-executive-wipe-pending"),
+      signedOut: localStorage.getItem("ai-executive-signed-out"),
+      fence: localStorage.getItem("ai-executive-owner-adoption-fence"),
+      generation: localStorage.getItem("ai-executive-restore-generation"),
+      hold: localStorage.getItem("ai-executive-offline-recovery-hold"),
+    }));
+    expect(first.wipe).toBe("1");
+    expect(first.signedOut).toBe("1");
+    expect(first.fence).not.toBeNull();
+    expect(first.generation).toBeNull();
+    expect(first.hold).toBeNull();
+
+    await page.reload();
+    await expect.poll(() => page.evaluate(() =>
+      localStorage.getItem("ai-executive-wipe-pending"))).toBeNull();
+    const state = await page.evaluate(async id => {
+      const db = await new Promise<IDBDatabase>((resolve, reject) => {
+        const req = indexedDB.open("ai-executive");
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => reject(req.error);
+      });
+      const record = await new Promise<unknown>((resolve, reject) => {
+        const req = db.transaction("entities").objectStore("entities").get(id);
+        req.onsuccess = () => resolve(req.result); req.onerror = () => reject(req.error);
+      });
+      db.close();
+      return {
+        record, fence: localStorage.getItem("ai-executive-owner-adoption-fence"),
+        signedOut: localStorage.getItem("ai-executive-signed-out"),
+        generation: localStorage.getItem("ai-executive-restore-generation"),
+        synced: localStorage.getItem("ai-executive-server-synced"),
+        hold: localStorage.getItem("ai-executive-offline-recovery-hold"),
+      };
+    }, id);
+    expect(state.record).toBeUndefined();
+    expect(state.fence).toBeNull();
+    expect(state.signedOut).toBe("1");
+    expect(state.generation).toBeNull();
+    expect(state.synced).toBeNull();
+    expect(state.hold).toBeNull();
+    await expect(page.getByRole("alertdialog", { name: "Lokální změny jsou chráněné" })).toHaveCount(0);
+  } finally { await context.close(); }
+});
