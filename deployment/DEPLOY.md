@@ -18,14 +18,23 @@ The launcher first checks that `origin/main` matches the **exact SHA**. The
 pinned script then performs its normal root-owned deployment lock, clean/main
 worktree and ancestry checks, consistent backup, stop/build, first-time owner
 cutoff initialization when appropriate, validation, restart and service
-checks. Ordinary failures can roll back code, **but a failed first rollout
-introducing the owner-session cutoff must not automatically roll back to
-pre-feature authentication**, because that old code would accept revoked
-signed cookies. After the service has been stopped, a first-rollout failure
-leaves it **stopped** and the current checkout unchanged by automatic rollback;
-the operator must repair and redeploy a cutoff-aware version, or rotate
-`AI_EXECUTIVE_SESSION_SECRET` before manually permitting the older code to
-serve requests. Never recreate or restore the cutoff to make rollback work.
+checks. Ordinary failures can roll back code. **If the first rollout fails
+during the backup, before any code fast-forward or cutoff-initialization
+attempt**, the unchanged pre-feature service is restarted only when the
+checked-out commit is still the original one **and no cutoff file exists**.
+The unverified backup is removed; after fixing the backup fault, rerun the
+normal reviewed-SHA launcher. This path has not yet installed or initialized
+the new authentication feature. If an existing cutoff is detected, restart
+is refused even this early.
+
+**If first rollout fails after the code switch begins or initialization could
+have started, it is fail-closed:** the old pre-feature authenticator is not
+restarted because it could accept revoked signed cookies. The service stays
+**stopped** and the current checkout is not automatically rolled back.
+Repair and redeploy cutoff-aware code through the guarded recovery procedure
+below; alternatively rotate `AI_EXECUTIVE_SESSION_SECRET` before explicitly
+authorizing any manual return to pre-feature authentication. Never recreate
+or restore the cutoff to make rollback work.
 The script's path-independent absolute layout makes execution via stdin
 equivalent to running the checked-out script **after** updating the checkout.
 
@@ -46,6 +55,15 @@ explicit `--recover-stopped` argument:
 TARGET_SHA=<reviewed-40-character-main-sha>
 sudo bash -c 'set -Eeuo pipefail; cd /opt/ai-executive; target="$1"; [[ "$target" =~ ^[0-9a-f]{40}$ ]]; git fetch --no-tags origin main; test "$(git rev-parse FETCH_HEAD)" = "$target"; git show "$target:deployment/deploy-safe.sh" | bash -s -- "$target" --recover-stopped' _ "$TARGET_SHA"
 ```
+
+If `systemctl is-active ai-executive` reports `failed` after a crashed
+startup, inspect `systemctl status ai-executive` and
+`systemctl show ai-executive -p MainPID -p ControlPID -p ControlGroup`
+and verify **all** service workers are stopped. Only once that is confirmed
+may the operator run `sudo systemctl reset-failed ai-executive`, then verify
+`systemctl is-active ai-executive` reports exactly `inactive` before
+invoking the recovery launcher. Never treat `failed` as evidence that the
+workers stopped, and do not bypass the `inactive` guard.
 
 This recovery mode requires an **inactive** service, a clean `main`
 checkout already containing the cutoff-aware implementation, a cutoff-aware
@@ -80,7 +98,10 @@ still contains the old one. `tests/deploy-safe.test.mjs` additionally
 exercises a failed first rollout with real cutoff initialization in a
 disposable mocked-service environment: it must preserve the cutoff and never
 restart an old binary that would accept a pre-feature signed cookie. The
-same fixture exercises the stopped-service `--recover-stopped` path with
+same fixture also covers a first-rollout backup failure **before** the
+fast-forward (restart original service without provisioning cutoff, then
+retry the full rollout), and rejects pre-feature restart when a cutoff file
+already exists. It exercises the stopped-service `--recover-stopped` path with
 a successful restart, rejects missing cutoff and pre-feature checkouts, and
 verifies that a same-SHA recovery does not reset the cutoff. No real
 production deployment or systemd commands run in CI.

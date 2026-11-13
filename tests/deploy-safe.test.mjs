@@ -363,6 +363,55 @@ scenarioCase("firstrolloutunhealthy: failed new startup never re-enables pre-rev
     "pre-feature owner validation would accept this still-signed cookie");
   assert.equal(r.events.includes("start-a"), false, "the vulnerable old authentication is never exposed");
 });
+
+test("first rollout: pre-fast-forward backup failure restores old service and allows a healthy retry", { timeout: 90000 }, () => {
+  const f = sandbox("firstrolloutpartialcopy");
+  try {
+    const first = f.execute();
+    assert.notEqual(first.status, 0);
+    assert.match(first.output, /simulated ENOSPC/);
+    assert.match(first.output, /selhal pred zmenou kodu a pred pokusem o inicializaci/);
+    assert.equal(first.head, oldSha, "backup failed before fast-forward");
+    assert.equal(first.service, "active", "pre-feature service is restored before any cutoff exists");
+    assert.equal(first.events.includes("merge"), false);
+    assert.equal(first.events.includes("start-a"), true);
+    assert.equal(first.events.includes("start-b"), false);
+    assert.deepEqual(first.backups, [], "unverified partial backup is deleted");
+    const marker = path.join(f.data, "owner-session-valid-from.sqlite");
+    assert.equal(existsSync(marker), false, "failed preflight never provisioned cutoff");
+
+    // Fix the synthetic disk failure, then perform an ordinary first rollout.
+    const second = f.execute();
+    assert.equal(second.status, 0, second.output);
+    assert.equal(second.head, newSha);
+    assert.equal(second.service, "active");
+    assert.equal(second.events.includes("start-b"), true);
+    assert.equal(second.events.includes("reset"), false);
+    assert.equal(second.backups.length, 1);
+    assert.equal(existsSync(marker), true, "healthy retry provisions the real cutoff");
+    const db = new DatabaseSync(marker, { readOnly: true });
+    try {
+      assert.ok(db.prepare("SELECT valid_from_ms FROM owner_session_cutoff WHERE id = 1").get().valid_from_ms > 0);
+    } finally { db.close(); }
+  } finally { f.cleanup(); }
+});
+
+test("first rollout: old auth is not restarted if cutoff state already exists before backup failure", { timeout: 50000 }, () => {
+  const f = sandbox("firstrolloutpartialcopy");
+  try {
+    const marker = path.join(f.data, "owner-session-valid-from.sqlite");
+    writeFileSync(marker, "preexisting-cutoff-must-not-be-treated-as-absent", { mode: 0o600 });
+    const result = f.execute();
+    assert.notEqual(result.status, 0);
+    assert.match(result.output, /BEZPECNOSTNI BLOKACE/);
+    assert.equal(result.head, oldSha);
+    assert.equal(result.service, "inactive");
+    assert.equal(result.events.includes("start-a"), false);
+    assert.equal(result.events.includes("merge"), false);
+    assert.equal(readFileSync(marker, "utf8"), "preexisting-cutoff-must-not-be-treated-as-absent");
+  } finally { f.cleanup(); }
+});
+
 test("failed first rollout can recover from a stopped, cutoff-aware checkout without resetting revocation", { timeout: 125000 }, () => {
   const f = sandbox("firstrolloutunhealthy");
   try {

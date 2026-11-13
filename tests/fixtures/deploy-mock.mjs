@@ -135,12 +135,12 @@ switch (name) {
     else if (verb === "cat-file" && args[1] === "-e") {
       // Synthetic pre-feature -> revocation-feature transition. Earlier deploy
       // tests intentionally do not advertise this module in either commit.
-      if (scenario === "firstrolloutunhealthy" &&
+      if (["firstrolloutunhealthy", "firstrolloutpartialcopy"].includes(scenario) &&
           args[2] === target + ":lib/owner-session-revocation.ts") break;
       process.exit(1);
     } else if (verb === "merge" && args[1] === "--ff-only") {
       set("head", target); log("merge");
-      if (scenario === "firstrolloutunhealthy") {
+      if (["firstrolloutunhealthy", "firstrolloutpartialcopy"].includes(scenario)) {
         // The target commit introduces the real provisioning CLI and its
         // dependencies; copy only into this temporary synthetic checkout.
         for (const file of [
@@ -213,7 +213,10 @@ switch (name) {
     break;
   }
   case "cp": {
-    if (scenario === "partialcopy" && args[args.length - 2] === path.join(root, "var/lib/ai-executive")) {
+    if ((scenario === "partialcopy" ||
+         (scenario === "firstrolloutpartialcopy" && !fs.existsSync(stateFile("copyfailed")))) &&
+        args[args.length - 2] === path.join(root, "var/lib/ai-executive")) {
+      if (scenario === "firstrolloutpartialcopy") set("copyfailed", "1");
       const destination = args[args.length - 1];
       fs.mkdirSync(destination, { recursive: true });
       fs.writeFileSync(path.join(destination, "incomplete"), Buffer.alloc(512 * 1024));

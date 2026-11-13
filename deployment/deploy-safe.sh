@@ -16,6 +16,9 @@ PREV=""
 BACKUP=""
 STOPPED=0
 CHANGED=0
+# Fail closed if a revocation initialization could have begun, even if the
+# feature commit was not completely installed.
+OWNER_CUTOFF_INIT_ATTEMPTED=0
 BACKUP_VALIDATED=0
 # An integrity mismatch while the service was stopped is a known data incident.
 # Rolling back code must not claim the affected Gmail consent/index survived.
@@ -254,12 +257,21 @@ on_exit() {
     echo "KRITICKA CHYBA: sluzba stale bezi; nelze bezpecne sestavovat rollback." >&2
     exit "$rc"
   fi
-  # A first rollout may already have initialized the persistent cookie cutoff.
-  # The pre-feature $PREV does not consult it: starting that binary would
-  # reaccept old signed owner cookies, including ones invalidated by logout.
-  # Fail closed even if provisioning was interrupted or the state was present
-  # before this attempt; do not infer that no previous cutoff existed.
-  if [ "${OWNER_SESSION_FIRST_ROLLOUT:-0}" = 1 ] || [ "$RECOVERY_MODE" = 1 ]; then
+  # A failure before ANY code switch or cutoff-init attempt can safely restore
+  # the still-checked-out old service: this deployment has not revoked cookies.
+  # Recheck HEAD and the cutoff path, not merely a missing file or a boolean
+  # computed at preflight. A possibly provisioned/lost cutoff fails closed.
+  if [ "${OWNER_SESSION_FIRST_ROLLOUT:-0}" = 1 ] &&
+     [ "$RECOVERY_MODE" != 1 ] &&
+     [ "$CHANGED" = 0 ] &&
+     [ "$OWNER_CUTOFF_INIT_ATTEMPTED" = 0 ] &&
+     [ "$(git -C "$APP" rev-parse HEAD)" = "$PREV" ] &&
+     [ ! -e "$DATA/owner-session-valid-from.sqlite" ] &&
+     [ ! -L "$DATA/owner-session-valid-from.sqlite" ]; then
+    echo "Prvni rollout selhal pred zmenou kodu a pred pokusem o inicializaci: obnovuji puvodni sluzbu." >&2
+  # After switching code (or attempting cutoff init), never reenable old
+  # cookie validation by restarting pre-feature $PREV without secret rotation.
+  elif [ "${OWNER_SESSION_FIRST_ROLLOUT:-0}" = 1 ] || [ "$RECOVERY_MODE" = 1 ]; then
     echo "BEZPECNOSTNI BLOKACE: neuspesne nasazeni nebo obnova revokace relaci." >&2
     echo "Sluzba zustava zastavena, bez automatickeho rollbacku a navratu k predchozi autentizaci." >&2
     echo "Oprav a nasad verzi s kontrolou revokace, nebo pred rucnim spustenim stare verze rotuj AI_EXECUTIVE_SESSION_SECRET." >&2
@@ -491,6 +503,7 @@ if git cat-file -e "$TARGET:lib/owner-session-revocation.ts" 2>/dev/null; then
     [ "$OWNER_SESSION_FIRST_ROLLOUT" = 1 ] ||
       die "zmizel revokacni stav; obnov puvodni stav nebo pred novou inicializaci vymen session secret"
     echo "=== JEDNORAZOVA INICIALIZACE REVOKACE RELACE ==="
+    OWNER_CUTOFF_INIT_ATTEMPTED=1
     runuser -u ai-executive -- env AI_EXECUTIVE_DATA_DIR="$DATA" /usr/bin/node \
       --experimental-loader "$APP/scripts/target-staging-ts-loader.mjs" \
       "$APP/scripts/owner-session-revocation-init.mjs" --init ||
