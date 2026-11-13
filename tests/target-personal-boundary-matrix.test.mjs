@@ -140,12 +140,16 @@ const failures = [];
 const fail = (method, route, phase, expected, received) =>
   failures.push(method + " /api/target-staging/" + route + " [" + phase + "] → " +
     received + " (expected " + expected + ")");
-async function runHandler(handler, context, method, route, phase, cookie, origin, expectedStatus, checkMutation) {
-  const relative = route.replace(/\[(\w+)\]/g, (_m, name) => params[name]?.() ?? "synthetic-id");
+async function runHandler(handler, context, method, route, phase, cookie, origin, expectedStatus, checkMutation, missingTarget = false) {
+  const value = name => missingTarget ? "missing-c11-" + name : (params[name]?.() ?? "synthetic-id");
+  const relative = route.replace(/\[(\w+)\]/g, (_m, name) => value(name));
+  const resolvedContext = missingTarget ? { params: Promise.resolve(Object.fromEntries(
+    [...route.matchAll(/\[(\w+)\]/g)].map(([, name]) => [name, value(name)]),
+  )) } : context;
   const url = host + "/api/target-staging/" + relative;
   const before = checkMutation ? countState() : null;
   try {
-    const response = await handler(request(method, url, cookie, origin), context);
+    const response = await handler(request(method, url, cookie, origin), resolvedContext);
     if (response.status !== expectedStatus) fail(method, route, phase, expectedStatus, response.status);
     const text = await response.text();
     if (expectedStatus === 401 || expectedStatus === 404) {
@@ -183,6 +187,12 @@ test("every discovered target-staging handler respects the exact first-release s
       const phase = on ? "no-session" : "profile-disabled:" + flag;
       await runHandler(mod[method], context, method, relative, phase, null,
         host, on ? 401 : 404, true);
+      if (relative.includes("[")) {
+        // An absent but well-formed ID cannot bypass session or feature
+        // admission; it must produce exactly the same generic refusal.
+        await runHandler(mod[method], context, method, relative,
+          phase + ":absent-id", null, host, on ? 401 : 404, true, true);
+      }
       if (!on) { excluded++; continue; }
       enabled++;
       // Bob has a valid live session, but no access to Alice's private object.
