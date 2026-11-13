@@ -265,7 +265,7 @@ on_exit() {
      [ "$RECOVERY_MODE" != 1 ] &&
      [ "$CHANGED" = 0 ] &&
      [ "$OWNER_CUTOFF_INIT_ATTEMPTED" = 0 ] &&
-     [ "$(git -C "$APP" rev-parse HEAD)" = "$PREV" ] &&
+     [ "$(git rev-parse HEAD)" = "$PREV" ] &&
      [ ! -e "$DATA/owner-session-valid-from.sqlite" ] &&
      [ ! -L "$DATA/owner-session-valid-from.sqlite" ]; then
     echo "Prvni rollout selhal pred zmenou kodu a pred pokusem o inicializaci: obnovuji puvodni sluzbu." >&2
