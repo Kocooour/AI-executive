@@ -82,7 +82,7 @@ export function AttentionItemRow({ app, candidate }: { app: LumiApp; candidate: 
             {primary === "defer" && <button type="button" role="menuitem" onClick={() => { close(false); open(); }}>{tr("attentionOpen")}</button>}
             <button type="button" role="menuitem" aria-label={`${tr("attentionSnooze")}: ${candidate.title}`} disabled={busy} title={app.legacyReadOnlyHint}
               onClick={(event) => { void actAndKeepFocus(event.currentTarget, "snooze"); close(false); }}>{tr("attentionSnooze")}</button>
-            <button type="button" role="menuitem" aria-label={`${tr("attentionDismiss")}: ${candidate.title}`} disabled={busy}
+            <button type="button" role="menuitem" aria-label={`${tr("attentionDismiss")}: ${candidate.title}`} disabled={busy} title={app.legacyReadOnlyHint}
               onClick={(event) => { void actAndKeepFocus(event.currentTarget, "dismiss"); close(false); }}>{tr("attentionDismiss")}</button>
           </>}
         </PopoverMenu>
