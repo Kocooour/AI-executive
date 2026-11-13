@@ -80,7 +80,9 @@ CDP `Network.requestWillBeSent`, `Network.responseReceived`,
 On a true BFCache hit it now requires new **completed direct HTTP GET 200**
 responses, with the owner session response finished *before* the private
 Area GET begins, all before another user action. A `401`, `403`, `500`,
-aborted request or service-worker response does not satisfy this proof.
+aborted request, service-worker response or cached response does not satisfy
+this proof. The CDP collector tracks `Network.requestServedFromCache`,
+`fromDiskCache` and `fromPrefetchCache` to reject stale authorized reads.
 This strict positive-hit path remains **unobserved** until a real hit occurs.
 
 The required follow-up is still a **manual workflow_dispatch of both scoped
