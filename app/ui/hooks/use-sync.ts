@@ -90,10 +90,11 @@ export function useSync() {
   const [recoveryPreparing, setRecoveryPreparing] = useState(false);
   const [recoveryReady, setRecoveryReady] = useState(false);
   const [recoveryError, setRecoveryError] = useState(false);
-  // A malformed crash fence cannot authenticate *any* restore generation.
-  // Offer an explicitly raw, local-only, never-auto-importable rescue instead
-  // of showing a D2b dialog whose download cannot be prepared.
-  const [unreadableOwnerFenceRecovery, setUnreadableOwnerFenceRecovery] = useState(false);
+  // Raw, local-only salvage is available when the owner fence is malformed
+  // OR its valid generation cannot be safely replayed because the shared Web
+  // Lock could not be acquired. Neither case authorizes destructive recovery.
+  const [ownerFenceRawRescueReason, setOwnerFenceRawRescueReason] =
+    useState<"unreadable" | "lock-unavailable" | null>(null);
   // A local-only rescue does not claim fresh verification of the current server.
   const [recoveryOffline, setRecoveryOffline] = useState(false);
   const [recoveryDownloadRequested, setRecoveryDownloadRequested] = useState(false);
@@ -336,7 +337,7 @@ export function useSync() {
         // No trustworthy observed generation is available for D2b; do NOT
         // forge a generation or leave a dead "Prepare" button. The raw export
         // preserves the remaining IDB rows and local markers for manual help.
-        setUnreadableOwnerFenceRecovery(true);
+        setOwnerFenceRawRescueReason("unreadable");
         setRecoveryHeld(true);
         setRecoveryError(false);
         setSyncStatus("offline");
@@ -364,9 +365,18 @@ export function useSync() {
         recoveryFence.observedGeneration, recoveryFence.knownGeneration,
       );
       else {
-        setUnreadableOwnerFenceRecovery(ownerAdoptionFencePresent());
+        // A missing/rejecting Web Lock fails *before* the callback can read a
+        // perfectly valid fence. Do not misclassify it as corrupt: that would
+        // show a rescue UI that rejects its own valid marker.
+        let reason: "unreadable" | "lock-unavailable" | null = null;
+        if (ownerAdoptionFencePresent()) {
+          try {
+            reason = readOwnerAdoptionFence(localStorage) === null ? "unreadable" : "lock-unavailable";
+          } catch { reason = "unreadable"; }
+        }
+        setOwnerFenceRawRescueReason(reason);
         setRecoveryHeld(true);
-        setRecoveryError(false);
+        setRecoveryError(reason === null);
         setSyncStatus("offline");
       }
       return false;
@@ -864,7 +874,7 @@ export function useSync() {
   // TWO explicit steps: prepare a private byte array, then download from the
   // next direct button click. A delayed synthetic click is unreliable on iOS.
   async function prepareOfflineRecoveryDownload() {
-    if ((!offlineRecoveryIsHeld() && !unreadableOwnerFenceRecovery) || recoveryPreparing) return;
+    if ((!offlineRecoveryIsHeld() && ownerFenceRawRescueReason === null) || recoveryPreparing) return;
     setRecoveryPreparing(true);
     setRecoveryReady(false);
     setRecoveryError(false);
@@ -872,12 +882,15 @@ export function useSync() {
     recoveryFileBytes.current = null;
     recoveryStorageSnapshot.current = null;
     try {
-      if (unreadableOwnerFenceRecovery) {
-        // A corrupt fence is NOT an authenticated generation. This raw-only
-        // backup is intentionally distinct from the D2b importable file.
+      if (ownerFenceRawRescueReason !== null) {
+        // Neither a corrupt marker nor failure to obtain the destructive Web
+        // Lock certifies a generation. This raw-only export is deliberately
+        // not an importable D2b recovery file; no destructive lock is needed.
         if (offlineRecoveryIsHeld() || !ownerAdoptionFencePresent() ||
-            readOwnerAdoptionFence(localStorage) !== null ||
             localStorage.getItem("ai-executive-wipe-pending") === "1")
+          throw new Error("OWNER_RESCUE_STATE_CHANGED");
+        const parsedFence = readOwnerAdoptionFence(localStorage);
+        if ((ownerFenceRawRescueReason === "unreadable") !== (parsedFence === null))
           throw new Error("OWNER_RESCUE_STATE_CHANGED");
         const rawBefore = captureUnreadableOwnerRescueStorage(localStorage);
         const localBefore: RawOwnerRescueLocal | null = await readLocalWithBase().then(
@@ -889,10 +902,13 @@ export function useSync() {
         const rawAfter = captureUnreadableOwnerRescueStorage(localStorage);
         if (JSON.stringify(rawBefore) !== JSON.stringify(rawAfter) ||
             JSON.stringify(localBefore) !== JSON.stringify(localAfter) ||
-            readOwnerAdoptionFence(localStorage) !== null ||
+            ((ownerFenceRawRescueReason === "unreadable") !==
+              (readOwnerAdoptionFence(localStorage) === null)) ||
             localStorage.getItem("ai-executive-wipe-pending") === "1")
           throw new Error("OWNER_RESCUE_UNSTABLE");
-        const bytes = encodeUnreadableOwnerRescue(localAfter, rawAfter);
+        const bytes = encodeUnreadableOwnerRescue(localAfter, rawAfter, Date.now(),
+          ownerFenceRawRescueReason === "unreadable"
+            ? "unreadable-owner-adoption-fence" : "owner-adoption-lock-unavailable");
         recoveryStorageSnapshot.current = JSON.stringify(rawAfter);
         recoveryFileBytes.current = bytes;
         setRecoveryOffline(true);
@@ -963,13 +979,14 @@ export function useSync() {
   }
   function downloadOfflineRecovery() {
     const bytes = recoveryFileBytes.current;
-    if (!recoveryHeld || (!offlineRecoveryIsHeld() && !unreadableOwnerFenceRecovery) || !bytes) return;
+    if (!recoveryHeld || (!offlineRecoveryIsHeld() && ownerFenceRawRescueReason === null) || !bytes) return;
     // localStorage reads are synchronous, so this check remains in the user's
     // direct click activation (required by mobile Safari). Reject stale bundles.
     try {
-      if (unreadableOwnerFenceRecovery) {
+      if (ownerFenceRawRescueReason !== null) {
         if (offlineRecoveryIsHeld() || !ownerAdoptionFencePresent() ||
-            readOwnerAdoptionFence(localStorage) !== null ||
+            ((ownerFenceRawRescueReason === "unreadable") !==
+              (readOwnerAdoptionFence(localStorage) === null)) ||
             localStorage.getItem("ai-executive-wipe-pending") === "1" ||
             JSON.stringify(captureUnreadableOwnerRescueStorage(localStorage)) !== recoveryStorageSnapshot.current)
           throw new Error("OWNER_RESCUE_UNSTABLE");
@@ -989,7 +1006,7 @@ export function useSync() {
     const url = URL.createObjectURL(blob);
     const anchor = document.createElement("a");
     anchor.href = url;
-    anchor.download = unreadableOwnerFenceRecovery
+    anchor.download = ownerFenceRawRescueReason !== null
       ? unreadableOwnerRescueFilename
       : recoveryOffline ? offlineRecoveryFile.unverifiedFilename : offlineRecoveryFile.filename;
     anchor.style.display = "none";
@@ -1048,7 +1065,7 @@ export function useSync() {
 
   return {
     recoveryHeld,
-    unreadableOwnerFenceRecovery,
+    ownerFenceRawRescueReason,
     recoveryPreparing,
     recoveryReady,
     recoveryError,

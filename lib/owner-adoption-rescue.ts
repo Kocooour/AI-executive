@@ -9,6 +9,7 @@ import type { Entity, Relation } from "./db";
 import { offlineRecoveryFile } from "./d2b-offline-recovery-file";
 
 export const unreadableOwnerRescueFilename = "lumi-interrupted-restore-raw-unverified.json";
+export type RawOwnerRescueReason = "unreadable-owner-adoption-fence" | "owner-adoption-lock-unavailable";
 
 type Store = Pick<Storage, "getItem" | "key" | "length">;
 const exactKeys = new Set([
@@ -61,14 +62,17 @@ export type RawOwnerRescueLocal = Readonly<{
 // unreadable it is explicitly marked missing; no claim of completeness.
 export function encodeUnreadableOwnerRescue(
   local: RawOwnerRescueLocal | null, storage: RawOwnerRescueStorage, capturedAt = Date.now(),
+  reason: RawOwnerRescueReason = "unreadable-owner-adoption-fence",
 ): Uint8Array {
-  if (!Number.isSafeInteger(capturedAt) || capturedAt < 0 || !Array.isArray(storage) ||
+  if (!Number.isSafeInteger(capturedAt) || capturedAt < 0 ||
+      (reason !== "unreadable-owner-adoption-fence" && reason !== "owner-adoption-lock-unavailable") ||
+      !Array.isArray(storage) ||
       !storage.some(entry => entry.key === "ai-executive-owner-adoption-fence"))
     throw new Error("OWNER_RESCUE_INVALID");
   const data = {
     format: "lumi-owner-adoption-raw-rescue", version: 1,
     verified: false, complete: false, autoImportPermitted: false,
-    reason: "unreadable-owner-adoption-fence", capturedAt,
+    reason, capturedAt,
     indexedDbReadable: local !== null,
     local, storage,
   };

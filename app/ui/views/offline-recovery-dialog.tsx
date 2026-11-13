@@ -51,10 +51,14 @@ export function OfflineRecoveryDialog({ app }: { app: LumiApp }) {
               ? "Serverová data byla obnovena z jiné generace. Lumi zastavilo zápisy i přepsání místní kopie. Změny, poznámky a rozpracované texty zůstávají v tomto prohlížeči."
               : "The server's restore generation changed. Lumi has blocked writes and replacement of your local copy. Local edits, notes and drafts stay in this browser."}
         </p>
-        {app.unreadableOwnerFenceRecovery && <p role="alert">
-          {cs
-            ? "Ochranná značka obnovy je poškozená. Není možné ověřit původní generaci. Nabízíme jen nezpracovaný lokální export pro ruční záchranu, nikoli standardní záchranný soubor. Nelze ho importovat ani automaticky sloučit."
-            : "The restore marker is corrupt, so its generation cannot be verified. Only a raw local salvage file is available for manual recovery. It cannot be imported or merged automatically."}
+        {app.ownerFenceRawRescueReason !== null && <p role="alert">
+          {app.ownerFenceRawRescueReason === "unreadable"
+            ? cs
+              ? "Ochranná značka obnovy je poškozená. Není možné ověřit původní generaci. Nabízíme jen nezpracovaný lokální export pro ruční záchranu, nikoli standardní záchranný soubor. Nelze ho importovat ani automaticky sloučit."
+              : "The restore marker is corrupt, so its generation cannot be verified. Only a raw local salvage file is available for manual recovery. It cannot be imported or merged automatically."
+            : cs
+              ? "Nepodařilo se získat bezpečnostní zámek pro dokončení obnovy. Data zůstávají chráněná proti zápisu. Lze stáhnout pouze neověřený lokální export pro ruční záchranu; nelze ho importovat ani automaticky sloučit."
+              : "The recovery safety lock is unavailable. Writes remain blocked. You can download only an unverified raw local rescue file for manual recovery; it cannot be imported or automatically merged."}
         </p>}
         {interruptedOwnerRestore && <p role="status">
           {cs
@@ -96,7 +100,7 @@ export function OfflineRecoveryDialog({ app }: { app: LumiApp }) {
             ? "Soubor je připravený. Klikněte na Stáhnout soubor; samotné připravení nic neukládá."
             : "The file is ready. Select Download file; preparing alone does not save it."}
         </p>}
-        {!app.unreadableOwnerFenceRecovery && <section aria-labelledby="offline-recovery-review-title">
+        {app.ownerFenceRawRescueReason === null && <section aria-labelledby="offline-recovery-review-title">
           <h3 id="offline-recovery-review-title">
             {cs ? "3. Zkontrolovat uložený soubor" : "3. Inspect a saved recovery file"}
           </h3>
