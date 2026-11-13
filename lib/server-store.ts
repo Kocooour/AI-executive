@@ -886,6 +886,9 @@ export function replaceSnapshot(
     const next: StoreSnapshot = {
       revision: current.revision + 1,
       restoreGeneration: current.restoreGeneration,
+      // A normal save does not change the proven generation origin. Its
+      // response must match readSnapshot(), including the optional evidence.
+      restoreKind: current.restoreKind,
       entities: liveEntities,
       // A tombstone may name a relation ID (crafted or stale request); never store it live beside its tombstone.
       relations: relations.filter(

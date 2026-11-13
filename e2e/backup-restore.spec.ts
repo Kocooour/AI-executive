@@ -723,6 +723,81 @@ test("when the local copy cannot be replaced during adoption the page still relo
   }
 });
 
+test("failed replacement, fallback clear and database deletion keep the old generation and block stale replay", async ({ browser }) => {
+  const kept = `e2e-backup-failclosed-${stamp}`, local = `e2e-backup-failclosed-local-${stamp}`;
+  const markerKey = "ai-executive-pending-deletions:0000000000000-e2e-000002";
+  const { first, second } = await twoDevices(browser);
+  try {
+    await first.page.goto("/");
+    await waitUntilSynced(first.page);
+    await setStore(first.page, [task(kept, "Bezpečné zotavení: úkol na serveru")]);
+    await second.page.goto("/?view=Inbox");
+    await waitUntilSynced(second.page);
+    const name = await createManualBackup(first.page);
+    const oldGeneration = await second.page.evaluate(async ({ id, marker }) => {
+      const generation = localStorage.getItem("ai-executive-restore-generation");
+      const database = await new Promise<IDBDatabase>((resolve, reject) => {
+        const request = indexedDB.open("ai-executive");
+        request.onsuccess = () => resolve(request.result);
+        request.onerror = () => reject(request.error);
+      });
+      await new Promise<void>((resolve, reject) => {
+        const transaction = database.transaction("entities", "readwrite");
+        transaction.objectStore("entities").put({ id, type: "task", title: "Nesmí se odeslat po chybě obnovy",
+          status: "open", workspaceId: "personal", properties: { inbox: true }, createdAt: Date.now(), updatedAt: Date.now() + 60_000 });
+        transaction.oncomplete = () => resolve();
+        transaction.onerror = () => reject(transaction.error);
+      });
+      database.close();
+      localStorage.setItem(marker, id);
+      // Fail the main transaction and both destructive fallbacks. A missing
+      // quota is not enough: the existing fallback-clear test already passes.
+      const fail = () => { throw new DOMException("Injected storage failure", "QuotaExceededError"); };
+      const store = IDBObjectStore.prototype as unknown as Record<string, unknown>;
+      for (const method of ["add", "put", "clear"]) store[method] = fail;
+      (IDBFactory.prototype as unknown as Record<string, unknown>).deleteDatabase = fail;
+      return generation;
+    }, { id: local, marker: markerKey });
+    expect(oldGeneration).not.toBeNull();
+    expect(await restoreByApi(first.page, name)).toBe(200);
+    const currentGeneration = await first.page.evaluate(async () =>
+      (await fetch("/api/store", { cache: "no-store" }).then((response) => response.json())).restoreGeneration as number);
+    expect(Number(oldGeneration)).toBeLessThan(currentGeneration);
+    await remoteWakeUp(second.page);
+    await expect(second.page.getByRole("alertdialog", { name: "Lokální změny jsou chráněné" }))
+      .toBeVisible({ timeout: 30_000 });
+    const localCopy = await second.page.evaluate(async ({ id, marker }) => {
+      const database = await new Promise<IDBDatabase>((resolve, reject) => {
+        const request = indexedDB.open("ai-executive");
+        request.onsuccess = () => resolve(request.result);
+        request.onerror = () => reject(request.error);
+      });
+      const record = await new Promise<unknown>((resolve, reject) => {
+        const request = database.transaction("entities").objectStore("entities").get(id);
+        request.onsuccess = () => resolve(request.result);
+        request.onerror = () => reject(request.error);
+      });
+      database.close();
+      return { record, generation: localStorage.getItem("ai-executive-restore-generation"),
+        pendingDeletion: localStorage.getItem(marker), hold: localStorage.getItem("ai-executive-offline-recovery-hold") };
+    }, { id: local, marker: markerKey });
+    expect(localCopy.record).toMatchObject({ id: local, title: "Nesmí se odeslat po chybě obnovy" });
+    expect(localCopy.generation).toBe(oldGeneration);
+    expect(localCopy.pendingDeletion).toBe(local);
+    expect(localCopy.hold).not.toBeNull();
+    expect((await serverEntities(first.page)).map((entity) => entity.id)).not.toContain(local);
+    // The fail-closed marker is durable across reloads. This must not
+    // silently adopt old data as though they belonged to the new generation.
+    await second.page.reload();
+    await expect(second.page.getByRole("alertdialog", { name: "Lokální změny jsou chráněné" })).toBeVisible();
+    expect(await second.page.evaluate(() => localStorage.getItem("ai-executive-restore-generation"))).toBe(oldGeneration);
+    expect((await serverEntities(first.page)).map((entity) => entity.id)).not.toContain(local);
+  } finally {
+    await first.context.close();
+    await second.context.close();
+  }
+});
+
 test("a browser that never stored a generation and holds an offline change adopts the restored data when the server has been restored", async ({ browser }) => {
   const kept = `e2e-backup-dormant-${stamp}`, local = `e2e-backup-dormant-local-${stamp}`;
   const { first, second } = await twoDevices(browser);

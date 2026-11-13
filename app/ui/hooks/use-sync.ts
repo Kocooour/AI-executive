@@ -308,8 +308,17 @@ export function useSync() {
           await adoptionTransaction(async () => {
             await db.entities.clear(); await db.relations.clear(); await db.baseEntities.clear(); await db.baseRelations.clear();
           });
-        } catch {
-          try { await db.delete(); } catch { /* nothing more can be done; the reload still happens */ }
+        } catch (clearError) {
+          try {
+            await db.delete();
+          } catch (deleteError) {
+            // No destructive operation succeeded. Do NOT stamp the new
+            // generation or erase unsent markers/drafts: a surviving old copy
+            // would otherwise appear current and could be sent to the server.
+            console.error("Could not replace, clear or delete the pre-restore local copy:", clearError, deleteError);
+            await engageRecoveryForGeneration(source.restoreGeneration);
+            return false;
+          }
         }
       }
       const attempt = (work: () => void) => { try { work(); } catch { /* storage unavailable */ } };

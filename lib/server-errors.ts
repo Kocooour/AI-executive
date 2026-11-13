@@ -202,6 +202,8 @@ export const developerOnly: ReadonlySet<string> = new Set([
   "R1 foreign-key validation failed",
   // R2c.4a bootstrap rejects malformed internal generation/hash parameters; no route exposes this error.
   "Invalid witness genesis",
+  // Internal invariant before writing the atomic owner-restore generation.
+  "Invalid restore generation",
   // D3 pre-activation read-selector guards: internal programmer/snapshot errors,
   // not surfaced by any live UI or route until the access-control gates ship.
   "Conflicting canonical entity ID in work scope snapshot",
