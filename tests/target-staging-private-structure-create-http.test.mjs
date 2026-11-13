@@ -13,6 +13,10 @@ const vars=["NODE_ENV","AI_EXECUTIVE_DATA_DIR","AI_EXECUTIVE_AUTH_ENABLED",
   "AI_EXECUTIVE_TARGET_STAGING_HTTP_WRITE_ENABLED",
   "AI_EXECUTIVE_TARGET_STAGING_HTTP_PROJECTS_CREATE_ENABLED",
   "AI_EXECUTIVE_TARGET_STAGING_HTTP_PROJECT_TASKS_CREATE_ENABLED",
+  "AI_EXECUTIVE_TARGET_STAGING_HTTP_NOTES_ENABLED",
+  "AI_EXECUTIVE_TARGET_STAGING_HTTP_NOTES_WRITE_ENABLED",
+  "AI_EXECUTIVE_TARGET_STAGING_HTTP_NOTES_CREATE_ENABLED",
+  "AI_EXECUTIVE_TARGET_STAGING_HTTP_PRIVATE_NOTE_AREAS_ENABLED",
   "AI_EXECUTIVE_TARGET_STAGING_DIRECTORY",
   "AI_EXECUTIVE_TARGET_STAGING_RESTORE_GENERATION",
   "AI_EXECUTIVE_TARGET_STAGING_OWNER_USER_ID"];
@@ -38,7 +42,8 @@ const {bootstrapIsolatedTargetStore,
 const {inspectIsolatedTargetStore}=await import("../lib/target-store-preflight.ts");
 const {TARGET_STAGING_JOURNAL_FILENAME}=await import("../lib/target-staging-anchor-journal.ts");
 const {PRIVATE_STRUCTURE_CREATE_RECEIPT_PREFIX,
-  PRIVATE_STRUCTURE_CREATE_RECOVERY_PREFIX}=await import("../lib/target-private-structure-create-writer.ts");
+  PRIVATE_STRUCTURE_CREATE_RECOVERY_PREFIX,
+  PRIVATE_STRUCTURE_CREATE_CANCEL_PREFIX}=await import("../lib/target-private-structure-create-writer.ts");
 const durable=await import("../lib/target-staging-durable-session.ts");
 // Use the test-only provisioned owner-cookie fixture; production must fail closed.
 const {createSessionToken,sessionCookieName}=await import("./support/owner-session-test-cookie.mjs");
@@ -48,7 +53,11 @@ const {POST:PROJECT_RECOVERY}=await import("../app/api/target-staging/projects/c
 const {POST:CHILD}=await import("../app/api/target-staging/project-tasks/route.ts");
 const {POST:CHILD_STATUS}=await import("../app/api/target-staging/project-tasks/create-status/route.ts");
 const {POST:CHILD_RECOVERY}=await import("../app/api/target-staging/project-tasks/create-recovery/route.ts");
+const {POST:PROJECT_CANCEL}=await import("../app/api/target-staging/projects/create-cancel/route.ts");
+const {POST:CHILD_CANCEL}=await import("../app/api/target-staging/project-tasks/create-cancel/route.ts");
+const {GET:PROJECT_TARGETS}=await import("../app/api/target-staging/projects/create-targets/route.ts");
 const {isTargetReadRequest}=await import("../lib/target-edit-fetch.ts");
+const {privateStructureActorScope}=await import("../lib/target-private-structure-owner-scope.ts");
 
 const fixtures=[];
 function assertValidStore(fx){
@@ -129,6 +138,15 @@ const ct=(cmd,cookie)=>call(CHILD,"/project-tasks",cmd,cookie);
 const cts=(cmd,cookie)=>call(CHILD_STATUS,"/project-tasks/create-status",cmd,cookie);
 const ctr=(cmd,cookie)=>call(CHILD_RECOVERY,"/project-tasks/create-recovery",
   {commandId:cmd.commandId},cookie);
+const scoped=(actor="alice")=>privateStructureActorScope(actor,
+  process.env.AI_EXECUTIVE_TARGET_STAGING_RESTORE_GENERATION);
+const pc=(cmd,cookie,ownerScope=scoped())=>call(PROJECT_CANCEL,"/projects/create-cancel",
+  {commandId:cmd.commandId,ownerScope},cookie);
+const tc=(cmd,cookie,ownerScope=scoped())=>call(CHILD_CANCEL,"/project-tasks/create-cancel",
+  {commandId:cmd.commandId,ownerScope},cookie);
+const targets=(cookie=owner())=>PROJECT_TARGETS(new Request(base+"/projects/create-targets",{
+  method:"GET",headers:{cookie,"x-forwarded-for":"10.9.18.1"},
+}));
 function state(fx){
   const db=new DatabaseSync(fx.stage.databasePath,{readOnly:true});
   try{
@@ -139,6 +157,8 @@ function state(fx){
         .get(PRIVATE_STRUCTURE_CREATE_RECEIPT_PREFIX+"%").n,
       witnesses:db.prepare("SELECT COUNT(*) AS n FROM metadata WHERE key LIKE ?")
         .get(PRIVATE_STRUCTURE_CREATE_RECOVERY_PREFIX+"%").n,
+      cancels:db.prepare("SELECT COUNT(*) AS n FROM metadata WHERE key LIKE ?")
+        .get(PRIVATE_STRUCTURE_CREATE_CANCEL_PREFIX+"%").n,
       project:db.prepare("SELECT id,title,area_id,revision FROM projects LIMIT 1").get(),
       task:db.prepare("SELECT id,title,area_id,project_id,assignee_user_id,status,revision FROM tasks LIMIT 1").get(),
       metadata:JSON.stringify(db.prepare("SELECT key,value FROM metadata").all()),
@@ -159,8 +179,8 @@ test("project and project-child create, replay and content-free ledger/journal",
   assert.deepEqual(await checked(await ct(t),201),{ok:true,id:t.taskId});
   assertValidStore(fx);
   assert.deepEqual(await checked(await ct(t),200),{ok:true,id:t.taskId,replayed:true});
-  assert.deepEqual(await checked(await cts(t),200),{status:"committed",id:t.taskId});
-  assert.deepEqual(await checked(await ctr(t),200),{status:"committed",id:t.taskId});
+  assert.deepEqual(await checked(await cts(t),200),{status:"committed",id:t.taskId,projectId:t.projectId});
+  assert.deepEqual(await checked(await ctr(t),200),{status:"committed",id:t.taskId,projectId:t.projectId});
   const after=state(fx);
   assert.equal(after.projects,initial.projects+1);
   assert.equal(after.tasks,initial.tasks+1);
@@ -299,8 +319,8 @@ test("child creation accepts an existing private text-ID project with exact pare
   assert.deepEqual(await checked(await ct(t),201),{ok:true,id:t.taskId});
   assertValidStore(fx);
   assert.deepEqual(await checked(await ct(t),200),{ok:true,id:t.taskId,replayed:true});
-  assert.deepEqual(await checked(await cts(t),200),{status:"committed",id:t.taskId});
-  assert.deepEqual(await checked(await ctr(t),200),{status:"committed",id:t.taskId});
+  assert.deepEqual(await checked(await cts(t),200),{status:"committed",id:t.taskId,projectId:t.projectId});
+  assert.deepEqual(await checked(await ctr(t),200),{status:"committed",id:t.taskId,projectId:t.projectId});
   const verify=new DatabaseSync(fx.stage.databasePath,{readOnly:true});
   try{
     const row=verify.prepare("SELECT project_id,area_id FROM tasks WHERE id=?").get(t.taskId);
@@ -330,8 +350,8 @@ test("maximum-length escaped existing project IDs preserve preflight, replay and
     // canonical preflight or read-only status and recovery.
     assertValidStore(fx);
     assert.deepEqual(await checked(await ct(t),200),{ok:true,id:t.taskId,replayed:true});
-    assert.deepEqual(await checked(await cts(t),200),{status:"committed",id:t.taskId});
-    assert.deepEqual(await checked(await ctr(t),200),{status:"committed",id:t.taskId});
+    assert.deepEqual(await checked(await cts(t),200),{status:"committed",id:t.taskId,projectId:t.projectId});
+    assert.deepEqual(await checked(await ctr(t),200),{status:"committed",id:t.taskId,projectId:t.projectId});
     const verify=new DatabaseSync(fx.stage.databasePath,{readOnly:true});
     try{
       const row=verify.prepare("SELECT project_id,area_id FROM tasks WHERE id=?").get(t.taskId);
@@ -381,4 +401,98 @@ test("canonical preflight rejects a receipt whose recovery witness was removed",
     expectedOwnerUserId:"alice",expectedRestoreGeneration:fx.stage.restoreGeneration});
   assert.equal(invalid.ok,false);
   assert.ok(invalid.issues.includes("metadata_invalid"),JSON.stringify(invalid));
+});
+
+test("terminal cancel fences never-delivered project and child POSTs; late POST cannot insert",async()=>{
+  const fx=fixture(),p=project(fx),t=child(fx,"legacy-unresolved-parent");
+  const db=new DatabaseSync(fx.stage.databasePath);
+  db.prepare("INSERT INTO projects(id,area_id,title) VALUES(?,?,?)")
+    .run("legacy-unresolved-parent",fx.stage.unassignedAreaId,"Existing private parent");
+  db.close();
+  const before=state(fx);
+  for(const [command,cancel,create,status] of [
+    [p,pc,cp,cs],[t,tc,ct,cts],
+  ]){
+    assert.deepEqual(await checked(await cancel(command),200),{status:"cancelled"});
+    assertValidStore(fx);
+    assert.deepEqual(await checked(await cancel(command),200),{status:"cancelled"});
+    await checked(await create(command),409,"late create after committed cancel fence");
+    assert.deepEqual(await checked(await status(command),200),{status:"not_recorded"});
+    assertValidStore(fx);
+  }
+  const after=state(fx);
+  assert.equal(after.projects,before.projects);
+  assert.equal(after.tasks,before.tasks);
+  assert.equal(after.receipts,before.receipts);
+  assert.equal(after.witnesses,before.witnesses);
+  assert.equal(after.cancels,before.cancels+2);
+  assert.doesNotMatch(after.metadata,/Synthetic project child|Synthetic owner project/);
+  assert.match(after.journal,/"cancel":1/);
+});
+test("settled cancellation returns content-free proof and never deletes a committed record",async()=>{
+  const fx=fixture(),p=project(fx);
+  await checked(await cp(p),201);
+  assert.deepEqual(await checked(await pc(p),200),{status:"settled"});
+  assert.equal(state(fx).cancels,0);
+  assert.deepEqual(await checked(await cr(p),200),{status:"committed",id:p.projectId});
+  const t=child(fx,p.projectId);
+  await checked(await ct(t),201);
+  assert.deepEqual(await checked(await tc(t),200),{status:"settled"});
+  assert.deepEqual(await checked(await ctr(t),200),{status:"committed",id:t.taskId,projectId:t.projectId});
+  assert.equal(state(fx).cancels,0);
+  assertValidStore(fx);
+});
+test("cancel fence keys are actor scoped and retain all owner ACL boundaries",async()=>{
+  const fx=fixture(),p=project(fx),bob=session(fx,"bob");
+  await checked(await pc(p,bob.cookie,scoped("alice")),404,
+    "different actor cannot use original owner's bound marker");
+  assert.equal(state(fx).cancels,0);
+  assert.deepEqual(await checked(await pc(p,bob.cookie,scoped("bob")),200),
+    {status:"cancelled"});
+  assertValidStore(fx);
+  await checked(await cp(p),201);
+  assert.deepEqual(await checked(await pc(p),200),{status:"settled"});
+  assertValidStore(fx);
+});
+test("structure private Area catalog works with all note create flags off",async()=>{
+  const fx=fixture();
+  for(const key of ["AI_EXECUTIVE_TARGET_STAGING_HTTP_NOTES_ENABLED",
+    "AI_EXECUTIVE_TARGET_STAGING_HTTP_NOTES_WRITE_ENABLED",
+    "AI_EXECUTIVE_TARGET_STAGING_HTTP_NOTES_CREATE_ENABLED",
+    "AI_EXECUTIVE_TARGET_STAGING_HTTP_PRIVATE_NOTE_AREAS_ENABLED"])process.env[key]="false";
+  const result=await targets();
+  const data=await checked(result,200);
+  assert.deepEqual(data.restoreGeneration,fx.stage.restoreGeneration);
+  assert.equal(data.ownerScope,scoped());
+  assert.match(data.ownerScope,/^[A-Za-z0-9_-]{43}$/);
+  assert.ok(data.areas.some(a=>a.id===fx.stage.unassignedAreaId));
+  await checked(await cp(project(fx)),201);
+  assertValidStore(fx);
+});
+
+test("reauth to same actor retains scope and fences delayed old-session POST; another actor is denied",async()=>{
+  const fx=fixture(),first=session(fx,"alice"),second=session(fx,"alice"),
+    bob=session(fx,"bob"),p=project(fx),t=child(fx,"legacy-private-project");
+  const db=new DatabaseSync(fx.stage.databasePath);
+  db.prepare("INSERT INTO projects(id,area_id,title) VALUES(?,?,?)")
+    .run("legacy-private-project",fx.stage.unassignedAreaId,"Original parent");
+  db.close();
+  const scope1=(await checked(await targets(first.cookie),200)).ownerScope;
+  const scope2=(await checked(await targets(second.cookie),200)).ownerScope;
+  const bobResponse=await targets(bob.cookie);
+  assert.equal(bobResponse.status,200);
+  const bobScope=(await bobResponse.json()).ownerScope;
+  assert.equal(scope1,scope2,"stable across same-actor durable reauth");
+  assert.notEqual(scope1,bobScope,"different actors get distinct opaque witness");
+  for(const [command,create,cancel] of [[p,cp,pc],[t,ct,tc]]){
+    const countBefore=state(fx).cancels;
+    await checked(await cancel(command,bob.cookie,scope1),404);
+    assert.equal(state(fx).cancels,countBefore);
+    assert.deepEqual(await checked(await cancel(command,second.cookie,scope1),200),
+      {status:"cancelled"});
+    await checked(await create(command,first.cookie),409,
+      "the still-live original session cannot commit after the new session fenced it");
+    assertValidStore(fx);
+  }
+  assert.equal(state(fx).cancels,2);
 });

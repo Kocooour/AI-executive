@@ -14,6 +14,7 @@ on:
       - "e2e/target-personal-native-bfcache.spec.ts"
       - "e2e/target-personal-my-plan.spec.ts"
       - "e2e/target-personal-search-open.spec.ts"
+      - "e2e/target-personal-create.spec.ts"
       - "e2e/target-personal-store-setup.mjs"
       - "tests/target-personal-profile.test.mjs"
       - "tests/target-app-fetch.test.mjs"
@@ -89,7 +90,7 @@ jobs:
         run: pnpm exec playwright install --with-deps chromium
       - name: 390px and desktop acceptance incl. My Plan, Search and ACL (real SQLite)
         # Each filename is explicit: Playwright CLI filters even with testMatch.
-        run: pnpm exec playwright test e2e/target-personal-acceptance.spec.ts e2e/target-personal-my-plan.spec.ts e2e/target-personal-search-open.spec.ts --project=desktop
+        run: pnpm exec playwright test e2e/target-personal-acceptance.spec.ts e2e/target-personal-my-plan.spec.ts e2e/target-personal-search-open.spec.ts e2e/target-personal-create.spec.ts --project=desktop
       - name: Real Back / BFCache, full reload and uncertain POST (real SQLite, 390/1280)
         run: pnpm exec playwright test e2e/target-personal-bfcache.spec.ts --project=desktop
       - name: Native Chromium BFCache witness (no Playwright disable flag)

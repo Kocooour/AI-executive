@@ -12,6 +12,8 @@ import {targetMainTitleSearchEnabled} from "../lib/target-main-title-search-ui.t
 import {targetPrivateNoteAreaUiEnabled} from "../lib/target-private-note-area-ui-gate.ts";
 import {targetPrivateNoteCreateUiEnabled} from "../lib/target-private-note-create-ui-gate.ts";
 import {targetPrivateTaskCreateUiEnabled} from "../lib/target-private-task-create-ui-gate.ts";
+import {targetPrivateProjectCreateUiEnabled,targetProjectTaskCreateUiEnabled}
+  from "../lib/target-private-structure-create-ui-gate.ts";
 import {targetProjectTitleEditUiEnabled} from "../lib/target-project-title-edit-ui-gate.ts";
 import {targetNoteEditUiEnabled} from "../lib/target-note-edit-ui-gate.ts";
 
@@ -98,6 +100,7 @@ test("the profile switches every myPlan/scopes/details/edits field on",()=>{
   assert.deepEqual(config.scopes,{enabled:true,projects:true,notes:true});
   assert.deepEqual(config.details,{task:true,project:true,note:true});
   assert.deepEqual(config.edits,{taskTitle:true,taskStatus:true,taskWhen:true,taskDelete:true,noteEdit:true,noteDelete:true});
+  assert.deepEqual(config.creates,{projects:true,projectTasks:true});
 });
 
 test("the other UI gates evaluate enabled under the profile",()=>{
@@ -105,6 +108,8 @@ test("the other UI gates evaluate enabled under the profile",()=>{
   assert.equal(targetPrivateNoteAreaUiEnabled(env),true);
   assert.equal(targetPrivateNoteCreateUiEnabled(env),true);
   assert.equal(targetPrivateTaskCreateUiEnabled(env),true);
+  assert.equal(targetPrivateProjectCreateUiEnabled(env),true);
+  assert.equal(targetProjectTaskCreateUiEnabled(env),true);
   assert.equal(targetProjectTitleEditUiEnabled(env),true);
   assert.equal(targetNoteEditUiEnabled(env),true);
 });
@@ -112,7 +117,8 @@ test("the other UI gates evaluate enabled under the profile",()=>{
 test("removing any single profile flag turns at least one gate or route off (no dead flags)",()=>{
   const gates=e=>JSON.stringify([targetUiConfig(e),targetMainTitleSearchEnabled(e),
     targetPrivateNoteAreaUiEnabled(e),targetPrivateNoteCreateUiEnabled(e),
-    targetPrivateTaskCreateUiEnabled(e),targetProjectTitleEditUiEnabled(e),targetNoteEditUiEnabled(e)]);
+    targetPrivateTaskCreateUiEnabled(e),targetPrivateProjectCreateUiEnabled(e),
+    targetProjectTaskCreateUiEnabled(e),targetProjectTitleEditUiEnabled(e),targetNoteEditUiEnabled(e)]);
   const base=gates(env);
   for(const flag of TARGET_PERSONAL_V1_PROFILE){
     const reduced={...env};delete reduced[flag];

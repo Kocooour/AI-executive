@@ -15,6 +15,7 @@ import type {TargetStagingReadStore} from "./target-task-staging-reader";
 import {TARGET_STAGING_MAX_RECEIPTS,TARGET_STAGING_AUDIT_MAX_EVENTS,
   TARGET_STAGING_PRIVATE_STRUCTURE_CREATE_RECEIPT_PREFIX,
   TARGET_STAGING_PRIVATE_STRUCTURE_CREATE_RECOVERY_PREFIX,
+  TARGET_STAGING_PRIVATE_STRUCTURE_CREATE_CANCEL_PREFIX,
   TARGET_STAGING_PRIVATE_STRUCTURE_CREATE_WITNESS_MAX_BYTES}
   from "./target-store-bootstrap";
 
@@ -45,6 +46,7 @@ export type PrivateStructureCreateRecovery=
 
 export const PRIVATE_STRUCTURE_CREATE_RECEIPT_PREFIX=TARGET_STAGING_PRIVATE_STRUCTURE_CREATE_RECEIPT_PREFIX;
 export const PRIVATE_STRUCTURE_CREATE_RECOVERY_PREFIX=TARGET_STAGING_PRIVATE_STRUCTURE_CREATE_RECOVERY_PREFIX;
+export const PRIVATE_STRUCTURE_CREATE_CANCEL_PREFIX=TARGET_STAGING_PRIVATE_STRUCTURE_CREATE_CANCEL_PREFIX;
 
 const canonicalUUID=(x:unknown):x is string=>typeof x==="string"&&UUID.test(x)&&x===x.toLowerCase();
 const validTitle=(x:unknown):x is string=>typeof x==="string"&&x.length>0&&
@@ -72,6 +74,8 @@ const keyHash=(actor:string,commandId:string)=>createHash("sha256")
 const receiptKey=(actor:string,commandId:string)=>PRIVATE_STRUCTURE_CREATE_RECEIPT_PREFIX+
   keyHash(actor,commandId);
 const recoveryKey=(actor:string,commandId:string)=>PRIVATE_STRUCTURE_CREATE_RECOVERY_PREFIX+
+  keyHash(actor,commandId);
+const cancelKey=(actor:string,commandId:string)=>PRIVATE_STRUCTURE_CREATE_CANCEL_PREFIX+
   keyHash(actor,commandId);
 // Use a fixed field order; semantically identical JSON with reordered keys
 // must be an idempotent replay, never a conflict.
@@ -174,6 +178,10 @@ export function createPreflightedPrivateStructure(
       return liveWitness(db,actor,witness)
         ?{ok:true,replayed:true}:{ok:false,reason:"unavailable"};
     }
+    // Same pinned BEGIN IMMEDIATE as cancellation: a late POST with a
+    // terminally cancelled command UUID can NEVER create a record.
+    if(db.prepare("SELECT 1 FROM metadata WHERE key=?").get(cancelKey(actor,command.commandId)))
+      return {ok:false,reason:"idempotency_conflict"};
     // A stale, partially corrupted receipt/witness pair fails closed.
     if(db.prepare("SELECT 1 FROM metadata WHERE key=?").get(wk))
       return {ok:false,reason:"unavailable"};
@@ -262,4 +270,49 @@ export function readPrivateStructureCreateRecovery(
     !liveWitness(db,actor,witness))return no();
   return {ok:true,status:"committed",id:witness.id,
     projectId:witness.projectId,areaId:witness.areaId};
+}
+
+/** Durable actor+command cancellation fence. An unknown command is cancelled
+ * under the same pinned write lock as create; already committed is settled.
+ * Neither outcome grants access to, or reveals, an existing project or task.
+ */
+export type PrivateStructureCancelResult=
+  |{ok:true;status:"cancelled"|"settled"}
+  |{ok:false;reason:"unauthorized"|"invalid_request"|"resync_required"|
+    "session_revoked"|"write_failed"};
+export function cancelPreflightedPrivateStructureCreate(
+  store:TargetStagingReadStore,credential:TargetStagingReadCredential,
+  kind:PrivateStructureKind,commandId:string,durableSessionTokenHash?:string,
+):PrivateStructureCancelResult{
+  const no=():PrivateStructureCancelResult=>({ok:false,reason:"unauthorized"});
+  const failed=():PrivateStructureCancelResult=>({ok:false,reason:"write_failed"});
+  if((kind!=="project"&&kind!=="project-task")||typeof commandId!=="string"||!UUID.test(commandId))
+    return {ok:false,reason:"invalid_request"};
+  if(durableSessionTokenHash!==undefined&&
+    !isTargetStagingSessionTokenHash(durableSessionTokenHash))return no();
+  return withPinnedTargetStagingWrite<PrivateStructureCancelResult>(store,context=>{
+    const {db}=context,actor=verifiedActor(db,credential,true);
+    if(!actor)return no();
+    const sessionLive=()=>durableSessionTokenHash===undefined||
+      lookupLiveTargetStagingSession(db,durableSessionTokenHash,Date.now())?.userId===actor;
+    if(!sessionLive())return {ok:false,reason:"session_revoked"};
+    if(generation(db)!==store.expectedRestoreGeneration.toLowerCase())
+      return {ok:false,reason:"resync_required"};
+    // Receipts and cancellation are keyed by actor+command (not kind).
+    // A settled command can never create a second structure record.
+    if(db.prepare("SELECT 1 FROM metadata WHERE key=?")
+      .get(receiptKey(actor,commandId)))return {ok:true,status:"settled"};
+    const key=cancelKey(actor,commandId);
+    if(db.prepare("SELECT 1 FROM metadata WHERE key=?").get(key))
+      return {ok:true,status:"cancelled"};
+    const count=(db.prepare("SELECT COUNT(*) AS n FROM metadata WHERE key LIKE ?")
+      .get(PRIVATE_STRUCTURE_CREATE_CANCEL_PREFIX+"%") as {n:number}).n;
+    if(!Number.isSafeInteger(count)||count>=TARGET_STAGING_MAX_RECEIPTS)return failed();
+    if(!context.stillPinned()||!context.noSidecars()||!sessionLive())return failed();
+    db.prepare("INSERT INTO metadata(key,value) VALUES(?,?)").run(key,"1");
+    if(!context.stillPinned()||!sessionLive())
+      return {ok:false,reason:"session_revoked"};
+    return context.commit({kind:kind==="project"?"project_create":"project_task_create",
+      payload:{cancel:1}})?{ok:true,status:"cancelled"}:failed();
+  },no,failed);
 }

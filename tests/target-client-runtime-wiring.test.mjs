@@ -109,6 +109,8 @@ test("only the runtime (and its server route) reference the session endpoint; no
     "app/ui/target-project-title-editor.tsx",
     // R3-CAPTURE-1: live private Area chooser uses the existing runtime.
     "app/ui/target-private-note-area-chooser.tsx",
+    // R3 A/3: the inline private project/task form is a scoped runtime consumer.
+    "app/ui/target-private-project-create.tsx",
     // R3-FE-6: lazily loaded private task capture uses the same runtime contract.
     "app/ui/target-private-task-area-chooser.tsx",
     // Completion observer is independently gated and never imported by default shell eagerly.

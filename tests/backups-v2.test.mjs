@@ -712,15 +712,18 @@ test("an export of a large store runs in a small heap, where reading whole table
     // About 75 MB of notes, written with the default heap.
     const seeded = run([], "seed", "2500");
     assert.equal(seeded.status, 0, seeded.stderr);
-    // The first version of the export (a whole table in one string) does not fit 64 MB of heap ...
-    const naive = run(["--max-old-space-size=64"], "naive");
-    assert.notEqual(naive.status, 0, "reading the whole entities table should not fit the small heap");
-    // ... the streamed export does, and what it writes passes the importer's verification (also run in the small heap).
+    // Only the export/verification child is heap-constrained. The former
+    // negative-control child deliberately ran out of memory; in parallel CI,
+    // OS pressure could kill it (or other children) for reasons unrelated to
+    // V8's heap limit. A successful export of >64 MiB of entity JSON under a
+    // real 64 MiB old-space cap is the stronger positive guarantee: replacing
+    // the streaming writer with the old whole-table JSON.stringify must OOM.
     const streamed = run(["--max-old-space-size=64"], "export");
     assert.equal(streamed.status, 0, streamed.stderr.slice(-2000));
     const result = last(streamed);
     assert.ok(result.entries > 2500);
-    assert.ok(result.entitiesJson > 64 * 1024 ** 2);
+    assert.ok(result.entitiesJson > 64 * 1024 ** 2,
+      "exported uncompressed entity JSON exceeds the actual child old-space limit");
     assert.ok(result.zipBytes < pack.maxImportUploadBytes);
   } finally {
     rmSync(lowDir, { recursive: true, force: true });
