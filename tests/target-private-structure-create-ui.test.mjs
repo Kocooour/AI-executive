@@ -105,6 +105,8 @@ test("R3 A/3: one create POST, exact success or uncertain; status/recovery are q
       return json({status:"committed",id:expected});
     });
     assert.deepEqual(status,{status:"committed",id:expected});
+    assert.equal(await checkStructureCreateStatus(kind,cmd,signal,
+      async()=>json({status:"committed",id:randomUUID()})),"unavailable");
     const recovery=await recoverStructureCreate(kind,cmd.commandId,null,signal,
       async(url,options)=>{
         assert.equal(url,path+"/create-recovery");
