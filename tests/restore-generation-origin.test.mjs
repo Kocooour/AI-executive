@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 import {
   ownerRestoreOrigin, restoreKindForGeneration, restoredSinceKnownGeneration,
@@ -38,4 +39,18 @@ test("unsent edits, parked drafts and deletion markers are discarded only for ce
   assert.equal(restoreGenerationDecision(true, "owner_restore", true), "hold", "old explicit rescue holds stay intact");
   assert.equal(restoreGenerationDecision(false, "owner_restore", false), "normal",
     "unreplaced data with pending edits must NEVER be discarded for a normal server revision");
+});
+
+test("restore safety dialog uses plain-language Czech and English instead of implementation terms", () => {
+  const source = readFileSync(new URL("../app/ui/views/offline-recovery-dialog.tsx", import.meta.url), "utf8");
+  const displayed = [...source.matchAll(/"([^"\\\\]*(?:\\\\.[^"\\\\]*)*)"/g)]
+    .map((match) => match[1]).filter((value) => value.length > 70);
+  assert.ok(displayed.length >= 10, "check actual dialogue prose, not empty source");
+  for (const sentence of displayed) {
+    assert.doesNotMatch(sentence,
+      /restore generation|restore marker|raw local salvage|recovery safety lock|obnovena z jiné generace|ochranná značka obnovy|nezpracovaný lokální export|bezpečnostní zámek pro dokončení obnovy/i,
+      "implementation terminology must not appear in a user-facing paragraph");
+  }
+  assert.match(source, /Až bude spojení fungovat, načtěte stránku znovu/);
+  assert.match(source, /Reload when the connection works again/);
 });
