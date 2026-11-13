@@ -324,7 +324,8 @@ test("C10: inspector Close preserves project Back origin and scoped typed parent
     await page.locator(".projectBack").click();
     await expect(projectPage).toHaveCount(0);
     await expect(page.locator(".appShell")).toHaveClass(/view-home/);
-    await expect(page).toHaveURL(/[?]view=Home$/);
+    // Home is canonically "/" when it is the configured startup view.
+    await expect(page).toHaveURL(/(?:\/|[?]view=Home)$/);
 
     // A pasted project/task address has no in-tab project return history.
     // Close retains the parent and the reading scope; project Back then uses
