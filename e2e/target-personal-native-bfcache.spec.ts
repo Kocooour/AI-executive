@@ -134,6 +134,7 @@ function snapshotExpression(secret:string){
     "const reads=performance.getEntriesByType('resource').slice("+
     "(Number.isInteger(offset)?offset:0)).map(x=>new URL(x.name).pathname);"+
     "return {url:location.href,shows:window.__lumiNative?.shows??[],"+
+    "observerInstalled:!!window.__lumiNative,documentToken:window.__lumiNative?.docToken??null,"+
     "persisted:window.__lumiNative?.shows?.includes(true)===true,"+
     "navigationType:nav?.type??'missing',"+
     "notRestoredReasons:nav?.notRestoredReasons?"+
@@ -234,6 +235,10 @@ for(const width of [390,1280]){
       // The original document is preserved only on a genuine BFCache hit.
       // A full reload is covered separately by the existing Playwright suite.
       if(first.persisted){
+        // The genuinely resumed document must be the exact private editor
+        // document we left, rather than a fresh navigation or SPA transition.
+        expect(first.documentToken,"BFCache returned a different document")
+          .toBe(preBack?.docToken);
         const awake=await waitFor("new authorized session and Area GET",async()=>{
           const state=await cdp.eval<any>(snapshotExpression(secret));
           return state.reads.includes("/api/target-staging/session")&&
