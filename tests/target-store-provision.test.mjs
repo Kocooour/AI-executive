@@ -270,3 +270,30 @@ test("synthetic provision -> --check -> archived target-offline rehearsal", t =>
   assert.equal(report.independentCaptureEstablished, false);
   assert.deepEqual(snapshot(offline), snapshot(dir));
 });
+
+
+test("runbook provisions and checks under the deployed service UID, not root", () => {
+  const unit = readFileSync(path.join(repo, "deployment/ai-executive.service"), "utf8");
+  assert.match(unit, /^User=ai-executive$/m);
+  assert.match(unit, /^Group=ai-executive$/m);
+  assert.match(unit, /^WorkingDirectory=\/opt\/ai-executive$/m);
+  assert.match(unit, /^ProtectSystem=strict$/m);
+  assert.match(unit, /^StateDirectory=ai-executive$/m);
+
+  const docs = readFileSync(path.join(repo, "docs/R4-CUTOVER-RUNBOOK.md"), "utf8");
+  const operatorStep = docs.split("## Target-store provision and check (#422; no activation)")[1]
+    ?.split("## Copy-only rehearsal commands and limitations")[0];
+  assert.ok(operatorStep, "operator instructions must exist");
+  assert.match(operatorStep, /test "\$SERVICE_USER" = ai-executive/);
+  assert.match(operatorStep, /test "\$SERVICE_GROUP" = ai-executive/);
+  assert.match(operatorStep, /test "\$SERVICE_UID" -ne 0/);
+  assert.match(operatorStep, /test "\$MAINPID" -gt 0/);
+  const commands = operatorStep.match(/runuser -u "\$SERVICE_USER" -g "\$SERVICE_GROUP" -- env -i/g) ?? [];
+  assert.equal(commands.length, 2, "provision and --check must both drop to service UID");
+  assert.match(operatorStep, /node scripts\/target-store-provision\.mjs "\$TARGET_DIR" "\$OWNER_USER_ID" --confirmed/);
+  assert.match(operatorStep, /node scripts\/target-store-provision\.mjs --check "\$TARGET_DIR"/);
+  assert.match(operatorStep, /ProtectSystem=strict/);
+  assert.match(operatorStep, /StateDirectory=ai-executive/);
+  assert.match(operatorStep, /least-privilege.*unit change/);
+  assert.match(operatorStep, /root-owned\/previously existing target must \*\*not\*\* be fixed with.*chown/);
+});
