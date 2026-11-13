@@ -52,30 +52,30 @@ Bez `LUMI_TARGET_PERSONAL_ACCEPTANCE_E2E=true` se test přeskočí a nevznikne
 
 ## C17 — nativní BFCache a přeformulovaná release brána #388
 
-Nad izolovaným profilem \`personal-v1\` běží \`e2e/target-personal-native-bfcache.spec.ts\`
+Nad izolovaným profilem `personal-v1` běží `e2e/target-personal-native-bfcache.spec.ts`
 pro **390 a 1280 px**, v samostatném nativním Chromu bez Playwright přepínače
-\`--disable-back-forward-cache\`. Ve striktním \`workflow_dispatch\`
-(\`LUMI_REAL_BFCACHE_E2E=true\`) musí být vidět původní i návratový skutečný
-\`pageshow\`. Přijímají se pouze dvě doložené větve:
+`--disable-back-forward-cache`. Ve striktním `workflow_dispatch`
+(`LUMI_REAL_BFCACHE_E2E=true`) musí být vidět původní i návratový skutečný
+`pageshow`. Přijímají se pouze dvě doložené větve:
 
-- **\`restored\`:** \`persisted === true\`, totožný token dokumentu,
+- **`restored`:** `persisted === true`, totožný token dokumentu,
   původní přísné privacy/autorizační invarianty (nové dokončené přímé GET 200:
-  session → soukromé Oblasti), nulové \`POST /api/target-staging/tasks\`.
-- **\`not_restored\`:** \`persisted === false\`, **neprázdné důvody**
-  z \`Page.backForwardCacheNotUsed\`, nový token dokumentu, prázdný soukromý
+  session → soukromé Oblasti), nulové `POST /api/target-staging/tasks`.
+- **`not_restored`:** `persisted === false`, **neprázdné důvody**
+  z `Page.backForwardCacheNotUsed`, nový token dokumentu, prázdný soukromý
   formulář a Oblast, nový dokončený přímý GET 200 pro relaci před otevřením
   editoru a nový GET 200 pro Oblasti před dalším výběrem či uložením;
-  nulové \`POST /api/target-staging/tasks\`.
+  nulové `POST /api/target-staging/tasks`.
 
 U obou větví musí původní text chybět v DOM a úložišti, zůstat
 neodeslatelný i po opětovném výběru Oblasti a stisknutí Uložit.
-\`NATIVE_REAL_BFCACHE_EVIDENCE\` obsahuje \`evaluatedBranch\`,
-\`checkedOutSha\`, CDP důvody, autorizovaná čtení a počty CREATE.
-Bez události, bez důvodů při \`not_restored\` nebo při jakémkoli CREATE
-striktní test selže. \`Cache-Control: no-store\` se **nemění**.
+`NATIVE_REAL_BFCACHE_EVIDENCE` obsahuje `evaluatedBranch`,
+`checkedOutSha`, CDP důvody, autorizovaná čtení a počty CREATE.
+Bez události, bez důvodů při `not_restored` nebo při jakémkoli CREATE
+striktní test selže. `Cache-Control: no-store` se **nemění**.
 
-Běžné Playwright testy v \`target-personal-bfcache.spec.ts\` a
-\`target-global-private-capture.spec.ts\` jsou oddělené regresní
+Běžné Playwright testy v `target-personal-bfcache.spec.ts` a
+`target-global-private-capture.spec.ts` jsou oddělené regresní
 scénáře reloadu a simulované lifecycle cesty, nikoli nativní svědek
 release brány. Oba ruční workflow dispatch běhy na integrační větvi
 jsou pouze **zkouška brány**; před R4 musí proběhnout na přesném release SHA
