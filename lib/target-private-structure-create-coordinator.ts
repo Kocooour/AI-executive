@@ -11,7 +11,15 @@ const KEY="lumi-private-structure-create-unresolved-v1";
 const uuid=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const generationPattern=/^[A-Za-z0-9_-]{43}$/;
 type Runtime=Pick<TargetClientRuntime,"known"|"generation"|"register">;
-type Marker={kind:StructureKind;commandId:string;generation:string};
+type Marker={kind:StructureKind;commandId:string;generation:string;
+  /** Reauth-stable HMAC witness. Undefined is accepted only for pre-upgrade markers
+   * whose original runtime generation STILL matches the current session. */
+  ownerScope?:string};
+const scopePattern=/^[A-Za-z0-9_-]{43}$/;
+const sameActor=(marker:Marker,generation:string,ownerScope:string)=>
+  scopePattern.test(ownerScope)&&
+  (marker.ownerScope===ownerScope||
+    (marker.ownerScope===undefined&&marker.generation===generation));
 type Active={marker:Marker;command:StructureCreateCommand;phase:"saving"|"uncertain";
   abort:()=>void;unregister:()=>void};
 const active=new WeakMap<Runtime,Active>();
@@ -21,10 +29,13 @@ function decode(text:string):Marker|null{
     const raw:unknown=JSON.parse(text);
     if(!raw||typeof raw!=="object"||Array.isArray(raw))return null;
     const r=raw as Record<string,unknown>;
-    if(Object.keys(r).sort().join(",")!=="commandId,generation,kind"||
+    if(!["commandId,generation,kind","commandId,generation,kind,ownerScope"]
+      .includes(Object.keys(r).sort().join(","))||
       !["project","project-task"].includes(String(r.kind))||
       typeof r.commandId!=="string"||!uuid.test(r.commandId)||
-      typeof r.generation!=="string"||!generationPattern.test(r.generation))return null;
+      typeof r.generation!=="string"||!generationPattern.test(r.generation)||
+      (r.ownerScope!==undefined&&(typeof r.ownerScope!=="string"||
+        !scopePattern.test(r.ownerScope))))return null;
     return r as Marker;
   }catch{return null;}
 }
@@ -40,7 +51,8 @@ export function structureCreateMarker():StructureMarker{
   }catch{return {status:"unavailable"};}
 }
 function reserve(marker:Marker):boolean{
-  if(!generationPattern.test(marker.generation)||!uuid.test(marker.commandId)||
+  if(!generationPattern.test(marker.generation)||!scopePattern.test(marker.ownerScope||"")||
+    !uuid.test(marker.commandId)||
     structureCreateMarker().status!=="clear")return false;
   try{
     const s=store();if(!s)return false;
@@ -64,11 +76,11 @@ export function trackedStructureCreate(runtime:Runtime):"saving"|"uncertain"|nul
 }
 export async function runStructureCreate(
   runtime:Runtime,generation:string,kind:StructureKind,command:StructureCreateCommand,
-  send:typeof sendStructureCreate=sendStructureCreate,timeoutMs=20_000,
+  ownerScope:string,send:typeof sendStructureCreate=sendStructureCreate,timeoutMs=20_000,
 ):Promise<StructureCreateResult|"blocked">{
   if(!runtime.known()||runtime.generation()!==generation||active.has(runtime)||
     !validStructureCommand(kind,command))return "blocked";
-  const marker={kind,commandId:command.commandId,generation};
+  const marker={kind,commandId:command.commandId,generation,ownerScope};
   if(!reserve(marker))return "blocked";
   const controller=new AbortController();
   let timeoutResolve:(outcome:StructureCreateResult)=>void=()=>{};
@@ -97,7 +109,7 @@ export async function runStructureCreate(
   return result;
 }
 export async function verifyStructureCreate(
-  runtime:Runtime,generation:string,signal:AbortSignal,
+  runtime:Runtime,generation:string,ownerScope:string,signal:AbortSignal,
   check:typeof checkStructureCreateStatus=checkStructureCreateStatus,
   recover:typeof recoverStructureCreate=recoverStructureCreate,
 ):Promise<StructureReceipt>{
@@ -105,6 +117,7 @@ export async function verifyStructureCreate(
   const current=structureCreateMarker();
   if(current.status!=="blocked")return "unavailable";
   const marker=current.marker;
+  if(!sameActor(marker,generation,ownerScope))return "unavailable";
   const entry=active.get(runtime);
   if(entry?.phase==="saving")return "unavailable";
   const result=entry?.marker.commandId===marker.commandId
@@ -118,26 +131,37 @@ export async function verifyStructureCreate(
   return result;
 }
 
-/** Release only after the server has atomically fenced the command against
- * a future insert, or proven its receipt settled under the same lock. */
+/** Release only after a terminal actor-bound server fence. An existing receipt
+ * is SETTLED, not cancelled: reconcile it through the live-ACL read BEFORE
+ * releasing the marker, then return a navigable ID only when authorized. */
+export type StructureCancelOutcome=
+  |"cancelled"|"denied"|"unavailable"
+  |{status:"settled";id:string|null};
 export async function cancelStructureCreate(
-  runtime:Runtime,generation:string,signal:AbortSignal,
+  runtime:Runtime,generation:string,ownerScope:string,signal:AbortSignal,
   cancel:typeof cancelStructureCreateCommand=cancelStructureCreateCommand,
-):Promise<"cancelled"|"settled"|"denied"|"unavailable">{
+  recover:typeof recoverStructureCreate=recoverStructureCreate,
+):Promise<StructureCancelOutcome>{
   if(!runtime.known()||runtime.generation()!==generation||signal.aborted)
     return "unavailable";
   const current=structureCreateMarker();
-  if(current.status!=="blocked"||current.marker.generation!==generation)
+  if(current.status!=="blocked"||!sameActor(current.marker,generation,ownerScope))
     return "unavailable";
   const entry=active.get(runtime);
   if(entry?.phase==="saving")return "unavailable";
-  const result=await cancel(current.marker.kind,current.marker.commandId,signal);
-  if((result==="cancelled"||result==="settled")&&!signal.aborted&&
-    runtime.known()&&runtime.generation()===generation&&release(current.marker)){
-    if(entry?.marker.commandId===current.marker.commandId){
-      active.delete(runtime);entry.unregister();
-    }
-    return result;
+  const result=await cancel(current.marker.kind,current.marker.commandId,ownerScope,signal);
+  if(result!=="cancelled"&&result!=="settled")return result;
+  // Even after a full reload, the server's actor-scoped receipt witness
+  // provides the original created ID without storing any title or Area locally.
+  const found=result==="settled"
+    ?await recover(current.marker.kind,current.marker.commandId,null,signal)
+    :null;
+  if(signal.aborted||!runtime.known()||runtime.generation()!==generation||
+    !release(current.marker))return "unavailable";
+  if(entry?.marker.commandId===current.marker.commandId){
+    active.delete(runtime);entry.unregister();
   }
-  return result==="cancelled"||result==="settled"?"unavailable":result;
+  if(result==="cancelled")return result;
+  return {status:"settled",id:typeof found==="object"&&found.status==="committed"
+    ?found.id:null};
 }

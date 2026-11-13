@@ -128,12 +128,13 @@ export function recoverStructureCreate(
  * durable receipt) has been persisted by the server. This is a WRITE. */
 export type StructureCancel="cancelled"|"settled"|"denied"|"unavailable";
 export async function cancelStructureCreateCommand(
-  kind:StructureKind,commandId:string,signal:AbortSignal,
+  kind:StructureKind,commandId:string,ownerScope:string,signal:AbortSignal,
   fetchImpl:typeof fetch=targetAppFetch,
 ):Promise<StructureCancel>{
-  if(!canonical(commandId)||signal.aborted)return "unavailable";
+  if(!canonical(commandId)||!(/^[A-Za-z0-9_-]{43}$/.test(ownerScope))||signal.aborted)
+    return "unavailable";
   try{
-    const response=await fetchImpl(url(kind)+"/create-cancel",opts({commandId},signal));
+    const response=await fetchImpl(url(kind)+"/create-cancel",opts({commandId,ownerScope},signal));
     if(signal.aborted)return "unavailable";
     if([401,403,404].includes(response.status))return "denied";
     if(response.status!==200)return "unavailable";

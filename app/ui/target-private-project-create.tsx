@@ -21,7 +21,7 @@ type Props={
   onCommitted:(id:string)=>void;
 };
 type Catalog={status:"loading"|"unavailable"|"signed-out"|"ready";
-  generation:string;restoreGeneration:string;areas:PrivateNoteAreaChoice[]};
+  generation:string;restoreGeneration:string;ownerScope:string;areas:PrivateNoteAreaChoice[]};
 const words={
   cs:{project:"Nový soukromý projekt",task:"Přidat úkol",cancel:"Zavřít",
     title:"Název",area:"Soukromá Oblast",choose:"Vyberte Oblast",submit:"Vytvořit",
@@ -36,7 +36,10 @@ const words={
     verifyFailed:"Potvrzení není dostupné; další zápis zůstává zablokován.",
     retry:"Znovu načíst",openProject:"Otevřít vytvořený projekt",
     openTask:"Otevřít vytvořený úkol",cancelUnresolved:"Bezpečně zrušit nevyřízené vytvoření",
-    cancelled:"Původní příkaz je bezpečně ukončen.",cancelFailed:"Zrušení se nepodařilo; nový zápis zůstává zablokován."},
+    cancelled:"Původní příkaz byl bezpečně zrušen.",cancelFailed:"Zrušení se nepodařilo; nový zápis zůstává zablokován.",
+    settled:"Původní vytvoření se dokončilo. Položku lze otevřít.",
+    settledUnknown:"Původní vytvoření se dokončilo, ale položku teď nelze bezpečně otevřít. Zkontrolujte seznam před dalším vytvořením.",
+    wrongActor:"Tento nevyřízený příkaz patří jinému přihlášení. Vyřešte jej pod původním účtem; nesmaže se bez serverového potvrzení."},
   en:{project:"New private project",task:"Add task",cancel:"Close",
     title:"Title",area:"Private Area",choose:"Choose Area",submit:"Create",
     loading:"Loading private Areas…",unavailable:"Areas could not be verified.",
@@ -50,7 +53,10 @@ const words={
     verifyFailed:"Confirmation unavailable; new writes remain blocked.",
     retry:"Reload Areas",openProject:"Open created project",openTask:"Open created task",
     cancelUnresolved:"Safely cancel unresolved create",cancelled:"Original command safely settled.",
-    cancelFailed:"Cancellation unavailable; new writes remain blocked."},
+    cancelFailed:"Cancellation unavailable; new writes remain blocked.",
+    settled:"The original create committed. You can open the item.",
+    settledUnknown:"The original create committed, but the item cannot currently be opened. Check the list before creating another.",
+    wrongActor:"This unresolved command belongs to a different sign-in. Settle it in the original account; it cannot be cleared without server confirmation."},
 } as const;
 export default function TargetPrivateStructureCreate({
   kind,language="cs",projectId,areaId,onCommitted,
@@ -60,7 +66,7 @@ export default function TargetPrivateStructureCreate({
   const [expanded,setExpanded]=useState(false);
   const [name,setName]=useState("");
   const [selected,setSelected]=useState("");
-  const [catalog,setCatalog]=useState<Catalog>({status:"loading",generation:"",restoreGeneration:"",areas:[]});
+  const [catalog,setCatalog]=useState<Catalog>({status:"loading",generation:"",restoreGeneration:"",ownerScope:"",areas:[]});
   const [nonce,setNonce]=useState(0);
   const [phase,setPhase]=useState<"idle"|"checking"|"saving"|"verifying"|"uncertain">("idle");
   const [message,setMessage]=useState("");
@@ -71,7 +77,7 @@ export default function TargetPrivateStructureCreate({
   const hide=()=>{
     serial.current++;controller.current?.abort();
     setName("");setSelected("");setSavedId("");setExpanded(false);
-    setCatalog({status:"unavailable",generation,restoreGeneration:"",areas:[]});
+    setCatalog({status:"unavailable",generation,restoreGeneration:"",ownerScope:"",areas:[]});
     // The opaque unresolved marker survives hide; private draft does not.
     pending.current=false;setPhase("idle");setMessage("");
   };
@@ -82,7 +88,7 @@ export default function TargetPrivateStructureCreate({
   useEffect(()=>{
     serial.current++;controller.current?.abort();pending.current=false;
     setName("");setSelected("");setSavedId("");setExpanded(false);
-    setMessage("");setPhase("idle");setCatalog({status:"loading",generation,restoreGeneration:"",areas:[]});
+    setMessage("");setPhase("idle");setCatalog({status:"loading",generation,restoreGeneration:"",ownerScope:"",areas:[]});
   },[generation,kind,projectId,areaId]);
   function live(){
     return runtime?.known()===true&&runtime.generation()===generation&&
@@ -96,24 +102,32 @@ export default function TargetPrivateStructureCreate({
   useEffect(()=>{
     if(!expanded)return;
     const signal=new AbortController();let active=true;
-    setCatalog({status:"loading",generation,restoreGeneration:"",areas:[]});setSelected("");
-    if(!live()){setCatalog({status:"unavailable",generation,restoreGeneration:"",areas:[]});return;}
+    setCatalog({status:"loading",generation,restoreGeneration:"",ownerScope:"",areas:[]});setSelected("");
+    if(!live()){setCatalog({status:"unavailable",generation,restoreGeneration:"",ownerScope:"",areas:[]});return;}
     const unregister=runtime!.register({dispose:()=>signal.abort(),suspend:()=>signal.abort()});
     const timer=setTimeout(()=>signal.abort(),8000);
     void loadStructureCreateTargets(signal.signal).then(result=>{
       if(!active||signal.signal.aborted||!live())return;
       if(result.ok===true)setCatalog({status:"ready",generation,
-        restoreGeneration:result.restoreGeneration,areas:result.areas});
+        restoreGeneration:result.restoreGeneration,ownerScope:result.ownerScope,areas:result.areas});
       else{
-        setCatalog({status:result.reason==="signed-out"?"signed-out":"unavailable",generation,restoreGeneration:"",areas:[]});
+        setCatalog({status:result.reason==="signed-out"?"signed-out":"unavailable",generation,restoreGeneration:"",ownerScope:"",areas:[]});
         if(result.reason==="signed-out")void runtime!.reportRefusal();
       }
-    }).catch(()=>{if(active)setCatalog({status:"unavailable",generation,restoreGeneration:"",areas:[]});})
+    }).catch(()=>{if(active)setCatalog({status:"unavailable",generation,restoreGeneration:"",ownerScope:"",areas:[]});})
       .finally(()=>clearTimeout(timer));
     return ()=>{active=false;clearTimeout(timer);signal.abort();unregister();};
   },[kind,expanded,runtime,generation,nonce]);
   const marker=structureCreateMarker();
   const blocked=marker.status!=="clear";
+  const currentOwnerScope=catalog.status==="ready"&&catalog.generation===generation
+    ?catalog.ownerScope:"";
+  // Stable owner witness permits safe resolution after *same-actor* reauth.
+  // Legacy markers with no witness are resolvable only in their original
+  // auth generation. Different actors cannot clear each other's markers.
+  const canResolve=marker.status==="blocked"&&!!currentOwnerScope&&
+    (marker.marker.ownerScope===currentOwnerScope||
+      (marker.marker.ownerScope===undefined&&marker.marker.generation===generation));
   const areas=catalog.status==="ready"&&catalog.generation===generation
     ?catalog.areas.filter(a=>validPrivateTaskAreaId(a.id)):[];
   const chosen=areas.find(a=>a.id===selected);
@@ -128,7 +142,7 @@ export default function TargetPrivateStructureCreate({
       return;
     }
     const chosenArea=kind==="project"?chosen?.id:areaId;
-    if(!chosenArea||catalog.status!=="ready"||!catalog.restoreGeneration||
+    if(!chosenArea||catalog.status!=="ready"||!catalog.restoreGeneration||!catalog.ownerScope||
       structureCreateMarker().status!=="clear")return;
     pending.current=true;
     setMessage("");setSavedId("");
@@ -138,7 +152,7 @@ export default function TargetPrivateStructureCreate({
       :{taskId:id,commandId,projectId:projectId!,restoreGeneration:catalog.restoreGeneration,title:name};
     setPhase("saving");
     // A dispatched write is owned by the runtime and may settle after this form unmounts.
-    void runStructureCreate(runtime,generation,kind,command).then(result=>{
+    void runStructureCreate(runtime,generation,kind,command,catalog.ownerScope).then(result=>{
       if(!mounted.current||runtime.generation()!==generation)return;
       pending.current=false;
       setRevision(n=>n+1);
@@ -149,40 +163,50 @@ export default function TargetPrivateStructureCreate({
     });
   }
   async function cancelUnresolved(){
-    if(!runtime||!live()||marker.status!=="blocked"||
-      marker.marker.generation!==generation||pending.current||
+    if(!runtime||!live()||marker.status!=="blocked"||!canResolve||pending.current||
       trackedStructureCreate(runtime)==="saving")return;
     pending.current=true;
     const ticket=++serial.current,signal=new AbortController();
     controller.current?.abort();controller.current=signal;
     setPhase("verifying");setMessage("");
     const timer=setTimeout(()=>signal.abort(),8000);
-    const result=await cancelStructureCreate(runtime,generation,signal.signal);
+    const result=await cancelStructureCreate(runtime,generation,currentOwnerScope,signal.signal);
     clearTimeout(timer);
     if(ticket!==serial.current||!mounted.current||!live())return;
     pending.current=false;setRevision(n=>n+1);
-    if((result==="cancelled"||result==="settled")&&
+    if((result==="cancelled"||(typeof result==="object"&&result.status==="settled"))&&
       structureCreateMarker().status==="clear"){
-      setPhase("idle");setName("");setSavedId("");setMessage(c.cancelled);
+      setPhase("idle");setName("");
+      if(result==="cancelled"){
+        setSavedId("");setMessage(c.cancelled);
+      }else{
+        const knownId=marker.marker.kind===kind?result.id:null;
+        setSavedId(knownId??"");
+        setMessage(knownId?c.settled:c.settledUnknown);
+        // Treat an already-committed operation as a CREATE, not a cancel.
+        if(knownId)onCommitted(knownId);
+      }
       if(kind==="project")setNonce(n=>n+1);
     }else{setPhase("uncertain");setMessage(c.cancelFailed);}
   }
   async function verify(){
-    if(!runtime||!live()||marker.status!=="blocked"||pending.current||
+    if(!runtime||!live()||marker.status!=="blocked"||!canResolve||pending.current||
       trackedStructureCreate(runtime)==="saving")return;
     pending.current=true;
     const ticket=++serial.current,signal=new AbortController();
     controller.current?.abort();controller.current=signal;
     setPhase("verifying");setMessage("");
     const timer=setTimeout(()=>signal.abort(),8000);
-    const result=await verifyStructureCreate(runtime,generation,signal.signal);
+    const result=await verifyStructureCreate(runtime,generation,currentOwnerScope,signal.signal);
     clearTimeout(timer);
     if(ticket!==serial.current||!mounted.current||!live())return;
     pending.current=false;setRevision(n=>n+1);
     if(typeof result==="object"&&result.status==="committed"&&
       structureCreateMarker().status==="clear"){
-      setName("");setPhase("idle");setSavedId(result.id);setMessage(c.success);
-      if(marker.marker.kind===kind)onCommitted(result.id);
+      setName("");setPhase("idle");setMessage(c.success);
+      if(marker.marker.kind===kind){
+        setSavedId(result.id);onCommitted(result.id);
+      }else setSavedId("");
     }else{setPhase("uncertain");setMessage(result==="not_recorded"?c.notRecorded:c.verifyFailed);}
   }
   void revision;
@@ -201,13 +225,14 @@ export default function TargetPrivateStructureCreate({
           </select></label>)
         :<p role="status">{catalog.status==="loading"?c.loading:c.unavailable}</p>)}
       {blocked&&<div data-testid="target-structure-unresolved">
-        <p role="alert">{marker.status==="unavailable"?c.storage:c.blocked}</p>
+        <p role="alert">{marker.status==="unavailable"?c.storage:
+          catalog.status==="ready"&&!canResolve?c.wrongActor:c.blocked}</p>
         {marker.status==="blocked"&&<button type="button"
-          disabled={!live()||phase==="verifying"||phase==="saving"||
+          disabled={!live()||!canResolve||pending.current||phase==="verifying"||phase==="saving"||
             trackedStructureCreate(runtime!)==="saving"}
           data-testid="target-structure-verify" onClick={()=>{void verify();}}>{c.verify}</button>}
         {marker.status==="blocked"&&<button type="button"
-          disabled={!live()||marker.marker.generation!==generation||pending.current||
+          disabled={!live()||!canResolve||pending.current||
             phase==="verifying"||phase==="saving"||trackedStructureCreate(runtime!)==="saving"}
           data-testid="target-structure-cancel" onClick={()=>{void cancelUnresolved();}}>
           {c.cancelUnresolved}</button>}
@@ -220,7 +245,7 @@ export default function TargetPrivateStructureCreate({
           data-testid={kind==="project"?"target-project-create-save":"target-project-task-create-save"}>
           {phase==="checking"?c.checking:phase==="saving"?c.saving:c.submit}</button>
       </form>}
-      {message&&<p role={message===c.success||message===c.cancelled?"status":"alert"}>{message}</p>}
+      {message&&<p role={message===c.success||message===c.cancelled||message===c.settled||message===c.settledUnknown?"status":"alert"}>{message}</p>}
       {savedId&&<button type="button" data-testid={kind==="project"?"target-project-created-open":"target-project-task-created-open"}
         onClick={event=>openTargetDetail(kind==="project"
           ?{kind:"project",id:savedId,view:"Projects"}

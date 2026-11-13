@@ -25,6 +25,7 @@ const project=()=>({projectId:randomUUID(),commandId:randomUUID(),
 const child=(projectId="project:legacy-123")=>({taskId:randomUUID(),commandId:randomUUID(),
   projectId,restoreGeneration:randomUUID(),title:"Úkol"});
 const generation="a".repeat(43);
+const ownerScope="b".repeat(43);
 const runtime=()=>({known:()=>true,generation:()=>generation,register:()=>()=>{}});
 const storage=()=>{const data=new Map();return {data,getItem:k=>data.get(k)??null,
   setItem:(k,v)=>data.set(k,v),removeItem:k=>data.delete(k)};};
@@ -133,20 +134,20 @@ test("R3 A/3: one create POST, exact success or uncertain; status/recovery are q
 test("R3 A/3: dropped response blocks duplicate POST; not_recorded never releases",async()=>withStorage(async s=>{
   const actor=runtime(),cmd=project();
   let writes=0;
-  assert.equal(await runStructureCreate(actor,generation,"project",cmd,
+  assert.equal(await runStructureCreate(actor,generation,"project",cmd,ownerScope,
     async()=>{writes++;return "uncertain";}),"uncertain");
   assert.equal(writes,1);
   assert.equal(structureCreateMarker().status,"blocked");
-  assert.equal(await runStructureCreate(actor,generation,"project",project(),
+  assert.equal(await runStructureCreate(actor,generation,"project",project(),ownerScope,
     async()=>{writes++;return "saved";}),"blocked");
   assert.equal(writes,1);
   const marker=JSON.stringify([...s.data.values()][0]);
   assert.ok(!marker.includes(cmd.title)&&!marker.includes(cmd.areaId)&&
     !marker.includes(cmd.projectId));
-  assert.equal(await verifyStructureCreate(actor,generation,new AbortController().signal,
+  assert.equal(await verifyStructureCreate(actor,generation,ownerScope,new AbortController().signal,
     async()=> "not_recorded"),"not_recorded");
   assert.equal(structureCreateMarker().status,"blocked");
-  assert.deepEqual(await verifyStructureCreate(actor,generation,new AbortController().signal,
+  assert.deepEqual(await verifyStructureCreate(actor,generation,ownerScope,new AbortController().signal,
     async()=>({status:"committed",id:cmd.projectId})),
     {status:"committed",id:cmd.projectId});
   assert.equal(structureCreateMarker().status,"clear");
@@ -154,11 +155,11 @@ test("R3 A/3: dropped response blocks duplicate POST; not_recorded never release
 
 test("R3 A/3: reload retains only opaque command ID; verified recovery clears it",async()=>withStorage(async()=>{
   const old=runtime(),cmd=child();
-  assert.equal(await runStructureCreate(old,generation,"project-task",cmd,
+  assert.equal(await runStructureCreate(old,generation,"project-task",cmd,ownerScope,
     async()=> "uncertain"),"uncertain");
   // Simulate a page reload: different runtime has no original command.
   const fresh=runtime(),signal=new AbortController().signal;
-  const result=await verifyStructureCreate(fresh,generation,signal,
+  const result=await verifyStructureCreate(fresh,generation,ownerScope,signal,
     async()=>{throw Error("must not use status without original command");},
     async(kind,id,parent)=>{
       assert.equal(kind,"project-task");assert.equal(id,cmd.commandId);
@@ -189,39 +190,39 @@ test("R3 A/3: structure-owned targets are strict and independent of note create"
     assert.equal(url,"/api/target-staging/projects/create-targets");
     assert.equal(options.method,"GET");
     assert.equal(options.cache,"no-store");
-    return json({areas:[{id:area,title:"Tvoření"}],restoreGeneration:gen});
+    return json({areas:[{id:area,title:"Tvoření"}],restoreGeneration:gen,ownerScope});
   });
   assert.equal(called,1);
-  assert.deepEqual(ok,{ok:true,areas:[{id:area,title:"Tvoření"}],restoreGeneration:gen});
+  assert.deepEqual(ok,{ok:true,areas:[{id:area,title:"Tvoření"}],restoreGeneration:gen,ownerScope});
   for(const payload of [
-    {areas:[{id:area,title:"Tvoření"}],restoreGeneration:"invalid"},
-    {areas:[{id:area,title:"Tvoření"}],restoreGeneration:gen,actor:"secret"},
-    {areas:[{id:area,title:"Tvoření"},{id:area,title:"Duplicated"}],restoreGeneration:gen},
+    {areas:[{id:area,title:"Tvoření"}],restoreGeneration:"invalid",ownerScope},
+    {areas:[{id:area,title:"Tvoření"}],restoreGeneration:gen,ownerScope,actor:"secret"},
+    {areas:[{id:area,title:"Tvoření"},{id:area,title:"Duplicated"}],restoreGeneration:gen,ownerScope},
   ])assert.equal((await loadStructureCreateTargets(signal,async()=>json(payload))).ok,false);
 });
 test("R3 A/3: cancellation only releases after terminal server fence, never on not_recorded",async()=>withStorage(async()=>{
   for(const kind of ["project","project-task"]){
     const actor=runtime(),cmd=kind==="project"?project():child();
-    assert.equal(await runStructureCreate(actor,generation,kind,cmd,
+    assert.equal(await runStructureCreate(actor,generation,kind,cmd,ownerScope,
       async()=>"uncertain"),"uncertain");
-    assert.equal(await verifyStructureCreate(actor,generation,new AbortController().signal,
+    assert.equal(await verifyStructureCreate(actor,generation,ownerScope,new AbortController().signal,
       async()=>"not_recorded"),"not_recorded");
     assert.equal(structureCreateMarker().status,"blocked");
-    const unsuccessful=await cancelStructureCreate(actor,generation,new AbortController().signal,
+    const unsuccessful=await cancelStructureCreate(actor,generation,ownerScope,new AbortController().signal,
       async()=> "unavailable");
     assert.equal(unsuccessful,"unavailable");
     assert.equal(structureCreateMarker().status,"blocked");
     let requests=0;
-    const cancelled=await cancelStructureCreate(actor,generation,new AbortController().signal,
-      async(k,id,signal)=>{
-        requests++;assert.equal(k,kind);assert.equal(id,cmd.commandId);
+    const cancelled=await cancelStructureCreate(actor,generation,ownerScope,new AbortController().signal,
+      async(k,id,scope,signal)=>{
+        assert.equal(scope,ownerScope);requests++;assert.equal(k,kind);assert.equal(id,cmd.commandId);
         assert.equal(signal.aborted,false);return "cancelled";
       });
     assert.equal(cancelled,"cancelled");
     assert.equal(requests,1);
     assert.equal(structureCreateMarker().status,"clear");
     assert.equal(await runStructureCreate(actor,generation,kind,
-      kind==="project"?project():child(),async()=>"saved"),"saved");
+      kind==="project"?project():child(),ownerScope,async()=>"saved"),"saved");
     assert.equal(structureCreateMarker().status,"clear");
   }
 }));
@@ -230,17 +231,64 @@ test("R3 A/3: cancel HTTP requires exact opaque status and cannot be queued",asy
   for(const kind of ["project","project-task"]){
     const path=kind==="project"?"/api/target-staging/projects":"/api/target-staging/project-tasks";
     assert.equal(isTargetReadRequest(path+"/create-cancel",{method:"POST"}),false);
-    assert.equal(await cancelStructureCreateCommand(kind,commandId,signal,
+    assert.equal(await cancelStructureCreateCommand(kind,commandId,ownerScope,signal,
       async(url,opts)=>{
         assert.equal(url,path+"/create-cancel");
-        assert.deepEqual(JSON.parse(opts.body),{commandId});
+        assert.deepEqual(JSON.parse(opts.body),{commandId,ownerScope});
         return json({status:"cancelled"});
       }),"cancelled");
-    assert.equal(await cancelStructureCreateCommand(kind,commandId,signal,
+    assert.equal(await cancelStructureCreateCommand(kind,commandId,ownerScope,signal,
       async()=>json({status:"settled"})),"settled");
     for(const reply of [json({status:"not_recorded"}),json({status:"cancelled",extra:true}),
       json({error:"fail"},503)])
-      assert.equal(await cancelStructureCreateCommand(kind,commandId,signal,
+      assert.equal(await cancelStructureCreateCommand(kind,commandId,ownerScope,signal,
         async()=>reply),"unavailable");
   }
 });
+
+test("R3 A/3: reauth of original actor safely cancels undelivered create; other actor cannot clear it",async()=>withStorage(async()=>{
+  const old=runtime(),cmd=project(),nextGeneration="c".repeat(43);
+  assert.equal(await runStructureCreate(old,generation,"project",cmd,ownerScope,
+    async()=> "uncertain"),"uncertain");
+  const newRuntime={known:()=>true,generation:()=>nextGeneration,register:()=>()=>{}};
+  assert.equal(await verifyStructureCreate(newRuntime,nextGeneration,ownerScope,
+    new AbortController().signal,async()=>{throw Error("no original command");},
+    async()=> "not_recorded"),"not_recorded");
+  assert.equal(structureCreateMarker().status,"blocked");
+  let cancelled=0;
+  assert.equal(await cancelStructureCreate(newRuntime,nextGeneration,"x".repeat(43),
+    new AbortController().signal,async()=>{cancelled++;return "cancelled";}),
+    "unavailable","other actor may not cancel and release original actor's marker");
+  assert.equal(cancelled,0);
+  assert.equal(structureCreateMarker().status,"blocked");
+  assert.equal(await cancelStructureCreate(newRuntime,nextGeneration,ownerScope,
+    new AbortController().signal,async(kind,commandId,scope)=>{
+      cancelled++;assert.equal(kind,"project");assert.equal(commandId,cmd.commandId);
+      assert.equal(scope,ownerScope);return "cancelled";
+    }),"cancelled");
+  assert.equal(cancelled,1);
+  assert.equal(structureCreateMarker().status,"clear");
+}));
+test("R3 A/3: settled receipt recovers an authorized created ID; revoked record is not revealed",async()=>withStorage(async()=>{
+  for(const kind of ["project","project-task"]){
+    const actor=runtime(),cmd=kind==="project"?project():child(),id=kind==="project"?cmd.projectId:cmd.taskId;
+    assert.equal(await runStructureCreate(actor,generation,kind,cmd,ownerScope,
+      async()=> "uncertain"),"uncertain");
+    let requests=0;
+    const response=await cancelStructureCreate(actor,generation,ownerScope,
+      new AbortController().signal,
+      async()=>{requests++;return "settled";},
+      async(k,commandId)=>{requests++;assert.equal(k,kind);assert.equal(commandId,cmd.commandId);
+        return {status:"committed",id};});
+    assert.deepEqual(response,{status:"settled",id});
+    assert.equal(requests,2);
+    assert.equal(structureCreateMarker().status,"clear");
+  }
+  const actor=runtime(),cmd=project();
+  assert.equal(await runStructureCreate(actor,generation,"project",cmd,ownerScope,
+    async()=> "uncertain"),"uncertain");
+  assert.deepEqual(await cancelStructureCreate(actor,generation,ownerScope,
+    new AbortController().signal,async()=> "settled",async()=> "denied"),
+    {status:"settled",id:null},"a hidden/deleted/foreign row must not be surfaced");
+  assert.equal(structureCreateMarker().status,"clear");
+}));

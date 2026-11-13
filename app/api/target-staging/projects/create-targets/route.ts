@@ -8,6 +8,7 @@ import {resolveStagingHttpIdentity,stagingAnchorRefusal,stagingUnauthenticatedRe
   verifyStagingIdentityBeforeRelease,verifyStagingReadBeforeRelease}
   from "../../../../../lib/target-staging-http-identity";
 import {readStagingPrivateNoteAreaTargetsInChild} from "../../../../../lib/target-staging-read-process";
+import {structureOwnerScopeForIdentity} from "../../../../../lib/target-private-structure-owner-scope";
 export const runtime="nodejs";
 export const dynamic="force-dynamic";
 const headers={"cache-control":"no-store","x-content-type-options":"nosniff"};
@@ -51,7 +52,18 @@ export async function GET(request:Request):Promise<Response>{
       latest.ownerUserId!==base.ownerUserId)return answer(503,"Staging unavailable");
     if(check==="stale")return answer(409,"read_stale_reload");
     if(!page)return answer(503,"Staging unavailable");
-    return Response.json({areas:page.areas,restoreGeneration:base.expectedRestoreGeneration},{headers});
+    // Stable across reauthentication of the SAME actor, unlike auth-generation.
+    // It is never a write capability or a substitute for the live session check.
+    const ownerScope=structureOwnerScopeForIdentity(identity,base);
+    if(!ownerScope)return answer(503,"Staging unavailable");
+    const afterScope=verifyStagingIdentityBeforeRelease(request,identity,base);
+    if(afterScope!=="ok")return stagingIdentityRefusal(afterScope);
+    const final=config();
+    if(!enabled()||final?.stagingDirectory!==base.stagingDirectory||
+      final.expectedRestoreGeneration!==base.expectedRestoreGeneration||
+      final.ownerUserId!==base.ownerUserId)return answer(503,"Staging unavailable");
+    return Response.json({areas:page.areas,restoreGeneration:base.expectedRestoreGeneration,
+      ownerScope},{headers});
   }catch(error){
     logStagingFailure("private_structure_areas","route_exception",error);
     return answer(503,"Staging unavailable");

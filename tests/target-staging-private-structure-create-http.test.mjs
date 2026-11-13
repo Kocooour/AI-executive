@@ -57,6 +57,7 @@ const {POST:PROJECT_CANCEL}=await import("../app/api/target-staging/projects/cre
 const {POST:CHILD_CANCEL}=await import("../app/api/target-staging/project-tasks/create-cancel/route.ts");
 const {GET:PROJECT_TARGETS}=await import("../app/api/target-staging/projects/create-targets/route.ts");
 const {isTargetReadRequest}=await import("../lib/target-edit-fetch.ts");
+const {privateStructureActorScope}=await import("../lib/target-private-structure-owner-scope.ts");
 
 const fixtures=[];
 function assertValidStore(fx){
@@ -137,10 +138,12 @@ const ct=(cmd,cookie)=>call(CHILD,"/project-tasks",cmd,cookie);
 const cts=(cmd,cookie)=>call(CHILD_STATUS,"/project-tasks/create-status",cmd,cookie);
 const ctr=(cmd,cookie)=>call(CHILD_RECOVERY,"/project-tasks/create-recovery",
   {commandId:cmd.commandId},cookie);
-const pc=(cmd,cookie)=>call(PROJECT_CANCEL,"/projects/create-cancel",
-  {commandId:cmd.commandId},cookie);
-const tc=(cmd,cookie)=>call(CHILD_CANCEL,"/project-tasks/create-cancel",
-  {commandId:cmd.commandId},cookie);
+const scoped=(actor="alice")=>privateStructureActorScope(actor,
+  process.env.AI_EXECUTIVE_TARGET_STAGING_RESTORE_GENERATION);
+const pc=(cmd,cookie,ownerScope=scoped())=>call(PROJECT_CANCEL,"/projects/create-cancel",
+  {commandId:cmd.commandId,ownerScope},cookie);
+const tc=(cmd,cookie,ownerScope=scoped())=>call(CHILD_CANCEL,"/project-tasks/create-cancel",
+  {commandId:cmd.commandId,ownerScope},cookie);
 const targets=(cookie=owner())=>PROJECT_TARGETS(new Request(base+"/projects/create-targets",{
   method:"GET",headers:{cookie,"x-forwarded-for":"10.9.18.1"},
 }));
@@ -441,7 +444,11 @@ test("settled cancellation returns content-free proof and never deletes a commit
 });
 test("cancel fence keys are actor scoped and retain all owner ACL boundaries",async()=>{
   const fx=fixture(),p=project(fx),bob=session(fx,"bob");
-  assert.deepEqual(await checked(await pc(p,bob.cookie),200),{status:"cancelled"});
+  await checked(await pc(p,bob.cookie,scoped("alice")),404,
+    "different actor cannot use original owner's bound marker");
+  assert.equal(state(fx).cancels,0);
+  assert.deepEqual(await checked(await pc(p,bob.cookie,scoped("bob")),200),
+    {status:"cancelled"});
   assertValidStore(fx);
   await checked(await cp(p),201);
   assert.deepEqual(await checked(await pc(p),200),{status:"settled"});
@@ -456,7 +463,36 @@ test("structure private Area catalog works with all note create flags off",async
   const result=await targets();
   const data=await checked(result,200);
   assert.deepEqual(data.restoreGeneration,fx.stage.restoreGeneration);
+  assert.equal(data.ownerScope,scoped());
+  assert.match(data.ownerScope,/^[A-Za-z0-9_-]{43}$/);
   assert.ok(data.areas.some(a=>a.id===fx.stage.unassignedAreaId));
   await checked(await cp(project(fx)),201);
   assertValidStore(fx);
+});
+
+test("reauth to same actor retains scope and fences delayed old-session POST; another actor is denied",async()=>{
+  const fx=fixture(),first=session(fx,"alice"),second=session(fx,"alice"),
+    bob=session(fx,"bob"),p=project(fx),t=child(fx,"legacy-private-project");
+  const db=new DatabaseSync(fx.stage.databasePath);
+  db.prepare("INSERT INTO projects(id,area_id,title) VALUES(?,?,?)")
+    .run("legacy-private-project",fx.stage.unassignedAreaId,"Original parent");
+  db.close();
+  const scope1=(await checked(await targets(first.cookie),200)).ownerScope;
+  const scope2=(await checked(await targets(second.cookie),200)).ownerScope;
+  const bobResponse=await targets(bob.cookie);
+  assert.equal(bobResponse.status,200);
+  const bobScope=(await bobResponse.json()).ownerScope;
+  assert.equal(scope1,scope2,"stable across same-actor durable reauth");
+  assert.notEqual(scope1,bobScope,"different actors get distinct opaque witness");
+  for(const [command,create,cancel] of [[p,cp,pc],[t,ct,tc]]){
+    const countBefore=state(fx).cancels;
+    await checked(await cancel(command,bob.cookie,scope1),404);
+    assert.equal(state(fx).cancels,countBefore);
+    assert.deepEqual(await checked(await cancel(command,second.cookie,scope1),200),
+      {status:"cancelled"});
+    await checked(await create(command,first.cookie),409,
+      "the still-live original session cannot commit after the new session fenced it");
+    assertValidStore(fx);
+  }
+  assert.equal(state(fx).cancels,2);
 });

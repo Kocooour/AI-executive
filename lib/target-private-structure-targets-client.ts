@@ -5,9 +5,10 @@ import {parsePrivateNoteAreaChoices,type PrivateNoteAreaChoice}
   from "./target-private-note-area-client";
 import {MAX_PRIVATE_NOTE_AREA_CATALOG_BYTES} from "./target-staging-read-limits";
 export type StructureTargets=
-  |{ok:true;areas:PrivateNoteAreaChoice[];restoreGeneration:string}
+  |{ok:true;areas:PrivateNoteAreaChoice[];restoreGeneration:string;ownerScope:string}
   |{ok:false;reason:"signed-out"|"unavailable"};
 const uuid=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const ownerScopePattern=/^[A-Za-z0-9_-]{43}$/;
 export async function loadStructureCreateTargets(
   signal:AbortSignal,fetchImpl:typeof fetch=targetAppFetch,
 ):Promise<StructureTargets>{
@@ -44,10 +45,12 @@ export async function loadStructureCreateTargets(
     const data:unknown=JSON.parse(raw);
     if(!data||typeof data!=="object"||Array.isArray(data))throw Error("invalid");
     const obj=data as Record<string,unknown>;
-    if(Object.keys(obj).sort().join(",")!=="areas,restoreGeneration"||
-      typeof obj.restoreGeneration!=="string"||!uuid.test(obj.restoreGeneration))throw Error("invalid");
+    if(Object.keys(obj).sort().join(",")!=="areas,ownerScope,restoreGeneration"||
+      typeof obj.restoreGeneration!=="string"||!uuid.test(obj.restoreGeneration)||
+      typeof obj.ownerScope!=="string"||!ownerScopePattern.test(obj.ownerScope))
+      throw Error("invalid");
     const areas=parsePrivateNoteAreaChoices({areas:obj.areas});
     if(!areas)throw Error("invalid");
-    return {ok:true,areas,restoreGeneration:obj.restoreGeneration};
+    return {ok:true,areas,restoreGeneration:obj.restoreGeneration,ownerScope:obj.ownerScope};
   }catch{return {ok:false,reason:"unavailable"};}
 }

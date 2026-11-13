@@ -214,3 +214,45 @@ for(const width of [390,1280]){
     await expect(detailTask(page)).toContainText(after);
   });
 }
+
+/** A terminal 'settled' fence means CREATE committed, never "cancelled".
+ * The UI must recover the original server-authorized ID, not invite duplication. */
+for(const width of [390,1280]){
+  test("A/3: settled creation opens the original project at "+width+"px",async({page})=>{
+    test.setTimeout(150_000);
+    if(!store)throw Error("No isolated target fixture");
+    await page.setViewportSize({width,height:844});
+    await page.goto("/?view=Projects&scope=personal");
+    await expect(page.getByTestId("target-scope-list")).toHaveAttribute("data-state","ready");
+    const title="Settled project "+width+" "+Math.random().toString(36).slice(2);
+    await page.getByTestId("target-project-create-open").click();
+    await page.getByTestId("target-project-create-area")
+      .selectOption({label:store.seed.createAreaTitle});
+    await page.getByTestId("target-project-create-form")
+      .getByRole("textbox",{name:"Název"}).fill(title);
+    let originalId="";
+    await page.route("**/api/target-staging/projects",async route=>{
+      const response=await route.fetch();
+      expect(response.status()).toBe(201);
+      const payload=await response.json() as {id:string};
+      originalId=payload.id;
+      await route.abort("failed");
+    },{times:1});
+    await page.getByTestId("target-project-create-save").click();
+    await expect(page.getByTestId("target-structure-unresolved")).toBeVisible();
+    const settled=page.waitForResponse(r=>r.request().method()==="POST"&&
+      new URL(r.url()).pathname===projectPath+"/create-cancel");
+    await page.getByTestId("target-structure-cancel").click();
+    const proof=await settled;
+    expect(proof.status()).toBe(200);
+    expect(await proof.json()).toEqual({status:"settled"});
+    await expect(page.getByTestId("target-structure-unresolved")).toHaveCount(0);
+    await expect(page.getByText("Původní vytvoření se dokončilo. Položku lze otevřít."))
+      .toBeVisible();
+    await expect(page.getByTestId("target-project-created-open")).toBeVisible();
+    await page.getByTestId("target-project-created-open").click();
+    await expect(detailTask(page)).toHaveAttribute("data-detail-kind","project");
+    await expect(detailTask(page)).toContainText(title);
+    expect(new URL(page.url()).searchParams.get("projectId")).toBe(originalId);
+  });
+}
