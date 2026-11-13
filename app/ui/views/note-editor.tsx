@@ -110,6 +110,7 @@ export function NoteEditor({ app }: { app: LumiApp }) {
       {mode === "edit" ? (
         <textarea
           className="noteBody"
+          readOnly={app.legacyWritesDisabled} title={app.legacyReadOnlyHint}
           aria-labelledby={`noteText-${id}`}
           data-user-content
           maxLength={100000}
@@ -125,8 +126,8 @@ export function NoteEditor({ app }: { app: LumiApp }) {
         <div className="noteConflict" role="alert">
           <p>{tr("noteConflictText")}</p>
           <div className="noteConflictActions">
-            <button type="button" onClick={() => void resolveNoteBodyConflict(id, "mine")}>{tr("noteUseMine")}</button>
-            <button type="button" onClick={() => void resolveNoteBodyConflict(id, "theirs")}>{tr("noteDiscardMine")}</button>
+            <button type="button" disabled={app.legacyWritesDisabled} title={app.legacyReadOnlyHint} onClick={() => void resolveNoteBodyConflict(id, "mine")}>{tr("noteUseMine")}</button>
+            <button type="button" disabled={app.legacyWritesDisabled} title={app.legacyReadOnlyHint} onClick={() => void resolveNoteBodyConflict(id, "theirs")}>{tr("noteDiscardMine")}</button>
           </div>
         </div>
       )}
@@ -168,7 +169,7 @@ export function NoteEditor({ app }: { app: LumiApp }) {
                   </span>
                 ))}
             </pre>
-            <button type="button" className="revisionRestore" disabled={restoring || hasDraft || waiting} onClick={() => void restore()}>{tr("revRestore")}</button>
+            <button type="button" className="revisionRestore" disabled={restoring || hasDraft || waiting || app.legacyWritesDisabled} title={app.legacyReadOnlyHint} onClick={() => void restore()}>{tr("revRestore")}</button>
             {hasDraft ? <p className="noteStatus">{tr("revRestoreBlocked")}</p>
               : waiting && <p className="noteStatus">{tr("revRestoreWaiting")}</p>}
           </div>

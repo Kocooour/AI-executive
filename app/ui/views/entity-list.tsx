@@ -164,6 +164,7 @@ export function EntityList({ app }: { app: LumiApp }) {
                 }} />
             ) : (
               <button type="button" className="check"
+                disabled={app.legacyWritesDisabled} title={app.legacyReadOnlyHint}
                 aria-label={`${tr("complete")} ${x.title || tr("untitledItem")}`}
                 onClick={(event) => { event.stopPropagation(); void done(x.id); }}>○</button>
             )

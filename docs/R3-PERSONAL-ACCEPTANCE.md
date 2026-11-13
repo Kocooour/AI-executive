@@ -112,15 +112,26 @@ Dnes, Attention, push/notifikace, HumanWiki, produkční zapnutí.
    vysvětlují bezpečné ověřování a absenci offline ukládání bez interních
    názvů implementace. Ochrana: `tests/target-my-plan-i18n.test.mjs` včetně
    českého snapshotu a kontroly zakázaných technických výrazů.
-6. **Legacy Domů v cílovém režimu (ověřeno, zápis neprochází).** Na 1280 px ukazuje
-   Domů legacy úkoly, sekci Pozornost, počty v postranním panelu a ikony řádků.
-   V běhu na skutečném store: zaškrtnutí i „Kdy“ jsou `disabled`; položky
-   „Odložit o 24 h“ a „Skrýt“ v menu „Další akce“ jsou aktivní, ale
-   `blockLegacyWrite` (`app/ui/use-lumi-app.tsx:83`) je zastaví hláškou „Změna nebyla
-   provedena…jen pro čtení“, bez zápisu a se stejným legacy store. Při načtení
-   stránky proběhne jeden automatický `PUT /api/store` (synchronizační baseline,
-   ne uživatelská změna; porovnání s během bez target příznaků neověřeno).
-   Inspektor legacy řádku nebyl ověřen.
+6. **OPRAVENO v C13 / issue #423 — dosavadní Domů/Doručené/Dnes jsou pouze pro čtení.**
+   V cílovém profilu zůstávají tyto historické obrazovky dostupné k prohlížení,
+   ale veškeré jejich zápisové prvky (včetně titulku a polí inspektoru,
+   dokončení, plánování, hromadného Inbox třídění, Pozornosti a konfliktů)
+   jsou nativně vypnuté nebo pouze pro čtení. Český a anglický banner ukazuje
+   cestu do aktuálního **Mého plánu**, aniž by blokoval navigaci.
+   `blockLegacyWrite` zůstává druhou ochrannou vrstvou.
+   **Příčina automatického `PUT /api/store`:** dřívější úvodní synchronizace
+   při dosud neoznačeném klientovi nebo čekajících lokálních změnách posílala
+   plný sloučený snapshot, i když uživatel pouze otevřel stránku. V cílovém
+   profilu se nyní historická kopie pouze načte z `GET /api/store` do
+   paměti: nezakládají se ukázková data, nemigruje se IndexedDB a čekající
+   změny se neodesílají; běžný režim synchronizace zůstává beze změny.
+   Regrese: `e2e/target-personal-acceptance.spec.ts`, oba viewporty
+   **390/1280 px**, skutečné HTTP route handlery, autentizovaný izolovaný target
+   store; po explicitním testovacím zasetí legacy úkolů se porovnává
+   **bajtově totožná odpověď `GET /api/store`** před a po procházení
+   Domů/Doručené/Dnes a inspektoru, při současném odchytu jakéhokoli
+   automatického `PUT`. Výsledek je nutné potvrdit zeleným CI během.
+
 7. **Odhlášení nezneplatní vlastnický token (potřeba rozhodnutí vlastníka).** Logout
    pouze maže cookie; bezstavový token zůstává na serveru platný až 7 dní
    (`lib/auth.ts`, `app/api/auth/logout/route.ts`); tester jej přehrál na

@@ -28,7 +28,7 @@ import { runLatestRecoveryInspection, type RecoveryInspectionState } from "../..
 // copy holds that content, or the server holds exactly what was sent.
 // Start-up synchronization, sign-out and the refresh on focus still live in use-lumi-app.tsx and
 // use these.
-export function useSync() {
+export function useSync({ legacyReadOnly = false }: { legacyReadOnly?: boolean } = {}) {
   const [items, setItems] = useState<Entity[]>([]),
     // Records changed here and not yet on the server, and records the server would refuse (held
     // back on this device until they are fixed; lib/sendable.ts).
@@ -408,6 +408,17 @@ export function useSync() {
       }),
     });
   }
+  // Target mode may display the historical server copy, but must never seed,
+  // migrate, reconcile or upload an IndexedDB snapshot in the background.
+  function showReadOnlySnapshot(snapshot: ServerSnapshot) {
+    setItems([...snapshot.entities]);
+    setRelations([...snapshot.relations]);
+    setUnsent(new Set());
+    setHeldBack([]);
+    setHeldReasons(new Map());
+    serverRevision.current = snapshot.revision;
+    setSyncStatus("synced");
+  }
   // Saves that were asked for and have not started yet.
   const queuedSaves = useRef(0);
   // After a save that could not settle, one more is needed. A change that is being written or
@@ -417,6 +428,10 @@ export function useSync() {
     void syncToServer();
   }
   async function syncToServer({ reportFailure = false }: { reportFailure?: boolean } = {}) {
+    if (legacyReadOnly) {
+      if (reportFailure) throw new Error("LEGACY_READ_ONLY");
+      return;
+    }
     // Existing callers keep the non-rejecting offline-first queue. Preview project
     // actions opt in to observing the result of THEIR particular server write.
     // Restored data is being adopted: nothing of the replaced data is sent.
@@ -549,6 +564,15 @@ export function useSync() {
   // `afterSignIn`: the browser has just signed in, so nothing local predates the server copy and,
   // once that copy is taken over, the local copy counts as synchronized (see below).
   async function pullFromServer(afterSignIn = false) {
+    if (legacyReadOnly) {
+      if (signedOut.current || offlineRecoveryIsHeld()) return;
+      try {
+        const response = await fetch("/api/store", { cache: "no-store", signal: requestTimeout() });
+        if (!response.ok) throw new Error("Server synchronization failed");
+        if (!signedOut.current && !offlineRecoveryIsHeld()) showReadOnlySnapshot((await response.json()) as ServerSnapshot);
+      } catch { setSyncStatus("offline"); }
+      return;
+    }
     await syncQueue.current;
     if (offlineRecoveryIsHeld()) {
       setRecoveryHeld(true);
@@ -801,6 +825,7 @@ export function useSync() {
     showRestoredNotice: () => setRestoredNotice(true),
     dismissRestoredNotice: () => setRestoredNotice(false),
     putSnapshot,
+    showReadOnlySnapshot,
     syncToServer,
     pullFromServer,
     tabId,

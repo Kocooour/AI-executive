@@ -9,6 +9,7 @@ import { SyncConflicts } from "./sync-conflicts";
 import { NoteEditor } from "./note-editor";
 import { DeferChip } from "./defer-popover";
 import { InboxTriage } from "./inbox-triage";
+import { LegacyWriteGate } from "./legacy-write-gate";
 import { heldBackReason } from "./held-back";
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { mobileDesignV1Preview } from "../navigation";
@@ -275,7 +276,7 @@ export function DetailPanel({ app }: { app: LumiApp }) {
                     : (language === "cs"
                       ? "Vyberte zapisovatelný prostor a vyřešte případnou synchronizaci nebo konflikt."
                       : "Select a writable workspace and resolve any pending sync or conflict.")}
-                  disabled={!taskPreviewMayToggle}
+                  disabled={!taskPreviewMayToggle || app.legacyWritesDisabled}
                   onClick={() => {
                     if (!taskPreviewMayToggle) return;
                     if (selectedTask.status === "completed") void reopenTask(selectedTask);
@@ -305,7 +306,8 @@ export function DetailPanel({ app }: { app: LumiApp }) {
               )}
             <input
               className="titleEdit"
-              readOnly={isFallbackArea(selected, app.items)}
+              readOnly={app.legacyWritesDisabled || isFallbackArea(selected, app.items)}
+              title={app.legacyReadOnlyHint}
               maxLength={1000}
               value={selected.title}
               onChange={(e) => {
@@ -412,6 +414,7 @@ export function DetailPanel({ app }: { app: LumiApp }) {
                       {dragHandle(t, `task:area:${selected.id}`)}
                       <button
                         className="check"
+                        disabled={app.legacyWritesDisabled} title={app.legacyReadOnlyHint}
                         onClick={(e) => {
                           e.stopPropagation();
                           done(t.id);
@@ -429,6 +432,7 @@ export function DetailPanel({ app }: { app: LumiApp }) {
                 <label>
                   {tr("project")}
                   <select
+                    disabled={app.legacyWritesDisabled} title={app.legacyReadOnlyHint}
                     value={String(
                       targets(selected.id, "belongs_to_project")[0] || "",
                     )}
@@ -796,6 +800,7 @@ export function DetailPanel({ app }: { app: LumiApp }) {
               );
               const workButton = (mobileTaskPreview || desktopTaskPreview) && activeTaskSession ? (
                   <button key="work-finish" type="button" className="primaryAction taskDetailWorkFinish"
+                    disabled={app.legacyWritesDisabled} title={app.legacyReadOnlyHint}
                     onClick={() => void done(selected.id)}>{tr("workFinish")}</button>
               ) : null;
               const actionsSection = (
@@ -910,11 +915,16 @@ export function DetailPanel({ app }: { app: LumiApp }) {
                 </button>
                 </div>
               );
+              // Only the disclosure is navigational. All editable sections are
+              // natively disabled in target mode, including saves on blur.
+              const gate = (name: string, section: ReactNode) => <LegacyWriteGate key={name}>{section}</LegacyWriteGate>;
               return (
                 <div className="fields taskDetailFields" data-task-more-open={taskMoreOpen ? "true" : "false"}>
                   {(mobileTaskPreview || desktopTaskPreview)
-                    ? [essentialsSection, notesSection, workButton, moreButton, listSection, optionsSection, actionsSection]
-                    : [listSection, essentialsSection, optionsSection, notesSection, moreButton, workButton, actionsSection]}
+                    ? [gate("essentials", essentialsSection), gate("notes", notesSection), workButton, moreButton,
+                        gate("list", listSection), gate("options", optionsSection), gate("actions", actionsSection)]
+                    : [gate("list", listSection), gate("essentials", essentialsSection), gate("options", optionsSection),
+                        gate("notes", notesSection), moreButton, workButton, gate("actions", actionsSection)]}
                 </div>
               );
             })()}

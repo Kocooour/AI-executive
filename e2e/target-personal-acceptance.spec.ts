@@ -345,3 +345,92 @@ for(const width of [390,1280]){
     await expect(page.getByTestId("target-my-plan")).toHaveCount(0);
   });
 }
+
+
+// C13: the real target profile must expose legacy Home/Inbox/Today for reading
+// without ever turning the historical local-first store into a migration source.
+for (const width of [390, 1280]) {
+  test("target mode leaves legacy Home, Inbox and Today read-only at " + width + "px", async ({ page }) => {
+    test.setTimeout(90_000);
+    if (!store) throw new Error("Requires the real isolated target store");
+    await page.setViewportSize({ width, height: 844 });
+    const unexpectedPuts: string[] = [];
+    let seeding = false;
+    page.on("request", request => {
+      if (!seeding && request.method() === "PUT" &&
+          new URL(request.url()).pathname === "/api/store")
+        unexpectedPuts.push(request.url());
+    });
+    // Even a brand-new browser in target mode may read the old server copy,
+    // but it may not seed IndexedDB or upload a synthesized baseline.
+    await page.goto("/?view=Home");
+    await expect(page.getByTestId("legacy-read-only-notice")).toBeVisible();
+    expect(unexpectedPuts, "target startup cannot PUT a baseline").toEqual([]);
+
+    // Seed only through the ordinary real legacy HTTP route. It is the sole
+    // allowed PUT in this scenario and is excluded from observed UI requests.
+    const token = "legacy-c13-" + width + "-" + Date.now();
+    const homeTitle = token + "-home";
+    const inboxTitle = token + "-inbox";
+    const now = Date.now();
+    seeding = true;
+    try {
+      const seedStatus = await page.evaluate(async ({ homeTitle, inboxTitle, now }) => {
+        const current = await fetch("/api/store", { cache: "no-store" }).then(response => response.json());
+        const task = (id: string, title: string, properties: Record<string, unknown>) => ({
+          id, title, type: "task", status: "open", workspaceId: "personal",
+          properties, createdAt: now, updatedAt: now,
+        });
+        const response = await fetch("/api/store", {
+          method: "PUT", headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            baseRevision: current.revision, restoreGeneration: current.restoreGeneration,
+            entities: [...current.entities,
+              task("c13:" + homeTitle, homeTitle, { today: true }),
+              task("c13:" + inboxTitle, inboxTitle, { inbox: true })],
+            relations: current.relations, deletedIds: [], revivedIds: [],
+          }),
+        });
+        return response.status;
+      }, { homeTitle, inboxTitle, now });
+      expect(seedStatus).toBe(200);
+    } finally {
+      seeding = false;
+    }
+    const before = await (await page.request.get("/api/store")).body();
+
+    for (const [view, title] of [["Home", homeTitle], ["Inbox", inboxTitle], ["Today", homeTitle]] as const) {
+      await page.goto("/?view=" + view);
+      const banner = page.getByTestId("legacy-read-only-notice");
+      await expect(banner).toBeVisible();
+      await expect(banner).toContainText("jen pro čtení");
+      await expect(banner.getByRole("button", { name: "Otevřít Můj plán" })).toBeVisible();
+
+      const row = view === "Home"
+        ? page.locator(".homeTaskList article").filter({ hasText: title }).first()
+        : page.locator(".taskRow").filter({ hasText: title }).first();
+      await expect(row).toBeVisible();
+      await expect(row.locator("button.check")).toBeDisabled();
+      await row.click();
+      const inspector = page.locator("aside.inspectorDetail");
+      await expect(inspector).toBeVisible();
+      await expect(inspector.locator(".titleEdit")).toHaveValue(title);
+      await expect(inspector.locator(".titleEdit")).toHaveJSProperty("readOnly", true);
+      await expect(inspector.locator(".taskDetailMoreList select")).toBeDisabled();
+      await expect(inspector.locator(".taskDetailEssentials input[type=date]").first()).toBeDisabled();
+      await expect(inspector.locator(".taskDetailMoreActions button.danger")).toBeDisabled();
+      // Disclosure and navigation still work; they do not mutate old data.
+      await inspector.locator(".taskDetailMoreToggle").click();
+      await expect(inspector.locator(".taskDetailMoreOptions select").first()).toBeDisabled();
+      await inspector.locator(".inspectorClose").click();
+      await expect(inspector).toHaveCount(0);
+    }
+    // One live navigation path to the target, without making the old data editable.
+    await page.getByTestId("legacy-read-only-notice")
+      .getByRole("button", { name: "Otevřít Můj plán" }).click();
+    await expect(page.getByTestId("target-my-plan")).toBeVisible();
+    expect(unexpectedPuts, "no browser-requested legacy snapshot PUT").toEqual([]);
+    const after = await (await page.request.get("/api/store")).body();
+    expect(after.equals(before), "legacy store bytes must stay unchanged").toBe(true);
+  });
+}
