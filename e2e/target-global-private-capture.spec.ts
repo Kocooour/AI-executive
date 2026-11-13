@@ -216,8 +216,22 @@ test("BFCache lifecycle and real back navigation never revive private draft or A
     (window as Window & {__lumiBfcacheRestored?:boolean}).__lumiBfcacheRestored);
   // Release-only browser gate MUST prove a real BFCache cache hit; the regular
   // PR test separately exercises the persisted event path and reload fallback.
+  const reasons=await page.evaluate(()=>{
+    const nav=performance.getEntriesByType("navigation")[0] as
+      (PerformanceNavigationTiming & {notRestoredReasons?:unknown})|undefined;
+    return {navigationType:nav?.type??"unavailable",
+      notRestoredReasons:nav?.notRestoredReasons??null};
+  });
+  const evidence={persisted:restored,...reasons,mode:"mocked target API"};
+  console.log("GLOBAL_CAPTURE_REAL_BFCACHE_EVIDENCE "+JSON.stringify(evidence));
+  await test.info().attach("global-capture-bfcache.json",{
+    body:Buffer.from(JSON.stringify(evidence,null,2)),
+    contentType:"application/json",
+  });
   if(process.env.LUMI_REAL_BFCACHE_E2E==="true")
-    expect(restored,"real BFCache restore was not observed (pageshow.persisted never fired); this release browser run cannot certify BFCache privacy").toBe(true);
+    expect(restored,"real BFCache restore was not observed (pageshow.persisted never fired); "+
+      "notRestoredReasons="+JSON.stringify(reasons.notRestoredReasons)+
+      ". This release browser run cannot certify BFCache privacy").toBe(true);
   if(restored){
     await expect(modal).toBeVisible();
   }else{
