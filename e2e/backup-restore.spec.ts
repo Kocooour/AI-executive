@@ -1011,9 +1011,13 @@ test("owner adoption and D2b recovery hold serialize across sibling tabs, regard
         localStorage.setItem(draft, JSON.stringify({ id, page: "e2e", text: "Rozpracovaný text", base: "", at: Date.now() }));
         localStorage.setItem("ai-executive-pending-sync", "1");
       }, { id: localId, marker: markerKey, draft: draftKey });
+      // The pending-sync marker belongs to both sibling tabs. The holder
+      // may receive a restored-generation 409 from PUT rather than a GET;
+      // strip owner proof on either response so the real D2b hold wins first.
       await holder.route("**/api/store", async (route) => {
-        if (route.request().method() !== "GET") return route.continue();
         const response = await route.fetch();
+        if (!response.ok && response.status !== 409)
+          return route.fulfill({ response });
         const snapshot = await response.json();
         delete snapshot.restoreKind;
         await route.fulfill({ response, json: snapshot });
@@ -1626,7 +1630,7 @@ test("a corrupt owner fence offers a real raw-only local rescue download, never 
     await second.page.reload();
     const dialog = second.page.getByRole("alertdialog", { name: "Lokální změny jsou chráněné" });
     await expect(dialog).toBeVisible({ timeout: 30_000 });
-    await expect(dialog.getByText(/Ochranná značka obnovy je poškozená/)).toBeVisible();
+    await expect(dialog.getByText(/Nepodařilo se přečíst údaje o přerušené obnově/)).toBeVisible();
     await dialog.getByRole("button", { name: "1. Připravit záchranný soubor" }).click();
     await expect(dialog.getByRole("button", { name: "2. Stáhnout soubor" })).toBeEnabled();
 
@@ -1808,7 +1812,7 @@ for (const mode of ["missing", "rejected"] as const) {
       await second.page.reload();
       const dialog = second.page.getByRole("alertdialog", { name: "Lokální změny jsou chráněné" });
       await expect(dialog).toBeVisible({ timeout: 30_000 });
-      await expect(dialog.getByText(/Nepodařilo se získat bezpečnostní zámek/)).toBeVisible();
+      await expect(dialog.getByText(/Obnovu nelze nyní bezpečně dokončit/)).toBeVisible();
       await dialog.getByRole("button", { name: "1. Připravit záchranný soubor" }).click();
       const downloadButton = dialog.getByRole("button", { name: "2. Stáhnout soubor" });
       await expect(downloadButton).toBeEnabled();
@@ -1935,7 +1939,7 @@ test("a valid owner fence with a recovery lock held forever still allows raw res
     await recovering.reload();
     const dialog = recovering.getByRole("alertdialog", { name: "Lokální změny jsou chráněné" });
     await expect(dialog).toBeVisible({ timeout: 20_000 });
-    await expect(dialog.getByText(/Nepodařilo se získat bezpečnostní zámek/)).toBeVisible();
+    await expect(dialog.getByText(/Obnovu nelze nyní bezpečně dokončit/)).toBeVisible();
     const attempted = await recovering.evaluate(() => ({
       requested: sessionStorage.getItem("e2e-owner-startup-lock-requested"),
       aborted: sessionStorage.getItem("e2e-owner-startup-lock-aborted"),
