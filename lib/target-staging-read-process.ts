@@ -1862,7 +1862,7 @@ export async function readStagingTemporalDetailInChild(
 
 /** BE-04: strict worker DTO; the CAS hash and task guard are from one read. */
 export type StagingTemporalStatusPreviewResult =
-  | {ok:true;detail:TemporalTaskDetail;expectedRevision:string}
+  | {ok:true;detail:TemporalTaskDetail;expectedRevision:string;previousWhenOn?:string|null}
   | {ok:false;reason:"inaccessible"};
 
 export function parseStagingTemporalStatusPreview(
@@ -1873,14 +1873,19 @@ export function parseStagingTemporalStatusPreview(
   if(Object.keys(v).sort().join(",")==="ok,reason"&&
     v.ok===false&&v.reason==="inaccessible")
     return {ok:false,reason:"inaccessible"};
-  if(v.ok!==true||Object.keys(v).sort().join(",")!=="detail,expectedRevision,ok"||
+  const fields=Object.keys(v).sort().join(",");
+  if(v.ok!==true||
+    (fields!=="detail,expectedRevision,ok"&&fields!=="detail,expectedRevision,ok,previousWhenOn")||
+    (fields.includes("previousWhenOn")&&v.previousWhenOn!==null&&
+      temporalCalendarOrdinal(v.previousWhenOn)===null)||
     typeof v.expectedRevision!=="string"||!REVISION.test(v.expectedRevision)||
     !v.detail||typeof v.detail!=="object"||Array.isArray(v.detail))return null;
   const parsed=parseStagingTemporalDetail({ok:true,...v.detail},taskId);
   if(!parsed||parsed.ok!==true)return null;
   const access=parsed.detail.linearization.areas[0]?.access;
   if(access!=="private-owner"&&access!=="editor"&&access!=="admin")return null;
-  return {ok:true,detail:parsed.detail,expectedRevision:v.expectedRevision};
+  return {ok:true,detail:parsed.detail,expectedRevision:v.expectedRevision,
+    ...(fields.includes("previousWhenOn")?{previousWhenOn:v.previousWhenOn as string|null}:{})};
 }
 
 export async function readStagingTemporalStatusPreviewInChild(
