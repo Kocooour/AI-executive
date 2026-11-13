@@ -48,17 +48,21 @@ export function OfflineRecoveryDialog({ app }: { app: LumiApp }) {
               ? "Obnova byla přerušena. Lumi zastavilo zápisy, aby nedošlo k další ztrátě případně zbývajících místních dat."
               : "The restore was interrupted. Lumi has blocked writes to protect any local data that may remain."
             : cs
-              ? "Serverová data byla obnovena z jiné generace. Lumi zastavilo zápisy i přepsání místní kopie. Změny, poznámky a rozpracované texty zůstávají v tomto prohlížeči."
-              : "The server's restore generation changed. Lumi has blocked writes and replacement of your local copy. Local edits, notes and drafts stay in this browser."}
+              ? "Na serveru byla obnovena jiná kopie dat. Lumi pozastavilo synchronizaci, aby nepřepsalo změny uložené v tomto prohlížeči. Vaše poznámky a rozpracované texty zatím zůstávají zde."
+              : "A different copy of your data was restored on the server. Lumi paused synchronization to avoid overwriting changes saved in this browser. Your notes and drafts remain here for now."}
         </p>
         {app.ownerFenceRawRescueReason !== null && <p role="alert">
           {app.ownerFenceRawRescueReason === "unreadable"
             ? cs
-              ? "Ochranná značka obnovy je poškozená. Není možné ověřit původní generaci. Nabízíme jen nezpracovaný lokální export pro ruční záchranu, nikoli standardní záchranný soubor. Nelze ho importovat ani automaticky sloučit."
-              : "The restore marker is corrupt, so its generation cannot be verified. Only a raw local salvage file is available for manual recovery. It cannot be imported or merged automatically."
-            : cs
-              ? "Nepodařilo se získat bezpečnostní zámek pro dokončení obnovy. Data zůstávají chráněná proti zápisu. Lze stáhnout pouze neověřený lokální export pro ruční záchranu; nelze ho importovat ani automaticky sloučit."
-              : "The recovery safety lock is unavailable. Writes remain blocked. You can download only an unverified raw local rescue file for manual recovery; it cannot be imported or automatically merged."}
+              ? "Nepodařilo se přečíst údaje o přerušené obnově. Můžete si uložit kopii dat, která v tomto prohlížeči ještě zůstala, pro ruční záchranu. Soubor nelze přímo načíst zpět ani automaticky sloučit."
+              : "The information needed to resume the interrupted restore cannot be read. You can save a copy of the data still in this browser for manual recovery. The file cannot be imported or merged automatically."
+            : app.ownerFenceRawRescueReason === "verification-unavailable"
+              ? cs
+                ? "Server teď není dostupný nebo nebylo možné obnovu ověřit. Vaše místní data zůstávají chráněná. Až bude spojení fungovat, načtěte stránku znovu; případně si stáhněte kopii dat pro ruční záchranu."
+                : "The server is unavailable or the restore could not be verified. Your local data stays protected. Reload when the connection works again, or save a copy for manual recovery."
+              : cs
+                ? "Obnovu nelze nyní bezpečně dokončit, protože jiná záložka může pracovat se stejnými daty. Místní změny zůstávají chráněné. Uložte si jejich kopii pro ruční záchranu; soubor nelze automaticky importovat ani sloučit."
+                : "The restore cannot finish safely right now because another tab may be using the same data. Your local changes remain protected. You can save a copy for manual recovery, but it cannot be imported or merged automatically."
         </p>}
         {interruptedOwnerRestore && <p role="status">
           {cs
