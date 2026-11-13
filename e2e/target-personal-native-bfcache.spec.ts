@@ -20,11 +20,14 @@ const strict=process.env.LUMI_REAL_BFCACHE_E2E==="true";
 const pause=(ms:number)=>new Promise<void>(resolve=>setTimeout(resolve,ms));
 async function waitFor<T>(label:string,fn:()=>Promise<T|null|undefined|false>,ms=20000):Promise<T>{
   const end=Date.now()+ms;
+  let lastError:unknown;
   while(Date.now()<end){
-    try{const result=await fn();if(result)return result as T;}catch{}
+    try{const result=await fn();if(result)return result as T;}
+    catch(error){lastError=error;}
     await pause(120);
   }
-  throw Error("Native BFCache timeout: "+label);
+  throw Error("Native BFCache timeout: "+label+
+    (lastError===undefined?"":"; last CDP error: "+String(lastError)));
 }
 class CDP{
   private seq=0;
@@ -98,6 +101,10 @@ async function nativeBrowser(width:number){
       return pages.find(p=>p.type==="page")?.webSocketDebuggerUrl||null;
     });
     const cdp=await CDP.connect(pageSocket);
+    // Chromium requires the Page domain to be enabled for document-start
+    // injection. Without this, missing pageshow instrumentation resembles
+    // a BFCache miss and prevents diagnostic collection.
+    await cdp.send("Page.enable");
     const state=JSON.parse(readFileSync(path.join(dir,"session.json"),"utf8")) as
       {cookies:{name:string;value:string;path?:string;httpOnly?:boolean;
         secure?:boolean;sameSite?:string}[]};
@@ -111,7 +118,7 @@ async function nativeBrowser(width:number){
       if(!result.success)throw Error("Owner cookie installation failed");
     }
     await cdp.send("Page.addScriptToEvaluateOnNewDocument",{source:
-      "window.__lumiNative={shows:[]};"+
+      "window.__lumiNative={shows:[],docToken:Math.random().toString(36).slice(2)};"+
       "addEventListener('pageshow',e=>window.__lumiNative.shows.push(e.persisted))"});
     return {profile,chrome,cdp};
   }catch(e){
@@ -143,10 +150,38 @@ for(const width of [390,1280]){
   test("native Chrome actual BFCache witness "+width+"px",async()=>{
     test.setTimeout(120000);
     const {profile,chrome,cdp}=await nativeBrowser(width);
+    let phase="before initial navigation";
+    let secret="";
+    let preBack: {shows:boolean[];docToken:string}|null=null;
+    const cacheNotUsed: {reasons:{reason:string;type:string}[];frameId?:string}[]=[];
+    const unsubscribeNotUsed=cdp.on("Page.backForwardCacheNotUsed",event=>{
+      const data=event as {frameId?:string;notRestoredExplanations?:{reason:string;type:string}[]};
+      // Keep reasons and frame identity only: no cookies, paths or private data.
+      cacheNotUsed.push({frameId:data.frameId,reasons:(data.notRestoredExplanations||[])
+        .map(reason=>({reason:reason.reason,type:reason.type}))});
+    });
+    async function evidence(status:"observed"|"failure",error?:unknown){
+      let browser:Record<string,unknown>;
+      try{browser=await cdp.eval<Record<string,unknown>>(snapshotExpression(secret));}
+      catch(snapshotError){browser={snapshotError:String(snapshotError)};}
+      const record={status,phase,width,
+        checkedOutSha:process.env.LUMI_TESTED_CHECKOUT_SHA??null,
+        preBack,cacheNotUsed,browser,
+        ...(error===undefined?{}:{error:String(error)})};
+      console.log("NATIVE_REAL_BFCACHE_EVIDENCE "+JSON.stringify(record));
+      await test.info().attach("native-bfcache-"+width+"-"+status+".json",{
+        body:Buffer.from(JSON.stringify(record,null,2)),contentType:"application/json"});
+      return browser;
+    }
     try{
       await cdp.send("Emulation.setDeviceMetricsOverride",{
         width,height:844,deviceScaleFactor:1,mobile:width===390});
       await cdp.send("Page.navigate",{url:origin+"/?view=Calendar&scope=personal"});
+      // This is a prerequisite, not a BFCache hit: the initial navigation
+      // must fire the genuine (persisted:false) pageshow before drafting.
+      phase="awaiting initial native pageshow";
+      await waitFor("initial browser-fired pageshow",()=>cdp.eval<boolean>(
+        "window.__lumiNative?.shows?.includes(false)===true"));
       const fab='[data-target-private-capture-fab="'+(width===390?"mobile":"desktop")+'"]';
       await waitFor("authenticated global capture",()=>cdp.eval<boolean>(
         "!!document.querySelector("+JSON.stringify(fab)+")"));
@@ -162,7 +197,7 @@ for(const width of [390,1280]){
         "s.dispatchEvent(new Event('change',{bubbles:true}))})()");
       await waitFor("private task form",()=>cdp.eval<boolean>(
         "!!document.querySelector('[data-testid=\"target-private-task-form\"]')"));
-      const secret="C15 private "+width+" "+randomUUID();
+      secret="C15 private "+width+" "+randomUUID();
       await cdp.eval("(()=>{const x=document.querySelector('[data-testid=\"target-private-task-form\"] input');"+
         "Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(x,"+
         JSON.stringify(secret)+");x.dispatchEvent(new Event('input',{bubbles:true}))})()");
@@ -170,32 +205,32 @@ for(const width of [390,1280]){
         "document.querySelector('[data-testid=\"target-private-task-form\"] input')?.value==="+JSON.stringify(secret)));
       await cdp.eval("window.__lumiBeforeLeave=performance.getEntriesByType('resource').length;"+
         "window.__lumiShowsBeforeLeave=window.__lumiNative?.shows.length??0");
+      preBack=await cdp.eval<{shows:boolean[];docToken:string}>(
+        "({shows:[...window.__lumiNative.shows],docToken:window.__lumiNative.docToken})");
+      phase="navigating away to robots.txt";
       // Both navigations are native browser actions; no Playwright goBack and
       // no synthetic PageTransitionEvent. Keep the private response no-store.
       await cdp.eval("location.assign('/robots.txt');true");
       await waitFor("robots.txt",()=>cdp.eval<boolean>("location.pathname==='/robots.txt'"));
+      phase="native history.back";
       await cdp.eval("history.back();true");
       await waitFor("native browser back",()=>cdp.eval<boolean>(
         "location.search.includes('view=Calendar')"));
       // A navigation can commit to the destination before its pageshow
       // actually fires. An earlier snapshot saw shows:[] and incorrectly
       // classified that in-flight navigation as a BFCache miss.
+      phase="awaiting actual post-Back pageshow";
       await waitFor("actual browser-fired pageshow after Back",()=>cdp.eval<boolean>(
         "!!window.__lumiNative?.shows.length && ("+
         "window.__lumiShowsBeforeLeave===undefined || "+
         "window.__lumiNative.shows.length>window.__lumiShowsBeforeLeave)"));
-      const first=await cdp.eval<any>(snapshotExpression(secret));
-      const evidence={width,checkedOutSha:process.env.LUMI_TESTED_CHECKOUT_SHA??null,
-        ...first};
-      console.log("NATIVE_REAL_BFCACHE_EVIDENCE "+JSON.stringify(evidence));
-      await test.info().attach("native-bfcache-"+width+".json",{
-        body:Buffer.from(JSON.stringify(evidence,null,2)),
-        contentType:"application/json"});
+      phase="asserting native Back privacy and authorization";
+      const first=await evidence("observed");
       expect(first.titleVisible,"Private draft remains in DOM").toBe(false);
       expect(first.storageLeak,"Private draft persisted to browser storage").toBe(false);
       expect(["",null],"Old private Area remains selected").toContain(first.area);
       if(strict)expect(first.persisted,"Native pageshow.persisted was false; reasons="+
-        JSON.stringify(first.notRestoredReasons)).toBe(true);
+        JSON.stringify({navigation:first.notRestoredReasons,cdp:cacheNotUsed})).toBe(true);
       // The original document is preserved only on a genuine BFCache hit.
       // A full reload is covered separately by the existing Playwright suite.
       if(first.persisted){
@@ -234,7 +269,14 @@ for(const width of [390,1280]){
         expect(creates,"Blank restored composer must not submit CREATE").toHaveLength(0);
         unsubscribe();
       }
+    }catch(error){
+      // Attach and log the state even when native pageshow never fires:
+      // a broken observer, a reload and a genuine BFCache miss are distinct.
+      await evidence("failure",error).catch(diagnosticError=>
+        console.log("NATIVE_BFCACHE_DIAGNOSTIC_ERROR "+String(diagnosticError)));
+      throw error;
     }finally{
+      unsubscribeNotUsed();
       cdp.close();chrome.kill("SIGKILL");
       rmSync(profile,{recursive:true,force:true,maxRetries:20,retryDelay:100});
     }
