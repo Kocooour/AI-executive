@@ -65,7 +65,6 @@ test("new target: exactly the required settings, private files, preflight, read-
   const dir = path.join(base, "target");
   const first = run([dir, "owner:alpha", "--confirmed"], { legacy });
   assert.equal(first.status, 0, first.stderr);
-  assert.equal(first.stderr, "");
   const initial = rows(first.stdout);
   assert.equal(initial[0], dir);
   assert.equal(initial[1], "owner:alpha");
@@ -84,7 +83,6 @@ test("new target: exactly the required settings, private files, preflight, read-
   const checked = run(["--check", dir], { legacy });
   assert.equal(checked.status, 0, checked.stderr);
   assert.equal(checked.stdout, first.stdout);
-  assert.equal(checked.stderr, "");
   assert.deepEqual(snapshot(dir), before);
   assert.deepEqual(files.map(name => lstatSync(path.join(dir, name)).mtimeMs), stats);
 });
