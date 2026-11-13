@@ -167,12 +167,26 @@ test("current project relation rejects a stale legacy parent in a typed task URL
   const now = Date.now();
   const actualProject = { id: actualProjectId, type: "project", title: "Current project",
     status: "active", workspaceId: "personal", properties: {}, createdAt: now, updatedAt: now };
-  const records = [...data.records.map((row) => row.id === data.taskId
-    ? { ...row, properties: { projectId: data.projectId } } : row), actualProject];
+  // A newly supplied legacy properties.projectId is itself treated as a move
+  // by area-write-invariants.ts and overrides a conflicting canonical edge.
+  // To test a stale *URL*, seed an actual canonical parent and keep the URL
+  // stale; otherwise the test mutates its own supposed authoritative fixture.
+  const records = [...data.records, actualProject];
   const links = data.links.map((link) => link.sourceEntityId === data.taskId
     ? { ...link, targetEntityId: actualProjectId } : link);
   expect(await updateStore(page, records, links)).toBe(200);
   try {
+    // Verify the persisted current relation before requesting the *old* URL.
+    // The stale parent must be rejected even though both projects exist.
+    const authoritativeParents = await page.evaluate(async (taskId) => {
+      const snapshot = await fetch("/api/store", { cache: "no-store" }).then((response) => response.json());
+      return snapshot.relations
+        .filter((relation: { sourceEntityId: string; relationType: string }) =>
+          relation.sourceEntityId === taskId && relation.relationType === "belongs_to_project")
+        .map((relation: { targetEntityId: string }) => relation.targetEntityId);
+    }, data.taskId);
+    expect(authoritativeParents).toEqual([actualProjectId]);
+
     await page.goto(`/?view=Projects&projectId=${data.projectId}&taskId=${data.taskId}`);
     await waitUntilSynced(page);
     await expect(page.locator(".inspectorDetail")).toHaveCount(0);
@@ -181,7 +195,9 @@ test("current project relation rejects a stale legacy parent in a typed task URL
     await page.goto(`/?view=Projects&projectId=${actualProjectId}&taskId=${data.taskId}`);
     await waitUntilSynced(page);
     await expect(page.locator(".projectPage")).toHaveAttribute("data-project-page", actualProjectId);
-    await expect(page.locator(".inspectorDetail")).toContainText(data.taskTitle);
+    // The editable task title is an <input> value, not textContent.
+    await expect(page.locator(".inspectorDetail .titleEdit")).toHaveValue(data.taskTitle);
+    await expect(page.locator(".inspectorDetail")).toHaveAttribute("aria-label", `Úkol: ${data.taskTitle}`);
   } finally {
     expect(await updateStore(page, records, links, true)).toBe(200);
   }

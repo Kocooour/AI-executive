@@ -47,7 +47,7 @@ test("every legacy-address deviation in use-lumi-app is guarded by the target-de
   const guarded=[
     /else if \(shouldLeaveTypedAddress\(\{ enabled: targetDetailsRef\.current, keepAddress: Boolean\(options\?\.keepAddress\)/,
     /targetDetailsRef\.current && targetViewsRef\.current\.includes\("MyPlanPreview"\) && isPlanDetailSearch\(window\.location\.search\)/,
-    /const targetTyped = targetTypedNow\(\);\s*const route = targetTyped \? null : targetFromSearch/,
+    /const targetTyped = targetTypedNow\(\);/,
     /setNavigationUnavailable\(!targetTyped && showUnavailableLink/,
     /if \(holdTypedAddress\(\{ enabled: targetDetailsRef\.current, search: window\.location\.search,/,
     /const target = targetTyped \? null : targetFromSearch\(window\.location\.search, addressableViews, nextView\)/,
@@ -58,6 +58,17 @@ test("every legacy-address deviation in use-lumi-app is guarded by the target-de
     /if \(addressedView\) setView\(addressedView, \{ keepAddress: true \}\)/,
   ];
   for(const pattern of guarded)assert.match(hookSource,pattern,String(pattern));
+  // The legacy typed URL guard must precede any resolver or inspector side
+  // effects, but target-enabled links must still bypass that legacy path.
+  const linkEffect=hookSource.slice(hookSource.indexOf("// Resolve requested project IDs"),
+    hookSource.indexOf("// The address follows the view"));
+  const guard=/if \(!targetTyped && requestsTypedRecord\(window\.location\.search\) &&\s*syncStatus !== "synced" && syncStatus !== "offline"\) return;/;
+  assert.match(linkEffect,guard);
+  const guardAt=linkEffect.search(guard);
+  const routeAt=linkEffect.indexOf("const route = targetTyped ? null : targetFromSearch(");
+  const resolveAt=linkEffect.indexOf("resolveLegacyRecordLink(");
+  assert.ok(guardAt >= 0 && routeAt > guardAt && resolveAt > routeAt,
+    "typed legacy links must await the server snapshot before resolving any record");
   assert.match(hookSource,/const targetDetailsRef = useRef\(Boolean\(options\.targetDetails\)\)/);
 });
 
@@ -195,7 +206,7 @@ test("focus management: the panel takes focus on open and Escape/close/backdrop 
   assert.match(state,/export function focusPendingRow/);
 });
 
-test("private note and task creation are independently gated; project create remains unavailable",()=>{
+test("private note, standalone task and project creation have independent default-off gates",()=>{
   const taskRoute=read("app/api/target-staging/tasks/route.ts");
   assert.match(taskRoute,/export async function GET/);
   assert.match(taskRoute,/export async function POST/);
@@ -208,7 +219,16 @@ test("private note and task creation are independently gated; project create rem
     assert.ok(privateTaskHttp.includes(flag),flag+" must gate isolated private task creation");
   const projectRoute=read("app/api/target-staging/projects/route.ts");
   assert.match(projectRoute,/export async function GET/);
-  assert.doesNotMatch(projectRoute,/export async function (POST|PUT|PATCH|DELETE)/);
+  assert.match(projectRoute,/export async function POST/);
+  assert.match(projectRoute,/return postPrivateProjectCreate\(request\)/);
+  assert.doesNotMatch(projectRoute,/export async function (PUT|PATCH|DELETE)/);
+  const projectHttp=read("lib/target-private-structure-create-http.ts");
+  assert.match(projectHttp,/AI_EXECUTIVE_TARGET_STAGING_HTTP_PROJECTS_CREATE_ENABLED/);
+  assert.match(projectHttp,/AI_EXECUTIVE_TARGET_STAGING_HTTP_PROJECT_TASKS_CREATE_ENABLED/);
+  assert.match(projectHttp,/AI_EXECUTIVE_TARGET_STAGING_HTTP_WRITE_ENABLED/);
+  assert.match(projectHttp,/process\.env\.AI_EXECUTIVE_TARGET_STAGING_HTTP_PROJECTS_CREATE_ENABLED==="true"/);
+  const projectProfile=read("lib/target-personal-profile.ts");
+  assert.match(projectProfile,/\{flag:"AI_EXECUTIVE_TARGET_STAGING_HTTP_PROJECTS_CREATE_ENABLED"/);
   const noteRoute=read("app/api/target-staging/notes/route.ts");
   assert.match(noteRoute,/export async function POST/);
   assert.match(noteRoute,/AI_EXECUTIVE_TARGET_STAGING_HTTP_NOTES_CREATE_ENABLED/);
