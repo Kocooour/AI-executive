@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
-import { chmodSync, copyFileSync, cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -78,6 +78,9 @@ test("inventory: content-free report and summary, no write to source", t => {
   assert.equal(allOutput.includes(SECRET), false);
   assert.equal(allOutput.includes("example.org"), false);
   assert.equal(report.integrity, "ok");
+  assert.deepEqual(readdirSync(out).sort(), ["inventory.json", "summary.txt"],
+    "report output must never include a private SQLite inspection copy");
+  assert.equal(existsSync(path.join(out, "inspection-copy")), false);
   assert.equal(report.entities.count, 2);
   assert.equal(report.entities.byKind.note, 1);
   assert.equal(report.entities.byKind.task, 1);
@@ -294,6 +297,11 @@ test("rehearsal: archival backup restored to a fresh directory with matching tab
   assert.equal(result.status, 0, result.stderr);
   const report = JSON.parse(readFileSync(path.join(out, "rehearsal.json"), "utf8"));
   assert.equal(report.verdict, "equal");
+  assert.equal(report.verificationScope, "single_source_copy_fidelity");
+  assert.equal(report.independentCaptureEstablished, false);
+  assert.match(result.stdout, /SINGLE-SOURCE COPY FIDELITY VERIFIED/);
+  assert.match(result.stdout, /NOT independent verification/);
+  assert.doesNotMatch(result.stdout, /\bPASS\b/);
   assert.equal(report.sqliteIntegrity, "ok");
   assert.equal(report.tables.entities.count, 2);
   assert.match(report.tables.entities.rowsSha256, /^[0-9a-f]{64}$/);
@@ -364,6 +372,11 @@ test("rehearsal --verify still accepts separate independent input directories", 
   const report = JSON.parse(readFileSync(path.join(out, "rehearsal.json"), "utf8"));
   assert.equal(report.verdict, "equal");
   assert.equal(report.mode, "verify-copies");
+  assert.equal(report.verificationScope, "distinct_offline_inputs_equal");
+  assert.equal(report.independentCaptureEstablished, false);
+  assert.match(result.stdout, /DISTINCT INPUT COPIES EQUAL/);
+  assert.match(result.stdout, /independent capture NOT proven/);
+  assert.doesNotMatch(result.stdout, /\bPASS\b/);
 });
 
 test("rehearsal --verify rejects a tampered row", t => {
@@ -687,4 +700,56 @@ test("verify-copies fails closed when original permissions differ despite identi
   const result = run(rehearsal, ["--verify", source, candidate, path.join(base, "mode-verify")]);
   assert.notEqual(result.status, 0);
   assert.equal(result.stderr.includes(SECRET), false);
+});
+
+test("inventory temporary SQLite stays outside public output and is cleaned on success and failure", t => {
+  const { source, base } = fixture(t);
+  const scratchParent = path.join(base, "private-tmp");
+  mkdirSync(scratchParent, { mode: 0o700 });
+  const runIsolated = (output) => spawnSync(process.execPath,
+    [inventory, source, output, "--offline-confirmed"], {
+      cwd: root, encoding: "utf8",
+      env: { ...process.env, TMPDIR: scratchParent, TMP: scratchParent, TEMP: scratchParent,
+        AI_EXECUTIVE_DATA_DIR: "" },
+    });
+
+  const out = path.join(base, "inventory-public");
+  const ok = runIsolated(out);
+  assert.equal(ok.status, 0, ok.stderr);
+  assert.deepEqual(readdirSync(out).sort(), ["inventory.json", "summary.txt"]);
+  assert.deepEqual(readdirSync(scratchParent), [], "successful inventory must remove private scratch");
+  assert.equal(ok.stdout.includes(SECRET), false);
+
+  rmSync(path.join(source, "store.sqlite"));
+  const failedOut = path.join(base, "inventory-failed");
+  const failed = runIsolated(failedOut);
+  assert.notEqual(failed.status, 0);
+  assert.match(failed.stderr, /offline snapshot has no store.sqlite/);
+  assert.equal(existsSync(failedOut), false, "failed inventory must not create shareable report");
+  assert.deepEqual(readdirSync(scratchParent), [], "failed inventory must remove private scratch");
+  assert.equal(failed.stderr.includes(SECRET), false);
+});
+
+test("offline CLIs explain known failure causes without printing sensitive paths or values", t => {
+  const { source, base } = fixture(t);
+  const inventoryOut = path.join(base, "missing-offline-assertion");
+  const absentConfirmation = spawnSync(process.execPath, [inventory, source, inventoryOut], {
+    cwd: root, encoding: "utf8", env: { ...process.env, AI_EXECUTIVE_DATA_DIR: "" },
+  });
+  assert.notEqual(absentConfirmation.status, 0);
+  assert.match(absentConfirmation.stderr, /offline source confirmation required/);
+  assert.doesNotMatch(absentConfirmation.stderr, /FAIL \(Error\)/);
+  assert.equal(existsSync(inventoryOut), false);
+
+  const existingOutput = path.join(base, "already-exists");
+  mkdirSync(existingOutput);
+  const rehearsalResult = run(rehearsal, [source, existingOutput]);
+  assert.notEqual(rehearsalResult.status, 0);
+  assert.match(rehearsalResult.stderr, /destination exists \(must be new\)/);
+  assert.doesNotMatch(rehearsalResult.stderr, /FAIL \(Error\)/);
+
+  for (const line of [absentConfirmation.stderr, rehearsalResult.stderr]) {
+    assert.equal(line.includes(SECRET), false);
+    assert.equal(line.includes(source), false);
+  }
 });
