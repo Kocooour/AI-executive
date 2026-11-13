@@ -39,9 +39,11 @@ The operator selects an absolute **new, non-existing** target directory under an
 
 **The execution account is part of the safety contract.** The deployed [systemd unit](../deployment/ai-executive.service) specifies `User=ai-executive`, `Group=ai-executive`, `WorkingDirectory=/opt/ai-executive` and `AI_EXECUTIVE_DATA_DIR=/var/lib/ai-executive`. The CLI creates files owned by its effective UID; `--check` accepts only that same UID. A target created by root cannot be read/written by the service, and a correct target created by the service will be rejected by a root `--check`. The root-only GitHub test uses **synthetic `/tmp` fixtures**, never a service target.
 
-After **separate operator approval** of the exact new path, authenticated application owner ID, and private parent, confirm the loaded unit and invoke **both** commands using `runuser` as `ai-executive`. A one-time parent creation (only if absent, never overwrite existing) may be separately approved, e.g. `install -d -o ai-executive -g ai-executive -m 0700 /var/lib/ai-executive-target`. The candidate `/var/lib/ai-executive-target/personal-v1` is a **draft example, not approval**. The following block is a template **not to execute without authorization**; replace both placeholders.
+After **separate operator approval** of the exact new path, authenticated application owner ID, and private parent, confirm the loaded unit and invoke **both** commands using `runuser` as `ai-executive`. Capture both actual live data locations from the running process (including systemd `EnvironmentFile` and drop-in overrides) and pass them to the CLI; fail closed if that configuration is not available. Do not substitute known defaults. A one-time parent creation (only if absent, never overwrite existing) may be separately approved, e.g. `install -d -o ai-executive -g ai-executive -m 0700 /var/lib/ai-executive-target`. The candidate `/var/lib/ai-executive-target/personal-v1` is a **draft example, not approval**. The following block is a template **not to execute without authorization**; replace both placeholders.
 ```bash
-set -eu
+# Run in an authorized root operator shell (bash; uses read -d '').
+set -euo pipefail
+test "$(id -u)" -eq 0
 UNIT=ai-executive.service
 SERVICE_USER="$(systemctl show "$UNIT" -p User --value)"
 SERVICE_GROUP="$(systemctl show "$UNIT" -p Group --value)"
@@ -51,11 +53,35 @@ test "$SERVICE_GROUP" = ai-executive
 test "$SERVICE_CWD" = /opt/ai-executive
 test "$(systemctl show "$UNIT" -p DynamicUser --value)" != yes
 SERVICE_UID="$(id -u "$SERVICE_USER")"
+SERVICE_GID="$(id -g "$SERVICE_USER")"
 test "$SERVICE_UID" -ne 0
+test "$(id -gn "$SERVICE_USER")" = "$SERVICE_GROUP"
+
+# The running process has resolved Environment=, EnvironmentFile= and drop-ins.
+# Never log the environment (it can contain credentials), or shell-source it.
+systemctl is-active --quiet "$UNIT"
 MAINPID="$(systemctl show "$UNIT" -p MainPID --value)"
-if [ "$MAINPID" -gt 0 ]; then
-  test "$(awk '$1 == "Uid:" {print $3}' "/proc/$MAINPID/status")" = "$SERVICE_UID"
-fi
+test "$MAINPID" -gt 0
+test "$(awk '$1 == "Uid:" {print $3}' "/proc/$MAINPID/status")" = "$SERVICE_UID"
+test "$(awk '$1 == "Gid:" {print $3}' "/proc/$MAINPID/status")" = "$SERVICE_GID"
+LIVE_LEGACY_DIR=''
+LIVE_STAGING_DIR=''
+legacy_count=0
+staging_count=0
+while IFS= read -r -d '' entry; do
+  case "$entry" in
+    AI_EXECUTIVE_DATA_DIR=*)
+      legacy_count=$((legacy_count + 1))
+      LIVE_LEGACY_DIR="${entry#AI_EXECUTIVE_DATA_DIR=}" ;;
+    AI_EXECUTIVE_TARGET_STAGING_DIRECTORY=*)
+      staging_count=$((staging_count + 1))
+      LIVE_STAGING_DIR="${entry#AI_EXECUTIVE_TARGET_STAGING_DIRECTORY=}" ;;
+  esac
+done < "/proc/$MAINPID/environ"
+test "$legacy_count" -eq 1
+test "$staging_count" -le 1
+case "$LIVE_LEGACY_DIR" in /*) ;; *) echo 'STOP: invalid live legacy path' >&2; exit 1 ;; esac
+case "$LIVE_STAGING_DIR" in ''|/*) ;; *) echo 'STOP: invalid live staging path' >&2; exit 1 ;; esac
 
 TARGET_DIR='<approved-new-absolute-path>'
 OWNER_USER_ID='<verified-application-owner-id>'  # NOT the POSIX service username
@@ -63,12 +89,19 @@ PARENT="$(dirname "$TARGET_DIR")"
 test "$(stat -c '%u:%a' "$PARENT")" = "$SERVICE_UID:700"
 test ! -e "$TARGET_DIR" && test ! -L "$TARGET_DIR"
 
+# Preserve BOTH live paths in the CLI's overlap guards, without passing secrets.
 cd "$SERVICE_CWD"
+test "$(systemctl show "$UNIT" -p MainPID --value)" = "$MAINPID"
 runuser -u "$SERVICE_USER" -g "$SERVICE_GROUP" -- env -i \
-  PATH=/usr/bin:/bin HOME=/nonexistent AI_EXECUTIVE_DATA_DIR=/var/lib/ai-executive \
+  PATH=/usr/bin:/bin HOME=/nonexistent \
+  AI_EXECUTIVE_DATA_DIR="$LIVE_LEGACY_DIR" \
+  AI_EXECUTIVE_TARGET_STAGING_DIRECTORY="$LIVE_STAGING_DIR" \
   /usr/bin/node scripts/target-store-provision.mjs "$TARGET_DIR" "$OWNER_USER_ID" --confirmed
+test "$(systemctl show "$UNIT" -p MainPID --value)" = "$MAINPID"
 runuser -u "$SERVICE_USER" -g "$SERVICE_GROUP" -- env -i \
-  PATH=/usr/bin:/bin HOME=/nonexistent AI_EXECUTIVE_DATA_DIR=/var/lib/ai-executive \
+  PATH=/usr/bin:/bin HOME=/nonexistent \
+  AI_EXECUTIVE_DATA_DIR="$LIVE_LEGACY_DIR" \
+  AI_EXECUTIVE_TARGET_STAGING_DIRECTORY="$LIVE_STAGING_DIR" \
   /usr/bin/node scripts/target-store-provision.mjs --check "$TARGET_DIR"
 
 test "$(stat -c '%u:%a' "$TARGET_DIR")" = "$SERVICE_UID:700"
@@ -77,7 +110,7 @@ for name in lumi-target.sqlite lumi-target.journal lumi-target-witness.sqlite; d
 done
 ```
 
-**STOP on any mismatch.** Verify the real service configuration including EnvironmentFile and all known live legacy/staging directories before using the explicit sanitized command environment. A root-owned/previously existing target must **not** be fixed with `chown`, reused, or overwritten; request a separately approved recovery procedure. For detached archival copies run `--check` as the account that actually owns that *copy*, never imply it establishes the service's access.
+**STOP on any mismatch.** The command reads only the two effective live storage paths from `/proc/$MAINPID/environ` and passes them into `safeTarget()` under the service UID. Never print the complete process environment (it can hold secrets), source `EnvironmentFile` as shell commands or hardcode a presumed live path. Confirm no separate service instance has another live storage location: the guard is scoped to this running unit. A root-owned/previously existing target must **not** be fixed with `chown`, reused, or overwritten; request a separately approved recovery procedure. For detached archival copies run `--check` as the account that actually owns that *copy*, never imply it establishes the service's access.
 
 **Separate systemd sandbox gate:** the current unit has `ProtectSystem=strict` and only `StateDirectory=ai-executive`. The proposed external `/var/lib/ai-executive-target` lies outside the unit's declared writable directories. A successful `runuser` operation verifies POSIX ownership but **does not prove the running sandboxed service can write the target**. Before any runtime activation, obtain separate approval and verify a least-privilege `StateDirectory`/writable-directory change for the approved target; this PR neither changes the unit nor authorizes cutover.
 
