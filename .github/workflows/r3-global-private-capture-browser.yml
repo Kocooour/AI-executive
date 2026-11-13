@@ -86,3 +86,59 @@ jobs:
             playwright-report/
           retention-days: 7
           if-no-files-found: ignore
+
+  native-bfcache:
+    name: Exact-SHA native Chrome BFCache on real personal-v1 SQLite
+    if: github.event_name == 'workflow_dispatch'
+    needs: chromium
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    env:
+      CI: "true"
+      NEXT_TELEMETRY_DISABLED: "1"
+      NEXT_PUBLIC_LUMI_DESIGN_V1_PREVIEW: "1"
+      E2E_SKIP_BUILD: "1"
+      E2E_PORT: "3140"
+      LUMI_TARGET_PERSONAL_ACCEPTANCE_E2E: "true"
+      LUMI_REAL_BFCACHE_E2E: "true"
+    steps:
+      - name: Checkout exact release SHA
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.target_sha }}
+      - name: Verify exact SHA and record checkout
+        env:
+          TARGET_SHA: ${{ inputs.target_sha }}
+        run: |
+          [[ "$TARGET_SHA" =~ ^[a-f0-9]{40}$ ]] || exit 1
+          ACTUAL_SHA="$(git rev-parse HEAD)"
+          echo "LUMI_TESTED_CHECKOUT_SHA=$ACTUAL_SHA" >> "$GITHUB_ENV"
+          echo "Target SHA: $TARGET_SHA actual: $ACTUAL_SHA" >> "$GITHUB_STEP_SUMMARY"
+          [[ "$ACTUAL_SHA" == "$TARGET_SHA" ]] || exit 1
+      - name: Install pnpm
+        uses: pnpm/action-setup@v5
+        with:
+          version: 10.20.0
+      - name: Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+          cache: pnpm
+      - name: Locked dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Build real-store isolated application
+        run: pnpm build
+      - name: Install Chromium
+        run: pnpm exec playwright install --with-deps chromium
+      - name: Observe native pageshow.persisted (390/1280)
+        run: pnpm exec playwright test e2e/target-personal-native-bfcache.spec.ts --project=desktop
+      - name: Upload native BFCache evidence
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: lumi-r3-global-native-bfcache
+          path: |
+            test-results/
+            playwright-report/
+          retention-days: 7
+          if-no-files-found: ignore
