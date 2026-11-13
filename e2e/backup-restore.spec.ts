@@ -106,6 +106,46 @@ const versionCount = async (page: Page, id: string) => {
   return page.locator(".revisionList li").count();
 };
 
+test("an unsent note edit survives an unrelated server revision without a restore", async ({ browser }) => {
+  const id = `e2e-backup-unreplaced-${stamp}`;
+  const unrelated = `e2e-backup-unrelated-${stamp}`;
+  const { first, second } = await twoDevices(browser);
+  try {
+    await first.page.goto("/");
+    await waitUntilSynced(first.page);
+    await setStore(first.page, [task(id, "Nesmazat: původní úkol")]);
+    await second.page.goto(`/?task=${id}`);
+    await waitUntilSynced(second.page);
+    // This is an ordinary conflict, NOT a backup restore. The offline device
+    // must retain its local draft and eventually send it.
+    await second.context.setOffline(true);
+    await second.page.getByLabel("Poznámky k úkolu").fill("Neodeslaná poznámka, kterou nesmí smazat revize");
+    await second.page.locator("input.titleEdit").focus();
+    await setStore(first.page, [task(unrelated, "Změna na jiném zařízení")]);
+    await second.context.setOffline(false);
+    await expect.poll(async () => {
+      const entities = await serverEntities(first.page);
+      return {
+        note: (entities.find((entity) => entity.id === id)?.properties as { notes?: string } | undefined)?.notes,
+        unrelatedPresent: entities.some((entity) => entity.id === unrelated),
+      };
+    }, { timeout: 30_000 }).toEqual({
+      note: "Neodeslaná poznámka, kterou nesmí smazat revize",
+      unrelatedPresent: true,
+    });
+    await second.page.reload();
+    await waitUntilSynced(second.page);
+    await second.page.goto(`/?task=${id}`);
+    await expect(second.page.getByLabel("Poznámky k úkolu")).toHaveValue(
+      "Neodeslaná poznámka, kterou nesmí smazat revize",
+    );
+    await expect(second.page.locator(".restoredNotice")).toHaveCount(0);
+  } finally {
+    await first.context.close();
+    await second.context.close();
+  }
+});
+
 test("restoring a full backup returns records, Context with its Undo step, sources and note versions", async ({ page }) => {
   const kept = `e2e-backup-kept-${stamp}`, removed = `e2e-backup-removed-${stamp}`, added = `e2e-backup-added-${stamp}`, noteId = `e2e-backup-note-${stamp}`;
   await page.goto("/");
