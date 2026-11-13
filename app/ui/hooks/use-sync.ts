@@ -94,7 +94,7 @@ export function useSync() {
   // OR its valid generation cannot be safely replayed because the shared Web
   // Lock could not be acquired. Neither case authorizes destructive recovery.
   const [ownerFenceRawRescueReason, setOwnerFenceRawRescueReason] =
-    useState<"unreadable" | "lock-unavailable" | null>(null);
+    useState<"unreadable" | "lock-unavailable" | "verification-unavailable" | null>(null);
   // A local-only rescue does not claim fresh verification of the current server.
   const [recoveryOffline, setRecoveryOffline] = useState(false);
   const [recoveryDownloadRequested, setRecoveryDownloadRequested] = useState(false);
@@ -364,14 +364,18 @@ export function useSync() {
       await adoptServerCopy(snapshot, true, recoveryFence);
       return false; // adoptServerCopy triggers a reload after the full commit.
     } catch {
-      // If the authoritative GET cannot verify a safe resume (for example
-      // offline), protect what remains. The fence preserves the OLD generation
-      // for a valid, exportable rescue marker. A partial IDB replacement is
-      // explicitly labeled as potentially incomplete in the dialog.
-      if (recoveryFence) await engageRecoveryForGeneration(
-        recoveryFence.observedGeneration, recoveryFence.knownGeneration,
-      );
-      else {
+      // A temporarily unavailable server must not turn a recoverable owner
+      // fence into an irreversible D2b hold. The durable owner fence already
+      // blocks all writes across tabs; expose read-only rescue while offline
+      // and retry the certified adoption on the next reload when back online.
+      // If a partial IDB replacement occurred, its rescue remains explicitly
+      // marked as potentially incomplete.
+      if (recoveryFence) {
+        setOwnerFenceRawRescueReason("verification-unavailable");
+        setRecoveryHeld(true);
+        setRecoveryError(false);
+        setSyncStatus("offline");
+      } else {
         // A missing/rejecting Web Lock fails *before* the callback can read a
         // perfectly valid fence. Do not misclassify it as corrupt: that would
         // show a rescue UI that rejects its own valid marker.
