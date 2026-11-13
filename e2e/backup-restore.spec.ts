@@ -1330,3 +1330,73 @@ test("an interrupted adoption without server access installs an exportable hold 
     await expect(second.page.getByText(/Místní kopie už může být částečně nahrazená/)).toBeVisible();
   } finally { await first.context.close(); await second.context.close(); }
 });
+
+test("a paused ordinary pull never stamps its stale generation after a sibling owner restore", async ({ browser }) => {
+  const id = `e2e-backup-delayed-generation-${stamp}`;
+  const ownerContext = await browser.newContext({ storageState: sessionFile, locale: "cs-CZ" });
+  const tabs = await browser.newContext({ storageState: sessionFile, locale: "cs-CZ" });
+  const owner = await ownerContext.newPage(), delayed = await tabs.newPage(), adopter = await tabs.newPage();
+  try {
+    await owner.goto("/");
+    await waitUntilSynced(owner);
+    await delayed.addInitScript(() => {
+      // Keep this tab stale while the sibling commits the restore.
+      Object.defineProperty(window, "BroadcastChannel", { configurable: true, value: undefined });
+      window.addEventListener("storage", event => {
+        if (event.key === "ai-executive-restore-generation" ||
+            event.key === "ai-executive-owner-adoption-fence") event.stopImmediatePropagation();
+      }, true);
+    });
+    await delayed.goto("/?view=Inbox");
+    await waitUntilSynced(delayed);
+    const oldGeneration = await delayed.evaluate(() => localStorage.getItem("ai-executive-restore-generation"));
+    expect(oldGeneration).not.toBeNull();
+
+    await setStore(owner, [task(id, "Opožděné potvrzení generace")]);
+    const backup = await createManualBackup(owner);
+    await openBackups(adopter);
+
+    // Pause only this page's NORMAL generation commit, after applySnapshot
+    // has completed its IndexedDB transaction. This does not acquire the
+    // actual recovery-data lock, so the owner's adoption can finish first.
+    await delayed.evaluate(() => {
+      const state = window as unknown as { e2eStampPending?: boolean; e2eReleaseStamp?: () => void };
+      const original = navigator.locks.request.bind(navigator.locks);
+      Object.defineProperty(navigator, "locks", { configurable: true, value: {
+        request: (name: string, callback: () => Promise<unknown>) => {
+          if (name !== "ai-executive-recovery-data") return original(name, callback);
+          state.e2eStampPending = true;
+          return new Promise<unknown>((resolve, reject) => {
+            state.e2eReleaseStamp = () => { void original(name, callback).then(resolve, reject); };
+          });
+        },
+      } });
+    });
+    await remoteWakeUp(delayed);
+    await delayed.waitForFunction(() => Boolean(
+      (window as unknown as { e2eStampPending?: boolean }).e2eStampPending,
+    ));
+
+    await manualRow(adopter).getByRole("button", { name: "Obnovit" }).click();
+    await confirmRestore(adopter);
+    await expect(adopter.locator(".restoredNotice"))
+      .toContainText("Data byla obnovena ze zálohy.", { timeout: 30_000 });
+    const newGeneration = await adopter.evaluate(() => localStorage.getItem("ai-executive-restore-generation"));
+    expect(Number(newGeneration)).toBeGreaterThan(Number(oldGeneration));
+    expect(await adopter.evaluate(() => localStorage.getItem("ai-executive-owner-adoption-fence"))).toBeNull();
+
+    await delayed.evaluate(() => {
+      (window as unknown as { e2eReleaseStamp?: () => void }).e2eReleaseStamp?.();
+    });
+    await expect.poll(() => delayed.evaluate(() =>
+      localStorage.getItem("ai-executive-restore-generation"))).toBe(newGeneration);
+    // Its pending lock operation is no longer queued. A late stamp would
+    // have overwritten the shared key before the queue became empty.
+    await expect.poll(() => delayed.evaluate(async () => {
+      const queued = await navigator.locks.query();
+      return queued.pending.filter(lock => lock.name === "ai-executive-recovery-data").length;
+    })).toBe(0);
+    expect(await adopter.evaluate(() => localStorage.getItem("ai-executive-restore-generation"))).toBe(newGeneration);
+    expect((await serverEntities(owner)).some(entity => entity.id === id)).toBe(true);
+  } finally { await ownerContext.close(); await tabs.close(); }
+});

@@ -287,12 +287,12 @@ export function useSync() {
   // engages the in-tab write fence synchronously, then serializes the durable
   // cross-tab marker with any already-authorized local wipe.
   async function engageRecoveryForGeneration(
-    observedGeneration: number | undefined, knownGeneration = restoreGeneration.current,
+    observedGeneration: number | undefined, knownGeneration: number | null | undefined = restoreGeneration.current,
   ) {
     setRecoveryHeld(true);
     setSyncStatus("offline");
     try {
-      await beginOfflineRecoveryHoldSafely(knownGeneration, observedGeneration);
+      await beginOfflineRecoveryHoldSafely(knownGeneration ?? undefined, observedGeneration);
     } catch (error) {
       if (error instanceof Error && (error.message === "OFFLINE_RECOVERY_WIPE_PRECEDED_HOLD" ||
           error.message === "OFFLINE_RECOVERY_ADOPTION_PRECEDED_HOLD")) {
@@ -310,29 +310,30 @@ export function useSync() {
   // local records under the D2b rescue hold). Never silently lift a fence.
   async function finishInterruptedOwnerAdoption() {
     if (!ownerAdoptionFencePresent()) return true;
-    let fence: OwnerAdoptionFence | null = null;
+    let recoveryFence: OwnerAdoptionFence | null = null;
     try {
-      const status = await withOfflineRecoveryDataLock(async () => {
-        if (offlineRecoveryIsHeld()) return "held" as const;
-        if (!ownerAdoptionFencePresent()) return "done" as const;
-        fence = readOwnerAdoptionFence(localStorage);
-        if (!fence) return "invalid" as const;
+      const state = await withOfflineRecoveryDataLock(async () => {
+        if (offlineRecoveryIsHeld()) return { status: "held" } as const;
+        if (!ownerAdoptionFencePresent()) return { status: "done" } as const;
+        const fence = readOwnerAdoptionFence(localStorage);
+        if (!fence) return { status: "invalid" } as const;
         try {
           if (ownerAdoptionReadyToFinish(localStorage)) {
             finishOwnerAdoptionFence(localStorage);
-            return "done" as const;
+            return { status: "done" } as const;
           }
         } catch { /* Interrupted localStorage cleanup; replay the certified adoption. */ }
-        return "resume" as const;
+        return { status: "resume", fence } as const;
       }, true);
-      if (status === "done") return true;
-      if (status === "held") { setRecoveryHeld(true); setSyncStatus("offline"); return false; }
-      if (status === "invalid" || !fence) {
+      if (state.status === "done") return true;
+      if (state.status === "held") { setRecoveryHeld(true); setSyncStatus("offline"); return false; }
+      if (state.status === "invalid") {
         setRecoveryHeld(true);
         setRecoveryError(true);
         setSyncStatus("offline");
         return false;
       }
+      recoveryFence = state.fence;
       // The fence stored the exact owner-certified generation before the
       // crash; verify that it STILL corresponds to the server origin. The
       // server, not a locally persisted snapshot, is authoritative.
@@ -340,18 +341,18 @@ export function useSync() {
       if (!response.ok) throw new Error("OWNER_ADOPTION_RESTART_UNVERIFIED");
       const snapshot = (await response.json()) as ServerSnapshot;
       if (snapshot.restoreKind !== "owner_restore" ||
-          snapshot.restoreGeneration !== fence.observedGeneration ||
+          snapshot.restoreGeneration !== recoveryFence.observedGeneration ||
           !Array.isArray(snapshot.entities) || !Array.isArray(snapshot.relations))
         throw new Error("OWNER_ADOPTION_RESTART_UNVERIFIED");
-      await adoptServerCopy(snapshot, true, fence);
+      await adoptServerCopy(snapshot, true, recoveryFence);
       return false; // adoptServerCopy triggers a reload after the full commit.
     } catch {
       // If the authoritative GET cannot verify a safe resume (for example
       // offline), protect what remains. The fence preserves the OLD generation
       // for a valid, exportable rescue marker. A partial IDB replacement is
       // explicitly labeled as potentially incomplete in the dialog.
-      if (fence) await engageRecoveryForGeneration(
-        fence.observedGeneration, fence.knownGeneration ?? undefined,
+      if (recoveryFence) await engageRecoveryForGeneration(
+        recoveryFence.observedGeneration, recoveryFence.knownGeneration,
       );
       else { setRecoveryHeld(true); setRecoveryError(true); setSyncStatus("offline"); }
       return false;
@@ -366,7 +367,7 @@ export function useSync() {
     if (resumeFence) {
       if (source.restoreKind !== "owner_restore" ||
           source.restoreGeneration !== resumeFence.observedGeneration)
-        return engageRecoveryForGeneration(source.restoreGeneration, resumeFence.knownGeneration ?? undefined);
+        return engageRecoveryForGeneration(source.restoreGeneration, resumeFence.knownGeneration);
     } else if (restoreGenerationDecision(
       restoredSinceKnown(source.restoreGeneration), source.restoreKind, false,
     ) === "hold") return engageRecoveryForGeneration(source.restoreGeneration);
@@ -492,7 +493,7 @@ export function useSync() {
     }
     if (needsRecoveryHold) {
       await engageRecoveryForGeneration(
-        source.restoreGeneration, resumeFence?.knownGeneration ?? restoreGeneration.current,
+        source.restoreGeneration, resumeFence ? resumeFence.knownGeneration : restoreGeneration.current,
       );
       return false;
     }
