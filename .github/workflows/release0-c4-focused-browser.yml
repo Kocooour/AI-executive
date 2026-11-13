@@ -74,8 +74,8 @@ jobs:
       - name: C10 ordered navigation then both complete inspector suites
         shell: bash
         run: |
-          # Build the list from Playwright's own full test names, not file-only
-          # selectors (which silently selected zero tests in Playwright 1.56).
+          # Playwright --list reports paths relative to testDir (e2e/), unlike
+          # its execution logs. Use exactly those titles for the ordered list.
           test_list="${RUNNER_TEMP}/release0-c10-inspector.test-list"
           discovery="${RUNNER_TEMP}/release0-c10-discovery.txt"
           plan="${RUNNER_TEMP}/release0-c10-plan.txt"
@@ -95,7 +95,7 @@ jobs:
             "project-page", "detail-inspector-b2", "inspector-return-focus-ui01e"];
           const selected = [];
           for (const spec of specs) {
-            const marker = `[desktop] › e2e/${spec}.spec.ts:`;
+            const marker = `[desktop] › ${spec}.spec.ts:`;
             const matches = lines.filter((line) => line.includes(marker))
               .map((line) => line.trim());
             if (!matches.length) throw new Error(`No discovered tests in ${spec}`);
@@ -109,7 +109,7 @@ jobs:
           pnpm exec playwright test --list --test-list "${test_list}" \
             --project=desktop | tee "${plan}"
           for spec in record-links-ui01 navigation-unavailable-ui01c project-page detail-inspector-b2 inspector-return-focus-ui01e; do
-            grep -Fq "[desktop] › e2e/${spec}.spec.ts" "${plan}" || {
+            grep -Fq "[desktop] › ${spec}.spec.ts" "${plan}" || {
               echo "C10 ordered gate selected no tests from ${spec}" >&2
               exit 1
             }
