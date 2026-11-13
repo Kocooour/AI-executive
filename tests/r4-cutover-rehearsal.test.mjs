@@ -175,6 +175,11 @@ test("rehearsal --verify still accepts separate independent input directories", 
   const { source, base } = fixture(t);
   const candidate = path.join(base, "independent-copy");
   cpSync(source, candidate, { recursive: true });
+  // cpSync's newly created destination root may inherit permissions from the
+  // runner's umask rather than the source. Align ONLY this positive fixture:
+  // the independent copies must actually have matching root metadata.
+  chmodSync(candidate, lstatSync(source).mode & 0o7777);
+  assert.equal(lstatSync(candidate).mode & 0o7777, lstatSync(source).mode & 0o7777);
   const out = path.join(base, "verify-distinct");
   const result = run(rehearsal, ["--verify", source, candidate, out]);
   assert.equal(result.status, 0, result.stderr);
