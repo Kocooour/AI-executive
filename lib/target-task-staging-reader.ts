@@ -752,7 +752,7 @@ export function readPreflightedTemporalTaskDetail(
  * read-only hint; the writer revalidates everything under BEGIN IMMEDIATE. */
 export function readPreflightedTemporalStatusPreview(
   store: TargetStagingReadStore, access: TargetStagingReadCredential, taskId: string,
-): {detail: TemporalTaskDetail; expectedRevision: string} | null {
+): {detail: TemporalTaskDetail; expectedRevision: string; previousWhenOn:string|null} | null {
   return withPreflightedStore(store, () => null, (db, preflight) =>
     inReadSnapshot(db, () => {
       if (!preflight(db)) return null;
@@ -764,7 +764,13 @@ export function readPreflightedTemporalStatusPreview(
           detail.linearization.areas.length !== 1 ||
           !["private-owner", "editor", "admin"].includes(detail.linearization.areas[0].access))
         return null;
-      return {detail, expectedRevision: revision};
+      // Read the actor-private day in the SAME pinned status/CAS snapshot.
+      // A shared editor who is not the assignee may still complete: the
+      // actor has no personal plan row, so the before-day is null.
+      const plan=db.prepare("SELECT when_on AS whenOn FROM personal_task_plans WHERE user_id=? AND task_id=?")
+        .get(actor,taskId) as {whenOn:string}|undefined;
+      if(plan && temporalCalendarOrdinal(plan.whenOn)===null)return null;
+      return {detail,expectedRevision:revision,previousWhenOn:plan?.whenOn??null};
     }, () => null));
 }
 
