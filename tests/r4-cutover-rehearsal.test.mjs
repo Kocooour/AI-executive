@@ -101,6 +101,118 @@ test("inventory: content-free report and summary, no write to source", t => {
   assert.equal(sha(path.join(source, "store.sqlite")), original);
 });
 
+test("inventory reports anonymous iCloud account and linked CalDAV sync states", t => {
+  const { source, base } = fixture(t);
+  const db = new DatabaseSync(path.join(source, "store.sqlite"));
+  try {
+    db.exec(`
+      CREATE TABLE calendar_accounts (
+        id TEXT PRIMARY KEY, provider TEXT NOT NULL, status TEXT NOT NULL,
+        last_success_at INTEGER, label TEXT, last_error TEXT,
+        encrypted_credentials TEXT
+      );
+      CREATE TABLE calendar_sources (
+        id TEXT PRIMARY KEY, account_id TEXT, provider TEXT NOT NULL,
+        status TEXT NOT NULL, last_success_at INTEGER, label TEXT,
+        last_error TEXT, encrypted_url TEXT
+      );
+    `);
+    const account = db.prepare("INSERT INTO calendar_accounts VALUES (?,?,?,?,?,?,?)");
+    account.run("icloud-secret-id", "icloud", "auth_failed", 1700000000000, SECRET, SECRET, SECRET);
+    account.run("icloud-second-id", "icloud", "ready", 1700003000000, SECRET, SECRET, SECRET);
+    account.run("different-provider", "other", "error", 1700004000000, SECRET, SECRET, SECRET);
+    const sourceRow = db.prepare("INSERT INTO calendar_sources VALUES (?,?,?,?,?,?,?,?)");
+    sourceRow.run("calendar-pending", "icloud-secret-id", "caldav", "pending", null, SECRET, SECRET, SECRET);
+    sourceRow.run("calendar-error", "icloud-secret-id", "caldav", "error", 1700002000000, SECRET, SECRET, SECRET);
+    sourceRow.run("calendar-unknown", "icloud-second-id", "caldav", SECRET, 1700001000000, SECRET, SECRET, SECRET);
+    sourceRow.run("unrelated-ics", "icloud-secret-id", "ics", "error", 1700009000000, SECRET, SECRET, SECRET);
+    sourceRow.run("unrelated-provider", "different-provider", "caldav", "error", 1700009000000, SECRET, SECRET, SECRET);
+  } finally { db.close(); }
+  const output = path.join(base, "icloud-failed");
+  const result = run(inventory, [source, output]);
+  assert.equal(result.status, 0, result.stderr);
+  const reportText = readFileSync(path.join(output, "inventory.json"), "utf8");
+  const summaryText = readFileSync(path.join(output, "summary.txt"), "utf8");
+  const report = JSON.parse(reportText);
+  assert.equal(report.connectors.icloudPresent, true);
+  const { accounts, calendars } = report.connectors.icloudSync;
+  assert.equal(accounts.schema, "available");
+  assert.equal(accounts.total, 2);
+  assert.equal(accounts.byStatus.auth_failed, 1);
+  assert.equal(accounts.byStatus.ready, 1);
+  assert.equal(accounts.byStatus.error, 0);
+  assert.deepEqual(accounts.lastSuccessAt, { earliest: 1700000000000, latest: 1700003000000 });
+  assert.equal(calendars.schema, "available");
+  assert.equal(calendars.total, 3);
+  assert.equal(calendars.byStatus.pending, 1);
+  assert.equal(calendars.byStatus.error, 1);
+  assert.equal(calendars.byStatus.other, 1, "unrecognized private states are bucketed");
+  assert.deepEqual(calendars.lastSuccessAt, { earliest: 1700001000000, latest: 1700002000000 });
+  for (const outputText of [reportText, summaryText, result.stdout, result.stderr]) {
+    assert.equal(outputText.includes(SECRET), false, "private iCloud values may not leak");
+    assert.equal(outputText.includes("icloud-secret-id"), false);
+    assert.equal(outputText.includes("calendar-pending"), false);
+  }
+});
+
+test("inventory distinguishes empty iCloud state from missing schemas", t => {
+  const { source, base } = fixture(t);
+  const first = run(inventory, [source, path.join(base, "icloud-not-present")]);
+  assert.equal(first.status, 0, first.stderr);
+  const unavailable = JSON.parse(readFileSync(path.join(base, "icloud-not-present", "inventory.json"), "utf8"));
+  for (const group of ["accounts", "calendars"]) {
+    assert.equal(unavailable.connectors.icloudSync[group].schema, "not_available");
+    assert.equal(unavailable.connectors.icloudSync[group].total, null);
+    assert.equal(unavailable.connectors.icloudSync[group].byStatus, null);
+  }
+
+  const db = new DatabaseSync(path.join(source, "store.sqlite"));
+  try {
+    db.exec(`
+      CREATE TABLE calendar_accounts (id TEXT PRIMARY KEY, provider TEXT, status TEXT, last_success_at INTEGER);
+      CREATE TABLE calendar_sources (id TEXT PRIMARY KEY, account_id TEXT, provider TEXT, status TEXT, last_success_at INTEGER);
+    `);
+  } finally { db.close(); }
+  const second = run(inventory, [source, path.join(base, "icloud-empty")]);
+  assert.equal(second.status, 0, second.stderr);
+  const empty = JSON.parse(readFileSync(path.join(base, "icloud-empty", "inventory.json"), "utf8"));
+  assert.equal(empty.connectors.icloudPresent, false);
+  for (const group of ["accounts", "calendars"]) {
+    const value = empty.connectors.icloudSync[group];
+    assert.equal(value.schema, "available");
+    assert.equal(value.total, 0);
+    assert.equal(value.byStatus.error, 0);
+    assert.equal(value.byStatus.auth_failed, 0);
+    assert.deepEqual(value.lastSuccessAt, { earliest: null, latest: null });
+  }
+});
+
+test("inventory does not claim iCloud sync readiness for incomplete old schemas", t => {
+  const { source, base } = fixture(t);
+  const db = new DatabaseSync(path.join(source, "store.sqlite"));
+  try {
+    db.exec(`
+      CREATE TABLE calendar_accounts (id TEXT PRIMARY KEY, provider TEXT, status TEXT, label TEXT);
+      CREATE TABLE calendar_sources (id TEXT PRIMARY KEY, provider TEXT, status TEXT, last_success_at INTEGER);
+    `);
+    db.prepare("INSERT INTO calendar_accounts VALUES (?,?,?,?)")
+      .run("private-account", "icloud", "auth_failed", SECRET);
+  } finally { db.close(); }
+  const output = path.join(base, "icloud-partial");
+  const result = run(inventory, [source, output]);
+  assert.equal(result.status, 0, result.stderr);
+  const text = readFileSync(path.join(output, "inventory.json"), "utf8");
+  const report = JSON.parse(text);
+  assert.equal(report.connectors.icloudPresent, true);
+  for (const group of ["accounts", "calendars"]) {
+    assert.equal(report.connectors.icloudSync[group].schema, "not_available");
+    assert.equal(report.connectors.icloudSync[group].total, null);
+    assert.equal(report.connectors.icloudSync[group].byStatus, null);
+  }
+  assert.equal(text.includes(SECRET), false);
+  assert.equal(text.includes("private-account"), false);
+});
+
 test("inventory reports reconciliation backlog even after Gmail checkpoints clear", t => {
   const { source, base } = fixture(t);
   const file = path.join(source, "store.sqlite");
