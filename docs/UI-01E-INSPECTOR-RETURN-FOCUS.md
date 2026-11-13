@@ -15,3 +15,11 @@ Dosavadní `DetailPanel` si držel jediný DOM element `returnFocusRef`. Když u
 ## Kontrola
 
 Cílené Node unit testy nyní **vykonávají skutečný životní cyklus** `advanceInspectorReturnFocus` s DOM doubles: A→zavření→B→zavření, shodu ID, změnu pohledu/prostoru, odstraněný/skrytý/převázaný prvek a jediný platný návrat. Nejde pouze o regex kontroly zdrojového kódu. `e2e/inspector-return-focus-ui01e.spec.ts` navíc ověřuje skutečné React události a fokus v Chromium (včetně přímého přepnutí A→B bez zavření A, výběru B kliknutím do nefokusovatelného řádku a přímého odkazu); spouští se v předprodukční browserové bráně. PR checks nadále zahrnují typecheck, cílené unit testy a build; manuální VoiceOver zůstává součástí předprodukční přístupnostní kontroly.
+
+## Release 0 / C10 — Close vs. historie (issue #416)
+
+- **Close** (tlačítko, mobilní zavření i podporovaný Escape) vždy zavře aktuální legacy inspektor; neprovádí `history.back()`. URL se změní na bezpečný pohled/seznam nebo nadřazený projekt bez `taskId`/`noteId`.
+- **Back/Forward** nadále prochází záznamy: otevření A → B vytváří dva samostatné kroky; Back zobrazí A, Forward znovu B. Přímý odkaz a reload otevírají oprávněný záznam jako dosud.
+- **Close používá `replaceState`, nikoli `pushState`**: právě zavřený B se nevrátí při dalším Back. Starší záznam A stále existuje v historii a Back na něj může přejít; neodstraňujeme předchozí uživatelskou navigaci.
+- Fokus se po zavření vrací pouze na platný řádek *posledního* otevřeného záznamu. Při přepnutí A → B kliknutím na nefokusovatelnou plochu se dohledá viditelné tlačítko B, ale pouze při skutečném přepnutí existujícího inspektoru ve stejném pohledu/prostoru. Pokud řádek již neexistuje, nepřebírá se fokus A. Přímý odkaz nemá předchozí inspektor, takže jeho řádek tímto způsobem nepřebírá.
+- Regresní testy jsou v `e2e/detail-inspector-b2.spec.ts` a `e2e/inspector-return-focus-ui01e.spec.ts`. Focused CI je spouští samostatně i v sérii po `record-links-ui01` a `project-page` pomocí jednoho Playwright `--test-list`, se `--workers=1` a bez preview flagů. Target detail panel zůstává nedotčen.
