@@ -115,7 +115,7 @@ export function recoverStructureCreate(
   kind:StructureKind,commandId:string,projectId:string|null,signal:AbortSignal,
   fetchImpl:typeof fetch=targetAppFetch,
 ):Promise<StructureReceipt>{
-  if(!canonical(commandId)||(kind==="project-task"&&!readableProjectId(projectId)))
+  if(!canonical(commandId))
     return Promise.resolve("unavailable");
   return receipt(kind,url(kind)+"/create-recovery",{commandId},signal,fetchImpl);
 }
