@@ -21,9 +21,19 @@ import {useTargetTick,useTargetWake} from "./use-target-revalidation";
 import {wakeRetryDelay} from "../../lib/target-wake";
 import {queuedTargetFetch} from "../../lib/target-read-queue";
 import {emitTargetChange} from "../../lib/target-data-invalidation";
+import {clearMainTitleSearchReturn} from "../../lib/target-main-title-search-ui";
 
 // Shared one-at-a-time read queue: the server answers 503 beyond two concurrent reads.
 const readFetch=queuedTargetFetch();
+
+// A generic 404 covers missing and revoked content. When a detail opened from
+// Search gets that answer, its previously authorized Search result must not
+// survive a same-tab Close/Back and become visible or focusable again.
+// Clear synchronously on the denied read, not on an incidental blur or poll.
+function invalidateSearchOnDetailDenial(reason:TargetDetailFailure):TargetDetailFailure{
+  if(reason==="not-available")clearMainTitleSearchReturn();
+  return reason;
+}
 import {closeTargetDetail,detailRowKey,focusPendingRow,openTargetDetail} from "./target-detail-state";
 import {
   createTargetDetailSession,type TargetDetailContent,type TargetDetailFailure,
@@ -272,7 +282,8 @@ function DetailBody({route,language,gates,edits,noteEdit,projectEdit,onPrivateCa
         setState({kind:"ready",content:result.content,more:false});
       }else if(result.reason==="superseded")return;
       else{
-        const reason=result.reason==="not-ready"?"stale":result.reason;
+        const reason=invalidateSearchOnDetailDenial(
+          result.reason==="not-ready"?"stale":result.reason);
         setState({kind:"error",reason});
         const delay=wakeRetryDelay(reason,retryAttempt.current);
         if(delay!==null){
@@ -312,7 +323,8 @@ function DetailBody({route,language,gates,edits,noteEdit,projectEdit,onPrivateCa
       if(epoch.current!==id||deletedRef.current)return;
       if(result.ok===true)setState({kind:"ready",content:result.content,more:false});
       else if(result.reason==="superseded")return;
-      else setState({kind:"error",reason:result.reason==="not-ready"?"stale":result.reason});
+      else setState({kind:"error",reason:invalidateSearchOnDetailDenial(
+        result.reason==="not-ready"?"stale":result.reason)});
     })().catch(()=>{if(epoch.current===id&&!deletedRef.current)setState({kind:"error",reason:"unavailable"});});
   },[]);
   useTargetTick(revalidate);

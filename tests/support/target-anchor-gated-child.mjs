@@ -5,6 +5,7 @@
 //   crash-before-confirm  - SIGKILL after COMMIT, just before the confirm line is written
 //   raw                   - one pinned write with the DEFAULT 200 ms busy timeout (no hook); prints ok|denied|failed
 //   raw-cold-gated        - one equally cold 200ms write after an external start barrier
+//   raw-cold-warm-paused  - verify full journal before SQLite lock, pause after read/close
 //   raw-cold-gated-fail-before-ready - synthetic startup failure to test parent cleanup
 //   raw-cold-gated-hang-after-ready - synthetic stuck child to test bounded termination
 //   plain                 - no hook; `rounds` (argv[5]) sessions are issued back to back
@@ -34,6 +35,43 @@ fs.fsyncSync = fd => {
   }
 };
 syncBuiltinESMExports();
+
+// Test-only pre-lock probe: suspend a cold writer AFTER its 20k-entry
+// content-free journal has been read and the verified fd has been closed.
+// The parent starts an independent writer while this process is paused.
+// If cold verification is moved under BEGIN IMMEDIATE, the second writer
+// cannot acquire its real 200ms SQLite lock and the regression will fail.
+// The production writer and its 200ms timeout are not patched or bypassed.
+if (mode === "raw-cold-warm-paused") {
+  if (!gate) throw new Error("raw-cold-warm-paused requires an isolated gate");
+  const journalPath = directory + "/lumi-target.journal";
+  const sameJournalFd = fd => {
+    try {
+      const held = fs.fstatSync(fd), named = fs.statSync(journalPath);
+      return held.dev === named.dev && held.ino === named.ino;
+    } catch { return false; }
+  };
+  const originalRead = fs.readSync;
+  const originalClose = fs.closeSync;
+  let scannedFullColdJournal = false, paused = false;
+  fs.readSync = (fd, ...args) => {
+    const bytes = originalRead(fd, ...args);
+    if (args[2] >= 1024 * 1024 && args[3] === 0 &&
+        bytes > 0 && sameJournalFd(fd)) scannedFullColdJournal = true;
+    return bytes;
+  };
+  fs.closeSync = fd => {
+    const complete = !paused && scannedFullColdJournal && sameJournalFd(fd);
+    const closed = originalClose(fd);
+    if (complete) {
+      paused = true;
+      writeFileSync(gate + "/ready-" + process.pid, "");
+      while (!existsSync(gate + "/go")) wait(5);
+    }
+    return closed;
+  };
+  syncBuiltinESMExports();
+}
 
 if (mode === "exclusive-lock") {
   // Synthetic competing connection holds an EXCLUSIVE SQLite lock long enough
@@ -65,6 +103,7 @@ if (mode === "hold-sidecar" || mode === "hold-sidecar-long") {
   process.exit(0);
 }
 if (mode === "raw" || mode === "raw-many" || mode === "raw-cold-gated" ||
+    mode === "raw-cold-warm-paused" ||
     mode === "raw-cold-gated-fail-before-ready" || mode === "raw-cold-gated-hang-after-ready") {
   const { withPinnedTargetStagingWrite } = await import("../../lib/target-staging-pinned-write.ts");
   if (mode === "raw-cold-gated" || mode === "raw-cold-gated-fail-before-ready" ||

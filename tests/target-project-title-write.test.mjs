@@ -142,7 +142,37 @@ test('simultaneous PATCH and cancel are ordered by pinned write transaction',asy
   const p=await (await preview(new Request(base+'title',{headers:headers(alice)}),ctx)).json();
   const command={commandId:randomUUID(),title:'Race winner title',
     expectedRevision:p.snapshotRevision,writeAreaId:p.writeAreaId,restoreGeneration:p.restoreGeneration,principalBinding:p.principalBinding};
-  const [rename,fence]=await Promise.all([write(alice,command),cancelWrite(alice,command.commandId,p.principalBinding)]);
+  // Exercise the actual simultaneous HTTP handlers first. A 200ms pinned
+  // SQLite lock can legitimately expire on an overloaded CI runner, returning
+  // a retryable 503 before an intent is written. Never count a 503 as a
+  // successful command or infer that any arbitrary 503 proves contention.
+  const [firstRename,firstFence]=await Promise.all([
+    write(alice,command),cancelWrite(alice,command.commandId,p.principalBinding),
+  ]);
+  assert.ok(firstRename.status!==503||firstFence.status!==503,
+    'at least one simultaneous command must settle: '+
+    JSON.stringify([firstRename.status,firstFence.status]));
+  // The two initial handlers have both completed. Re-submit ONLY the identical
+  // command IDs after confirming the canonical journal is still trusted; the
+  // protocol's durable replay/fence semantics must then settle the race.
+  // Bound retries: a persistent outage, failed preflight or 401/404/429 cannot
+  // pass merely because a transient 503 was permitted on the first attempt.
+  const settle=async(label,response,repeat)=>{
+    let current=response;
+    for(let attempt=0;current.status===503&&attempt<3;attempt++){
+      assert.deepEqual(await current.clone().json(),{error:'Staging unavailable'},
+        label+': only a generic temporary outage may be retried');
+      assert.equal(inspectIsolatedTargetStore({...store,mode:'r2-model'}).ok,true,
+        label+': the canonical store must stay trusted before retry');
+      await new Promise(resolve=>setTimeout(resolve,30));
+      current=await repeat();
+    }
+    assert.notEqual(current.status,503,label+': persisted outage after bounded exact-command retries');
+    return current;
+  };
+  const rename=await settle('PATCH',firstRename,()=>write(alice,command));
+  const fence=await settle('cancel',firstFence,
+    ()=>cancelWrite(alice,command.commandId,p.principalBinding));
   assert.equal(fence.status,200,await fence.clone().text());
   const status=(await fence.json()).status;
   if(status==='cancelled'){

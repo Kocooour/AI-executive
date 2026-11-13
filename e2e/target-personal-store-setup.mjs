@@ -4,7 +4,8 @@
 //   node ... e2e/target-personal-store-setup.mjs <run-dir> <owner-user-id> [1 = run dir created by the config]
 // Prints the staging settings as JSON. The directory lives inside the Playwright run dir;
 // no legacy data path or production state is touched. Direct SQL seeds ONLY what no
-// route can create yet: one extra private Area, one private project with one task.
+// route can create yet: private Area projects and a shared Area for an ACL
+// revocation-between-search-and-click regression (one viewer per viewport).
 import { realpathSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -26,12 +27,24 @@ if (!path.basename(run).startsWith("lumi-e2e-")) fail("the run dir must be a lum
 const { bootstrapIsolatedTargetStore } = await import("../lib/target-store-bootstrap.ts");
 const stage = bootstrapIsolatedTargetStore({ stagingDirectory: path.join(runDir, "target-store"), ownerUserId: owner });
 
-// One project with one task per viewport run, so the two runs never share a renamed row.
-const seed = { areaId: "area:e2e:rodina", areaTitle: "Rodina", projects: {} };
+// Distinct project/task fixtures per viewport AND per spec: each real-store
+// acceptance mutates titles, so parallel or sequential specs must not collide.
+const seed = { areaId: "area:e2e:rodina", areaTitle: "Rodina", projects: {}, searchProjects: {}, revokeProjects: {} };
 for (const width of ["390", "1280"]) {
   seed.projects[width] = {
     projectId: `project:e2e:${width}`, projectTitle: `Seed Projekt ${width}`,
     taskId: `task:e2e:${width}`, taskTitle: `Seed úkol v projektu ${width}`,
+  };
+  seed.searchProjects[width] = {
+    projectId: `project:e2e:search:${width}`, projectTitle: `Seed Projekt Search ${width}`,
+    taskId: `task:e2e:search:${width}`, taskTitle: `Seed úkol Search ${width}`,
+  };
+  seed.revokeProjects[width] = {
+    adminId: `owner:e2e:revoke:${width}`,
+    workspaceId: `workspace:e2e:revoke:${width}`,
+    areaId: `area:e2e:revoke:${width}`,
+    projectId: `project:e2e:revoke:${width}`,
+    projectTitle: `Revocable confidential project ${width}`,
   };
 }
 const db = new DatabaseSync(stage.databasePath);
@@ -40,13 +53,48 @@ try {
   const workspace = db.prepare("SELECT id FROM workspaces WHERE kind='personal' AND owner_user_id=?").get(owner);
   db.prepare("INSERT INTO areas(id,title,kind,workspace_id,owner_user_id) VALUES (?,?,'private',?,?)")
     .run(seed.areaId, seed.areaTitle, workspace.id, owner);
-  for (const item of Object.values(seed.projects)) {
+  for (const item of [...Object.values(seed.projects), ...Object.values(seed.searchProjects)]) {
     db.prepare("INSERT INTO projects(id,area_id,title) VALUES (?,?,?)").run(item.projectId, seed.areaId, item.projectTitle);
     db.prepare("INSERT INTO tasks(id,project_id,title) VALUES (?,?,?)").run(item.taskId, item.projectId, item.taskTitle);
+  }
+  // The signed-in synthetic owner is a viewer, *not* the admin of these shared
+  // Areas. Deleting only that viewer later leaves a valid admin and enforces a
+  // real authorization refusal on the existing project route.
+  for (const item of Object.values(seed.revokeProjects)) {
+    db.prepare("INSERT INTO identities(id) VALUES (?)").run(item.adminId);
+    // Canonical preflight requires EVERY identity (even a synthetic shared
+    // admin) to own a personal workspace and its protected Unassigned Area.
+    // Mirror bootstrapIsolatedTargetStore's ordinary per-identity skeleton.
+    const personalWorkspaceId=`workspace:personal:${item.adminId}`;
+    const unassignedAreaId=`area:unassigned:${item.adminId}`;
+    db.prepare("INSERT INTO workspaces(id,kind,owner_user_id) VALUES (?,'personal',?)")
+      .run(personalWorkspaceId, item.adminId);
+    db.prepare("INSERT INTO areas(id,title,kind,workspace_id,owner_user_id,system_key) VALUES (?,'Nezařazeno','private',?,?,'unassigned')")
+      .run(unassignedAreaId, personalWorkspaceId, item.adminId);
+    db.prepare("INSERT INTO workspaces(id,kind,owner_user_id) VALUES (?,'shared',?)")
+      .run(item.workspaceId, item.adminId);
+    db.prepare("INSERT INTO areas(id,title,kind,workspace_id,owner_user_id) VALUES (?,'Revocable Area','shared',?,?)")
+      .run(item.areaId, item.workspaceId, item.adminId);
+    db.prepare("INSERT INTO area_members(area_id,user_id,role) VALUES (?,?,'admin')")
+      .run(item.areaId, item.adminId);
+    db.prepare("INSERT INTO area_members(area_id,user_id,role) VALUES (?,?,'viewer')")
+      .run(item.areaId, owner);
+    db.prepare("INSERT INTO projects(id,area_id,title) VALUES (?,?,?)")
+      .run(item.projectId, item.areaId, item.projectTitle);
   }
 } finally {
   db.close();
 }
+// Fail at fixture creation, not inside opaque browser read children: a test
+// database must satisfy both canonical staging and shared-Area invariants.
+const { inspectIsolatedTargetStore } = await import("../lib/target-store-preflight.ts");
+const preflight = inspectIsolatedTargetStore({
+  stagingDirectory:stage.directory,
+  expectedOwnerUserId:owner,
+  expectedRestoreGeneration:stage.restoreGeneration,
+  mode:"r2-model",
+});
+if(!preflight.ok)fail("fixture failed canonical preflight: "+preflight.issues.join(","));
 process.stdout.write(JSON.stringify({
   directory: stage.directory, restoreGeneration: stage.restoreGeneration, ownerUserId: owner, seed,
 }) + "\n");

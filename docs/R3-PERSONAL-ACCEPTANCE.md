@@ -84,15 +84,26 @@ Dnes, Attention, push/notifikace, HumanWiki, produkční zapnutí.
    `isTargetReadRequest` nově počítá i `create-preview`, `create-recovery`,
    `create-status`. Hlídá to krok 1b scénáře (klik na **+** bez čekání na obou
    šířkách), `peakReads ≤ 2` a `tests/target-app-fetch.test.mjs`.
-3. **Výsledky hledání nejsou otevíratelné** (`app/ui/target-main-title-search.tsx`,
-   řádky `<li>` jsou jen text), takže znovu otevřený, ale neplánovaný úkol
-   není z UI dosažitelný jinak než přes jeho projekt.
-4. **Nově zachycený úkol bez „Kdy“ není v Mém plánu vidět.** Po zavření potvrzení
-   („Zobrazit úkol“) se k němu z hlavního UI nelze dostat: Můj plán ukazuje jen
-   naplánované dny, seznam úkolů cílový režim nemá a výsledky hledání nejsou
-   otevíratelné (bod 3). [LUMI-FR-013](PRODUCT.md#lumi-fr-013) přitom říká, že Můj
-   plán obsahuje všechny soukromé úkoly uživatele. Test proto úkol plánuje
-   přímo z potvrzení. Řeší druhý PR milníku A.
+3. **Výsledky hledání — opraveno v pracovním proudu C6 / issue #407.**
+   Při zapnutém odpovídajícím detailu je výsledek přístupné tlačítko,
+   které otevře existující serverem autorizovaný detail úkolu, projektu či
+   poznámky. Neplatné ID a vypnuté druhy detailu zůstávají textem. Po zavření
+   se fokus vrací na původní řádek pomocí jednorázového výsledku v paměti,
+   který se při změně oprávnění, identity, dotazu, rozsahu, skrytí či odpojení
+   zahodí. Krytí: `tests/target-main-title-search-ui.test.mjs`,
+   `e2e/target-main-title-search.spec.ts` (vypnuté příznaky),
+   `e2e/target-personal-search-open.spec.ts` (real-store opt-in). Poslední
+   prohlížečový test je nově zařazen do real-store opt-in profilu v
+   `playwright.config.ts`, se samostatnými seedovanými daty. **Akceptace je
+   ověřená až po úspěšném běhu obou scénářů v CI.**
+4. **Nově zachycený úkol bez „Kdy“ není v Mém plánu vidět.** Můj plán
+   ukazuje jen naplánované dny, takže po zavření potvrzení („Zobrazit úkol“)
+   úkol z Mého plánu nelze otevřít. Při zapnutém autorizovaném hledání a detailu
+   jej však lze explicitně vyhledat a otevřít přes výsledky hledání (bod 3).
+   Zbývající problém se týká úplnosti Mého plánu, nikoliv otevírání výsledků:
+   [LUMI-FR-013](PRODUCT.md#lumi-fr-013) říká, že Můj plán obsahuje všechny
+   soukromé úkoly uživatele. Test proto úkol plánuje přímo z potvrzení.
+   Řeší druhý PR milníku A.
 5. **Interní žargon v textech cílového režimu (neopraveno).**
    `lib/target-my-plan-copy.ts:106` („stagingový přehled“), `:127`–`:128`
    („Izolovaný stagingový…“, „novým CAS“), `:168` („dueOn“, „Každý zápis
