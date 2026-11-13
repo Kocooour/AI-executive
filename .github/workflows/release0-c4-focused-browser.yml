@@ -7,6 +7,7 @@ on:
     paths:
       - ".github/workflows/release0-c4-focused-browser.yml"
       - "app/ui/use-lumi-app.tsx"
+      - "app/ui/views/detail-panel.tsx"
       - "app/ui/views/defer-popover.tsx"
       - "tests/target-details-wiring.test.mjs"
       - "e2e/record-links-ui01.spec.ts"
