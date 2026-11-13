@@ -136,6 +136,32 @@ const receiptCount=fx=>{
   finally{db.close();}
 };
 
+test("R3-A3 status-owned completion preview works for unassigned shared editor without personal-When flags",async()=>{
+  const fx=fixture(),bob=login(fx,"bob"),carol=login(fx,"carol");
+  const old=await query("s-bob",bob);
+  assert.equal(old.status,200);
+  assert.deepEqual(Object.keys(await old.json()).sort(),[
+    "expectedRevision","restoreGeneration","writeAreaId",
+  ]);
+  const response=await query("s-bob",bob,"&completion=1");
+  assert.equal(response.status,200,await response.clone().text());
+  const witness=await response.json();
+  assert.deepEqual(Object.keys(witness).sort(),[
+    "expectedRevision","previousWhenOn","restoreGeneration","writeAreaId",
+  ]);
+  assert.equal(witness.previousWhenOn,null,"shared editor has no personal plan when unassigned");
+  assert.equal((await query("s-bob",bob,"&completion=0")).status,400);
+  assert.equal((await query("s-bob",bob,"&completion=1&completion=1")).status,400);
+  assert.equal((await query("s-viewer",carol,"&completion=1")).status,404);
+  const complete={...witness,taskId:"s-bob",status:"completed",commandId:randomUUID()};
+  assert.equal((await call("PATCH",complete,bob)).status,200);
+  const back={...await preview("s-bob",bob),taskId:"s-bob",status:"open",
+    undoOf:complete,commandId:randomUUID()};
+  assert.equal((await call("PATCH",back,bob)).status,200,
+    "a status editor can undo completion without an actor-private When permission");
+  assert.equal(state(fx,"s-bob").status,"open");
+});
+
 test("four independent gates and authentication fail closed, preview validates ID",async()=>{
   fixture();
   for(const flag of ["AI_EXECUTIVE_TARGET_STAGING_HTTP_ENABLED",
