@@ -148,11 +148,15 @@ async function runHandler(handler, context, method, route, phase, cookie, origin
     const response = await handler(request(method, url, cookie, origin), context);
     if (response.status !== expectedStatus) fail(method, route, phase, expectedStatus, response.status);
     const text = await response.text();
-    if (expectedStatus === 401 && (text.includes("alice-") ||
-      !(() => { try { return JSON.parse(text).error === "Authentication required"; } catch { return false; } })()))
-      fail(method, route, phase + ":body", "generic authentication refusal", text.slice(0, 100));
-    if (expectedStatus === 404 && text.includes("Private"))
-      fail(method, route, phase + ":body", "generic refusal", "private content exposed");
+    if (expectedStatus === 401 || expectedStatus === 404) {
+      let body;
+      try { body = JSON.parse(text); } catch { /* invalid JSON is reported below */ }
+      const genericError = expectedStatus === 401 ? "Authentication required" : "Not found";
+      if (!body || body.error !== genericError || Object.hasOwn(body, "id") ||
+          Object.hasOwn(body, "title") ||
+          /alice-(?:task|project|note)|Private (?:task|project|note)|Secret/.test(text))
+        fail(method, route, phase + ":body", "generic " + genericError, text.slice(0, 100));
+    }
     if (before) assert.deepEqual(countState(), before, method + " " + route + " " + phase + " mutated staging");
   } catch (error) {
     fail(method, route, phase, expectedStatus, error?.message ?? String(error));
