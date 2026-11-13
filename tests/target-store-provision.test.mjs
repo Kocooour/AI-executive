@@ -287,7 +287,21 @@ test("runbook provisions and checks under the deployed service UID, not root", (
   assert.match(operatorStep, /test "\$SERVICE_USER" = ai-executive/);
   assert.match(operatorStep, /test "\$SERVICE_GROUP" = ai-executive/);
   assert.match(operatorStep, /test "\$SERVICE_UID" -ne 0/);
-  assert.match(operatorStep, /if \[ "\$MAINPID" -gt 0 \]; then/);
+  assert.match(operatorStep, /set -euo pipefail/);
+  assert.match(operatorStep, /test "\$MAINPID" -gt 0/);
+  assert.match(operatorStep, /systemctl is-active --quiet "\$UNIT"/);
+  assert.match(operatorStep, /done < "\/proc\/\$MAINPID\/environ"/);
+  assert.ok(operatorStep.includes('LIVE_LEGACY_DIR="${entry#AI_EXECUTIVE_DATA_DIR=}"'));
+  assert.ok(operatorStep.includes('LIVE_STAGING_DIR="${entry#AI_EXECUTIVE_TARGET_STAGING_DIRECTORY=}"'));
+  assert.match(operatorStep, /test "\$legacy_count" -eq 1/);
+  assert.match(operatorStep, /test "\$staging_count" -le 1/);
+  assert.match(operatorStep, /case "\$LIVE_LEGACY_DIR" in \/\*\)/);
+  assert.match(operatorStep, /case "\$LIVE_STAGING_DIR" in ''\|\/\*\)/);
+  assert.equal((operatorStep.match(/AI_EXECUTIVE_DATA_DIR="\$LIVE_LEGACY_DIR"/g) ?? []).length, 2);
+  assert.equal((operatorStep.match(/AI_EXECUTIVE_TARGET_STAGING_DIRECTORY="\$LIVE_STAGING_DIR"/g) ?? []).length, 2);
+  assert.doesNotMatch(operatorStep, /PATH=\/usr\/bin:\/bin HOME=\/nonexistent AI_EXECUTIVE_DATA_DIR=\/var\/lib/);
+  assert.match(operatorStep, /test "\$\(systemctl show "\$UNIT" -p MainPID --value\)" = "\$MAINPID"/);
+
   const commands = operatorStep.match(/runuser -u "\$SERVICE_USER" -g "\$SERVICE_GROUP" -- env -i/g) ?? [];
   assert.equal(commands.length, 2, "provision and --check must both drop to service UID");
   assert.match(operatorStep, /node scripts\/target-store-provision\.mjs "\$TARGET_DIR" "\$OWNER_USER_ID" --confirmed/);
@@ -296,4 +310,24 @@ test("runbook provisions and checks under the deployed service UID, not root", (
   assert.match(operatorStep, /StateDirectory=ai-executive/);
   assert.match(operatorStep, /least-privilege.*writable-directory change/);
   assert.match(operatorStep, /root-owned\/previously existing target must \*\*not\*\* be fixed with.*chown/);
+});
+
+
+test("operator-propagated live legacy and target paths block nested provisioning", t => {
+  const { base, legacy } = fixture(t);
+  const liveStaging = path.join(base, "active-target-staging");
+  mkdirSync(liveStaging, { mode: 0o700 });
+  writeFileSync(path.join(liveStaging, "sentinel"), "never overwrite", { mode: 0o600 });
+  const env = {
+    AI_EXECUTIVE_DATA_DIR: legacy,
+    AI_EXECUTIVE_TARGET_STAGING_DIRECTORY: liveStaging,
+  };
+  const nestedTarget = path.join(liveStaging, "new-target");
+  const deniedStaging = reject([nestedTarget, "owner", "--confirmed"], { legacy, env }, nestedTarget);
+  assert.match(deniedStaging.stderr, /overlaps a known live data location/);
+  const nestedLegacy = path.join(legacy, "new-target");
+  const deniedLegacy = reject([nestedLegacy, "owner", "--confirmed"], { legacy, env }, nestedLegacy);
+  assert.match(deniedLegacy.stderr, /overlaps a known live data location/);
+  assert.equal(readFileSync(path.join(liveStaging, "sentinel"), "utf8"), "never overwrite");
+  assert.equal(readFileSync(path.join(legacy, "sentinel"), "utf8"), "never overwrite");
 });
