@@ -1519,11 +1519,19 @@ test("a paused ordinary pull never stamps its stale generation after a sibling o
       (window as unknown as { e2eStampPending?: boolean }).e2eStampPending,
     ));
 
-    // Restore from the owner on another device while a sibling's ordinary
-    // generation write remains paused. Avoid a UI save flow competing for the
-    // shared sync lock; this test is about stale generation after adoption.
+    // The delayed normal pull HOLDS the outer sync lock while its generation
+    // stamp is paused. A normal focus pull on the adopter would queue behind
+    // that lock and never reach adoption; use the actual owner-certified 409
+    // path, which must fence writes and adopt immediately, outside that queue.
     expect(await restoreByApi(owner, backupName)).toBe(200);
-    await remoteWakeUp(adopter);
+    const refused = await adopter.evaluate(async () =>
+      (await fetch("/api/context/claims", { method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action: "create", workspaceId: "personal", idempotencyKey: crypto.randomUUID(),
+          id: crypto.randomUUID(), expectedRevision: 0, subject: { entityId: "workspace:personal" },
+          predicate: "e2e.backup.stale-generation", literal: { type: "string", value: "must be refused" },
+          freshness: "current", sensitivity: "normal" }) })).status);
+    expect(refused).toBe(409);
     await expect(adopter.locator(".restoredNotice"))
       .toContainText("Data byla obnovena ze zálohy.", { timeout: 30_000 });
     const newGeneration = await adopter.evaluate(() => localStorage.getItem("ai-executive-restore-generation"));
