@@ -316,7 +316,7 @@ for(const width of [390,1280]){
     // requests only UNTIL response headers: subsequent body draining is not a
     // server child, and counting until requestfinished inflates concurrency.
     expect(calls.peakReads).toBeLessThanOrEqual(2);
-    expect(calls.unavailableReads).toBe(0,"no target GET/receipt may exhaust child capacity");
+    expect(calls.unavailableReads,"no target GET/receipt may exhaust child capacity").toBe(0);
     // The invariant above is only meaningful if POST-shaped reads were really counted: the journey issues at least
     // the note create-preview and a receipt/status check.
     expect(calls.postReads).toBeGreaterThan(0);
