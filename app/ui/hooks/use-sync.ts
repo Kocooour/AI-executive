@@ -399,9 +399,15 @@ export function useSync() {
       if (source.restoreKind !== "owner_restore" ||
           source.restoreGeneration !== resumeFence.observedGeneration)
         return engageRecoveryForGeneration(source.restoreGeneration, resumeFence.knownGeneration);
-    } else if (restoreGenerationDecision(
-      restoredSinceKnown(source.restoreGeneration), source.restoreKind, false,
-    ) === "hold") return engageRecoveryForGeneration(source.restoreGeneration);
+    } else {
+      const decision = restoreGenerationDecision(
+        restoredSinceKnown(source.restoreGeneration), source.restoreKind, false,
+      );
+      // A restore certificate proves *why* the server generation changed, not
+      // that an unsynchronized browser's local work predates that change.
+      // Never destroy first-sync/offline-only data on a "normal" decision.
+      if (decision !== "adopt") return engageRecoveryForGeneration(source.restoreGeneration);
+    }
     if (isAdoptingInThisTab() && !fencedRestore.current) return true;
     fencedRestore.current = false;
     if (!isAdoptingInThisTab()) beginAdoption();
