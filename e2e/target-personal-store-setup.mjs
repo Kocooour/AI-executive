@@ -62,6 +62,15 @@ try {
   // real authorization refusal on the existing project route.
   for (const item of Object.values(seed.revokeProjects)) {
     db.prepare("INSERT INTO identities(id) VALUES (?)").run(item.adminId);
+    // Canonical preflight requires EVERY identity (even a synthetic shared
+    // admin) to own a personal workspace and its protected Unassigned Area.
+    // Mirror bootstrapIsolatedTargetStore's ordinary per-identity skeleton.
+    const personalWorkspaceId=`workspace:personal:${item.adminId}`;
+    const unassignedAreaId=`area:unassigned:${item.adminId}`;
+    db.prepare("INSERT INTO workspaces(id,kind,owner_user_id) VALUES (?,'personal',?)")
+      .run(personalWorkspaceId, item.adminId);
+    db.prepare("INSERT INTO areas(id,title,kind,workspace_id,owner_user_id,system_key) VALUES (?,'Nezařazeno','private',?,?,'unassigned')")
+      .run(unassignedAreaId, personalWorkspaceId, item.adminId);
     db.prepare("INSERT INTO workspaces(id,kind,owner_user_id) VALUES (?,'shared',?)")
       .run(item.workspaceId, item.adminId);
     db.prepare("INSERT INTO areas(id,title,kind,workspace_id,owner_user_id) VALUES (?,'Revocable Area','shared',?,?)")
@@ -76,6 +85,16 @@ try {
 } finally {
   db.close();
 }
+// Fail at fixture creation, not inside opaque browser read children: a test
+// database must satisfy both canonical staging and shared-Area invariants.
+const { inspectIsolatedTargetStore } = await import("../lib/target-store-preflight.ts");
+const preflight = inspectIsolatedTargetStore({
+  stagingDirectory:stage.directory,
+  expectedOwnerUserId:owner,
+  expectedRestoreGeneration:stage.restoreGeneration,
+  mode:"r2-model",
+});
+if(!preflight.ok)fail("fixture failed canonical preflight: "+preflight.issues.join(","));
 process.stdout.write(JSON.stringify({
   directory: stage.directory, restoreGeneration: stage.restoreGeneration, ownerUserId: owner, seed,
 }) + "\n");
