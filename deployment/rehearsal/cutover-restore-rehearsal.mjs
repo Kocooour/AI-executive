@@ -206,7 +206,10 @@ function describe(db) {
   const tables = definitions.filter(item => item.type === "table");
   if (!tables.length) throw new R4OperatorError("no application tables");
   const schemaSha256 = sha(JSON.stringify(definitions.map(x => [x.type, x.name, x.tbl_name, x.sql])));
-  const fingerprints = {};
+  // SQLite identifiers are untrusted. A Map preserves names such as
+  // "__proto__" without prototype-key behavior; names remain private and are
+  // used only for the full semantic comparison, never in shareable JSON.
+  const fingerprints = new Map();
   for (const { name, sql } of tables) {
     const rowHashes = [];
     for (const row of db.prepare("SELECT * FROM " + quote(name)).iterate()) {
@@ -218,11 +221,11 @@ function describe(db) {
       rowHashes.push(sha(encoded));
     }
     rowHashes.sort();
-    fingerprints[name] = {
+    fingerprints.set(name, {
       count: rowHashes.length,
       schemaSha256: sha(sql === null ? "" : String(sql)),
       rowsSha256: sha(rowHashes.join("\n")),
-    };
+    });
   }
   const version = db.prepare("PRAGMA user_version").get().user_version;
   const application = db.prepare("PRAGMA application_id").get().application_id;
@@ -238,15 +241,24 @@ function assertEqualDescriptions(a, b) {
       a.version !== b.version ||
       a.application !== b.application)
     throw new R4OperatorError("schema objects or SQLite metadata mismatch");
-  const x = Object.keys(a.tables).sort(), y = Object.keys(b.tables).sort();
+  const x = [...a.tables.keys()].sort(), y = [...b.tables.keys()].sort();
   if (JSON.stringify(x) !== JSON.stringify(y)) throw new R4OperatorError("missing/extra table");
   for (const table of x) {
-    const before = a.tables[table], after = b.tables[table];
+    const before = a.tables.get(table), after = b.tables.get(table);
     if (before.count !== after.count ||
         before.schemaSha256 !== after.schemaSha256 ||
         before.rowsSha256 !== after.rowsSha256)
       throw new R4OperatorError("row count, schema or content mismatch");
   }
+}
+// The shareable report contains *only* opaque ordinal IDs, aggregate counts
+// and SHA-256 fingerprints. sqlite_master names and SQL stay in the protected
+// database copies; no source-chosen identifier can become a public JSON key.
+function publicTableSummaries(tables) {
+  return [...tables.values()].map((fingerprint, index) => ({
+    id: "table_" + (index + 1),
+    ...fingerprint,
+  }));
 }
 function checkTarget(targetDir, inspectionRoot, tag) {
   for (const required of TARGET_REQUIRED) assertSafeFile(path.join(targetDir, required));
@@ -372,7 +384,7 @@ function main() {
   // The archive stores private bytes at 0600/0700. Original owner/mode data
   // is intentionally recorded, NOT applied without separately approved restore.
   const report = {
-    format: "lumi-r4-rehearsal-v2",
+    format: "lumi-r4-rehearsal-v3",
     // Comparing an archive with its own restored copy proves copy fidelity,
     // NOT that an independently captured snapshot is correct. --verify uses
     // distinct input roots but cannot establish independent acquisition.
@@ -381,7 +393,7 @@ function main() {
     verificationScope: args.verify ? "distinct_offline_inputs_equal" : "single_source_copy_fidelity",
     independentCaptureEstablished: false,
     sqliteIntegrity: "ok",
-    applicationTableCount: Object.keys(expected.tables).length,
+    applicationTableCount: expected.tables.size,
     schemaSha256: expected.schemaSha256,
     archiveSha256,
     privateManifestSha256,
@@ -396,7 +408,7 @@ function main() {
       "input must be an independently quiesced, consistent offline snapshot",
       "byte-accurate journal/witness restore is not a semantic target anti-rollback preflight",
     ],
-    tables: expected.tables,
+    tables: publicTableSummaries(expected.tables),
     boundedRowsPerTable: MAX_ROWS_PER_TABLE,
   };
   writeFileSync(path.join(dst, "rehearsal.json"), JSON.stringify(report, null, 2) + "\n",
