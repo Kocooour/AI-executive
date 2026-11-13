@@ -1102,42 +1102,77 @@ function inflate(fx, writes) {
   fx.db.prepare("UPDATE metadata SET value=? WHERE key='anchor_seq'").run(String(n0 + writes));
 }
 
-test("cold writers with a 200 ms lock budget preserve the journal and retry ordinary contention", async () => {
+// Join even when the probe fails: no background child may outlive a fixture.
+// Only the test child is killed after a hard deadline; no production timeout changes.
+async function joinColdProbeChild(writer, maxMs = 20_000) {
+  let timer;
+  try {
+    return await Promise.race([
+      writer.done,
+      new Promise((_, reject) => {
+        timer = setTimeout(() => {
+          if (writer.child.exitCode === null && writer.child.signalCode === null)
+            writer.child.kill("SIGKILL");
+          reject(new Error("cold pre-lock probe child exceeded its deadline"));
+        }, maxMs);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+    await writer.done;
+  }
+}
+
+test("20k-entry cold journal is verified before the SQLite write lock, with a live competing writer", async () => {
   const fx = makeFixture();
   inflate(fx, 20000);
   const base0 = anchorOf(fx);
-  // Start two genuinely cold verifications together. Keep the real 200 ms
-  // busy_timeout, no child warm-up and no retries during the contested phase.
-  // On a busy CI runner, the scheduler can preempt a writer for >200 ms even
-  // with verification outside the lock. That is a legitimate retryable
-  // write_failed, not an integrity failure or an SLA the OS can guarantee.
-  const gate = mkdtempSync(path.join(root, "cold-writer-start-"));
-  const writers = [runChild(fx, "raw-cold-gated", gate),
-    runChild(fx, "raw-cold-gated", gate)];
-  const results = await releaseColdWriterGateAndJoin(writers, gate);
-  assert.ok(results.every(result => result.code === 0), JSON.stringify(results));
-  const outcomes = results.map(result => JSON.parse(result.stdout).outcome);
-  assert.ok(outcomes.every(outcome => outcome === "ok" || outcome === "failed"),
-    "a trusted concurrent writer must never be denied: " + JSON.stringify(results));
-  const committed = outcomes.filter(outcome => outcome === "ok").length;
-  assert.ok(committed >= 1,
-    "at least one of the cold writers must commit: " + JSON.stringify(results));
+  const gate = mkdtempSync(path.join(root, "cold-writer-prelock-"));
+  // This child pauses only once its cold journal scan has completed and the
+  // verified journal fd has closed. It has not entered the SQLite writer yet.
+  // A process that moved the scan under BEGIN IMMEDIATE would hold that lock
+  // while paused and the independent 200ms writer below would fail.
+  const cold = runChild(fx, "raw-cold-warm-paused", gate);
+  let competitor = null, competitorResult = null, coldResult;
+  try {
+    let ready = false;
+    for (let i = 0; i < 1000; i++) {
+      if (readdirSync(gate).some(name => name.startsWith("ready-"))) {
+        ready = true;
+        break;
+      }
+      if (cold.child.exitCode !== null || cold.child.signalCode !== null) break;
+      await sleep(10);
+    }
+    assert.ok(ready, "cold journal verification did not reach the pre-lock boundary");
 
-  // A failed 200 ms attempt must not leave an unconfirmed intent or advance
-  // the anchor. Confirm integrity BEFORE allowing the caller's explicit retry.
-  assert.equal(anchorOf(fx), base0 + committed, JSON.stringify(results));
-  assert.equal(journalState(fx).pending, null);
-  assert.equal(durable.checkTargetStagingAnchorLive(fx.store), "ok");
-  for (let i = committed; i < 2; i++) {
-    const retried = await runChild(fx, "raw").done;
-    assert.equal(retried.code, 0, JSON.stringify(retried));
-    assert.equal(JSON.parse(retried.stdout).outcome, "ok",
-      "a retry on the trusted, no-longer-contended store must succeed: " + JSON.stringify(retried));
+    // This is a real independent writer (full preflight, original 200ms busy
+    // timeout, no mocking, retries or failure exceptions). It must succeed
+    // WHILE the first child remains paused, never after it is released.
+    competitor = runChild(fx, "raw");
+    competitorResult = await joinColdProbeChild(competitor);
+    assert.equal(competitorResult.code, 0, JSON.stringify(competitorResult));
+    assert.equal(JSON.parse(competitorResult.stdout).outcome, "ok",
+      "a completed cold verification must not hold the SQLite write lock");
+    assert.equal(anchorOf(fx), base0 + 1);
+    assert.equal(journalState(fx).pending, null);
+    assert.equal(durable.checkTargetStagingAnchorLive(fx.store), "ok");
+  } finally {
+    // Always release and reap both children, including failed assertions.
+    writeFileSync(path.join(gate, "go"), "");
+    coldResult = await joinColdProbeChild(cold);
+    if (competitor && competitorResult === null) await joinColdProbeChild(competitor);
   }
+  assert.equal(coldResult.code, 0, JSON.stringify(coldResult));
+  assert.equal(JSON.parse(coldResult.stdout).outcome, "ok", JSON.stringify(coldResult));
   assert.equal(anchorOf(fx), base0 + 2);
   assert.equal(journalState(fx).pending, null);
   assert.equal(durable.checkTargetStagingAnchorLive(fx.store), "ok");
 });
+
+// Retryable 200ms SQLite contention is covered separately by the controlled
+// exclusive-lock and rollback-sidecar tests above. Do not treat a generic
+// writer "failed" callback as proof of lock contention.
 
 test("failed cold writer readiness releases the gate and joins ALL children before cleanup", async () => {
   const fx = makeFixture();
