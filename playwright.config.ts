@@ -119,9 +119,9 @@ export default defineConfig({
   projects: [
     { name: "setup", testMatch: /.*\.setup\.ts/ },
     // The webServer env below is run-wide: real-store opt-in must only run
-    // these three isolated acceptance specs, never other tests.
+    // these four isolated acceptance specs, never other tests.
     { name: "desktop", use: { ...devices["Desktop Chrome"], storageState: sessionFile }, dependencies: ["setup"],
-      ...(personalAcceptanceTest ? { testMatch: /target-personal-(?:acceptance|my-plan|search-open)\.spec\.ts/ } : {}) },
+      ...(personalAcceptanceTest ? { testMatch: /target-personal-(?:acceptance|my-plan|search-open|bfcache)\.spec\.ts/ } : {}) },
   ],
   webServer: {
     command: `${process.env.E2E_SKIP_BUILD ? "" : "pnpm build && "}pnpm start --port ${port} --hostname 127.0.0.1`,
