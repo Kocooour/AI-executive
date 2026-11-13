@@ -1450,7 +1450,7 @@ test("an interrupted owner adoption can be rescued offline and resumes when the 
     }));
     expect(hold.fence).not.toBeNull();
     expect(hold.generation).toBe(old);
-    expect(hold.hold).toBeNull("a temporary network outage must not install an irreversible D2b hold");
+    expect(hold.hold).toBeNull(); // A transient outage must never create an irreversible D2b hold.
     // The owner fence alone continues to prevent writes and permits a manual
     // local-only rescue while offline. An interrupted copy may be incomplete.
     await expect(second.page.getByText(/Místní kopie už může být částečně nahrazená/)).toBeVisible();
