@@ -160,6 +160,22 @@ test.describe("B2 responsive detail inspector", () => {
     await expect(page).toHaveURL(/[?]view=Inbox$/);
   });
 
+  test("Close keeps the reading scope of a typed record address", async ({ page }) => {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    const [task] = await createInboxTasks(page, 1);
+    const id = await page.locator(".taskRow", { hasText: task }).first().getAttribute("data-drop-entity");
+    expect(id).toBeTruthy();
+
+    // Scope is orthogonal to the typed record target. Closing may remove only
+    // taskId, not reset personal/shared reading scope to the default "all".
+    await page.goto(`/?view=Inbox&scope=personal&taskId=${encodeURIComponent(id!)}`);
+    await waitUntilSynced(page);
+    await expect(page.locator("aside.inspectorDetail .titleEdit")).toHaveValue(task);
+    await page.locator(".inspectorClose").click();
+    await expect(page.locator("aside.inspectorDetail")).toHaveCount(0);
+    await expect(page).toHaveURL(/[?]view=Inbox&scope=personal$/);
+  });
+
   test("removing A during a delayed sync cannot close B's newer inspector", async ({ page }) => {
     await page.setViewportSize({ width: 1440, height: 900 });
     const [taskA, taskB] = await createInboxTasks(page, 2);
