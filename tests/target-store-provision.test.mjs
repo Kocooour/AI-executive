@@ -204,8 +204,12 @@ test("foreign UID is rejected even with private POSIX modes (pure ownership poli
 });
 
 test("--check rejects foreign-owned directory or each companion without modifying it", {
-  skip: process.geteuid?.() !== 0 ? "requires root to create a foreign-UID fixture" : false,
+  // Optional for unprivileged local development, but REQUIRED in the dedicated
+  // PR CI step. If that step is not root, fail the run instead of skipping it.
+  skip: process.env.R4_REQUIRE_ROOT_OWNERSHIP_TEST !== "1" && process.geteuid?.() !== 0
+    ? "requires root to create a foreign-UID fixture" : false,
 }, t => {
+  assert.equal(process.geteuid?.(), 0, "privileged ownership regression must run as root");
   const { base, legacy } = fixture(t);
   const dir = path.join(base, "target");
   const options = { legacy };
