@@ -302,11 +302,14 @@ test('contended first-attempt project PATCH and cancel settle with the real 200m
       check();
     });
   };
-  const leader=launch('leader');
-  let follower;
+  const follower=launch('follower');
+  let leader;
   try{
-    await waitFor(['leader-ready'],[[leader,'leader-ready']]);
-    follower=launch('follower');
+    // Credential issuance preflights SQLite: it must finish BEFORE the other
+    // process holds the real pinned write lock, not inside the measured race.
+    await waitFor(['follower-ready'],[[follower,'follower-ready']]);
+    leader=launch('leader');
+    await waitFor(['leader-ready'],[[leader,'leader-ready'],[follower,'follower-result']]);
     await waitFor(['leader-result','follower-result'],
       [[leader,'leader-result'],[follower,'follower-result']]);
     assert.equal(existsSync(marker('follower-contended')),true,
@@ -320,7 +323,7 @@ test('contended first-attempt project PATCH and cancel settle with the real 200m
     assert.equal(db.prepare('SELECT COUNT(*) AS n FROM project_title_audit WHERE project_id=?').get(id).n,1);
     assert.equal(inspectIsolatedTargetStore({...store,mode:'r2-model'}).ok,true);
   }finally{
-    leader.kill();
-    if(follower)follower.kill();
+    if(leader)leader.kill();
+    follower.kill();
   }
 });
