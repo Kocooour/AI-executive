@@ -234,8 +234,14 @@ switch (name) {
     const url = args[args.length - 1];
     if (scenario === "httpsfail" && get("head") === target &&
         url.startsWith("https://")) process.exit(22);
-    if (["unhealthy", "firstrolloutunhealthy"].includes(scenario) &&
-        get("head") === target && url.includes("/manifest.webmanifest")) process.exit(22);
+    if (scenario === "firstrolloutunhealthy" && get("head") === target &&
+        url.includes("/manifest.webmanifest") &&
+        !fs.existsSync(stateFile("first-rollout-readiness-failed"))) {
+      set("first-rollout-readiness-failed", "1");
+      process.exit(22);
+    }
+    if (scenario === "unhealthy" && get("head") === target &&
+        url.includes("/manifest.webmanifest")) process.exit(22);
     const code = url.includes("/api/store") ? 401 : 200;
     if (args.includes("-w")) process.stdout.write(String(code));
     break;

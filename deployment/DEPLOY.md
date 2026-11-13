@@ -29,6 +29,37 @@ serve requests. Never recreate or restore the cutoff to make rollback work.
 The script's path-independent absolute layout makes execution via stdin
 equivalent to running the checked-out script **after** updating the checkout.
 
+### Recovering a stopped, cutoff-aware service after a failed first rollout
+
+This is an **operator-controlled exception**, not a normal deployment path.
+First investigate the incident, resolve the underlying build/service/HTTPS
+failure, verify the original persistent cutoff is present, and confirm that
+the active service configuration (including `AI_EXECUTIVE_SESSION_SECRET`)
+has not been silently replaced. Preserve the existing verified backup. Before
+resuming, require successful release Browser E2E for the **exact** intended
+`origin/main` SHA, even if that is the same SHA already checked out.
+
+From root's tmux session, execute the **reviewed target script** with the
+explicit `--recover-stopped` argument:
+
+```bash
+TARGET_SHA=<reviewed-40-character-main-sha>
+sudo bash -c 'set -Eeuo pipefail; cd /opt/ai-executive; target="$1"; [[ "$target" =~ ^[0-9a-f]{40}$ ]]; git fetch --no-tags origin main; test "$(git rev-parse FETCH_HEAD)" = "$target"; git show "$target:deployment/deploy-safe.sh" | bash -s -- "$target" --recover-stopped' _ "$TARGET_SHA"
+```
+
+This recovery mode requires an **inactive** service, a clean `main`
+checkout already containing the cutoff-aware implementation, a cutoff-aware
+reviewed target (same or newer commit), and a valid existing cutoff checked
+read-only as the service user **before any backup/build/start**. It then runs
+the usual locked, checked, backup-verified build and startup procedure. On
+any failure it leaves the service stopped, never starts an old auth binary,
+never silently initializes a missing cutoff, and never restores old cutoff
+history. If state is missing/corrupt or the checked-out version predates the
+feature, **stop**: this mode deliberately refuses recovery. Investigate and
+follow the separate authorized first-provisioning or secret-rotation incident
+procedure in [OWNER-SESSION-REVOCATION.md](../docs/OWNER-SESSION-REVOCATION.md).
+Do not force a start or weaken these guards.
+
 **Never substitute:**
 
 ```bash
@@ -48,5 +79,8 @@ against them, and checks that the new script runs while the local checkout
 still contains the old one. `tests/deploy-safe.test.mjs` additionally
 exercises a failed first rollout with real cutoff initialization in a
 disposable mocked-service environment: it must preserve the cutoff and never
-restart an old binary that would accept a pre-feature signed cookie. No real
+restart an old binary that would accept a pre-feature signed cookie. The
+same fixture exercises the stopped-service `--recover-stopped` path with
+a successful restart, rejects missing cutoff and pre-feature checkouts, and
+verifies that a same-SHA recovery does not reset the cutoff. No real
 production deployment or systemd commands run in CI.

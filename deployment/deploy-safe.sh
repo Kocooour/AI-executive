@@ -11,6 +11,7 @@ BACKUP_DIR=/var/backups/ai-executive
 SERVICE=ai-executive
 HTTPS_BASE=https://vm13861.tail412944.ts.net:8443
 TARGET="${1:-}"
+RECOVERY_MODE=0
 PREV=""
 BACKUP=""
 STOPPED=0
@@ -22,6 +23,14 @@ MAIL_PRESTART_INTEGRITY_FAILED=0
 MAIL_PRESTART_SNAPSHOT_FAILED=0
 
 die() { echo "STOP: $*" >&2; exit 1; }
+
+# Explicit opt-in after a failed first rollout has left the service stopped.
+# Never interpret a stopped service as permission to recover automatically.
+if [ "$#" -eq 2 ] && [ "$2" = "--recover-stopped" ]; then
+  RECOVERY_MODE=1
+else
+  [ "$#" -eq 1 ] || die "pouziti: deploy-safe.sh <target-sha> [--recover-stopped]"
+fi
 
 # A root build can leave .next/BUILD_ID mode 0600. Never make the build world-writable.
 fix_build_permissions() {
@@ -250,9 +259,9 @@ on_exit() {
   # reaccept old signed owner cookies, including ones invalidated by logout.
   # Fail closed even if provisioning was interrupted or the state was present
   # before this attempt; do not infer that no previous cutoff existed.
-  if [ "${OWNER_SESSION_FIRST_ROLLOUT:-0}" = 1 ]; then
-    echo "BEZPECNOSTNI BLOKACE: prvni nasazeni revokace relaci selhalo." >&2
-    echo "Stara verze ignoruje revokacni stav; sluzba zustava zastavena, bez automatickeho rollbacku." >&2
+  if [ "${OWNER_SESSION_FIRST_ROLLOUT:-0}" = 1 ] || [ "$RECOVERY_MODE" = 1 ]; then
+    echo "BEZPECNOSTNI BLOKACE: neuspesne nasazeni nebo obnova revokace relaci." >&2
+    echo "Sluzba zustava zastavena, bez automatickeho rollbacku a navratu k predchozi autentizaci." >&2
     echo "Oprav a nasad verzi s kontrolou revokace, nebo pred rucnim spustenim stare verze rotuj AI_EXECUTIVE_SESSION_SECRET." >&2
     exit "$rc"
   fi
@@ -335,7 +344,12 @@ echo "Exkluzivni zamek nasazeni: OK"
 
 echo "=== PRE-FLIGHT ==="
 [[ "$TARGET" =~ ^[0-9a-f]{40}$ ]] || die "zadej uplny 40mistny SHA"
-test "$(systemctl is-active "$SERVICE")" = active || die "sluzba nebezi"
+if [ "$RECOVERY_MODE" = 1 ]; then
+  ! systemctl is-active --quiet "$SERVICE" ||
+    die "rezim obnovy vyzaduje zastavenou sluzbu"
+else
+  test "$(systemctl is-active "$SERVICE")" = active || die "sluzba nebezi"
+fi
 test "$(systemctl show "$SERVICE" -p User --value)" = ai-executive || die "jiny ucet sluzby"
 test "$(systemctl show "$SERVICE" -p WorkingDirectory --value)" = "$APP" || die "jiny adresar sluzby"
 test -f "$DATA/store.sqlite" && test -f "$ENVFILE" || die "chybi data nebo env"
@@ -350,8 +364,26 @@ test -z "$(git status --porcelain)" || die "lokalni zmeny v repozitari"
 PREV="$(git rev-parse HEAD)"
 git fetch --no-tags origin main
 test "$(git rev-parse FETCH_HEAD)" = "$TARGET" || die "cil se neshoduje s origin/main"
-test "$PREV" != "$TARGET" || die "verze uz bezi"
+if [ "$RECOVERY_MODE" != 1 ]; then
+  test "$PREV" != "$TARGET" || die "verze uz bezi"
+fi
 git merge-base --is-ancestor "$PREV" "$TARGET" || die "nelze fast-forward"
+if [ "$RECOVERY_MODE" = 1 ]; then
+  # Recovery from a fail-closed, stopped deployment: only when the checked-out
+  # version AND the reviewed target enforce the existing persistent cutoff.
+  # This intentionally does not cover failures before first provisioning.
+  git cat-file -e "$PREV:lib/owner-session-revocation.ts" 2>/dev/null ||
+    die "obnova vyzaduje jiz nasazenou verzi s revokaci relaci"
+  git cat-file -e "$TARGET:lib/owner-session-revocation.ts" 2>/dev/null ||
+    die "cil obnovy neobsahuje revokaci relaci"
+  test -f "$APP/scripts/owner-session-revocation-init.mjs" ||
+    die "chybi kontrolni prikaz revokace relaci"
+  runuser -u ai-executive -- env AI_EXECUTIVE_DATA_DIR="$DATA" /usr/bin/node \
+    --experimental-loader "$APP/scripts/target-staging-ts-loader.mjs" \
+    "$APP/scripts/owner-session-revocation-init.mjs" --check ||
+    die "stav revokace relaci chybi nebo je neplatny; nikdy neobnovuj automaticky"
+  echo "=== OBOVA ZASTAVENE SLUZBY: revokacni stav overen ==="
+fi
 # The only automatic initial provisioning allowed is a real first code rollout.
 # Never recreate missing revocation history during a subsequent deploy/restart.
 OWNER_SESSION_FIRST_ROLLOUT=0
@@ -436,7 +468,9 @@ BACKUP_VALIDATED=1
 
 echo "=== FAST-FORWARD A BUILD ==="
 CHANGED=1
-git merge --ff-only "$TARGET"
+if [ "$PREV" != "$TARGET" ]; then
+  git merge --ff-only "$TARGET"
+fi
 test "$(git rev-parse HEAD)" = "$TARGET"
 umask 022
 pnpm install --frozen-lockfile

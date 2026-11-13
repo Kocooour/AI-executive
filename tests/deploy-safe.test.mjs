@@ -3,7 +3,7 @@ import { createHmac } from "node:crypto";
 import { spawn, spawnSync } from "node:child_process";
 import {
   chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync,
-  readFileSync, readdirSync, rmSync, writeFileSync, statSync,
+  readFileSync, readdirSync, renameSync, rmSync, writeFileSync, statSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -141,8 +141,8 @@ function sandbox(scenario) {
     LUMI_TEST_SCENARIO: scenario,
     LUMI_TEST_LOCK_FILE: lockFile,
   };
-  function execute() {
-    const result = spawnSync("bash", ["-c", script, "--", newSha], {
+  function execute({ recovery = false } = {}) {
+    const result = spawnSync("bash", ["-c", script, "--", newSha, ...(recovery ? ["--recover-stopped"] : [])], {
       cwd: root, env, encoding: "utf8", timeout: 40000, maxBuffer: 3 * 1024 * 1024,
     });
     assert.ifError(result.error);
@@ -362,6 +362,69 @@ scenarioCase("firstrolloutunhealthy: failed new startup never re-enables pre-rev
     "pre-feature owner validation would accept this still-signed cookie");
   assert.equal(r.events.includes("start-a"), false, "the vulnerable old authentication is never exposed");
 });
+test("failed first rollout can recover from a stopped, cutoff-aware checkout without resetting revocation", { timeout: 125000 }, () => {
+  const f = sandbox("firstrolloutunhealthy");
+  try {
+    const first = f.execute();
+    assert.notEqual(first.status, 0);
+    assert.equal(first.service, "inactive");
+    assert.equal(first.head, newSha);
+    assert.equal(first.events.includes("start-a"), false);
+    const marker = path.join(f.data, "owner-session-valid-from.sqlite");
+    assert.equal(existsSync(marker), true);
+    const readCutoff = () => {
+      const db = new DatabaseSync(marker, { readOnly: true });
+      try { return db.prepare("SELECT valid_from_ms FROM owner_session_cutoff WHERE id = 1").get().valid_from_ms; }
+      finally { db.close(); }
+    };
+    const cutoff = readCutoff();
+    const normal = f.execute();
+    assert.notEqual(normal.status, 0, "normal deployment cannot repair a stopped service");
+    assert.match(normal.output, /sluzba nebezi/);
+    assert.equal(normal.service, "inactive");
+    const saved = marker + ".saved";
+    // Recovery may neither create a missing cutoff nor start the service while it is missing.
+    renameSync(marker, saved);
+    try {
+      const missing = f.execute({ recovery: true });
+      assert.notEqual(missing.status, 0);
+      assert.match(missing.output, /stav revokace relaci chybi nebo je neplatny/);
+      assert.equal(missing.service, "inactive");
+      assert.equal(missing.events.includes("start-a"), false);
+    } finally {
+      renameSync(saved, marker);
+    }
+    const recovered = f.execute({ recovery: true });
+    assert.equal(recovered.status, 0, recovered.output);
+    assert.equal(recovered.service, "active");
+    assert.equal(recovered.head, newSha);
+    assert.equal(recovered.events.includes("reset"), false);
+    assert.equal(recovered.events.includes("start-a"), false);
+    assert.equal(readCutoff(), cutoff, "recovery preserves the exact persisted cutoff");
+    assert.ok(recovered.events.filter(x => x === "start-b").length >= 2,
+      "only cutoff-aware new code was started");
+    assert.equal(recovered.backups.length, 2, "both attempts preserve validated backups");
+    const activeRecovery = f.execute({ recovery: true });
+    assert.notEqual(activeRecovery.status, 0);
+    assert.match(activeRecovery.output, /rezim obnovy vyzaduje zastavenou sluzbu/);
+    assert.equal(activeRecovery.service, "active");
+  } finally { f.cleanup(); }
+});
+
+test("stopped pre-feature code cannot opt into cutoff recovery", { timeout: 50000 }, () => {
+  const f = sandbox("success");
+  try {
+    writeFileSync(path.join(f.root, "state/service"), "inactive");
+    const result = f.execute({ recovery: true });
+    assert.notEqual(result.status, 0);
+    assert.match(result.output, /obnova vyzaduje jiz nasazenou verzi s revokaci relaci/);
+    assert.equal(result.service, "inactive");
+    assert.equal(result.head, oldSha);
+    assert.equal(result.events.includes("start-a"), false);
+    assert.deepEqual(result.backups, []);
+  } finally { f.cleanup(); }
+});
+
 scenarioCase("unhealthy: failed HTTP readiness triggers verified code rollback", (r) => {
   assert.notEqual(r.status, 0);
   assert.match(r.output, /sluzba nebo lokalni\/HTTPS API nejsou dostupne/);
