@@ -26,12 +26,15 @@ import { resolveDataDirectory } from "./data-dir";
 import { baselineNoteRevisions, recordNoteRevisions } from "./note-revisions";
 import { AreaWriteInvalid, enforceAreaWriteInvariants, workspaceKinds } from "./area-write-invariants";
 import { fallbackAreaTitle, generatedAreaId } from "./area-ids";
+import { ownerRestoreOrigin, restoreKindForGeneration, type RestoreKind } from "./restore-generation-origin";
 
 export interface StoreSnapshot {
   revision: number;
   // Counts restores and imports of this server's data (metadata, never in a backup). A client's save carries the value it
   // knows; after a restore a save from before it is refused instead of merged back into the restored data.
   restoreGeneration?: number;
+  // Server-side origin bound to the generation; never supplied by a backup.
+  restoreKind?: RestoreKind;
   entities: Entity[];
   relations: Relation[];
   tombstones: Array<{ id: string; deletedAt: number }>;
@@ -685,10 +688,20 @@ const readMetadata = (database: DatabaseSync, key: string, fallback = "0") =>
 function readRestoreGeneration(database: DatabaseSync) {
   return Number(readMetadata(database, "restoreGeneration", "0")) || 0;
 }
-// Inside the transaction of every restore and import.
+function readRestoreKind(database: DatabaseSync): RestoreKind | undefined {
+  return restoreKindForGeneration(readRestoreGeneration(database), readMetadata(database, "restoreGenerationOrigin", ""));
+}
+export function currentRestoreKind(): RestoreKind | undefined {
+  return readRestoreKind(getDatabase());
+}
+// Inside the same transaction as replacing the backup's owner data. The origin
+// is bound to this number, so a later non-backup bump cannot inherit it.
 function bumpRestoreGeneration(database: DatabaseSync) {
+  const generation = readRestoreGeneration(database) + 1;
   database.prepare(`INSERT INTO metadata (key, value) VALUES ('restoreGeneration', ?)
-    ON CONFLICT(key) DO UPDATE SET value = excluded.value`).run(String(readRestoreGeneration(database) + 1));
+    ON CONFLICT(key) DO UPDATE SET value = excluded.value`).run(String(generation));
+  database.prepare(`INSERT INTO metadata (key, value) VALUES ('restoreGenerationOrigin', ?)
+    ON CONFLICT(key) DO UPDATE SET value = excluded.value`).run(ownerRestoreOrigin(generation));
 }
 
 export function readSnapshot(): StoreSnapshot {
@@ -711,6 +724,7 @@ export function readSnapshot(): StoreSnapshot {
   return {
     revision: Number(readMetadata(database, "revision")),
     restoreGeneration: readRestoreGeneration(database),
+    restoreKind: readRestoreKind(database),
     entities,
     relations,
     tombstones,
@@ -1140,7 +1154,7 @@ function restoreLegacyBackup(name: string) {
     recordNoteRevisions(database, current.entities, next.entities, "backup_restore", next.revision);
     bumpRestoreGeneration(database);
     database.exec("COMMIT");
-    return { ...next, restoreGeneration: readRestoreGeneration(database) };
+    return { ...next, restoreGeneration: readRestoreGeneration(database), restoreKind: readRestoreKind(database) };
   } catch (error) {
     database.exec("ROLLBACK");
     throw error;

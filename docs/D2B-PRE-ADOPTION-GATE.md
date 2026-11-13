@@ -1,6 +1,14 @@
 # D2b part 4 — fail-closed recovery hold before restore adoption
 
-**Scope:** First client-side pre-adoption safety gate and private owner-initiated export UI. This does **not** activate 2b partition, server ACL, import/replay or automatic reconciliation.
+**Scope:** Original D2b pre-adoption safety gate and private owner-initiated export UI. This does **not** activate 2b partition, server ACL, import/replay or automatic reconciliation.
+
+## Release 0 correction — issue #415 (2026-11-13)
+
+The former rule that **every** legacy `restoreGeneration` mismatch must create an unreleaseable recovery hold broke owner-initiated backup restore/import. The current legacy `store.sqlite` generation advances only for an owner-invoked restore or import. Every successful new restore/import now commits `restoreGenerationOrigin` alongside `restoreGeneration` in server-side `metadata`, bound to the exact generation; snapshots and mutating-route 409 refusals expose only the validated `owner_restore` reason. This metadata is deliberately excluded from backups. If an independent future writer increments the generation without updating this proof, the old proof becomes stale and cannot authorize deletion.
+
+A **certified owner restore** is adopted by the initiating tab, sibling tabs and other devices: before local writes can race the adoption, the replaced legacy entities/relations, merge base, pending markers and drafts are discarded, and all tabs reload from the current server copy. The server fence refuses stale writes. A mere higher revision with the **same** generation does not trigger this destructive path; ordinary pending changes still merge. Neither the target-staging store nor data outside the replaced legacy snapshot is cleared.
+
+An **unknown/non-owner generation** or already persisted D2b hold still fails closed. The current protocol before this correction lacked a server-side cause: therefore old pre-existing generations with no signed-off origin **cannot be automatically reclassified**; such held clients require explicit owner recovery (a safety export is available), never an implicit marker deletion. The future 2b partition/replay rollout MUST introduce its own server-authoritative, atomic origin and a fully usable release/reconciliation flow before enabling a partition-generation bump. The old unconditional mismatch rules below are a historical account of D2b and are no longer correct for certified legacy owner restores.
 
 ## Behavior
 

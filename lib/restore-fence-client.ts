@@ -5,7 +5,7 @@ import { offlineRecoveryIsHeld } from "./d2b-recovery-hold";
 // its body and handles its own answer; the integration API is not called from the app.
 export const restoreGenerationHeader = "x-lumi-restore-generation";
 
-type Hooks = { generation: () => number | undefined; onRestored: (observedGeneration: number | undefined) => void };
+type Hooks = { generation: () => number | undefined; onRestored: (observedGeneration: number | undefined, restoreKind: unknown) => void };
 
 export function installRestoreFence(hooks: Hooks) {
   const target = window as unknown as { fetch: typeof fetch; __lumiRestoreFence?: boolean };
@@ -32,11 +32,11 @@ export function installRestoreFence(hooks: Hooks) {
     if (generation !== undefined) headers.set(restoreGenerationHeader, String(generation));
     const response = await original(input, { ...init, headers });
     if (response.status === 409) {
-      const answer = await response.clone().json().catch(() => null) as { code?: string; restoreGeneration?: unknown } | null;
+      const answer = await response.clone().json().catch(() => null) as { code?: string; restoreGeneration?: unknown; restoreKind?: unknown } | null;
       if (answer?.code === "restored") {
         const generation = answer.restoreGeneration;
         hooks.onRestored(typeof generation === "number" && Number.isSafeInteger(generation) && generation >= 0
-          ? generation : undefined);
+          ? generation : undefined, answer.restoreKind);
       }
     }
     return response;

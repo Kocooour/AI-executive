@@ -10,6 +10,7 @@ import { settleSyncOperation } from "../../../lib/sync-result";
 import { hasChangesBeyond, postToTabs, requestTimeout, tabChannelName, withSyncLock, type TabMessage } from "../../../lib/tab-coordination";
 import { markSignedIn } from "../../../lib/local-data";
 import { beginAdoption, isAdopting, setAfterRestoreFlag } from "../../../lib/adoption";
+import { restoredSinceKnownGeneration, restoreGenerationDecision } from "../../../lib/restore-generation-origin";
 import { clearNotesDrafts } from "../../../lib/notes-drafts";
 import { clearProjectContextDrafts } from "../../../lib/project-context-drafts";
 import { installRestoreFence } from "../../../lib/restore-fence-client";
@@ -81,13 +82,15 @@ export function useSync() {
   // before generations were tracked, or dormant) is treated the same once the server's generation is above 0: there is no way
   // to tell whether it predates a restore, so it adopts. One that never synchronized holds nothing to protect.
   function restoredSinceKnown(serverGeneration: number | undefined) {
-    if (typeof serverGeneration !== "number") return false;
-    const known = restoreGeneration.current;
-    if (known !== undefined) return serverGeneration !== known;
-    return serverGeneration > 0 && localStorage.getItem("ai-executive-server-synced") === "1";
+    return restoredSinceKnownGeneration(
+      restoreGeneration.current, serverGeneration, localStorage.getItem("ai-executive-server-synced") === "1",
+    );
   }
   // The generation this page started with: another tab's adoption matters only if it is newer.
   const loadedGeneration = useRef<number | undefined>(restoreGeneration.current);
+  // A fenced mutating API has already stopped in-tab writes synchronously;
+  // its authenticated GET must finish that same adoption, not return early.
+  const fencedRestore = useRef(false);
   const syncQueue = useRef<Promise<void>>(Promise.resolve());
   const localDataVersion = useRef(0);
   const signedOut = useRef(false);
@@ -269,11 +272,15 @@ export function useSync() {
     return false;
   }
   async function adoptServerCopy(source: ServerSnapshot, notice = false) {
-    // The generation mismatch is a STOP, not permission to wipe local data.
-    if (offlineRecoveryIsHeld() || restoredSinceKnown(source.restoreGeneration))
-      return engageRecoveryForGeneration(source.restoreGeneration);
-    if (isAdopting()) return true;
-    beginAdoption();
+    // Only a certified server-side owner restore authorizes discarding the
+    // replaced legacy snapshot. A future partition recovery or unknown origin
+    // retains the D2b rescue hold; an existing hold is never silently cleared.
+    if (restoreGenerationDecision(
+      restoredSinceKnown(source.restoreGeneration), source.restoreKind, offlineRecoveryIsHeld(),
+    ) === "hold") return engageRecoveryForGeneration(source.restoreGeneration);
+    if (isAdopting() && !fencedRestore.current) return true;
+    fencedRestore.current = false;
+    if (!isAdopting()) beginAdoption();
     try {
       // Anything computed from the old copy (a save in progress, a pull) is discarded.
       localDataVersion.current += 2;
@@ -357,10 +364,38 @@ export function useSync() {
   // Every mutation of the app carries the generation it knows; a refusal because of a restore adopts the restored data.
   useEffect(() => {
     installRestoreFence({ generation: () => restoreGeneration.current,
-      onRestored: (observedGeneration) => {
-        // The 409 already supplies the new generation. Do not wait for a
-        // failing follow-up network request before freezing local writes.
-        void engageRecoveryForGeneration(observedGeneration);
+      onRestored: (observedGeneration, restoreKind) => {
+        // A certified owner restore immediately fences ALL in-tab writes,
+        // including blur/save callbacks racing the subsequent server GET.
+        // The 409 carries no snapshot, so fetch the current authoritative one.
+        if (restoreKind === "owner_restore" && !offlineRecoveryIsHeld()) {
+          if (isAdopting()) return;
+          fencedRestore.current = true;
+          beginAdoption();
+          void (async () => {
+            try {
+              const response = await fetch("/api/store", { cache: "no-store", signal: requestTimeout() });
+              if (!response.ok) throw new Error("Server synchronization failed");
+              const snapshot = (await response.json()) as ServerSnapshot;
+              if (snapshot.restoreKind !== "owner_restore" ||
+                  !Number.isSafeInteger(snapshot.restoreGeneration) ||
+                  typeof observedGeneration !== "number" ||
+                  (snapshot.restoreGeneration as number) < observedGeneration) {
+                await engageRecoveryForGeneration(snapshot.restoreGeneration);
+                return;
+              }
+              await adoptServerCopy(snapshot, true);
+            } catch {
+              // Never resume stale writes if the GET or local adoption failed.
+              // The next startup checks the generation before local mutations.
+              setSyncStatus("offline");
+              window.location.reload();
+            }
+          })();
+        } else {
+          // Unknown or non-owner source keeps the D2b fail-closed barrier.
+          void engageRecoveryForGeneration(observedGeneration);
+        }
       },
     });
   }, []);

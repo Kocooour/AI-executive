@@ -1,0 +1,84 @@
+name: Release 0 backup restore browser
+
+on:
+  pull_request:
+    paths:
+      - "app/ui/hooks/use-sync.ts"
+      - "app/ui/views/offline-recovery-dialog.tsx"
+      - "lib/server-store.ts"
+      - "lib/server-sync.ts"
+      - "lib/restore-fence.ts"
+      - "lib/restore-fence-client.ts"
+      - "lib/restore-generation-origin.ts"
+      - "lib/adoption.ts"
+      - "lib/db.ts"
+      - "lib/d2b-*"
+      - "app/api/backups/**"
+      - "e2e/backup-restore.spec.ts"
+      - "tests/restore-generation-origin.test.mjs"
+      - ".github/workflows/release0-backup-restore-browser.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: lumi-release0-c9-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  restore-browser:
+    name: C9 restore three repeats and serial integration (Chromium)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 95
+    env:
+      CI: "true"
+      NEXT_TELEMETRY_DISABLED: "1"
+      E2E_PORT: "3145"
+      E2E_SKIP_BUILD: "1"
+    steps:
+      - name: Checkout PR head
+        uses: actions/checkout@v5
+      - name: Install pnpm
+        uses: pnpm/action-setup@v5
+        with:
+          version: 10.20.0
+      - name: Set up Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+          cache: pnpm
+      - name: Install locked dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Focused restore origin decisions
+        run: node --experimental-loader ./tests/ts-loader.mjs --test tests/restore-generation-origin.test.mjs tests/adoption.test.mjs
+      - name: Build WITHOUT design-v1 preview
+        shell: bash
+        run: |
+          unset NEXT_PUBLIC_LUMI_DESIGN_V1_PREVIEW
+          pnpm build
+      - name: Install browser
+        run: pnpm exec playwright install --with-deps chromium
+      - name: Entire backup and restore spec, three consecutive clean runs
+        shell: bash
+        run: |
+          unset NEXT_PUBLIC_LUMI_DESIGN_V1_PREVIEW
+          for attempt in 1 2 3; do
+            echo "Backup restore pass $attempt of 3"
+            pnpm exec playwright test e2e/backup-restore.spec.ts --project=desktop
+          done
+      - name: Serial integration with app and two devices
+        shell: bash
+        run: |
+          unset NEXT_PUBLIC_LUMI_DESIGN_V1_PREVIEW
+          pnpm exec playwright test e2e/backup-restore.spec.ts e2e/app.spec.ts e2e/two-devices.spec.ts --project=desktop
+      - name: Upload traces on failure
+        if: failure()
+        uses: actions/upload-artifact@v6
+        with:
+          name: lumi-release0-c9-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            test-results/
+            playwright-report/
+          if-no-files-found: ignore
+          retention-days: 7

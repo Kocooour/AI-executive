@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { getDatabase } from "./server-store";
+import { currentRestoreKind, getDatabase } from "./server-store";
 import { requireSameOrigin } from "./http-security";
 
 // Every owner-session write of an included table carries the restore generation the client knows (the header below, added
@@ -27,7 +27,7 @@ export function fenceRestoredClient(request: Request): NextResponse | null {
   const generation = currentRestoreGeneration();
   if (!restoreGenerationMismatch(request.headers.get(restoreGenerationHeader), generation)) return null;
   return NextResponse.json(
-    { error: "Data was restored", code: "restored", restoreGeneration: generation },
+    { error: "Data was restored", code: "restored", restoreGeneration: generation, restoreKind: currentRestoreKind() },
     { status: 409, headers: { "cache-control": "no-store" } },
   );
 }
