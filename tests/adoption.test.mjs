@@ -121,3 +121,35 @@ test("only a fully committed owner adoption can finish a stale fence", () => {
   assert.equal(store.getItem(barrier.ownerAdoptionFenceKey), null);
 });
 
+
+test("a late ordinary sync cannot roll back a certified owner-adopted generation", () => {
+  const storage = memoryStorage();
+  storage.setItem(barrier.ownerAdoptionGenerationKey, "4");
+  assert.equal(barrier.persistOrdinaryGeneration(storage, 4, 4), true);
+  barrier.startOwnerAdoptionFence(storage, 5, 4);
+  assert.deepEqual(barrier.readOwnerAdoptionFence(storage), {
+    version: 1, observedGeneration: 5, knownGeneration: 4,
+  });
+  assert.equal(barrier.persistOrdinaryGeneration(storage, 4, 4), false, "stale stamp is refused during adoption");
+  storage.setItem(barrier.ownerAdoptionGenerationKey, "5");
+  storage.setItem("ai-executive-server-synced", "1");
+  barrier.finishOwnerAdoptionFence(storage);
+  assert.equal(barrier.persistOrdinaryGeneration(storage, 4, 4), false, "late sync cannot roll generation back");
+  assert.equal(storage.getItem(barrier.ownerAdoptionGenerationKey), "5");
+  assert.equal(barrier.persistOrdinaryGeneration(storage, 5, 4), false, "ordinary sync cannot certify an earlier generation");
+  assert.equal(barrier.persistOrdinaryGeneration(storage, 5, 5), true);
+});
+
+test("an unfinished owner restore cannot be mistaken for a completed adoption", () => {
+  const storage = memoryStorage();
+  storage.setItem("ai-executive-server-synced", "1");
+  storage.setItem(barrier.ownerAdoptionGenerationKey, "3");
+  barrier.startOwnerAdoptionFence(storage, 4, 3);
+  assert.equal(barrier.ownerAdoptionReadyToFinish(storage), false);
+  assert.equal(barrier.readOwnerAdoptionFence(storage).knownGeneration, 3);
+  storage.setItem(barrier.ownerAdoptionGenerationKey, "4");
+  storage.setItem("ai-executive-pending-deletions:stale", "id");
+  assert.throws(() => barrier.ownerAdoptionReadyToFinish(storage), /LOCAL_CLEANUP_INCOMPLETE/);
+  storage.removeItem("ai-executive-pending-deletions:stale");
+  assert.equal(barrier.ownerAdoptionReadyToFinish(storage), true);
+});
