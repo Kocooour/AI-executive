@@ -18,7 +18,7 @@ The old and target stores are distinct data domains. A backup of the legacy data
 | 1 | Enumerate active browser tabs, installed PWAs and browsers on phones/desktops; coordinate with everyone who has a local copy. | Device/client inventory (manual checklist below), with acknowledgement per client |
 | 2 | Confirm owner-session revocation from #402 is merged, explicitly provisioned and functional. | Init proof, successful owner logout/re-login, copied-cookie denial, clean CI |
 | 3 | Resolve #388 BFCache lifecycle failures and demonstrate stale/returning clients cannot write old state. | Focused BFCache/restore-generation barrier evidence, exact test SHA |
-| 3a | After owner approval of the intended **new** target path and single-owner ID, use `scripts/target-store-provision.mjs` to create and verify that isolated store **before the coordinated archival snapshot**. Create no legacy data; leave all target flags off. | Exact three operator settings (kept private) and read-only `--check`; no activation |
+| 3a | After owner approval of the intended **new** target path and single-owner ID, run `scripts/target-store-provision.mjs` **as the effective OS service user `ai-executive`, not root**, then check it as the same UID **before the coordinated archival snapshot**. Create no legacy data; leave all target flags off. | Three private settings, service UID on target and all companions, same-UID read-only `--check`; no activation |
 | 4 | **After step 3a**, capture a **consistent, coordinated** archival snapshot while writers are quiesced or through an approved atomic filesystem/SQLite backup procedure. Preserve legacy DB + WAL, backups, credentials, integration state and the **new target SQLite + append-only journal + witness** as one recovery unit. Include a detached target-directory copy in step 6 with `--target-offline`. An earlier legacy-only backup is **not** a substitute for this combined capture. | Immutable combined archive identifier, restrictive permissions, file manifest/checksums, protected retention location |
 | 5 | Run `scripts/cutover-inventory.mjs` on the offline copy, giving a new output location. Review only aggregated counts, timestamp ranges and boolean presence. | Content-free JSON, short summary, secret-content rejection tests |
 | 6 | Run the copy-only rehearsal in `deployment/rehearsal/` using a new empty output location. Check copied files, table rows, SHA-256 digests and SQLite `integrity_check` plus tamper/missing-table/non-empty-destination negative tests. **One-source copy fidelity is not independent backup verification.** | Private backup manifest and scoped copy-fidelity report; optional comparison of two separate input paths; independent capture still requires external evidence |
@@ -37,10 +37,50 @@ This text is an approval **template**, not an approval. If the owner-approved pl
 
 The operator selects an absolute **new, non-existing** target directory under an existing **trusted** parent and an explicit single owner ID. Every path ancestor must be owned by the operator's UID or root, and must not be writable by other users/groups unless it is a sticky-bit-protected directory owned by the operator or root (for example `/tmp`). Untrusted ancestors are refused for both provision and `--check`, because another UID could otherwise replace path entries between validation and filesystem writes. In addition, the target directory **and all three store files must be owned by the effective operator UID**: `--check` refuses foreign-owned 0700/0600 files even if run as root, because their owner could change them during preflight. Run `--check` as the account that owns the copy; do not use `sudo` to bypass ownership or automatically `chown` an unknown store. The CLI also refuses symlink/path aliases, overlap with configured legacy or existing target staging storage, and overlap with the implicit `<cwd>/.data` default. It bootstraps a private isolated store using the existing library, runs the supported **read-only** semantic preflight (schema, owner, restore generation, journal and witness) and publishes it only into a freshly created destination. It creates the directory with mode 0700 and the three store files with mode 0600. Re-running provision against an existing path fails without overwriting it. On a caught failure, the CLI removes only its own newly created working/output directories; a hard kill can leave an operator-private temporary directory that must be inspected.
 
+**The execution account is part of the safety contract.** The deployed [systemd unit](../deployment/ai-executive.service) specifies `User=ai-executive`, `Group=ai-executive`, `WorkingDirectory=/opt/ai-executive` and `AI_EXECUTIVE_DATA_DIR=/var/lib/ai-executive`. The CLI creates files owned by its effective UID; `--check` accepts only that same UID. A target created by root cannot be read/written by the service, and a correct target created by the service will be rejected by a root `--check`. The root-only GitHub test uses **synthetic `/tmp` fixtures**, never a service target.
+
+After **separate operator approval** of the exact new path, authenticated application owner ID, and private parent, confirm the loaded unit and invoke **both** commands using `runuser` as `ai-executive`. A one-time parent creation (only if absent, never overwrite existing) may be separately approved, e.g. `install -d -o ai-executive -g ai-executive -m 0700 /var/lib/ai-executive-target`. The candidate `/var/lib/ai-executive-target/personal-v1` is a **draft example, not approval**. The following block is a template **not to execute without authorization**; replace both placeholders.
 ```bash
-node scripts/target-store-provision.mjs /absolute/new/target-store owner-user-id --confirmed
-node scripts/target-store-provision.mjs --check /absolute/new/target-store
+set -eu
+UNIT=ai-executive.service
+SERVICE_USER="$(systemctl show "$UNIT" -p User --value)"
+SERVICE_GROUP="$(systemctl show "$UNIT" -p Group --value)"
+SERVICE_CWD="$(systemctl show "$UNIT" -p WorkingDirectory --value)"
+test "$SERVICE_USER" = ai-executive
+test "$SERVICE_GROUP" = ai-executive
+test "$SERVICE_CWD" = /opt/ai-executive
+test "$(systemctl show "$UNIT" -p DynamicUser --value)" != yes
+SERVICE_UID="$(id -u "$SERVICE_USER")"
+test "$SERVICE_UID" -ne 0
+MAINPID="$(systemctl show "$UNIT" -p MainPID --value)"
+if [ "$MAINPID" -gt 0 ]; then
+  test "$(awk '$1 == "Uid:" {print $3}' "/proc/$MAINPID/status")" = "$SERVICE_UID"
+fi
+
+TARGET_DIR='<approved-new-absolute-path>'
+OWNER_USER_ID='<verified-application-owner-id>'  # NOT the POSIX service username
+PARENT="$(dirname "$TARGET_DIR")"
+test "$(stat -c '%u:%a' "$PARENT")" = "$SERVICE_UID:700"
+test ! -e "$TARGET_DIR" && test ! -L "$TARGET_DIR"
+
+cd "$SERVICE_CWD"
+runuser -u "$SERVICE_USER" -g "$SERVICE_GROUP" -- env -i \
+  PATH=/usr/bin:/bin HOME=/nonexistent AI_EXECUTIVE_DATA_DIR=/var/lib/ai-executive \
+  /usr/bin/node scripts/target-store-provision.mjs "$TARGET_DIR" "$OWNER_USER_ID" --confirmed
+runuser -u "$SERVICE_USER" -g "$SERVICE_GROUP" -- env -i \
+  PATH=/usr/bin:/bin HOME=/nonexistent AI_EXECUTIVE_DATA_DIR=/var/lib/ai-executive \
+  /usr/bin/node scripts/target-store-provision.mjs --check "$TARGET_DIR"
+
+test "$(stat -c '%u:%a' "$TARGET_DIR")" = "$SERVICE_UID:700"
+for name in lumi-target.sqlite lumi-target.journal lumi-target-witness.sqlite; do
+  test "$(stat -c '%u:%a' "$TARGET_DIR/$name")" = "$SERVICE_UID:600"
+done
 ```
+
+**STOP on any mismatch.** Verify the real service configuration including EnvironmentFile and all known live legacy/staging directories before using the explicit sanitized command environment. A root-owned/previously existing target must **not** be fixed with `chown`, reused, or overwritten; request a separately approved recovery procedure. For detached archival copies run `--check` as the account that actually owns that *copy*, never imply it establishes the service's access.
+
+**Separate systemd sandbox gate:** the current unit has `ProtectSystem=strict` and only `StateDirectory=ai-executive`. The proposed external `/var/lib/ai-executive-target` lies outside the unit's declared writable directories. A successful `runuser` operation verifies POSIX ownership but **does not prove the running sandboxed service can write the target**. Before any runtime activation, obtain separate approval and verify a least-privilege `StateDirectory`/writable-directory change for the approved target; this PR neither changes the unit nor authorizes cutover.
+
 
 A successful command prints **only** the three existing, exact settings:
 
