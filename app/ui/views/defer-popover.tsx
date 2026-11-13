@@ -99,17 +99,25 @@ export function DeferPopover({ app }: { app: LumiApp }) {
   const revoked = Boolean(deferOpen?.origin === "attention" &&
     (attentionActionsBlocked || !currentEvidence || locallyChanged || !deferOpen.anchor.isConnected));
 
-  // Check the anchor again *after* React commits. During a successful Attention
-  // refresh it can still be connected in render and then be removed in commit,
-  // while neither the task nor synchronization state changes.
+  // The dialog can still own keyboard focus while this component decides
+  // to revoke it. Returning focus *before* the dialog is unmounted loses focus
+  // when React removes the currently focused dialog element.
+  const restoreAttentionFocus = useRef(false);
+  // Check the anchor after React commits, because a successful refresh may
+  // detach it during the same commit that updates the evidence.
   useLayoutEffect(() => {
     if (deferOpen?.origin !== "attention") return;
     if (!revoked && deferOpen.anchor.isConnected) return;
+    restoreAttentionFocus.current = true;
     setDeferOpen((current) => current === deferOpen ? null : current);
-    // The old chip may have been removed with the row. Restore keyboard focus
-    // to the stable Home section heading rather than leaving it on <body>.
-    document.getElementById("attention-title")?.focus();
   });
+  useLayoutEffect(() => {
+    if (deferOpen || !restoreAttentionFocus.current) return;
+    restoreAttentionFocus.current = false;
+    // The old chip may have been removed with the row. Focus a stable heading
+    // only after the dialog has unmounted, without scrolling the user.
+    document.getElementById("attention-title")?.focus({ preventScroll: true });
+  }, [deferOpen]);
 
   if (!deferOpen || !task || task.type !== "task" || task.status !== "open" || activeWorkspaceId === "all" || revoked) return null;
   return <DeferDialog key={task.id} app={app} task={task} anchor={deferOpen.anchor} fromAttention={deferOpen.origin === "attention" ? evidence : undefined} />;
