@@ -626,8 +626,16 @@ export function useLumiApp(options: { targetDetails?: boolean; targetUnified?: b
     setOpenProjectId(project.id);
   }
   function closeProjectPage() {
-    if (window.history.state?.lumiProject) window.history.back();
-    else {
+    const state = window.history.state;
+    if (state?.lumiProject) {
+      // A record inspector opened from a project adds one history entry per
+      // selected record. Close replaces only the last entry with the project
+      // URL, so a project Back must skip those record entries to reach the
+      // project's original view (Home, Today, or the Projects list).
+      const recordSteps = Number.isSafeInteger(state.lumiProjectRecordSteps) &&
+        state.lumiProjectRecordSteps > 0 ? state.lumiProjectRecordSteps : 0;
+      window.history.go(-(recordSteps + 1));
+    } else {
       activeProjectFocusEntryRef.current = null;
       pendingProjectFocusRef.current = null;
       setOpenProjectId(null);
@@ -690,11 +698,28 @@ export function useLumiApp(options: { targetDetails?: boolean; targetUnified?: b
         ? openProjectIdRef.current : null;
       try {
         const target = { kind: e.type, id: e.id, view, ...(parent ? { projectId: parent } : {}) };
-        const address = `${window.location.pathname}${searchForTarget(target, startupView, addressableViews)}`;
+        const address = `${window.location.pathname}${searchWithScope(
+          searchForTarget(target, startupView, addressableViews), scopeFromSearch(window.location.search))}`;
         const prior = targetFromSearch(window.location.search, addressableViews, startupView);
         const same = prior?.kind === e.type && prior.id === e.id &&
           prior.view === view && (prior.projectId ?? null) === parent;
-        if (!same) window.history.pushState({ lumiRecord: e.id }, "", address);
+        // The project was opened from an in-tab origin only if its history
+        // state carries a project marker. Propagate that provenance through
+        // A → B so the project's own Back can skip the inspector entries.
+        const previousState = window.history.state;
+        const projectOrigin = parent && previousState?.lumiProject === parent ? previousState : null;
+        const recordSteps = projectOrigin
+          ? (Number.isSafeInteger(projectOrigin.lumiProjectRecordSteps) &&
+            projectOrigin.lumiProjectRecordSteps >= 0 ? projectOrigin.lumiProjectRecordSteps : 0) + 1
+          : null;
+        if (!same) window.history.pushState({
+          lumiRecord: e.id,
+          ...(recordSteps !== null ? {
+            lumiProject: parent,
+            lumiProjectRecordSteps: recordSteps,
+            ...(typeof projectOrigin?.lumiFocusEntry === "string" ? { lumiFocusEntry: projectOrigin.lumiFocusEntry } : {}),
+          } : {}),
+        }, "", address);
         addressedView.current = view;
       } catch { /* In-memory inspector remains usable if the History API fails. */ }
       if (!parent && openProjectIdRef.current) setOpenProjectId(null);
@@ -729,12 +754,24 @@ export function useLumiApp(options: { targetDetails?: boolean; targetUnified?: b
     pendingRecordRef.current = null;
     closeDetail();
     if (target?.kind !== "task" && target?.kind !== "note") return;
-    const search = target.projectId
+    const search = searchWithScope(target.projectId
       ? searchForTarget({ kind: "project", id: target.projectId }, startupView, addressableViews)
-      : searchForView(target.view, startupView);
+      : searchForView(target.view, startupView), scopeFromSearch(window.location.search));
+    // Preserve the originating project history entry and focus position if
+    // the inspector was opened from an in-tab project page. A typed or
+    // reloaded record URL has no such provenance and closes to a safe parent.
+    const previousState = window.history.state;
+    const projectState = target.projectId && previousState?.lumiProject === target.projectId
+      ? {
+        lumiProject: target.projectId,
+        lumiProjectRecordSteps: Number.isSafeInteger(previousState.lumiProjectRecordSteps) &&
+          previousState.lumiProjectRecordSteps > 0 ? previousState.lumiProjectRecordSteps : 0,
+        ...(typeof previousState.lumiFocusEntry === "string" ? { lumiFocusEntry: previousState.lumiFocusEntry } : {}),
+      } : null;
     setOpenProjectId(target.projectId ?? null);
     try {
-      window.history.replaceState(null, "", `${window.location.pathname}${search}`);
+      window.history.replaceState(projectState, "", `${window.location.pathname}${search}`);
+      if (projectState?.lumiFocusEntry) activeProjectFocusEntryRef.current = projectState.lumiFocusEntry;
       addressedView.current = target.view;
     } catch { /* The address synchronization effect handles the fallback. */ }
   }
