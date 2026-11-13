@@ -7,12 +7,15 @@ on:
     paths:
       - ".github/workflows/release0-c4-focused-browser.yml"
       - "app/ui/use-lumi-app.tsx"
+      - "app/ui/views/detail-panel.tsx"
       - "app/ui/views/defer-popover.tsx"
       - "tests/target-details-wiring.test.mjs"
       - "e2e/record-links-ui01.spec.ts"
+      - "e2e/navigation-unavailable-ui01c.spec.ts"
       - "e2e/attention-open.spec.ts"
       - "e2e/project-page.spec.ts"
       - "e2e/inspector-return-focus-ui01e.spec.ts"
+      - "e2e/detail-inspector-b2.spec.ts"
   workflow_dispatch:
 
 permissions:
@@ -24,9 +27,9 @@ concurrency:
 
 jobs:
   focused-browser:
-    name: C4 seven focused cases (Chromium)
+    name: C4 cases + C10 inspector acceptance (Chromium)
     runs-on: ubuntu-24.04
-    timeout-minutes: 25
+    timeout-minutes: 45
     env:
       CI: "true"
       NEXT_TELEMETRY_DISABLED: "1"
@@ -61,6 +64,73 @@ jobs:
             --project=desktop \
             --grep 'a synced task edit|a fresh Attention refresh|UI-01e: keyboard A|aggregate project deep links|current project relation rejects' \
             --trace=on
+      - name: C10 inspector specs independently (default-off production build)
+        shell: bash
+        run: |
+          pnpm exec playwright test e2e/detail-inspector-b2.spec.ts \
+            --project=desktop --workers=1 --trace=on
+          pnpm exec playwright test e2e/inspector-return-focus-ui01e.spec.ts \
+            --project=desktop --workers=1 --trace=on
+      - name: C10 ordered navigation then both complete inspector suites
+        shell: bash
+        run: |
+          # Playwright 1.56 orders files alphabetically even with --test-list.
+          # Copy existing specs to numbered, temporary aliases; one worker then
+          # executes the complete five suites in the requested order in ONE run
+          # against the SAME synthetic server. No app code or test source changes.
+          ordered=(
+            e2e/c10-01-record-links-ui01.spec.ts
+            e2e/c10-02-navigation-unavailable-ui01c.spec.ts
+            e2e/c10-03-project-page.spec.ts
+            e2e/c10-04-detail-inspector-b2.spec.ts
+            e2e/c10-05-inspector-return-focus-ui01e.spec.ts
+          )
+          cp e2e/record-links-ui01.spec.ts "${ordered[0]}"
+          cp e2e/navigation-unavailable-ui01c.spec.ts "${ordered[1]}"
+          cp e2e/project-page.spec.ts "${ordered[2]}"
+          cp e2e/detail-inspector-b2.spec.ts "${ordered[3]}"
+          cp e2e/inspector-return-focus-ui01e.spec.ts "${ordered[4]}"
+          trap 'rm -f "${ordered[@]}"' EXIT
+          plan="${RUNNER_TEMP}/release0-c10-plan.txt"
+          results="${RUNNER_TEMP}/release0-c10-results.txt"
+          pnpm exec playwright test "${ordered[@]}" --project=desktop --list | tee "${plan}"
+          node - "${plan}" <<'NODE'
+          const fs = require("node:fs");
+          const content = fs.readFileSync(process.argv[2], "utf8");
+          const expected = [
+            "c10-01-record-links-ui01.spec.ts", "c10-02-navigation-unavailable-ui01c.spec.ts",
+            "c10-03-project-page.spec.ts", "c10-04-detail-inspector-b2.spec.ts",
+            "c10-05-inspector-return-focus-ui01e.spec.ts",
+          ];
+          const seen = [];
+          for (const line of content.split(/\r?\n/)) {
+            const file = line.match(/\[desktop\] › (c10-[^:]+\.spec\.ts):/)?.[1];
+            if (file && !seen.includes(file)) seen.push(file);
+          }
+          if (seen.join("|") !== expected.join("|"))
+            throw new Error(`C10 selection/order mismatch: ${seen.join(", ")}`);
+          const count = (content.match(/\[desktop\] › c10-[^\n]+/g) || []).length;
+          if (count < 16) throw new Error(`C10 selected only ${count} desktop tests`);
+          console.log(`C10 discovered ${count} desktop tests across five suites in order`);
+          NODE
+          pnpm exec playwright test "${ordered[@]}" \
+            --project=desktop --workers=1 --trace=on 2>&1 | tee "${results}"
+          node - "${results}" <<'NODE'
+          const fs = require("node:fs");
+          const result = fs.readFileSync(process.argv[2], "utf8");
+          const expected = ["c10-01-record-links-ui01", "c10-02-navigation-unavailable-ui01c",
+            "c10-03-project-page", "c10-04-detail-inspector-b2", "c10-05-inspector-return-focus-ui01e"];
+          const seen = [];
+          for (const line of result.split(/\r?\n/)) {
+            const name = line.match(/\[desktop\] › e2e\/(c10-[^:]+)\.spec\.ts:/)?.[1];
+            if (name && !seen.includes(name)) seen.push(name);
+          }
+          if (seen.join("|") !== expected.join("|"))
+            throw new Error(`C10 actual execution order mismatch: ${seen.join(", ")}`);
+          if (!/\b[1-9][0-9]* passed\b/.test(result))
+            throw new Error("C10 did not execute any passing browser tests");
+          console.log("C10 confirmed nonempty serial execution across five suites");
+          NODE
       - name: Upload focused traces on failure
         if: failure()
         uses: actions/upload-artifact@v6

@@ -283,6 +283,68 @@ test("Home sidebar project: direct URL, actual Back/Forward origin and explicit 
   }
 });
 
+test("C10: inspector Close preserves project Back origin and scoped typed parent", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.goto("/?view=Home");
+  await waitUntilSynced(page);
+  const stamp = now();
+  const projectId = `e2e-c10-project-${stamp}`;
+  const firstId = `e2e-c10-first-${stamp}`;
+  const secondId = `e2e-c10-second-${stamp}`;
+  const projectTitle = `C10 projekt návrat ${R}-${stamp}`;
+  const firstTitle = `C10 první úkol ${R}-${stamp}`;
+  const secondTitle = `C10 druhý úkol ${R}-${stamp}`;
+  expect(await seed(page, {
+    entities: [entity(projectId, "project", projectTitle),
+      entity(firstId, "task", firstTitle), entity(secondId, "task", secondTitle)],
+    relations: [member(stamp, firstId, projectId), member(stamp, secondId, projectId)],
+  })).toBe(200);
+  try {
+    await page.reload();
+    await waitUntilSynced(page);
+    await page.locator("aside .sidebarProjects button", { hasText: projectTitle }).click();
+    const projectPage = page.locator(".projectPage");
+    await expect(projectPage).toHaveAttribute("data-project-page", projectId);
+    const taskButton = (title: string) =>
+      projectPage.locator(".projectTaskList .taskRow", { hasText: title })
+        .getByRole("button", { name: title, exact: true });
+
+    await taskButton(firstTitle).click();
+    await expect(page.locator(".inspectorDetail .titleEdit")).toHaveValue(firstTitle);
+    await taskButton(secondTitle).click();
+    await expect(page.locator(".inspectorDetail .titleEdit")).toHaveValue(secondTitle);
+    await expect(page).toHaveURL(new RegExp(`[?]view=Projects&projectId=${projectId}&taskId=${secondId}$`));
+
+    // Close replaces B with P, but project Back must skip the earlier A and
+    // original P entries to restore Home, not get stuck in an extra project.
+    await page.locator(".inspectorClose").click();
+    await expect(page.locator(".inspectorDetail")).toHaveCount(0);
+    await expect(page).toHaveURL(new RegExp(`[?]view=Projects&projectId=${projectId}$`));
+    await expect(projectPage).toHaveAttribute("data-project-page", projectId);
+    await page.locator(".projectBack").click();
+    await expect(projectPage).toHaveCount(0);
+    await expect(page.locator(".appShell")).toHaveClass(/view-home/);
+    // Home is canonically "/" when it is the configured startup view.
+    await expect(page).toHaveURL(/(?:\/|[?]view=Home)$/);
+
+    // A pasted project/task address has no in-tab project return history.
+    // Close retains the parent and the reading scope; project Back then uses
+    // the safe scoped Projects list rather than navigating outside the app.
+    await page.goto(`/?view=Projects&scope=personal&projectId=${projectId}&taskId=${firstId}`);
+    await waitUntilSynced(page);
+    await expect(page.locator(".inspectorDetail .titleEdit")).toHaveValue(firstTitle);
+    await page.locator(".inspectorClose").click();
+    await expect(page.locator(".inspectorDetail")).toHaveCount(0);
+    await expect(projectPage).toHaveAttribute("data-project-page", projectId);
+    await expect(page).toHaveURL(new RegExp(`[?]view=Projects&projectId=${projectId}&scope=personal$`));
+    await page.locator(".projectBack").click();
+    await expect(projectPage).toHaveCount(0);
+    await expect(page).toHaveURL(/[?]view=Projects&scope=personal$/);
+  } finally {
+    await cleanup(page, [projectId, firstId, secondId]);
+  }
+});
+
 test("browser Back restores a project across a shared workspace switch", async ({ page }) => {
   await page.goto("/?view=Home");
   await waitUntilSynced(page);

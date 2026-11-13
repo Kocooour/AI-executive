@@ -127,7 +127,26 @@ test("UI-01d: popstate resolves exact departure and destination position before 
   assert.match(app, /const target = eligible\(pending\.opener\) \? pending\.opener :/);
   assert.match(app, /target\?\.focus\(\{ preventScroll: true \}\)/);
   assert.match(app, /window\.addEventListener\("popstate", followAddress\)/);
-  assert.match(app, /if \(window\.history\.state\?\.lumiProject\) window\.history\.back\(\)/);
+  // C10 (#416): project Back skips any record-inspector history entries
+  // created since opening the project; without them it remains one Back step.
+  const close = app.match(/function closeProjectPage\(\) \{([\s\S]*?)\n  \}/)?.[1];
+  assert.ok(close, "project Back must have a dedicated handler");
+  assert.match(close, /if \(state\?\.lumiProject\) \{/);
+  assert.match(close, /Number\.isSafeInteger\(state\.lumiProjectRecordSteps\)/);
+  assert.match(close, /state\.lumiProjectRecordSteps > 0 \? state\.lumiProjectRecordSteps : 0/,
+    "a project with no open record has zero extra history steps");
+  assert.match(close, /window\.history\.go\(-\(recordSteps \+ 1\)\)/,
+    "one Back step closes a project directly; additional record steps are skipped");
+  assert.match(close, /searchWithScope\([\s\S]*scopeFromSearch\(window\.location\.search\)/,
+    "direct project URLs close to a safe Projects list retaining reading scope");
+  assert.doesNotMatch(close, /window\.history\.back\(\)/,
+    "a single Back is insufficient after inspecting a project record");
+  const inspect = app.match(/async function inspect\(e: Entity,[\s\S]*?\n  \}/)?.[0];
+  assert.ok(inspect);
+  assert.match(inspect, /lumiProjectRecordSteps: recordSteps/);
+  assert.match(inspect, /lumiProject: parent/);
+  assert.match(inspect, /lumiFocusEntry: projectOrigin\.lumiFocusEntry/,
+    "record navigation keeps the current project focus position");
   assert.match(app, /pendingProjectFocusRef\.current = null;\s*activeProjectFocusEntryRef\.current = null;\s*setNavigationUnavailable\(false\)/,
     "explicit view navigation clears a pending focus return");
   assert.doesNotMatch(read("../lib/project-return-focus.ts"), /localStorage|sessionStorage|fetch\(|\.pushState/);

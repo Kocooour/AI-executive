@@ -37,10 +37,20 @@ test("UI-03b: shared desktop/mobile inspector wires preview-only guarded Escape 
   assert.match(detail, /input, textarea, select, \[contenteditable\]/);
   assert.match(detail, /ref=\{inspectorRef\} tabIndex=\{-1\}/);
   assert.match(detail, /className="close inspectorClose"/);
-  assert.match(app, /function closeInspector\(\)/);
-  assert.match(app, /if \(window\.history\.state\?\.lumiRecord === target\.id\) \{/);
-  assert.match(app, /window\.history\.back\(\)/);
-  assert.match(app, /searchForView\(target\.view, startupView\)/);
+  // C10 (#416): Escape still calls Close, but Close must not traverse the
+  // record stack. It replaces the selected record URL with a scoped parent.
+  const close = app.match(/function closeInspector\(\) \{([\s\S]*?)\n  \}/)?.[1];
+  assert.ok(close, "the shared inspector exposes an explicit Close handler");
+  assert.match(close, /pendingRecordRef\.current = null;\s*closeDetail\(\)/);
+  assert.match(close, /if \(target\?\.kind !== "task" && target\?\.kind !== "note"\) return/);
+  assert.match(close, /searchWithScope\(target\.projectId[\s\S]*scopeFromSearch\(window\.location\.search\)/,
+    "Close preserves the reading scope when removing a task or note ID");
+  assert.match(close, /searchForView\(target\.view, startupView\)/);
+  assert.match(close, /searchForTarget\(\{ kind: "project", id: target\.projectId \}/);
+  assert.match(close, /window\.history\.replaceState\(projectState, "",/,
+    "Close replaces the current history entry, it does not create another one");
+  assert.doesNotMatch(close, /window\.history\.(?:back|go|pushState)\(/,
+    "Close must never traverse browser history or push a new entry");
 });
 
 test("UI-03b: current secondary view receives aria-current without changing legacy menu semantics", () => {
