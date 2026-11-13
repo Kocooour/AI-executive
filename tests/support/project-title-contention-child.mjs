@@ -54,6 +54,17 @@ const authority = new TargetStagingSessionAuthority(store);
 try {
   const issued = authority.issueWritable("alice");
   if (!issued) throw Error("cannot issue synthetic credential");
+  // Issue the follower's REAL authority session before the leader acquires
+  // BEGIN IMMEDIATE. Otherwise session issuance's canonical read preflight
+  // would itself race the SQLite journal and obscure the 200ms write probe.
+  if (mode === "follower") {
+    writeFileSync(path.join(gate, "follower-ready"), "preflight finished");
+    const until = Date.now() + 10000;
+    while (!existsSync(path.join(gate, "leader-ready"))) {
+      if (Date.now() > until) throw Error("leader never reached the pinned write gate");
+      wait(2);
+    }
+  }
   const result = mode === "leader"
     ? authority.updateProjectTitle(issued.sessionToken, command, "alice")
     : authority.cancelProjectTitle(issued.sessionToken, {
