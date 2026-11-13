@@ -29,6 +29,7 @@ import {useTargetTick} from "./use-target-revalidation";
 import {subscribeTargetChange} from "../../lib/target-data-invalidation";
 import {detailIdOk} from "../../lib/target-detail-route";
 import {queuedTargetFetch} from "../../lib/target-read-queue";
+import TargetPrivateStructureCreate from "./target-private-project-create";
 
 // Shared one-at-a-time read queue: the server answers 503 beyond two concurrent reads.
 const readFetch=queuedTargetFetch();
@@ -47,10 +48,10 @@ function useScopeSession(kind:"project"|"note",scope:"all"|"personal"|"shared"){
   return useTargetSession(contextVersion=>createKindIndexReadSession(kind,{scope,contextVersion},readFetch),[kind,scope]);
 }
 
-export default function TargetScopeLists({kind,language="cs",detail=false}:{
+export default function TargetScopeLists({kind,language="cs",detail=false,createProject=false}:{
   kind:"project"|"note";language?:ScopesLanguage;
   /** R3-FE-4a: rows open the authorized detail in the main app (else they stay text). */
-  detail?:boolean;
+  detail?:boolean;createProject?:boolean;
 }){
   const copy=scopesCopy[language];
   const rowCopy=detailCopy[language];
@@ -235,6 +236,9 @@ export default function TargetScopeLists({kind,language="cs",detail=false}:{
       <p role="alert">{copy.reasons[state.reason]}</p>}
     {state.kind==="error"&&state.reason!=="rate-limited"&&
       <button type="button" onClick={reload}>{copy.reload}</button>}
+    {createProject&&kind==="project"&&scope!=="shared"&&page&&
+      <TargetPrivateStructureCreate key={scope} kind="project" language={language}
+        onCommitted={()=>reload()}/>}
     {page&&(rows.length===0&&!page.hasMore
       ?<p>{kind==="project"?copy.projectsEmpty:copy.notesEmpty}</p>
       :groups.map(group=><ul key={group.areaId} className="targetScopeGroup"
