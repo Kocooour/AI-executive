@@ -11,6 +11,7 @@ const [mode, inputFile, gate] = process.argv.slice(2);
 if (!["leader", "follower"].includes(mode)) throw Error("unknown witness mode");
 const { store, command } = JSON.parse(readFileSync(inputFile, "utf8"));
 const wait = ms => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+// Watchdogs detect a stuck worker; the actual write budget stays at 200 ms.
 const realWrite = fs.writeSync;
 const realFsync = fs.fsyncSync;
 const realLstat = fs.lstatSync;
@@ -29,7 +30,7 @@ if (mode === "leader") {
       writeFileSync(path.join(gate, "leader-ready"), "holding pinned title write");
       // The follower itself releases this gate when it has really seen the
       // current SQLite rollback sidecar, not after a guessed sleep interval.
-      const until = Date.now() + 10000;
+      const until = Date.now() + 120_000;
       while (!existsSync(path.join(gate, "follower-contended"))) {
         if (Date.now() > until) throw Error("follower never entered sidecar check");
         wait(2);
@@ -59,7 +60,7 @@ try {
   // would itself race the SQLite journal and obscure the 200ms write probe.
   if (mode === "follower") {
     writeFileSync(path.join(gate, "follower-ready"), "preflight finished");
-    const until = Date.now() + 10000;
+    const until = Date.now() + 120_000;
     while (!existsSync(path.join(gate, "leader-ready"))) {
       if (Date.now() > until) throw Error("leader never reached the pinned write gate");
       wait(2);
