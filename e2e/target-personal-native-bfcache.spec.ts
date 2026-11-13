@@ -132,7 +132,7 @@ function snapshotExpression(secret:string){
     "notRestoredReasons:nav?.notRestoredReasons?"+
     "{reasons:nav.notRestoredReasons.reasons??null,"+
     "children:nav.notRestoredReasons.children?.map(x=>({reasons:x.reasons??null,url:x.url??null}))??null}:"+
-    "null,","+
+    "null,"+
     "userAgent:navigator.userAgent,titleVisible:inputs.some(x=>x.value.includes(secret))||"+
     "document.documentElement.outerHTML.includes(secret),"+
     "area:select?.value??null,reads:reads.filter(x=>x.startsWith('/api/target-staging/')),"+
