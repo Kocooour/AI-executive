@@ -3,10 +3,12 @@
 // Never open the original SQLite file: SQLite read-only connections may update -shm.
 // Writes only to a NEW, expressly named directory; do not run on production.
 import { DatabaseSync } from "node:sqlite";
-import { copyFileSync, existsSync, lstatSync, mkdirSync, readdirSync, realpathSync, writeFileSync, chmodSync, constants } from "node:fs";
+import { copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, writeFileSync, chmodSync, constants } from "node:fs";
 import path from "node:path";
+import os from "node:os";
 import { createHash } from "node:crypto";
 import { isWithinPath as within } from "./r4-path-boundary.mjs";
+import { R4OperatorError, safeFailureReason } from "./r4-cli-errors.mjs";
 
 const TABLES = [
   "entities", "relations", "tombstones", "note_revisions", "context_subjects",
@@ -63,13 +65,13 @@ const cleanInt = value => typeof value === "number" && Number.isSafeInteger(valu
 const countRows = (db, table) => Number(db.prepare("SELECT COUNT(*) AS n FROM " + quote(table)).get().n);
 
 function safeOutput(source, destination) {
-  if (!path.isAbsolute(source) || !path.isAbsolute(destination)) throw Error("absolute paths required");
+  if (!path.isAbsolute(source) || !path.isAbsolute(destination)) throw new R4OperatorError("absolute paths required");
   const src = realpathSync(source);
-  if (!lstatSync(src).isDirectory()) throw Error("source must be a directory");
+  if (!lstatSync(src).isDirectory()) throw new R4OperatorError("source must be a directory");
   const parent = realpathSync(path.dirname(destination));
   const dst = path.join(parent, path.basename(destination));
-  if (within(dst, src) || within(src, dst)) throw Error("source and output paths overlap");
-  if (existsSync(dst) || (lstatSyncMaybe(dst) !== null)) throw Error("output must not exist");
+  if (within(dst, src) || within(src, dst)) throw new R4OperatorError("source and output paths overlap");
+  if (existsSync(dst) || (lstatSyncMaybe(dst) !== null)) throw new R4OperatorError("output must not exist");
   // The app's unset AI_EXECUTIVE_DATA_DIR resolves to <cwd>/.data.
   // Protect it even when the CLI inherits no production environment variables.
   // This guard is a defense-in-depth check, not proof that any input is offline.
@@ -80,10 +82,10 @@ function safeOutput(source, destination) {
   ];
   for (const candidate of liveCandidates) {
     if (!candidate) continue;
-    if (!path.isAbsolute(candidate)) throw Error("live directory config must be absolute");
+    if (!path.isAbsolute(candidate)) throw new R4OperatorError("live directory config must be absolute");
     const live = existsSync(candidate) ? realpathSync(candidate) : path.resolve(candidate);
     if (within(src, live) || within(live, src) || within(dst, live) || within(live, dst))
-      throw Error("known live data overlap refused");
+      throw new R4OperatorError("known live data overlap refused");
   }
   return { src, dst };
 }
@@ -92,7 +94,7 @@ function lstatSyncMaybe(file) {
 }
 function assertRegular(file) {
   const s = lstatSyncMaybe(file);
-  if (!s || !s.isFile() || s.isSymbolicLink()) throw Error("snapshot database is missing or unsafe");
+  if (!s || !s.isFile() || s.isSymbolicLink()) throw new R4OperatorError("snapshot database is missing or unsafe");
   return { size: s.size, mtimeMs: s.mtimeMs };
 }
 function snapshotFiles(src, dst) {
@@ -102,7 +104,7 @@ function snapshotFiles(src, dst) {
     const file = main + suffix;
     if (existsSync(file) || lstatSyncMaybe(file)) before.set(suffix, assertRegular(file));
   }
-  if (!before.has("")) throw Error("offline snapshot has no store.sqlite");
+  if (!before.has("")) throw new R4OperatorError("offline snapshot has no store.sqlite");
   const privateDir = path.join(dst, "inspection-copy");
   mkdirSync(privateDir, { mode: 0o700 });
   for (const suffix of before.keys()) {
@@ -113,16 +115,16 @@ function snapshotFiles(src, dst) {
   for (const [suffix, original] of before) {
     const after = assertRegular(main + suffix);
     if (original.size !== after.size || original.mtimeMs !== after.mtimeMs)
-      throw Error("offline snapshot changed while being copied");
+      throw new R4OperatorError("offline snapshot changed while being copied");
   }
   return path.join(privateDir, "store.sqlite");
 }
 
 function readInventory(db, source, tokenAttestation) {
   const found = new Set(db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all().map(row => row.name));
-  if (!found.has("entities")) throw Error("not a recognized legacy Lumi store");
+  if (!found.has("entities")) throw new R4OperatorError("not a recognized legacy Lumi store");
   const integrity = db.prepare("PRAGMA integrity_check").all().every(row => Object.values(row)[0] === "ok");
-  if (!integrity) throw Error("snapshot failed SQLite integrity_check");
+  if (!integrity) throw new R4OperatorError("snapshot failed SQLite integrity_check");
   const tables = {};
   const timestampRanges = {};
   for (const table of TABLES) {
@@ -143,7 +145,7 @@ function readInventory(db, source, tokenAttestation) {
   let entityCount = 0;
   const workspaceSet = new Set();
   function parseEntity(payload) {
-    if (Buffer.byteLength(String(payload)) > MAX_ENTITY_BYTES) throw Error("oversized entity payload");
+    if (Buffer.byteLength(String(payload)) > MAX_ENTITY_BYTES) throw new R4OperatorError("oversized entity payload");
     let value;
     try { value = JSON.parse(String(payload)); } catch { return { workspace: null, kind: "other" }; }
     return {
@@ -152,7 +154,7 @@ function readInventory(db, source, tokenAttestation) {
     };
   }
   for (const row of stmt.iterate()) {
-    if (++entityCount > MAX_ENTITY_ROWS) throw Error("entity count exceeds safe inventory cap");
+    if (++entityCount > MAX_ENTITY_ROWS) throw new R4OperatorError("entity count exceeds safe inventory cap");
     const parsed = parseEntity(row.payload);
     if (parsed.workspace) workspaceSet.add(parsed.workspace);
   }
@@ -305,10 +307,10 @@ function readInventory(db, source, tokenAttestation) {
   const backupsDir = path.join(source, "backups");
   let backupFiles = 0;
   const backupEntry = lstatSyncMaybe(backupsDir);
-  if (backupEntry?.isSymbolicLink()) throw Error("unsafe symlink to backups");
+  if (backupEntry?.isSymbolicLink()) throw new R4OperatorError("unsafe symlink to backups");
   if (backupEntry?.isDirectory()) {
     for (const item of readdirSync(backupsDir, { withFileTypes: true })) {
-      if (item.isSymbolicLink()) throw Error("unsafe backup symlink");
+      if (item.isSymbolicLink()) throw new R4OperatorError("unsafe backup symlink");
       if (item.isFile()) backupFiles += 1;
       // Nested backup trees are inventoried by the full-directory rehearsal.
     }
@@ -338,18 +340,32 @@ function main() {
   const args = process.argv.slice(2);
   // An explicit human/operator assertion is required, but cannot itself prove
   // a coherent or detached offline capture.
-  if (args.pop() !== "--offline-confirmed") throw Error("offline source confirmation required");
+  if (args.pop() !== "--offline-confirmed") throw new R4OperatorError("offline source confirmation required");
   if (!(args.length === 2 || (args.length === 4 && args[2] === "--integration-token-present" &&
       (args[3] === "true" || args[3] === "false"))))
-    throw Error("usage: inventory <offline-copy> <new-output> [--integration-token-present true|false] --offline-confirmed");
+    throw new R4OperatorError("usage: inventory <offline-copy> <new-output> [--integration-token-present true|false] --offline-confirmed");
   const tokenAttestation = args.length === 4 ? args[3] === "true" : null;
   const { src, dst } = safeOutput(args[0], args[1]);
-  // Only create the new output directory once all collision/alias checks have passed.
-  mkdirSync(dst, { mode: 0o700 });
-  const copiedFile = snapshotFiles(src, dst);
-  const db = new DatabaseSync(copiedFile, { readOnly: true });
+  // Read private SQLite bytes only in a separate, mode-0700 scratch directory.
+  // The operator-facing output may contain ONLY the content-free JSON/summary,
+  // even if inspection fails. A normal return or thrown error clears the scratch.
+  const scratchParent = realpathSync(os.tmpdir());
+  if (within(scratchParent, src))
+    throw new R4OperatorError("temporary inspection directory must be outside the offline source");
+  const scratch = mkdtempSync(path.join(scratchParent, "lumi-r4-inventory-"));
   let report;
-  try { report = readInventory(db, src, tokenAttestation); } finally { db.close(); }
+  try {
+    chmodSync(scratch, 0o700);
+    const copiedFile = snapshotFiles(src, scratch);
+    const db = new DatabaseSync(copiedFile, { readOnly: true });
+    try { report = readInventory(db, src, tokenAttestation); }
+    finally { db.close(); }
+  } finally {
+    // Hard termination cannot execute finally; protect the scratch by 0700 and
+    // document that operators must clean abandoned temp dirs after a crash.
+    rmSync(scratch, { recursive: true, force: true });
+  }
+  mkdirSync(dst, { mode: 0o700 });
   const summary = [
     "R4 offline inventory (content-free; no production access)",
     "Legacy entities: " + report.entities.count,
@@ -370,6 +386,6 @@ function main() {
 }
 try { main(); } catch (error) {
   // Do not echo OS/SQLite messages: they can contain sensitive absolute paths/SQL content.
-  console.error("R4 inventory refused or failed (" + (error instanceof Error ? error.constructor.name : "error") + ")");
+  console.error("R4 inventory: FAIL — " + safeFailureReason(error) + " (private paths and values suppressed)");
   process.exitCode = 1;
 }
