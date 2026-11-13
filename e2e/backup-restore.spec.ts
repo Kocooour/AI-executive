@@ -1353,21 +1353,23 @@ test("a paused ordinary pull never stamps its stale generation after a sibling o
     expect(oldGeneration).not.toBeNull();
 
     await setStore(owner, [task(id, "Opožděné potvrzení generace")]);
-    const backup = await createManualBackup(owner);
+    await createManualBackup(owner);
     await openBackups(adopter);
 
     // Pause only this page's NORMAL generation commit, after applySnapshot
     // has completed its IndexedDB transaction. This does not acquire the
     // actual recovery-data lock, so the owner's adoption can finish first.
     await delayed.evaluate(() => {
-      const state = window as unknown as { e2eStampPending?: boolean; e2eReleaseStamp?: () => void };
+      const state = window as unknown as { e2eStampPending?: boolean; e2eStampComplete?: boolean; e2eReleaseStamp?: () => void };
       const original = navigator.locks.request.bind(navigator.locks);
       Object.defineProperty(navigator, "locks", { configurable: true, value: {
         request: (name: string, callback: () => Promise<unknown>) => {
           if (name !== "ai-executive-recovery-data") return original(name, callback);
           state.e2eStampPending = true;
           return new Promise<unknown>((resolve, reject) => {
-            state.e2eReleaseStamp = () => { void original(name, callback).then(resolve, reject); };
+            state.e2eReleaseStamp = () => {
+              void original(name, callback).then(resolve, reject).finally(() => { state.e2eStampComplete = true; });
+            };
           });
         },
       } });
@@ -1390,12 +1392,12 @@ test("a paused ordinary pull never stamps its stale generation after a sibling o
     });
     await expect.poll(() => delayed.evaluate(() =>
       localStorage.getItem("ai-executive-restore-generation"))).toBe(newGeneration);
-    // Its pending lock operation is no longer queued. A late stamp would
-    // have overwritten the shared key before the queue became empty.
-    await expect.poll(() => delayed.evaluate(async () => {
-      const queued = await navigator.locks.query();
-      return queued.pending.filter(lock => lock.name === "ai-executive-recovery-data").length;
-    })).toBe(0);
+    // Wait for the exact delayed callback, not just a transient shared
+    // storage read which could precede the stale continuation.
+    await delayed.waitForFunction(() =>
+      (window as unknown as { e2eStampComplete?: boolean }).e2eStampComplete === true);
+    expect(await delayed.evaluate(() => localStorage.getItem("ai-executive-restore-generation")))
+      .toBe(newGeneration);
     expect(await adopter.evaluate(() => localStorage.getItem("ai-executive-restore-generation"))).toBe(newGeneration);
     expect((await serverEntities(owner)).some(entity => entity.id === id)).toBe(true);
   } finally { await ownerContext.close(); await tabs.close(); }
