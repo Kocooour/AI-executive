@@ -96,12 +96,14 @@ Dnes, Attention, push/notifikace, HumanWiki, produkční zapnutí.
    prohlížečový test je nově zařazen do real-store opt-in profilu v
    `playwright.config.ts`, se samostatnými seedovanými daty. **Akceptace je
    ověřená až po úspěšném běhu obou scénářů v CI.**
-4. **Nově zachycený úkol bez „Kdy“ není v Mém plánu vidět.** Po zavření potvrzení
-   („Zobrazit úkol“) se k němu z hlavního UI nelze dostat: Můj plán ukazuje jen
-   naplánované dny, seznam úkolů cílový režim nemá a výsledky hledání nejsou
-   otevíratelné (bod 3). [LUMI-FR-013](PRODUCT.md#lumi-fr-013) přitom říká, že Můj
-   plán obsahuje všechny soukromé úkoly uživatele. Test proto úkol plánuje
-   přímo z potvrzení. Řeší druhý PR milníku A.
+4. **Nově zachycený úkol bez „Kdy“ není v Mém plánu vidět.** Můj plán
+   ukazuje jen naplánované dny, takže po zavření potvrzení („Zobrazit úkol“)
+   úkol z Mého plánu nelze otevřít. Při zapnutém autorizovaném hledání a detailu
+   jej však lze explicitně vyhledat a otevřít přes výsledky hledání (bod 3).
+   Zbývající problém se týká úplnosti Mého plánu, nikoliv otevírání výsledků:
+   [LUMI-FR-013](PRODUCT.md#lumi-fr-013) říká, že Můj plán obsahuje všechny
+   soukromé úkoly uživatele. Test proto úkol plánuje přímo z potvrzení.
+   Řeší druhý PR milníku A.
 5. **Interní žargon v textech cílového režimu (neopraveno).**
    `lib/target-my-plan-copy.ts:106` („stagingový přehled“), `:127`–`:128`
    („Izolovaný stagingový…“, „novým CAS“), `:168` („dueOn“, „Každý zápis
