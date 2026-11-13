@@ -231,9 +231,15 @@ async function runTaskStatus(input:Extract<WriteInput,{kind:"taskStatus"}>,d:Dep
     ?await readTaskCompletionContext(input.taskId,input.areaId,d.fetch,d.signal)
     :await readTaskWriteContext(input.taskId,input.areaId,d.fetch,d.signal);
   if(ctx.ok===false)return outcomeForFailure(ctx.reason);
+  const originalDay="previousWhenOn" in ctx?ctx.previousWhenOn:undefined;
+  if(input.status==="completed"&&originalDay===undefined)
+    return {t:"error",reason:"invalid-response"};
+  if(originalDay!==undefined&&originalDay!==null&&typeof originalDay!=="string")
+    return {t:"error",reason:"invalid-response"};
   const command:MyPlanStatusCommand={
     commandId:crypto.randomUUID(),taskId:input.taskId,status:input.status,...ctx.context,
-    ...("previousWhenOn" in ctx?{previousWhenOn:ctx.previousWhenOn}:{}),
+    ...(originalDay===null||typeof originalDay==="string"
+      ?{previousWhenOn:originalDay}:{}),
   };
   if(!validStatusCommand(command))return {t:"error",reason:"invalid"};
   // Server Undo semantics as in My Plan: only a completion is undoable (reopening it).
