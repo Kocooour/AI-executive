@@ -79,7 +79,8 @@ async function prepareLegacy(page:Page){
       const response = await fetch("/api/store", {
         method: "PUT", headers: { "content-type": "application/json" },
         body: JSON.stringify({ baseRevision: snapshot.revision, restoreGeneration: snapshot.restoreGeneration,
-          entities: [...snapshot.entities, { id: "r3-fe05-legacy-server", title, type: "task", status: "open",
+          entities: [...snapshot.entities.filter((item: { id: string }) => item.id !== "r3-fe05-legacy-server"),
+            { id: "r3-fe05-legacy-server", title, type: "task", status: "open",
             workspaceId: "personal", properties: { inbox: true }, createdAt: now, updatedAt: now }],
           relations: snapshot.relations, deletedIds: [], revivedIds: [] }),
       });
