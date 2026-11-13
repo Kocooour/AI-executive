@@ -49,7 +49,10 @@ node deployment/rehearsal/cutover-restore-rehearsal.mjs \
   --offline-confirmed
 
 # A second, INDEPENDENTLY captured offline copy can be compared against the
-# first copy, including its non-SQLite artifacts:
+# first copy, including its non-SQLite artifacts. The two input roots must
+# resolve to distinct non-overlapping directories (no self-comparison,
+# symlink aliases, parent/child inputs). This only validates path separation;
+# the operator must independently attest separate, consistent captures.
 node deployment/rehearsal/cutover-restore-rehearsal.mjs \
   --verify /offline/legacy-copy /offline/legacy-candidate /new/verify-output --offline-confirmed
 ```
