@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { releaseOwnerRead } from "../../../../lib/owner-session-read-release";
 import { fenceRestoredClient } from "../../../../lib/restore-fence";
 import { isAuthenticated } from "../../../../lib/auth";
 import { ContextCommandError } from "../../../../lib/context-commands";
@@ -23,8 +24,8 @@ export async function GET(request: Request) {
   if (limited) return NextResponse.json({ error: limited.error }, { status: limited.status });
   try {
     const workspaceId = new URL(request.url).searchParams.get("workspaceId") || "";
-    return NextResponse.json(getContextHistory(workspaceId), { headers: { "cache-control": "no-store" } });
-  } catch (error) { return errorResponse(error); }
+    return releaseOwnerRead(request, NextResponse.json(getContextHistory(workspaceId), { headers: { "cache-control": "no-store" } }));
+  } catch (error) { return releaseOwnerRead(request, errorResponse(error)); }
 }
 
 export async function POST(request: Request) {

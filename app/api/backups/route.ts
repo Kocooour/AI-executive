@@ -1,3 +1,4 @@
+import { releaseOwnerRead } from "../../../lib/owner-session-read-release";
 import { NextResponse } from "next/server";
 import {
   createBackup,
@@ -31,10 +32,10 @@ export async function GET(request: Request) {
     });
   }
   recordSecurityEvent(request, "backup.read", "allowed");
-  return NextResponse.json(
+  return releaseOwnerRead(request, NextResponse.json(
     { backups: listBackups() },
     { headers: { "cache-control": "no-store" } },
-  );
+  ));
 }
 
 export async function POST(request: Request) {

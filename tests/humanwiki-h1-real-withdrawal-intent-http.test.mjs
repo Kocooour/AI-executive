@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { after, test } from "node:test";
 import { DatabaseSync } from "node:sqlite";
-import { createSessionToken, sessionCookieName } from "../lib/auth.ts";
+import { createSessionToken, sessionCookieName } from "./support/owner-session-test-cookie.mjs";
 import { bootstrapIsolatedTargetStore } from "../lib/target-store-bootstrap.ts";
 import { GET, POST } from "../app/api/humanwiki/withdrawal-intent/route.ts";
 import { POST as importPost } from "../app/api/humanwiki/import/route.ts";

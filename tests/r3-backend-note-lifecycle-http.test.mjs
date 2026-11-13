@@ -43,7 +43,7 @@ const { bootstrapIsolatedTargetStore, TARGET_STAGING_NOTE_LIFECYCLE_RECEIPT_PREF
 const { TARGET_STAGING_JOURNAL_FILENAME } =
   await import("../lib/target-staging-anchor-journal.ts");
 const durable = await import("../lib/target-staging-durable-session.ts");
-const { createSessionToken, sessionCookieName } = await import("../lib/auth.ts");
+const { createSessionToken, sessionCookieName } = await import("./support/owner-session-test-cookie.mjs");
 const { POST: CREATE } = await import("../app/api/target-staging/notes/route.ts");
 const { GET: DETAIL, DELETE: REMOVE } =
   await import("../app/api/target-staging/notes/[noteId]/route.ts");

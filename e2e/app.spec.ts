@@ -128,6 +128,8 @@ test("capture switches destination and area to the selected workspace", async ({
   await modal.getByLabel("Název úkolu").fill(title);
   await expect.poll(() => suggestedFor).toBe(ids.workspaceId);
   await area.selectOption(ids.targetAreaId);
+  // #248: shared capture needs explicit, scoped consent.
+  await modal.getByRole("checkbox", { name: /Potvrzuji, že se tato položka má uložit do sdíleného prostoru/ }).check();
   await modal.getByRole("button", { name: "Přidat úkol" }).click();
   await expect(modal).toHaveCount(0);
   await expect.poll(async () => page.evaluate(async (name) => {
@@ -185,6 +187,8 @@ test("a task added from a project in another workspace goes to that workspace an
   await modal.getByLabel("Název úkolu").fill(title);
   // Suggestions (calendar window) are asked for in the project's workspace.
   await expect.poll(() => suggestedFor).toBe(ids.workspaceId);
+  // #248: choosing a shared parent project also requires consent.
+  await modal.getByRole("checkbox", { name: /Potvrzuji, že se tato položka má uložit do sdíleného prostoru/ }).check();
   await modal.getByRole("button", { name: "Přidat úkol" }).click();
   await expect(modal).toHaveCount(0);
   await expect.poll(async () => page.evaluate(async ({ name, projectId }) => {

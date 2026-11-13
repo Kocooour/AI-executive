@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
+import { createHmac } from "node:crypto";
 import { spawn, spawnSync } from "node:child_process";
 import {
   chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync,
-  readFileSync, readdirSync, rmSync, writeFileSync, statSync,
+  readFileSync, readdirSync, renameSync, rmSync, writeFileSync, statSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -140,9 +141,10 @@ function sandbox(scenario) {
     LUMI_TEST_SCENARIO: scenario,
     LUMI_TEST_LOCK_FILE: lockFile,
   };
-  function execute() {
-    const result = spawnSync("bash", ["-c", script, "--", newSha], {
-      cwd: root, env, encoding: "utf8", timeout: 40000, maxBuffer: 3 * 1024 * 1024,
+  function execute({ recovery = false } = {}) {
+    const result = spawnSync("bash", ["-c", script, "--", newSha, ...(recovery ? ["--recover-stopped"] : [])], {
+      cwd: root, env: { ...env, LUMI_TEST_RECOVERY_MODE: recovery ? "true" : "false" },
+      encoding: "utf8", timeout: 40000, maxBuffer: 3 * 1024 * 1024,
     });
     assert.ifError(result.error);
     return {
@@ -325,6 +327,154 @@ scenarioCase("rowloss: rollback refuses to certify lost canonical rows", (r, f) 
   assert.equal(r.backups.length, 1, "verified backup must be preserved for owner decision");
   assert.ok(existsSync(path.join(f.backups, r.backups[0], "rollback.json")));
 });
+scenarioCase("firstrolloutunhealthy: failed new startup never re-enables pre-revocation owner cookies", (r, f) => {
+  assert.notEqual(r.status, 0, "the synthetic first rollout must fail its readiness check");
+  assert.match(r.output, /sluzba nebo lokalni\/HTTPS API nejsou dostupne/);
+  assert.match(r.output, /BEZPECNOSTNI BLOKACE: neuspesne nasazeni nebo obnova revokace relaci/);
+  assert.equal(r.head, newSha, "must not reset to pre-feature auth code");
+  assert.equal(r.service, "inactive", "failed first rollout leaves all owner API traffic stopped");
+  assert.equal(r.events.includes("start-b"), true, "new service was tried after cutoff init");
+  assert.equal(r.events.includes("start-a"), false, "pre-feature service is never restarted");
+  assert.equal(r.events.includes("reset"), false, "old auth code must not be restored automatically");
+  assert.equal(r.backups.length, 1, "verified data backup remains available for manual repair");
+  const marker = path.join(f.data, "owner-session-valid-from.sqlite");
+  assert.equal(existsSync(marker), true, "the real target CLI provisions the persistent cutoff");
+  const db = new DatabaseSync(marker, { readOnly: true });
+  try {
+    const row = db.prepare("SELECT version, valid_from_ms FROM owner_session_cutoff WHERE id = 1").get();
+    assert.equal(row.version, 1);
+    assert.ok(Number.isSafeInteger(row.valid_from_ms) && row.valid_from_ms > 0);
+  } finally { db.close(); }
+
+  // This is a pre-feature owner token: signed with the same session secret,
+  // unexpired, but missing issuedAt. The old auth code accepts this format
+  // while the target auth rejects it. Never restart the old code after cutoff.
+  const secret = "synthetic-first-rollout-session-secret-long-enough";
+  const payload = Buffer.from(JSON.stringify({
+    subject: "owner", expiresAt: Date.now() + 3600_000,
+  })).toString("base64url");
+  const oldCookie = payload + "." + createHmac("sha256", secret).update(payload).digest("base64url");
+  const [issuedPayload, issuedSignature] = oldCookie.split(".");
+  const original = JSON.parse(Buffer.from(issuedPayload, "base64url").toString("utf8"));
+  assert.equal(original.subject, "owner");
+  assert.ok(original.expiresAt > Date.now());
+  assert.equal(Object.hasOwn(original, "issuedAt"), false);
+  assert.equal(issuedSignature, createHmac("sha256", secret).update(issuedPayload).digest("base64url"),
+    "pre-feature owner validation would accept this still-signed cookie");
+  assert.equal(r.events.includes("start-a"), false, "the vulnerable old authentication is never exposed");
+});
+
+test("first rollout: pre-fast-forward backup failure restores old service and allows a healthy retry", { timeout: 90000 }, () => {
+  const f = sandbox("firstrolloutpartialcopy");
+  try {
+    const first = f.execute();
+    assert.notEqual(first.status, 0);
+    assert.match(first.output, /simulated ENOSPC/);
+    assert.match(first.output, /selhal pred zmenou kodu a pred pokusem o inicializaci/);
+    assert.equal(first.head, oldSha, "backup failed before fast-forward");
+    assert.equal(first.service, "active", "pre-feature service is restored before any cutoff exists");
+    assert.equal(first.events.includes("merge"), false);
+    assert.equal(first.events.includes("start-a"), true);
+    assert.equal(first.events.includes("start-b"), false);
+    assert.deepEqual(first.backups, [], "unverified partial backup is deleted");
+    const marker = path.join(f.data, "owner-session-valid-from.sqlite");
+    assert.equal(existsSync(marker), false, "failed preflight never provisioned cutoff");
+
+    // Fix the synthetic disk failure, then perform an ordinary first rollout.
+    const second = f.execute();
+    assert.equal(second.status, 0, second.output);
+    assert.equal(second.head, newSha);
+    assert.equal(second.service, "active");
+    assert.equal(second.events.includes("start-b"), true);
+    assert.equal(second.events.includes("reset"), false);
+    assert.equal(second.backups.length, 1);
+    assert.equal(existsSync(marker), true, "healthy retry provisions the real cutoff");
+    const db = new DatabaseSync(marker, { readOnly: true });
+    try {
+      assert.ok(db.prepare("SELECT valid_from_ms FROM owner_session_cutoff WHERE id = 1").get().valid_from_ms > 0);
+    } finally { db.close(); }
+  } finally { f.cleanup(); }
+});
+
+test("first rollout: old auth is not restarted if cutoff state already exists before backup failure", { timeout: 50000 }, () => {
+  const f = sandbox("firstrolloutpartialcopy");
+  try {
+    const marker = path.join(f.data, "owner-session-valid-from.sqlite");
+    writeFileSync(marker, "preexisting-cutoff-must-not-be-treated-as-absent", { mode: 0o600 });
+    const result = f.execute();
+    assert.notEqual(result.status, 0);
+    assert.match(result.output, /BEZPECNOSTNI BLOKACE/);
+    assert.equal(result.head, oldSha);
+    assert.equal(result.service, "inactive");
+    assert.equal(result.events.includes("start-a"), false);
+    assert.equal(result.events.includes("merge"), false);
+    assert.equal(readFileSync(marker, "utf8"), "preexisting-cutoff-must-not-be-treated-as-absent");
+  } finally { f.cleanup(); }
+});
+
+test("failed first rollout can recover from a stopped, cutoff-aware checkout without resetting revocation", { timeout: 125000 }, () => {
+  const f = sandbox("firstrolloutunhealthy");
+  try {
+    const first = f.execute();
+    assert.notEqual(first.status, 0);
+    assert.equal(first.service, "inactive");
+    assert.equal(first.head, newSha);
+    assert.equal(first.events.includes("start-a"), false);
+    const marker = path.join(f.data, "owner-session-valid-from.sqlite");
+    assert.equal(existsSync(marker), true);
+    const readCutoff = () => {
+      const db = new DatabaseSync(marker, { readOnly: true });
+      try { return db.prepare("SELECT valid_from_ms FROM owner_session_cutoff WHERE id = 1").get().valid_from_ms; }
+      finally { db.close(); }
+    };
+    const cutoff = readCutoff();
+    const normal = f.execute();
+    assert.notEqual(normal.status, 0, "normal deployment cannot repair a stopped service");
+    assert.match(normal.output, /sluzba nebezi/);
+    assert.equal(normal.service, "inactive");
+    const saved = marker + ".saved";
+    // Recovery may neither create a missing cutoff nor start the service while it is missing.
+    renameSync(marker, saved);
+    try {
+      const missing = f.execute({ recovery: true });
+      assert.notEqual(missing.status, 0);
+      assert.match(missing.output, /stav revokace relaci chybi nebo je neplatny/);
+      assert.equal(missing.service, "inactive");
+      assert.equal(missing.events.includes("start-a"), false);
+    } finally {
+      renameSync(saved, marker);
+    }
+    const recovered = f.execute({ recovery: true });
+    assert.equal(recovered.status, 0, recovered.output);
+    assert.equal(recovered.service, "active");
+    assert.equal(recovered.head, newSha);
+    assert.equal(recovered.events.includes("reset"), false);
+    assert.equal(recovered.events.includes("start-a"), false);
+    assert.equal(readCutoff(), cutoff, "recovery preserves the exact persisted cutoff");
+    assert.ok(recovered.events.filter(x => x === "start-b").length >= 2,
+      "only cutoff-aware new code was started");
+    assert.equal(recovered.backups.length, 2, "both attempts preserve validated backups");
+    const activeRecovery = f.execute({ recovery: true });
+    assert.notEqual(activeRecovery.status, 0);
+    assert.match(activeRecovery.output, /rezim obnovy vyzaduje zastavenou sluzbu/);
+    assert.equal(activeRecovery.service, "active");
+  } finally { f.cleanup(); }
+});
+
+test("stopped pre-feature code cannot opt into cutoff recovery", { timeout: 50000 }, () => {
+  const f = sandbox("success");
+  try {
+    writeFileSync(path.join(f.root, "state/service"), "inactive");
+    const result = f.execute({ recovery: true });
+    assert.notEqual(result.status, 0);
+    assert.match(result.output, /obnova vyzaduje jiz nasazenou verzi s revokaci relaci/);
+    assert.equal(result.service, "inactive");
+    assert.equal(result.head, oldSha);
+    assert.equal(result.events.includes("start-a"), false);
+    assert.deepEqual(result.backups, []);
+  } finally { f.cleanup(); }
+});
+
 scenarioCase("unhealthy: failed HTTP readiness triggers verified code rollback", (r) => {
   assert.notEqual(r.status, 0);
   assert.match(r.output, /sluzba nebo lokalni\/HTTPS API nejsou dostupne/);
