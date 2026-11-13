@@ -1088,6 +1088,9 @@ test("R3-A3 Undo restores When atomically, rejects stale and revoked completions
   await accepted(statusPATCH,statusURL,sharedComplete,bob,{ok:true});
   const sharedUndo={...await writePreview(statusGET,statusURL,"s-bob",bob),
     taskId:"s-bob",status:"open",undoOf:sharedComplete,commandId:randomUUID()};
+  // The canonical DB guard requires assigned tasks to be unassigned BEFORE
+  // membership removal. Both transitions invalidate the old actor CAS.
+  f.db.prepare("UPDATE tasks SET assignee_user_id=NULL WHERE id='s-bob'").run();
   f.db.prepare("DELETE FROM area_members WHERE area_id='family-area' AND user_id='bob'").run();
   assert.notEqual((await writeCommand(statusPATCH,statusURL,sharedUndo,bob)).status,200);
   assert.equal(f.db.prepare("SELECT status FROM tasks WHERE id='s-bob'").get().status,"completed");
