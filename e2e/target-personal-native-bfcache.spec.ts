@@ -161,7 +161,8 @@ for(const width of [390,1280]){
     type NativeRead={
       requestId:string;path:string;method:string;requestOrder:number;
       responseOrder?:number;status?:number;finishedOrder?:number;
-      failed?:boolean;fromServiceWorker?:boolean
+      failed?:boolean;fromServiceWorker?:boolean;fromDiskCache?:boolean;
+      fromPrefetchCache?:boolean;cacheServed?:boolean
     };
     const reads:NativeRead[]=[];
     const pendingReads=new Map<string,NativeRead>();
@@ -180,12 +181,21 @@ for(const width of [390,1280]){
       reads.push(read);
       pendingReads.set(e.requestId,read);
     });
+    const unsubscribeCached=cdp.on("Network.requestServedFromCache",event=>{
+      const read=pendingReads.get((event as {requestId:string}).requestId);
+      if(read)read.cacheServed=true;
+    });
     const unsubscribeResponse=cdp.on("Network.responseReceived",event=>{
-      const e=event as {requestId:string;response:{status:number;fromServiceWorker?:boolean}};
+      const e=event as {requestId:string;response:{
+        status:number;fromServiceWorker?:boolean;fromDiskCache?:boolean;
+        fromPrefetchCache?:boolean
+      }};
       const read=pendingReads.get(e.requestId);
       if(!read)return;
       read.status=e.response.status;
       read.fromServiceWorker=e.response.fromServiceWorker===true;
+      read.fromDiskCache=e.response.fromDiskCache===true;
+      read.fromPrefetchCache=e.response.fromPrefetchCache===true;
       read.responseOrder=++networkOrder;
     });
     const unsubscribeFinished=cdp.on("Network.loadingFinished",event=>{
@@ -203,8 +213,9 @@ for(const width of [390,1280]){
     const successfulRead=(path:string)=>reads.find(read=>
       backReadMark!==null&&read.requestOrder>backReadMark&&
       read.path===path&&read.method==="GET"&&read.status===200&&
-      read.fromServiceWorker===false&&read.responseOrder!==undefined&&
-      read.finishedOrder!==undefined&&!read.failed);
+      read.fromServiceWorker===false&&read.fromDiskCache===false&&
+      read.fromPrefetchCache===false&&read.cacheServed!==true&&
+      read.responseOrder!==undefined&&read.finishedOrder!==undefined&&!read.failed);
     const unsubscribeNotUsed=cdp.on("Page.backForwardCacheNotUsed",event=>{
       const data=event as {frameId?:string;notRestoredExplanations?:{reason:string;type:string}[]};
       // Keep reasons and frame identity only: no cookies, paths or private data.
@@ -226,6 +237,9 @@ for(const width of [390,1280]){
           responseOrder:read.responseOrder??null,requestOrder:read.requestOrder,
           finished:read.finishedOrder!==undefined,failed:read.failed===true,
           fromServiceWorker:read.fromServiceWorker??null,
+          fromDiskCache:read.fromDiskCache??null,
+          fromPrefetchCache:read.fromPrefetchCache??null,
+          cacheServed:read.cacheServed===true,
         })),
         ...(error===undefined?{}:{error:String(error)})};
       console.log("NATIVE_REAL_BFCACHE_EVIDENCE "+JSON.stringify(record));
@@ -351,6 +365,7 @@ for(const width of [390,1280]){
       throw error;
     }finally{
       unsubscribeRequest();
+      unsubscribeCached();
       unsubscribeResponse();
       unsubscribeFinished();
       unsubscribeFailed();
