@@ -97,5 +97,5 @@ export function writeTargetProjectTitle(store: TargetStagingReadStore, access: T
     // and retry the exact same idempotency key only after the store is trusted again.
     const confirmed = context.commit({kind:"project_title",payload:{}});
     return confirmed ? {ok:true} : failed();
-  }, denied, failed);
+  }, denied, failed, 3_000); // PATCH and cancel compete for one pinned BEGIN IMMEDIATE.
 }
