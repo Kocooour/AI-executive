@@ -780,7 +780,9 @@ export function readPreflightedTemporalStatusPreview(
 export function readPreflightedTemporalDueOnPreview(
   store:TargetStagingReadStore,access:TargetStagingReadCredential,taskId:string,
 ):{detail:TemporalTaskDetail;expectedRevision:string}|null {
-  return readPreflightedTemporalStatusPreview(store,access,taskId);
+  const preview=readPreflightedTemporalStatusPreview(store,access,taskId);
+  // The dueOn-only API must not inherit the actor-private completion witness.
+  return preview?{detail:preview.detail,expectedRevision:preview.expectedRevision}:null;
 }
 
 /**
