@@ -62,7 +62,7 @@ test("UI-06d: work-session finishing and the single guarded task completion rema
   assert.match(detail, /const taskPreviewMayToggle = taskPreviewCanToggle\(selectedTask, app\.activeWorkspaceId,/);
   assert.match(detail, /entityConflicts\(selectedTask\)\.length > 0 \|\| activeTaskSession/);
   assert.match(detail, /\{desktopTaskPreview && selectedTask && \(\s*<LumiCompletionControl kind="task"/);
-  assert.match(detail, /disabled=\{!taskPreviewMayToggle\}/);
+  assert.match(detail, /disabled=\{!taskPreviewMayToggle \|\| app\.legacyWritesDisabled\}/);
   assert.match(detail, /\{!mobileDesignV1Preview && \(selected.status === "completed" \?/,
     "preview cannot fall back to the unguarded legacy completion before hydration");
   const pos = detail.indexOf("? [essentialsSection, notesSection, workButton, moreButton");

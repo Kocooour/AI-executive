@@ -9,7 +9,6 @@ import { SyncConflicts } from "./sync-conflicts";
 import { NoteEditor } from "./note-editor";
 import { DeferChip } from "./defer-popover";
 import { InboxTriage } from "./inbox-triage";
-import { LegacyWriteGate } from "./legacy-write-gate";
 import { heldBackReason } from "./held-back";
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { mobileDesignV1Preview } from "../navigation";
@@ -41,11 +40,11 @@ function useSentValue(stored: string, show: (value: string) => void, canShow: ()
 
 // The follow-up date. What is typed is kept here; a year typed digit by digit passes through
 // dates like 0002-10-09, so only a cleared field or a plausible date is saved.
-function FollowUpDateInput({ value, onSave }: { value: string; onSave: (value: string) => void }) {
+function FollowUpDateInput({ value, onSave, disabled }: { value: string; onSave: (value: string) => void; disabled?: boolean }) {
   const [shown, setShown] = useState(value);
   const send = useSentValue(value, setShown);
   return (
-    <input
+    <input disabled={disabled}
       type="date"
       value={shown}
       onChange={(event) => {
@@ -58,13 +57,13 @@ function FollowUpDateInput({ value, onSave }: { value: string; onSave: (value: s
 }
 
 // Who or what the task waits for, saved when the field is left.
-function WaitingForInput({ value, placeholder, onSave }: { value: string; placeholder: string; onSave: (value: string) => void }) {
+function WaitingForInput({ value, placeholder, onSave, disabled }: { value: string; placeholder: string; onSave: (value: string) => void; disabled?: boolean }) {
   const [shown, setShown] = useState(value);
   const focused = useRef(false);
   // A change from elsewhere does not replace what is being typed.
   const send = useSentValue(value, setShown, () => !focused.current);
   return (
-    <input
+    <input disabled={disabled}
       value={shown}
       maxLength={120}
       placeholder={placeholder}
@@ -476,7 +475,7 @@ export function DetailPanel({ app }: { app: LumiApp }) {
                 <div key="list" className="taskDetailMoreGroup taskDetailMoreList" id={`task-more-list-${selected.id}`}>
                 <label>
                   {tr("list")}
-                  <select
+                  <select disabled={app.legacyWritesDisabled}
                     value={
                       selected.properties.inbox === true
                         ? "Inbox"
@@ -511,7 +510,7 @@ export function DetailPanel({ app }: { app: LumiApp }) {
                   <span>{tr("when")}</span>
                   <div className="scheduleChoices" role="group" aria-label={tr("when")}>
                     {(["today", "tomorrow", "someday", "clear"] as const).map((choice) => (
-                      <button key={choice} type="button"
+                      <button disabled={app.legacyWritesDisabled} key={choice} type="button"
                         className={choice === "today" ? (selected.properties.when === today ? "active" : "")
                           : choice === "tomorrow" ? (selected.properties.when === ymd(addLocalDays(new Date(), 1)) ? "active" : "")
                             : choice === "someday" ? (selected.properties.someday === true ? "active" : "")
@@ -519,7 +518,7 @@ export function DetailPanel({ app }: { app: LumiApp }) {
                         onClick={() => void scheduleTask(selected, choice)}>{tr(`schedule${choice[0].toUpperCase()}${choice.slice(1)}`)}</button>
                     ))}
                   </div>
-                  <input
+                  <input disabled={app.legacyWritesDisabled}
                     type="date"
                     aria-label={tr("when")}
                     value={String(selected.properties.when || "")}
@@ -528,7 +527,7 @@ export function DetailPanel({ app }: { app: LumiApp }) {
                 </div>
                 <label>
                   {tr("deadline")}
-                  <input
+                  <input disabled={app.legacyWritesDisabled}
                     type="date"
                     value={String(selected.properties.deadline || "")}
                     onChange={(e) =>
@@ -538,7 +537,7 @@ export function DetailPanel({ app }: { app: LumiApp }) {
                 </label>
                 <label>
                   {tr("project")}
-                  <select
+                  <select disabled={app.legacyWritesDisabled}
                     value={String(
                       targets(selected.id, "belongs_to_project")[0] || "",
                     )}
@@ -569,7 +568,7 @@ export function DetailPanel({ app }: { app: LumiApp }) {
                 ) : (
                   <label>
                     {tr("area")}
-                    <select
+                    <select disabled={app.legacyWritesDisabled}
                       aria-label={tr("area")}
                       value={String(
                         targets(selected.id, "belongs_to_area")[0] || "",
@@ -598,7 +597,7 @@ export function DetailPanel({ app }: { app: LumiApp }) {
                 <div key="options" className="taskDetailMoreGroup taskDetailMoreOptions" id={`task-more-options-${selected.id}`}>
                 <label>
                   {tr("priority")}
-                  <select
+                  <select disabled={app.legacyWritesDisabled}
                     value={String(selected.properties.priority || "none")}
                     onChange={(e) =>
                       patch(selected, { priority: e.target.value })
@@ -613,7 +612,7 @@ export function DetailPanel({ app }: { app: LumiApp }) {
                 <fieldset className="waitingField">
                   <legend>{tr("waitingTitle")}</legend>
                   <label className="inlineCheck">
-                    <input
+                    <input disabled={app.legacyWritesDisabled}
                       type="checkbox"
                       checked={selected.properties.waiting === true}
                       onChange={(event) => patch(selected, event.target.checked
@@ -629,7 +628,7 @@ export function DetailPanel({ app }: { app: LumiApp }) {
                     <>
                       <label>
                         {tr("waitingFor")}
-                        <WaitingForInput
+                        <WaitingForInput disabled={app.legacyWritesDisabled}
                           key={selected.id}
                           value={String(selected.properties.waitingFor || "")}
                           placeholder={tr("waitingForPlaceholder")}
@@ -638,7 +637,7 @@ export function DetailPanel({ app }: { app: LumiApp }) {
                       </label>
                       <label>
                         {tr("followUpDate")}
-                        <FollowUpDateInput
+                        <FollowUpDateInput disabled={app.legacyWritesDisabled}
                           key={selected.id}
                           value={String(selected.properties.followUpDate || "")}
                           onSave={(value) => void patch(selected, { followUpDate: value }, "follow-up date changed", true)}
@@ -650,7 +649,7 @@ export function DetailPanel({ app }: { app: LumiApp }) {
                 </fieldset>
                 <label>
                   {tr("duration")}
-                  <DurationInput
+                  <DurationInput disabled={app.legacyWritesDisabled}
                     value={String(selected.properties.estimatedMinutes || "")}
                     onChange={(estimatedMinutes) => {
                       const plannedStart = String(selected.properties.plannedStart || "");
@@ -663,7 +662,7 @@ export function DetailPanel({ app }: { app: LumiApp }) {
                 </label>
                 <label>
                   {tr("plannedTime")}
-                  <input
+                  <input disabled={app.legacyWritesDisabled}
                     type="datetime-local"
                     value={toLocalDateTime(selected.properties.plannedStart)}
                     onChange={(event) => {
@@ -685,7 +684,7 @@ export function DetailPanel({ app }: { app: LumiApp }) {
                 </label>
                 <label>
                   {tr("reminder")}
-                  <input
+                  <input disabled={app.legacyWritesDisabled}
                     type="datetime-local"
                     value={toLocalDateTime(selected.properties.reminderAt)}
                     onChange={(e) =>
@@ -694,7 +693,7 @@ export function DetailPanel({ app }: { app: LumiApp }) {
                   />
                 </label>
                 {selected.properties.when && notificationState && (
-                  <button
+                  <button disabled={app.legacyWritesDisabled}
                     type="button"
                     onClick={() => {
                       const planned = new Date(`${String(selected.properties.when)}T12:00:00Z`);
@@ -721,7 +720,7 @@ export function DetailPanel({ app }: { app: LumiApp }) {
                 <div key="notes" className="taskDetailNotes">
                 <label>
                   {tr("taskNotes")}
-                  <textarea
+                  <textarea disabled={app.legacyWritesDisabled}
                     value={notesDraft?.id === selected.id ? notesDraft.text : String(selected.properties.notes || "")}
                     onChange={(e) => editNotes(selected.id, e.target.value, String(selected.properties.notes || ""))}
                     // Only notes typed here are saved: leaving the field unchanged must not write the
@@ -741,7 +740,7 @@ export function DetailPanel({ app }: { app: LumiApp }) {
                       : raw as { id?: string; title?: string; done?: boolean };
                     return (
                       <label className="checklistItem" key={item.id || index}>
-                        <input
+                        <input disabled={app.legacyWritesDisabled}
                           type="checkbox"
                           checked={Boolean(item.done)}
                           onChange={() => patch(selected, (stored) => ({
@@ -760,7 +759,7 @@ export function DetailPanel({ app }: { app: LumiApp }) {
                     );
                   })}
                   <div className="checklistAdd">
-                    <input
+                    <input disabled={app.legacyWritesDisabled}
                       value={checklistDraft}
                       onChange={(event) => setChecklistDraft(event.target.value)}
                       onKeyDown={(event) => {
@@ -776,7 +775,7 @@ export function DetailPanel({ app }: { app: LumiApp }) {
                     />
                     <button
                       type="button"
-                      disabled={!checklistDraft.trim()}
+                      disabled={!checklistDraft.trim() || app.legacyWritesDisabled}
                       onClick={() => {
                         const added = { id: crypto.randomUUID(), title: checklistDraft.trim(), done: false };
                         patch(selected, (stored) => ({
@@ -807,7 +806,7 @@ export function DetailPanel({ app }: { app: LumiApp }) {
                 <div key="actions" className="taskDetailMoreGroup taskDetailMoreActions" id={`task-more-actions-${selected.id}`}>
                 <label>
                   {tr("repeat")}
-                  <select
+                  <select disabled={app.legacyWritesDisabled}
                     value={String(
                       (selected.properties.recurrence as any)?.frequency ||
                         selected.properties.repeat ||
@@ -837,7 +836,7 @@ export function DetailPanel({ app }: { app: LumiApp }) {
                   <>
                     <label>
                       {tr("every")}
-                      <input
+                      <input disabled={app.legacyWritesDisabled}
                         type="number"
                         min="1"
                         value={String(
@@ -856,7 +855,7 @@ export function DetailPanel({ app }: { app: LumiApp }) {
                     </label>
                     <label>
                       {tr("repeatFrom")}
-                      <select
+                      <select disabled={app.legacyWritesDisabled}
                         value={String(
                           (selected.properties.recurrence as any)?.mode ||
                             "scheduled",
@@ -890,7 +889,7 @@ export function DetailPanel({ app }: { app: LumiApp }) {
                       ))}
                   </div>
                 )}
-                <button
+                <button disabled={app.legacyWritesDisabled}
                   onClick={() =>
                     patch(selected, {
                       someday: true,
@@ -906,25 +905,20 @@ export function DetailPanel({ app }: { app: LumiApp }) {
                 {/* The viewport is null until hydration. A preview must NEVER
                     expose the legacy, unguarded completion in that gap. */}
                 {!mobileDesignV1Preview && (selected.status === "completed" ? (
-                  <button onClick={() => reopenTask(selected)}>{tr("reopen")}</button>
+                  <button disabled={app.legacyWritesDisabled} onClick={() => reopenTask(selected)}>{tr("reopen")}</button>
                 ) : (
-                  <button className="primaryAction" onClick={() => done(selected.id)}>{workSession?.taskId === selected.id ? tr("workFinish") : tr("complete")}</button>
+                  <button disabled={app.legacyWritesDisabled} className="primaryAction" onClick={() => done(selected.id)}>{workSession?.taskId === selected.id ? tr("workFinish") : tr("complete")}</button>
                 ))}
-                <button className="danger" disabled={isFallbackArea(selected, app.items)} onClick={() => remove(selected)}>
+                <button className="danger" disabled={isFallbackArea(selected, app.items) || app.legacyWritesDisabled} onClick={() => remove(selected)}>
                   {tr("delete")}
                 </button>
                 </div>
               );
-              // Only the disclosure is navigational. All editable sections are
-              // natively disabled in target mode, including saves on blur.
-              const gate = (name: string, section: ReactNode) => <LegacyWriteGate key={name}>{section}</LegacyWriteGate>;
               return (
                 <div className="fields taskDetailFields" data-task-more-open={taskMoreOpen ? "true" : "false"}>
                   {(mobileTaskPreview || desktopTaskPreview)
-                    ? [gate("essentials", essentialsSection), gate("notes", notesSection), workButton, moreButton,
-                        gate("list", listSection), gate("options", optionsSection), gate("actions", actionsSection)]
-                    : [gate("list", listSection), gate("essentials", essentialsSection), gate("options", optionsSection),
-                        gate("notes", notesSection), moreButton, workButton, gate("actions", actionsSection)]}
+                    ? [essentialsSection, notesSection, workButton, moreButton, listSection, optionsSection, actionsSection]
+                    : [listSection, essentialsSection, optionsSection, notesSection, moreButton, workButton, actionsSection]}
                 </div>
               );
             })()}
