@@ -146,6 +146,11 @@ export function persistOrdinaryGeneration(
   if (knownGeneration !== undefined && (generation !== knownGeneration || persisted !== knownGeneration))
     return false;
   if (persisted !== undefined && persisted !== generation) return false;
+  // A normal pull reaffirms the SAME generation. Once already persisted it
+  // does not need to write again: browsers with quota/read-only storage may
+  // reject setItem, but that must not leave every unrelated pull offline.
+  // The shared recovery Web Lock still protects the read/decision.
+  if (raw === String(generation)) return true;
   storage.setItem(ownerAdoptionGenerationKey, String(generation));
   return storage.getItem(ownerAdoptionGenerationKey) === String(generation);
 }
