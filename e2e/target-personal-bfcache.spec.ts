@@ -11,7 +11,8 @@ test.skip(process.env.LUMI_TARGET_PERSONAL_ACCEPTANCE_E2E !== "true",
 
 type Store = { seed: { areaTitle: string } };
 const store = JSON.parse(process.env.LUMI_E2E_TARGET_STORE || "null") as Store | null;
-const strictRealHit = process.env.LUMI_REAL_BFCACHE_E2E === "true";
+// Standard Playwright always launches Chrome with BFCache disabled. The strict
+// persisted assertion belongs to the independent native-browser witness.
 const fab = (page: Page, width: number) =>
   page.locator('[data-target-private-capture-fab="' + (width === 390 ? "mobile" : "desktop") + '"]');
 const taskForm = (page: Page) => page.getByTestId("target-private-task-form");
@@ -124,11 +125,11 @@ for (const width of [390, 1280]) {
     expect(["", null], "Area retained immediately after Back").toContain(immediate.selectedArea);
     // The manual release gate cannot pass on a fallback reload. Never simulate
     // persisted=true, turn a miss into a skip, or claim a BFCache hit from Back alone.
-    if (strictRealHit) {
-      expect(browser.persisted,
-        "No real pageshow.persisted=true; browser notRestoredReasons=" +
-        JSON.stringify(browser.notRestoredReasons) + ", Cache-Control=" + cacheControl).toBe(true);
-    }
+    // This Playwright test is intentionally the full-reload fallback test:
+    // native Chrome, without Playwright's --disable-back-forward-cache, owns
+    // the strict persisted=true release requirement (see native-bfcache.spec).
+    expect(browser.persisted,
+      "Playwright should not claim a BFCache hit with its disabled cache").toBe(false);
     await expect.poll(() => trace.responses.slice(mark).some(value =>
       value === "GET /api/target-staging/session 200"
     ), { message: "Fresh authorized session GET must precede post-Back action", timeout: 15_000 }).toBe(true);
