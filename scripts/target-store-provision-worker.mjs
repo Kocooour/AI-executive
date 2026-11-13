@@ -11,6 +11,7 @@ import { register } from "node:module";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { isWithinPath as within } from "./r4-path-boundary.mjs";
+import { isOwnedByOperator } from "./r4-store-ownership.mjs";
 import { R4OperatorError, safeFailureReason } from "./r4-cli-errors.mjs";
 
 const USAGE = "usage: target-store-provision.mjs <absolute-new-directory> <ownerUserId> --confirmed | --check <absolute-existing-directory>";
@@ -101,16 +102,26 @@ function safeTarget(input, mustExist) {
 }
 
 function assertPrivateStore(directory) {
+  // Enforce ownership before each read-only preflight and after validation.
+  // A 0700 directory or 0600 file owned by another UID can still be modified
+  // concurrently by that owner if this command is run with elevated privileges.
+  const operatorUid = process.getuid?.();
   const dirStat = lstatSync(directory);
-  if (!dirStat.isDirectory() || dirStat.isSymbolicLink() || (dirStat.mode & 0o7777) !== 0o700)
+  if (!dirStat.isDirectory() || dirStat.isSymbolicLink() ||
+      !isOwnedByOperator(dirStat, operatorUid))
+    fail("target directory ownership or type is unsafe");
+  if ((dirStat.mode & 0o7777) !== 0o700)
     fail("target directory permissions are not 0700");
   const names = readdirSync(directory).sort();
   if (JSON.stringify(names) !== JSON.stringify(STORE_FILES))
     fail("target store contains missing or unexpected files");
   for (const name of STORE_FILES) {
     const stat = lstatSync(path.join(directory, name));
-    if (!stat.isFile() || stat.isSymbolicLink() || (stat.mode & 0o7777) !== 0o600)
-      fail("target file permissions or type are unsafe");
+    if (!stat.isFile() || stat.isSymbolicLink() ||
+        !isOwnedByOperator(stat, operatorUid))
+      fail("target file ownership or type is unsafe");
+    if ((stat.mode & 0o7777) !== 0o600)
+      fail("target file permissions are not 0600");
   }
 }
 
