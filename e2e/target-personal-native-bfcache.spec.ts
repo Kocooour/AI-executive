@@ -155,19 +155,78 @@ for(const width of [390,1280]){
     let secret="";
     let preBack: {shows:boolean[];docToken:string}|null=null;
     const cacheNotUsed: {reasons:{reason:string;type:string}[];frameId?:string}[]=[];
+    // Record actual HTTP completions rather than inferring authorization from
+    // PerformanceResourceTiming names (which have no method/status). Register
+    // before navigation: wake requests can race a post-Back CDP snapshot.
+    type NativeRead={
+      requestId:string;path:string;method:string;requestOrder:number;
+      responseOrder?:number;status?:number;finishedOrder?:number;
+      failed?:boolean;fromServiceWorker?:boolean
+    };
+    const reads:NativeRead[]=[];
+    const pendingReads=new Map<string,NativeRead>();
+    let networkOrder=0;
+    let backReadMark:number|null=null;
+    const targetReadPaths=new Set([
+      "/api/target-staging/session",
+      "/api/target-staging/notes/create-targets",
+    ]);
+    const unsubscribeRequest=cdp.on("Network.requestWillBeSent",event=>{
+      const e=event as {requestId:string;request:{url:string;method:string}};
+      const url=new URL(e.request.url);
+      if(url.origin!==origin||!targetReadPaths.has(url.pathname))return;
+      const read:NativeRead={requestId:e.requestId,path:url.pathname,
+        method:e.request.method,requestOrder:++networkOrder};
+      reads.push(read);
+      pendingReads.set(e.requestId,read);
+    });
+    const unsubscribeResponse=cdp.on("Network.responseReceived",event=>{
+      const e=event as {requestId:string;response:{status:number;fromServiceWorker?:boolean}};
+      const read=pendingReads.get(e.requestId);
+      if(!read)return;
+      read.status=e.response.status;
+      read.fromServiceWorker=e.response.fromServiceWorker===true;
+      read.responseOrder=++networkOrder;
+    });
+    const unsubscribeFinished=cdp.on("Network.loadingFinished",event=>{
+      const read=pendingReads.get((event as {requestId:string}).requestId);
+      if(!read)return;
+      read.finishedOrder=++networkOrder;
+      pendingReads.delete(read.requestId);
+    });
+    const unsubscribeFailed=cdp.on("Network.loadingFailed",event=>{
+      const read=pendingReads.get((event as {requestId:string}).requestId);
+      if(!read)return;
+      read.failed=true;
+      pendingReads.delete(read.requestId);
+    });
+    const successfulRead=(path:string)=>reads.find(read=>
+      backReadMark!==null&&read.requestOrder>backReadMark&&
+      read.path===path&&read.method==="GET"&&read.status===200&&
+      read.fromServiceWorker===false&&read.responseOrder!==undefined&&
+      read.finishedOrder!==undefined&&!read.failed);
     const unsubscribeNotUsed=cdp.on("Page.backForwardCacheNotUsed",event=>{
       const data=event as {frameId?:string;notRestoredExplanations?:{reason:string;type:string}[]};
       // Keep reasons and frame identity only: no cookies, paths or private data.
       cacheNotUsed.push({frameId:data.frameId,reasons:(data.notRestoredExplanations||[])
         .map(reason=>({reason:reason.reason,type:reason.type}))});
     });
-    async function evidence(status:"observed"|"failure",error?:unknown){
+    async function evidence(status:"observed"|"wake-authorized"|"failure",error?:unknown){
       let browser:Record<string,unknown>;
       try{browser=await cdp.eval<Record<string,unknown>>(snapshotExpression(secret));}
       catch(snapshotError){browser={snapshotError:String(snapshotError)};}
       const record={status,phase,width,
         checkedOutSha:process.env.LUMI_TESTED_CHECKOUT_SHA??null,
         preBack,cacheNotUsed,browser,
+        // Only endpoint paths and outcomes; never include request bodies, task
+        // names, URLs with query strings, cookies or authorization headers.
+        freshHttpReads:reads.filter(read=>backReadMark!==null&&
+          read.requestOrder>backReadMark).map(read=>({
+          path:read.path,method:read.method,status:read.status??null,
+          responseOrder:read.responseOrder??null,requestOrder:read.requestOrder,
+          finished:read.finishedOrder!==undefined,failed:read.failed===true,
+          fromServiceWorker:read.fromServiceWorker??null,
+        })),
         ...(error===undefined?{}:{error:String(error)})};
       console.log("NATIVE_REAL_BFCACHE_EVIDENCE "+JSON.stringify(record));
       await test.info().attach("native-bfcache-"+width+"-"+status+".json",{
@@ -175,6 +234,7 @@ for(const width of [390,1280]){
       return browser;
     }
     try{
+      await cdp.send("Network.enable");
       await cdp.send("Emulation.setDeviceMetricsOverride",{
         width,height:844,deviceScaleFactor:1,mobile:width===390});
       await cdp.send("Page.navigate",{url:origin+"/?view=Calendar&scope=personal"});
@@ -213,6 +273,8 @@ for(const width of [390,1280]){
       // no synthetic PageTransitionEvent. Keep the private response no-store.
       await cdp.eval("location.assign('/robots.txt');true");
       await waitFor("robots.txt",()=>cdp.eval<boolean>("location.pathname==='/robots.txt'"));
+      // Only requests begun after this marker may certify a fresh wake.
+      backReadMark=networkOrder;
       phase="native history.back";
       await cdp.eval("history.back();true");
       await waitFor("native browser back",()=>cdp.eval<boolean>(
@@ -239,15 +301,23 @@ for(const width of [390,1280]){
         // document we left, rather than a fresh navigation or SPA transition.
         expect(first.documentToken,"BFCache returned a different document")
           .toBe(preBack?.docToken);
-        const awake=await waitFor("new authorized session and Area GET",async()=>{
-          const state=await cdp.eval<any>(snapshotExpression(secret));
-          return state.reads.includes("/api/target-staging/session")&&
-            state.reads.includes("/api/target-staging/notes/create-targets")?state:null;
+        // A resource name is insufficient: require a *new* completed GET 200
+        // from the real HTTP origin for BOTH endpoints. A 401/403/500,
+        // aborted request or SW response must not count as authorization.
+        // The successful session response must complete BEFORE the Area
+        // request starts, and all of this precedes the next user action.
+        const authorized=await waitFor("fresh authorized GET 200 session then Area",async()=>{
+          const session=successfulRead("/api/target-staging/session");
+          const area=successfulRead("/api/target-staging/notes/create-targets");
+          return session&&area&&session.finishedOrder!<area.requestOrder
+            ?{session,area}:null;
         });
-        expect(awake.reads.indexOf("/api/target-staging/session")).toBeLessThan(
-          awake.reads.indexOf("/api/target-staging/notes/create-targets"));
+        expect(authorized.session.finishedOrder).toBeLessThan(
+          authorized.area.requestOrder);
+        const awake=await cdp.eval<any>(snapshotExpression(secret));
         expect(awake.titleVisible).toBe(false);
         expect(["",null]).toContain(awake.area);
+        await evidence("wake-authorized");
         // Before any new action we have proved a fresh authorized session and
         // Area lookup. Only now may the user reselect the private Area. Neither
         // the abandoned text nor an executable old CREATE may be revived.
@@ -262,7 +332,6 @@ for(const width of [390,1280]){
         const postRestoreTitle=await cdp.eval<string>(
           "document.querySelector('[data-testid=\"target-private-task-form\"] input').value");
         expect(postRestoreTitle,"Old React draft reappeared after Area reselect").toBe("");
-        await cdp.send("Network.enable");
         const creates:string[]=[];
         const unsubscribe=cdp.on("Network.requestWillBeSent",event=>{
           const req=event.request as {url:string;method:string};
@@ -281,6 +350,10 @@ for(const width of [390,1280]){
         console.log("NATIVE_BFCACHE_DIAGNOSTIC_ERROR "+String(diagnosticError)));
       throw error;
     }finally{
+      unsubscribeRequest();
+      unsubscribeResponse();
+      unsubscribeFinished();
+      unsubscribeFailed();
       unsubscribeNotUsed();
       cdp.close();chrome.kill("SIGKILL");
       rmSync(profile,{recursive:true,force:true,maxRetries:20,retryDelay:100});
