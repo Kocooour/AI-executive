@@ -3,7 +3,7 @@ import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import {
-  chmodSync, cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync,
+  chmodSync, chownSync, cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync,
   readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync,
 } from "node:fs";
 import os from "node:os";
@@ -11,6 +11,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 import { TARGET_PERSONAL_V1_REQUIRED_SETTINGS } from "../lib/target-personal-profile.ts";
+import { isOwnedByOperator } from "../scripts/r4-store-ownership.mjs";
 
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const provision = path.join(repo, "scripts/target-store-provision.mjs");
@@ -73,9 +74,11 @@ test("new target: exactly the required settings, private files, preflight, read-
   assert.match(initial[2], /^[a-f0-9-]{36}$/i);
   assert.deepEqual(readdirSync(dir).sort(), files);
   assert.equal(lstatSync(dir).mode & 0o7777, 0o700);
+  assert.equal(lstatSync(dir).uid, process.getuid());
   for (const name of files) {
     const st = lstatSync(path.join(dir, name));
     assert.ok(st.isFile());
+    assert.equal(st.uid, process.getuid(), name);
     assert.equal(st.mode & 0o7777, 0o600, name);
   }
   assert.deepEqual(readdirSync(base).sort(), ["legacy", "target"]);
@@ -187,6 +190,49 @@ test("reject unsafe writable ancestors without writes; permit sticky protected p
   assert.match(deniedCheck.stderr, /unsafe group\/other write permissions/);
   assert.deepEqual(snapshot(target), before);
   assert.equal(readFileSync(sentinel, "utf8"), "never overwrite");
+});
+
+test("foreign UID is rejected even with private POSIX modes (pure ownership policy)", () => {
+  const operatorUid = 1001;
+  for (const mode of [0o700, 0o600]) {
+    assert.equal(isOwnedByOperator({ uid: operatorUid, mode }, operatorUid), true);
+    assert.equal(isOwnedByOperator({ uid: operatorUid + 1, mode }, operatorUid), false);
+    assert.equal(isOwnedByOperator({ uid: 0, mode }, operatorUid), false);
+    assert.equal(isOwnedByOperator({ uid: operatorUid, mode }, undefined), false);
+    assert.equal(isOwnedByOperator({ uid: operatorUid, mode }, -1), false);
+  }
+});
+
+test("--check rejects foreign-owned directory or each companion without modifying it", {
+  skip: process.getuid?.() !== 0 ? "requires root to create a foreign-UID fixture" : false,
+}, t => {
+  const { base, legacy } = fixture(t);
+  const dir = path.join(base, "target");
+  const options = { legacy };
+  const provisioned = run([dir, "owner", "--confirmed"], options);
+  assert.equal(provisioned.status, 0, provisioned.stderr);
+  const baseline = snapshot(dir);
+  const foreignUid = 65534; // synthetic unprivileged user (numeric UID need not exist)
+  const paths = [dir, ...files.map(name => path.join(dir, name))];
+
+  for (const currentPath of paths) {
+    const original = lstatSync(currentPath);
+    chownSync(currentPath, foreignUid, original.gid);
+    try {
+      assert.equal(lstatSync(currentPath).uid, foreignUid);
+      const denied = reject(["--check", dir], options);
+      assert.match(denied.stderr, /ownership or type is unsafe/);
+      assert.deepEqual(snapshot(dir), baseline);
+      assert.equal(lstatSync(currentPath).uid, foreignUid, "read-only check must not repair ownership");
+    } finally {
+      chownSync(currentPath, original.uid, original.gid);
+    }
+  }
+  const verified = run(["--check", dir], options);
+  assert.equal(verified.status, 0, verified.stderr);
+  assert.equal(verified.stdout, provisioned.stdout);
+  assert.equal(verified.stderr, "");
+  assert.deepEqual(snapshot(dir), baseline);
 });
 
 test("repeat provision cannot overwrite existing store, its generation or other bytes", t => {
