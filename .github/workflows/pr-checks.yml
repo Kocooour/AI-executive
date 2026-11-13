@@ -69,6 +69,61 @@ jobs:
         if: steps.scope.outputs.code == 'true'
         run: node scripts/ci-pr-tests.mjs --test
 
+      # GitHub's normal runner is not root, so the foreign-UID integration
+      # regression is otherwise skipped. Run it explicitly with elevated UID
+      # against synthetic /tmp fixtures only; no deployment credentials exist.
+      - name: Privileged R4 ownership regression
+        if: steps.scope.outputs.code == 'true' && hashFiles('tests/target-store-provision.test.mjs') != ''
+        run: |
+          sudo -n env TMPDIR=/tmp R4_REQUIRE_ROOT_OWNERSHIP_TEST=1 \
+            "$(command -v node)" --experimental-loader ./tests/ts-loader.mjs \
+            --test --test-name-pattern='^--check rejects foreign-owned directory or each companion without modifying it
+
+  main-regression:
+    name: Main Regression
+    # Run the broad unit and HTTP integration suite once changes reach main,
+    # or on an explicit manual dispatch. Not a required PR status.
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      CI: "true"
+      NEXT_TELEMETRY_DISABLED: "1"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v5
+        with:
+          version: 10.20.0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+          cache: pnpm
+
+      - name: Install locked dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Deployment script syntax
+        run: bash -n deployment/deploy-safe.sh
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Full unit and regression suite
+        run: pnpm test
+
+      - name: Production build
+        run: pnpm build
+
+      - name: Next router HTTP integration smoke
+        run: node --experimental-loader ./tests/ts-loader.mjs scripts/target-staging-next-smoke.mjs
+ \
+            tests/target-store-provision.test.mjs
+
       - name: Production build
         if: steps.scope.outputs.code == 'true'
         run: pnpm build
