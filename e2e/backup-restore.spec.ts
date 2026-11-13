@@ -1016,7 +1016,7 @@ test("owner adoption and D2b recovery hold serialize across sibling tabs, regard
       // strip owner proof on either response so the real D2b hold wins first.
       await holder.route("**/api/store", async (route) => {
         const response = await route.fetch();
-        if (!response.ok && response.status !== 409)
+        if (!response.ok() && response.status() !== 409)
           return route.fulfill({ response });
         const snapshot = await response.json();
         delete snapshot.restoreKind;
