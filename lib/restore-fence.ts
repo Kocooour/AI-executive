@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
-import { currentRestoreKind, getDatabase } from "./server-store";
+import { getDatabase } from "./server-store";
+import { restoreKindForGeneration } from "./restore-generation-origin";
 import { requireSameOrigin } from "./http-security";
 
 // Every owner-session write of an included table carries the restore generation the client knows (the header below, added
@@ -24,10 +25,17 @@ export function currentRestoreGeneration() {
 export function fenceRestoredClient(request: Request): NextResponse | null {
   // A request from another origin (or with none) is refused by the route's own origin check, with its own status.
   try { requireSameOrigin(request); } catch { return null; }
-  const generation = currentRestoreGeneration();
+  // The counter and its origin must come from ONE SQLite read snapshot.
+  // A concurrent restore commits both atomically; two separate reads could
+  // observe a new counter with an old origin and falsely deny certification.
+  const metadata = getDatabase().prepare(
+    "SELECT key, value FROM metadata WHERE key IN ('restoreGeneration', 'restoreGenerationOrigin')",
+  ).all() as Array<{ key: string; value: string }>;
+  const generation = Number(metadata.find((row) => row.key === "restoreGeneration")?.value) || 0;
   if (!restoreGenerationMismatch(request.headers.get(restoreGenerationHeader), generation)) return null;
+  const origin = metadata.find((row) => row.key === "restoreGenerationOrigin")?.value ?? "";
   return NextResponse.json(
-    { error: "Data was restored", code: "restored", restoreGeneration: generation, restoreKind: currentRestoreKind() },
+    { error: "Data was restored", code: "restored", restoreGeneration: generation, restoreKind: restoreKindForGeneration(generation, origin) },
     { status: 409, headers: { "cache-control": "no-store" } },
   );
 }
