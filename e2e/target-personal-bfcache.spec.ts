@@ -108,6 +108,7 @@ for (const width of [390, 1280]) {
       return {
         pageShows: state?.pageShows ?? [],
         persisted: state?.pageShows.includes(true) === true,
+        browserUserAgent: navigator.userAgent,
         navigationType: navigation?.type ?? "unavailable",
         notRestoredReasons: navigation?.notRestoredReasons ?? null,
       };
