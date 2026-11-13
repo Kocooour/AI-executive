@@ -85,24 +85,38 @@ function routes(dir = directory) {
 // Explicit per-route/method exclusions: the HTTP family flags in the release
 // profile are independent. In particular /projects GET is ON but POST is OFF.
 // Unknown/new routes default to ON and MUST prove 401, never silently pass 404.
-const disabled = [
-  { pattern: /^attention(?:\/|$)/, flag: "AI_EXECUTIVE_TARGET_STAGING_HTTP_ATTENTION_ENABLED" },
-  { pattern: /^global-index$/, flag: "AI_EXECUTIVE_TARGET_STAGING_HTTP_GLOBAL_COMBINED_ENABLED" },
-  { pattern: /^home(?:\/|$)/, flag: "AI_EXECUTIVE_TARGET_STAGING_HTTP_HOME_ENABLED" },
-  { pattern: /^note-sync(?:-session)?$/, flag: "AI_EXECUTIVE_TARGET_STAGING_HTTP_NOTE_SYNC_ENABLED" },
-  { pattern: /^notifications(?:\/|$)/, flag: "AI_EXECUTIVE_TARGET_STAGING_HTTP_NOTIFICATIONS_ENABLED" },
-  { pattern: /^project-tasks(?:\/|$)/, flag: "AI_EXECUTIVE_TARGET_STAGING_HTTP_PROJECT_TASKS_CREATE_ENABLED" },
-  { pattern: /^projects\/(?:create-recovery|create-status)$/, flag: "AI_EXECUTIVE_TARGET_STAGING_HTTP_PROJECTS_CREATE_ENABLED" },
-  { pattern: /^relations(?:\/|$)/, flag: "AI_EXECUTIVE_TARGET_STAGING_HTTP_RELATIONS_ENABLED" },
-  { pattern: /^projects\/\[projectId\]\/relations$/, flag: "AI_EXECUTIVE_TARGET_STAGING_HTTP_RELATIONS_ENABLED" },
-  { pattern: /^task-index\/global$/, flag: "AI_EXECUTIVE_TARGET_STAGING_HTTP_GLOBAL_TASKS_ENABLED" },
-  { pattern: /^task-temporal\/due-on(?:\/|$)/, flag: "AI_EXECUTIVE_TARGET_STAGING_HTTP_TEMPORAL_DUE_ON_WRITE_ENABLED" },
-  { pattern: /^task-temporal\/due-window$/, flag: "AI_EXECUTIVE_TARGET_STAGING_HTTP_TEMPORAL_DUE_WINDOWS_ENABLED" },
-];
+// Closed inventory of excluded METHOD + route pairs. Do not use family-prefix
+// expressions: a newly discovered handler must prove 401 until its precise
+// release gate has been reviewed and explicitly classified.
+const disabledRoutes = new Map([
+  ["GET attention", "AI_EXECUTIVE_TARGET_STAGING_HTTP_ATTENTION_ENABLED"],
+  ["GET attention/command", "AI_EXECUTIVE_TARGET_STAGING_HTTP_ATTENTION_ENABLED"],
+  ["PATCH attention/command", "AI_EXECUTIVE_TARGET_STAGING_HTTP_ATTENTION_ENABLED"],
+  ["POST attention/command/receipt", "AI_EXECUTIVE_TARGET_STAGING_HTTP_ATTENTION_ENABLED"],
+  ["GET global-index", "AI_EXECUTIVE_TARGET_STAGING_HTTP_GLOBAL_COMBINED_ENABLED"],
+  ["GET home/my-plan", "AI_EXECUTIVE_TARGET_STAGING_HTTP_HOME_ENABLED"],
+  ["GET home/summary", "AI_EXECUTIVE_TARGET_STAGING_HTTP_HOME_ENABLED"],
+  ["GET note-sync", "AI_EXECUTIVE_TARGET_STAGING_HTTP_NOTE_SYNC_ENABLED"],
+  ["GET note-sync-session", "AI_EXECUTIVE_TARGET_STAGING_HTTP_NOTE_SYNC_ENABLED"],
+  ["GET notifications/settings", "AI_EXECUTIVE_TARGET_STAGING_HTTP_NOTIFICATIONS_ENABLED"],
+  ["PATCH notifications/settings", "AI_EXECUTIVE_TARGET_STAGING_HTTP_NOTIFICATIONS_ENABLED"],
+  ["POST notifications/targets", "AI_EXECUTIVE_TARGET_STAGING_HTTP_NOTIFICATIONS_ENABLED"],
+  ["POST project-tasks", "AI_EXECUTIVE_TARGET_STAGING_HTTP_PROJECT_TASKS_CREATE_ENABLED"],
+  ["POST project-tasks/create-recovery", "AI_EXECUTIVE_TARGET_STAGING_HTTP_PROJECT_TASKS_CREATE_ENABLED"],
+  ["POST project-tasks/create-status", "AI_EXECUTIVE_TARGET_STAGING_HTTP_PROJECT_TASKS_CREATE_ENABLED"],
+  ["POST projects", "AI_EXECUTIVE_TARGET_STAGING_HTTP_PROJECTS_CREATE_ENABLED"],
+  ["POST projects/create-recovery", "AI_EXECUTIVE_TARGET_STAGING_HTTP_PROJECTS_CREATE_ENABLED"],
+  ["POST projects/create-status", "AI_EXECUTIVE_TARGET_STAGING_HTTP_PROJECTS_CREATE_ENABLED"],
+  ["GET projects/[projectId]/relations", "AI_EXECUTIVE_TARGET_STAGING_HTTP_RELATIONS_ENABLED"],
+  ["GET relations/backlinks", "AI_EXECUTIVE_TARGET_STAGING_HTTP_RELATIONS_ENABLED"],
+  ["GET task-index/global", "AI_EXECUTIVE_TARGET_STAGING_HTTP_GLOBAL_TASKS_ENABLED"],
+  ["GET task-temporal/due-on", "AI_EXECUTIVE_TARGET_STAGING_HTTP_TEMPORAL_DUE_ON_WRITE_ENABLED"],
+  ["PATCH task-temporal/due-on", "AI_EXECUTIVE_TARGET_STAGING_HTTP_TEMPORAL_DUE_ON_WRITE_ENABLED"],
+  ["POST task-temporal/due-on/receipt", "AI_EXECUTIVE_TARGET_STAGING_HTTP_TEMPORAL_DUE_ON_WRITE_ENABLED"],
+  ["GET task-temporal/due-window", "AI_EXECUTIVE_TARGET_STAGING_HTTP_TEMPORAL_DUE_WINDOWS_ENABLED"],
+]);
 function excludedFlag(route, method) {
-  if (route === "projects" && method === "POST")
-    return "AI_EXECUTIVE_TARGET_STAGING_HTTP_PROJECTS_CREATE_ENABLED";
-  return disabled.find(item => item.pattern.test(route))?.flag ?? null;
+  return disabledRoutes.get(method + " " + route) ?? null;
 }
 const params = {
   areaId: () => stage.unassignedAreaId,
@@ -171,12 +185,14 @@ test("every discovered target-staging handler respects the exact first-release s
   const entries = routes();
   assert.ok(entries.length >= 45, "recursive route discovery must cover the complete target API");
   let enabled = 0, excluded = 0, writes = 0;
+  const discovered = new Set();
   for (const file of entries) {
     const relative = path.relative(directory, path.dirname(file)).split(path.sep).join("/");
     const mod = await import(pathToFileURL(file).href);
     const methods = Object.keys(mod).filter(method => /^(GET|POST|PATCH|PUT|DELETE)$/.test(method)).sort();
     assert.ok(methods.length > 0, file + " exports no HTTP handler");
     for (const method of methods) {
+      discovered.add(method + " " + relative);
       const flag = excludedFlag(relative, method);
       const on = flag === null || process.env[flag] === "true";
       assert.ok(flag === null || TARGET_PERSONAL_V1_EXCLUDED.some(x => x.flag === flag),
@@ -208,6 +224,8 @@ test("every discovered target-staging handler respects the exact first-release s
       }
     }
   }
+  assert.deepEqual([...disabledRoutes.keys()].filter(key => !discovered.has(key)), [],
+    "stale explicit disabled-route entries");
   assert.ok(enabled > 20 && excluded > 10 && writes > 10,
     JSON.stringify({ enabled, excluded, writes }));
   assert.deepEqual(failures, [], failures.join("\n"));
