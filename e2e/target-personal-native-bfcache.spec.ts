@@ -1,0 +1,195 @@
+/** C15: BFCache witness in a REAL Chrome process.
+ * Playwright launches Chromium with --disable-back-forward-cache. Even when
+ * overridden, page.goBack() cannot synchronize with a BFCache thaw. This
+ * standalone Chrome has neither that switch nor Playwright navigation control.
+ * It uses the isolated personal-v1 SQLite server and test-owner session cookie.
+ */
+import {spawn} from "node:child_process";
+import {existsSync,mkdtempSync,readFileSync,rmSync} from "node:fs";
+import path from "node:path";
+import {randomUUID} from "node:crypto";
+import {chromium,test,expect} from "@playwright/test";
+
+test.skip(process.env.LUMI_TARGET_PERSONAL_ACCEPTANCE_E2E!=="true",
+  "Requires isolated personal-v1 real-store profile");
+const dir=process.env.LUMI_E2E_RUN_DIR;
+const store=JSON.parse(process.env.LUMI_E2E_TARGET_STORE||"null") as
+  {seed?:{areaTitle?:string}}|null;
+const origin="http://localhost:"+Number(process.env.E2E_PORT||3100);
+const strict=process.env.LUMI_REAL_BFCACHE_E2E==="true";
+const pause=(ms:number)=>new Promise<void>(resolve=>setTimeout(resolve,ms));
+async function waitFor<T>(label:string,fn:()=>Promise<T|null|undefined|false>,ms=20000):Promise<T>{
+  const end=Date.now()+ms;
+  while(Date.now()<end){
+    try{const result=await fn();if(result)return result as T;}catch{}
+    await pause(120);
+  }
+  throw Error("Native BFCache timeout: "+label);
+}
+class CDP{
+  private seq=0;
+  private requests=new Map<number,{resolve:(value:any)=>void;reject:(e:Error)=>void}>();
+  private constructor(private socket:WebSocket){
+    socket.addEventListener("message",event=>{
+      const msg=JSON.parse(String(event.data));
+      if(typeof msg.id!=="number")return;
+      const cb=this.requests.get(msg.id);
+      if(!cb)return;
+      this.requests.delete(msg.id);
+      if(msg.error)cb.reject(Error(msg.error.message));
+      else cb.resolve(msg.result||{});
+    });
+    socket.addEventListener("close",()=>{
+      for(const cb of this.requests.values())cb.reject(Error("Chrome CDP disconnected"));
+      this.requests.clear();
+    });
+  }
+  static async connect(url:string){
+    const ws=new WebSocket(url);
+    await new Promise<void>((resolve,reject)=>{
+      ws.addEventListener("open",()=>resolve(),{once:true});
+      ws.addEventListener("error",()=>reject(Error("Cannot attach to Chrome")),{once:true});
+    });
+    return new CDP(ws);
+  }
+  send(method:string,params:Record<string,unknown>={}):Promise<any>{
+    return new Promise((resolve,reject)=>{
+      const id=++this.seq;
+      this.requests.set(id,{resolve,reject});
+      this.socket.send(JSON.stringify({id,method,params}));
+    });
+  }
+  async eval<T>(expression:string):Promise<T>{
+    const reply=await this.send("Runtime.evaluate",{expression,returnByValue:true});
+    if(reply.exceptionDetails)throw Error("Browser expression failed: "+
+      JSON.stringify(reply.exceptionDetails).slice(0,500));
+    return reply.result?.value as T;
+  }
+  close(){this.socket.close();}
+}
+async function nativeBrowser(width:number){
+  if(!dir||!existsSync(dir)||!store?.seed?.areaTitle)
+    throw Error("Only an isolated E2E target store may be used");
+  const profile=mkdtempSync(path.join(dir,"native-bfcache-"+width+"-"));
+  const chrome=spawn(chromium.executablePath(),[
+    "--headless=new","--no-sandbox","--no-first-run",
+    "--remote-debugging-port=0","--user-data-dir="+profile,
+    "--window-size="+width+",844","about:blank",
+  ],{stdio:"ignore"});
+  try{
+    const port=await waitFor("Chrome DevToolsActivePort",async()=>{
+      if(chrome.exitCode!==null)throw Error("Chrome exited "+chrome.exitCode);
+      const filename=path.join(profile,"DevToolsActivePort");
+      return existsSync(filename)?Number(readFileSync(filename,"utf8").split("\n")[0]):null;
+    });
+    const pageSocket=await waitFor("Chrome page target",async()=>{
+      const pages=await fetch("http://127.0.0.1:"+port+"/json/list")
+        .then(r=>r.json()) as {type:string;webSocketDebuggerUrl?:string}[];
+      return pages.find(p=>p.type==="page")?.webSocketDebuggerUrl||null;
+    });
+    const cdp=await CDP.connect(pageSocket);
+    const state=JSON.parse(readFileSync(path.join(dir,"session.json"),"utf8")) as
+      {cookies:{name:string;value:string;path?:string;httpOnly?:boolean;
+        secure?:boolean;sameSite?:string}[]};
+    if(!state.cookies.length)throw Error("Missing isolated owner cookie");
+    for(const cookie of state.cookies){
+      const result=await cdp.send("Network.setCookie",{
+        url:origin,name:cookie.name,value:cookie.value,path:cookie.path||"/",
+        httpOnly:!!cookie.httpOnly,secure:!!cookie.secure,
+        ...(cookie.sameSite?{sameSite:cookie.sameSite}:{})
+      });
+      if(!result.success)throw Error("Owner cookie installation failed");
+    }
+    await cdp.send("Page.addScriptToEvaluateOnNewDocument",{source:
+      "window.__lumiNative={shows:[]};"+
+      "addEventListener('pageshow',e=>window.__lumiNative.shows.push(e.persisted))"});
+    return {profile,chrome,cdp};
+  }catch(e){
+    chrome.kill("SIGKILL");rmSync(profile,{recursive:true,force:true});throw e;
+  }
+}
+function snapshotExpression(secret:string){
+  return "(()=>{const secret="+JSON.stringify(secret)+";"+
+    "const nav=performance.getEntriesByType('navigation')[0];"+
+    "const select=document.querySelector('[data-testid=\"target-private-task-area\"]');"+
+    "const inputs=[...document.querySelectorAll('input,textarea')];"+
+    "const offset=window.__lumiBeforeLeave;"+
+    "const reads=performance.getEntriesByType('resource').slice("+
+    "(Number.isInteger(offset)?offset:0)).map(x=>new URL(x.name).pathname);"+
+    "return {url:location.href,shows:window.__lumiNative?.shows??[],"+
+    "persisted:window.__lumiNative?.shows?.includes(true)===true,"+
+    "navigationType:nav?.type??'missing',notRestoredReasons:nav?.notRestoredReasons??null,"+
+    "userAgent:navigator.userAgent,titleVisible:inputs.some(x=>x.value.includes(secret))||"+
+    "document.documentElement.outerHTML.includes(secret),"+
+    "area:select?.value??null,reads:reads.filter(x=>x.startsWith('/api/target-staging/')),"+
+    "storageLeak:JSON.stringify([Object.entries(localStorage),Object.entries(sessionStorage)]).includes(secret)}"+
+    "})()";
+}
+for(const width of [390,1280]){
+  test("native Chrome actual BFCache witness "+width+"px",async()=>{
+    test.setTimeout(120000);
+    const {profile,chrome,cdp}=await nativeBrowser(width);
+    try{
+      await cdp.send("Emulation.setDeviceMetricsOverride",{
+        width,height:844,deviceScaleFactor:1,mobile:width===390});
+      await cdp.send("Page.navigate",{url:origin+"/?view=Calendar&scope=personal"});
+      const fab='[data-target-private-capture-fab="'+(width===390?"mobile":"desktop")+'"]';
+      await waitFor("authenticated global capture",()=>cdp.eval<boolean>(
+        "!!document.querySelector("+JSON.stringify(fab)+")"));
+      await cdp.eval("document.querySelector("+JSON.stringify(fab)+").click()");
+      await waitFor("task chooser",()=>cdp.eval<boolean>(
+        "!!document.querySelector('[data-testid=\"target-capture-task-kind\"]')"));
+      await cdp.eval("document.querySelector('[data-testid=\"target-capture-task-kind\"]').click()");
+      const areaTitle=JSON.stringify(store!.seed!.areaTitle);
+      await waitFor("authorized Area catalog",()=>cdp.eval<boolean>(
+        "Array.from(document.querySelector('[data-testid=\"target-private-task-area\"]')?.options||[]).some(x=>x.textContent==="+areaTitle+")"));
+      await cdp.eval("(()=>{const s=document.querySelector('[data-testid=\"target-private-task-area\"]');"+
+        "s.value=Array.from(s.options).find(x=>x.textContent==="+areaTitle+").value;"+
+        "s.dispatchEvent(new Event('change',{bubbles:true}))})()");
+      await waitFor("private task form",()=>cdp.eval<boolean>(
+        "!!document.querySelector('[data-testid=\"target-private-task-form\"]')"));
+      const secret="C15 private "+width+" "+randomUUID();
+      await cdp.eval("(()=>{const x=document.querySelector('[data-testid=\"target-private-task-form\"] input');"+
+        "Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(x,"+
+        JSON.stringify(secret)+");x.dispatchEvent(new Event('input',{bubbles:true}))})()");
+      await waitFor("React-bound draft",()=>cdp.eval<boolean>(
+        "document.querySelector('[data-testid=\"target-private-task-form\"] input')?.value==="+JSON.stringify(secret)));
+      await cdp.eval("window.__lumiBeforeLeave=performance.getEntriesByType('resource').length");
+      // Both navigations are native browser actions; no Playwright goBack and
+      // no synthetic PageTransitionEvent. Keep the private response no-store.
+      await cdp.eval("location.assign('/robots.txt');true");
+      await waitFor("robots.txt",()=>cdp.eval<boolean>("location.pathname==='/robots.txt'"));
+      await cdp.eval("history.back();true");
+      await waitFor("native browser back",()=>cdp.eval<boolean>(
+        "location.search.includes('view=Calendar')"));
+      const first=await cdp.eval<any>(snapshotExpression(secret));
+      const evidence={width,checkedOutSha:process.env.LUMI_TESTED_CHECKOUT_SHA??null,
+        ...first};
+      console.log("NATIVE_REAL_BFCACHE_EVIDENCE "+JSON.stringify(evidence));
+      await test.info().attach("native-bfcache-"+width+".json",{
+        body:Buffer.from(JSON.stringify(evidence,null,2)),
+        contentType:"application/json"});
+      expect(first.titleVisible,"Private draft remains in DOM").toBe(false);
+      expect(first.storageLeak,"Private draft persisted to browser storage").toBe(false);
+      expect(["",null],"Old private Area remains selected").toContain(first.area);
+      if(strict)expect(first.persisted,"Native pageshow.persisted was false; reasons="+
+        JSON.stringify(first.notRestoredReasons)).toBe(true);
+      // The original document is preserved only on a genuine BFCache hit.
+      // A full reload is covered separately by the existing Playwright suite.
+      if(first.persisted){
+        const awake=await waitFor("new authorized session and Area GET",async()=>{
+          const state=await cdp.eval<any>(snapshotExpression(secret));
+          return state.reads.includes("/api/target-staging/session")&&
+            state.reads.includes("/api/target-staging/notes/create-targets")?state:null;
+        });
+        expect(awake.reads.indexOf("/api/target-staging/session")).toBeLessThan(
+          awake.reads.indexOf("/api/target-staging/notes/create-targets"));
+        expect(awake.titleVisible).toBe(false);
+        expect(["",null]).toContain(awake.area);
+      }
+    }finally{
+      cdp.close();chrome.kill("SIGKILL");
+      rmSync(profile,{recursive:true,force:true});
+    }
+  });
+}
