@@ -886,7 +886,13 @@ test("owner adoption and D2b recovery hold serialize across sibling tabs, regard
         await pendingRecoveryLocks(adopter, 1);
         await remoteWakeUp(holder);
       }
-      await pendingRecoveryLocks(adopter, 2);
+      // Pulls share the outer ai-executive-sync Web Lock: the first pull is
+      // queued on recovery-data, while the second waits for the sync lock.
+      // Requiring two recovery-data requests would contradict that ordering.
+      await pendingRecoveryLocks(adopter, 1);
+      await expect.poll(() => adopter.evaluate(async () =>
+        (await navigator.locks.query()).pending?.some((lock) => lock.name === "ai-executive-sync") ?? false),
+      { timeout: 15_000 }).toBe(true);
       await adopter.evaluate(() => (window as typeof window & { e2eReleaseRecoveryLock: () => void }).e2eReleaseRecoveryLock());
       if (firstToLock === "hold") {
         await expect(holder.getByRole("alertdialog", { name: "Lokální změny jsou chráněné" })).toBeVisible({ timeout: 30_000 });
@@ -1315,7 +1321,7 @@ test("restart safely completes a certified owner adoption interrupted before its
   } finally { await first.context.close(); await second.context.close(); }
 });
 
-test("an interrupted adoption without server access installs an exportable hold with the OLD generation", async ({ browser }) => {
+test("an interrupted owner adoption can be rescued offline and resumes when the server returns", async ({ browser }) => {
   const { first, second } = await twoDevices(browser);
   try {
     await first.page.goto("/");
@@ -1343,12 +1349,22 @@ test("an interrupted adoption without server access installs an exportable hold 
     }));
     expect(hold.fence).not.toBeNull();
     expect(hold.generation).toBe(old);
-    expect(JSON.parse(hold.hold || "{}")).toMatchObject({
-      knownGeneration: Number(old), observedGeneration: observed,
-    });
-    // The dialog states that an interrupted restore may already have removed
-    // part of the copy. It must not falsely promise a complete backup.
+    expect(hold.hold).toBeNull("a temporary network outage must not install an irreversible D2b hold");
+    // The owner fence alone continues to prevent writes and permits a manual
+    // local-only rescue while offline. An interrupted copy may be incomplete.
     await expect(second.page.getByText(/Místní kopie už může být částečně nahrazená/)).toBeVisible();
+    await expect(second.page.getByText(/Až bude spojení fungovat, načtěte stránku znovu/)).toBeVisible();
+    await second.page.unroute("**/api/store");
+    await second.page.reload();
+    await expect(second.page.locator(".restoredNotice"))
+      .toContainText("Data byla obnovena ze zálohy.", { timeout: 30_000 });
+    const resumed = await second.page.evaluate(() => ({
+      hold: localStorage.getItem("ai-executive-offline-recovery-hold"),
+      fence: localStorage.getItem("ai-executive-owner-adoption-fence"),
+      generation: localStorage.getItem("ai-executive-restore-generation"),
+    }));
+    expect(resumed).toEqual({ hold: null, fence: null, generation: String(observed) });
+    await expect(second.page.getByRole("alertdialog", { name: "Lokální změny jsou chráněné" })).toHaveCount(0);
   } finally { await first.context.close(); await second.context.close(); }
 });
 
@@ -1374,7 +1390,7 @@ test("a paused ordinary pull never stamps its stale generation after a sibling o
     expect(oldGeneration).not.toBeNull();
 
     await setStore(owner, [task(id, "Opožděné potvrzení generace")]);
-    await createManualBackup(owner);
+    const backupName = await createManualBackup(owner);
     await openBackups(adopter);
 
     // Pause only this page's NORMAL generation commit, after applySnapshot
@@ -1402,8 +1418,11 @@ test("a paused ordinary pull never stamps its stale generation after a sibling o
       (window as unknown as { e2eStampPending?: boolean }).e2eStampPending,
     ));
 
-    await manualRow(adopter).getByRole("button", { name: "Obnovit" }).click();
-    await confirmRestore(adopter);
+    // Restore from the owner on another device while a sibling's ordinary
+    // generation write remains paused. Avoid a UI save flow competing for the
+    // shared sync lock; this test is about stale generation after adoption.
+    expect(await restoreByApi(owner, backupName)).toBe(200);
+    await remoteWakeUp(adopter);
     await expect(adopter.locator(".restoredNotice"))
       .toContainText("Data byla obnovena ze zálohy.", { timeout: 30_000 });
     const newGeneration = await adopter.evaluate(() => localStorage.getItem("ai-executive-restore-generation"));
