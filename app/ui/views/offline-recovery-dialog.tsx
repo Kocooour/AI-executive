@@ -43,9 +43,13 @@ export function OfflineRecoveryDialog({ app }: { app: LumiApp }) {
       <div className="confirmDialogBody">
         <h2 id="offline-recovery-title">{cs ? "Lokální změny jsou chráněné" : "Local changes are protected"}</h2>
         <p id="offline-recovery-desc">
-          {cs
-            ? "Serverová data byla obnovena z jiné generace. Lumi zastavilo zápisy i přepsání místní kopie. Změny, poznámky a rozpracované texty zůstávají v tomto prohlížeči."
-            : "The server's restore generation changed. Lumi has blocked writes and replacement of your local copy. Local edits, notes and drafts stay in this browser."}
+          {interruptedOwnerRestore
+            ? cs
+              ? "Obnova byla přerušena. Lumi zastavilo zápisy, aby nedošlo k další ztrátě případně zbývajících místních dat."
+              : "The restore was interrupted. Lumi has blocked writes to protect any local data that may remain."
+            : cs
+              ? "Serverová data byla obnovena z jiné generace. Lumi zastavilo zápisy i přepsání místní kopie. Změny, poznámky a rozpracované texty zůstávají v tomto prohlížeči."
+              : "The server's restore generation changed. Lumi has blocked writes and replacement of your local copy. Local edits, notes and drafts stay in this browser."}
         </p>
         {interruptedOwnerRestore && <p role="status">
           {cs
