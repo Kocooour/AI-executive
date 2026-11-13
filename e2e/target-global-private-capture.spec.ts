@@ -222,7 +222,7 @@ test("BFCache lifecycle and real back navigation never revive private draft or A
     return {navigationType:nav?.type??"unavailable",
       notRestoredReasons:nav?.notRestoredReasons??null};
   });
-  const evidence={persisted:restored,...reasons,mode:"mocked target API"};
+  const evidence={persisted:restored,...reasons,mode:"mocked target API",checkedOutSha:process.env.LUMI_TESTED_CHECKOUT_SHA??null};
   console.log("GLOBAL_CAPTURE_REAL_BFCACHE_EVIDENCE "+JSON.stringify(evidence));
   await test.info().attach("global-capture-bfcache.json",{
     body:Buffer.from(JSON.stringify(evidence,null,2)),
