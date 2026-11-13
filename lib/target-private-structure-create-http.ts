@@ -15,13 +15,14 @@ import {resolveStagingHttpIdentity,stagingAnchorRefusal,stagingUnauthenticatedRe
 import {validPrivateStructureCreateCommand,type PrivateStructureKind,
   type PrivateStructureCreateCommand} from "./target-private-structure-create-writer";
 import {createStructureInChild,readStructureCreateStatusInChild,
-  readStructureCreateRecoveryInChild} from "./target-staging-structure-create-process";
+  readStructureCreateRecoveryInChild,cancelStructureCreateInChild} from "./target-staging-structure-create-process";
 import {readStagingPrivateProjectDetailInChild,readStagingTemporalDetailInChild}
   from "./target-staging-read-process";
 import type {StagingPersonalReadConfig} from "./target-staging-read-process";
 import {targetProtocolRefusal,legacySnapshotRefusal,resyncRequiredResponse}
   from "./target-staging-write-contract";
 import type {TargetStagingReadStore} from "./target-task-staging-reader";
+import {structureOwnerScopeForIdentity} from "./target-private-structure-owner-scope";
 
 const headers={"cache-control":"no-store","x-content-type-options":"nosniff"};
 const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -89,10 +90,14 @@ async function releaseCommitted(
       result.detail.linearization.areas[0]?.access!=="private-owner")
       return answer(404,"Not found");
   }
-  return Response.json({status:"committed",id},{headers});
+  // The child parent comes from the receipt witness AND the current live
+  // task-detail ACL/linearization check above. Never take it from the caller's
+  // currently open project, or expose an Area/title in this receipt.
+  return Response.json(kind==="project"?{status:"committed",id}:
+    {status:"committed",id,projectId},{headers});
 }
 async function handle(
-  request:Request,kind:PrivateStructureKind,mode:"create"|"status"|"recovery",
+  request:Request,kind:PrivateStructureKind,mode:"create"|"status"|"recovery"|"cancel",
 ):Promise<Response>{
   if(!enabled(kind))return answer(404,"Not found");
   const anchor=stagingAnchorRefusal(request,true);if(anchor)return anchor;
@@ -113,19 +118,40 @@ async function handle(
       "target-private-structure-"+kind+"-"+mode,mode==="create"?30:60,600_000);
     if(limited)return Response.json({error:"Too many requests"},
       {status:429,headers:{...headers,"retry-after":String(limited.retryAfter)}});
-    const data=await readJsonBody<unknown>(request,mode==="recovery"?128:16*1024,
+    const data=await readJsonBody<unknown>(request,mode==="recovery"?128:mode==="cancel"?256:16*1024,
       {strictUtf8:true});
     const legacy=legacySnapshotRefusal(data);if(legacy)return legacy;
-    const opaque=mode==="recovery"&&!!data&&typeof data==="object"&&
-      !Array.isArray(data)&&Object.keys(data).join(",")==="commandId"&&
-      typeof (data as {commandId?:unknown}).commandId==="string"&&
-      UUID.test((data as {commandId:string}).commandId);
-    if(mode==="recovery"?!opaque:!validPrivateStructureCreateCommand(kind,data))
+    const input=data&&typeof data==="object"&&!Array.isArray(data)
+      ?data as Record<string,unknown>:null;
+    const opaque=!!input&&Object.keys(input).sort().join(",")==="commandId"&&
+      typeof input.commandId==="string"&&UUID.test(input.commandId);
+    const cancelOpaque=!!input&&Object.keys(input).sort().join(",")==="commandId,ownerScope"&&
+      typeof input.commandId==="string"&&UUID.test(input.commandId)&&
+      typeof input.ownerScope==="string"&&/^[A-Za-z0-9_-]{43}$/.test(input.ownerScope);
+    if(mode==="recovery"?!opaque:mode==="cancel"?!cancelOpaque:
+      !validPrivateStructureCreateCommand(kind,data))
       return answer(400,"Invalid request");
     const released=verifyStagingIdentityBeforeRelease(request,identity,store);
     if(released!=="ok")return stagingIdentityRefusal(released);
     if(!unchanged(base,kind))return answer(503,"Staging unavailable");
     const child={...base,...stagingChildSessionConfig(identity)};
+    if(mode==="cancel"){
+      const ownerScope=structureOwnerScopeForIdentity(identity,base);
+      if(!ownerScope)return answer(503,"Staging unavailable");
+      // This actor-bound opaque comparison is mandatory even for an UNKNOWN
+      // command (which has no receipt from which to recover original ownership).
+      // A newly logged-in DIFFERENT actor must not fence their own command UUID
+      // and unlock a marker belonging to a different actor.
+      if(ownerScope!==(data as {ownerScope:string}).ownerScope)
+        return answer(404,"Not found");
+      const result=await cancelStructureCreateInChild(
+        child,kind,(data as {commandId:string}).commandId);
+      const check=verifyStagingIdentityBeforeRelease(request,identity,store);
+      if(check!=="ok")return stagingIdentityRefusal(check);
+      if(!unchanged(base,kind)||!result||result.ok===false)
+        return answer(503,"Staging unavailable");
+      return Response.json({status:result.status},{headers});
+    }
     if(mode==="recovery"){
       const result=await readStructureCreateRecoveryInChild(
         child,kind,(data as {commandId:string}).commandId);
@@ -191,3 +217,6 @@ export const postPrivateProjectCreateRecovery=(request:Request)=>handle(request,
 export const postPrivateProjectTaskCreate=(request:Request)=>handle(request,"project-task","create");
 export const postPrivateProjectTaskCreateStatus=(request:Request)=>handle(request,"project-task","status");
 export const postPrivateProjectTaskCreateRecovery=(request:Request)=>handle(request,"project-task","recovery");
+
+export const postPrivateProjectCreateCancel=(request:Request)=>handle(request,"project","cancel");
+export const postPrivateProjectTaskCreateCancel=(request:Request)=>handle(request,"project-task","cancel");

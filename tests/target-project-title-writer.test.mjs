@@ -144,9 +144,22 @@ test('two processes racing the same project CAS commit at most one change',async
    writeFileSync(go,'go');
    while (!results.every(existsSync)) {if(Date.now()>deadline) throw Error('workers did not finish');await new Promise(r=>setTimeout(r,20));}
    const outcome=results.map(file=>JSON.parse(readFileSync(file,'utf8')));
-   assert.equal(outcome.filter(result=>result.ok).length,1,JSON.stringify(outcome));
-   assert.deepEqual(outcome.filter(result=>!result.ok),[{ok:false,reason:'stale_revision'}]);
-   assert.equal(db.prepare("SELECT COUNT(*) AS n FROM project_title_audit WHERE project_id='race'").get().n,1);
+   const committed=db.prepare("SELECT title,revision FROM projects WHERE id='race'").get();
+   const winner=['After 0','After 1'].findIndex(title=>title===committed?.title);
+   assert.notEqual(winner,-1,JSON.stringify({outcome,committed}));
+   assert.equal(committed.revision,1,"CAS must commit exactly one title revision");
+   const audit=db.prepare("SELECT revision_before,revision_after FROM project_title_audit WHERE project_id='race'").all();
+   assert.equal(audit.length,1,"two racing commands must never produce two audit records");
+   assert.equal(audit[0].revision_before,0);
+   assert.equal(audit[0].revision_after,1);
+   assert.deepEqual(outcome[1-winner],{ok:false,reason:'stale_revision'});
+   // A COMMIT can succeed before its post-COMMIT journal confirmation:
+   // the writer must fail closed with write_failed rather than claim success.
+   // Another writer may resolve that intent and correctly see stale_revision.
+   // Assert the durable CAS result instead of requiring a positive ACK.
+   assert.ok(outcome[winner]?.ok===true||
+     (outcome[winner]?.ok===false&&outcome[winner].reason==='write_failed'),
+     JSON.stringify({outcome,committed}));
  } finally {for(const worker of workers)worker.kill();}
 });
 
