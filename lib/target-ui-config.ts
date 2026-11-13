@@ -73,8 +73,8 @@ export type TargetUiConfig={
   myPlan:{enabled:boolean;statusWrite:boolean;whenWrite:boolean};
   scopes:{enabled:boolean;projects:boolean;notes:boolean};
   details:{task:boolean;project:boolean;note:boolean};
-  edits:TargetUiEdits;
   creates:{projects:boolean;projectTasks:boolean};
+  edits:TargetUiEdits;
 };
 
 /** The provider (and its session check) mounts only when some screen consumes it.
