@@ -171,8 +171,9 @@ export default function TargetMainTitleSearch({query,language="cs",details,detai
   submitRef.current=search;
   function loadMore(){
     if(!session||!ready||!ready.hasMore||!foregroundOnline())return;
-    // After navigation, a new session has no valid paging cursor. The user
-    // explicitly starts a fresh server query before requesting another page.
+    // A restored snapshot has no live pagination cursor in the new session.
+    // The button is explicitly labeled "Refresh search" in this state; never
+    // claim to append rows when we must re-authorize page one first.
     if(fromReturn.current){search();return;}
     statusRef.current?.focus();
     const binding={...bindingRef.current};
@@ -250,7 +251,7 @@ export default function TargetMainTitleSearch({query,language="cs",details,detai
           })}
         </ul>}
       {ready.hasMore&&<button type="button" className="targetMainSearchMore"
-        onClick={loadMore}>{copy.more}</button>}
+        onClick={loadMore}>{fromReturn.current?copy.refresh:copy.more}</button>}
       {ready.limitReached&&<p role="status">{copy.cap}</p>}
       <p className="targetMainSearchPrivacy">{copy.privacy}</p>
     </section>}
