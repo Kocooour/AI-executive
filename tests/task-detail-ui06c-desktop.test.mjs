@@ -13,7 +13,7 @@ test("UI-06c: desktop preview has one square task completion at the heading, nev
   assert.match(detail, /data-task-detail-desktop-preview=\{desktopTaskPreview \? "lumi-v1" : undefined\}/);
   assert.match(detail, /\{desktopTaskPreview && selectedTask && \(\s*<LumiCompletionControl kind="task" className="taskDetailDesktopCompletion"/);
   assert.equal(detail.split('className="taskDetailDesktopCompletion"').length - 1, 1);
-  assert.match(detail, /disabled=\{!taskPreviewMayToggle\}/);
+  assert.match(detail, /disabled=\{!taskPreviewMayToggle \|\| app\.legacyWritesDisabled\}/);
   assert.match(detail, /if \(!taskPreviewMayToggle\) return;\s*if \(selectedTask.status === "completed"\) void reopenTask\(selectedTask\);\s*else void done\(selectedTask.id\);/);
   assert.match(detail, /\{!mobileDesignV1Preview && \(selected.status === "completed" \?/,
     "preview mode must not render legacy completion even while viewport is unknown");
