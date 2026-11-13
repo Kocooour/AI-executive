@@ -203,10 +203,13 @@ test.describe("B2 project overview", () => {
     const taskRow = page.locator(".taskRow", { hasText: taskName }).first();
     await expect(taskRow).toBeVisible();
     await taskRow.click();
-    // This is the ordinary relation picker, not the Inbox triage action.
-    // #404: inspect by the accessible label, not the removed .fields > label structure.
-    const projectPicker = page.locator("aside.detail").getByLabel("Projekt", { exact: true });
-    await expect(projectPicker).toHaveCount(1);
+    // Link through the ordinary task field, not Inbox triage ("Do projektu"):
+    // triage would remove the task from Inbox and change this scenario.
+    const inspector = page.locator("aside.inspectorDetail");
+    await expect(inspector).toBeVisible();
+    const projectPicker = inspector.locator(".taskDetailEssentials > label")
+      .filter({ hasText: /^Projekt/ }).locator("select");
+    await expect(projectPicker).toBeVisible();
     await projectPicker.selectOption({ label: name });
     await expect.poll(async () => page.evaluate(async ({ taskTitle, projectTitle }) => {
       const snapshot = await fetch("/api/store", { cache: "no-store" }).then((response) => response.json());

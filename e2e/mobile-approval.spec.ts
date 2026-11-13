@@ -176,9 +176,12 @@ test.describe("mobile proposal approval", () => {
     await ask("Přesuň Tajný úkol");
     await expect(page.getByRole("button", { name: "Zkontrolovat návrh" })).toBeVisible();
     // Quick Capture must not mutate the global write workspace in All.
-    await expect.poll(() => page.evaluate(() => localStorage.getItem("ai-executive-write-workspace"))).toBe("personal");
+    // In-memory writeWorkspaceId defaults to personal, while the storage key
+    // may remain absent until a destination is explicitly chosen.
+    const originalWriteWorkspace = await page.evaluate(() => localStorage.getItem("ai-executive-write-workspace"));
+    expect([null, "personal"]).toContain(originalWriteWorkspace);
     await chooseCaptureDestination(otherWorkspaceId);
-    await expect.poll(() => page.evaluate(() => localStorage.getItem("ai-executive-write-workspace"))).toBe("personal");
+    await expect.poll(() => page.evaluate(() => localStorage.getItem("ai-executive-write-workspace"))).toBe(originalWriteWorkspace);
     await page.getByRole("button", { name: "Zeptat se AI" }).click();
     // The proposal is not merely visible: it must remain valid for approval.
     await page.getByRole("button", { name: "Zkontrolovat návrh" }).click();

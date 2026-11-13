@@ -1,3 +1,7 @@
+import {createPreflightedPrivateStructure,validPrivateStructureCreateCommand,
+  type PrivateStructureKind,type PrivateStructureCreateCommand,
+  type PrivateStructureCreateResult,type PrivateStructureCreateStatus,
+  type PrivateStructureCreateRecovery} from "./target-private-structure-create-writer";
 import type {TargetProjectTitleRecovery} from "./target-project-title-command-status";
 import {cancelTargetProjectTitle,validProjectTitleCancelCommand,type ProjectTitleCancelCommand,type ProjectTitleCancelResult} from "./target-project-title-cancel";
 import { writeTargetProjectTitle, validProjectTitleCommand, type ProjectTitleCommand, type ProjectTitleResult } from "./target-project-title-writer";
@@ -46,6 +50,7 @@ import {
   readPreflightedTargetNoteEditCommandStatus,readPreflightedTargetNoteEditRecovery,
   readPreflightedTargetNoteCreateRecovery,readPreflightedProjectTitleRecovery,readPreflightedTargetNoteDeleteCommandStatus,
   readPreflightedPrivateTaskCreateStatus,readPreflightedPrivateTaskCreateRecovery,
+  readPreflightedPrivateStructureCreateStatus,readPreflightedPrivateStructureCreateRecovery,
   listPreflightedPrivateProjectsAtOffset, readPreflightedPrivateProjectDetail,
   readPreflightedPrivateTaskTitleAudit,
   readPreflightedScopedTaskPage, readPreflightedSharedTargetTask, readPreflightedChangeFeedPage,
@@ -1355,6 +1360,35 @@ export class TargetStagingSessionAuthority {
     if (!validPrivateTaskCreateCommand(request)) return {ok:false,reason:"invalid_request"};
     return createPreflightedPrivateTask(
       this.#store,credential,request,durableSessionTokenHash);
+  }
+
+  /** Owner-private project and project-child create (write audience only). */
+  createPrivateStructure(
+    sessionToken:string,kind:PrivateStructureKind,
+    command:PrivateStructureCreateCommand,durableSessionTokenHash?:string,
+  ):PrivateStructureCreateResult{
+    const credential=this.#credential(sessionToken,true);
+    if(!credential)return {ok:false,reason:"unauthorized"};
+    if(!validPrivateStructureCreateCommand(kind,command))
+      return {ok:false,reason:"invalid_request"};
+    return createPreflightedPrivateStructure(this.#store,credential,kind,command,
+      durableSessionTokenHash);
+  }
+  privateStructureCreateStatus(
+    sessionToken:string,kind:PrivateStructureKind,command:PrivateStructureCreateCommand,
+  ):PrivateStructureCreateStatus{
+    const credential=this.#credential(sessionToken,true);
+    return credential
+      ?readPreflightedPrivateStructureCreateStatus(this.#store,credential,kind,command)
+      :{ok:false,reason:"unavailable"};
+  }
+  privateStructureCreateRecovery(
+    sessionToken:string,kind:PrivateStructureKind,commandId:string,
+  ):PrivateStructureCreateRecovery{
+    const credential=this.#credential(sessionToken,true);
+    return credential
+      ?readPreflightedPrivateStructureCreateRecovery(this.#store,credential,kind,commandId)
+      :{ok:false,reason:"unavailable"};
   }
 
   /** Actor-bound cancellation fence, serialized with the original CREATE. */
