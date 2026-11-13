@@ -114,6 +114,52 @@ test.describe("B2 responsive detail inspector", () => {
   });
 
 
+  test("Close dismisses B while Back and Forward retain record history", async ({ page }) => {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    const [taskA, taskB] = await createInboxTasks(page, 2);
+    const rowA = page.locator(".taskRow", { hasText: taskA }).first();
+    const rowB = page.locator(".taskRow", { hasText: taskB }).first();
+
+    await rowA.click();
+    await expect(page.locator("aside.inspectorDetail .titleEdit")).toHaveValue(taskA);
+    const addressA = page.url();
+    expect(addressA).toMatch(/[?]view=Inbox&taskId=/);
+
+    await rowB.click();
+    await expect(page.locator("aside.inspectorDetail .titleEdit")).toHaveValue(taskB);
+    const addressB = page.url();
+    expect(addressB).toMatch(/[?]view=Inbox&taskId=/);
+    expect(addressB).not.toBe(addressA);
+
+    // Browser history traverses records; Close is not the same command.
+    await page.goBack();
+    await expect(page.locator("aside.inspectorDetail .titleEdit")).toHaveValue(taskA);
+    await expect(page).toHaveURL(addressA);
+    await page.goForward();
+    await expect(page.locator("aside.inspectorDetail .titleEdit")).toHaveValue(taskB);
+    await expect(page).toHaveURL(addressB);
+
+    await page.locator(".inspectorClose").click();
+    await expect(page.locator("aside.inspectorDetail")).toHaveCount(0);
+    await expect(page).toHaveURL(/[?]view=Inbox$/);
+    // Close REPLACES B's entry; it does not push a list entry that would
+    // reopen B on Back. The older A history entry remains accessible.
+    await page.goBack();
+    await expect(page.locator("aside.inspectorDetail .titleEdit")).toHaveValue(taskA);
+    await expect(page).toHaveURL(addressA);
+    await page.goForward();
+    await expect(page.locator("aside.inspectorDetail")).toHaveCount(0);
+    await expect(page).toHaveURL(/[?]view=Inbox$/);
+
+    // A pasted/reloaded record address has no in-app opener, yet closes safely.
+    await page.goto(addressB);
+    await waitUntilSynced(page);
+    await expect(page.locator("aside.inspectorDetail .titleEdit")).toHaveValue(taskB);
+    await page.locator(".inspectorClose").click();
+    await expect(page.locator("aside.inspectorDetail")).toHaveCount(0);
+    await expect(page).toHaveURL(/[?]view=Inbox$/);
+  });
+
   test("removing A during a delayed sync cannot close B's newer inspector", async ({ page }) => {
     await page.setViewportSize({ width: 1440, height: 900 });
     const [taskA, taskB] = await createInboxTasks(page, 2);
