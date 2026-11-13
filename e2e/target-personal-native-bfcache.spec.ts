@@ -29,9 +29,14 @@ async function waitFor<T>(label:string,fn:()=>Promise<T|null|undefined|false>,ms
 class CDP{
   private seq=0;
   private requests=new Map<number,{resolve:(value:any)=>void;reject:(e:Error)=>void}>();
+  private observers=new Map<string,Set<(value:any)=>void>>();
   private constructor(private socket:WebSocket){
     socket.addEventListener("message",event=>{
       const msg=JSON.parse(String(event.data));
+      if(typeof msg.method==="string"){
+        for(const observer of this.observers.get(msg.method)||[])
+          observer(msg.params||{});
+      }
       if(typeof msg.id!=="number")return;
       const cb=this.requests.get(msg.id);
       if(!cb)return;
@@ -64,6 +69,11 @@ class CDP{
     if(reply.exceptionDetails)throw Error("Browser expression failed: "+
       JSON.stringify(reply.exceptionDetails).slice(0,500));
     return reply.result?.value as T;
+  }
+  on(method:string,handler:(value:any)=>void):()=>void{
+    const handlers=this.observers.get(method)||new Set<(value:any)=>void>();
+    handlers.add(handler);this.observers.set(method,handlers);
+    return ()=>handlers.delete(handler);
   }
   close(){this.socket.close();}
 }
@@ -186,6 +196,31 @@ for(const width of [390,1280]){
           awake.reads.indexOf("/api/target-staging/notes/create-targets"));
         expect(awake.titleVisible).toBe(false);
         expect(["",null]).toContain(awake.area);
+        // Before any new action we have proved a fresh authorized session and
+        // Area lookup. Only now may the user reselect the private Area. Neither
+        // the abandoned text nor an executable old CREATE may be revived.
+        const label=JSON.stringify(store!.seed!.areaTitle);
+        await waitFor("refreshed authorized private Area",()=>cdp.eval<boolean>(
+          "Array.from(document.querySelector('[data-testid=\"target-private-task-area\"]')?.options||[]).some(x=>x.textContent==="+label+")"));
+        await cdp.eval("(()=>{const s=document.querySelector('[data-testid=\"target-private-task-area\"]');"+
+          "s.value=Array.from(s.options).find(x=>x.textContent==="+label+").value;"+
+          "s.dispatchEvent(new Event('change',{bubbles:true}))})()");
+        await waitFor("new empty composer",()=>cdp.eval<boolean>(
+          "!!document.querySelector('[data-testid=\"target-private-task-form\"] input')"));
+        const postRestoreTitle=await cdp.eval<string>(
+          "document.querySelector('[data-testid=\"target-private-task-form\"] input').value");
+        expect(postRestoreTitle,"Old React draft reappeared after Area reselect").toBe("");
+        await cdp.send("Network.enable");
+        const creates:string[]=[];
+        const unsubscribe=cdp.on("Network.requestWillBeSent",event=>{
+          const req=event.request as {url:string;method:string};
+          if(req.method==="POST"&&
+            new URL(req.url).pathname==="/api/target-staging/tasks")creates.push(req.url);
+        });
+        await cdp.eval("document.querySelector('[data-testid=\"target-private-task-save\"]').click()");
+        await pause(300);
+        expect(creates,"Blank restored composer must not submit CREATE").toHaveLength(0);
+        unsubscribe();
       }
     }finally{
       cdp.close();chrome.kill("SIGKILL");
