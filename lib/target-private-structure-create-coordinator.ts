@@ -4,6 +4,7 @@
  * server's live-ACL-verified read, not an idempotent replay write. */
 import type {TargetClientRuntime} from "./target-client-runtime";
 import {sendStructureCreate,checkStructureCreateStatus,recoverStructureCreate,
+  cancelStructureCreateCommand,
   validStructureCommand,type StructureKind,type StructureCreateCommand,
   type StructureReceipt,type StructureCreateResult} from "./target-private-structure-create-client";
 const KEY="lumi-private-structure-create-unresolved-v1";
@@ -115,4 +116,28 @@ export async function verifyStructureCreate(
     return result;
   }
   return result;
+}
+
+/** Release only after the server has atomically fenced the command against
+ * a future insert, or proven its receipt settled under the same lock. */
+export async function cancelStructureCreate(
+  runtime:Runtime,generation:string,signal:AbortSignal,
+  cancel:typeof cancelStructureCreateCommand=cancelStructureCreateCommand,
+):Promise<"cancelled"|"settled"|"denied"|"unavailable">{
+  if(!runtime.known()||runtime.generation()!==generation||signal.aborted)
+    return "unavailable";
+  const current=structureCreateMarker();
+  if(current.status!=="blocked"||current.marker.generation!==generation)
+    return "unavailable";
+  const entry=active.get(runtime);
+  if(entry?.phase==="saving")return "unavailable";
+  const result=await cancel(current.marker.kind,current.marker.commandId,signal);
+  if((result==="cancelled"||result==="settled")&&!signal.aborted&&
+    runtime.known()&&runtime.generation()===generation&&release(current.marker)){
+    if(entry?.marker.commandId===current.marker.commandId){
+      active.delete(runtime);entry.unregister();
+    }
+    return result;
+  }
+  return result==="cancelled"||result==="settled"?"unavailable":result;
 }

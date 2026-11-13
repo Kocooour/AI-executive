@@ -123,3 +123,23 @@ export function recoverStructureCreate(
     return Promise.resolve("unavailable");
   return receipt(kind,url(kind)+"/create-recovery",{commandId},signal,fetchImpl);
 }
+
+/** Cancellable only after a live, actor-bound, durable no-commit fence (or
+ * durable receipt) has been persisted by the server. This is a WRITE. */
+export type StructureCancel="cancelled"|"settled"|"denied"|"unavailable";
+export async function cancelStructureCreateCommand(
+  kind:StructureKind,commandId:string,signal:AbortSignal,
+  fetchImpl:typeof fetch=targetAppFetch,
+):Promise<StructureCancel>{
+  if(!canonical(commandId)||signal.aborted)return "unavailable";
+  try{
+    const response=await fetchImpl(url(kind)+"/create-cancel",opts({commandId},signal));
+    if(signal.aborted)return "unavailable";
+    if([401,403,404].includes(response.status))return "denied";
+    if(response.status!==200)return "unavailable";
+    const data=await bounded(response,signal);
+    return record(data)&&keys(data)==="status"&&
+      (data.status==="cancelled"||data.status==="settled")
+      ?data.status:"unavailable";
+  }catch{return "unavailable";}
+}

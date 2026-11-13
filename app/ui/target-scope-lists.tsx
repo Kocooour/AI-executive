@@ -238,7 +238,7 @@ export default function TargetScopeLists({kind,language="cs",detail=false,create
       <button type="button" onClick={reload}>{copy.reload}</button>}
     {createProject&&kind==="project"&&scope!=="shared"&&page&&
       <TargetPrivateStructureCreate key={scope} kind="project" language={language}
-        onCommitted={()=>reload()}/>}
+        onCommitted={()=>revalidate()}/>}
     {page&&(rows.length===0&&!page.hasMore
       ?<p>{kind==="project"?copy.projectsEmpty:copy.notesEmpty}</p>
       :groups.map(group=><ul key={group.areaId} className="targetScopeGroup"

@@ -139,10 +139,10 @@ function UnavailablePanel({language,onPrivateCapture}:{language:DetailLanguage;o
   </Shell>;
 }
 
-function Content({content,route,copy,gates,more,onMore,edit,noteEdit,projectEdit,createTask,onCommitted,onAccessRefused,language}:{
+function Content({content,route,copy,gates,more,onMore,edit,noteEdit,projectEdit,createTask,onCommitted,onCreated,onAccessRefused,language}:{
   content:TargetDetailContent;route:TargetDetailRoute;copy:DetailCopy;gates:TargetDetailGates;
   more:boolean;onMore:()=>void;edit:DetailEditApi|null;
-  noteEdit:boolean;projectEdit:boolean;createTask:boolean;onCommitted:()=>void;onAccessRefused:()=>void;language:DetailLanguage;
+  noteEdit:boolean;projectEdit:boolean;createTask:boolean;onCommitted:()=>void;onCreated:()=>void;onAccessRefused:()=>void;language:DetailLanguage;
 }){
   const area=(kind:"private"|"shared")=>kind==="shared"?copy.areaShared:copy.areaPrivate;
   if(content.kind==="task"){
@@ -197,7 +197,7 @@ function Content({content,route,copy,gates,more,onMore,edit,noteEdit,projectEdit
     {createTask&&gates.task&&page.project.areaKind==="private"&&
       <TargetPrivateStructureCreate kind="project-task" language={language}
         projectId={page.project.id} areaId={page.project.areaId}
-        onCommitted={()=>onCommitted()}/>}
+        onCommitted={()=>onCreated()}/>}
     {page.tasks.length===0&&!page.hasMore
       ?<p className="targetDetailMuted">{copy.tasksEmpty}</p>
       :<ul className="targetDetailTasks">
@@ -413,7 +413,7 @@ function DetailBody({route,language,gates,edits,noteEdit,projectEdit,createTask,
       {content&&state.kind==="ready"&&
         <Content content={content} route={route} copy={copy} gates={gates}
           more={state.more} onMore={()=>{void more();}} edit={edit}
-          noteEdit={noteEdit} projectEdit={projectEdit} createTask={createTask} onCommitted={reload} onAccessRefused={invalidateAndReload}
+          noteEdit={noteEdit} projectEdit={projectEdit} createTask={createTask} onCommitted={reload} onCreated={revalidate} onAccessRefused={invalidateAndReload}
           language={language}/>}
       {content&&!(noteEdit&&content.kind==="note")&&!(projectEdit&&content.kind==="project")&&!(edit&&kindHasEdits(content.kind,edits))&&
         !(createTask&&content.kind==="project"&&content.page.project.areaKind==="private")&&
