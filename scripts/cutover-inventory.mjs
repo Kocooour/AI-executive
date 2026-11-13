@@ -17,6 +17,21 @@ const TABLES = [
   "schema_migrations", "metadata",
 ];
 const ENTITY_KINDS = new Set(["workspace", "area", "project", "task", "note"]);
+// Fixed output keys: an unexpected DB status must not become a public field name.
+const ICLOUD_STATUSES = new Set(["ready", "pending", "stale", "syncing", "error", "auth_failed"]);
+function icloudStatusCounts(rows) {
+  const counts = { ready: 0, pending: 0, stale: 0, syncing: 0, error: 0, auth_failed: 0, other: 0 };
+  for (const row of rows) {
+    const key = typeof row.status === "string" && ICLOUD_STATUSES.has(row.status)
+      ? row.status : "other";
+    counts[key] += Number(row.n);
+  }
+  return counts;
+}
+const unavailableIcloudGroup = () => ({
+  schema: "not_available", total: null, byStatus: null,
+  lastSuccessAt: { earliest: null, latest: null },
+});
 // Pinned catalog from lib/schema-migrations.ts at this PR's base SHA.
 // Update this ordered, non-sensitive migration list whenever app migrations change.
 // Never infer "current" from a count or PRAGMA user_version alone.
@@ -158,6 +173,7 @@ function readInventory(db, source, tokenAttestation) {
     accounts: tables.mail_accounts || 0,
     syncingAccounts: tables.mail_sync_accounts || 0,
     syncedMessageRows: tables.mail_sync_messages || 0,
+    icloudSync: { accounts: unavailableIcloudGroup(), calendars: unavailableIcloudGroup() },
     // "absent" must not mean "not inspected"; status only describes the
     // account checkpoint schema, not whether Gmail is fully synchronized.
     sync: { status: "not_available", neverSynced: null, everSynced: null, pending: null,
@@ -172,6 +188,54 @@ function readInventory(db, source, tokenAttestation) {
       const provider = typeof row.provider === "string" ? row.provider.toLowerCase() : "";
       if (provider === "gmail" || provider === "google") mail.gmailPresent = true;
       if (provider === "icloud" || provider === "apple") mail.icloudPresent = true;
+    }
+  }
+
+  // iCloud's stored account and CalDAV source states are separate from Gmail.
+  // Status strings and account/source identities are private input data: report
+  // ONLY allowlisted status counters and clean integer timestamp ranges.
+  // A missing table/column means not_available, not an empty or healthy state.
+  const accountRequired = ["provider", "status", "last_success_at"];
+  const sourceRequired = ["provider", "account_id", "status", "last_success_at"];
+  const accountCols = found.has("calendar_accounts")
+    ? new Set(db.prepare("PRAGMA table_info(calendar_accounts)").all().map(row => row.name))
+    : new Set();
+  const sourceCols = found.has("calendar_sources")
+    ? new Set(db.prepare("PRAGMA table_info(calendar_sources)").all().map(row => row.name))
+    : new Set();
+  const accountSchemaReady = accountRequired.every(col => accountCols.has(col));
+  if (accountSchemaReady) {
+    const counts = icloudStatusCounts(db.prepare(
+      "SELECT status, COUNT(*) AS n FROM calendar_accounts WHERE provider='icloud' GROUP BY status"
+    ).all());
+    const ranges = db.prepare(
+      "SELECT MIN(last_success_at) AS earliest, MAX(last_success_at) AS latest " +
+      "FROM calendar_accounts WHERE provider='icloud'"
+    ).get();
+    mail.icloudSync.accounts = {
+      schema: "available", total: Object.values(counts).reduce((sum, n) => sum + n, 0),
+      byStatus: counts,
+      lastSuccessAt: { earliest: cleanInt(ranges.earliest), latest: cleanInt(ranges.latest) },
+    };
+  }
+  // Only linked CalDAV sources belonging to real iCloud account rows count.
+  // Do not mix generic ICS sources or unlinked calendar rows into iCloud health.
+  if (accountSchemaReady && sourceRequired.every(col => sourceCols.has(col))) {
+    const linked = "FROM calendar_sources s INNER JOIN calendar_accounts a " +
+      "ON s.account_id=a.id WHERE a.provider='icloud' AND s.provider='caldav'";
+    const accountIdsAvailable = accountCols.has("id");
+    if (accountIdsAvailable) {
+      const counts = icloudStatusCounts(db.prepare(
+        "SELECT s.status AS status, COUNT(*) AS n " + linked + " GROUP BY s.status"
+      ).all());
+      const ranges = db.prepare(
+        "SELECT MIN(s.last_success_at) AS earliest, MAX(s.last_success_at) AS latest " + linked
+      ).get();
+      mail.icloudSync.calendars = {
+        schema: "available", total: Object.values(counts).reduce((sum, n) => sum + n, 0),
+        byStatus: counts,
+        lastSuccessAt: { earliest: cleanInt(ranges.earliest), latest: cleanInt(ranges.latest) },
+      };
     }
   }
 
@@ -293,6 +357,8 @@ function main() {
     "Context claims/evidence: " + report.context.claims + "/" + report.context.evidence,
     "Work sessions: " + report.work.sessions,
     "Gmail sync inspected: " + report.connectors.sync.status,
+    "iCloud account states inspected: " + report.connectors.icloudSync.accounts.schema,
+    "iCloud CalDAV states inspected: " + report.connectors.icloudSync.calendars.schema,
     "Passkeys/push targets: " + report.credentials.passkeys + "/" + report.credentials.pushTargets,
     "Backup files: " + report.backups.files,
     "SQLite integrity: " + report.integrity,
