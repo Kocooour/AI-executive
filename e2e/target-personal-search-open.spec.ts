@@ -12,6 +12,7 @@ test.skip(process.env.LUMI_TARGET_PERSONAL_ACCEPTANCE_E2E!=="true",
   "Search-open acceptance requires the isolated personal-v1 target store");
 
 type Seed={
+  areaId:string;
   searchProjects:Record<string,{
     projectId:string;projectTitle:string;taskId:string;taskTitle:string;
   }>;
@@ -37,6 +38,34 @@ function removeTestViewerMembership(areaId:string):void{
       "DELETE FROM area_members WHERE area_id=? AND user_id=? AND role='viewer'"
     ).run(areaId,store.ownerUserId);
     expect(result.changes).toBe(1);
+  }finally{db.close();}
+}
+
+// Paginated Search needs >25 real authorized rows. Seed a unique private
+// project set only for this isolated, serial real-store browser scenario. No
+// target HTTP endpoints are intercepted and no production paths are accessed.
+function seedPagingProjects(width:number):void{
+  if(!store||!process.env.LUMI_E2E_RUN_DIR)throw new Error("Missing isolated test store");
+  const run=realpathSync(process.env.LUMI_E2E_RUN_DIR);
+  if(realpathSync(store.directory)!==path.join(run,"target-store")||
+    store.ownerUserId!=="e2e-owner")throw new Error("Refusing non-test paging seed");
+  const db=new DatabaseSync(path.join(store.directory,"lumi-target.sqlite"));
+  try{
+    db.exec("PRAGMA foreign_keys=ON; PRAGMA busy_timeout=3000");
+    const area=db.prepare(
+      "SELECT id FROM areas WHERE id=? AND kind='private' AND owner_user_id=?"
+    ).get(store.seed.areaId,store.ownerUserId);
+    if(!area)throw new Error("Missing authorized private test Area");
+    const insert=db.prepare("INSERT INTO projects(id,area_id,title) VALUES (?,?,?)");
+    db.exec("BEGIN");
+    try{
+      for(let n=1;n<=27;n++){
+        const suffix=String(n).padStart(2,"0");
+        insert.run(`project:e2e:paging:${width}:${suffix}`,store.seed.areaId,
+          `Paging ${width} return ${suffix}`);
+      }
+      db.exec("COMMIT");
+    }catch(error){db.exec("ROLLBACK");throw error;}
   }finally{db.close();}
 }
 
@@ -162,5 +191,53 @@ for(const width of [390,1280]){
       await expect(search.getByText(revoked.projectTitle,{exact:true})).toHaveCount(0);
       await expect(search.locator('[data-detail-row="project:'+revoked.projectId+'"]'))
         .toHaveCount(0);
+    });
+
+  test("restored 25-result Search explicitly refreshes before paging at "+width+"px",
+    async({page})=>{
+      test.setTimeout(180_000);
+      if(!store)throw new Error("The isolated target store was not created");
+      seedPagingProjects(width);
+      await page.setViewportSize({width,height:844});
+      await page.goto("/?view=Search&scope=personal");
+      const input=page.locator(".searchField input");
+      const search=page.getByTestId("target-main-title-search");
+      const list=search.locator(".targetMainSearchItems li");
+      await input.fill("Paging "+width+" return");
+      await expect(search.getByRole("button",{name:"Vyhledat"})).toBeEnabled();
+      await input.press("Enter");
+      await expect(list).toHaveCount(25);
+      await expect(search.getByRole("button",{name:"Načíst další"})).toBeVisible();
+
+      const first=search.locator('[data-detail-row="project:project:e2e:paging:'+width+':01"]');
+      await first.focus();
+      await first.press("Enter");
+      const detail=page.getByTestId("target-detail");
+      await expect(detail).toContainText("Paging "+width+" return 01");
+      await detail.locator("button.inspectorClose").click();
+      await expect(detail).toHaveCount(0);
+      await expect(page).toHaveURL(/view=Search/);
+      await expect(list).toHaveCount(25);
+      await expect(first).toBeFocused();
+
+      // The old 25 rows are a focus-return snapshot, not a live cursor.
+      // First click is explicitly named Refresh, and re-queries authorized page 1.
+      await expect(search.getByRole("button",{name:"Načíst další"})).toHaveCount(0);
+      const refresh=search.getByRole("button",{name:"Obnovit hledání"});
+      await expect(refresh).toBeVisible();
+      const fresh=page.waitForResponse(response=>
+        response.request().method()==="GET"&&
+        new URL(response.url()).pathname==="/api/target-staging/title-search"&&
+        !new URL(response.url()).searchParams.has("cursor"));
+      await refresh.click();
+      expect((await fresh).status()).toBe(200);
+      await expect(list).toHaveCount(25);
+      await expect(search.getByRole("button",{name:"Obnovit hledání"})).toHaveCount(0);
+
+      // Once re-authorized, the normal Load more button really appends page 2.
+      await search.getByRole("button",{name:"Načíst další"}).click();
+      await expect(list).toHaveCount(27);
+      await expect(search).toContainText("Paging "+width+" return 27");
+      await expect(search.getByRole("button",{name:"Načíst další"})).toHaveCount(0);
     });
 }
