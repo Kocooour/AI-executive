@@ -166,6 +166,11 @@ for(const width of [390,1280]){
     };
     const reads:NativeRead[]=[];
     const pendingReads=new Map<string,NativeRead>();
+    // Observe every task CREATE from before the first app navigation through
+    // teardown, not just after a successful BFCache restore. Otherwise an
+    // automatic replay during pagehide/pageshow/wake can escape detection.
+    // Never retain POST bodies, private titles, URL queries or auth headers.
+    const taskCreatePosts:{phase:string;path:string}[]=[];
     let networkOrder=0;
     let backReadMark:number|null=null;
     const targetReadPaths=new Set([
@@ -175,7 +180,10 @@ for(const width of [390,1280]){
     const unsubscribeRequest=cdp.on("Network.requestWillBeSent",event=>{
       const e=event as {requestId:string;request:{url:string;method:string}};
       const url=new URL(e.request.url);
-      if(url.origin!==origin||!targetReadPaths.has(url.pathname))return;
+      if(url.origin!==origin)return;
+      if(e.request.method==="POST"&&url.pathname==="/api/target-staging/tasks")
+        taskCreatePosts.push({phase,path:url.pathname});
+      if(!targetReadPaths.has(url.pathname))return;
       const read:NativeRead={requestId:e.requestId,path:url.pathname,
         method:e.request.method,requestOrder:++networkOrder};
       reads.push(read);
@@ -229,6 +237,8 @@ for(const width of [390,1280]){
       const record={status,phase,width,
         checkedOutSha:process.env.LUMI_TESTED_CHECKOUT_SHA??null,
         preBack,cacheNotUsed,browser,
+        taskCreatePostCount:taskCreatePosts.length,
+        taskCreatePostStages:taskCreatePosts.map(post=>post.phase),
         // Only endpoint paths and outcomes; never include request bodies, task
         // names, URLs with query strings, cookies or authorization headers.
         freshHttpReads:reads.filter(read=>backReadMark!==null&&
@@ -306,6 +316,8 @@ for(const width of [390,1280]){
       expect(first.titleVisible,"Private draft remains in DOM").toBe(false);
       expect(first.storageLeak,"Private draft persisted to browser storage").toBe(false);
       expect(["",null],"Old private Area remains selected").toContain(first.area);
+      expect(taskCreatePosts,"Abandoned draft CREATE before/during native Back")
+        .toHaveLength(0);
       if(strict)expect(first.persisted,"Native pageshow.persisted was false; reasons="+
         JSON.stringify({navigation:first.notRestoredReasons,cdp:cacheNotUsed})).toBe(true);
       // The original document is preserved only on a genuine BFCache hit.
@@ -332,6 +344,8 @@ for(const width of [390,1280]){
         expect(awake.titleVisible).toBe(false);
         expect(["",null]).toContain(awake.area);
         await evidence("wake-authorized");
+        expect(taskCreatePosts,"Automatic CREATE during BFCache wake/revalidation")
+          .toHaveLength(0);
         // Before any new action we have proved a fresh authorized session and
         // Area lookup. Only now may the user reselect the private Area. Neither
         // the abandoned text nor an executable old CREATE may be revived.
@@ -346,16 +360,13 @@ for(const width of [390,1280]){
         const postRestoreTitle=await cdp.eval<string>(
           "document.querySelector('[data-testid=\"target-private-task-form\"] input').value");
         expect(postRestoreTitle,"Old React draft reappeared after Area reselect").toBe("");
-        const creates:string[]=[];
-        const unsubscribe=cdp.on("Network.requestWillBeSent",event=>{
-          const req=event.request as {url:string;method:string};
-          if(req.method==="POST"&&
-            new URL(req.url).pathname==="/api/target-staging/tasks")creates.push(req.url);
-        });
+        expect(taskCreatePosts,"Automatic CREATE after private Area reselect")
+          .toHaveLength(0);
+        phase="attempting empty-composer save after BFCache restore";
         await cdp.eval("document.querySelector('[data-testid=\"target-private-task-save\"]').click()");
         await pause(300);
-        expect(creates,"Blank restored composer must not submit CREATE").toHaveLength(0);
-        unsubscribe();
+        expect(taskCreatePosts,"Blank restored composer must not submit CREATE")
+          .toHaveLength(0);
       }
     }catch(error){
       // Attach and log the state even when native pageshow never fires:
