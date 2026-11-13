@@ -390,4 +390,3 @@ full Browser E2E, verified backup/restore and explicit owner approval.
 An automatic PR result or a successful integration-branch **rehearsal**
 is never a substitute for these release-SHA steps. Keep #388 open
 until **all** required conditions are satisfied and signed off.
-
