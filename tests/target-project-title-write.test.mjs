@@ -156,14 +156,12 @@ test('simultaneous PATCH and cancel are ordered by pinned write transaction',asy
   // Reconcile ONLY the same command UUID after the fence has responded.
   // The separate pinned-journal companion below still requires BOTH operations
   // to succeed on their FIRST attempt within the real 200ms budget.
-  if(rename.status===503){
+  for(let attempt=0;rename.status===503 && attempt<3;attempt++){
     assert.deepEqual(await rename.json(),{error:'Staging unavailable'});
-    for(let attempt=0;attempt<3;attempt++){
-      rename=await write(alice,command);
-      if(rename.status!==503)break;
-      assert.deepEqual(await rename.json(),{error:'Staging unavailable'});
-    }
+    rename=await write(alice,command);
   }
+  assert.notEqual(rename.status,503,
+    'a settled fence must make the identical command UUID resolve as committed or cancelled');
   if(status==='cancelled'){
     assert.equal(rename.status,409,await rename.clone().text());
     assert.deepEqual(await rename.json(),{error:'Command cancelled'});
