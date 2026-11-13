@@ -14,7 +14,7 @@ const id="123e4567-e89b-42d3-a456-426614174000";
 const restoreGeneration="765e4567-e89b-42d3-a456-426614174000";
 const area="private-area";
 const originalStatus={
-  commandId:id,taskId:"completed-A",status:"completed",
+  commandId:id,taskId:"completed-A",status:"completed",previousWhenOn:null,
   expectedRevision:"a".repeat(64),writeAreaId:area,restoreGeneration,
 };
 const originalWhen={
@@ -42,6 +42,7 @@ const json=(body,status=200)=>Response.json(body,{
 const page={
   evaluationDate:"2026-11-06",areaFilter:"all",
   today:{tasks:[],hasMore:false},tomorrow:{tasks:[],hasMore:false},
+  undated:{tasks:[],hasMore:false},
   hasMore:false,nextCursor:null,
 };
 const reauthorize=async(calls)=>{
