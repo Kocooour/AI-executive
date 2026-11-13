@@ -94,6 +94,7 @@ const disabled = [
   { pattern: /^project-tasks(?:\/|$)/, flag: "AI_EXECUTIVE_TARGET_STAGING_HTTP_PROJECT_TASKS_CREATE_ENABLED" },
   { pattern: /^projects\/(?:create-recovery|create-status)$/, flag: "AI_EXECUTIVE_TARGET_STAGING_HTTP_PROJECTS_CREATE_ENABLED" },
   { pattern: /^relations(?:\/|$)/, flag: "AI_EXECUTIVE_TARGET_STAGING_HTTP_RELATIONS_ENABLED" },
+  { pattern: /^projects\/\[projectId\]\/relations$/, flag: "AI_EXECUTIVE_TARGET_STAGING_HTTP_RELATIONS_ENABLED" },
   { pattern: /^task-index\/global$/, flag: "AI_EXECUTIVE_TARGET_STAGING_HTTP_GLOBAL_TASKS_ENABLED" },
   { pattern: /^task-temporal\/due-on(?:\/|$)/, flag: "AI_EXECUTIVE_TARGET_STAGING_HTTP_TEMPORAL_DUE_ON_WRITE_ENABLED" },
   { pattern: /^task-temporal\/due-window$/, flag: "AI_EXECUTIVE_TARGET_STAGING_HTTP_TEMPORAL_DUE_WINDOWS_ENABLED" },
