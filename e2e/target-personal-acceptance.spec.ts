@@ -632,10 +632,10 @@ for (const width of [390, 1280]) {
     });
     await notice.getByTestId("legacy-pending-download").click();
     await expect.poll(() => page.evaluate(() =>
-      (window as Window & { __c13SafariSpy: { navigations: string[] } }).__c13SafariSpy.navigations.length,
+      (window as unknown as Window & { __c13SafariSpy: { navigations: string[] } }).__c13SafariSpy.navigations.length,
     )).toBe(1);
     const safariCopy = JSON.parse(await page.evaluate(async () => {
-      const { navigations } = (window as Window & { __c13SafariSpy: { navigations: string[] } }).__c13SafariSpy;
+      const { navigations } = (window as unknown as Window & { __c13SafariSpy: { navigations: string[] } }).__c13SafariSpy;
       return await (await fetch(navigations[0])).text();
     }));
     expect(safariCopy.local.entities.some((item: {title: string}) => item.title === updatedTitle)).toBe(true);
@@ -666,12 +666,12 @@ for (const width of [390, 1280]) {
     await expect(notice.getByTestId("legacy-pending-download")).toHaveCount(0);
     await expect(notice.getByRole("alert")).toBeVisible();
     expect(await page.evaluate(() => {
-      const spy = (window as Window & { __c13SafariSpy: { navigations: string[]; closed: number } }).__c13SafariSpy;
+      const spy = (window as unknown as Window & { __c13SafariSpy: { navigations: string[]; closed: number } }).__c13SafariSpy;
       return { navigations: spy.navigations.length, closed: spy.closed };
     })).toEqual({ navigations: 1, closed: 1 });
     await safariSibling.close();
     await page.evaluate(() =>
-      (window as Window & { __c13RestoreOpen: () => void }).__c13RestoreOpen(),
+      (window as unknown as Window & { __c13RestoreOpen: () => void }).__c13RestoreOpen(),
     );
 
     await notice.getByTestId("legacy-pending-prepare").click();
