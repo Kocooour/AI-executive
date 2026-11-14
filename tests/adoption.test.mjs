@@ -153,23 +153,34 @@ test("logout epoch blocks stale tabs through restore completion cleanup and late
     "a tab loaded after the second logout is not frozen by old logouts");
 });
 
-test("the tab completing an interrupted wipe can safely re-authenticate; stale siblings cannot", () => {
+test("the tab completing an interrupted wipe can safely re-authenticate; stale siblings cannot", async () => {
   const state = memoryStorage();
-  const oldEpoch = state.getItem(barrier.ownerSignOutEpochKey);
-  state.setItem(barrier.ownerAdoptionGenerationKey, "8");
-  state.setItem("ai-executive-signed-out", "1");
-  state.setItem("ai-executive-wipe-pending", "1");
-  barrier.advanceSignOutEpoch(state);
-  state.removeItem(barrier.ownerAdoptionGenerationKey);
-  assert.equal(barrier.crossTabAdoptionBlocked(undefined, state, false, null, oldEpoch), true);
-  barrier.acknowledgePurgedSignOutInThisTab(state);
-  assert.equal(barrier.isCrossTabAdoptionBlocked(), false,
-    "the tab whose local data is fully purged may begin its next first pull");
-  assert.equal(barrier.crossTabAdoptionBlocked(undefined, state, false, null, oldEpoch), true,
-    "acknowledgement must not release a pre-logout sibling");
-  state.removeItem("ai-executive-wipe-pending");
-  state.setItem(barrier.ownerAdoptionGenerationKey, "8");
-  assert.equal(barrier.crossTabAdoptionBlocked(undefined, state, false, null, oldEpoch), true);
+  const previous = globalThis.localStorage;
+  try {
+    globalThis.localStorage = state;
+    // Isolate this tab's module globals from the siblings and the other tests.
+    const finishingTab = await import(`../lib/owner-adoption-barrier.ts?purged-tab=${Date.now()}`);
+    finishingTab.initializeAdoptionGeneration(undefined, false);
+    const oldEpoch = state.getItem(finishingTab.ownerSignOutEpochKey);
+    state.setItem(finishingTab.ownerAdoptionGenerationKey, "8");
+    state.setItem("ai-executive-signed-out", "1");
+    state.setItem("ai-executive-wipe-pending", "1");
+    finishingTab.advanceSignOutEpoch(state);
+    state.removeItem(finishingTab.ownerAdoptionGenerationKey);
+    assert.equal(finishingTab.isCrossTabAdoptionBlocked(), true, "this tab is fenced during its own wipe");
+    assert.equal(finishingTab.crossTabAdoptionBlocked(undefined, state, false, null, oldEpoch), true);
+    finishingTab.acknowledgePurgedSignOutInThisTab(state);
+    assert.equal(finishingTab.isCrossTabAdoptionBlocked(), false,
+      "the tab whose local data is fully purged may begin its next first pull");
+    assert.equal(finishingTab.crossTabAdoptionBlocked(undefined, state, false, null, oldEpoch), true,
+      "acknowledgement must not release a pre-logout sibling");
+    state.removeItem("ai-executive-wipe-pending");
+    state.setItem(finishingTab.ownerAdoptionGenerationKey, "8");
+    assert.equal(finishingTab.crossTabAdoptionBlocked(undefined, state, false, null, oldEpoch), true);
+  } finally {
+    if (previous === undefined) delete globalThis.localStorage;
+    else globalThis.localStorage = previous;
+  }
 });
 
 test("logout epoch fails closed when corrupt or unpersistable", () => {

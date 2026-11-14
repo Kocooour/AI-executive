@@ -732,7 +732,7 @@ test("signing out clears the local copy; signing in again restores it from the s
   expect(await page.evaluate(() => localStorage.getItem("ai-executive-signed-in"))).toBeNull();
   expect(await page.evaluate(() => localStorage.getItem("ai-executive-owner-adoption-completed"))).toBeNull();
   const signOutEpoch = await page.evaluate(() => localStorage.getItem("ai-executive-owner-sign-out-epoch"));
-  expect(signOutEpoch).toMatch(/^[1-9]\\d*$/);
+  expect(signOutEpoch).toMatch(/^[1-9]\d*$/);
   expect(await page.evaluate(() => fetch("/api/store").then((response) => response.status))).toBe(401);
   await signIn(page);
   expect(await page.evaluate(() => localStorage.getItem("ai-executive-owner-sign-out-epoch"))).toBe(signOutEpoch);
