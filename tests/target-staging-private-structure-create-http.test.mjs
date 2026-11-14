@@ -134,11 +134,11 @@ async function checked(response,status){
 const cp=(cmd,cookie)=>call(PROJECT,"/projects",cmd,cookie);
 const cs=(cmd,cookie)=>call(PROJECT_STATUS,"/projects/create-status",cmd,cookie);
 const cr=(cmd,cookie)=>call(PROJECT_RECOVERY,"/projects/create-recovery",
-  {commandId:cmd.commandId},cookie);
+  {commandId:cmd.commandId,ownerScope:scoped()},cookie);
 const ct=(cmd,cookie)=>call(CHILD,"/project-tasks",cmd,cookie);
 const cts=(cmd,cookie)=>call(CHILD_STATUS,"/project-tasks/create-status",cmd,cookie);
 const ctr=(cmd,cookie)=>call(CHILD_RECOVERY,"/project-tasks/create-recovery",
-  {commandId:cmd.commandId},cookie);
+  {commandId:cmd.commandId,ownerScope:scoped()},cookie);
 const scoped=(actor="alice")=>privateStructureActorScope(actor,
   process.env.AI_EXECUTIVE_TARGET_STAGING_RESTORE_GENERATION);
 const pc=(cmd,cookie,ownerScope=scoped())=>call(PROJECT_CANCEL,"/projects/create-cancel",
@@ -237,14 +237,14 @@ test("actor-scoped receipts forbid command reuse, and stolen commands cannot rep
   await checked(await cp({...p,title:"Changed"}),409);
   const bob=session(fx,"bob");
   await checked(await cp(p,bob.cookie),404);
-  assert.deepEqual(await checked(await cr(p,bob.cookie),200),{status:"not_recorded"});
+  await checked(await cr(p,bob.cookie),404);
   await checked(await cs(p,bob.cookie),404);
   const t=child(fx,p.projectId);
   await checked(await ct(t),201);
   await checked(await ct({...t,taskId:randomUUID()}),409);
   await checked(await ct({...t,title:"Changed"}),409);
   await checked(await ct(t,bob.cookie),404);
-  assert.deepEqual(await checked(await ctr(t,bob.cookie),200),{status:"not_recorded"});
+  await checked(await ctr(t,bob.cookie),404);
 });
 test("revoked durable session cannot create, confirm or recover",async()=>{
   const fx=fixture(),p=project(fx),live=session(fx,"alice");
