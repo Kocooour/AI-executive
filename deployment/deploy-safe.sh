@@ -94,6 +94,68 @@ verify_loaded_execution() {
   done
 }
 
+# Inspect the EFFECTIVE systemd unit, not the tracked file. Drop-ins can
+# replace User/Group/WorkingDirectory or weaken a unit sandbox property after
+# the initial preflight. Match the hardening contract declared by the reviewed
+# ai-executive.service before every launch (including off-profile rollback).
+# Do not log operator-controlled property values, which may be sensitive.
+# The separately authorized target StateDirectory/ReadWritePaths exception is
+# validated by verify_loaded_write_sandbox(), not loosened here.
+verify_loaded_service_security() {
+  local loaded line key value prop
+  local -A expected=(
+    [Type]=simple
+    [User]=ai-executive
+    [Group]=ai-executive
+    [WorkingDirectory]="$APP"
+    [UMask]=0077
+    [StateDirectoryMode]=0700
+    [NoNewPrivileges]=yes
+    [PrivateTmp]=yes
+    [PrivateDevices]=yes
+    [ProtectSystem]=strict
+    [ProtectHome]=yes
+    [ProtectKernelTunables]=yes
+    [ProtectKernelModules]=yes
+    [ProtectKernelLogs]=yes
+    [ProtectControlGroups]=yes
+    [ProtectClock]=yes
+    [ProtectHostname]=yes
+    [RestrictSUIDSGID]=yes
+    [LockPersonality]=yes
+    [CapabilityBoundingSet]=''
+    [AmbientCapabilities]=''
+    [RestrictAddressFamilies]='AF_UNIX AF_INET AF_INET6'
+    [ProtectProc]=invisible
+    [RestrictNamespaces]=yes
+    [RestrictRealtime]=yes
+    [SystemCallArchitectures]=native
+    [LimitCORE]=0
+  )
+  local -A seen=()
+  local -a options=()
+  for prop in "${!expected[@]}"; do options+=(-p "$prop"); done
+  loaded="$(systemctl show "$SERVICE" "${options[@]}")" || return 1
+  # Read and verify every requested property exactly once. An absent field,
+  # duplicate field or an unexpected returned key fails closed.
+  while IFS= read -r line; do
+    [[ "$line" == *=* ]] || return 1
+    key="${line%%=*}"
+    value="${line#*=}"
+    [[ "$key" =~ ^[A-Za-z][A-Za-z0-9]*$ ]] || return 1
+    [[ "${expected[$key]+present}" ]] || return 1
+    [[ ! "${seen[$key]+present}" ]] || return 1
+    if [[ "$key" == CapabilityBoundingSet || "$key" == AmbientCapabilities ]]; then
+      # systemd versions may expose an empty capability bitset as "0".
+      [[ -z "$value" || "$value" == 0 ]] || return 1
+    else
+      [[ "$value" == "${expected[$key]}" ]] || return 1
+    fi
+    seen[$key]=1
+  done <<<"$loaded"
+  [[ "${#seen[@]}" -eq "${#expected[@]}" ]]
+}
+
 # The shipped unit is ProtectSystem=strict with a private legacy
 # StateDirectory. The only authorized extension is the isolated
 # ai-executive-target StateDirectory (as proposed in the R4 runbook) or
@@ -454,6 +516,10 @@ on_exit() {
     echo "BEZPECNOSTNI BLOKACE: spousteci prikazy systemd pri rollbacku." >&2
     exit "$rc"
   fi
+  if ! verify_loaded_service_security; then
+    echo "BEZPECNOSTNI BLOKACE: identita nebo ochrany systemd pri rollbacku." >&2
+    exit "$rc"
+  fi
   if ! env_file_unchanged; then
     echo "BEZPECNOSTNI BLOKACE: zmeneny obsah .env pri rollbacku." >&2
     exit "$rc"
@@ -530,8 +596,8 @@ if [ "$RECOVERY_MODE" = 1 ]; then
 else
   test "$(systemctl is-active "$SERVICE")" = active || die "sluzba nebezi"
 fi
-test "$(systemctl show "$SERVICE" -p User --value)" = ai-executive || die "jiny ucet sluzby"
-test "$(systemctl show "$SERVICE" -p WorkingDirectory --value)" = "$APP" || die "jiny adresar sluzby"
+verify_loaded_service_security ||
+  die "neoverena identita nebo bezpecnostni profil systemd"
 test -f "$DATA/store.sqlite" && test -f "$ENVFILE" || die "chybi data nebo env"
 test ! -L "$DATA" && test ! -L "$ENVFILE" || die "necekany symlink"
 test -z "$(find "$DATA" -type l -print -quit)" || die "symlink v datech"
@@ -811,6 +877,8 @@ verify_loaded_write_sandbox && write_sandbox_unchanged ||
   die "systemd sandbox se pred startem zmenil"
 verify_loaded_execution ||
   die "spousteci prikazy systemd se pred startem zmenily"
+verify_loaded_service_security ||
+  die "identita nebo ochrany systemd se pred startem zmenily"
 env_file_unchanged ||
   die "env se pred startem zmenilo"
 systemctl start "$SERVICE"
@@ -829,6 +897,8 @@ if [ "$TARGET_PROFILE" = personal-v1 ]; then
     die "systemd sandbox se pred druhym startem zmenil"
   verify_loaded_execution ||
     die "spousteci prikazy systemd se pred druhym startem zmenily"
+  verify_loaded_service_security ||
+    die "identita nebo ochrany systemd se pred druhym startem zmenily"
   env_file_unchanged ||
     die "env se pred druhym startem zmenilo"
   systemctl start "$SERVICE"
