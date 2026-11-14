@@ -643,7 +643,7 @@ scenarioCase("offenvcomment: commented fixed-unit variable is not an override", 
 
 for (const scenario of [
   "targetrwbroad", "targetrwparent", "targetweakprotect",
-  "targetstateextra", "offweakprotect",
+  "targetstateextra", "targetmixedwrites", "offweakprotect",
 ]) {
   scenarioCase(scenario + ": refuse unapproved or weakened systemd sandbox", (r) => {
     assert.notEqual(r.status, 0);
@@ -654,6 +654,40 @@ for (const scenario of [
     assert.deepEqual(r.backups, []);
   });
 }
+
+for (const scenario of ["offexechanged", "targetexechanged", "offextrahook"]) {
+  scenarioCase(scenario + ": reject unreviewed loaded execution before downtime", (r) => {
+    assert.notEqual(r.status, 0);
+    assert.match(r.output, /neoverene spousteci prikazy systemd/);
+    assert.equal(r.head, oldSha);
+    assert.equal(r.service, "active");
+    assert.equal(r.events.includes("stop"), false);
+    assert.deepEqual(r.backups, []);
+  });
+}
+
+scenarioCase("offexecdriftbuild: never restart old code under changed loaded ExecStart", (r) => {
+  assert.notEqual(r.status, 0);
+  assert.match(r.output, /spousteci prikazy systemd se pred startem zmenily/);
+  assert.match(r.output, /BEZPECNOSTNI BLOKACE: spousteci prikazy systemd pri rollbacku/);
+  assert.equal(r.events.includes("unit-exec-changed-during-build"), true);
+  assert.equal(r.events.includes("reset"), true);
+  assert.equal(r.events.some(e => e.startsWith("start-")), false);
+  assert.equal(r.head, oldSha);
+  assert.equal(r.service, "inactive");
+  assert.equal(r.backups.length, 1);
+});
+
+scenarioCase("targetexecdriftbuild: never serve target under changed loaded ExecStart", (r) => {
+  assert.notEqual(r.status, 0);
+  assert.match(r.output, /spousteci prikazy systemd se pred startem zmenily/);
+  assert.equal(r.events.includes("unit-exec-changed-during-build"), true);
+  assert.equal(r.events.includes("reset"), true);
+  assert.equal(r.events.some(e => e.startsWith("start-")), false);
+  assert.equal(r.head, oldSha);
+  assert.equal(r.service, "inactive");
+  assert.equal(r.backups.length, 1);
+});
 
 // Fail even for a legacy-only env: later EnvironmentFile or manager injection
 // can enable unreviewed target flags when the base file looks disabled.
@@ -690,7 +724,7 @@ scenarioCase("offmanagerenvlargesafe: long manager env without target flags is a
 scenarioCase("offsystemddriftbuild: rollback must not restart with a rejected loaded unit", (r) => {
   assert.notEqual(r.status, 0);
   assert.match(r.output, /zdroje prostredi systemd se pred startem zmenily/);
-  assert.match(r.output, /BEZPECNOSTNI BLOKACE: zmenene zdroje prostredi systemd nebo obsah \.env pri rollbacku/);
+  assert.match(r.output, /BEZPECNOSTNI BLOKACE: zdroje prostredi systemd pri rollbacku (pozor: puvodne obsah \.env pri rollbacku/);
   assert.equal(r.events.includes("unit-env-changed-during-build"), true);
   assert.equal(r.events.includes("reset"), true, "code-only rollback is allowed, not restart");
   assert.equal(r.events.some(e => e.startsWith("start-")), false,
@@ -715,7 +749,7 @@ scenarioCase("offweakprotectbuild: weakened sandbox during build blocks old-code
 scenarioCase("offenvdriftbuild: rollback must not restart with changed root env", (r) => {
   assert.notEqual(r.status, 0);
   assert.match(r.output, /env se pred startem zmenilo/);
-  assert.match(r.output, /BEZPECNOSTNI BLOKACE: zmenene zdroje prostredi systemd nebo obsah \.env pri rollbacku/);
+  assert.match(r.output, /BEZPECNOSTNI BLOKACE: zmeneny obsah \.env pri rollbacku/);
   assert.equal(r.events.includes("env-changed-during-build"), true);
   assert.equal(r.events.includes("reset"), true);
   assert.equal(r.events.some(e => e.startsWith("start-")), false,
