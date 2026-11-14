@@ -183,6 +183,14 @@ function sandbox(scenario) {
   }
   assert.ok(script.includes("/usr/bin/node"), "check data script still uses Node");
   script = script.replaceAll("/usr/bin/node", process.execPath);
+  if (scenario === "targetstatedir") {
+    // Map only the absolute systemd StateDirectory root to the synthetic
+    // private filesystem. The production code still validates /var/lib.
+    const literal = "/var/lib/ai-executive-target/*/) return 0 ;;";
+    assert.equal(script.split(literal).length, 2);
+    script = script.replace(literal,
+      path.join(root, "var/lib/ai-executive-target") + "/*/) return 0 ;;");
+  }
 
   const env = {
     ...process.env,
@@ -587,6 +595,13 @@ scenarioCase("targetsuccess: quiesced target preflight, shared verified archive,
   assert.match(manifest, /target\/lumi-target.journal/);
   assert.match(manifest, /target\/lumi-target-witness.sqlite/);
 });
+scenarioCase("targetstatedir: approved isolated StateDirectory permits target rollout", (r) => {
+  assert.equal(r.status, 0, r.output);
+  assert.equal(r.head, newSha);
+  assert.equal(r.service, "active");
+  assert.equal(r.events.filter(e => e === "target-check").length, 4);
+});
+
 scenarioCase("targetinvalid: reject partial activation without stopping service", (r) => {
   assert.notEqual(r.status, 0);
   assert.match(r.output, /neplatny nebo castecny profil/);
@@ -683,6 +698,18 @@ scenarioCase("offsystemddriftbuild: rollback must not restart with a rejected lo
   assert.equal(r.head, oldSha);
   assert.equal(r.service, "inactive");
   assert.equal(r.backups.length, 1, "verified backup remains for manual recovery");
+});
+
+scenarioCase("offweakprotectbuild: weakened sandbox during build blocks old-code restart", (r) => {
+  assert.notEqual(r.status, 0);
+  assert.match(r.output, /systemd sandbox se pred startem zmenil/);
+  assert.match(r.output, /BEZPECNOSTNI BLOKACE/);
+  assert.equal(r.events.includes("sandbox-changed-during-build"), true);
+  assert.equal(r.events.includes("reset"), true);
+  assert.equal(r.events.some(e => e.startsWith("start-")), false);
+  assert.equal(r.head, oldSha);
+  assert.equal(r.service, "inactive");
+  assert.equal(r.backups.length, 1);
 });
 
 scenarioCase("offenvdriftbuild: rollback must not restart with changed root env", (r) => {
