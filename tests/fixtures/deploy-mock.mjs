@@ -247,7 +247,7 @@ switch (name) {
         process.exit(40);
       }
       const names = fs.readdirSync(directory).sort();
-      if (names.join(",") !== ["lumi-target.journal", "lumi-target-witness.sqlite", "lumi-target.sqlite"].join(","))
+      if (names.join(",") !== ["lumi-target.journal", "lumi-target-witness.sqlite", "lumi-target.sqlite"].sort().join(","))
         process.exit(41);
       const [owner, generation] = fs.readFileSync(path.join(directory, "lumi-target.sqlite"), "utf8").split("\n");
       console.log([
@@ -268,6 +268,17 @@ switch (name) {
     break;
   }
   case "cp": {
+    if (scenario === "targetidentityswap" &&
+        args[args.length - 2] === path.join(root, "var/lib/ai-executive-target/personal-v1") &&
+        !fs.existsSync(stateFile("identity-swapped"))) {
+      // The first semantic check passed, but a valid *different* owner and
+      // generation now replace the quiesced source just before its copy.
+      // Pure --check would still succeed; the env-bound comparison must not.
+      const source = path.join(root, "var/lib/ai-executive-target/personal-v1/lumi-target.sqlite");
+      fs.writeFileSync(source, "other-owner\n" + "54cfe278-7d10-43cc-8899-0eaa49e7d737");
+      set("identity-swapped", "1");
+      log("target-identity-swapped");
+    }
     if ((scenario === "partialcopy" ||
          (scenario === "firstrolloutpartialcopy" && !fs.existsSync(stateFile("copyfailed")))) &&
         args[args.length - 2] === path.join(root, "var/lib/ai-executive")) {
