@@ -10,7 +10,7 @@ import { settleSyncOperation } from "../../../lib/sync-result";
 import { hasChangesBeyond, postToTabs, requestTimeout, tabChannelName, withSyncLock, type TabMessage } from "../../../lib/tab-coordination";
 import { markSignedIn } from "../../../lib/local-data";
 import { beginAdoption, isAdopting, isAdoptingInThisTab, setAfterRestoreFlag } from "../../../lib/adoption";
-import { advanceAdoptionGeneration, assertOwnerAdoptionCleanup, finishOwnerAdoptionFence, initializeAdoptionGeneration, ownerAdoptionFenceKey, ownerAdoptionFencePresent, ownerAdoptionReadyToFinish, persistOrdinaryGeneration, readOwnerAdoptionFence, startOwnerAdoptionFence, type OwnerAdoptionFence } from "../../../lib/owner-adoption-barrier";
+import { advanceAdoptionGeneration, assertOwnerAdoptionCleanup, completedOwnerAdoptionSinceThisTabLoaded, finishOwnerAdoptionFence, initializeAdoptionGeneration, ownerAdoptionCompletedKey, ownerAdoptionFenceKey, ownerAdoptionFencePresent, ownerAdoptionReadyToFinish, persistOrdinaryGeneration, readOwnerAdoptionFence, startOwnerAdoptionFence, type OwnerAdoptionFence } from "../../../lib/owner-adoption-barrier";
 import { restoredSinceKnownGeneration, restoreGenerationDecision } from "../../../lib/restore-generation-origin";
 import { clearNotesDrafts } from "../../../lib/notes-drafts";
 import { clearProjectContextDrafts } from "../../../lib/project-context-drafts";
@@ -580,8 +580,12 @@ export function useSync() {
     if (isAdoptingInThisTab() || offlineRecoveryIsHeld() || signedOut.current ||
         ownerAdoptionFencePresent()) return;
     if (typeof generation !== "number" || !Number.isSafeInteger(generation) || generation < 0) return;
-    // Legacy previously-synced tabs may not have a stored generation.
-    if (fromStorage && loadedGeneration.current === undefined && !loadedWasSynced.current) return;
+    // A sibling's first sync can stamp a generation without restoring data:
+    // fresh tabs must ignore that. A CERTIFIED completed owner restore is
+    // different: its durable completion marker changed since this page loaded.
+    // Without BroadcastChannel this is the only way to unfreeze a fresh tab.
+    if (fromStorage && loadedGeneration.current === undefined && !loadedWasSynced.current &&
+        completedOwnerAdoptionSinceThisTabLoaded() !== generation) return;
     if (loadedGeneration.current !== undefined && generation <= loadedGeneration.current) return;
     beginAdoption();
     setAfterRestoreFlag("sibling");
@@ -635,15 +639,27 @@ export function useSync() {
         setSyncStatus("offline");
       }
       if (event.key === generationKey && event.newValue !== null) reloadForRestore(Number(event.newValue), true);
-      // The generation is stored while the shared fence is still active.
-      // A sibling may therefore need the later fence-removal notification.
+      // The owner completion marker is written while the live fence exists.
+      // The later fence-removal event retries reload once adoption is safe.
+      if (event.key === ownerAdoptionCompletedKey && event.newValue !== null)
+        reloadForRestore(Number(event.newValue), true);
       if (event.key === ownerAdoptionFenceKey && event.newValue === null) {
         const raw = localStorage.getItem(generationKey);
         if (raw !== null) reloadForRestore(Number(raw), true);
       }
     };
+    // A suspended tab may miss storage events; on focus, inspect the same
+    // certified marker, never a bare ordinary-sync generation update.
+    const onFocus = () => {
+      const completed = completedOwnerAdoptionSinceThisTabLoaded();
+      if (completed !== undefined) reloadForRestore(completed, true);
+    };
     window.addEventListener("storage", onStorage);
-    return () => window.removeEventListener("storage", onStorage);
+    window.addEventListener("focus", onFocus);
+    return () => {
+      window.removeEventListener("storage", onStorage);
+      window.removeEventListener("focus", onFocus);
+    };
   }, []);
   // Another tab changed the shared local copy: show it here too.
   useEffect(() => {
