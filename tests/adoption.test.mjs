@@ -116,6 +116,52 @@ test("an owner restore completing in a sibling still fences a fresh tab with no 
   assert.equal(barrier.crossTabAdoptionBlocked(5, state), false);
 });
 
+test("logout epoch blocks stale tabs through restore completion cleanup and later sign-in", () => {
+  const state = memoryStorage();
+  // Tab A was opened before another tab B completed an owner restore.
+  // A had never synchronized and may miss all storage/BroadcastChannel events.
+  const tabA = { known: undefined, completed: null, signOutEpoch: state.getItem(barrier.ownerSignOutEpochKey) };
+  state.setItem(barrier.ownerAdoptionGenerationKey, "4");
+  barrier.startOwnerAdoptionFence(state, 5, 4);
+  state.setItem(barrier.ownerAdoptionGenerationKey, "5");
+  barrier.finishOwnerAdoptionFence(state);
+  assert.equal(barrier.crossTabAdoptionBlocked(tabA.known, state, false, tabA.completed, tabA.signOutEpoch), true);
+
+  // Successful logout clears the restore generation and completion marker.
+  // It MUST preserve a separate epoch, even after signed-out is cleared at login.
+  barrier.advanceSignOutEpoch(state);
+  const firstEpoch = state.getItem(barrier.ownerSignOutEpochKey);
+  assert.equal(firstEpoch, "1");
+  state.removeItem(barrier.ownerAdoptionGenerationKey);
+  state.removeItem(barrier.ownerAdoptionCompletedKey);
+  assert.equal(barrier.crossTabAdoptionBlocked(tabA.known, state, false, tabA.completed, tabA.signOutEpoch), true,
+    "a missed owner restore event must not revive stale records after logout");
+
+  state.setItem(barrier.ownerAdoptionGenerationKey, "5"); // new signed-in tab's first pull
+  assert.equal(barrier.crossTabAdoptionBlocked(tabA.known, state, false, tabA.completed, tabA.signOutEpoch), true,
+    "removing signed-out on re-authentication must NOT re-enable the old tab");
+  assert.equal(barrier.crossTabAdoptionBlocked(5, state, false, null, firstEpoch), false,
+    "a freshly loaded and authenticated tab uses the current epoch");
+  assert.equal(barrier.crossTabAdoptionBlocked(5, state, false, null, null), true,
+    "even an old tab that knew the same generation remains blocked");
+
+  // A second logout must advance again; a one-way boolean would fail here.
+  barrier.advanceSignOutEpoch(state);
+  assert.equal(state.getItem(barrier.ownerSignOutEpochKey), "2");
+  assert.equal(barrier.crossTabAdoptionBlocked(5, state, false, null, firstEpoch), true);
+  assert.equal(barrier.crossTabAdoptionBlocked(undefined, state, false, null, "2"), false,
+    "a tab loaded after the second logout is not frozen by old logouts");
+});
+
+test("logout epoch fails closed when corrupt or unpersistable", () => {
+  const corrupt = memoryStorage();
+  corrupt.setItem(barrier.ownerSignOutEpochKey, "NaN");
+  assert.throws(() => barrier.advanceSignOutEpoch(corrupt), /OWNER_SIGN_OUT_EPOCH_UNAVAILABLE/);
+  const dropsWrites = memoryStorage();
+  dropsWrites.setItem = () => {};
+  assert.throws(() => barrier.advanceSignOutEpoch(dropsWrites), /OWNER_SIGN_OUT_EPOCH_NOT_PERSISTED/);
+});
+
 test("a certified owner completion releases a fresh tab on reload, unlike an ordinary first pull", () => {
   const state = memoryStorage();
   assert.equal(barrier.completedOwnerAdoptionSince(null, state), undefined);
@@ -274,12 +320,15 @@ test("valid owner adoption fence can be saved as non-importable raw rescue when 
 
 test("C23 verified sign-out clears adoption completion after database and fence cleanup", () => {
   const source = readFileSync(new URL("../lib/local-data.ts", import.meta.url), "utf8");
+  const stampEpoch = source.indexOf("advanceSignOutEpoch(localStorage);");
+  const purgeStart = source.indexOf("const wipe = adoptionTransaction", stampEpoch);
   const wipeStart = source.indexOf("await Promise.race([");
   const purgeBaseline = source.indexOf("clearPurgedRestoreBaseline(localStorage);", wipeStart);
   const finishFence = source.indexOf("finishOwnerAdoptionFence(localStorage);", purgeBaseline);
   const removeCompletion = source.indexOf("localStorage.removeItem(ownerAdoptionCompletedKey);", finishFence);
   const clearPending = source.indexOf("localStorage.removeItem(wipePendingKey);", removeCompletion);
-  assert.ok(wipeStart !== -1 && wipeStart < purgeBaseline && purgeBaseline < finishFence &&
+  assert.ok(stampEpoch !== -1 && stampEpoch < purgeStart && purgeStart < wipeStart &&
+    wipeStart < purgeBaseline && purgeBaseline < finishFence &&
     finishFence < removeCompletion && removeCompletion < clearPending,
     "completion cleanup must follow a verified wipe and fence retirement");
   assert.ok(!source.slice(source.indexOf("export async function clearLocalData"), wipeStart)
