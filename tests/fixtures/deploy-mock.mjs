@@ -106,6 +106,11 @@ switch (name) {
         fs.existsSync(stateFile("identity-changed"));
       const lateProtection = ["offhardeningdriftbuild", "targethardeningdriftpoststart"].includes(scenario) &&
         fs.existsSync(stateFile("hardening-changed"));
+      const lateMount = ["offtmpfsdriftbuild", "targettmpfsdriftpoststart"].includes(scenario) &&
+        fs.existsSync(stateFile("mount-changed"));
+      const lateImage = scenario === "targetmountdriftbuild" &&
+        fs.existsSync(stateFile("mount-changed"));
+      const targetStore = path.join(root, "var/lib/ai-executive-target/personal-v1");
       const security = {
         Type: "simple",
         User: ["offuserroot", "targetuserroot"].includes(scenario) || lateIdentity ? "root" : "ai-executive",
@@ -139,6 +144,14 @@ switch (name) {
         RootImage: "",
         BindPaths: scenario === "offbindpaths" ? "/etc:/mnt/other" : "",
         BindReadOnlyPaths: "",
+        TemporaryFileSystem: (["offtmpfsoverlay", "targettmpfsoverlay"].includes(scenario) ||
+          lateMount) ? targetStore + ":mode=0777" : "",
+        MountImages: (["offmountimage", "targetmountimage"].includes(scenario) ||
+          lateImage) ? "/tmp/unreviewed.raw:" + targetStore : "",
+        ExtensionImages: scenario === "offextensionimage" ? "/tmp/unreviewed.raw" : "",
+        ExtensionDirectories: scenario === "targetextensiondir" ? "/tmp/unreviewed-ext" : "",
+        InaccessiblePaths: scenario === "offinaccessiblepaths" ? targetStore : "",
+        ReadOnlyPaths: scenario === "targetreadonlypaths" ? targetStore : "",
         CacheDirectory: scenario === "targetcachedir" ? "unapproved-cache" : "",
         LogsDirectory: "",
         RuntimeDirectory: "",
@@ -189,12 +202,20 @@ switch (name) {
         let values = requested.map(key => key + "=" + valueFor(key));
         if (scenario === "offsecuritymissing")
           values = values.filter(line => !line.startsWith("StateDirectoryMode="));
+        if (scenario === "offmountpropertymissing")
+          values = values.filter(line => !line.startsWith("TemporaryFileSystem="));
         if (scenario === "offsecurityduplicate") values.push("User=root");
         console.log(values.join("\n"));
       }
       break;
     }
     if (verb === "stop") {
+      if (scenario === "targettmpfsdriftpoststart" && get("head") === target &&
+          fs.existsSync(stateFile("target-started")) &&
+          !fs.existsSync(stateFile("mount-changed"))) {
+        set("mount-changed", "1");
+        log("unit-mount-changed-after-first-start");
+      }
       if (scenario === "targetexecflagsdriftpoststart" && get("head") === target &&
           fs.existsSync(stateFile("target-started")) &&
           !fs.existsSync(stateFile("exec-flags-changed"))) {
@@ -337,6 +358,11 @@ switch (name) {
     if (args[0] === "install") { log("install"); break; }
     if (args[0] === "build") {
       log("build-" + get("head").slice(0, 1));
+      if (["offtmpfsdriftbuild", "targetmountdriftbuild"].includes(scenario) &&
+          get("head") === target && !fs.existsSync(stateFile("mount-changed"))) {
+        set("mount-changed", "1");
+        log("unit-mount-changed-during-build");
+      }
       if (["offuserdriftbuild", "targetuserdriftbuild"].includes(scenario) &&
           get("head") === target && !fs.existsSync(stateFile("identity-changed"))) {
         set("identity-changed", "1");
