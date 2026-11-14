@@ -655,6 +655,72 @@ for (const scenario of [
   });
 }
 
+// The tracked unit's hardening values are a live contract, not just a
+// checked-in file. Refuse unexpected users/groups, writable state modes,
+// disabled process protections and new capabilities before any downtime.
+for (const scenario of [
+  "offuserroot", "targetuserroot", "offbadgroup", "offbadworkdir",
+  "offstateworld", "targetstateworld", "targetnonewprivileges",
+  "offprivatetmp", "offprotecthome", "offcapabilities",
+]) {
+  scenarioCase(scenario + ": reject weakened loaded unit security before stop", (r) => {
+    assert.notEqual(r.status, 0);
+    assert.match(r.output, /neoverena identita nebo bezpecnostni profil systemd/);
+    assert.equal(r.head, oldSha);
+    assert.equal(r.service, "active");
+    assert.equal(r.events.includes("stop"), false);
+    assert.deepEqual(r.backups, []);
+  });
+}
+
+scenarioCase("offuserdriftbuild: do not restart service as root after build", (r) => {
+  assert.notEqual(r.status, 0);
+  assert.match(r.output, /identita nebo ochrany systemd se pred startem zmenily/);
+  assert.match(r.output, /BEZPECNOSTNI BLOKACE: identita nebo ochrany systemd pri rollbacku/);
+  assert.equal(r.events.includes("unit-identity-changed-during-build"), true);
+  assert.equal(r.events.includes("reset"), true);
+  assert.equal(r.events.some(e => e.startsWith("start-")), false);
+  assert.equal(r.head, oldSha);
+  assert.equal(r.service, "inactive");
+  assert.equal(r.backups.length, 1);
+});
+
+scenarioCase("targetuserdriftbuild: do not launch target under changed service user", (r) => {
+  assert.notEqual(r.status, 0);
+  assert.match(r.output, /identita nebo ochrany systemd se pred startem zmenily/);
+  assert.equal(r.events.includes("unit-identity-changed-during-build"), true);
+  assert.equal(r.events.includes("reset"), true);
+  assert.equal(r.events.some(e => e.startsWith("start-")), false);
+  assert.equal(r.head, oldSha);
+  assert.equal(r.service, "inactive");
+  assert.equal(r.backups.length, 1);
+});
+
+scenarioCase("offhardeningdriftbuild: no off rollback under weakened StateDirectoryMode", (r) => {
+  assert.notEqual(r.status, 0);
+  assert.match(r.output, /identita nebo ochrany systemd se pred startem zmenily/);
+  assert.match(r.output, /BEZPECNOSTNI BLOKACE: identita nebo ochrany systemd pri rollbacku/);
+  assert.equal(r.events.includes("unit-hardening-changed-during-build"), true);
+  assert.equal(r.events.includes("reset"), true);
+  assert.equal(r.events.some(e => e.startsWith("start-")), false);
+  assert.equal(r.head, oldSha);
+  assert.equal(r.service, "inactive");
+  assert.equal(r.backups.length, 1);
+});
+
+scenarioCase("targethardeningdriftpoststart: refuse second launch after sandbox downgrade", (r) => {
+  assert.notEqual(r.status, 0);
+  assert.match(r.output, /identita nebo ochrany systemd se pred druhym startem zmenily/);
+  assert.equal(r.events.includes("unit-hardening-changed-after-first-start"), true);
+  assert.equal(r.events.filter(e => e === "start-b").length, 1,
+    "first launch used hardened systemd; second launch must be blocked");
+  assert.equal(r.events.includes("reset"), true);
+  assert.equal(r.events.includes("start-a"), false);
+  assert.equal(r.head, oldSha);
+  assert.equal(r.service, "inactive");
+  assert.equal(r.backups.length, 1);
+});
+
 for (const scenario of ["offexechanged", "targetexechanged", "offextrahook"]) {
   scenarioCase(scenario + ": reject unreviewed loaded execution before downtime", (r) => {
     assert.notEqual(r.status, 0);
