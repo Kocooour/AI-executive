@@ -57,6 +57,9 @@ verify_loaded_environment_sources() {
   # match in a large manager environment (set -o pipefail would hide it).
   if grep -Eq '^AI_EXECUTIVE_TARGET_[A-Za-z0-9_]*=' <<<"$manager_env"; then
     return 1
+  else
+    # grep returns 1 only for a confirmed non-match; I/O/errors also fail closed.
+    [ "$?" -eq 1 ]
   fi
 }
 
