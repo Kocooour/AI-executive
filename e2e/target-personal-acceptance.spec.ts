@@ -559,8 +559,12 @@ for (const width of [390, 1280]) {
           pathname.startsWith("/api/") && !pathname.startsWith("/api/target-staging/"))
         writes.push("tab2 " + request.method() + " " + pathname);
     });
-    await secondTab.goto("/?view=Home");
+    // Use a same-origin JSON document rather than mounting a second Lumi app.
+    // Mounting that app emits cross-tab change messages during startup, which
+    // would invalidate the export independently of the silent IndexedDB edit.
+    await secondTab.goto("/api/store");
     await page.bringToFront();
+    await page.waitForTimeout(350); // let any focus inspection settle before preparing
     await notice.getByTestId("legacy-pending-prepare").click();
     await expect(notice.getByTestId("legacy-pending-download")).toBeVisible();
 
