@@ -122,8 +122,9 @@ export function noTargetStagingSidecars(
 export function targetStagingRollbackSidecarShape(
   sidecar: { isFile(): boolean; isSymbolicLink(): boolean; nlink: number },
 ): "retryable" | "denied" {
-  if (!sidecar.isFile() || sidecar.isSymbolicLink() || sidecar.nlink > 1 ||
-      sidecar.nlink < 0) return "denied";
+  if (!sidecar.isFile() || sidecar.isSymbolicLink() ||
+      !Number.isInteger(sidecar.nlink) || sidecar.nlink < 0 || sidecar.nlink > 1)
+    return "denied";
   return "retryable"; // nlink 1 = ordinary sidecar; 0 = concurrent unlink
 }
 
