@@ -155,8 +155,19 @@ contract is also checked against the reviewed unit: exactly `/usr/bin/node`
 with the reviewed Next.js argv, and no added ExecStartPre/ExecStartPost,
 ExecCondition, ExecStop/ExecStopPost or ExecReload hooks. The dynamic
 systemd timestamps/PID may change, but the executed binary and argv may not.
-All loaded-unit checks run before stopping, before every start, and during
-any off-profile rollback. No unit or permissions are auto-edited.
+The deploy additionally verifies the **effective** `User=ai-executive`,
+`Group=ai-executive`, `WorkingDirectory=/opt/ai-executive`, `UMask=0077`,
+`StateDirectoryMode=0700`, `NoNewPrivileges`, `PrivateTmp`, `PrivateDevices`,
+`ProtectHome`, the kernel/control-group/clock/hostname protections,
+namespace, realtime, proc and address-family restrictions, empty capability
+sets and `LimitCORE=0`, as declared in the reviewed service unit. An
+unreviewed drop-in that weakens any of these (for example
+`StateDirectoryMode=0777` or `User=root`) is rejected even when its
+`ExecStart` and environment remain unchanged. All loaded-unit checks
+run before stopping, before **each** service start and during any
+off-profile rollback; changing identity or hardening during a build leaves
+the service stopped rather than starting privileged code. No unit or
+permissions are auto-edited.
 
 **A separate written owner decision is mandatory before activation.** The
 installed unit currently uses \`ProtectSystem=strict\` and writes only to
