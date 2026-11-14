@@ -191,7 +191,12 @@ test('two processes racing the same project CAS commit at most one change',async
    await waitForWorkerMarkers(results, workers, true);
    const outcome=results.map(file=>JSON.parse(readFileSync(file,'utf8')));
    assert.equal(outcome.filter(result=>result.ok).length,1,JSON.stringify(outcome));
-   assert.deepEqual(outcome.filter(result=>!result.ok),[{ok:false,reason:'stale_revision'}]);
+   // The losing writer either observes the winning CAS revision or hits the
+   // deliberately bounded SQLite lock wait. Both outcomes must fail closed;
+   // neither may acknowledge a second commit as successful.
+   const losers=outcome.filter(result=>!result.ok);
+   assert.equal(losers.length,1,JSON.stringify(outcome));
+   assert.ok(['stale_revision','write_failed'].includes(losers[0].reason),JSON.stringify(outcome));
    assert.equal(db.prepare("SELECT COUNT(*) AS n FROM project_title_audit WHERE project_id='race'").get().n,1);
    assert.ok(['After 0','After 1'].includes(db.prepare("SELECT title FROM projects WHERE id='race'").get().title),
      'the only persisted title is the winner of the one CAS commit');
