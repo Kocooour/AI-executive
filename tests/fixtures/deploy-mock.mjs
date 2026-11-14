@@ -84,7 +84,9 @@ switch (name) {
       const execChanged = ["offexechanged", "targetexechanged"].includes(scenario) ||
         (["offexecdriftbuild", "targetexecdriftbuild"].includes(scenario) &&
           fs.existsSync(stateFile("exec-changed")));
-      const expectedExec = "{ path=/usr/bin/node ; argv[]=/usr/bin/node " +
+      // The disposable deploy test substitutes the production /usr/bin/node
+      // with the runner Node binary; mirror the same explicit unit contract.
+      const expectedExec = "{ path=" + process.execPath + " ; argv[]=" + process.execPath + " " +
         path.join(app, "node_modules/next/dist/bin/next") +
         " start --hostname 127.0.0.1 ; ignore_errors=no ; " +
         "start_time=[n/a] ; stop_time=[n/a] ; pid=0 ; code=(null) ; status=0/0 }";
@@ -114,7 +116,8 @@ switch (name) {
               fs.existsSync(stateFile("sandbox-changed"))) ? "full" : "strict") :
         prop === "StateDirectory" ?
           (scenario === "targetstateextra" ? "ai-executive ai-executive-target unexpected" :
-            scenario === "targetstatedir" ? "ai-executive ai-executive-target" : "ai-executive") :
+            ["targetstatedir", "targetmixedwrites"].includes(scenario) ?
+              "ai-executive ai-executive-target" : "ai-executive") :
         prop === "ReadWritePaths" ?
           (["targetrwbroad", "targetrwparent"].includes(scenario) ?
             path.join(root, scenario === "targetrwbroad" ? "var/lib" : "var/lib/ai-executive-target") :
