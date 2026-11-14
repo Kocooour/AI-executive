@@ -73,6 +73,26 @@ verify_loaded_environment_sources() {
   fi
 }
 
+# The checked-out service file is not the same as the systemd *loaded*
+# execution contract: drop-ins can silently replace ExecStart or add hooks.
+# Validate the full command and allowed volatile systemd runtime metadata
+# before stopping or restarting. Do not print commands on failure.
+verify_loaded_execution() {
+  local start expected rest metadata prop hook
+  start="$(systemctl show "$SERVICE" -p ExecStart --value)" || return 1
+  expected="{ path=/usr/bin/node ; argv[]=/usr/bin/node $APP/node_modules/next/dist/bin/next start --hostname 127.0.0.1 ; ignore_errors=no ; "
+  [[ "$start" == "$expected"* ]] || return 1
+  rest="${start#"$expected"}"
+  # Permit start/stop timestamps and PID/status to change, but not a
+  # second command, shell, altered argv, extra field or injected hook.
+  metadata='^start_time=[^;{}]* ; stop_time=[^;{}]* ; pid=[0-9]+ ; code=[^;{}]* ; status=[^;{}]* \}$'
+  [[ "$rest" =~ $metadata ]] || return 1
+  for prop in ExecStartPre ExecStartPost ExecCondition ExecStop ExecStopPost ExecReload; do
+    hook="$(systemctl show "$SERVICE" -p "$prop" --value)" || return 1
+    [ -z "$hook" ] || return 1
+  done
+}
+
 # The shipped unit is ProtectSystem=strict with a private legacy
 # StateDirectory. The only authorized extension is the isolated
 # ai-executive-target StateDirectory (as proposed in the R4 runbook) or
@@ -94,18 +114,16 @@ verify_loaded_write_sandbox() {
     [ -z "$rw" ]
     return
   fi
-  if [ -n "$rw" ]; then
-    # Never accept ancestors such as /var/lib or the target parent,
-    # additional write paths, or systemd's optional '-' path syntax.
+  if [ "$state" = ai-executive ]; then
+    # Explicit exact-path alternative: no second writable StateDirectory.
     [ "$rw" = "$TARGET_DIRECTORY" ]
     return
   fi
-  case "$state" in
-    "ai-executive ai-executive-target"|"ai-executive-target ai-executive")
-      case "$TARGET_DIRECTORY/" in
-        /var/lib/ai-executive-target/*/) return 0 ;;
-      esac
-      ;;
+  # Separate StateDirectory mode must have NO ReadWritePaths exception:
+  # otherwise the two independent writable roots could be unrelated.
+  [ -z "$rw" ] || return 1
+  case "$TARGET_DIRECTORY/" in
+    /var/lib/ai-executive-target/*/) return 0 ;;
   esac
   return 1
 }
@@ -403,10 +421,22 @@ on_exit() {
   fi
   # A failed off deployment can also see unit/env drift *after* its last
   # pre-start validation. Never restart old code with newly rejected flags.
-  if ! verify_loaded_environment_sources || ! verify_loaded_write_sandbox ||
-     ! env_file_unchanged; then
-    echo "BEZPECNOSTNI BLOKACE: zmenene zdroje prostredi systemd nebo obsah .env pri rollbacku." >&2
-    echo "Sluzba zustava zastavena; oprav konfiguraci a schval samostatnou obnovu." >&2
+  # These checks intentionally emit only a named failed policy, not values.
+  # Keep separate tests so an unexpected rollback block can be diagnosed.
+  if ! verify_loaded_environment_sources; then
+    echo "BEZPECNOSTNI BLOKACE: zdroje prostredi systemd pri rollbacku." >&2
+    exit "$rc"
+  fi
+  if ! verify_loaded_write_sandbox; then
+    echo "BEZPECNOSTNI BLOKACE: systemd sandbox pri rollbacku." >&2
+    exit "$rc"
+  fi
+  if ! verify_loaded_execution; then
+    echo "BEZPECNOSTNI BLOKACE: spousteci prikazy systemd pri rollbacku." >&2
+    exit "$rc"
+  fi
+  if ! env_file_unchanged; then
+    echo "BEZPECNOSTNI BLOKACE: zmeneny obsah .env pri rollbacku." >&2
     exit "$rc"
   fi
   if systemctl start "$SERVICE" && verify_service; then
@@ -527,6 +557,8 @@ git diff --quiet "$PREV" "$TARGET" -- deployment/ai-executive.service || die "sy
 # a second loaded file or manager-global target flag can activate it.
 verify_loaded_environment_sources ||
   die "neoverene zdroje prostredi systemd; kontrola konfigurace sluzby selhala"
+verify_loaded_execution ||
+  die "neoverene spousteci prikazy systemd"
 ENV_BASELINE_SHA="$(sha256sum -- "$ENVFILE")" ||
   die "nelze overit hash konfigurace env"
 # Do not evaluate the root-owned EnvironmentFile as shell. In the dormant
@@ -573,6 +605,8 @@ fi
 # Reject weakened sandboxing also for legacy-only/off deployments.
 verify_loaded_write_sandbox ||
   die "systemd sandbox nedovoluje zapis do ciloveho uloziste nebo neni ProtectSystem=strict"
+verify_loaded_execution ||
+  die "neoverene spousteci prikazy systemd"
 env_file_unchanged || die "env se zmenilo behem predstartovniho overovani"
 echo "Stavajici: $PREV"
 echo "Cil:       $TARGET"
@@ -754,6 +788,8 @@ verify_loaded_environment_sources ||
   die "zdroje prostredi systemd se pred startem zmenily"
 verify_loaded_write_sandbox ||
   die "systemd sandbox se pred startem zmenil"
+verify_loaded_execution ||
+  die "spousteci prikazy systemd se pred startem zmenily"
 env_file_unchanged ||
   die "env se pred startem zmenilo"
 systemctl start "$SERVICE"
@@ -770,6 +806,8 @@ if [ "$TARGET_PROFILE" = personal-v1 ]; then
     die "zdroje prostredi systemd se pred druhym startem zmenily"
   verify_loaded_write_sandbox ||
     die "systemd sandbox se pred druhym startem zmenil"
+  verify_loaded_execution ||
+    die "spousteci prikazy systemd se pred druhym startem zmenily"
   env_file_unchanged ||
     die "env se pred druhym startem zmenilo"
   systemctl start "$SERVICE"
