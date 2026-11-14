@@ -24,11 +24,9 @@ const tracked=execFileSync("git",["ls-files","-z"],{cwd:root,encoding:"utf8",max
   .split("\0").filter(file=>file&&!SKIPPED.test(file)&&!/\.(?:png|jpe?g|gif|ico|webp|woff2?|ttf|svg|pdf|md)$/i.test(file));
 // A name assembled at runtime cannot be classified, so it is refused: only these exact (file, fragment)
 // pairs may mention an incomplete AI_EXECUTIVE_TARGET_ identifier.
-// The deploy launcher uses this exact literal as a static, anchored regex
-// prefix to detect even *unknown* enabled target flags before invoking the
-// strict checker. It never assembles or reads a particular flag by this name.
-const INCOMPLETE_ALLOWED=new Set(["deployment/deploy-safe.sh|AI_EXECUTIVE_TARGET"]);
+const INCOMPLETE_ALLOWED=new Set([]);
 const found=new Set(),nonBoolean=new Set(),incomplete=[];
+let staticDeploySentinels=0;
 for(const file of tracked){
   let text;
   try{text=readFileSync(path.join(root,file),"utf8");}catch{continue;}
@@ -40,8 +38,17 @@ for(const file of tracked){
     else nonBoolean.add(token);
   }
   // A split prefix ("AI_EXECUTIVE_" + "TARGET_...") would also hide a flag from the scan.
-  for(const match of text.matchAll(/AI_EXECUTIVE_(?:TARGET)?(?![A-Z0-9_])/g))
-    if(!INCOMPLETE_ALLOWED.has(file+"|"+match[0]))incomplete.push(file+": split prefix "+match[0]);
+  for(const match of text.matchAll(/AI_EXECUTIVE_(?:TARGET)?(?![A-Z0-9_])/g)){
+    // One explicit exception: the static awk regex is an intentionally broad
+    // sentinel for *unknown* target flags, not a dynamically assembled name.
+    // Only the exact regex fragment in this single deployment file is accepted.
+    const staticDeploySentinel=file==="deployment/deploy-safe.sh" &&
+      match[0]==="AI_EXECUTIVE_TARGET" &&
+      text.slice(match.index).startsWith("AI_EXECUTIVE_TARGET[A-Z0-9_]+_ENABLED");
+    if(staticDeploySentinel){staticDeploySentinels++;continue;}
+    if(!INCOMPLETE_ALLOWED.has(file+"|"+match[0]))
+      incomplete.push(file+": split prefix "+match[0]);
+  }
 }
 const excluded=TARGET_PERSONAL_V1_EXCLUDED.map(entry=>entry.flag);
 const env=targetPersonalV1Env();
@@ -59,6 +66,7 @@ test("profile is sorted, unique and well-formed; every exclusion has a reason",(
 });
 
 test("no flag name is assembled at runtime or split, so the scan cannot be bypassed",()=>{
+  assert.equal(staticDeploySentinels,1,"only the single audited, static deploy sentinel is allowed");
   assert.deepEqual(incomplete,[]);
 });
 
