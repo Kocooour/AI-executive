@@ -27,10 +27,18 @@ environment-source contract**: only the single, mandatory
 `/etc/ai-executive/ai-executive.env` EnvironmentFile; the four fixed
 Environment assignments from the installed unit; empty PassEnvironment,
 UnsetEnvironment and PAMName; and no manager-global target settings.
+The manager-global scan must reject any target variable even when it occurs
+early in a very large environment dump; implementation avoids the
+`grep -q`/`pipefail` SIGPIPE trap and fails closed on scan errors.
 This applies even if the root-owned file reports `off`, because a
 second loaded file could otherwise enable an unchecked target. Repeat
-the loaded-unit contract check before both service starts. A systemd
-drop-in approved for target-store write access must change **only the
+the loaded-unit contract check before both service starts. Record and compare
+the root-owned env's SHA-256 fingerprint before the first service stop
+and before any subsequent service start (including automatic rollback).
+**An `off` deployment may restore previous code but must NOT restart it**
+after any systemd source change or root env modification during the deployment.
+Leave it stopped and obtain independent operator approval for recovery.
+A systemd drop-in approved for target-store write access must change **only the
 StateDirectory permission boundary**, not inject/override environment
 variables. Any difference is a stop condition, not an invitation to
 auto-edit the systemd unit or live env.
