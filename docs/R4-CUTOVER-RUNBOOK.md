@@ -74,10 +74,15 @@ private devices, kernel protection, empty capabilities, restricted namespaces,
 address families, proc exposure and core dumps) are checked against the
 reviewed hardened unit. Additional implicit settings must remain
 disabled/empty: `DynamicUser`, `SupplementaryGroups`, `RootDirectory`,
-`RootImage`, `BindPaths`, `BindReadOnlyPaths`, `CacheDirectory`,
-`LogsDirectory`, `RuntimeDirectory` and `ConfigurationDirectory`.
-An unapproved bind mount or extra systemd-managed directory must not create
-a second writable root. A drop-in changing the executable, identity or
+`RootImage`, `BindPaths`, `BindReadOnlyPaths`,
+`TemporaryFileSystem`, `MountImages`, `ExtensionImages`,
+`ExtensionDirectories`, `InaccessiblePaths`, `ReadOnlyPaths`,
+`CacheDirectory`, `LogsDirectory`, `RuntimeDirectory` and
+`ConfigurationDirectory`. An unapproved tmpfs, mount image, extension
+overlay, path mask or extra systemd-managed directory can change the filesystem
+visible to the service independently of the offline verified and archived store.
+Such a drop-in must be rejected before any service start, including during
+a stopped-service rollback; the script does not modify the systemd unit. A drop-in changing the executable, identity or
 hardening while leaving Environment fields intact is a stop condition.
 Recheck before **every** service start, including a legacy rollback.
 No configuration is auto-edited.
