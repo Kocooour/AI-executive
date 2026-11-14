@@ -723,7 +723,13 @@ scenarioCase("targethardeningdriftpoststart: refuse second launch after sandbox 
   assert.equal(r.backups.length, 1);
 });
 
-for (const scenario of ["offexechanged", "targetexechanged", "offextrahook"]) {
+// Legacy ExecStart hides execution prefixes: only ExecStartEx exposes them.
+for (const scenario of [
+  "offexechanged", "targetexechanged", "offextrahook",
+  "offexecflagsplus", "targetexecflagsplus",
+  "offexecflagsbang", "targetexecflagsbang",
+  "offexecflagsignore", "offexecxmissing", "offexecxchangedargv",
+]) {
   scenarioCase(scenario + ": reject unreviewed loaded execution before downtime", (r) => {
     assert.notEqual(r.status, 0);
     assert.match(r.output, /neoverene spousteci prikazy systemd/);
@@ -733,6 +739,41 @@ for (const scenario of ["offexechanged", "targetexechanged", "offextrahook"]) {
     assert.deepEqual(r.backups, []);
   });
 }
+
+scenarioCase("offexecflagsdriftbuild: refuse privileged launch and off rollback", (r) => {
+  assert.notEqual(r.status, 0);
+  assert.match(r.output, /spousteci prikazy systemd se pred startem zmenily/);
+  assert.match(r.output, /BEZPECNOSTNI BLOKACE: spousteci prikazy systemd pri rollbacku/);
+  assert.equal(r.events.includes("unit-exec-flags-changed-during-build"), true);
+  assert.equal(r.events.includes("reset"), true);
+  assert.equal(r.events.some(e => e.startsWith("start-")), false);
+  assert.equal(r.head, oldSha);
+  assert.equal(r.service, "inactive");
+  assert.equal(r.backups.length, 1);
+});
+
+scenarioCase("targetexecflagsdriftbuild: refuse privileged target launch", (r) => {
+  assert.notEqual(r.status, 0);
+  assert.match(r.output, /spousteci prikazy systemd se pred startem zmenily/);
+  assert.equal(r.events.includes("unit-exec-flags-changed-during-build"), true);
+  assert.equal(r.events.includes("reset"), true);
+  assert.equal(r.events.some(e => e.startsWith("start-")), false);
+  assert.equal(r.head, oldSha);
+  assert.equal(r.service, "inactive");
+  assert.equal(r.backups.length, 1);
+});
+
+scenarioCase("targetexecflagsdriftpoststart: second start rejects elevated privilege flags", (r) => {
+  assert.notEqual(r.status, 0);
+  assert.match(r.output, /spousteci prikazy systemd se pred druhym startem zmenily/);
+  assert.equal(r.events.includes("unit-exec-flags-changed-after-first-start"), true);
+  assert.equal(r.events.filter(e => e === "start-b").length, 1);
+  assert.equal(r.events.includes("reset"), true);
+  assert.equal(r.events.includes("start-a"), false);
+  assert.equal(r.head, oldSha);
+  assert.equal(r.service, "inactive");
+  assert.equal(r.backups.length, 1);
+});
 
 scenarioCase("offexecdriftbuild: never restart old code under changed loaded ExecStart", (r) => {
   assert.notEqual(r.status, 0);
