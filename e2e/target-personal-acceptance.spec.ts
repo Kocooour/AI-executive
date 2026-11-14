@@ -549,12 +549,9 @@ for (const width of [390, 1280]) {
     await expect(notice).toBeVisible();
     await expect(notice).toContainText("neodeslaly");
     await expect(notice).toContainText("1");
-    await notice.getByTestId("legacy-pending-prepare").click();
-    await expect(notice.getByTestId("legacy-pending-download")).toBeVisible();
-
-    // Two-tab regression: IndexedDB changes do not necessarily send
-    // BroadcastChannel or localStorage notifications. A focus/periodic
-    // recheck must invalidate the prepared file even at the SAME item count.
+    // Open the second tab BEFORE preparing, so its startup events cannot
+    // themselves invalidate the prepared copy. The subsequent IndexedDB edit
+    // changes only the data, without a storage or BroadcastChannel notification.
     const secondTab = await page.context().newPage();
     secondTab.on("request", request => {
       const pathname = new URL(request.url()).pathname;
@@ -563,6 +560,12 @@ for (const width of [390, 1280]) {
         writes.push("tab2 " + request.method() + " " + pathname);
     });
     await secondTab.goto("/?view=Home");
+    await notice.getByTestId("legacy-pending-prepare").click();
+    await expect(notice.getByTestId("legacy-pending-download")).toBeVisible();
+
+    // Two-tab regression: IndexedDB changes do not necessarily send
+    // BroadcastChannel or localStorage notifications. A focus/periodic
+    // recheck must invalidate the prepared file even at the SAME item count.
     const updatedTitle = title + " (z druhé záložky)";
     await secondTab.evaluate(async (updatedTitle) => {
       const db = await new Promise<IDBDatabase>((resolve, reject) => {
