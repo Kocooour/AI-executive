@@ -26,19 +26,45 @@ const tracked=execFileSync("git",["ls-files","-z"],{cwd:root,encoding:"utf8",max
 // pairs may mention an incomplete AI_EXECUTIVE_TARGET_ identifier.
 const INCOMPLETE_ALLOWED=new Set([]);
 const found=new Set(),nonBoolean=new Set(),incomplete=[];
+let staticDeploySentinels=0;
+let staticProfilePrefixes=0;
+let staticManagerEnvPrefixes=0;
 for(const file of tracked){
   let text;
   try{text=readFileSync(path.join(root,file),"utf8");}catch{continue;}
   for(const match of text.matchAll(/AI_EXECUTIVE_TARGET_[A-Z0-9_]*/g)){
     const token=match[0];
     if(token.endsWith("_")||token==="AI_EXECUTIVE_TARGET_"){
-      if(!INCOMPLETE_ALLOWED.has(file+"|"+token))incomplete.push(file+": "+token+" followed by "+JSON.stringify(text[match.index+token.length]));
+      // One audited fixed-namespace literal for the strict operator CLI.
+      // Never allow an arbitrary partial flag name or a runtime concatenation.
+      const fixedProfilePrefix=file==="scripts/target-profile-env.mjs" &&
+        token==="AI_EXECUTIVE_TARGET_" &&
+        text.slice(match.index-'const prefix = "'.length,match.index+token.length+2) ===
+          'const prefix = "AI_EXECUTIVE_TARGET_";';
+      // This static grep checks the systemd manager's inherited environment
+      // for *any* target name (not a dynamically assembled variable lookup).
+      const fixedManagerEnvPrefix=file==="deployment/deploy-safe.sh" &&
+        token==="AI_EXECUTIVE_TARGET_" &&
+        text.slice(match.index-1).startsWith("^AI_EXECUTIVE_TARGET_[A-Za-z0-9_]*=");
+      if(fixedProfilePrefix)staticProfilePrefixes++;
+      else if(fixedManagerEnvPrefix)staticManagerEnvPrefixes++;
+      else if(!INCOMPLETE_ALLOWED.has(file+"|"+token))
+        incomplete.push(file+": "+token+" followed by "+JSON.stringify(text[match.index+token.length]));
     }else if(token.endsWith("_ENABLED"))found.add(token);
     else nonBoolean.add(token);
   }
   // A split prefix ("AI_EXECUTIVE_" + "TARGET_...") would also hide a flag from the scan.
-  for(const match of text.matchAll(/AI_EXECUTIVE_(?:TARGET)?(?![A-Z0-9_])/g))
-    if(!INCOMPLETE_ALLOWED.has(file+"|"+match[0]))incomplete.push(file+": split prefix "+match[0]);
+  for(const match of text.matchAll(/AI_EXECUTIVE_(?:TARGET)?(?![A-Z0-9_])/g)){
+    // One explicit exception: the static awk regex is an intentionally broad
+    // sentinel for *unknown* target flags, not a dynamically assembled name.
+    // Only the exact regex fragment in this single deployment file is accepted.
+    const staticDeploySentinel=file==="deployment/deploy-safe.sh" &&
+      match[0]==="AI_EXECUTIVE_TARGET" &&
+      text.slice(match.index).startsWith("AI_EXECUTIVE_TARGET[A-Z0-9_]+_ENABLED");
+    if(staticDeploySentinel){staticDeploySentinels++;continue;}
+    if(!INCOMPLETE_ALLOWED.has(file+"|"+match[0]))
+      incomplete.push(file+": split prefix "+match[0]);
+  }
 }
 const excluded=TARGET_PERSONAL_V1_EXCLUDED.map(entry=>entry.flag);
 const env=targetPersonalV1Env();
@@ -56,6 +82,9 @@ test("profile is sorted, unique and well-formed; every exclusion has a reason",(
 });
 
 test("no flag name is assembled at runtime or split, so the scan cannot be bypassed",()=>{
+  assert.equal(staticDeploySentinels,1,"only the single audited, static deploy sentinel is allowed");
+  assert.equal(staticProfilePrefixes,1,"the CLI must declare exactly one fixed target-flag namespace");
+  assert.equal(staticManagerEnvPrefixes,1,"only one static manager-env target namespace scan is allowed");
   assert.deepEqual(incomplete,[]);
 });
 

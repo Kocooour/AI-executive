@@ -29,6 +29,10 @@ switch (name) {
     process.exit(8);
   case "stat":
     if (args[0] === "-c" && args[1] === "%u") { console.log("0"); break; }
+    if (args[0] === "-c" && args[1] === "%a") {
+      console.log((fs.statSync(args[args.length - 1]).mode & 0o777).toString(8));
+      break;
+    }
     process.exit(8);
   case "du":
     console.log("5120\t" + args[args.length - 1]); break;
@@ -47,6 +51,23 @@ switch (name) {
     break;
   case "systemctl": {
     const verb = args[0];
+    if (verb === "show-environment") {
+      // The system manager's inherited target flags can override an off
+      // EnvironmentFile unless the loaded global environment is checked.
+      if (scenario === "offmanagerenvlarge") {
+        // Early forbidden flag + a large tail used to make grep -q close
+        // before printf finishes; under pipefail that could be misread as OK.
+        process.stdout.write("AI_EXECUTIVE_TARGET_STAGING_HTTP_ENABLED=true\n" +
+          "LONG_BENIGN_ENV=" + "x".repeat(256 * 1024) + "\n");
+      } else if (scenario === "offmanagerenvlargesafe") {
+        process.stdout.write("LANG=C.UTF-8\n" +
+          "LONG_BENIGN_ENV=" + "x".repeat(256 * 1024) + "\n");
+      } else {
+        console.log(scenario === "targetmanagerenv" ?
+          "AI_EXECUTIVE_TARGET_STAGING_HTTP_ENABLED=true" : "LANG=C.UTF-8");
+      }
+      break;
+    }
     if (verb === "is-active") {
       const active = get("service") === "active";
       if (!args.includes("--quiet")) console.log(active ? "active" : "inactive");
@@ -54,10 +75,65 @@ switch (name) {
     }
     if (verb === "show") {
       const prop = args[args.indexOf("-p") + 1];
-      console.log(prop === "User" ? "ai-executive" : prop === "WorkingDirectory" ? app : "");
+      const envfile = path.join(root, "etc/ai-executive/ai-executive.env");
+      const extraFile = path.join(root, "etc/ai-executive/override.env");
+      const defaults = [
+        "NODE_ENV=production", "PORT=3000", "NEXT_TELEMETRY_DISABLED=1",
+        "AI_EXECUTIVE_DATA_DIR=" + path.join(root, "var/lib/ai-executive"),
+      ].join(" ");
+      const execChanged = ["offexechanged", "targetexechanged"].includes(scenario) ||
+        (["offexecdriftbuild", "targetexecdriftbuild", "targetexecdriftpoststart"].includes(scenario) &&
+          fs.existsSync(stateFile("exec-changed")));
+      // The disposable deploy test substitutes the production /usr/bin/node
+      // with the runner Node binary; mirror the same explicit unit contract.
+      const expectedExec = "{ path=" + process.execPath + " ; argv[]=" + process.execPath + " " +
+        path.join(app, "node_modules/next/dist/bin/next") +
+        " start --hostname 127.0.0.1 ; ignore_errors=no ; " +
+        "start_time=[n/a] ; stop_time=[n/a] ; pid=0 ; code=(null) ; status=0/0 }";
+      console.log(prop === "ExecStart" ? (
+          execChanged ? expectedExec.replace("start --hostname 127.0.0.1", "start --hostname 0.0.0.0") : expectedExec) :
+        prop === "ExecStartPost" && scenario === "offextrahook" ?
+          "{ path=/usr/bin/touch ; argv[]=/usr/bin/touch /tmp/unreviewed ; ignore_errors=no ; start_time=[n/a] ; stop_time=[n/a] ; pid=0 ; code=(null) ; status=0/0 }" :
+        prop === "User" ? "ai-executive" :
+        prop === "WorkingDirectory" ? app :
+        prop === "EnvironmentFiles" ?
+          envfile + " (ignore_errors=no)" +
+          (["targetextraenvfile", "offextraenvfile"].includes(scenario) ||
+            (["targetsystemddriftbuild", "offsystemddriftbuild"].includes(scenario) &&
+              fs.existsSync(stateFile("unit-env-changed")))
+            ? " " + extraFile + " (ignore_errors=no)" : "") :
+        prop === "Environment" ?
+          defaults + (scenario === "targetenvassignment" ?
+            " AI_EXECUTIVE_TARGET_STAGING_HTTP_ENABLED=false" : "") :
+        prop === "PassEnvironment" && scenario === "targetpassenvironment" ?
+          "AI_EXECUTIVE_TARGET_STAGING_HTTP_ENABLED" :
+        prop === "UnsetEnvironment" && scenario === "targetunsetenvironment" ?
+          "AI_EXECUTIVE_TARGET_STAGING_HTTP_ENABLED" :
+        prop === "PAMName" && scenario === "targetpam" ? "login" :
+        prop === "ProtectSystem" ?
+          (["targetweakprotect", "offweakprotect"].includes(scenario) ||
+            (scenario === "offweakprotectbuild" &&
+              fs.existsSync(stateFile("sandbox-changed"))) ? "full" : "strict") :
+        prop === "StateDirectory" ?
+          (scenario === "targetstateextra" ? "ai-executive ai-executive-target unexpected" :
+            ["targetstatedir", "targetmixedwrites"].includes(scenario) ?
+              "ai-executive ai-executive-target" : "ai-executive") :
+        prop === "ReadWritePaths" ?
+          (["targetrwbroad", "targetrwparent"].includes(scenario) ?
+            path.join(root, scenario === "targetrwbroad" ? "var/lib" : "var/lib/ai-executive-target") :
+            scenario.startsWith("target") && !["targetunit", "targetstatedir"].includes(scenario) ?
+              path.join(root, "var/lib/ai-executive-target/personal-v1") : "") : "");
       break;
     }
-    if (verb === "stop") { set("service", "inactive"); log("stop"); break; }
+    if (verb === "stop") {
+      if (scenario === "targetexecdriftpoststart" && get("head") === target &&
+          fs.existsSync(stateFile("target-started")) &&
+          !fs.existsSync(stateFile("exec-changed"))) {
+        set("exec-changed", "1");
+        log("unit-exec-changed-after-first-start");
+      }
+      set("service", "inactive"); log("stop"); break;
+    }
     if (verb === "start") {
       if (scenario === "rowloss" && get("head") === target && !fs.existsSync(stateFile("deleted"))) {
         const db = new DatabaseSync(dbFile);
@@ -122,6 +198,15 @@ switch (name) {
         } finally { db.close(); }
         set("mail-pruned", "1");
       }
+      if (scenario.startsWith("target")) {
+        // Observe the *effective* EnvironmentFile on every service start.
+        // In particular, an old-code rollback must not reload rejected flags.
+        const env = fs.readFileSync(path.join(root, "etc/ai-executive/ai-executive.env"), "utf8");
+        const enabled = env.split(/\r?\n/).filter(line =>
+          /^AI_EXECUTIVE_TARGET_[A-Z0-9_]+_ENABLED=true$/.test(line)).length;
+        log("start-with-target-flags:" + enabled);
+      }
+      if (scenario.startsWith("target") && get("head") === target) set("target-started", "1");
       set("service", "active"); log("start-" + get("head").slice(0,1)); break;
     }
     process.exit(8);
@@ -132,6 +217,15 @@ switch (name) {
     else if (verb === "status" && args[1] === "--porcelain") {}
     else if (verb === "rev-parse") console.log(args[1] === "FETCH_HEAD" ? target : get("head"));
     else if (verb === "fetch" || verb === "merge-base" || verb === "diff") {}
+    else if (verb === "show") {
+      const spec = args[1] || "";
+      if (!spec.startsWith(target + ":")) process.exit(8);
+      const file = spec.slice(target.length + 1);
+      if (!["scripts/target-profile-env.mjs", "lib/target-personal-profile.ts"].includes(file))
+        process.exit(8);
+      process.stdout.write(fs.readFileSync(new URL("../../" + file, import.meta.url)));
+      log("target-profile-source");
+    }
     else if (verb === "cat-file" && args[1] === "-e") {
       // Synthetic pre-feature -> revocation-feature transition. Earlier deploy
       // tests intentionally do not advertise this module in either commit.
@@ -162,6 +256,40 @@ switch (name) {
     if (args[0] === "install") { log("install"); break; }
     if (args[0] === "build") {
       log("build-" + get("head").slice(0, 1));
+      if (["offexecdriftbuild", "targetexecdriftbuild"].includes(scenario) &&
+          get("head") === target &&
+          !fs.existsSync(stateFile("exec-changed"))) {
+        set("exec-changed", "1");
+        log("unit-exec-changed-during-build");
+      }
+      if (scenario === "offweakprotectbuild" && get("head") === target &&
+          !fs.existsSync(stateFile("sandbox-changed"))) {
+        set("sandbox-changed", "1");
+        log("sandbox-changed-during-build");
+      }
+      if (["targetsystemddriftbuild", "offsystemddriftbuild"].includes(scenario) &&
+          get("head") === target &&
+          !fs.existsSync(stateFile("unit-env-changed"))) {
+        set("unit-env-changed", "1");
+        log("unit-env-changed-during-build");
+      }
+      if (scenario === "offenvdriftbuild" && get("head") === target &&
+          !fs.existsSync(stateFile("env-changed"))) {
+        const envFile = path.join(root, "etc/ai-executive/ai-executive.env");
+        fs.appendFileSync(envFile, "AI_EXECUTIVE_TARGET_STAGING_HTTP_ENABLED=true\n");
+        set("env-changed", "1");
+        log("env-changed-during-build");
+      }
+      if (scenario === "targetbuildidentitydrift" && get("head") === target &&
+          !fs.existsSync(stateFile("build-identity-drift"))) {
+        // A different, internally valid target replaces the archive-checked
+        // store during a long offline build. The final pre-start check must
+        // detect it BEFORE any target-enabled service receives requests.
+        const store = path.join(root, "var/lib/ai-executive-target/personal-v1/lumi-target.sqlite");
+        fs.writeFileSync(store, "different-owner\n30cee2ba-feba-4f75-a5db-5fa21ab36ad0");
+        set("build-identity-drift", "1");
+        log("target-build-identity-drift");
+      }
       if (scenario === "mailprestartloss" && get("head") === target &&
           !fs.existsSync(stateFile("mail-consent-deleted"))) {
         // Fault injection: code/build work corrupts owner sync consent while
@@ -181,6 +309,10 @@ switch (name) {
           process.exit(91);
         }
         log("rollback-lock-held");
+      }
+      if (scenario === "targetbuildfail" && get("head") === target) {
+        console.error("synthetic target-enabled build failure");
+        process.exit(17);
       }
       if (scenario === "buildfail" && get("head") === target &&
           !fs.existsSync(stateFile("buildfailed"))) {
@@ -203,6 +335,31 @@ switch (name) {
       console.error("simulated read-only Gmail snapshot error");
       process.exit(29);
     }
+    if (scenario.startsWith("target") && exec === "env" &&
+        rest[0] === "AI_EXECUTIVE_DATA_DIR=" + path.join(root, "var/lib/ai-executive") &&
+        rest[1] === process.execPath &&
+        rest[2] === path.join(app, "scripts/target-store-provision.mjs") &&
+        rest[3] === "--check") {
+      log("target-check");
+      const directory = rest[4];
+      const expected = path.join(root, "var/lib/ai-executive-target/personal-v1");
+      if (directory !== expected || get("service") !== "inactive") process.exit(9);
+      if (scenario === "targetpostfail" && fs.existsSync(stateFile("target-started"))) {
+        console.error("synthetic post-start target preflight failure");
+        process.exit(40);
+      }
+      const names = fs.readdirSync(directory).sort();
+      if (names.join(",") !== ["lumi-target.journal", "lumi-target-witness.sqlite", "lumi-target.sqlite"].sort().join(","))
+        process.exit(41);
+      const [owner, generation] = fs.readFileSync(path.join(directory, "lumi-target.sqlite"), "utf8").split("\n");
+      console.log([
+        "AI_EXECUTIVE_TARGET_STAGING_DIRECTORY=" + directory,
+        "AI_EXECUTIVE_TARGET_STAGING_OWNER_USER_ID=" + owner,
+        "AI_EXECUTIVE_TARGET_STAGING_RESTORE_GENERATION=" +
+          (scenario === "targetgeneration" ? "different-generation" : generation),
+      ].join("\n"));
+      break;
+    }
     if (exec === "test") {
       const file = rest[1], mode = rest[0];
       const perm = fs.statSync(file).mode & 0o777;
@@ -213,6 +370,17 @@ switch (name) {
     break;
   }
   case "cp": {
+    if (scenario === "targetidentityswap" &&
+        args[args.length - 2] === path.join(root, "var/lib/ai-executive-target/personal-v1") &&
+        !fs.existsSync(stateFile("identity-swapped"))) {
+      // The first semantic check passed, but a valid *different* owner and
+      // generation now replace the quiesced source just before its copy.
+      // Pure --check would still succeed; the env-bound comparison must not.
+      const source = path.join(root, "var/lib/ai-executive-target/personal-v1/lumi-target.sqlite");
+      fs.writeFileSync(source, "other-owner\n" + "54cfe278-7d10-43cc-8899-0eaa49e7d737");
+      set("identity-swapped", "1");
+      log("target-identity-swapped");
+    }
     if ((scenario === "partialcopy" ||
          (scenario === "firstrolloutpartialcopy" && !fs.existsSync(stateFile("copyfailed")))) &&
         args[args.length - 2] === path.join(root, "var/lib/ai-executive")) {
@@ -222,6 +390,13 @@ switch (name) {
       fs.writeFileSync(path.join(destination, "incomplete"), Buffer.alloc(512 * 1024));
       console.error("simulated ENOSPC while copying");
       process.exit(28);
+    }
+    if (scenario === "targetbackupcorrupt" &&
+        args[args.length - 2] === path.join(root, "var/lib/ai-executive-target/personal-v1")) {
+      const copied = spawnSync("/bin/cp", args, { stdio: "inherit" });
+      if (copied.status !== 0) process.exit(copied.status || 1);
+      fs.appendFileSync(path.join(args[args.length - 1], "lumi-target.journal"), "tampered");
+      break;
     }
     if (scenario === "corruptcopy" && args[args.length - 2] === path.join(root, "etc/ai-executive/ai-executive.env")) {
       const saved = spawnSync("/bin/cp", args, { stdio: "inherit" });

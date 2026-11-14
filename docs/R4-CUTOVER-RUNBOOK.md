@@ -10,6 +10,138 @@ Neither this runbook nor any tool in #408 authorizes a production cutover, datab
 
 The old and target stores are distinct data domains. A backup of the legacy database (including the app's format-v2 owner-data export) is **not** a complete archival backup of credentials, passkeys, push subscriptions, integration secrets or target-store journal/witness state. Preserve the complete offline directory snapshot as the archive; treat app exports as additional, narrower recovery artifacts.
 
+
+## C14 — activation preflight and isolated target backup (#424; no production activation)
+
+This milestone adds \`scripts/target-profile-env.mjs\` and a guarded
+\`deployment/deploy-safe.sh\` path. Running the generator only **prints**
+a profile template; it never writes \`.env\`. The three existing operator
+settings must be supplied from the canonical provision output and verified
+identity. \`--check <env-file>\` reports \`off\`, complete \`personal-v1\`, or
+\`invalid\`, with only missing/extra variable names on error. No target
+flags are enabled by committed files, and this PR does not authorize an
+environment change.
+
+Before any service stop, the deploy launcher verifies the **loaded systemd
+environment-source contract**: only the single, mandatory
+`/etc/ai-executive/ai-executive.env` EnvironmentFile; the four fixed
+Environment assignments from the installed unit; empty PassEnvironment,
+UnsetEnvironment and PAMName; and no manager-global target settings.
+The manager-global scan must reject any target variable even when it occurs
+early in a very large environment dump; implementation avoids the
+`grep -q`/`pipefail` SIGPIPE trap and fails closed on scan errors.
+This applies even if the root-owned file reports `off`, because a
+second loaded file could otherwise enable an unchecked target. Repeat
+the loaded-unit contract check before both service starts. Record and compare
+the root-owned env's SHA-256 fingerprint before the first service stop
+and before any subsequent service start (including automatic rollback).
+**An `off` deployment may restore previous code but must NOT restart it**
+after any systemd source change or root env modification during the deployment.
+Leave it stopped and obtain independent operator approval for recovery.
+The sole loaded root EnvironmentFile must **never** assign the unit's
+fixed `AI_EXECUTIVE_DATA_DIR`, `PORT`, `NODE_ENV` or
+`NEXT_TELEMETRY_DISABLED`: EnvironmentFile assignments take precedence
+over the checked Environment values. The deploy rejects those names before
+any downtime and rechecks the unchanged env and unit before each startup,
+including off-profile rollback. This ensures the runtime uses the data
+directory the script actually archived.
+
+The loaded systemd sandbox must keep `ProtectSystem=strict` and
+`StateDirectory=ai-executive` as a base. Choose **one** write-access
+authorization: either add only `StateDirectory=ai-executive-target` with the
+approved target under `/var/lib/ai-executive-target/` and no ReadWritePaths,
+or retain only the baseline StateDirectory and add a separately approved,
+**exact** `ReadWritePaths=<target-store-directory>`. These modes cannot
+be combined: a second StateDirectory plus ReadWritePaths would expose two
+independent writable roots. `ReadWritePaths=/var/lib`, parent paths,
+unrelated exceptions, unexpected state directories and a weakened
+ProtectSystem are rejected. With flags off, ReadWritePaths must be empty.
+
+The deploy also verifies the *loaded* execution command, not merely the
+tracked service file: `ExecStart` must remain exactly the reviewed Node
+binary and Next.js argv (allowing only dynamic systemd PID/timestamps),
+and no ExecStartPre/ExecStartPost, ExecCondition, ExecStop/ExecStopPost or
+ExecReload hook may be added. A drop-in that injects commands while leaving
+Environment fields intact is a stop condition. Recheck before every
+service start, including legacy rollback. No configuration is auto-edited.
+
+**Decision proposal for the owner (not approved): choose (a)**, a separate
+systemd \`StateDirectory=ai-executive-target\` for an isolated absolute target
+path under \`/var/lib/ai-executive-target/personal-v1\`. The current unit's
+\`ProtectSystem=strict\` makes that path unwritable despite POSIX 0700
+ownership. A second \`StateDirectory\` supplies both persistent ownership
+and an explicit systemd write exception, without weakening the legacy data
+boundary. **Reject (b)** (target as a subdirectory of
+\`/var/lib/ai-executive\`): that overlaps \`AI_EXECUTIVE_DATA_DIR\` under
+\`scripts/r4-path-boundary.mjs\` and must be rejected by provisioning. Do
+not change that path guard to make nested target stores appear valid.
+
+**Only after a separate explicit owner approval of the concrete path and
+unit configuration**, the operator may review a drop-in like the following.
+It is a proposal, **not a command to execute from this PR**:
+
+\`\`\`ini
+# /etc/systemd/system/ai-executive.service.d/target-store.conf
+[Service]
+StateDirectory=
+StateDirectory=ai-executive ai-executive-target
+\`\`\`
+
+The operator must independently install the approved override, perform
+\`systemctl daemon-reload\`, check \`systemctl show ai-executive
+-p StateDirectory -p ProtectSystem\`, verify an ordinary service restart
+and a service-user write test to the exact target directory **without
+touching real data files**. The versioned \`deployment/ai-executive.service\`
+remains unchanged, so the existing code-diff safety guard is not bypassed.
+A missing loaded write exception causes \`deploy-safe.sh\` to fail **before
+stop**.
+
+For \`personal-v1\` deployments: profile check, target directory existence,
+UID/permissions, and systemd writable-sandbox check happen before stop;
+canonical semantic \`target-store-provision.mjs --check\` runs with
+\`runuser -u ai-executive --\` only when service writers are stopped.
+The full directory (SQLite, witness, journal and companions) is saved as
+\`target/\` within the **same verified** \`deploy-XXXXXXXX\` backup as
+legacy \`data/\` and \`env\`. The common hash manifest covers all files and
+the source-versus-copy directory diff must match. Immediately after the
+copy, before any new-code start, the quiesced target store is checked again
+**against the configured owner and restore generation**, not just for internal
+consistency: this also rejects a substituted but valid store. On failure,
+only an unverified partial copy is deleted. Because install/build and
+other prestart work can run after the archive verification, repeat the
+*same identity-bound semantic preflight* again on the still-quiesced
+target **immediately before the first service start**, so a later
+change cannot be served. Post-start checking quiesces the service
+again to avoid transient SQLite sidecars before a further semantic preflight,
+then restarts and checks HTTP readiness. Only code is automatically rolled
+back, **never either data domain**. This introduces a second short service
+restart exclusively for an activated target.
+
+**Failure of activated personal-v1 (fail closed):** if any target-enabled
+deployment step fails after service stop (including generation mismatch,
+incomplete archive, build failure, post-start semantic preflight, or later
+verification), leave the service **stopped** even if previous code was
+successfully rebuilt. The root-owned EnvironmentFile still has enabled target
+flags. Restarting old code would reload those flags and could serve the very
+store that failed preflight. Preserve any verified archive, all live store
+files and operator configuration; do not auto-edit the env file, restore a
+data directory, or start the old code.
+
+**Return to legacy:** under separately reviewed operational authorization,
+set all 31 target profile flags to false/absent and validate the `off`
+profile before a separately reviewed recovery/service restart. Confirm the
+actual loaded EnvironmentFile has the verified `off` profile, not merely
+the previous git revision. Do not remove, import, reset, overwrite or
+restore target and legacy stores as a side effect. Preserve the target
+archive and restore-generation evidence for subsequent incident review.
+
+Before production: run the focused CLI/deploy regression suite and PR
+Checks, verify systemd sandbox with the actual service context, perform
+the controlled offline combined-store restore rehearsal, pass **full Browser
+E2E on the exact approved SHA**, and obtain the separate owner approval
+specified in this runbook.
+
+
 ## Ordered evidence and gates
 
 | Step | Human/operator action | Evidence required before proceeding |

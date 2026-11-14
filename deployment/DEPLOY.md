@@ -105,3 +105,105 @@ already exists. It exercises the stopped-service `--recover-stopped` path with
 a successful restart, rejects missing cutoff and pre-feature checkouts, and
 verifies that a same-SHA recovery does not reset the cutoff. No real
 production deployment or systemd commands run in CI.
+
+
+### Target personal-v1 activation preflight (C14 / issue #424)
+
+The default deployment remains legacy-only: with no enabled target flag in the
+root-owned env file, target preflight, target store reads, and target archival
+steps are skipped. Generate the **proposed** exact flag block (not an activation
+authorization) using \`node scripts/target-profile-env.mjs\`; fill the three
+\`TARGET_PERSONAL_V1_REQUIRED_SETTINGS\` values from a separately approved
+provisioned store and authenticated owner. \`node scripts/target-profile-env.mjs
+--check /etc/ai-executive/ai-executive.env\` returns exactly \`off\`,
+\`personal-v1\`, or \`invalid\` (nonzero on invalid), with only erroneous
+variable **names**, never values. A partial profile or any enabled excluded
+flag is refused before stopping the service. Every deployment also checks
+the **loaded systemd environment sources** before stop: exactly the root-owned
+`/etc/ai-executive/ai-executive.env` (non-optional) as the sole
+`EnvironmentFiles` entry; the four expected fixed `Environment` assignments
+from the deployed service unit; no `PassEnvironment`, `UnsetEnvironment`
+or `PAMName`; and no target settings inherited from the system manager.
+Unexpected sources fail closed even when the root env reports `off`.
+The manager-global target scan reads the full captured environment without a
+`grep -q` pipeline (which could miss an early match under `pipefail` with
+a large output); scan errors fail closed. The root env's exact SHA-256
+fingerprint is recorded before profile classification and must still match
+before any start. **Even on a legacy-only (`off`) failed deployment**, the
+code-only rollback may restart the old service *only if* the loaded environment
+sources and the root env's original bytes are still unchanged. Any drift
+leaves the service stopped pending separately reviewed manual recovery.
+The same source contract is rechecked before both target service starts.
+**The sole loaded EnvironmentFile must not assign `AI_EXECUTIVE_DATA_DIR`,
+`PORT`, `NODE_ENV` or `NEXT_TELEMETRY_DISABLED`**, even to the expected
+value: systemd's EnvironmentFile takes precedence over the unit's fixed
+Environment assignments. This prevents the actual service from opening a
+different store than the deploy script backed up and verified. A comment
+mentioning a key is harmless. The check runs before service stop, before
+start, and during any off-profile rollback.
+
+The loaded sandbox must retain `ProtectSystem=strict` and the exact baseline
+`StateDirectory=ai-executive`. An active personal-v1 deployment must choose
+**exactly one** of two mutually exclusive isolated-write configurations:
+the extra `ai-executive-target` StateDirectory with the target underneath it
+and **no** ReadWritePaths, or the original StateDirectory **alone** with one
+separately approved `ReadWritePaths` matching the **exact target directory**.
+Mixing both grants two writable roots and is rejected, as are parent paths
+(e.g. `/var/lib`), multiple exceptions and unexpected StateDirectories.
+In off mode ReadWritePaths must be empty. The effective service execution
+contract is also checked against the reviewed unit: exactly `/usr/bin/node`
+with the reviewed Next.js argv, and no added ExecStartPre/ExecStartPost,
+ExecCondition, ExecStop/ExecStopPost or ExecReload hooks. The dynamic
+systemd timestamps/PID may change, but the executed binary and argv may not.
+All loaded-unit checks run before stopping, before every start, and during
+any off-profile rollback. No unit or permissions are auto-edited.
+
+**A separate written owner decision is mandatory before activation.** The
+installed unit currently uses \`ProtectSystem=strict\` and writes only to
+\`StateDirectory=ai-executive\`. The recommended isolated target
+\`/var/lib/ai-executive-target/personal-v1\` requires a separately approved
+systemd drop-in adding a second \`StateDirectory\`, followed by
+\`systemctl daemon-reload\` and a reviewed service restart. Do not edit or
+install that override on the basis of this PR. The deployment script refuses
+target activation unless the **loaded** approved isolated StateDirectory
+covers the target or an exact (never ancestor) ReadWritePaths permits it,
+and it rejects any weakening of ProtectSystem=strict. Changing the versioned \`deployment/ai-executive.service\`
+between release commits remains forbidden; a separately authorized operator
+drop-in is distinct from changing that tracked file. See
+[the cutover runbook](../docs/R4-CUTOVER-RUNBOOK.md) for a non-executable
+proposal and the authorization gates.
+
+With an independently approved, complete \`personal-v1\` configuration,
+the reviewed target deploy script validates the profile and path ownership
+before stopping. Only **after stop** does it execute the canonical
+\`target-store-provision.mjs --check\` **as \`ai-executive\`**, comparing owner
+and generation from the configured env. A running SQLite store can have
+transient WAL/SHM files, so semantic inspection before stop is deliberately
+unsafe. The script backs up the complete target directory alongside legacy
+data and checks exact source/copy equality plus the common SHA-256 manifest.
+**After copying, before any new service start**, it repeats the semantic
+preflight and verifies the owner and restore generation are still identical
+to the approved environment; a substituted but internally valid store is
+rejected without serving requests. Since package installation and build
+can be lengthy, the same owner/generation-bound semantic check runs **once
+more immediately before the first service start** (still quiesced), after
+all build and prestart snapshot work. If the store changed during that
+interval, no target request may be served.
+After startup it quiesces the service once more for a second semantic target
+check, restarts, and repeats HTTP readiness. **Any failure after a
+personal-v1 deployment has stopped the service leaves the service stopped.**
+The rollback trap may restore the previous **code only**, but it MUST NOT
+restart the previous binary: systemd would reload the still-enabled target
+flags from the root-owned EnvironmentFile, even when semantic preflight
+rejected that target. Neither target nor legacy data are restored or deleted.
+Unverified incomplete backup directories alone may be removed. The operator
+must first independently disable all target flags, validate `off` on the
+effective EnvironmentFile, and follow a separately reviewed recovery/start
+procedure. Do not blindly run `systemctl start` or assume that restoring
+a previous git commit also restores the old process environment.
+
+These tests are synthetic service mocks, not proof of a real deployment:
+\`node --test tests/target-profile-env.test.mjs tests/deploy-safe.test.mjs
+tests/reviewed-target-deploy.test.mjs\`. The exact release-SHA Browser E2E,
+backup/restore rehearsal, systemd sandbox verification and explicit operator
+approval are still production gates.
