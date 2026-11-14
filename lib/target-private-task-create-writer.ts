@@ -313,7 +313,7 @@ export function cancelPreflightedPrivateTaskCreate(
     if(db.prepare("SELECT 1 FROM metadata WHERE key=?")
       .get(PRIVATE_TASK_CREATE_RECEIPT_PREFIX+digest))
       return {ok:true,status:"settled"};
-    const key=TARGET_STAGING_PRIVATE_TASK_CREATE_CANCEL_PREFIX+digest;
+    const key=cancelKey(actor,commandId);
     if(db.prepare("SELECT 1 FROM metadata WHERE key IN (?,?)").get(
       key,legacyCancelKey(actor,commandId)))
       return {ok:true,status:"cancelled"};
