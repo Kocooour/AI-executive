@@ -58,9 +58,13 @@ unrelated exceptions, unexpected state directories and a weakened
 ProtectSystem are rejected. With flags off, ReadWritePaths must be empty.
 
 The deploy also verifies the *loaded* execution command, not merely the
-tracked service file: `ExecStart` must remain exactly the reviewed Node
-binary and Next.js argv (allowing only dynamic systemd PID/timestamps),
-and no ExecStartPre/ExecStartPost, ExecCondition, ExecStop/ExecStopPost or
+tracked service file: both `ExecStart` and `ExecStartEx` must report
+exactly the reviewed Node binary and Next.js argv (allowing only dynamic
+systemd PID/timestamps). `ExecStartEx` must report **empty `flags=`**;
+privileged prefixes such as `+`, `!` and `!!` must not bypass `User=`
+and the sandbox, and other command prefixes are not authorized either.
+An absent or unsupported `ExecStartEx` is a fail-closed stop condition.
+No ExecStartPre/ExecStartPost, ExecCondition, ExecStop/ExecStopPost or
 ExecReload hook may be added. The *loaded* `User`, `Group` and
 `WorkingDirectory` must also match the reviewed service unit before each
 start; a switch to `User=root` during the build must never launch code.
