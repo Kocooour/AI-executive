@@ -559,6 +559,20 @@ test("a regular zero-link unlink snapshot is retryable, never a trust denial", (
   assert.equal(shape(-1), "denied");
 });
 
+test("a concurrent journal unlink observed as zero-link before the lock never denies a valid write", async () => {
+  const fx = makeFixture();
+  const before = anchorOf(fx);
+  const result = await runChild(fx, "raw-inject-unlink").done;
+  assert.equal(result.code, 0, JSON.stringify(result));
+  const observed = JSON.parse(result.stdout);
+  assert.deepEqual(observed, { outcome: "ok", injectedUnlink: true, sidecarStats: 2 },
+    "the real pinned write path must see the disappearing inode, then proceed safely");
+  assert.equal(existsSync(fx.databasePath + "-journal"), false);
+  assert.equal(anchorOf(fx), before + 1);
+  assert.equal(journalState(fx).pending, null);
+  assert.equal(durable.checkTargetStagingAnchorLive(fx.store), "ok");
+});
+
 test("post-lock sidecar verdict permits only regular rollback contention, never hostile sidecars", () => {
   const fx = makeFixture();
   const classify = () => pinned.classifyPostLockTargetStagingSidecar(fx.databasePath);
