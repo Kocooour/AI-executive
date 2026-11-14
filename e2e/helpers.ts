@@ -163,7 +163,7 @@ export async function cleanupSyntheticFixtures(page: Page, options: {
       }),
     });
     if (response.status === 409) return false;
-    if (!response.ok) throw new Error(`Fixture cleanup: ${response.status}`);
+    if (!response.ok) throw new Error(`Fixture cleanup: ${response.status} ${(await response.text()).slice(0, 500)}`);
     return true;
   }, { workspaceIds, workspacePrefixes, entityPrefixes }), { timeout: 20_000 }).toBe(true);
   await expect.poll(async () => (await serverEntities(page)).filter(selected).length,
