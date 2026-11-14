@@ -618,10 +618,18 @@ for (const width of [390, 1280]) {
     await page.evaluate(() => {
       const safari = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.4 Mobile/15E148 Safari/604.1";
       Object.defineProperty(navigator, "userAgent", { configurable: true, value: safari });
-      const spy = { navigations: [] as string[], closed: 0 };
+      const spy = { navigations: [] as string[], blobs: [] as Blob[], closed: 0 };
       const originalOpen = window.open;
+      const originalCreateObjectURL = URL.createObjectURL;
+      // Lumi's fetch guard intentionally denies blob: requests. Capture the
+      // exact Blob offered to the user instead of fetching its object URL.
+      URL.createObjectURL = (value: Blob | MediaSource) => {
+        if (value instanceof Blob) spy.blobs.push(value);
+        return originalCreateObjectURL.call(URL, value);
+      };
       Object.assign(window, { __c13SafariSpy: spy, __c13RestoreOpen: () => {
         window.open = originalOpen;
+        URL.createObjectURL = originalCreateObjectURL;
         Reflect.deleteProperty(navigator, "userAgent");
       } });
       window.open = (() => ({
@@ -635,8 +643,8 @@ for (const width of [390, 1280]) {
       (window as unknown as Window & { __c13SafariSpy: { navigations: string[] } }).__c13SafariSpy.navigations.length,
     )).toBe(1);
     const safariCopy = JSON.parse(await page.evaluate(async () => {
-      const { navigations } = (window as unknown as Window & { __c13SafariSpy: { navigations: string[] } }).__c13SafariSpy;
-      return await (await fetch(navigations[0])).text();
+      const { blobs } = (window as unknown as Window & { __c13SafariSpy: { blobs: Blob[] } }).__c13SafariSpy;
+      return await blobs[0].text();
     }));
     expect(safariCopy.local.entities.some((item: {title: string}) => item.title === updatedTitle)).toBe(true);
 
