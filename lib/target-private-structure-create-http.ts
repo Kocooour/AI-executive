@@ -123,19 +123,17 @@ async function handle(
     const legacy=legacySnapshotRefusal(data);if(legacy)return legacy;
     const input=data&&typeof data==="object"&&!Array.isArray(data)
       ?data as Record<string,unknown>:null;
-    const opaque=!!input&&Object.keys(input).sort().join(",")==="commandId"&&
-      typeof input.commandId==="string"&&UUID.test(input.commandId);
-    const cancelOpaque=!!input&&Object.keys(input).sort().join(",")==="commandId,ownerScope"&&
+    const scopedOpaque=!!input&&Object.keys(input).sort().join(",")==="commandId,ownerScope"&&
       typeof input.commandId==="string"&&UUID.test(input.commandId)&&
       typeof input.ownerScope==="string"&&/^[A-Za-z0-9_-]{43}$/.test(input.ownerScope);
-    if(mode==="recovery"?!opaque:mode==="cancel"?!cancelOpaque:
+    if(mode==="recovery"||mode==="cancel"?!scopedOpaque:
       !validPrivateStructureCreateCommand(kind,data))
       return answer(400,"Invalid request");
     const released=verifyStagingIdentityBeforeRelease(request,identity,store);
     if(released!=="ok")return stagingIdentityRefusal(released);
     if(!unchanged(base,kind))return answer(503,"Staging unavailable");
     const child={...base,...stagingChildSessionConfig(identity)};
-    if(mode==="cancel"){
+    if(mode==="cancel"||mode==="recovery"){
       const ownerScope=structureOwnerScopeForIdentity(identity,base);
       if(!ownerScope)return answer(503,"Staging unavailable");
       // This actor-bound opaque comparison is mandatory even for an UNKNOWN
@@ -144,6 +142,8 @@ async function handle(
       // and unlock a marker belonging to a different actor.
       if(ownerScope!==(data as {ownerScope:string}).ownerScope)
         return answer(404,"Not found");
+    }
+    if(mode==="cancel"){
       const result=await cancelStructureCreateInChild(
         child,kind,(data as {commandId:string}).commandId);
       const check=verifyStagingIdentityBeforeRelease(request,identity,store);
