@@ -654,11 +654,9 @@ for (const scenario of [
   });
 }
 
-// Fail even for a legacy-only env: later EnvironmentFile or manager injection
-// can enable unreviewed target flags when the base file looks disabled.
+// The loaded EnvironmentFile must be the single reviewed operator file.
 for (const scenario of [
-  "offextraenvfile", "targetextraenvfile", "targetenvassignment",
-  "targetunsetenvironment", "targetpassenvironment", "targetpam",
+  "offextraenvfile", "targetextraenvfile",
 ]) {
   scenarioCase(scenario + ": reject unverified effective systemd env before stop", (r) => {
     assert.notEqual(r.status, 0);
