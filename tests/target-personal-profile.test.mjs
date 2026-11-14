@@ -84,7 +84,7 @@ test("profile is sorted, unique and well-formed; every exclusion has a reason",(
 test("no flag name is assembled at runtime or split, so the scan cannot be bypassed",()=>{
   assert.equal(staticDeploySentinels,1,"only the single audited, static deploy sentinel is allowed");
   assert.equal(staticProfilePrefixes,1,"the CLI must declare exactly one fixed target-flag namespace");
-  assert.equal(staticManagerEnvPrefixes,1,"only one static manager-env target namespace scan is allowed");
+  assert.equal(staticManagerEnvPrefixes,0,"no manager-global namespace scan is permitted in the approved scope");
   assert.deepEqual(incomplete,[]);
 });
 
