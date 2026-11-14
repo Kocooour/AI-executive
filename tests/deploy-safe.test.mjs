@@ -662,6 +662,7 @@ for (const scenario of [
   "offuserroot", "targetuserroot", "offbadgroup", "offbadworkdir",
   "offstateworld", "targetstateworld", "targetnonewprivileges",
   "offprivatetmp", "offprotecthome", "offcapabilities",
+  "offsecuritymissing", "offsecurityduplicate",
 ]) {
   scenarioCase(scenario + ": reject weakened loaded unit security before stop", (r) => {
     assert.notEqual(r.status, 0);
