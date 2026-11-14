@@ -79,6 +79,30 @@ function sandbox(scenario) {
     writeFileSync(envfile, readFileSync(envfile, "utf8") +
       "# AI_EXECUTIVE_DATA_DIR=/var/lib/redirected-store\n", { mode: 0o600 });
   }
+  // Test the deployment prefilter and canonical validator together. A clean
+  // disabled profile must stay on the fast path, while duplicates/malformed
+  // assignments must invoke --check and fail before taking down the service.
+  const offFlag = "AI_EXECUTIVE_TARGET_STAGING_HTTP_ENABLED";
+  const offProfiles = {
+    offduplicatefalse: [offFlag + "=false", offFlag + "=false"],
+    offduplicatequotedfalse: [offFlag + '= "false"', offFlag + "=false"],
+    offduplicateunknownfalse: [
+      "AI_EXECUTIVE_TARGET_UNREVIEWED_ENABLED=false",
+      "AI_EXECUTIVE_TARGET_UNREVIEWED_ENABLED=false",
+    ],
+    offduplicaterequired: [
+      "AI_EXECUTIVE_TARGET_STAGING_DIRECTORY=/tmp/a",
+      "AI_EXECUTIVE_TARGET_STAGING_DIRECTORY=/tmp/b",
+    ],
+    offmalformedtarget: [offFlag + " =false"],
+    offvalidfalse: [offFlag + "=false"],
+    offvalidquotedfalse: [offFlag + '="false"'],
+    offvalidunknownfalse: ["AI_EXECUTIVE_TARGET_UNREVIEWED_ENABLED=false"],
+    offcommentedfalse: ["# " + offFlag + "=true"],
+  };
+  if (Object.hasOwn(offProfiles, scenario)) {
+    writeFileSync(envfile, offProfiles[scenario].join("\n") + "\n", { mode: 0o600 });
+  }
   if (["offextraenvfile", "targetextraenvfile", "targetsystemddriftbuild"].includes(scenario)) {
     // Exists only in the disposable sandbox, but is never read by the
     // reviewed deploy code: the *loaded systemd list* must reject it.
