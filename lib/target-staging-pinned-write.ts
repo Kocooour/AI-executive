@@ -461,6 +461,8 @@ function runPinnedTargetStagingTransaction<T, C>(
         // the writer is gone: unlock and journal unlink are not atomic.
         // A valid regular sidecar is always retryable contention, not an
         // authorization/trust denial. Do NOT open SQLite or mutate either file.
+        if (process.env.AI_EXECUTIVE_TARGET_STAGING_DIAGNOSTICS === "1")
+          logStagingFailure("prelock_sidecar_timeout", "retryable_contention");
         return failed();
       }
       Atomics.wait(sidecarSleep, 0, 0, Math.min(5, remaining));
@@ -527,7 +529,11 @@ function runPinnedTargetStagingTransaction<T, C>(
       if (postLockSidecar === "denied") return deny("postlock_sidecar_structure");
       if (postLockSidecar === "clear") break;
       const remaining = postLockDeadline - Date.now();
-      if (remaining <= 0) return failed();
+      if (remaining <= 0) {
+        if (process.env.AI_EXECUTIVE_TARGET_STAGING_DIAGNOSTICS === "1")
+          logStagingFailure("postlock_sidecar_timeout", "retryable_contention");
+        return failed();
+      }
       Atomics.wait(sidecarSleep, 0, 0, Math.min(5, remaining));
       if (!identitiesStillTrusted()) return deny("postlock_identity");
     }
