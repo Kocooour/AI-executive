@@ -494,16 +494,43 @@ ENV_BASELINE_SHA="$(sha256sum -- "$ENVFILE")" ||
 # legacy case we do no target probing, filesystem access or additional output.
 # The exact validator is loaded from the REVIEWED target commit before stop,
 # not from a possibly old checked-out version of the application.
-# Preserve the dormant legacy path even when the env explicitly declares
-# all flags false. Only values other than literal false require the checked
-# target-commit validator (including malformed/partial attempts).
-if awk '
-  /^[[:space:]]*(export[[:space:]]+)?AI_EXECUTIVE_TARGET[A-Z0-9_]+_ENABLED[[:space:]]*=/ {
-    v=$0; sub(/^[^=]*=/,"",v)
-    gsub(/^[[:space:]]+|[[:space:]]+$/,"",v)
-    if (v!="false" && v!="\"false\"" && v!="\047false\047") {print 1; exit}
+# Keep a valid, disabled profile on the legacy fast path, without target I/O.
+# Any duplicate disabled flag/operator setting or malformed target line still
+# requires the canonical validator: invalid must fail before service stop.
+# Capture a single non-secret marker; an awk I/O failure must not mean "off".
+profile_needs_check="$(awk '
+  /^[[:space:]]*(#|$)/ { next }
+  {
+    line=$0
+    sub(/^[[:space:]]*/, "", line)
+    if (line !~ /^AI_EXECUTIVE_TARGET_/) {
+      # The CLI rejects malformed assignments mentioning target variables.
+      if (line !~ /^[A-Za-z_][A-Za-z0-9_]*=/ &&
+          index(line, "AI_EXECUTIVE_TARGET_") > 0) { print 1; exit }
+      next
+    }
+    if (line !~ /^AI_EXECUTIVE_TARGET_[A-Za-z0-9_]+=/) {
+      print 1; exit
+    }
+    key=line
+    sub(/=.*/, "", key)
+    if (key ~ /_ENABLED$/ ||
+        key == "AI_EXECUTIVE_TARGET_STAGING_DIRECTORY" ||
+        key == "AI_EXECUTIVE_TARGET_STAGING_OWNER_USER_ID" ||
+        key == "AI_EXECUTIVE_TARGET_STAGING_RESTORE_GENERATION") {
+      if (++seen[key] > 1) { print 1; exit }
+    }
+    if (key ~ /_ENABLED$/) {
+      v=line
+      sub(/^[^=]*=/, "", v)
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", v)
+      if (v!="false" && v!="\"false\"" && v!="\047false\047") {
+        print 1; exit
+      }
+    }
   }
-' "$ENVFILE" | grep -q '^1$'; then
+' "$ENVFILE")" || die "nelze zkontrolovat cilove prepinace v env"
+if [ "$profile_needs_check" = 1 ]; then
   PROFILE_TMP="$(mktemp -d "$LOCK_DIR/profile-XXXXXXXX")"
   chmod 0700 "$PROFILE_TMP"
   mkdir -m 0700 "$PROFILE_TMP/scripts" "$PROFILE_TMP/lib"
