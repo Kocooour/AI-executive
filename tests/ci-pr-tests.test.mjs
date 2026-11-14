@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { chooseTests, needsCodeChecks } from "../scripts/ci-pr-tests.mjs";
+import { chooseTests, needsCodeChecks, needsNextRouterSmoke } from "../scripts/ci-pr-tests.mjs";
 
 const available = [
   "tests/server-errors.test.mjs",
@@ -151,4 +151,28 @@ test("toolchain changes force the complete unit suite even on PRs", () => {
   const out = chooseTests(["pnpm-lock.yaml"], available);
   assert.equal(out.full, true);
   assert.equal(out.selected.length, available.length);
+});
+
+test("owner-session and auth changes add the built Next router smoke without reducing unit tests", () => {
+  for (const filename of [
+    "lib/auth.ts",
+    "lib/owner-session-revocation.ts",
+    "lib/owner-session-read-release.ts",
+    "app/api/auth/logout/route.ts",
+    "app/api/auth/login/route.ts",
+    "scripts/target-staging-next-smoke.mjs",
+    "scripts/owner-session-revocation-init.mjs",
+  ]) {
+    assert.equal(needsNextRouterSmoke([filename]), true, filename);
+    assert.equal(needsCodeChecks([filename]), true, filename);
+    const selected = chooseTests([filename], available);
+    assert.ok(selected.selected.includes("tests/server-errors.test.mjs"), filename);
+    if (filename.startsWith("lib/owner-session-")) {
+      assert.ok(selected.selected.includes("tests/context-evidence-leaks.test.mjs"), filename);
+    }
+  }
+  for (const filename of ["docs/ROADMAP.md", "app/page.tsx", "lib/calendar-overview.ts"]) {
+    assert.equal(needsNextRouterSmoke([filename]), false, filename);
+  }
+  assert.equal(needsNextRouterSmoke(["docs/ROADMAP.md", "app/api/auth/logout/route.ts"]), true);
 });

@@ -1,6 +1,6 @@
 /** Focused post-build Next router smoke; no browser and no production data. */
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { randomBytes, randomUUID } from "node:crypto";
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import net from "node:net";
@@ -42,6 +42,18 @@ async function ready(url, serverProcess) {
 }
 
 try {
+  // Real owner sessions fail closed until the operator explicitly provisions
+  // the revocation cutoff. Use the deployment CLI only in this isolated fixture.
+  for (const mode of ["--init", "--check"]) {
+    const provision = spawnSync(process.execPath, [
+      "--experimental-loader", "./scripts/target-staging-ts-loader.mjs",
+      "scripts/owner-session-revocation-init.mjs", mode,
+    ], { cwd: process.cwd(), env: { ...process.env, AI_EXECUTIVE_DATA_DIR: legacy },
+      encoding: "utf8" });
+    assert.equal(provision.status, 0,
+      `Owner session revocation ${mode} failed: ${provision.error ?? ""}\n${provision.stdout}\n${provision.stderr}`);
+  }
+
   const { bootstrapIsolatedTargetStore } = await import("../lib/target-store-bootstrap.ts");
   const { createSessionToken, sessionCookieName } = await import("../lib/auth.ts");
   const stage = bootstrapIsolatedTargetStore({
@@ -407,7 +419,23 @@ try {
   assert.equal((await sharedAs(bobCookie, "GET", "")).status, 404, "deleted task is gone");
   assert.equal(db.prepare("SELECT COUNT(*) AS n FROM task_tombstones WHERE id='shared-secret'").get().n, 1);
   assert.equal(db.prepare("SELECT COUNT(*) AS n FROM change_log WHERE entity_id='shared-secret' AND op='tombstone'").get().n, 1);
-  console.log("Next router staging task/project reads, private audit, title status, shared title write and task delete smoke passed");
+  // Exercise the production-built logout endpoint: the copied cookie must be
+  // rejected on the very same authenticated route that accepted it before logout.
+  const ownerReadUrl = `${origin}/api/target-staging/tasks/${encodeURIComponent(ids[0])}`;
+  assert.equal((await fetch(ownerReadUrl, {
+    headers: { cookie }, signal: AbortSignal.timeout(10_000),
+  })).status, 200, "Owner cookie must work before logout");
+  const logout = await fetch(`${origin}/api/auth/logout`, {
+    method: "POST", headers: { cookie, origin }, signal: AbortSignal.timeout(10_000),
+  });
+  assert.equal(logout.status, 200, "Next router owner logout failed");
+  assert.equal(logout.headers.get("cache-control"), "no-store");
+  const revoked = await fetch(ownerReadUrl, {
+    headers: { cookie }, signal: AbortSignal.timeout(10_000),
+  });
+  assert.equal(revoked.status, 401, "Copied owner cookie was not revoked by Next logout");
+  assert.equal(revoked.headers.get("cache-control"), "no-store");
+  console.log("Next router staging task/project reads, private audit, title status, shared title write, task delete and owner logout revocation smoke passed");
 } finally {
   if (server && server.exitCode === null) {
     const exited = once(server, "exit");

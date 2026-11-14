@@ -64,8 +64,32 @@ if (mode === "hold-sidecar" || mode === "hold-sidecar-long") {
   process.stdout.write("released");
   process.exit(0);
 }
-if (mode === "raw" || mode === "raw-many" || mode === "raw-cold-gated" ||
+if (mode === "raw" || mode === "raw-many" || mode === "raw-inject-unlink" || mode === "raw-cold-gated" ||
     mode === "raw-cold-gated-fail-before-ready" || mode === "raw-cold-gated-hang-after-ready") {
+  // Deterministic TOCTOU fault injection for the real pre-open path: the
+  // first journal lstat reports an ordinary linked inode, and the second
+  // returns an otherwise identical unlinked inode (nlink=0) while its directory
+  // entry disappears. Neither SQLite nor the pinned writer may open that
+  // ambiguous sidecar, and the successful subsequent write must remain trusted.
+  let injectedUnlink = false;
+  let sidecarStats = 0;
+  if (mode === "raw-inject-unlink") {
+    const journal = directory + "/lumi-target.sqlite-journal";
+    writeFileSync(journal, Buffer.alloc(512));
+    const realLstat = fs.lstatSync;
+    fs.lstatSync = (name, ...args) => {
+      const stat = realLstat(name, ...args);
+      if (String(name) === journal && !injectedUnlink) {
+        if (++sidecarStats === 2) {
+          injectedUnlink = true;
+          fs.unlinkSync(journal);
+          return Object.assign(Object.create(Object.getPrototypeOf(stat)), stat, { nlink: 0 });
+        }
+      }
+      return stat;
+    };
+    syncBuiltinESMExports();
+  }
   const { withPinnedTargetStagingWrite } = await import("../../lib/target-staging-pinned-write.ts");
   if (mode === "raw-cold-gated" || mode === "raw-cold-gated-fail-before-ready" ||
       mode === "raw-cold-gated-hang-after-ready") {
@@ -98,8 +122,9 @@ if (mode === "raw" || mode === "raw-many" || mode === "raw-cold-gated" ||
       () => "denied", () => "failed");
     counts[outcome]++;
   }
-  process.stdout.write(JSON.stringify(mode === "raw-many" ?
-    counts : { outcome: Object.keys(counts).find(key => counts[key]) }));
+  process.stdout.write(JSON.stringify(mode === "raw-many" ? counts :
+    { outcome: Object.keys(counts).find(key => counts[key]),
+      ...(mode === "raw-inject-unlink" ? { injectedUnlink, sidecarStats } : {}) }));
   process.exit(0);
 }
 const durable = await import("../../lib/target-staging-durable-session.ts");

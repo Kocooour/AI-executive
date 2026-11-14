@@ -23,6 +23,18 @@ export function needsCodeChecks(paths) {
   return paths.some((filename) => !filename.endsWith(".md"));
 }
 
+// Run the built Next router smoke on PRs that can change owner-cookie
+// issuance, revocation, auth endpoints or the smoke/provisioning harness.
+// This is additive to the existing conservative unit-test selector.
+export function needsNextRouterSmoke(paths) {
+  return paths.some((filename) =>
+    filename === "lib/auth.ts" ||
+    /^lib\/owner-session-[^/]+\.ts$/.test(filename) ||
+    filename.startsWith("app/api/auth/") ||
+    filename === "scripts/target-staging-next-smoke.mjs" ||
+    filename === "scripts/owner-session-revocation-init.mjs");
+}
+
 const CORE = [
   "tests/server-errors.test.mjs",
   "tests/client-auth-status.test.mjs",
@@ -56,7 +68,7 @@ const FILE_INPUT_TESTS = [
 ];
 // Fail closed for other changed workflow definitions, which can affect any check.
 const OTHER_WORKFLOWS = /^\.github\/workflows\/(?!browser-e2e\.yml$)/;
-const SENSITIVE = /^(?:lib\/(?:auth\.ts|passkeys\.ts|http-security\.ts|security-|server-store\.ts|server-sync\.ts|db\.ts|data-dir\.ts|schema-migrations\.ts|backup-|mail-gmail\.ts|area-|target-|context(?:-|\.ts)|work-read-scope\.ts)|app\/api\/)/;
+const SENSITIVE = /^(?:lib\/(?:auth\.ts|owner-session-[^/]+\.ts|passkeys\.ts|http-security\.ts|security-|server-store\.ts|server-sync\.ts|db\.ts|data-dir\.ts|schema-migrations\.ts|backup-|mail-gmail\.ts|area-|target-|context(?:-|\.ts)|work-read-scope\.ts)|app\/api\/)/;
 
 // Build a reverse dependency graph from relative imports. Scanning the tracked
 // source tree rather than only tests covers API route imports and transitive
@@ -169,8 +181,9 @@ function main() {
   const code = needsCodeChecks(paths);
   if (process.argv.includes("--scope")) {
     if (!process.env.GITHUB_OUTPUT) throw new Error("GITHUB_OUTPUT missing");
-    appendFileSync(process.env.GITHUB_OUTPUT, `code=${code}\n`);
-    console.log(`Changed files: ${paths.length}; code checks: ${code}`);
+    const routerSmoke = needsNextRouterSmoke(paths);
+    appendFileSync(process.env.GITHUB_OUTPUT, `code=${code}\nrouter_smoke=${routerSmoke}\n`);
+    console.log(`Changed files: ${paths.length}; code checks: ${code}; Next router smoke: ${routerSmoke}`);
     return;
   }
   if (!code) {

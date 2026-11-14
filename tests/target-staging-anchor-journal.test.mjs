@@ -366,7 +366,11 @@ function runChild(fx, mode, gate = "", rounds = 1) {
   const child = spawn(process.execPath, ["--experimental-loader", "./tests/ts-loader.mjs", "--no-warnings",
     "tests/support/target-anchor-gated-child.mjs", fx.stage.directory, fx.stage.restoreGeneration, mode, gate,
     String(rounds)],
-  { stdio: ["ignore", "pipe", "pipe"] });
+  { stdio: ["ignore", "pipe", "pipe"],
+    // Content-free diagnostics for high contention and the independent cold
+    // chain/200ms lock regression. Never enabled for normal application runs.
+    env: { ...process.env, ...((mode === "raw-many" || mode === "raw-cold-gated" || mode === "raw-inject-unlink")
+      ? { AI_EXECUTIVE_TARGET_STAGING_DIAGNOSTICS: "1" } : {}) } });
   let stdout = "", stderr = "";
   child.stdout.on("data", chunk => { stdout += chunk; });
   child.stderr.on("data", chunk => { stderr += chunk; });
@@ -539,34 +543,93 @@ test("symlinked SQLite rollback sidecar is still a strict boundary denial", () =
   assert.equal(durable.checkTargetStagingAnchorLive(fx.store), "ok");
 });
 
-test("six un-retried concurrent writers at the original 6x80 load never confuse contention with trust denial", async () => {
+test("a regular zero-link unlink snapshot is retryable, never a trust denial", () => {
+  // SQLite can unlink its rollback sidecar while another process observes its
+  // metadata. A disappearing regular inode (nlink=0) cannot be opened and is
+  // a retryable obstruction, not evidence of an attacker-planted hard link.
+  const shape = (nlink, type = "file") => pinned.targetStagingRollbackSidecarShape({
+    nlink, isFile: () => type === "file", isSymbolicLink: () => type === "symlink",
+  });
+  assert.equal(shape(0), "retryable");
+  assert.equal(shape(1), "retryable");
+  assert.equal(shape(2), "denied", "real multi-link sidecar remains unsafe");
+  assert.equal(shape(0, "symlink"), "denied");
+  assert.equal(shape(1, "symlink"), "denied");
+  assert.equal(shape(1, "fifo"), "denied");
+  assert.equal(shape(-1), "denied");
+});
+
+test("a concurrent journal unlink observed as zero-link before the lock never denies a valid write", async () => {
   const fx = makeFixture();
-  const workers = Array.from({ length: 6 }, () => runChild(fx, "raw-many", "", 80));
-  const results = await Promise.all(workers.map(w => w.done));
-  assert.ok(results.every(r => r.code === 0), JSON.stringify(results));
-  const counts = results.map(r => JSON.parse(r.stdout));
-  const totals = counts.reduce((sum, r) => ({
-    ok: sum.ok + r.ok, failed: sum.failed + r.failed, denied: sum.denied + r.denied,
-  }), { ok: 0, failed: 0, denied: 0 });
-  assert.equal(totals.ok + totals.failed + totals.denied, 480, JSON.stringify(counts));
-  assert.equal(totals.denied, 0, "legitimate concurrency must not be an authorization/trust refusal: " +
-    JSON.stringify(counts));
-  assert.ok(totals.ok > 0, "some writes must have committed");
-  // A failed attempt may have fsynced its intent before a SQLite COMMIT failure.
-  // Such an intent consumes an n and gets an abort at the NEXT write: anchor_seq
-  // need not equal the number of successful writes. Finish with one uncontended
-  // write, which also closes any pending intent left by the last failed writer.
-  const settled = pinned.withPinnedTargetStagingWrite(fx.store,
-    context => { context.commit({ kind: "compaction", payload: { floor: 0 } }); return "ok"; },
-    () => "denied", () => "failed");
-  assert.equal(settled, "ok", "the shared store remains writable after contention");
-  const state = journalState(fx);
-  assert.equal(state.pending, null);
-  assert.equal(state.confirmed, anchorOf(fx));
-  assert.equal(journalLines(fx).filter(line => line.t === "confirm").length, totals.ok + 1);
+  const before = anchorOf(fx);
+  const result = await runChild(fx, "raw-inject-unlink").done;
+  assert.equal(result.code, 0, JSON.stringify(result));
+  const observed = JSON.parse(result.stdout);
+  assert.deepEqual(observed, { outcome: "ok", injectedUnlink: true, sidecarStats: 2 },
+    "the real pinned write path must see the disappearing inode, then proceed safely");
+  assert.match(result.stderr, /stage=prelock_sidecar_unlink reason=retryable_contention/,
+    "content-free diagnostics must prove which boundary actually observed the unlink");
+  assert.equal(existsSync(fx.databasePath + "-journal"), false);
+  assert.equal(anchorOf(fx), before + 1);
+  assert.equal(journalState(fx).pending, null);
   assert.equal(durable.checkTargetStagingAnchorLive(fx.store), "ok");
 });
 
+test("post-lock sidecar verdict permits only regular rollback contention, never hostile sidecars", () => {
+  const fx = makeFixture();
+  const classify = () => pinned.classifyPostLockTargetStagingSidecar(fx.databasePath);
+  const journal = fx.databasePath + "-journal";
+  const wal = fx.databasePath + "-wal";
+  const target = path.join(root, fx.name + "-unsafe-sidecar");
+  assert.equal(classify(), "clear");
+  writeFileSync(journal, Buffer.alloc(512));
+  assert.equal(classify(), "retryable", "only an ordinary rollback journal may be transient contention");
+  writeFileSync(wal, "not WAL");
+  assert.equal(classify(), "denied", "WAL/SHM remain an unconditional denial");
+  unlinkSync(wal);
+  unlinkSync(journal);
+  writeFileSync(target, "untouched");
+  symlinkSync(target, journal);
+  assert.equal(classify(), "denied", "symlink is never retryable");
+  unlinkSync(journal);
+  linkSync(target, journal);
+  assert.equal(classify(), "denied", "hardlink is never retryable");
+  unlinkSync(journal);
+  assert.equal(readFileSync(target, "utf8"), "untouched");
+  assert.equal(classify(), "clear");
+});
+
+test("three independent 6x80 writer loads never confuse contention with trust denial", async () => {
+  // Repeat the ORIGINAL 6x80 schedule, with a fresh store and six cold
+  // processes each time. A single green sample previously missed the race.
+  for (let batch = 0; batch < 3; batch++) {
+    const fx = makeFixture();
+    const workers = Array.from({ length: 6 }, () => runChild(fx, "raw-many", "", 80));
+    const results = await Promise.all(workers.map(w => w.done));
+    assert.ok(results.every(r => r.code === 0), JSON.stringify(results));
+    const counts = results.map(r => JSON.parse(r.stdout));
+    const totals = counts.reduce((sum, r) => ({
+      ok: sum.ok + r.ok, failed: sum.failed + r.failed, denied: sum.denied + r.denied,
+    }), { ok: 0, failed: 0, denied: 0 });
+    assert.equal(totals.ok + totals.failed + totals.denied, 480, JSON.stringify(counts));
+    assert.equal(totals.denied, 0, "legitimate concurrency must not be an authorization/trust refusal: " +
+      JSON.stringify({ counts, diagnostics: results.map(r => r.stderr.trim()).filter(Boolean) }));
+    assert.ok(totals.ok > 0, "some writes must have committed");
+    // A failed attempt may have fsynced its intent before a SQLite COMMIT failure.
+    // Such an intent consumes an n and gets an abort at the NEXT write: anchor_seq
+    // need not equal the number of successful writes. Finish with one uncontended
+    // write, which also closes any pending intent left by the last failed writer.
+    const settled = pinned.withPinnedTargetStagingWrite(fx.store,
+      context => { context.commit({ kind: "compaction", payload: { floor: 0 } }); return "ok"; },
+      () => "denied", () => "failed");
+    assert.equal(settled, "ok", "the shared store remains writable after contention");
+    const state = journalState(fx);
+    assert.equal(state.pending, null);
+    assert.equal(state.confirmed, anchorOf(fx));
+    assert.equal(journalLines(fx).filter(line => line.t === "confirm").length, totals.ok + 1);
+    assert.equal(durable.checkTargetStagingAnchorLive(fx.store), "ok");
+  }
+});
 test("a write in flight on another process (intent appended, not committed) does not trip reads", async () => {
   const fx = makeFixture();
   assert.equal(titleWrite(fx, "t1", "warm").ok, true);

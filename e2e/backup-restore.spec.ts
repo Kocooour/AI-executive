@@ -114,6 +114,204 @@ const versionCount = async (page: Page, id: string) => {
   return page.locator(".revisionList li").count();
 };
 
+test("two fresh tabs keep a Quick Capture made while the second initial pull is paused", async ({ browser }) => {
+  const title = `e2e-backup-first-sync-tabs-${stamp}`;
+  const ownerContext = await browser.newContext({ storageState: sessionFile, locale: "cs-CZ" });
+  const tabs = await browser.newContext({ storageState: sessionFile, locale: "cs-CZ" });
+  const owner = await ownerContext.newPage();
+  const first = await tabs.newPage(), second = await tabs.newPage();
+  let releaseFirst: () => void = () => undefined;
+  let releaseSecond: () => void = () => undefined;
+  const firstHeld = new Promise<void>(resolve => { releaseFirst = resolve; });
+  const secondHeld = new Promise<void>(resolve => { releaseSecond = resolve; });
+  let firstGetStarted = false, secondGetStarted = false;
+  try {
+    await owner.goto("/");
+    await waitUntilSynced(owner);
+    const backup = await createManualBackup(owner);
+    expect(await restoreByApi(owner, backup)).toBe(200);
+    const serverGeneration = await owner.evaluate(async () =>
+      (await fetch("/api/store", { cache: "no-store" }).then(response => response.json())).restoreGeneration as number);
+    expect(serverGeneration).toBeGreaterThan(0);
+
+    // Both tabs start with an EMPTY browser profile, before either has read a
+    // server generation. The first tab holds the shared sync lock on its GET.
+    await first.route("**/api/store", async route => {
+      if (!firstGetStarted && route.request().method() === "GET") {
+        firstGetStarted = true;
+        await firstHeld;
+      }
+      await route.continue(); // The response is real; no mocked store data.
+    });
+    await second.route("**/api/store", async route => {
+      if (!secondGetStarted && route.request().method() === "GET") {
+        secondGetStarted = true;
+        await secondHeld;
+      }
+      await route.continue();
+    });
+    await first.goto("/?view=Inbox", { waitUntil: "domcontentloaded" });
+    await expect.poll(() => firstGetStarted).toBe(true);
+    await second.goto("/?view=Inbox", { waitUntil: "domcontentloaded" });
+    await expect(second.locator(".capture input")).toBeVisible();
+    expect(await second.evaluate(() => [
+      localStorage.getItem("ai-executive-restore-generation"),
+      localStorage.getItem("ai-executive-server-synced"),
+    ])).toEqual([null, null]);
+
+    // A finishes FIRST, writes generation N and the shared synced marker.
+    // B was loaded before that happened and now holds its first GET indefinitely.
+    releaseFirst();
+    await waitUntilSynced(first);
+    await expect.poll(() => secondGetStarted).toBe(true);
+    expect(await second.evaluate(() => ({
+      generation: localStorage.getItem("ai-executive-restore-generation"),
+      synced: localStorage.getItem("ai-executive-server-synced"),
+      fence: localStorage.getItem("ai-executive-owner-adoption-fence"),
+    }))).toEqual({ generation: String(serverGeneration), synced: "1", fence: null });
+
+    // Capture while B still cannot finish its very first pull. It MUST
+    // persist to IndexedDB rather than silently discard the submission.
+    // Do not rely on pending-sync staying "1": the sync can finish in B
+    // (including a 409/retry) and clear the marker BEFORE this assertion.
+    const capture = second.locator(".capture input");
+    await capture.fill(title);
+    await capture.press("Enter");
+    await expect.poll(() => second.evaluate(async expected => {
+      const db = await new Promise<IDBDatabase>((resolve, reject) => {
+        const request = indexedDB.open("ai-executive");
+        request.onsuccess = () => resolve(request.result);
+        request.onerror = () => reject(request.error);
+      });
+      try {
+        return await new Promise<boolean>((resolve, reject) => {
+          const request = db.transaction("entities", "readonly").objectStore("entities").getAll();
+          request.onsuccess = () => resolve(request.result.some((item: { title: string }) => item.title === expected));
+          request.onerror = () => reject(request.error);
+        });
+      } finally { db.close(); }
+    }, title), { timeout: 10_000 }).toBe(true);
+
+    // B's local write survives the real first GET and any 409 retry
+    // (the server already has generation N). It reaches the real server.
+    releaseSecond();
+    await expect.poll(async () => (await serverEntities(owner)).some(entity => entity.title === title),
+      { timeout: 30_000 }).toBe(true);
+    await second.reload();
+    await waitUntilSynced(second);
+    await expect(second.getByText(title).first()).toBeVisible();
+    await expect(second.locator(".restoredNotice")).toHaveCount(0);
+    await expect(second.getByRole("alertdialog", { name: "Lokální změny jsou chráněné" })).toHaveCount(0);
+  } finally {
+    releaseFirst();
+    releaseSecond();
+    await tabs.close();
+    await cleanUp(owner);
+    await ownerContext.close();
+  }
+});
+
+test("a fresh sibling reloads after a completed owner restore without BroadcastChannel, not after a first pull", async ({ browser }) => {
+  const ownerContext = await browser.newContext({ storageState: sessionFile, locale: "cs-CZ" });
+  const tabs = await browser.newContext({ storageState: sessionFile, locale: "cs-CZ" });
+  const owner = await ownerContext.newPage();
+  const first = await tabs.newPage(), second = await tabs.newPage();
+  let releaseFirst: () => void = () => undefined;
+  let releaseSecond: () => void = () => undefined;
+  const firstHeld = new Promise<void>(resolve => { releaseFirst = resolve; });
+  const secondHeld = new Promise<void>(resolve => { releaseSecond = resolve; });
+  let firstGetStarted = false, secondGetStarted = false;
+  try {
+    await owner.goto("/");
+    await waitUntilSynced(owner);
+    const backup = await createManualBackup(owner);
+    // Start with a certified generation > 0, then perform ANOTHER genuine
+    // restore after tab B has already opened with no known generation.
+    expect(await restoreByApi(owner, backup)).toBe(200);
+    const originalGeneration = await owner.evaluate(async () =>
+      (await fetch("/api/store", { cache: "no-store" }).then(response => response.json())).restoreGeneration as number);
+    expect(originalGeneration).toBeGreaterThan(0);
+
+    await first.route("**/api/store", async route => {
+      if (!firstGetStarted && route.request().method() === "GET") {
+        firstGetStarted = true;
+        await firstHeld;
+      }
+      await route.continue();
+    });
+    await second.addInitScript(() => {
+      Object.defineProperty(window, "BroadcastChannel", { value: undefined, configurable: true });
+      sessionStorage.setItem("e2e-fresh-sibling-loads",
+        String(Number(sessionStorage.getItem("e2e-fresh-sibling-loads") || "0") + 1));
+      window.addEventListener("storage", event => {
+        if (event.key === "ai-executive-restore-generation")
+          sessionStorage.setItem("e2e-fresh-sibling-generation-events",
+            String(Number(sessionStorage.getItem("e2e-fresh-sibling-generation-events") || "0") + 1));
+      }, true);
+    });
+    await second.route("**/api/store", async route => {
+      if (!secondGetStarted && route.request().method() === "GET") {
+        secondGetStarted = true;
+        await secondHeld;
+      }
+      await route.continue();
+    });
+    await first.goto("/?view=Inbox", { waitUntil: "domcontentloaded" });
+    await expect.poll(() => firstGetStarted).toBe(true);
+    await second.goto("/?view=Inbox", { waitUntil: "domcontentloaded" });
+    await expect(second.locator(".capture input")).toBeVisible();
+    expect(await second.evaluate(() => [
+      localStorage.getItem("ai-executive-restore-generation"),
+      localStorage.getItem("ai-executive-server-synced"),
+      sessionStorage.getItem("e2e-fresh-sibling-loads"),
+    ])).toEqual([null, null, "1"]);
+
+    // A's ordinary initial pull stamps generation N. B must NOT reload just
+    // because the shared generation (and synced flag) were first populated.
+    releaseFirst();
+    await waitUntilSynced(first);
+    await expect.poll(() => secondGetStarted).toBe(true);
+    await expect.poll(() => second.evaluate(() =>
+      sessionStorage.getItem("e2e-fresh-sibling-generation-events"))).toBe("1");
+    expect(await second.evaluate(() =>
+      sessionStorage.getItem("e2e-fresh-sibling-loads"))).toBe("1");
+    expect(await second.evaluate(() =>
+      localStorage.getItem("ai-executive-restore-generation"))).toBe(String(originalGeneration));
+
+    // A now observes a SECOND certified owner restore and adopts it. B's
+    // first GET is still held, and B cannot receive BroadcastChannel.
+    expect(await restoreByApi(owner, backup)).toBe(200);
+    const restoredGeneration = await owner.evaluate(async () =>
+      (await fetch("/api/store", { cache: "no-store" }).then(response => response.json())).restoreGeneration as number);
+    expect(restoredGeneration).toBeGreaterThan(originalGeneration);
+    await remoteWakeUp(first);
+    await expect(first.locator(".restoredNotice"))
+      .toContainText("Data byla obnovena ze zálohy.", { timeout: 30_000 });
+
+    // A's completed-adoption marker + final fence removal must reload B.
+    // The pending old GET is never used as a mocked restore response.
+    await expect.poll(async () => {
+      try {
+        return Number(await second.evaluate(() => sessionStorage.getItem("e2e-fresh-sibling-loads")));
+      } catch { return 0; } // A navigation can destroy the evaluation context.
+    }, { timeout: 30_000 }).toBeGreaterThan(1);
+    releaseSecond();
+    await waitUntilSynced(second);
+    expect(await second.evaluate(() => ({
+      generation: localStorage.getItem("ai-executive-restore-generation"),
+      completed: localStorage.getItem("ai-executive-owner-adoption-completed"),
+      fence: localStorage.getItem("ai-executive-owner-adoption-fence"),
+    }))).toEqual({ generation: String(restoredGeneration), completed: String(restoredGeneration), fence: null });
+    await expect(second.getByRole("alertdialog", { name: "Lokální změny jsou chráněné" })).toHaveCount(0);
+  } finally {
+    releaseFirst();
+    releaseSecond();
+    await tabs.close();
+    await cleanUp(owner);
+    await ownerContext.close();
+  }
+});
+
 test("an unsent note edit survives an unrelated server revision without a restore", async ({ browser }) => {
   const id = `e2e-backup-unreplaced-${stamp}`;
   const unrelated = `e2e-backup-unrelated-${stamp}`;
@@ -1132,6 +1330,7 @@ test("a stale sibling cannot write old data during or after owner adoption, even
       Object.defineProperty(window, "BroadcastChannel", { value: undefined, configurable: true });
       window.addEventListener("storage", (event) => {
         if (event.key === "ai-executive-restore-generation" ||
+            event.key === "ai-executive-owner-adoption-completed" ||
             event.key === "ai-executive-owner-adoption-fence")
           event.stopImmediatePropagation();
       }, true);
@@ -1526,6 +1725,7 @@ test("a paused ordinary pull never stamps its stale generation after a sibling o
       Object.defineProperty(window, "BroadcastChannel", { configurable: true, value: undefined });
       window.addEventListener("storage", event => {
         if (event.key === "ai-executive-restore-generation" ||
+            event.key === "ai-executive-owner-adoption-completed" ||
             event.key === "ai-executive-owner-adoption-fence") event.stopImmediatePropagation();
       }, true);
     });

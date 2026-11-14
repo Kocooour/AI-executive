@@ -81,7 +81,10 @@ test("a sibling cannot write while owner adoption is fenced or after another tab
   assert.equal(barrier.crossTabAdoptionBlocked(undefined, state), false);
   state.setItem(barrier.ownerAdoptionGenerationKey, "4");
   state.setItem("ai-executive-server-synced", "1");
-  assert.equal(barrier.crossTabAdoptionBlocked(undefined, state), true, "legacy synced tab has no generation");
+  assert.equal(barrier.crossTabAdoptionBlocked(undefined, state, false), false,
+    "a fresh second tab is not fenced by its sibling's first generation stamp");
+  assert.equal(barrier.crossTabAdoptionBlocked(undefined, state, true), true,
+    "an already-synced legacy tab without a generation remains fenced");
   assert.equal(barrier.crossTabAdoptionBlocked(4, state), false);
   barrier.startOwnerAdoptionFence(state, 5);
   assert.equal(barrier.crossTabAdoptionBlocked(4, state), true);
@@ -91,6 +94,54 @@ test("a sibling cannot write while owner adoption is fenced or after another tab
   assert.equal(barrier.crossTabAdoptionBlocked(4, state), true);
   assert.equal(barrier.crossTabAdoptionBlocked(5, state), false);
 });
+test("an owner restore completing in a sibling still fences a fresh tab with no known generation", () => {
+  const state = memoryStorage();
+  // An ordinary first pull changes these shared markers but must not fence
+  // a tab which loaded with neither generation nor synchronized data.
+  state.setItem(barrier.ownerAdoptionGenerationKey, "4");
+  state.setItem("ai-executive-server-synced", "1");
+  assert.equal(barrier.crossTabAdoptionBlocked(undefined, state, false, null), false);
+  barrier.startOwnerAdoptionFence(state, 5, 4);
+  assert.equal(barrier.crossTabAdoptionBlocked(undefined, state, false, null), true,
+    "the live owner fence always blocks writes");
+  state.setItem(barrier.ownerAdoptionGenerationKey, "5");
+  barrier.finishOwnerAdoptionFence(state);
+  assert.equal(state.getItem(barrier.ownerAdoptionCompletedKey), "5");
+  assert.equal(barrier.crossTabAdoptionBlocked(undefined, state, false, null), true,
+    "even a missed reload event cannot revive data after completed adoption");
+  assert.equal(barrier.crossTabAdoptionBlocked(undefined, state, false, "5"), false,
+    "a newly opened tab captures the finished adoption as its baseline");
+  assert.equal(barrier.crossTabAdoptionBlocked(4, state), true,
+    "a stale tab with a known generation stays fenced");
+  assert.equal(barrier.crossTabAdoptionBlocked(5, state), false);
+});
+
+test("a certified owner completion releases a fresh tab on reload, unlike an ordinary first pull", () => {
+  const state = memoryStorage();
+  assert.equal(barrier.completedOwnerAdoptionSince(null, state), undefined);
+  state.setItem(barrier.ownerAdoptionGenerationKey, "6");
+  state.setItem("ai-executive-server-synced", "1");
+  assert.equal(barrier.completedOwnerAdoptionSince(null, state), undefined,
+    "a sibling first-sync generation stamp is not evidence of an owner restore");
+
+  barrier.startOwnerAdoptionFence(state, 7, 6);
+  state.setItem(barrier.ownerAdoptionGenerationKey, "7");
+  state.setItem(barrier.ownerAdoptionCompletedKey, "7");
+  assert.equal(barrier.completedOwnerAdoptionSince(null, state), undefined,
+    "a live owner fence must still prevent reload");
+  barrier.finishOwnerAdoptionFence(state);
+  assert.equal(barrier.completedOwnerAdoptionSince(null, state), 7,
+    "a pre-restore fresh tab now has a certified reload signal");
+  assert.equal(barrier.completedOwnerAdoptionSince("7", state), undefined,
+    "a new tab opens with the completion as its baseline");
+  state.setItem(barrier.ownerAdoptionGenerationKey, "8");
+  assert.equal(barrier.completedOwnerAdoptionSince(null, state), undefined,
+    "a mismatched or stale completion marker is not a restore signal");
+  state.setItem(barrier.ownerAdoptionCompletedKey, "corrupt");
+  assert.equal(barrier.completedOwnerAdoptionSince(null, state), undefined,
+    "malformed marker must never authorize reload");
+});
+
 test("a single undeleted tombstone or context draft blocks owner adoption certification", () => {
   const state = memoryStorage();
   state.setItem("ai-executive-pending-deletions:e2e", "task-1");

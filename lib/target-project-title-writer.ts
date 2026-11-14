@@ -97,5 +97,11 @@ export function writeTargetProjectTitle(store: TargetStagingReadStore, access: T
     // and retry the exact same idempotency key only after the store is trusted again.
     const confirmed = context.commit({kind:"project_title",payload:{}});
     return confirmed ? {ok:true} : failed();
-  }, denied, failed);
+  // Project title CAS must re-check the current revision after an ordinary
+  // competing writer commits, rather than misreporting a stale command as a
+  // transient write failure. Bound this particular admission wait to 1 second
+  // (the generic staging writer retains its 200ms default). A genuinely held
+  // lock beyond the bound still returns write_failed without bypassing ACL or
+  // any journal/inode trust check.
+  }, denied, failed, 1_000);
 }
