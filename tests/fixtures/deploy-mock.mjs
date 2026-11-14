@@ -97,9 +97,16 @@ switch (name) {
         prop === "UnsetEnvironment" && scenario === "targetunsetenvironment" ?
           "AI_EXECUTIVE_TARGET_STAGING_HTTP_ENABLED" :
         prop === "PAMName" && scenario === "targetpam" ? "login" :
-        prop === "StateDirectory" ? "ai-executive" :
-        prop === "ReadWritePaths" && scenario.startsWith("target") && scenario !== "targetunit"
-          ? path.join(root, "var/lib/ai-executive-target") : "");
+        prop === "ProtectSystem" ?
+          (["targetweakprotect", "offweakprotect"].includes(scenario) ? "full" : "strict") :
+        prop === "StateDirectory" ?
+          (scenario === "targetstateextra" ? "ai-executive ai-executive-target unexpected" :
+            scenario === "targetstatedir" ? "ai-executive ai-executive-target" : "ai-executive") :
+        prop === "ReadWritePaths" ?
+          (["targetrwbroad", "targetrwparent"].includes(scenario) ?
+            path.join(root, scenario === "targetrwbroad" ? "var/lib" : "var/lib/ai-executive-target") :
+            scenario.startsWith("target") && !["targetunit", "targetstatedir"].includes(scenario) ?
+              path.join(root, "var/lib/ai-executive-target/personal-v1") : "") : "");
       break;
     }
     if (verb === "stop") { set("service", "inactive"); log("stop"); break; }
