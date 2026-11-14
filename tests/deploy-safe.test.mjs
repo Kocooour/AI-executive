@@ -664,6 +664,9 @@ for (const scenario of [
   "offprivatetmp", "offprotecthome", "offcapabilities",
   "offsecuritymissing", "offsecurityduplicate", "offbindpaths",
   "targetcachedir", "offrootdir", "offextramembers",
+  "offtmpfsoverlay", "targettmpfsoverlay", "offmountimage", "targetmountimage",
+  "offextensionimage", "targetextensiondir", "offinaccessiblepaths",
+  "targetreadonlypaths", "offmountpropertymissing",
 ]) {
   scenarioCase(scenario + ": reject weakened loaded unit security before stop", (r) => {
     assert.notEqual(r.status, 0);
@@ -674,6 +677,41 @@ for (const scenario of [
     assert.deepEqual(r.backups, []);
   });
 }
+
+scenarioCase("offtmpfsdriftbuild: reject new tmpfs after backup and block rollback", (r) => {
+  assert.notEqual(r.status, 0);
+  assert.match(r.output, /identita nebo ochrany systemd se pred startem zmenily/);
+  assert.match(r.output, /BEZPECNOSTNI BLOKACE: identita nebo ochrany systemd pri rollbacku/);
+  assert.equal(r.events.includes("unit-mount-changed-during-build"), true);
+  assert.equal(r.events.includes("reset"), true);
+  assert.equal(r.events.some(e => e.startsWith("start-")), false);
+  assert.equal(r.head, oldSha);
+  assert.equal(r.service, "inactive");
+  assert.equal(r.backups.length, 1);
+});
+
+scenarioCase("targetmountdriftbuild: refuse image mount before first target start", (r) => {
+  assert.notEqual(r.status, 0);
+  assert.match(r.output, /identita nebo ochrany systemd se pred startem zmenily/);
+  assert.equal(r.events.includes("unit-mount-changed-during-build"), true);
+  assert.equal(r.events.includes("reset"), true);
+  assert.equal(r.events.some(e => e.startsWith("start-")), false);
+  assert.equal(r.head, oldSha);
+  assert.equal(r.service, "inactive");
+  assert.equal(r.backups.length, 1);
+});
+
+scenarioCase("targettmpfsdriftpoststart: no second start after target path overlay", (r) => {
+  assert.notEqual(r.status, 0);
+  assert.match(r.output, /identita nebo ochrany systemd se pred druhym startem zmenily/);
+  assert.equal(r.events.includes("unit-mount-changed-after-first-start"), true);
+  assert.equal(r.events.filter(e => e === "start-b").length, 1);
+  assert.equal(r.events.includes("reset"), true);
+  assert.equal(r.events.includes("start-a"), false);
+  assert.equal(r.head, oldSha);
+  assert.equal(r.service, "inactive");
+  assert.equal(r.backups.length, 1);
+});
 
 scenarioCase("offuserdriftbuild: do not restart service as root after build", (r) => {
   assert.notEqual(r.status, 0);
