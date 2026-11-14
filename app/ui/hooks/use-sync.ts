@@ -54,7 +54,6 @@ export function useSync() {
     const stored = Number(localStorage.getItem(generationKey));
     if (localStorage.getItem(generationKey) !== null && Number.isSafeInteger(stored)) restoreGeneration.current = stored;
   }
-  initializeAdoptionGeneration(restoreGeneration.current);
   async function rememberGeneration(value: number | undefined, strictly = false): Promise<boolean> {
     if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) return false;
     if (strictly) {
@@ -113,7 +112,7 @@ export function useSync() {
   // to tell whether it predates a restore, so it adopts. One that never synchronized holds nothing to protect.
   function restoredSinceKnown(serverGeneration: number | undefined) {
     return restoredSinceKnownGeneration(
-      restoreGeneration.current, serverGeneration, localStorage.getItem("ai-executive-server-synced") === "1",
+      restoreGeneration.current, serverGeneration, loadedWasSynced.current,
     );
   }
   // The generation this page started with: another tab's adoption matters only if it is newer.
@@ -123,6 +122,7 @@ export function useSync() {
   const loadedWasSynced = useRef(
     typeof localStorage !== "undefined" && localStorage.getItem("ai-executive-server-synced") === "1",
   );
+  initializeAdoptionGeneration(restoreGeneration.current, loadedWasSynced.current);
   // A fenced mutating API has already stopped in-tab writes synchronously;
   // its authenticated GET must finish that same adoption, not return early.
   const fencedRestore = useRef(false);
