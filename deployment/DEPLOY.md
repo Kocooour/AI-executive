@@ -143,13 +143,20 @@ mentioning a key is harmless. The check runs before service stop, before
 start, and during any off-profile rollback.
 
 The loaded sandbox must retain `ProtectSystem=strict` and the exact baseline
-`StateDirectory=ai-executive`, optionally extended **only** with the isolated
-`ai-executive-target` StateDirectory. An active personal-v1 deployment may
-instead use a separately approved `ReadWritePaths` matching its **exact
-target directory**, never a parent (`/var/lib`), another directory, or a
-list of exceptions. In off mode `ReadWritePaths` must be empty. This
-sandbox contract is checked both before stop and before any startup,
-including a legacy rollback. No permission changes are auto-applied.
+`StateDirectory=ai-executive`. An active personal-v1 deployment must choose
+**exactly one** of two mutually exclusive isolated-write configurations:
+the extra `ai-executive-target` StateDirectory with the target underneath it
+and **no** ReadWritePaths, or the original StateDirectory **alone** with one
+separately approved `ReadWritePaths` matching the **exact target directory**.
+Mixing both grants two writable roots and is rejected, as are parent paths
+(e.g. `/var/lib`), multiple exceptions and unexpected StateDirectories.
+In off mode ReadWritePaths must be empty. The effective service execution
+contract is also checked against the reviewed unit: exactly `/usr/bin/node`
+with the reviewed Next.js argv, and no added ExecStartPre/ExecStartPost,
+ExecCondition, ExecStop/ExecStopPost or ExecReload hooks. The dynamic
+systemd timestamps/PID may change, but the executed binary and argv may not.
+All loaded-unit checks run before stopping, before every start, and during
+any off-profile rollback. No unit or permissions are auto-edited.
 
 **A separate written owner decision is mandatory before activation.** The
 installed unit currently uses \`ProtectSystem=strict\` and writes only to
