@@ -120,7 +120,7 @@ export function noTargetStagingSidecars(
  * A symlink, a directory/FIFO, or a multi-link inode remains a strict denial.
  */
 export function targetStagingRollbackSidecarShape(
-  sidecar: Pick<ReturnType<typeof lstatSync>, "isFile" | "isSymbolicLink" | "nlink">,
+  sidecar: { isFile(): boolean; isSymbolicLink(): boolean; nlink: number },
 ): "retryable" | "denied" {
   if (!sidecar.isFile() || sidecar.isSymbolicLink() || sidecar.nlink > 1 ||
       sidecar.nlink < 0) return "denied";
