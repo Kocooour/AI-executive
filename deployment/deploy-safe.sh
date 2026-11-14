@@ -807,7 +807,7 @@ fi
 # Confirm the loaded environment sources again before allowing a start.
 verify_loaded_environment_sources ||
   die "zdroje prostredi systemd se pred startem zmenily"
-verify_loaded_write_sandbox ||
+verify_loaded_write_sandbox && write_sandbox_unchanged ||
   die "systemd sandbox se pred startem zmenil"
 verify_loaded_execution ||
   die "spousteci prikazy systemd se pred startem zmenily"
@@ -825,7 +825,7 @@ if [ "$TARGET_PROFILE" = personal-v1 ]; then
   verify_target_store || die "cilovy preflight po prvnim startu selhal"
   verify_loaded_environment_sources ||
     die "zdroje prostredi systemd se pred druhym startem zmenily"
-  verify_loaded_write_sandbox ||
+  verify_loaded_write_sandbox && write_sandbox_unchanged ||
     die "systemd sandbox se pred druhym startem zmenil"
   verify_loaded_execution ||
     die "spousteci prikazy systemd se pred druhym startem zmenily"
