@@ -191,18 +191,8 @@ test('two processes racing the same project CAS commit at most one change',async
    await waitForWorkerMarkers(results, workers, true);
    const outcome=results.map(file=>JSON.parse(readFileSync(file,'utf8')));
    assert.equal(outcome.filter(result=>result.ok).length,1,JSON.stringify(outcome));
-   // The bounded 200ms SQLite lock wait can expire on a busy CI runner even
-   // with only one successful CAS. That is retryable write_failed, not a
-   // stale_revision verdict; once both workers have exited the same command
-   // MUST observe the winning revision and refuse as stale.
-   const loserIndex=outcome.findIndex(result=>!result.ok);
-   assert.ok(['stale_revision','write_failed'].includes(outcome[loserIndex].reason),JSON.stringify(outcome));
-   if(outcome[loserIndex].reason==='write_failed'){
-     const loserCommand=JSON.parse(readFileSync(path.join(root,'input'+loserIndex),'utf8')).command;
-     const token=authority.issueWritable('alice').sessionToken;
-     assert.deepEqual(authority.updateProjectTitle(token,loserCommand,'alice'),
-       {ok:false,reason:'stale_revision'},'retry after released lock must enforce CAS');
-   }
+   assert.deepEqual(outcome.filter(result=>!result.ok),[{ok:false,reason:'stale_revision'}],
+     JSON.stringify({outcome,diagnostics:workers.map(worker=>worker.capturedStderr)}));
    assert.equal(db.prepare("SELECT COUNT(*) AS n FROM project_title_audit WHERE project_id='race'").get().n,1);
    assert.ok(['After 0','After 1'].includes(db.prepare("SELECT title FROM projects WHERE id='race'").get().title),
      'the only persisted title is the winner of the one CAS commit');
