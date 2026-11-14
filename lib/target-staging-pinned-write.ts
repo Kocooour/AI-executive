@@ -442,6 +442,10 @@ function runPinnedTargetStagingTransaction<T, C>(
           !noTargetStagingSidecars(files.databasePath, ["-wal", "-shm"])) return deny("prelock_identity_or_wal");
       try {
         const sidecar = lstatSync(files.databasePath + "-journal");
+        if (sidecar.isFile() && !sidecar.isSymbolicLink() && sidecar.nlink === 0 &&
+            process.env.AI_EXECUTIVE_TARGET_STAGING_DIAGNOSTICS === "1") {
+          logStagingFailure("prelock_sidecar_unlink", "retryable_contention");
+        }
         if (targetStagingRollbackSidecarShape(sidecar) === "denied") {
           // Static, content-free categories let the stress test distinguish a
           // planted link from a nonregular file, rather than guessing at races.
