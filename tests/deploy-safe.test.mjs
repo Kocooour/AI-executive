@@ -600,7 +600,7 @@ for (const scenario of [
   });
 }
 
-scenarioCase("targetgeneration: mismatched generation never restarts under rejected flags", (r) => {
+()=>tests+marker
   assert.notEqual(r.status, 0);
   assert.match(r.output, /cilovy preflight: neshoda/);
   assert.match(r.output, /Sluzba zustava zastavena/);
