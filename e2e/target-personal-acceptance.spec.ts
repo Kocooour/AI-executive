@@ -4,6 +4,9 @@
  * No /api/target-staging request is intercepted or fulfilled here; page.on("request") only observes.
  * Synthetic data, default-off: only LUMI_TARGET_PERSONAL_ACCEPTANCE_E2E=true runs it. */
 import {test,expect} from "./fixtures";
+import { DatabaseSync } from "node:sqlite";
+import path from "node:path";
+import { readFile } from "node:fs/promises";
 import type {Page,Response} from "@playwright/test";
 import {isTargetReadRequest} from "../lib/target-edit-fetch";
 
@@ -343,5 +346,361 @@ for(const width of [390,1280]){
     await expect(page.locator('.authCard input[type="password"]')).toBeVisible();
     await expect(page.getByText(token)).toHaveCount(0);
     await expect(page.getByTestId("target-my-plan")).toHaveCount(0);
+  });
+}
+
+
+// GET /api/store excludes lifecycle tables. Compare relevant legacy SQLite rows
+// directly as well, so an unintended Attention/session/action write is detected.
+const legacyDbRows = () => {
+  if (!process.env.LUMI_E2E_RUN_DIR) throw new Error("Missing isolated E2E run directory");
+  const db = new DatabaseSync(path.join(process.env.LUMI_E2E_RUN_DIR, "data", "store.sqlite"), { readOnly: true });
+  try {
+    const tables = [
+      "metadata", "entities", "relations", "tombstones",
+      "attention_states", "attention_history", "work_sessions",
+      "work_session_intervals", "work_session_commands", "work_session_events",
+      "ai_proposals", "ai_action_history",
+    ];
+    const available = new Set((db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'")
+      .all() as { name: string }[]).map(row => row.name));
+    return JSON.stringify(Object.fromEntries(tables.filter(name => available.has(name)).map(name => [
+      name, db.prepare(`SELECT * FROM ${name}`).all().map(row => JSON.stringify(row)).sort(),
+    ])));
+  } finally {
+    db.close();
+  }
+};
+
+// C13: the real target profile must expose legacy Home/Inbox/Today for reading
+// without ever turning the historical local-first store into a migration source.
+for (const width of [390, 1280]) {
+  test("target mode leaves legacy Home, Inbox and Today read-only at " + width + "px", async ({ page }) => {
+    test.setTimeout(90_000);
+    if (!store) throw new Error("Requires the real isolated target store");
+    await page.setViewportSize({ width, height: 844 });
+    const unexpectedWrites: string[] = [];
+    const attentionReads: string[] = [];
+    let seeding = false;
+    page.on("request", request => {
+      const url = new URL(request.url());
+      const pathname = url.pathname;
+      if (request.method() === "GET" && pathname === "/api/attention")
+        attentionReads.push(url.searchParams.get("readOnly") || "missing");
+      // Target staging uses POST-shaped reads; all other API mutation
+      // verbs are forbidden here, including Attention and work sessions.
+      if (!seeding && ["POST", "PUT", "PATCH", "DELETE"].includes(request.method()) &&
+          pathname.startsWith("/api/") && !pathname.startsWith("/api/target-staging/"))
+        unexpectedWrites.push(request.method() + " " + pathname);
+    });
+    // Even a brand-new browser in target mode may read the old server copy,
+    // but it may not seed IndexedDB or upload a synthesized baseline.
+    await page.goto("/?view=Home");
+    await expect(page.getByTestId("legacy-read-only-notice")).toBeVisible();
+    expect(unexpectedWrites, "target startup must not write to any legacy API").toEqual([]);
+
+    // Seed only through the ordinary real legacy HTTP route. It is the sole
+    // allowed PUT in this scenario and is excluded from observed UI requests.
+    const token = "legacy-c13-" + width + "-" + Date.now();
+    const homeTitle = token + "-home";
+    const inboxTitle = token + "-inbox";
+    const overdueTitle = token + "-overdue";
+    const now = Date.now();
+    seeding = true;
+    try {
+      const seedStatus = await page.evaluate(async ({ homeTitle, inboxTitle, overdueTitle, now }) => {
+        const current = await fetch("/api/store", { cache: "no-store" }).then(response => response.json());
+        const task = (id: string, title: string, properties: Record<string, unknown>) => ({
+          id, title, type: "task", status: "open", workspaceId: "personal",
+          properties, createdAt: now, updatedAt: now,
+        });
+        const response = await fetch("/api/store", {
+          method: "PUT", headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            baseRevision: current.revision, restoreGeneration: current.restoreGeneration,
+            entities: [...current.entities,
+              // Ordinary Home task must stay in the Today list. A separate overdue
+              // task exercises Attention without being deduplicated out of that list.
+              task("c13:" + homeTitle, homeTitle, { today: true }),
+              task("c13:" + inboxTitle, inboxTitle, { inbox: true }),
+              task("c13:" + overdueTitle, overdueTitle, { deadline: "2020-01-01" })],
+            relations: current.relations, deletedIds: [], revivedIds: [],
+          }),
+        });
+        return response.status;
+      }, { homeTitle, inboxTitle, overdueTitle, now });
+      expect(seedStatus).toBe(200);
+    } finally {
+      seeding = false;
+    }
+    const before = await (await page.request.get("/api/store")).body();
+    const beforeDb = legacyDbRows();
+
+    for (const [view, title] of [["Home", homeTitle], ["Inbox", inboxTitle], ["Today", homeTitle]] as const) {
+      await page.goto("/?view=" + view);
+      const banner = page.getByTestId("legacy-read-only-notice");
+      await expect(banner).toBeVisible();
+      await expect(banner).toContainText("jen pro čtení");
+      await expect(banner.getByRole("button", { name: "Otevřít Můj plán" })).toBeVisible();
+
+      const row = view === "Home"
+        ? page.locator(".homeTaskList article").filter({ hasText: title }).first()
+        : page.locator(".taskRow").filter({ hasText: title }).first();
+      await expect(row).toBeVisible();
+      await expect(row.locator("button.check")).toBeDisabled();
+      if (view === "Home") {
+        // A separate overdue task must appear in Attention: it previously caused
+        // GET /api/attention to INSERT lifecycle rows as a side effect.
+        await expect(page.locator(".attentionItem").filter({ hasText: overdueTitle })).toBeVisible();
+        // Its Home row is intentionally absent; only the ordinary Today task
+        // is available to open and inspect in the list below Attention.
+        await expect(page.locator(".homeTaskList article").filter({ hasText: overdueTitle })).toHaveCount(0);
+        // A sibling running an older client can announce a changed IndexedDB
+        // snapshot. This tab must continue showing the server's historical data.
+        const sibling = await page.context().newPage();
+        try {
+          await sibling.goto("/?view=Home");
+          await expect(sibling.locator(".homeTaskList article").filter({ hasText: title })).toBeVisible();
+          await sibling.evaluate(() => {
+            const channel = new BroadcastChannel("ai-executive-tabs");
+            channel.postMessage({ type: "changed", from: "older-legacy-tab" });
+            channel.close();
+          });
+          await page.waitForTimeout(250);
+          await expect(row).toBeVisible();
+        } finally {
+          await sibling.close();
+        }
+      }
+      await row.click();
+      const inspector = page.locator("aside.inspectorDetail");
+      await expect(inspector).toBeVisible();
+      await expect(inspector.locator(".titleEdit")).toHaveValue(title);
+      await expect(inspector.locator(".titleEdit")).toHaveJSProperty("readOnly", true);
+      if (width === 390) await expect(inspector.locator(".taskPreviewCheck")).toBeDisabled();
+      await expect(inspector.locator(".taskDetailMoreList select")).toBeDisabled();
+      await expect(inspector.locator(".taskDetailEssentials input[type=date]").first()).toBeDisabled();
+      await expect(inspector.locator(".taskDetailMoreActions button.danger")).toBeDisabled();
+      // Disclosure and navigation still work; they do not mutate old data.
+      await inspector.locator(".taskDetailMoreToggle").click();
+      await expect(inspector.locator(".taskDetailMoreOptions select").first()).toBeDisabled();
+      await inspector.locator(".inspectorClose").click();
+      await expect(inspector).toHaveCount(0);
+    }
+    // One live navigation path to the target, without making the old data editable.
+    await page.getByTestId("legacy-read-only-notice")
+      .getByRole("button", { name: "Otevřít Můj plán" }).click();
+    await expect(page.getByTestId("target-my-plan")).toBeVisible();
+    expect(unexpectedWrites, "no browser-requested legacy API mutation").toEqual([]);
+    expect(attentionReads.length, "real Attention reads were exercised").toBeGreaterThan(0);
+    expect(attentionReads, "all Attention reads must use the non-mutating projection")
+      .toEqual(attentionReads.map(() => "1"));
+    const after = await (await page.request.get("/api/store")).body();
+    expect(after.equals(before), "legacy store GET response bytes must stay unchanged").toBe(true);
+    expect(legacyDbRows(), "canonical legacy SQLite tables must stay unchanged").toBe(beforeDb);
+  });
+}
+
+for (const width of [390, 1280]) {
+  test("local unsent legacy edit remains visible and exportable without server writes at " + width + "px", async ({ page }) => {
+    test.setTimeout(90_000);
+    await page.setViewportSize({ width, height: 844 });
+    const writes: string[] = [];
+    page.on("request", request => {
+      const pathname = new URL(request.url()).pathname;
+      if (["PUT", "POST", "PATCH", "DELETE"].includes(request.method()) &&
+          pathname.startsWith("/api/") && !pathname.startsWith("/api/target-staging/"))
+        writes.push(request.method() + " " + pathname);
+    });
+    await page.goto("/?view=Home");
+    await expect(page.getByTestId("legacy-read-only-notice")).toBeVisible();
+    const original = await (await page.request.get("/api/store")).body();
+    const originalDb = legacyDbRows();
+    const title = "Neodeslaná změna C13 " + width + " " + Date.now();
+    // Simulate a device that was edited offline BEFORE target mode started:
+    // insert a changed record and its old sync base only into IndexedDB.
+    await page.evaluate(async (title) => {
+      const db = await new Promise<IDBDatabase>((resolve, reject) => {
+        const request = indexedDB.open("ai-executive");
+        request.onsuccess = () => resolve(request.result);
+        request.onerror = () => reject(request.error);
+      });
+      const old = { id: "local-unsent-c13", type: "task", title: "Původní koncept",
+        status: "open", workspaceId: "personal", properties: { inbox: true },
+        createdAt: 1, updatedAt: 1 };
+      const next = { ...old, title, updatedAt: 2 };
+      await new Promise<void>((resolve, reject) => {
+        const tx = db.transaction(["entities", "baseEntities"], "readwrite");
+        tx.objectStore("baseEntities").put(old);
+        tx.objectStore("entities").put(next);
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => reject(tx.error);
+      });
+      db.close();
+      localStorage.setItem("ai-executive-pending-sync", "1");
+    }, title);
+    await page.reload();
+    // The 390px v1 shell restores My Plan from the canonical bare URL after
+    // reload. The device-copy warning belongs on historical views only; use
+    // an explicit Home deep link instead of asserting against My Plan.
+    await page.goto("/?view=Home");
+    await expect(page.getByTestId("legacy-read-only-notice")).toBeVisible();
+    const notice = page.getByTestId("legacy-pending-rescue");
+    await expect(notice).toBeVisible();
+    await expect(notice).toContainText("neodeslaly");
+    await expect(notice).toContainText("1");
+    // Open the second tab BEFORE preparing, so its startup events cannot
+    // themselves invalidate the prepared copy. The subsequent IndexedDB edit
+    // changes only the data, without a storage or BroadcastChannel notification.
+    const secondTab = await page.context().newPage();
+    secondTab.on("request", request => {
+      const pathname = new URL(request.url()).pathname;
+      if (["PUT", "POST", "PATCH", "DELETE"].includes(request.method()) &&
+          pathname.startsWith("/api/") && !pathname.startsWith("/api/target-staging/"))
+        writes.push("tab2 " + request.method() + " " + pathname);
+    });
+    // Use a same-origin JSON document rather than mounting a second Lumi app.
+    // Mounting that app emits cross-tab change messages during startup, which
+    // would invalidate the export independently of the silent IndexedDB edit.
+    await secondTab.goto("/api/store");
+    await page.bringToFront();
+    await page.waitForTimeout(350); // let any focus inspection settle before preparing
+    await notice.getByTestId("legacy-pending-prepare").click();
+    await expect(notice.getByTestId("legacy-pending-download")).toBeVisible();
+
+    // Two-tab regression: IndexedDB changes do not necessarily send
+    // BroadcastChannel or localStorage notifications. A focus/periodic
+    // recheck must invalidate the prepared file even at the SAME item count.
+    const updatedTitle = title + " (z druhé záložky)";
+    await secondTab.evaluate(async (updatedTitle) => {
+      const db = await new Promise<IDBDatabase>((resolve, reject) => {
+        const request = indexedDB.open("ai-executive");
+        request.onsuccess = () => resolve(request.result);
+        request.onerror = () => reject(request.error);
+      });
+      await new Promise<void>((resolve, reject) => {
+        const tx = db.transaction("entities", "readwrite");
+        const objectStore = tx.objectStore("entities");
+        const req = objectStore.get("local-unsent-c13");
+        req.onsuccess = () => {
+          if (!req.result) return;
+          objectStore.put({ ...req.result, title: updatedTitle, updatedAt: 3 });
+        };
+        req.onerror = () => reject(req.error);
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => reject(tx.error);
+      });
+      db.close();
+    }, updatedTitle);
+    // Do NOT close the sibling tab, dispatch focus or send a channel event.
+    // The download button must discover a silent IndexedDB edit itself, even
+    // before the periodic 30-second refresh fires. Without this check, the
+    // stale prepared blob would download despite containing the old title.
+    const downloads: string[] = [];
+    page.on("download", item => downloads.push(item.suggestedFilename()));
+    await expect(notice.getByTestId("legacy-pending-download")).toBeVisible();
+    await notice.getByTestId("legacy-pending-download").click();
+    await expect(notice.getByTestId("legacy-pending-download")).toHaveCount(0);
+    await expect(notice.getByRole("alert")).toBeVisible();
+    expect(downloads).toEqual([]);
+    await secondTab.close();
+
+    // Safari regression: the previous fallback had a second *direct save*
+    // click which rechecked only localStorage, not IndexedDB. Exercise the
+    // Safari-specific branch with a user-agent override and an isolated popup
+    // spy (real Safari is not available on the Chromium CI runner).
+    const safariSibling = await page.context().newPage();
+    await safariSibling.goto("/api/store"); // same-origin, no Lumi tab events
+    await page.bringToFront();
+    await page.waitForTimeout(350);
+    await notice.getByTestId("legacy-pending-prepare").click();
+    await expect(notice.getByTestId("legacy-pending-download")).toBeVisible();
+    await page.evaluate(() => {
+      const safari = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.4 Mobile/15E148 Safari/604.1";
+      Object.defineProperty(navigator, "userAgent", { configurable: true, value: safari });
+      const spy = { navigations: [] as string[], blobs: [] as Blob[], closed: 0 };
+      const originalOpen = window.open;
+      const originalCreateObjectURL = URL.createObjectURL;
+      // Lumi's fetch guard intentionally denies blob: requests. Capture the
+      // exact Blob offered to the user instead of fetching its object URL.
+      URL.createObjectURL = (value: Blob | MediaSource) => {
+        if (value instanceof Blob) spy.blobs.push(value);
+        return originalCreateObjectURL.call(URL, value);
+      };
+      Object.assign(window, { __c13SafariSpy: spy, __c13RestoreOpen: () => {
+        window.open = originalOpen;
+        URL.createObjectURL = originalCreateObjectURL;
+        Reflect.deleteProperty(navigator, "userAgent");
+      } });
+      window.open = (() => ({
+        document: { title: "", body: { textContent: "" } },
+        location: { replace: (url: string) => spy.navigations.push(url) },
+        close: () => { spy.closed += 1; },
+      })) as unknown as typeof window.open;
+    });
+    await notice.getByTestId("legacy-pending-download").click();
+    await expect.poll(() => page.evaluate(() =>
+      (window as unknown as Window & { __c13SafariSpy: { navigations: string[] } }).__c13SafariSpy.navigations.length,
+    )).toBe(1);
+    const safariCopy = JSON.parse(await page.evaluate(async () => {
+      const { blobs } = (window as unknown as Window & { __c13SafariSpy: { blobs: Blob[] } }).__c13SafariSpy;
+      return await blobs[0].text();
+    }));
+    expect(safariCopy.local.entities.some((item: {title: string}) => item.title === updatedTitle)).toBe(true);
+
+    // A raw IndexedDB write after that successful verification must NOT be
+    // downloadable in Safari on another click without a new source read.
+    const newestTitle = updatedTitle + " (novější editace)";
+    await safariSibling.evaluate(async (title) => {
+      const db = await new Promise<IDBDatabase>((resolve, reject) => {
+        const req = indexedDB.open("ai-executive");
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => reject(req.error);
+      });
+      await new Promise<void>((resolve, reject) => {
+        const tx = db.transaction("entities", "readwrite");
+        const store = tx.objectStore("entities");
+        const request = store.get("local-unsent-c13");
+        request.onsuccess = () => {
+          if (request.result) store.put({ ...request.result, title, updatedAt: 4 });
+        };
+        request.onerror = () => reject(request.error);
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => reject(tx.error);
+      });
+      db.close();
+    }, newestTitle);
+    await notice.getByTestId("legacy-pending-download").click();
+    await expect(notice.getByTestId("legacy-pending-download")).toHaveCount(0);
+    await expect(notice.getByRole("alert")).toBeVisible();
+    expect(await page.evaluate(() => {
+      const spy = (window as unknown as Window & { __c13SafariSpy: { navigations: string[]; closed: number } }).__c13SafariSpy;
+      return { navigations: spy.navigations.length, closed: spy.closed };
+    })).toEqual({ navigations: 1, closed: 1 });
+    await safariSibling.close();
+    await page.evaluate(() =>
+      (window as unknown as Window & { __c13RestoreOpen: () => void }).__c13RestoreOpen(),
+    );
+
+    await notice.getByTestId("legacy-pending-prepare").click();
+    await expect(notice.getByTestId("legacy-pending-download")).toBeVisible();
+    const downloadReady = page.waitForEvent("download");
+    await notice.getByTestId("legacy-pending-download").click();
+    const saved = await downloadReady;
+    const savedPath = await saved.path();
+    if (!savedPath) throw new Error("Local device copy was not downloaded");
+    const bundle = JSON.parse(await readFile(savedPath, "utf-8"));
+    expect(bundle.format).toBe("lumi-legacy-device-copy");
+    expect(bundle.automaticReplayAllowed).toBe(false);
+    expect(bundle.local.entities.some((item: {title: string}) => item.title === newestTitle)).toBe(true);
+    expect(bundle.local.entities.some((item: {title: string}) => item.title === updatedTitle)).toBe(false);
+    expect(bundle.local.entities.some((item: {title: string}) => item.title === title)).toBe(false);
+    await page.goto("/?view=Inbox");
+    await expect(page.getByTestId("legacy-pending-rescue")).toBeVisible();
+    await page.goto("/?view=Today");
+    await expect(page.getByTestId("legacy-pending-rescue")).toBeVisible();
+    expect(writes).toEqual([]);
+    expect((await (await page.request.get("/api/store")).body()).equals(original)).toBe(true);
+    expect(legacyDbRows()).toBe(originalDb);
   });
 }

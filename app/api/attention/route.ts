@@ -15,17 +15,21 @@ export async function GET(request: Request) {
   if (!isAuthenticated(request)) return NextResponse.json({ error: "Authentication required" }, { status: 401 });
   const limited = enforceRateLimit(request, "attention-read", 300, 10 * 60_000);
   if (limited) return NextResponse.json({ error: limited.error }, { status: limited.status, headers: { "retry-after": String(limited.retryAfter) } });
-  const requested = new URL(request.url).searchParams.get("workspaceId") || "";
+  const params = new URL(request.url).searchParams;
+  const requested = params.get("workspaceId") || "";
+  // C13: the target shell may view historical Attention, but the GET must
+  // not reconcile lifecycle state, write history or create daily backups.
+  const readOnly = params.get("readOnly") === "1";
   if (!requested || requested.length > 120) return NextResponse.json({ error: "Valid workspaceId required" }, { status: 400 });
   try {
-    const result = withAttentionTransaction(() => {
+    const evaluate = () => {
       const snapshot = readSnapshot();
       const workspaces = activeWorkspaces(snapshot);
       if (requested !== "all" && !workspaces.includes(requested)) return null;
       const timezone = getNotificationPreferences().timezone;
       const evaluatedAt = Date.now();
       const selected = requested === "all" ? workspaces : [requested];
-      const evaluated = selected.map((workspaceId) => reconcileWorkspace(snapshot, workspaceId, timezone, evaluatedAt));
+      const evaluated = selected.map((workspaceId) => reconcileWorkspace(snapshot, workspaceId, timezone, evaluatedAt, readOnly));
       const items = evaluated.flatMap((result) => result.items);
       const entityById = new Map(snapshot.entities.map((entity) => [entity.id, entity]));
       const priority = (subjectId: string) => ({ high: 0, medium: 1, low: 2, none: 3 } as Record<string, number>)[String(entityById.get(subjectId)?.properties.priority || "none")] ?? 3;
@@ -35,7 +39,8 @@ export async function GET(request: Request) {
         coverage: { rules: ["deadline_overdue", "deadline_soon", "waiting_follow_up", "planned_date_passed", "project_no_next_action", "project_idle"],
           excluded: ["calendar_conflict", "capacity_risk"],
           projectActivity: "stored_project_task_confirmed_context", deletedTaskHistory: false, externalActivity: false } };
-    });
+    };
+    const result = readOnly ? evaluate() : withAttentionTransaction(evaluate);
     if (!result) return NextResponse.json({ error: "Workspace unavailable" }, { status: 404 });
     return releaseOwnerRead(request, NextResponse.json(result, { headers: { "cache-control": "private, no-store" } }));
   } catch {

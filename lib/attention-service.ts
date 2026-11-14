@@ -17,9 +17,9 @@ export function evaluateWorkspace(snapshot: StoreSnapshot, workspaceId: string, 
 }
 
 // Evaluates a workspace and brings the stored states up to date.
-export function reconcileWorkspace(snapshot: StoreSnapshot, workspaceId: string, timezone: string, evaluatedAt: number) {
+export function reconcileWorkspace(snapshot: StoreSnapshot, workspaceId: string, timezone: string, evaluatedAt: number, readOnly = false) {
   const candidates = evaluateWorkspace(snapshot, workspaceId, timezone, evaluatedAt);
-  return { candidates, ...reconcileAttention(workspaceId, candidates, evaluatedAt, ongoingConditions(snapshot.entities, workspaceId)) };
+  return { candidates, ...reconcileAttention(workspaceId, candidates, evaluatedAt, ongoingConditions(snapshot.entities, workspaceId), !readOnly) };
 }
 
 export function withAttentionTransaction<T>(work: () => T): T {

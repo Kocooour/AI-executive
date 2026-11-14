@@ -3920,6 +3920,10 @@ input::placeholder, textarea::placeholder { color: var(--muted-light); opacity: 
 }
 
 /* R3-FE-4a: unified target mode - legacy write controls are disabled (never a silent no-op). */
-.legacyWriteGate{border:0;margin:0;padding:0;min-width:0;display:contents;}
+.legacyWriteGate{border:0;margin:0;padding:0;min-width:0;}
+.legacyDeviceRescueNotice{margin:0 0 12px;padding:12px 14px;border:1px solid var(--line);border-radius:8px;}
+.legacyDeviceRescueNotice p{margin:0 0 8px;}
+.legacyDeviceRescueActions{display:flex;gap:8px;flex-wrap:wrap;}
+.legacyDeviceRescueHint{font-size:.86em;color:var(--muted);margin-top:8px!important;}
 .legacyWriteGate :disabled,.appShell [aria-disabled="true"]:disabled{opacity:.55;cursor:not-allowed;}
 .legacyReadOnlyNotice{margin:0 0 12px;}

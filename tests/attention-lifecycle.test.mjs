@@ -124,3 +124,34 @@ test("planned day: moved forward supersedes, cleared or done resolves", () => {
     assert.equal(getDatabase().prepare("SELECT state FROM attention_states WHERE attention_key=?").get(item.attentionKey).state, expected, label);
   }
 });
+
+
+test("read-only Attention projection keeps hidden states and never changes lifecycle SQLite", () => {
+  const space = "read-only-projection";
+  const item = (id, revision = 1) => evaluateAttention({
+    entities: [{ ...task(revision, "2026-10-01"), id, workspaceId: space }],
+    relations: [], workspaceId: space, timezone: "Europe/Prague", evaluatedAt: now, dataRevision: 1,
+  })[0];
+  const snoozed = item("ro-snoozed"), dismissed = item("ro-dismissed");
+  const changed = item("ro-source-changed"), resolved = item("ro-resolved");
+  reconcileAttention(space, [snoozed, dismissed, changed, resolved], now);
+  setAttentionState(snoozed, "snooze", attentionFingerprint(snoozed), now + 2_000, now);
+  setAttentionState(dismissed, "dismiss", attentionFingerprint(dismissed), null, now);
+  setAttentionState(changed, "dismiss", attentionFingerprint(changed), null, now);
+  reconcileAttention(space, [snoozed, dismissed, changed], now + 1); // resolved persists
+  const database = getDatabase();
+  const rows = () => JSON.stringify({
+    states: database.prepare("SELECT * FROM attention_states WHERE workspace_id=? ORDER BY attention_key").all(space),
+    history: database.prepare("SELECT * FROM attention_history WHERE workspace_id=? ORDER BY id").all(space),
+  });
+  const before = rows();
+  const fresh = item("ro-never-seen"), revised = item("ro-source-changed", 2);
+  const view = reconcileAttention(space, [fresh, snoozed, dismissed, revised, resolved], now + 2_001, new Set(), false);
+  assert.deepEqual(new Set(view.items.map((candidate) => candidate.subjectId)),
+    new Set(["ro-never-seen", "ro-snoozed", "ro-source-changed", "ro-resolved"]));
+  assert.deepEqual(view.hidden, { snoozed: 0, dismissed: 1 });
+  assert.equal(rows(), before, "even expiry, source change, reactivation and a never-seen rule must be read-only");
+  // The original reconciliation remains the default in legacy mode.
+  reconcileAttention(space, [fresh, snoozed, dismissed, revised, resolved], now + 2_001);
+  assert.notEqual(rows(), before);
+});

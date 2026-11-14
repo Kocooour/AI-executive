@@ -167,9 +167,11 @@ test("uncertain real-store POST keeps one UUID command barrier after reload", as
   const secret = "Uncertain private task " + randomUUID();
   let forwarded: { commandId: string; taskId: string; title: string } | null = null;
   let writeCount = 0;
-  // This is NOT the BFCache test. Forward the exact CREATE to the REAL store,
-  // observe its 201 COMMIT, then deliberately lose only its response. The UI
-  // cannot infer whether it committed, and must retain the original UUID fence.
+  // This is NOT the BFCache test. Forward the exact CREATE to the REAL store
+  // and observe its 201 COMMIT, then replace the client-facing response with
+  // a gateway failure. The UI cannot infer whether it committed and must
+  // retain the original UUID fence. Unlike route.abort after route.fetch,
+  // this deterministic response cannot race with an already delivered 201.
   await page.route("**/api/target-staging/tasks", async route => {
     writeCount++;
     const command = route.request().postDataJSON() as
@@ -177,7 +179,11 @@ test("uncertain real-store POST keeps one UUID command barrier after reload", as
     forwarded = command;
     const reply = await route.fetch();
     expect(reply.status(), "real SQLite-backed CREATE must commit").toBe(201);
-    await route.abort("failed");
+    await route.fulfill({
+      status: 503,
+      headers: { "content-type": "application/json", "cache-control": "no-store" },
+      body: JSON.stringify({ error: "gateway_unavailable" }),
+    });
   });
   await draft(page, 1280, secret);
   await page.getByTestId("target-private-task-save").click();

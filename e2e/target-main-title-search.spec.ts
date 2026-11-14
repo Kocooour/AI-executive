@@ -68,6 +68,30 @@ async function interceptSearch(page:Page){
  * inventing an array in the test would not exercise the React/DOM leak. */
 async function prepareLegacy(page:Page){
   await page.goto("/?view=Inbox");
+  if (MODE === "on") {
+    // C13: target mode displays historical records from GET /api/store only.
+    // It intentionally never sets the legacy IndexedDB sync marker or uploads a
+    // locally seeded baseline. Seed the historical server fixture explicitly.
+    await expect(page.getByTestId("legacy-read-only-notice")).toBeVisible();
+    const status = await page.evaluate(async (title) => {
+      const snapshot = await fetch("/api/store", { cache: "no-store" }).then(response => response.json());
+      const now = Date.now();
+      const response = await fetch("/api/store", {
+        method: "PUT", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ baseRevision: snapshot.revision, restoreGeneration: snapshot.restoreGeneration,
+          entities: [...snapshot.entities.filter((item: { id: string }) => item.id !== "r3-fe05-legacy-server"),
+            { id: "r3-fe05-legacy-server", title, type: "task", status: "open",
+            workspaceId: "personal", properties: { inbox: true }, createdAt: now, updatedAt: now }],
+          relations: snapshot.relations, deletedIds: [], revivedIds: [] }),
+      });
+      return response.status;
+    }, LEGACY_TITLE);
+    expect(status).toBe(200);
+    await page.reload();
+    await expect(page.locator(".taskRow").filter({ hasText: LEGACY_TITLE })).toHaveCount(1);
+    await expect(page.locator(".heldBackItem")).toHaveCount(0);
+    return;
+  }
   await waitUntilSynced(page);
   await page.evaluate(async({legacyTitle,heldMarker})=>{
     const db=await new Promise<IDBDatabase>((resolve,reject)=>{
@@ -111,6 +135,11 @@ for(const width of [390,1280]){
     await page.setViewportSize({width,height:844});
     const http=await interceptSearch(page);
     await prepareLegacy(page);
+    // Scopes and Search are on, but target My Plan is off in this profile.
+    // A read-only legacy banner must not claim the target plan is navigable.
+    const banner = page.getByTestId("legacy-read-only-notice");
+    await expect(banner).toContainText("Můj plán zde zatím není dostupný");
+    await expect(banner.getByRole("button",{name:"Otevřít Můj plán"})).toHaveCount(0);
     const input=page.locator(".searchField input");
     await input.fill("school"); // Focus navigates to Search, never fetches.
     const search=page.getByTestId("target-main-title-search");
