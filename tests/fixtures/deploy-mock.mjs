@@ -82,7 +82,7 @@ switch (name) {
         "AI_EXECUTIVE_DATA_DIR=" + path.join(root, "var/lib/ai-executive"),
       ].join(" ");
       const execChanged = ["offexechanged", "targetexechanged"].includes(scenario) ||
-        (["offexecdriftbuild", "targetexecdriftbuild"].includes(scenario) &&
+        (["offexecdriftbuild", "targetexecdriftbuild", "targetexecdriftpoststart"].includes(scenario) &&
           fs.existsSync(stateFile("exec-changed")));
       // The disposable deploy test substitutes the production /usr/bin/node
       // with the runner Node binary; mirror the same explicit unit contract.
@@ -125,7 +125,15 @@ switch (name) {
               path.join(root, "var/lib/ai-executive-target/personal-v1") : "") : "");
       break;
     }
-    if (verb === "stop") { set("service", "inactive"); log("stop"); break; }
+    if (verb === "stop") {
+      if (scenario === "targetexecdriftpoststart" && get("head") === target &&
+          fs.existsSync(stateFile("target-started")) &&
+          !fs.existsSync(stateFile("exec-changed"))) {
+        set("exec-changed", "1");
+        log("unit-exec-changed-after-first-start");
+      }
+      set("service", "inactive"); log("stop"); break;
+    }
     if (verb === "start") {
       if (scenario === "rowloss" && get("head") === target && !fs.existsSync(stateFile("deleted"))) {
         const db = new DatabaseSync(dbFile);
