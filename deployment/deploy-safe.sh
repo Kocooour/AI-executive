@@ -560,9 +560,11 @@ diff -qr --exclude=store.sqlite-shm -- "$DATA" "$BACKUP/data" ||
 if [ "$TARGET_PROFILE" = personal-v1 ]; then
   diff -qr -- "$TARGET_DIRECTORY" "$BACKUP/target" ||
     die "cilova zaloha obsahuje neodpovidajici nebo chybejici soubory"
-  runuser -u ai-executive -- env AI_EXECUTIVE_DATA_DIR="$DATA" /usr/bin/node \
-    "$APP/scripts/target-store-provision.mjs" --check "$TARGET_DIRECTORY" >/dev/null ||
-    die "cilovy preflight se po zaloze zmenil"
+  # The backup is only safe to use if the *same* owner and restore
+  # generation still match the operator-approved env. A self-consistent
+  # but substituted target would pass --check without this comparison.
+  verify_target_store ||
+    die "cilovy preflight se po zaloze zmenil (vlastnik, generace nebo integrita)"
 fi
 runuser -u ai-executive -- /usr/bin/node \
   "$APP/scripts/check-data.mjs" "$DATA/store.sqlite" > "$BACKUP/before.json"
