@@ -2,6 +2,9 @@
 // rescue hold: the owner adoption must still write its own IndexedDB transaction.
 export const ownerAdoptionFenceKey = "ai-executive-owner-adoption-fence";
 export const ownerAdoptionGenerationKey = "ai-executive-restore-generation";
+// Unlike an ordinary first pull, a completed owner adoption must also fence
+// pre-existing tabs that started before any generation was known.
+export const ownerAdoptionCompletedKey = "ai-executive-owner-adoption-completed";
 
 type Readable = Pick<Storage, "getItem">;
 type Writable = Pick<Storage, "getItem" | "setItem" | "removeItem">;
@@ -22,9 +25,18 @@ function browserStore(): Readable | null {
 // Each loaded tab retains its OWN generation. Another tab must not change it
 // merely by advancing the shared localStorage value.
 let knownInThisTab: number | undefined;
+let wasSyncedAtLoad = false;
+let completedAtLoad: string | null = null;
 let initialized = false;
-export function initializeAdoptionGeneration(known: number | undefined) {
-  if (!initialized) { knownInThisTab = known; initialized = true; }
+export function initializeAdoptionGeneration(known: number | undefined, previouslySynced = false) {
+  if (initialized) return;
+  knownInThisTab = known;
+  wasSyncedAtLoad = previouslySynced;
+  // This is a per-tab baseline, not the shared value after a sibling's pull.
+  // Only a real completed owner adoption changes this marker.
+  try { completedAtLoad = browserStore()?.getItem(ownerAdoptionCompletedKey) ?? null; }
+  catch { completedAtLoad = null; }
+  initialized = true;
 }
 export function advanceAdoptionGeneration(generation: number) {
   knownInThisTab = generation;
@@ -36,24 +48,30 @@ export function ownerAdoptionFencePresent(storage: Readable | null = browserStor
 }
 export function crossTabAdoptionBlocked(
   known: number | undefined, storage: Readable | null = browserStore(),
+  previouslySyncedAtLoad = false, ownerCompletedAtLoad: string | null = null,
 ): boolean {
   if (!storage) return typeof window !== "undefined";
   try {
     if (storage.getItem(ownerAdoptionFenceKey) !== null) return true;
+    // Even a never-synced tab must not revive data after a sibling has
+    // COMPLETED a real restore while this page remained open.
+    if (known === undefined &&
+        storage.getItem(ownerAdoptionCompletedKey) !== ownerCompletedAtLoad) return true;
     const raw = storage.getItem(ownerAdoptionGenerationKey);
     if (raw === null) return known !== undefined;
     const generation = Number(raw);
     if (!validGeneration(generation)) return true;
-    // Legacy pages can have a synchronized local copy without having ever
-    // stored the generation counter. A newer certified generation must not
-    // be treated as their own merely because `known` is missing.
-    if (known === undefined)
-      return generation > 0 && storage.getItem("ai-executive-server-synced") === "1";
+    // A sibling's first pull may have just stamped the shared synced flag.
+    // That must NOT convert a fresh, still-loading tab into a legacy page.
+    // A truly legacy tab was already synced when THIS page was loaded.
+    if (known === undefined) return generation > 0 && previouslySyncedAtLoad;
     return generation !== known;
   } catch { return true; }
 }
 export function isCrossTabAdoptionBlocked() {
-  return crossTabAdoptionBlocked(initialized ? knownInThisTab : undefined);
+  return crossTabAdoptionBlocked(
+    initialized ? knownInThisTab : undefined, browserStore(), wasSyncedAtLoad, completedAtLoad,
+  );
 }
 // The marker records the *original* generation too. If the browser crashes
 // before the new generation is stamped, the owner can resume a certified
@@ -87,6 +105,15 @@ export function startOwnerAdoptionFence(
     throw new Error("OWNER_ADOPTION_FENCE_UNAVAILABLE");
 }
 export function finishOwnerAdoptionFence(storage: Writable): void {
+  const fence = readOwnerAdoptionFence(storage);
+  // The generation is committed only after all IDB and marker cleanup. Stamp
+  // the completion BEFORE lifting the live fence; a failed storage write keeps
+  // the owner fence in place for safe recovery after a reload.
+  if (fence && storage.getItem(ownerAdoptionGenerationKey) === String(fence.observedGeneration)) {
+    storage.setItem(ownerAdoptionCompletedKey, String(fence.observedGeneration));
+    if (storage.getItem(ownerAdoptionCompletedKey) !== String(fence.observedGeneration))
+      throw new Error("OWNER_ADOPTION_COMPLETION_NOT_PERSISTED");
+  }
   storage.removeItem(ownerAdoptionFenceKey);
   if (storage.getItem(ownerAdoptionFenceKey) !== null)
     throw new Error("OWNER_ADOPTION_FENCE_NOT_CLEARED");
