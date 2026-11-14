@@ -118,3 +118,11 @@ test("unknown flag with value false leaves the target disabled", () => {
     assert.equal(result.stdout, "off\n");
   });
 });
+
+test("unreadable target configuration returns invalid without printing the path", () => {
+  const sensitivePath = "/does-not-exist/private-target-secret.env";
+  const result = run("--check", sensitivePath);
+  assert.equal(result.status, 2);
+  assert.equal(result.stdout, "invalid\n");
+  assert.doesNotMatch(result.stderr, /private-target-secret/);
+});
