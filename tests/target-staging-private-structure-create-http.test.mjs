@@ -58,6 +58,7 @@ const {POST:CHILD_CANCEL}=await import("../app/api/target-staging/project-tasks/
 const {GET:PROJECT_TARGETS}=await import("../app/api/target-staging/projects/create-targets/route.ts");
 const {isTargetReadRequest}=await import("../lib/target-edit-fetch.ts");
 const {privateStructureActorScope}=await import("../lib/target-private-structure-owner-scope.ts");
+const {actorScopedCreateCancelPrefix}=await import("../lib/target-private-create-cancel-key.ts");
 
 const fixtures=[];
 function assertValidStore(fx){
@@ -495,4 +496,37 @@ test("reauth to same actor retains scope and fences delayed old-session POST; an
     assertValidStore(fx);
   }
   assert.equal(state(fx).cancels,2);
+});
+
+test("per-actor cancellation cap cannot block a second actor or erase late-POST fences",async()=>{
+  const fx=fixture();
+  const prefix=actorScopedCreateCancelPrefix(PRIVATE_STRUCTURE_CREATE_CANCEL_PREFIX,"alice");
+  const db=new DatabaseSync(fx.stage.databasePath);
+  const insert=db.prepare("INSERT INTO metadata(key,value) VALUES (?, '1')");
+  db.exec("BEGIN");
+  for(let i=0;i<4096;i++)insert.run(prefix+i.toString(16).padStart(64,"0"));
+  db.exec("COMMIT");db.close();
+  assertValidStore(fx);
+  const a=project(fx),b=project(fx),bob=session(fx,"bob");
+  await checked(await pc(a),503);
+  assert.deepEqual(await checked(await pc(b,bob.cookie,scoped("bob")),200),
+    {status:"cancelled"},"Bob's capacity must be independent of Alice");
+  assert.equal(state(fx).cancels,4097);
+  assertValidStore(fx);
+  await checked(await cp(b,bob.cookie),404,"Bob still cannot create in Alice's private Area");
+});
+
+test("pre-upgrade cancellation fences remain terminal after key format change",async()=>{
+  const fx=fixture(),command=project(fx);
+  const {createHash}=await import("node:crypto");
+  const oldHash=createHash("sha256")
+    .update(JSON.stringify(["alice",command.commandId.toLowerCase()])).digest("hex");
+  const db=new DatabaseSync(fx.stage.databasePath);
+  db.prepare("INSERT INTO metadata(key,value) VALUES (?, '1')")
+    .run(PRIVATE_STRUCTURE_CREATE_CANCEL_PREFIX+oldHash);
+  db.close();
+  assertValidStore(fx);
+  assert.deepEqual(await checked(await pc(command),200),{status:"cancelled"});
+  await checked(await cp(command),409,"legacy terminal fence must still block a late POST");
+  assertValidStore(fx);
 });
