@@ -68,7 +68,12 @@ The loaded security properties (including `StateDirectoryMode=0700`,
 `UMask=0077`, `NoNewPrivileges=yes`, `PrivateTmp=yes`, `ProtectHome=yes`,
 private devices, kernel protection, empty capabilities, restricted namespaces,
 address families, proc exposure and core dumps) are checked against the
-reviewed hardened unit. A drop-in changing the executable, identity or
+reviewed hardened unit. Additional implicit settings must remain
+disabled/empty: `DynamicUser`, `SupplementaryGroups`, `RootDirectory`,
+`RootImage`, `BindPaths`, `BindReadOnlyPaths`, `CacheDirectory`,
+`LogsDirectory`, `RuntimeDirectory` and `ConfigurationDirectory`.
+An unapproved bind mount or extra systemd-managed directory must not create
+a second writable root. A drop-in changing the executable, identity or
 hardening while leaving Environment fields intact is a stop condition.
 Recheck before **every** service start, including a legacy rollback.
 No configuration is auto-edited.
