@@ -689,6 +689,20 @@ scenarioCase("targetexecdriftbuild: never serve target under changed loaded Exec
   assert.equal(r.backups.length, 1);
 });
 
+scenarioCase("targetexecdriftpoststart: second start refuses changed ExecStart", (r) => {
+  assert.notEqual(r.status, 0);
+  assert.match(r.output, /spousteci prikazy systemd se pred druhym startem zmenily/);
+  assert.equal(r.events.includes("unit-exec-changed-after-first-start"), true);
+  assert.equal(r.events.filter(e => e === "start-b").length, 1,
+    "the first start used reviewed command, but no second start may run unreviewed code");
+  assert.equal(r.events.includes("reset"), true);
+  assert.equal(r.events.includes("start-a"), false,
+    "target-enabled failure must not restart old code");
+  assert.equal(r.head, oldSha);
+  assert.equal(r.service, "inactive");
+  assert.equal(r.backups.length, 1);
+});
+
 // Fail even for a legacy-only env: later EnvironmentFile or manager injection
 // can enable unreviewed target flags when the base file looks disabled.
 for (const scenario of [
