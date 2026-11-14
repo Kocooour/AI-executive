@@ -202,3 +202,37 @@ test("current project relation rejects a stale legacy parent in a typed task URL
     expect(await updateStore(page, records, links, true)).toBe(200);
   }
 });
+
+test("C21: workspace switcher keeps the last options reachable with many shared workspaces", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await page.goto("/?view=Projects");
+  await waitUntilSynced(page);
+  const stamp = Date.now();
+  const workspaces = Array.from({ length: 16 }, (_, index) => {
+    const workspaceId = `c21-menu-${stamp}-${index.toString().padStart(2, "0")}`;
+    return {
+      id: `workspace:${workspaceId}`, type: "workspace",
+      title: `C21 shared space ${index.toString().padStart(2, "0")}`,
+      status: "active", workspaceId,
+      properties: { kind: "shared", role: "owner", members: [{ id: "owner", role: "owner" }] },
+      createdAt: stamp, updatedAt: stamp,
+    };
+  });
+  expect(await updateStore(page, workspaces, [])).toBe(200);
+  try {
+    await page.reload();
+    await waitUntilSynced(page);
+    await page.locator("aside .workspaceButton").click();
+    const menu = page.locator("aside .workspaceMenu");
+    // Regression: before C21 the unbounded absolute menu grew below the
+    // viewport, and Playwright could not click its bottom entries in CI.
+    await expect.poll(() => menu.evaluate((element) => element.scrollHeight > element.clientHeight)).toBe(true);
+    await menu.locator(`button[data-workspace-id="${workspaces[15].workspaceId}"]`).click();
+    await expect(page.locator(".appShell")).toHaveAttribute("data-workspace-tone", "work");
+    await page.locator("aside .workspaceButton").click();
+    await menu.locator('button[data-workspace-id="all"]').click();
+    await expect(page.locator(".appShell")).toHaveAttribute("data-workspace-tone", "all");
+  } finally {
+    expect(await updateStore(page, workspaces, [], true)).toBe(200);
+  }
+});

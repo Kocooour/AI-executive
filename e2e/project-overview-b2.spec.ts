@@ -1,6 +1,11 @@
 import { test, expect } from "./fixtures";
 import type { Page } from "@playwright/test";
-import { expectOnServer, serverEntities, waitUntilSynced } from "./helpers";
+import { expectOnServer, removeTasks, serverEntities, waitUntilSynced } from "./helpers";
+
+// These tests share the release browser's server with later project navigation
+// scenarios. Track names before UI creation so afterEach can clean up even if a
+// scenario fails between creating a record and its final assertion.
+const createdTitles: string[] = [];
 
 async function createProject(page: Page) {
   // Creation through the UI also verifies the project can be reopened from the list.
@@ -8,6 +13,7 @@ async function createProject(page: Page) {
   await page.goto("/?view=Projects");
   await waitUntilSynced(page);
   const name = `B2 project overview ${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+  createdTitles.push(name);
   const capture = page.locator(".capture input");
   await expect(capture).toBeVisible();
   await capture.fill(name);
@@ -42,6 +48,12 @@ async function openDetails(page: Page) {
 const doneWhen = (page: Page) => page.locator(".projectContext").getByRole("textbox", { name: "Hotovo, když" });
 
 test.describe("B2 project overview", () => {
+  test.beforeEach(() => { createdTitles.length = 0; });
+  test.afterEach(async ({ page }) => {
+    const created = (await serverEntities(page))
+      .filter((entity) => createdTitles.includes(entity.title)).map((entity) => entity.id);
+    if (created.length > 0) await removeTasks(page, created);
+  });
   test("desktop goal is editable, saved to the canonical store, and survives reopening", async ({ page }) => {
     const name = await createProject(page);
     await openProject(page, name);
@@ -196,6 +208,7 @@ test.describe("B2 project overview", () => {
     await page.goto("/?view=Inbox");
     await waitUntilSynced(page);
     const taskName = "B2 untriaged project task " + Date.now();
+    createdTitles.push(taskName);
     const input = page.locator(".capture input");
     await expect(input).toBeVisible();
     await input.fill(taskName);
@@ -235,6 +248,7 @@ test.describe("B2 project overview", () => {
     await openProject(page, name);
     const futureTask = "B2 future task " + Date.now();
     const availableTask = "B2 available task " + Date.now();
+    createdTitles.push(futureTask, availableTask);
 
     async function addProjectTask(title: string) {
       await page.locator(".projectPage").getByRole("button", { name: /Přidat úkol/ }).click();
