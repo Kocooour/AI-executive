@@ -116,6 +116,32 @@ test("an owner restore completing in a sibling still fences a fresh tab with no 
   assert.equal(barrier.crossTabAdoptionBlocked(5, state), false);
 });
 
+test("a certified owner completion releases a fresh tab on reload, unlike an ordinary first pull", () => {
+  const state = memoryStorage();
+  assert.equal(barrier.completedOwnerAdoptionSince(null, state), undefined);
+  state.setItem(barrier.ownerAdoptionGenerationKey, "6");
+  state.setItem("ai-executive-server-synced", "1");
+  assert.equal(barrier.completedOwnerAdoptionSince(null, state), undefined,
+    "a sibling first-sync generation stamp is not evidence of an owner restore");
+
+  barrier.startOwnerAdoptionFence(state, 7, 6);
+  state.setItem(barrier.ownerAdoptionGenerationKey, "7");
+  state.setItem(barrier.ownerAdoptionCompletedKey, "7");
+  assert.equal(barrier.completedOwnerAdoptionSince(null, state), undefined,
+    "a live owner fence must still prevent reload");
+  barrier.finishOwnerAdoptionFence(state);
+  assert.equal(barrier.completedOwnerAdoptionSince(null, state), 7,
+    "a pre-restore fresh tab now has a certified reload signal");
+  assert.equal(barrier.completedOwnerAdoptionSince("7", state), undefined,
+    "a new tab opens with the completion as its baseline");
+  state.setItem(barrier.ownerAdoptionGenerationKey, "8");
+  assert.equal(barrier.completedOwnerAdoptionSince(null, state), undefined,
+    "a mismatched or stale completion marker is not a restore signal");
+  state.setItem(barrier.ownerAdoptionCompletedKey, "corrupt");
+  assert.equal(barrier.completedOwnerAdoptionSince(null, state), undefined,
+    "malformed marker must never authorize reload");
+});
+
 test("a single undeleted tombstone or context draft blocks owner adoption certification", () => {
   const state = memoryStorage();
   state.setItem("ai-executive-pending-deletions:e2e", "task-1");
