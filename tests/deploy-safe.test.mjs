@@ -603,6 +603,43 @@ scenarioCase("targetunit: refuse writable-store activation without approved syst
   assert.equal(r.service, "active");
   assert.deepEqual(r.backups, []);
 });
+// `EnvironmentFile=` overrides fixed `Environment=` settings. Each
+// forbidden assignment must be rejected before stopping or backing up.
+for (const scenario of [
+  "offenvdatadir", "offenvport", "offenvnode", "offenvtelemetry",
+  "targetenvdatadir",
+]) {
+  scenarioCase(scenario + ": refuse service-unit env override before downtime", (r) => {
+    assert.notEqual(r.status, 0);
+    assert.match(r.output, /neoverene zdroje prostredi systemd/);
+    assert.equal(r.service, "active");
+    assert.equal(r.head, oldSha);
+    assert.equal(r.events.includes("stop"), false,
+      "do not back up one data store and restart the app on another");
+    assert.deepEqual(r.backups, []);
+  });
+}
+
+scenarioCase("offenvcomment: commented fixed-unit variable is not an override", (r) => {
+  assert.equal(r.status, 0, r.output);
+  assert.equal(r.head, newSha);
+  assert.equal(r.service, "active");
+});
+
+for (const scenario of [
+  "targetrwbroad", "targetrwparent", "targetweakprotect",
+  "targetstateextra", "offweakprotect",
+]) {
+  scenarioCase(scenario + ": refuse unapproved or weakened systemd sandbox", (r) => {
+    assert.notEqual(r.status, 0);
+    assert.match(r.output, /systemd sandbox nedovoluje zapis/);
+    assert.equal(r.service, "active");
+    assert.equal(r.head, oldSha);
+    assert.equal(r.events.includes("stop"), false);
+    assert.deepEqual(r.backups, []);
+  });
+}
+
 // Fail even for a legacy-only env: later EnvironmentFile or manager injection
 // can enable unreviewed target flags when the base file looks disabled.
 for (const scenario of [
