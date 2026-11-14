@@ -547,7 +547,11 @@ scenarioCase("targetsuccess: quiesced target preflight, shared verified archive,
   assert.deepEqual(r.events.filter(value => value.startsWith("start-with-target-flags:")),
     ["start-with-target-flags:31", "start-with-target-flags:31"],
     "the two post-deployment service launches both use the fully reviewed profile");
-  assert.equal(r.events.filter(value => value === "target-check").length, 3);
+  assert.equal(r.events.filter(value => value === "target-check").length, 4,
+    "initial, post-copy, immediately-before-start and post-start semantic checks");
+  const firstStart = r.events.findIndex(value => value === "start-b");
+  assert.ok(r.events.slice(0, firstStart).filter(e => e === "target-check").length >= 3,
+    "all three pre-start checks must complete before target serves requests");
   const archive = path.join(f.backups, r.backups[0]);
   for (const name of ["lumi-target.sqlite", "lumi-target.journal", "lumi-target-witness.sqlite"])
     assert.equal(readFileSync(path.join(archive, "target", name), "utf8"),
@@ -573,6 +577,23 @@ scenarioCase("targetunit: refuse writable-store activation without approved syst
   assert.equal(r.service, "active");
   assert.deepEqual(r.backups, []);
 });
+// Fail even for a legacy-only env: later EnvironmentFile or manager injection
+// can enable unreviewed target flags when the base file looks disabled.
+for (const scenario of [
+  "offextraenvfile", "targetextraenvfile", "targetenvassignment",
+  "targetunsetenvironment", "targetpassenvironment", "targetmanagerenv", "targetpam",
+]) {
+  scenarioCase(scenario + ": reject unverified effective systemd env before stop", (r) => {
+    assert.notEqual(r.status, 0);
+    assert.match(r.output, /neoverene zdroje prostredi systemd/);
+    assert.equal(r.service, "active");
+    assert.equal(r.head, oldSha);
+    assert.equal(r.events.includes("stop"), false, "reject before any downtime");
+    assert.equal(r.events.includes("merge"), false);
+    assert.deepEqual(r.backups, []);
+  });
+}
+
 scenarioCase("targetgeneration: mismatched generation never restarts under rejected flags", (r) => {
   assert.notEqual(r.status, 0);
   assert.match(r.output, /cilovy preflight: neshoda/);
@@ -610,6 +631,25 @@ scenarioCase("targetidentityswap: changed owner/generation after copy preflight 
   assert.match(readFileSync(path.join(f.targetDirectory, "lumi-target.sqlite"), "utf8"), /other-owner/,
     "operator must investigate the changed live store, never auto-restore data");
 });
+scenarioCase("targetbuildidentitydrift: store swap during build blocks first start", (r, f) => {
+  assert.notEqual(r.status, 0);
+  assert.match(r.output, /cilovy preflight tesne pred startem/);
+  assert.match(r.output, /Sluzba zustava zastavena/);
+  assert.equal(r.events.includes("target-build-identity-drift"), true);
+  assert.equal(r.events.filter(e => e === "target-check").length, 3,
+    "the third check must detect a store changed after the verified archive");
+  assert.equal(r.events.some(e => e.startsWith("start-")), false,
+    "no request may be served from the new mismatched store");
+  assert.equal(r.head, oldSha, "failed pre-start code rollout reverts code only");
+  assert.equal(r.events.includes("reset"), true);
+  assert.equal(r.service, "inactive");
+  assert.equal(r.backups.length, 1, "verified original archive must be preserved");
+  const archived = readFileSync(path.join(f.backups, r.backups[0], "target", "lumi-target.sqlite"), "utf8");
+  assert.match(archived, /owner-01/, "archive still contains the previously verified owner");
+  assert.match(readFileSync(path.join(f.targetDirectory, "lumi-target.sqlite"), "utf8"), /different-owner/,
+    "live target never automatically restored or deleted");
+});
+
 scenarioCase("targetpostfail: code-only rollback stays stopped after new-code start failed", (r, f) => {
   assert.notEqual(r.status, 0);
   assert.match(r.output, /cilovy preflight po prvnim startu selhal/);
