@@ -38,10 +38,26 @@ and before any subsequent service start (including automatic rollback).
 **An `off` deployment may restore previous code but must NOT restart it**
 after any systemd source change or root env modification during the deployment.
 Leave it stopped and obtain independent operator approval for recovery.
-A systemd drop-in approved for target-store write access must change **only the
-StateDirectory permission boundary**, not inject/override environment
-variables. Any difference is a stop condition, not an invitation to
-auto-edit the systemd unit or live env.
+The sole loaded root EnvironmentFile must **never** assign the unit's
+fixed `AI_EXECUTIVE_DATA_DIR`, `PORT`, `NODE_ENV` or
+`NEXT_TELEMETRY_DISABLED`: EnvironmentFile assignments take precedence
+over the checked Environment values. The deploy rejects those names before
+any downtime and rechecks the unchanged env and unit before each startup,
+including off-profile rollback. This ensures the runtime uses the data
+directory the script actually archived.
+
+The loaded systemd sandbox must keep `ProtectSystem=strict`,
+`StateDirectory=ai-executive` with no other state directories except an
+explicitly approved `ai-executive-target`, and no unapproved
+`ReadWritePaths`. A personal-v1 alternative may use a separately approved,
+**exact** `ReadWritePaths=<target-store-directory>` rather than a broader
+parent; `ReadWritePaths=/var/lib`, any parent path, lists of unrelated
+write exceptions and relaxed ProtectSystem are all rejected. With target
+flags off, `ReadWritePaths` must be empty. A systemd drop-in proposed
+below only changes the isolated StateDirectory permission boundary; it must
+not inject or override environment variables or weaken sandboxing.
+Any difference is a stop condition, not an invitation to auto-edit the
+systemd unit or live env.
 
 **Decision proposal for the owner (not approved): choose (a)**, a separate
 systemd \`StateDirectory=ai-executive-target\` for an isolated absolute target
