@@ -10,7 +10,8 @@ import {
 const profile = new Set(TARGET_PERSONAL_V1_PROFILE);
 const excluded = new Set(TARGET_PERSONAL_V1_EXCLUDED.map(item => item.flag));
 const required = TARGET_PERSONAL_V1_REQUIRED_SETTINGS.map(item => item.name);
-const prefix = TARGET_PERSONAL_V1_PROFILE[0].split("STAGING_")[0];
+// Fixed namespace, independent of the alphabetical order of reviewed flags.
+const prefix = "AI_EXECUTIVE_TARGET_";
 const isFlag = name => name.startsWith(prefix) && name.endsWith("_ENABLED");
 const validOwner = /^[A-Za-z0-9_.:@-]{1,120}$/;
 const validGeneration = /^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i;
