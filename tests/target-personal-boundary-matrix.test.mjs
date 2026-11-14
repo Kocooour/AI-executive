@@ -319,6 +319,7 @@ test("same-origin cross-owner reads and valid private writes are rejected indepe
       method + " " + route + " must refuse generically, not reveal Alice's data");
     assert.deepEqual(state(), before, method + " " + route + " changed the target store");
 
+  }
   // A valid Bob session must never be able to cancel or recover an Alice
   // project/child command by replaying its UUID and Alice's owner-bound scope.
   const {privateStructureActorScope}=await import("../lib/target-private-structure-owner-scope.ts");
@@ -357,5 +358,4 @@ test("same-origin cross-owner reads and valid private writes are rejected indepe
   assert.ok(targetData.areas.every(area=>area.id!=="team-area"&&area.id!==stage.unassignedAreaId),
     "Alice's and shared Areas must not appear in Bob's private create targets");
   assert.deepEqual(state(),beforeTargets,"create-targets is a read-only actor projection");
-  }
 });
