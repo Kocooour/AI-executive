@@ -178,7 +178,8 @@ test('two processes racing the same project CAS commit at most one change',async
    const input=path.join(root,'input'+i);
    writeFileSync(input,JSON.stringify({store,command:{projectId:'race',commandId:randomUUID(),title:'After '+i,
      expectedRevision:page.page.revision,writeAreaId:stage.unassignedAreaId,restoreGeneration:stage.restoreGeneration,principalBinding:proof('alice','race',stage.restoreGeneration)}}));
-   const worker=spawn(process.execPath,['--experimental-loader','./tests/ts-loader.mjs','./tests/support/project-title-race-child.mjs',input,ready[i],go,results[i]],{stdio:['ignore','ignore','pipe'],cwd:process.cwd()});
+   const worker=spawn(process.execPath,['--experimental-loader','./tests/ts-loader.mjs','./tests/support/project-title-race-child.mjs',input,ready[i],go,results[i]],{stdio:['ignore','ignore','pipe'],cwd:process.cwd(),
+     env:{...process.env,AI_EXECUTIVE_TARGET_STAGING_DIAGNOSTICS:'1'}});
    worker.capturedStderr='';
    worker.stderr.on('data', data => { worker.capturedStderr=(worker.capturedStderr+data.toString()).slice(-3000); });
    return worker;
@@ -190,21 +191,10 @@ test('two processes racing the same project CAS commit at most one change',async
    writeFileSync(go,'go');
    await waitForWorkerMarkers(results, workers, true);
    const outcome=results.map(file=>JSON.parse(readFileSync(file,'utf8')));
-   const acknowledged=outcome.filter(result=>result.ok);
-   const rejected=outcome.filter(result=>!result.ok);
-   assert.ok(acknowledged.length<=1,JSON.stringify(outcome));
-   // A COMMIT can persist while the post-COMMIT journal confirmation is
-   // untrusted. In that case the pinned writer MUST return write_failed, not
-   // claim success, and the losing CAS still observes stale_revision.
-   // This is deliberately fail-closed, not an absent or duplicate commit.
-   if (acknowledged.length===1) {
-     assert.deepEqual(rejected,[{ok:false,reason:'stale_revision'}]);
-   } else {
-     assert.deepEqual(rejected.map(result=>result.reason).sort(),
-       ['stale_revision','write_failed'],JSON.stringify(outcome));
-   }
-   assert.equal(db.prepare("SELECT COUNT(*) AS n FROM project_title_audit WHERE project_id='race'").get().n,1,
-     'exactly one transaction committed even if its confirmation was withheld');
+   assert.equal(outcome.filter(result=>result.ok).length,1,JSON.stringify(outcome));
+   assert.deepEqual(outcome.filter(result=>!result.ok),[{ok:false,reason:'stale_revision'}],
+     JSON.stringify({outcome,diagnostics:workers.map(worker=>worker.capturedStderr)}));
+   assert.equal(db.prepare("SELECT COUNT(*) AS n FROM project_title_audit WHERE project_id='race'").get().n,1);
    assert.ok(['After 0','After 1'].includes(db.prepare("SELECT title FROM projects WHERE id='race'").get().title),
      'the only persisted title is the winner of the one CAS commit');
  } finally {await stopWorkers(workers);}
