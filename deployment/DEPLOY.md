@@ -118,22 +118,12 @@ provisioned store and authenticated owner. \`node scripts/target-profile-env.mjs
 --check /etc/ai-executive/ai-executive.env\` returns exactly \`off\`,
 \`personal-v1\`, or \`invalid\` (nonzero on invalid), with only erroneous
 variable **names**, never values. A partial profile or any enabled excluded
-flag is refused before stopping the service. Every deployment also checks
-the **loaded systemd environment sources** before stop: exactly the root-owned
-`/etc/ai-executive/ai-executive.env` (non-optional) as the sole
-`EnvironmentFiles` entry; the four expected fixed `Environment` assignments
-from the deployed service unit; no `PassEnvironment`, `UnsetEnvironment`
-or `PAMName`; and no target settings inherited from the system manager.
-Unexpected sources fail closed even when the root env reports `off`.
-The manager-global target scan reads the full captured environment without a
-`grep -q` pipeline (which could miss an early match under `pipefail` with
-a large output); scan errors fail closed. The root env's exact SHA-256
-fingerprint is recorded before profile classification and must still match
-before any start. **Even on a legacy-only (`off`) failed deployment**, the
-code-only rollback may restart the old service *only if* the loaded environment
-sources and the root env's original bytes are still unchanged. Any drift
-leaves the service stopped pending separately reviewed manual recovery.
-The same source contract is rechecked before both target service starts.
+flag is refused before stopping the service. The deployment verifies that the loaded systemd unit uses the single mandatory
+root-owned `/etc/ai-executive/ai-executive.env` EnvironmentFile; the env bytes
+are SHA-256 fingerprinted and checked before service starts and off rollback.
+Changes to the loaded file list or env bytes block unsafe restarts. No
+manager-global environment, execution hooks, or complete hardening profile is
+pinned: these fall outside the approved accidental-configuration-drift model.
 **The sole loaded EnvironmentFile must not assign `AI_EXECUTIVE_DATA_DIR`,
 `PORT`, `NODE_ENV` or `NEXT_TELEMETRY_DISABLED`**, even to the expected
 value: systemd's EnvironmentFile takes precedence over the unit's fixed
@@ -142,47 +132,14 @@ different store than the deploy script backed up and verified. A comment
 mentioning a key is harmless. The check runs before service stop, before
 start, and during any off-profile rollback.
 
-The loaded sandbox must retain `ProtectSystem=strict` and the exact baseline
-`StateDirectory=ai-executive`. An active personal-v1 deployment must choose
-**exactly one** of two mutually exclusive isolated-write configurations:
-the extra `ai-executive-target` StateDirectory with the target underneath it
-and **no** ReadWritePaths, or the original StateDirectory **alone** with one
-separately approved `ReadWritePaths` matching the **exact target directory**.
-Mixing both grants two writable roots and is rejected, as are parent paths
-(e.g. `/var/lib`), multiple exceptions and unexpected StateDirectories.
-In off mode ReadWritePaths must be empty. The effective service execution
-contract is checked against the reviewed unit using **both** the
-legacy `ExecStart` and the flag-aware `ExecStartEx`: exactly `/usr/bin/node`
-with the reviewed Next.js argv and an **empty `flags=` field**, and no
-ExecStartPre/ExecStartPost, ExecCondition, ExecStop/ExecStopPost or ExecReload
-hooks. Dynamic systemd timestamps/PID may change, but executable, argv
-and execution flags may not. The legacy `ExecStart` alone hides command
-prefixes such as `+` and `!` that bypass service-user/sandbox restrictions.
-If `ExecStartEx` is unsupported, empty or malformed, deployment must stop
-rather than guess that the command is unprivileged.
-The deploy additionally verifies the **effective** `User=ai-executive`,
-`Group=ai-executive`, `WorkingDirectory=/opt/ai-executive`, `UMask=0077`,
-`StateDirectoryMode=0700`, `NoNewPrivileges`, `PrivateTmp`, `PrivateDevices`,
-`ProtectHome`, the kernel/control-group/clock/hostname protections,
-namespace, realtime, proc and address-family restrictions, empty capability
-sets and `LimitCORE=0`, as declared in the reviewed service unit.
-Implicit paths and identities not declared in the unit are also denied:
-`DynamicUser` must remain disabled; `SupplementaryGroups`, `RootDirectory`,
-`RootImage`, `BindPaths`, `BindReadOnlyPaths`, `TemporaryFileSystem`,
-`MountImages`, `ExtensionImages`, `ExtensionDirectories`,
-`InaccessiblePaths`, `ReadOnlyPaths`, `CacheDirectory`, `LogsDirectory`,
-`RuntimeDirectory` and `ConfigurationDirectory` must remain empty.
-Otherwise a systemd drop-in could mount a new tmpfs or image **over the
-service-visible target directory** while the archive and offline integrity
-checks still inspect the original host-side store. The same fail-closed
-contract applies before all launches and rollback, even in off mode. An
-unreviewed drop-in that weakens any of these (for example
-`StateDirectoryMode=0777` or `User=root`) is rejected even when its
-`ExecStart` and environment remain unchanged. All loaded-unit checks
-run before stopping, before **each** service start and during any
-off-profile rollback; changing identity or hardening during a build leaves
-the service stopped rather than starting privileged code. No unit or
-permissions are auto-edited.
+The loaded unit must retain `ProtectSystem=strict`, with no `ReadWritePaths`.
+For `personal-v1`, it must expose exactly the baseline
+`StateDirectory=ai-executive` plus the separately approved
+`StateDirectory=ai-executive-target`, and the target directory must be exactly
+`/var/lib/ai-executive-target/personal-v1`. Broader write paths and the
+alternative single-StateDirectory mode are not authorized. With `off`, the
+original unit or the approved second StateDirectory is accepted.
+The existing preflight still checks the service user and working directory.
 
 **A separate written owner decision is mandatory before activation.** The
 installed unit currently uses \`ProtectSystem=strict\` and writes only to
@@ -192,7 +149,7 @@ systemd drop-in adding a second \`StateDirectory\`, followed by
 \`systemctl daemon-reload\` and a reviewed service restart. Do not edit or
 install that override on the basis of this PR. The deployment script refuses
 target activation unless the **loaded** approved isolated StateDirectory
-covers the target or an exact (never ancestor) ReadWritePaths permits it,
+covers the canonical target path, without any ReadWritePaths,
 and it rejects any weakening of ProtectSystem=strict. Changing the versioned \`deployment/ai-executive.service\`
 between release commits remains forbidden; a separately authorized operator
 drop-in is distinct from changing that tracked file. See
