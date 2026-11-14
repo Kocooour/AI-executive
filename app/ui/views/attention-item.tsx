@@ -38,7 +38,7 @@ export function AttentionItemRow({ app, candidate }: { app: LumiApp; candidate: 
     if (subject) void inspect(subject);
     else setAttentionError(tr("attentionDetailMissing"));
   };
-  const busy = Boolean(attentionBusyKey) || attentionActionsBlocked || changedSince;
+  const busy = Boolean(attentionBusyKey) || attentionActionsBlocked || changedSince || app.legacyWritesDisabled;
 
   // The snoozed or dismissed item leaves the list; keyboard focus moves to the item now in its place
   // (or the one before it, or the section heading) instead of falling back to the page.
@@ -80,9 +80,9 @@ export function AttentionItemRow({ app, candidate }: { app: LumiApp; candidate: 
           triggerClassName="attentionMenuButton" triggerData={{ "data-attention-menu": "" }} triggerContent={<span aria-hidden="true">⋯</span>}>
           {(close) => <>
             {primary === "defer" && <button type="button" role="menuitem" onClick={() => { close(false); open(); }}>{tr("attentionOpen")}</button>}
-            <button type="button" role="menuitem" aria-label={`${tr("attentionSnooze")}: ${candidate.title}`} disabled={busy}
+            <button type="button" role="menuitem" aria-label={`${tr("attentionSnooze")}: ${candidate.title}`} disabled={busy} title={app.legacyReadOnlyHint}
               onClick={(event) => { void actAndKeepFocus(event.currentTarget, "snooze"); close(false); }}>{tr("attentionSnooze")}</button>
-            <button type="button" role="menuitem" aria-label={`${tr("attentionDismiss")}: ${candidate.title}`} disabled={busy}
+            <button type="button" role="menuitem" aria-label={`${tr("attentionDismiss")}: ${candidate.title}`} disabled={busy} title={app.legacyReadOnlyHint}
               onClick={(event) => { void actAndKeepFocus(event.currentTarget, "dismiss"); close(false); }}>{tr("attentionDismiss")}</button>
           </>}
         </PopoverMenu>

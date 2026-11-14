@@ -28,10 +28,10 @@ export function WorkNowCard({ app, compact = false }: { app: LumiApp; compact?: 
                 <p><strong>{tr("workElapsed")}:</strong> <time>{workElapsedText}</time>{workSession.estimatedMinutes ? ` · ${workSession.estimatedMinutes} min` : ""}</p>
               </div>
               <div className="workNowActions">
-                {workSession.state === "running" ? <button disabled={workSessionBusy} onClick={() => workSessionAction("pause")}>{tr("workPause")}</button> : <button disabled={workSessionBusy} onClick={() => workSessionAction("resume")}>{tr("workResume")}</button>}
-                <button className="primaryAction" disabled={workSessionBusy} onClick={() => workSessionAction("finish")}>{tr("workFinish")}</button>
+                {workSession.state === "running" ? <button disabled={workSessionBusy || app.legacyWritesDisabled} onClick={() => workSessionAction("pause")}>{tr("workPause")}</button> : <button disabled={workSessionBusy || app.legacyWritesDisabled} onClick={() => workSessionAction("resume")}>{tr("workResume")}</button>}
+                <button className="primaryAction" disabled={workSessionBusy || app.legacyWritesDisabled} onClick={() => workSessionAction("finish")}>{tr("workFinish")}</button>
               </div>
-              {workOverrun && <div><p className="dayPlanWarning" role="status">{tr("workOverrun")}</p><button disabled={dayPlanBusy} onClick={() => loadDayPlan(activeWorkspaceId === "all" ? writeWorkspaceId : activeWorkspaceId, calendarToday).catch((error) => setDayPlanStatus(error instanceof Error ? error.message : tr("dayPlanChanged")))}>{tr("workReplan")}</button></div>}
+              {workOverrun && <div><p className="dayPlanWarning" role="status">{tr("workOverrun")}</p><button disabled={dayPlanBusy || app.legacyWritesDisabled} onClick={() => loadDayPlan(activeWorkspaceId === "all" ? writeWorkspaceId : activeWorkspaceId, calendarToday).catch((error) => setDayPlanStatus(error instanceof Error ? error.message : tr("dayPlanChanged")))}>{tr("workReplan")}</button></div>}
               {workSessionStatus && <p role="status">{workSessionStatus}</p>}
             </section>
   );

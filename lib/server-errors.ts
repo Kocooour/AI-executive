@@ -147,6 +147,9 @@ export const serverErrorKeys: Record<string, string> = {
 // Server messages a user does not meet in normal use: requests the app never sends, broken or
 // tampered data, configuration errors, internal markers. They are shown as they are.
 export const developerOnly: ReadonlySet<string> = new Set([
+  // C13 browser-only local copy guard: caught and replaced with a localized
+  // rescue notice. Never returned by an HTTP route or shown verbatim to users.
+  "NO_LOCAL_CHANGES",
   // Export download cancellation closes a Node/Web stream after owner logout.
   // This exception is internal to the stream and is never returned as a UI JSON error.
   "Owner session revoked during export",

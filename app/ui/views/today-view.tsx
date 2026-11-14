@@ -124,7 +124,7 @@ export function TodayTop({ app }: { app: LumiApp }) {
       {(dayPlanStatus || canUndo) && (
         <div className="todayPlanNote">
           {dayPlanStatus && <p role="status">{dayPlanStatus}</p>}
-          {canUndo && <button type="button" disabled={dayPlanBusy} onClick={undoDayPlanBlock}>{tr("dayPlanUndo")}</button>}
+          {canUndo && <button type="button" disabled={dayPlanBusy || app.legacyWritesDisabled} title={app.legacyReadOnlyHint} onClick={undoDayPlanBlock}>{tr("dayPlanUndo")}</button>}
         </div>
       )}
     </>
@@ -216,7 +216,7 @@ export function TodayFooter({ app }: { app: LumiApp }) {
                       : "Impact: reschedules this task and updates its Today, Evening or Inbox markers. Its deadline, workspace, Area and other tasks stay unchanged."}
                   </p>
                 )}
-                <button type="button" className="primaryAction" disabled={deferBusy}
+                <button type="button" className="primaryAction" disabled={deferBusy || app.legacyWritesDisabled} title={app.legacyReadOnlyHint}
                   data-plan-proposal-approve={previewProposal ? picked.task.id : undefined}
                   onClick={() => {
                     if (!previewProposal) { void deferTask(picked.task, picked.suggestion.target, "lumi"); return; }
@@ -234,7 +234,7 @@ export function TodayFooter({ app }: { app: LumiApp }) {
                   }}>
                   {previewProposal ? (language === "cs" ? "Schválit" : "Approve") : tr("deferApply")}
                 </button>
-                <button type="button" data-plan-proposal-reject={previewProposal ? picked.task.id : undefined}
+                <button type="button" disabled={app.legacyWritesDisabled} title={app.legacyReadOnlyHint} data-plan-proposal-reject={previewProposal ? picked.task.id : undefined}
                   onClick={hide}>
                   {previewProposal ? (language === "cs" ? "Odmítnout" : "Reject") : tr("todaySuggestHide")}
                 </button>

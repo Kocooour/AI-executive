@@ -97,8 +97,8 @@ export function SyncConflicts({ app, entity }: { app: LumiApp; entity: Entity })
               <span className="syncConflictValue">{shown(conflict, items, tr, language)}</span>
             </span>
             <div className="notificationActions">
-              {!conflict.truncated && <button onClick={() => resolveConflict(entity, conflict.id, true)}>{tr("conflictRestore")}</button>}
-              <button onClick={() => resolveConflict(entity, conflict.id, false)}>{tr("conflictKeep")}</button>
+              {!conflict.truncated && <button disabled={app.legacyWritesDisabled} title={app.legacyReadOnlyHint} onClick={() => resolveConflict(entity, conflict.id, true)}>{tr("conflictRestore")}</button>}
+              <button disabled={app.legacyWritesDisabled} title={app.legacyReadOnlyHint} onClick={() => resolveConflict(entity, conflict.id, false)}>{tr("conflictKeep")}</button>
             </div>
           </div>
         );

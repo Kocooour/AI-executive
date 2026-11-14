@@ -235,7 +235,7 @@ export function useLumiApp(options: { targetDetails?: boolean; targetUnified?: b
     pullFromServer, tabId, captureMarkers, clearSentMarkers,
     recoveryHeld, ownerFenceRawRescueReason, recoveryPreparing, recoveryReady, recoveryError, recoveryOffline, recoveryDownloadRequested,
     recoveryInspecting, recoveryInspection, recoveryInspectionError, inspectOfflineRecoveryFile,
-    prepareOfflineRecoveryDownload, downloadOfflineRecovery } = useSync();
+    prepareOfflineRecoveryDownload, downloadOfflineRecovery, showReadOnlySnapshot } = useSync({ legacyReadOnly: captureDisabled });
   // Reconcile each project independently against acknowledged base data and
   // deletion markers. A successful sync of B must not dismiss failed A.
   useEffect(() => {
@@ -1594,6 +1594,12 @@ export function useLumiApp(options: { targetDetails?: boolean; targetUnified?: b
         const response = await fetch("/api/store", { cache: "no-store", signal: storeRequest.signal });
         if (!response.ok) throw new Error("Server synchronization failed");
         let snapshot = (await response.json()) as ServerSnapshot;
+        // In target mode the old store is historical data only. In particular a fresh
+        // browser must not seed it, and a pending legacy change must not be uploaded.
+        if (captureDisabledRef.current) {
+          showReadOnlySnapshot(snapshot);
+          return;
+        }
         // This is the earliest safe point to compare generations: no local write, migration
         // or interrupted wipe may happen before the persistent recovery marker is recorded.
         if (restoredSinceKnown(snapshot.restoreGeneration)) {
@@ -1746,7 +1752,7 @@ export function useLumiApp(options: { targetDetails?: boolean; targetUnified?: b
         setSyncStatus(offlineRecoveryIsHeld() ? "offline" : "synced");
       } catch {
         // If a sibling activated recovery during startup, even fallback seeding is forbidden.
-        if (!offlineRecoveryIsHeld()) await ensureDefaultWorkspace().catch(() => undefined);
+        if (!offlineRecoveryIsHeld() && !captureDisabledRef.current) await ensureDefaultWorkspace().catch(() => undefined);
         await load().catch(() => undefined);
         setSyncStatus("offline");
       } finally {
@@ -1760,7 +1766,8 @@ export function useLumiApp(options: { targetDetails?: boolean; targetUnified?: b
     startupStoreRequest.current?.abort();
     // The start may already be waiting on a later request (a second fetch or a save): the data kept
     // in this browser is shown now rather than when that request gives up.
-    void ensureDefaultWorkspace().then(load).catch(() => undefined);
+    if (captureDisabledRef.current) void load().catch(() => undefined);
+    else void ensureDefaultWorkspace().then(load).catch(() => undefined);
   }, [authState]);
 
   // Signing out removes the local copy of the data. Unsent changes are sent first; if that is not
@@ -2652,7 +2659,7 @@ export function useLumiApp(options: { targetDetails?: boolean; targetUnified?: b
     setOfflineRetry(result === "unavailable" ? "failed" : "");
     window.setTimeout(() => setOfflineRetry((state) => (state === "failed" ? "" : state)), 4_000);
   }
-  const attentionState = useAttention({ writesBlocked: blockLegacyWrite, authState, offlineView, activeWorkspaceId, syncStatus, items, pendingDeletedIds, tr, language, signingOut: () => signedOut.current || document.body.inert });
+  const attentionState = useAttention({ writesBlocked: blockLegacyWrite, readOnly: captureDisabled, authState, offlineView, activeWorkspaceId, syncStatus, items, pendingDeletedIds, tr, language, signingOut: () => signedOut.current || document.body.inert });
   const calendarTomorrowDate = new Date(`${calendarToday}T12:00:00Z`);
   calendarTomorrowDate.setUTCDate(calendarTomorrowDate.getUTCDate() + 1);
   const calendarTomorrow = calendarTomorrowDate.toISOString().slice(0, 10);

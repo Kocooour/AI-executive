@@ -33,6 +33,7 @@ import { AssistantPanel } from "./views/assistant-panel";
 import { ConfirmDialog } from "./views/confirm-dialog";
 import { DeferPopover } from "./views/defer-popover";
 import { HeldBack } from "./views/held-back";
+import { LegacyDeviceRescueNotice } from "./legacy-device-rescue-notice";
 import { OfflineRecoveryDialog } from "./views/offline-recovery-dialog";
 
 // R3-FE-2: loaded (with its CSS) only when the server page enabled the target My Plan.
@@ -207,7 +208,9 @@ export function LumiAppRoot({ targetMyPlan, targetScopes, targetDetails, targetE
   const targetView = scopeList !== null || targetPlan || (targetSearch && view==="Search");
   const legacyInspector = Boolean(app.selected) && !(scopesOn && targetView);
   // Unified target mode: views that still show legacy data are read-only (no target create/edit API yet).
-  const legacyReadOnly = app.legacyWritesDisabled && !targetView;
+  const legacyReadOnly = app.legacyWritesDisabled && !targetView && ["Home", "Inbox", "Today"].includes(view);
+  // A navigable My Plan requires both its target feature gate and the v1 shell.
+  const legacyMyPlanAvailable = Boolean(targetMyPlan?.enabled && mobileDesignV1Preview);
   // Do not mount legacy task rows or local held-back titles underneath
   // server-authorized Search, including before the first explicit query.
   const legacySearchSurfaces = mainTitleSearchLegacySurfaces(targetSearch,view);
@@ -279,9 +282,19 @@ export function LumiAppRoot({ targetMyPlan, targetScopes, targetDetails, targetE
         <div className="content">
           {legacyReadOnly && (
             <p className="navigationUnavailableNotice legacyReadOnlyNotice" role="status" data-testid="legacy-read-only-notice">
-              {detailCopy[language].legacyReadOnlyNotice}
+              {legacyMyPlanAvailable ? detailCopy[language].legacyReadOnlyNotice
+                : language === "cs"
+                  ? "Tady vidíte dřívější data jen pro čtení. Můj plán zde zatím není dostupný."
+                  : "This view shows earlier data, read-only. My Plan is not available here yet."}
+              {legacyMyPlanAvailable && <>{" "}
+                <button type="button" className="textAction" onClick={() => {
+                  app.closeDetail();
+                  app.setView("Today", { previewMyPlan: true });
+                }}>{language === "cs" ? "Otevřít Můj plán" : "Open My Plan"}</button>
+              </>}
             </p>
           )}
+          {legacyReadOnly && <LegacyDeviceRescueNotice language={language} />}
           {app.legacyWritesDisabled && app.legacyWriteAttempt && (
             <div className="navigationUnavailableNotice legacyReadOnlyNotice" role="alert" data-testid="legacy-write-blocked">
               <p>{detailCopy[language].legacyWriteBlocked}</p>

@@ -101,7 +101,7 @@ export const detailCopy:Record<DetailLanguage,DetailCopy>={
     planOpenTask:title=>`Otevřít detail úkolu ${title}`,
     legacyWriteBlocked:"Změna nebyla provedena: dosavadní data jsou v režimu serverových dat jen pro čtení.",
     dismiss:"Skrýt",
-    legacyReadOnlyNotice:"Tento pohled zatím ukazuje dosavadní data; úpravy jsou v režimu serverových dat vypnuté.",
+    legacyReadOnlyNotice:"Tady vidíte dřívější data jen pro čtení. S aktuálními úkoly pracujte v Mém plánu.",
   },
   en:{
     locale:"en-GB",
@@ -151,6 +151,6 @@ export const detailCopy:Record<DetailLanguage,DetailCopy>={
     planOpenTask:title=>`Open task details for ${title}`,
     legacyWriteBlocked:"Nothing was changed: the existing data is read-only in server-data mode.",
     dismiss:"Dismiss",
-    legacyReadOnlyNotice:"This view still shows the existing data; editing is switched off in server-data mode.",
+    legacyReadOnlyNotice:"This view shows earlier data, read-only. Work with your current tasks in My Plan.",
   },
 };

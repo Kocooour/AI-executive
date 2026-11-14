@@ -8,9 +8,11 @@ import { cachedAttention, saveAttention } from "../../../lib/attention-cache";
 // The "Needs attention" list on Home: loading and refreshing the server's evaluation, keeping the
 // last one while the connection is lost (marked out of date), and snooze/dismiss. Moved verbatim
 // from use-lumi-app.tsx; the values it needs from the rest of the app are passed in.
-export function useAttention({ writesBlocked = () => false, authState, offlineView = false, activeWorkspaceId, syncStatus, items, pendingDeletedIds, tr, language, signingOut }: {
+export function useAttention({ writesBlocked = () => false, readOnly = false, authState, offlineView = false, activeWorkspaceId, syncStatus, items, pendingDeletedIds, tr, language, signingOut }: {
   /** R3-FE-4a: true (and announced) when unified target mode makes legacy user writes inert. */
   writesBlocked?: () => boolean;
+  /** C13: never reconcile legacy Attention lifecycle as a side effect of GET in target mode. */
+  readOnly?: boolean;
   tr: (key: string) => string;
   language: string;
   authState: string;
@@ -39,7 +41,7 @@ export function useAttention({ writesBlocked = () => false, authState, offlineVi
     const current = () => version === attentionLoadVersion.current;
     let response: Response;
     try {
-      response = await fetch(`/api/attention?workspaceId=${encodeURIComponent(workspaceId)}`, { cache: "no-store" });
+      response = await fetch(`/api/attention?workspaceId=${encodeURIComponent(workspaceId)}${readOnly ? "&readOnly=1" : ""}`, { cache: "no-store" });
     } catch {
       // No connection: the out-of-date label says it, so there is no separate error text.
       if (current()) setAttentionOutdated(true);
