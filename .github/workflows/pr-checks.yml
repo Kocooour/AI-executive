@@ -73,6 +73,10 @@ jobs:
         if: steps.scope.outputs.code == 'true'
         run: pnpm build
 
+      - name: Next router HTTP integration smoke (auth-sensitive PRs)
+        if: steps.scope.outputs.code == 'true' && steps.scope.outputs.router_smoke == 'true'
+        run: node --experimental-loader ./tests/ts-loader.mjs scripts/target-staging-next-smoke.mjs
+
   main-regression:
     name: Main Regression
     # Run the broad unit and HTTP integration suite once changes reach main,
