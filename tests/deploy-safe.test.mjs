@@ -85,7 +85,7 @@ function sandbox(scenario) {
   const offFlag = "AI_EXECUTIVE_TARGET_STAGING_HTTP_ENABLED";
   const offProfiles = {
     offduplicatefalse: [offFlag + "=false", offFlag + "=false"],
-    offduplicatequotedfalse: [offFlag + '= "false"', offFlag + "=false"],
+    offduplicatequotedfalse: [offFlag + '="false"', offFlag + "=false"],
     offduplicateunknownfalse: [
       "AI_EXECUTIVE_TARGET_UNREVIEWED_ENABLED=false",
       "AI_EXECUTIVE_TARGET_UNREVIEWED_ENABLED=false",
@@ -634,6 +634,35 @@ scenarioCase("targetinvalid: reject partial activation without stopping service"
   assert.equal(r.events.includes("stop"), false);
   assert.deepEqual(r.backups, []);
 });
+for (const scenario of [
+  "offduplicatefalse", "offduplicatequotedfalse", "offduplicateunknownfalse",
+  "offduplicaterequired", "offmalformedtarget",
+]) {
+  scenarioCase(scenario + ": invalid off profile is rejected before service stop", (r) => {
+    assert.notEqual(r.status, 0);
+    assert.match(r.output, /neplatny nebo castecny profil/);
+    assert.equal(r.events.filter(e => e === "target-profile-source").length, 2,
+      "invalid disabled configurations must run the reviewed canonical checker");
+    assert.equal(r.head, oldSha);
+    assert.equal(r.service, "active");
+    assert.equal(r.events.includes("stop"), false, "invalid profile cannot cause downtime");
+    assert.equal(r.events.includes("merge"), false);
+    assert.deepEqual(r.backups, []);
+  });
+}
+for (const scenario of [
+  "offvalidfalse", "offvalidquotedfalse", "offvalidunknownfalse",
+  "offcommentedfalse",
+]) {
+  scenarioCase(scenario + ": valid off profile keeps the legacy fast path", (r) => {
+    assert.equal(r.status, 0, r.output);
+    assert.equal(r.events.includes("target-profile-source"), false,
+      "valid disabled profile must not load the target checker");
+    assert.equal(r.head, newSha);
+    assert.equal(r.service, "active");
+    assert.equal(r.backups.length, 1);
+  });
+}
 scenarioCase("targetunit: refuse writable-store activation without approved systemd sandbox", (r) => {
   assert.notEqual(r.status, 0);
   assert.match(r.output, /systemd sandbox nedovoluje zapis/);
