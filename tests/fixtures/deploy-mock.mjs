@@ -189,12 +189,12 @@ switch (name) {
               fs.existsSync(stateFile("sandbox-changed"))) ? "full" : "strict") :
         prop === "StateDirectory" ?
           (scenario === "targetstateextra" ? "ai-executive ai-executive-target unexpected" :
-            ["targetstatedir", "targetmixedwrites"].includes(scenario) ?
+            scenario.startsWith("target") && scenario !== "targetunit" ?
               "ai-executive ai-executive-target" : "ai-executive") :
         prop === "ReadWritePaths" ?
           (["targetrwbroad", "targetrwparent"].includes(scenario) ?
             path.join(root, scenario === "targetrwbroad" ? "var/lib" : "var/lib/ai-executive-target") :
-            scenario.startsWith("target") && !["targetunit", "targetstatedir"].includes(scenario) ?
+            scenario === "targetmixedwrites" ?
               path.join(root, "var/lib/ai-executive-target/personal-v1") : "") : "");
       const requested = args.flatMap((arg, i) => arg === "-p" ? [args[i + 1]] : []);
       if (args.includes("--value")) console.log(valueFor(prop));
