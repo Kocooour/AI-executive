@@ -160,7 +160,13 @@ The deploy additionally verifies the **effective** `User=ai-executive`,
 `StateDirectoryMode=0700`, `NoNewPrivileges`, `PrivateTmp`, `PrivateDevices`,
 `ProtectHome`, the kernel/control-group/clock/hostname protections,
 namespace, realtime, proc and address-family restrictions, empty capability
-sets and `LimitCORE=0`, as declared in the reviewed service unit. An
+sets and `LimitCORE=0`, as declared in the reviewed service unit.
+Implicit paths and identities not declared in the unit are also denied:
+`DynamicUser` must remain disabled; `SupplementaryGroups`, `RootDirectory`,
+`RootImage`, `BindPaths`, `BindReadOnlyPaths`, `CacheDirectory`,
+`LogsDirectory`, `RuntimeDirectory` and `ConfigurationDirectory` must
+remain empty. These properties could otherwise introduce additional writable
+roots or unreviewed privileges despite a strict `ReadWritePaths` contract. An
 unreviewed drop-in that weakens any of these (for example
 `StateDirectoryMode=0777` or `User=root`) is rejected even when its
 `ExecStart` and environment remain unchanged. All loaded-unit checks
