@@ -33,6 +33,7 @@ TARGET_GENERATION=""
 PROFILE_TMP=""
 PROFILE_TOOL=""
 ENV_BASELINE_SHA=""
+SANDBOX_BASELINE_SHA=""
 
 die() { echo "STOP: $*" >&2; exit 1; }
 
@@ -111,13 +112,13 @@ verify_loaded_write_sandbox() {
   rw="$(systemctl show "$SERVICE" -p ReadWritePaths --value)" || return 1
   if [ "$TARGET_PROFILE" != personal-v1 ]; then
     # An off deployment has no approved target directory to compare.
-    [ -z "$rw" ]
-    return
+    [ -z "$rw" ] || return 1
+    return 0
   fi
   if [ "$state" = ai-executive ]; then
     # Explicit exact-path alternative: no second writable StateDirectory.
-    [ "$rw" = "$TARGET_DIRECTORY" ]
-    return
+    [ "$rw" = "$TARGET_DIRECTORY" ] || return 1
+    return 0
   fi
   # Separate StateDirectory mode must have NO ReadWritePaths exception:
   # otherwise the two independent writable roots could be unrelated.
@@ -126,6 +127,24 @@ verify_loaded_write_sandbox() {
     /var/lib/ai-executive-target/*/) return 0 ;;
   esac
   return 1
+}
+
+# The activation preflight above proves that the loaded sandbox is safe.
+# Pin those exact loaded settings for an off rollback, rather than depending
+# on re-entering a profile-specific authorization branch from the EXIT trap.
+# A changed unit is always unsafe, even if its new settings look plausible.
+loaded_write_sandbox_snapshot() {
+  local protect state rw
+  protect="$(systemctl show "$SERVICE" -p ProtectSystem --value)" || return 1
+  state="$(systemctl show "$SERVICE" -p StateDirectory --value)" || return 1
+  rw="$(systemctl show "$SERVICE" -p ReadWritePaths --value)" || return 1
+  printf '%s\n%s\n%s\n' "$protect" "$state" "$rw"
+}
+write_sandbox_unchanged() {
+  local current
+  [ -n "$SANDBOX_BASELINE_SHA" ] || return 1
+  current="$(loaded_write_sandbox_snapshot | sha256sum)" || return 1
+  [ "$current" = "$SANDBOX_BASELINE_SHA" ]
 }
 
 # Fingerprint the exact reviewed root-owned env bytes. Even an off deployment
@@ -427,7 +446,7 @@ on_exit() {
     echo "BEZPECNOSTNI BLOKACE: zdroje prostredi systemd pri rollbacku." >&2
     exit "$rc"
   fi
-  if ! verify_loaded_write_sandbox; then
+  if ! write_sandbox_unchanged; then
     echo "BEZPECNOSTNI BLOKACE: systemd sandbox pri rollbacku." >&2
     exit "$rc"
   fi
@@ -605,6 +624,8 @@ fi
 # Reject weakened sandboxing also for legacy-only/off deployments.
 verify_loaded_write_sandbox ||
   die "systemd sandbox nedovoluje zapis do ciloveho uloziste nebo neni ProtectSystem=strict"
+SANDBOX_BASELINE_SHA="$(loaded_write_sandbox_snapshot | sha256sum)" ||
+  die "nelze ověřit kontrakt sandboxu systemd"
 verify_loaded_execution ||
   die "neoverene spousteci prikazy systemd"
 env_file_unchanged || die "env se zmenilo behem predstartovniho overovani"
