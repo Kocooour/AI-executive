@@ -158,7 +158,13 @@ switch (name) {
               path.join(root, "var/lib/ai-executive-target/personal-v1") : "") : "");
       const requested = args.flatMap((arg, i) => arg === "-p" ? [args[i + 1]] : []);
       if (args.includes("--value")) console.log(valueFor(prop));
-      else console.log(requested.map(key => key + "=" + valueFor(key)).join("\n"));
+      else {
+        let values = requested.map(key => key + "=" + valueFor(key));
+        if (scenario === "offsecuritymissing")
+          values = values.filter(line => !line.startsWith("StateDirectoryMode="));
+        if (scenario === "offsecurityduplicate") values.push("User=root");
+        console.log(values.join("\n"));
+      }
       break;
     }
     if (verb === "stop") {
