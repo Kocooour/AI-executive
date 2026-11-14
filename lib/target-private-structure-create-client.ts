@@ -130,12 +130,12 @@ export async function checkStructureCreateStatus(
     ?"unavailable":found;
 }
 export function recoverStructureCreate(
-  kind:StructureKind,commandId:string,projectId:string|null,signal:AbortSignal,
+  kind:StructureKind,commandId:string,ownerScope:string,signal:AbortSignal,
   fetchImpl:typeof fetch=targetAppFetch,
 ):Promise<StructureReceipt>{
-  if(!canonical(commandId))
+  if(!canonical(commandId)||!/^[A-Za-z0-9_-]{43}$/.test(ownerScope))
     return Promise.resolve("unavailable");
-  return receipt(kind,url(kind)+"/create-recovery",{commandId},signal,fetchImpl);
+  return receipt(kind,url(kind)+"/create-recovery",{commandId,ownerScope},signal,fetchImpl);
 }
 
 /** Cancellable only after a live, actor-bound, durable no-commit fence (or
