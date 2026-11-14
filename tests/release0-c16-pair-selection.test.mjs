@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import { assertOrderedPair, selectedDesktopTests } from "../scripts/verify-release0-c16-pair.mjs";
 
@@ -41,4 +42,18 @@ test("C16 guard rejects unanticipated extra cases and malformed desktop log line
 [desktop] › c16-02-project.spec.ts:402:5 › unrelated test`;
   assert.throws(() => assertOrderedPair(extra, first, firstTitle, second, originalFailure), /required ordered pair/);
   assert.throws(() => selectedDesktopTests("[desktop] › malformed"), /Unrecognized/);
+});
+
+test("C16 workflow is triggered by authentication and setup changes", () => {
+  const workflow = readFileSync(new URL("../.github/workflows/release0-c16-focused-browser.yml", import.meta.url), "utf8");
+  for (const path of [
+    "e2e/auth.setup.ts", "e2e/helpers.ts", "playwright.config.ts",
+    "app/api/auth/**", "lib/auth.ts", "lib/owner-session-revocation.ts",
+    "lib/passkeys.ts", "lib/http-security.ts",
+    "scripts/owner-session-revocation-init.mjs",
+  ]) {
+    assert.ok(workflow.includes(`- "${path}"`), `Missing C16 CI trigger: ${path}`);
+  }
+  assert.ok(workflow.includes("aggregate project deep links survive reload"), "C16 must run the historical project deep-link failure");
+  assert.ok(workflow.includes("verify-release0-c16-pair.mjs"), "C16 must validate the selected and executed cases");
 });
