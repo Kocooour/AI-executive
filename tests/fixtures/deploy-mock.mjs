@@ -75,7 +75,8 @@ switch (name) {
         prop === "WorkingDirectory" ? app :
         prop === "EnvironmentFiles" ?
           envfile + " (ignore_errors=no)" +
-          (["targetextraenvfile", "offextraenvfile"].includes(scenario)
+          (["targetextraenvfile", "offextraenvfile"].includes(scenario) ||
+            (scenario === "targetsystemddriftbuild" && fs.existsSync(stateFile("unit-env-changed")))
             ? " " + extraFile + " (ignore_errors=no)" : "") :
         prop === "Environment" ?
           defaults + (scenario === "targetenvassignment" ?
@@ -213,6 +214,11 @@ switch (name) {
     if (args[0] === "install") { log("install"); break; }
     if (args[0] === "build") {
       log("build-" + get("head").slice(0, 1));
+      if (scenario === "targetsystemddriftbuild" && get("head") === target &&
+          !fs.existsSync(stateFile("unit-env-changed"))) {
+        set("unit-env-changed", "1");
+        log("unit-env-changed-during-build");
+      }
       if (scenario === "targetbuildidentitydrift" && get("head") === target &&
           !fs.existsSync(stateFile("build-identity-drift"))) {
         // A different, internally valid target replaces the archive-checked
