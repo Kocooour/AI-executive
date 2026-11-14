@@ -566,34 +566,37 @@ test("post-lock sidecar verdict permits only regular rollback contention, never 
   assert.equal(classify(), "clear");
 });
 
-test("six un-retried concurrent writers at the original 6x80 load never confuse contention with trust denial", async () => {
-  const fx = makeFixture();
-  const workers = Array.from({ length: 6 }, () => runChild(fx, "raw-many", "", 80));
-  const results = await Promise.all(workers.map(w => w.done));
-  assert.ok(results.every(r => r.code === 0), JSON.stringify(results));
-  const counts = results.map(r => JSON.parse(r.stdout));
-  const totals = counts.reduce((sum, r) => ({
-    ok: sum.ok + r.ok, failed: sum.failed + r.failed, denied: sum.denied + r.denied,
-  }), { ok: 0, failed: 0, denied: 0 });
-  assert.equal(totals.ok + totals.failed + totals.denied, 480, JSON.stringify(counts));
-  assert.equal(totals.denied, 0, "legitimate concurrency must not be an authorization/trust refusal: " +
-    JSON.stringify({ counts, diagnostics: results.map(r => r.stderr.trim()).filter(Boolean) }));
-  assert.ok(totals.ok > 0, "some writes must have committed");
-  // A failed attempt may have fsynced its intent before a SQLite COMMIT failure.
-  // Such an intent consumes an n and gets an abort at the NEXT write: anchor_seq
-  // need not equal the number of successful writes. Finish with one uncontended
-  // write, which also closes any pending intent left by the last failed writer.
-  const settled = pinned.withPinnedTargetStagingWrite(fx.store,
-    context => { context.commit({ kind: "compaction", payload: { floor: 0 } }); return "ok"; },
-    () => "denied", () => "failed");
-  assert.equal(settled, "ok", "the shared store remains writable after contention");
-  const state = journalState(fx);
-  assert.equal(state.pending, null);
-  assert.equal(state.confirmed, anchorOf(fx));
-  assert.equal(journalLines(fx).filter(line => line.t === "confirm").length, totals.ok + 1);
-  assert.equal(durable.checkTargetStagingAnchorLive(fx.store), "ok");
+test("three independent 6x80 writer loads never confuse contention with trust denial", async () => {
+  // Repeat the ORIGINAL 6x80 schedule, with a fresh store and six cold
+  // processes each time. A single green sample previously missed the race.
+  for (let batch = 0; batch < 3; batch++) {
+    const fx = makeFixture();
+    const workers = Array.from({ length: 6 }, () => runChild(fx, "raw-many", "", 80));
+    const results = await Promise.all(workers.map(w => w.done));
+    assert.ok(results.every(r => r.code === 0), JSON.stringify(results));
+    const counts = results.map(r => JSON.parse(r.stdout));
+    const totals = counts.reduce((sum, r) => ({
+      ok: sum.ok + r.ok, failed: sum.failed + r.failed, denied: sum.denied + r.denied,
+    }), { ok: 0, failed: 0, denied: 0 });
+    assert.equal(totals.ok + totals.failed + totals.denied, 480, JSON.stringify(counts));
+    assert.equal(totals.denied, 0, "legitimate concurrency must not be an authorization/trust refusal: " +
+      JSON.stringify({ counts, diagnostics: results.map(r => r.stderr.trim()).filter(Boolean) }));
+    assert.ok(totals.ok > 0, "some writes must have committed");
+    // A failed attempt may have fsynced its intent before a SQLite COMMIT failure.
+    // Such an intent consumes an n and gets an abort at the NEXT write: anchor_seq
+    // need not equal the number of successful writes. Finish with one uncontended
+    // write, which also closes any pending intent left by the last failed writer.
+    const settled = pinned.withPinnedTargetStagingWrite(fx.store,
+      context => { context.commit({ kind: "compaction", payload: { floor: 0 } }); return "ok"; },
+      () => "denied", () => "failed");
+    assert.equal(settled, "ok", "the shared store remains writable after contention");
+    const state = journalState(fx);
+    assert.equal(state.pending, null);
+    assert.equal(state.confirmed, anchorOf(fx));
+    assert.equal(journalLines(fx).filter(line => line.t === "confirm").length, totals.ok + 1);
+    assert.equal(durable.checkTargetStagingAnchorLive(fx.store), "ok");
+  }
 });
-
 test("a write in flight on another process (intent appended, not committed) does not trip reads", async () => {
   const fx = makeFixture();
   assert.equal(titleWrite(fx, "t1", "warm").ok, true);
