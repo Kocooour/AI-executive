@@ -112,6 +112,27 @@ export function noTargetStagingSidecars(
 }
 
 /**
+ * A rollback sidecar seen AFTER BEGIN IMMEDIATE, but BEFORE this transaction has
+ * written anything, cannot be ours. A regular single-link sidecar is ambiguous:
+ * another writer may have just released its lock while SQLite was unlinking it.
+ * It is retryable contention, not evidence of an untrusted database. All
+ * structural anomalies (WAL/SHM, symlink, hardlink, wrong file type, I/O error)
+ * remain strict boundary denials.
+ */
+export function classifyPostLockTargetStagingSidecar(
+  databasePath: string,
+): "clear" | "retryable" | "denied" {
+  if (!noTargetStagingSidecars(databasePath, ["-wal", "-shm"])) return "denied";
+  try {
+    const sidecar = lstatSync(databasePath + "-journal");
+    return sidecar.isFile() && !sidecar.isSymbolicLink() && sidecar.nlink === 1
+      ? "retryable" : "denied";
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "ENOENT" ? "clear" : "denied";
+  }
+}
+
+/**
  * A regular SQLite rollback sidecar at busy-timeout cannot be proved orphaned
  * without an atomic observation of both the journal and its writer. Even two
  * lock-free /proc/locks samples can race the unlink after a legitimate COMMIT.
@@ -367,38 +388,49 @@ function runPinnedTargetStagingTransaction<T, C>(
   busyTimeoutMs: number,
 ): T {
   const restore = mode === "restore";
+  // Diagnostic stages are fixed literals, never database data, paths or SQL.
+  // Opt in only for synthetic stress investigations; classification is unchanged.
+  const deny = (stage: string): T => {
+    if (process.env.AI_EXECUTIVE_TARGET_STAGING_DIAGNOSTICS === "1") {
+      logStagingFailure(stage, "boundary_denied");
+    }
+    return denied();
+  };
+  let stage = "arguments";
   if (!store || typeof store.stagingDirectory !== "string" ||
       typeof store.expectedRestoreGeneration !== "string" ||
       !GENERATION.test(store.expectedRestoreGeneration) ||
-      !Number.isInteger(busyTimeoutMs) || busyTimeoutMs < 0 || busyTimeoutMs > 10_000) return denied();
+      !Number.isInteger(busyTimeoutMs) || busyTimeoutMs < 0 || busyTimeoutMs > 10_000) return deny("arguments");
 
   let files: PinnedTargetStagingFiles | null = null;
   let db: DatabaseSync | null = null;
   let transaction = false;
   let journalFd: number | null = null;
   try {
+    stage = "pin_files";
     files = pinTargetStagingFiles(store.stagingDirectory);
-    if (!files) return denied();
+    if (!files) return deny("pin_files");
     // A *different* writer creates a SQLite -journal while committing. This check
     // precedes our SQLite lock (opening a DB with an untrusted sidecar could perform
     // crash recovery), so a single observation must not become an auth/trust denial.
     // Give a legitimate in-flight writer the same bounded grace as busy_timeout.
     // A sidecar that does not disappear is still refused WITHOUT opening SQLite:
     // the operator must handle a stale or hot journal, never this writer.
+    stage = "prelock_sidecar";
     const sidecarDeadline = Date.now() + busyTimeoutMs;
     const sidecarSleep = new Int32Array(new SharedArrayBuffer(4));
     while (!noTargetStagingSidecars(files.databasePath, ["-journal"])) {
       // WAL/SHM are never part of this rollback-mode store; neither is a
       // replaced main DB or a non-regular/symlinked rollback sidecar.
       if (!files.stillPinned() ||
-          !noTargetStagingSidecars(files.databasePath, ["-wal", "-shm"])) return denied();
+          !noTargetStagingSidecars(files.databasePath, ["-wal", "-shm"])) return deny("prelock_identity_or_wal");
       try {
         const sidecar = lstatSync(files.databasePath + "-journal");
-        if (!sidecar.isFile() || sidecar.isSymbolicLink() || sidecar.nlink !== 1) return denied();
+        if (!sidecar.isFile() || sidecar.isSymbolicLink() || sidecar.nlink !== 1) return deny("prelock_sidecar_structure");
       } catch (error) {
         // ENOENT means the journal disappeared between observations. All
         // other filesystem errors are trust/boundary failures, not contention.
-        if ((error as NodeJS.ErrnoException).code !== "ENOENT") return denied();
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") return deny("prelock_sidecar_io");
         continue;
       }
       const remaining = sidecarDeadline - Date.now();
@@ -412,9 +444,11 @@ function runPinnedTargetStagingTransaction<T, C>(
       Atomics.wait(sidecarSleep, 0, 0, Math.min(5, remaining));
     }
     if (!noTargetStagingSidecars(files.databasePath, ["-wal", "-shm"]) ||
-        !files.stillPinned()) return denied();
+        !files.stillPinned()) return deny("preopen_identity_or_wal");
     // R2c.4a: the (possibly long) cold chain verification happens BEFORE the write lock.
+    stage = "warm_journal";
     warmTargetStagingJournal(files.directoryFdPath, store.expectedRestoreGeneration);
+    stage = "open_database";
     const opened = files.openDatabase({ readOnly: false });
     db = opened.db;
     // Set the bounded wait BEFORE the first SQLite read and ATTACH: a short
@@ -423,15 +457,17 @@ function runPinnedTargetStagingTransaction<T, C>(
     // Prove that SQLite opened the pinned main inode BEFORE ATTACH adds the
     // second (witness) database descriptor.
     db.prepare("SELECT value FROM metadata WHERE key='schema_version'").get();
-    if (!opened.verifyOpened()) return denied();
+    if (!opened.verifyOpened()) return deny("sqlite_descriptor_identity");
     // ATTACH before BEGIN IMMEDIATE: the two durable SQLite files commit as one
     // rollback-journal transaction (no WAL). A lost JSONL confirm is no longer
     // ambiguous after a restore of just the main DB.
     // ATTACH MUST use the durable canonical filesystem pathname, not the
     // /proc/self/fd/N alias: SQLite records attached journal paths in its
     // crash-recovery super-journal, which must remain valid after process exit.
+    stage = "attach_witness";
     const witness = attachTargetStagingWitness(db, files.directory, store.expectedRestoreGeneration);
-    if (!witness) return denied();
+    if (!witness) return deny("attach_witness");
+    stage = "begin_immediate";
     db.exec("PRAGMA foreign_keys=ON; BEGIN IMMEDIATE");
     transaction = true;
     db.prepare("SELECT value FROM metadata WHERE key='schema_version'").get();
@@ -455,7 +491,13 @@ function runPinnedTargetStagingTransaction<T, C>(
       witness.stillAttached() && journalStillPinned();
     const pathsStillTrusted = (): boolean => identitiesStillTrusted() &&
       noTargetStagingSidecars(files!.databasePath);
-    if (!pathsStillTrusted()) return denied();
+    if (!identitiesStillTrusted()) return deny("postlock_identity");
+    // This transaction has not written to main yet: a well-shaped rollback
+    // sidecar is not ours and cannot distinguish in-flight unlink from a stale
+    // journal. Do not open it or mutate it; fail this attempt as retryable.
+    const postLockSidecar = classifyPostLockTargetStagingSidecar(files.databasePath);
+    if (postLockSidecar === "denied") return deny("postlock_sidecar_structure");
+    if (postLockSidecar === "retryable") return failed();
 
     // A restored backup carries its own restore_generation in its metadata; it is checked by the
     // canonical preflight against ITSELF, and against the journal further below.
@@ -463,33 +505,42 @@ function runPinnedTargetStagingTransaction<T, C>(
     if (restore) {
       const raw = (db.prepare("SELECT value FROM metadata WHERE key='restore_generation'")
         .get() as { value: unknown } | undefined)?.value;
-      if (typeof raw !== "string" || !GENERATION.test(raw)) return denied();
+      if (typeof raw !== "string" || !GENERATION.test(raw)) return deny("restore_generation");
       dbGeneration = raw;
     }
 
     // All checks, including current roles and the pinned source integrity check,
     // occur under the same SQLite RESERVED write lock.
+    stage = "preflight";
     const preflight = inspectIsolatedTargetStore({
       stagingDirectory: files.directory,
       expectedRestoreGeneration: dbGeneration,
       mode: "r2-model",
     }, { db, fd: files.databaseFd });
-    if (!preflight.ok) return denied();
+    if (!preflight.ok) {
+      if (process.env.AI_EXECUTIVE_TARGET_STAGING_DIAGNOSTICS === "1") {
+        for (const code of preflight.issues) logStagingFailure("preflight", code);
+      }
+      return deny("preflight");
+    }
     const connection = db;
     const pinnedFiles = files;
 
     // R2c.4a: verify the journal against the DB anchor under the write lock (no commit
     // can interleave) and resolve a trailing unconfirmed intent of a crashed writer.
+    stage = "journal_open";
     journalFd = openTargetStagingJournal(pinnedFiles.directoryFdPath, true);
-    if (journalFd === null) return denied();
+    if (journalFd === null) return deny("journal_open");
     const journal = journalFd;
     const journalInfo = fstatSync(journal);
     journalPin = { dev: journalInfo.dev, ino: journalInfo.ino };
     // Verdict first, on the complete lines: an untrusted store is never modified. The restore
     // mode differs only in accepting the restore_pending state (anchor below the witness).
+    stage = "journal_and_witness_tail";
     const trustedTail = trustedTargetStagingTail(connection, journal, store.expectedRestoreGeneration,
       pinnedFiles.directoryFdPath, restore ? "restore_pending" : "ok");
-    if (!trustedTail || !pathsStillTrusted()) return denied();
+    if (!trustedTail) return deny("journal_and_witness_tail");
+    if (!pathsStillTrusted()) return deny("tail_path_identity");
     const { scan, anchor, witnessed } = trustedTail;
     let state = scan.state;
     if (scan.torn) {
@@ -517,8 +568,9 @@ function runPinnedTargetStagingTransaction<T, C>(
       }
     }
     // After the resolution the generation in effect must be the configured one.
-    if (generation.toLowerCase() !== store.expectedRestoreGeneration.toLowerCase()) return denied();
-    if (restore && (!(anchor < state.confirmed) || witnessed !== state.confirmed)) return denied();
+    if (generation.toLowerCase() !== store.expectedRestoreGeneration.toLowerCase()) return deny("tail_generation");
+    if (restore && (!(anchor < state.confirmed) || witnessed !== state.confirmed)) return deny("restore_anchor");
+    stage = "write_body";
     let tailState = state;
     const seqBefore = Number((connection.prepare("SELECT COALESCE(MAX(seq),0) AS n FROM change_log")
       .get() as { n: number }).n);
@@ -625,7 +677,10 @@ function runPinnedTargetStagingTransaction<T, C>(
       },
     };
     return body(context as unknown as C);
-  } catch {
+  } catch (error) {
+    if (process.env.AI_EXECUTIVE_TARGET_STAGING_DIAGNOSTICS === "1") {
+      logStagingFailure(stage, "exception", error);
+    }
     return failed();
   } finally {
     if (db) {
