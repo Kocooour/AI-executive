@@ -67,13 +67,23 @@ then restarts and checks HTTP readiness. Only code is automatically rolled
 back, **never either data domain**. This introduces a second short service
 restart exclusively for an activated target.
 
+**Failure of activated personal-v1 (fail closed):** if any target-enabled
+deployment step fails after service stop (including generation mismatch,
+incomplete archive, build failure, post-start semantic preflight, or later
+verification), leave the service **stopped** even if previous code was
+successfully rebuilt. The root-owned EnvironmentFile still has enabled target
+flags. Restarting old code would reload those flags and could serve the very
+store that failed preflight. Preserve any verified archive, all live store
+files and operator configuration; do not auto-edit the env file, restore a
+data directory, or start the old code.
+
 **Return to legacy:** under separately reviewed operational authorization,
-set all 31 target profile flags to false/absent and validate \`off\` before
-a reviewed deployment or service restart. Do not remove, import, reset,
-overwrite or restore target and legacy stores as a side effect. Preserve
-the target archive and restore-generation evidence for subsequent
-incident review. A code-only rollback does not itself change \`.env\`;
-verify profile and functionality explicitly after any failed cutover.
+set all 31 target profile flags to false/absent and validate the `off`
+profile before a separately reviewed recovery/service restart. Confirm the
+actual loaded EnvironmentFile has the verified `off` profile, not merely
+the previous git revision. Do not remove, import, reset, overwrite or
+restore target and legacy stores as a side effect. Preserve the target
+archive and restore-generation evidence for subsequent incident review.
 
 Before production: run the focused CLI/deploy regression suite and PR
 Checks, verify systemd sandbox with the actual service context, perform
