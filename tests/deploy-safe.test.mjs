@@ -9,6 +9,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
+import { targetPersonalV1Env } from "../lib/target-personal-profile.ts";
 
 const repo = process.cwd();
 const source = readFileSync(path.join(repo, "deployment/deploy-safe.sh"), "utf8");
@@ -28,13 +29,86 @@ function sandbox(scenario) {
   const bin = path.join(root, "bin");
   const lockDir = path.join(root, "run/lock/ai-executive");
   const lockFile = path.join(lockDir, "deploy.lock");
+  const targetDirectory = path.join(root, "var/lib/ai-executive-target/personal-v1");
+  const targetGeneration = "2a10b529-66a4-4790-a600-a27f2d996a0f";
+  const targetOwner = "owner-01";
 
   for (const p of [app, data, backups, path.dirname(envfile), state, bin,
     path.join(app, ".next/server"), path.join(app, "scripts"),
     path.join(app, "node_modules/next/dist/bin"), path.join(data, "notes")]) {
     mkdirSync(p, { recursive: true });
   }
-  writeFileSync(envfile, "synthetic-only=true\n", { mode: 0o600 });
+  if (scenario.startsWith("target")) {
+    mkdirSync(targetDirectory, { recursive: true });
+    chmodSync(targetDirectory, 0o700);
+    for (const name of ["lumi-target.sqlite", "lumi-target.journal", "lumi-target-witness.sqlite"])
+      writeFileSync(path.join(targetDirectory, name),
+        name === "lumi-target.sqlite" ? targetOwner + "\n" + targetGeneration : "synthetic " + name,
+        { mode: 0o600 });
+    const all = targetPersonalV1Env();
+    if (scenario === "targetinvalid") {
+      for (const name of Object.keys(all).slice(1)) delete all[name];
+    }
+    writeFileSync(envfile, [
+      ...Object.entries(all).map(([key, value]) => key + "=" + value),
+      "AI_EXECUTIVE_TARGET_STAGING_DIRECTORY=" + targetDirectory,
+      "AI_EXECUTIVE_TARGET_STAGING_OWNER_USER_ID=" + targetOwner,
+      "AI_EXECUTIVE_TARGET_STAGING_RESTORE_GENERATION=" + targetGeneration,
+      "",
+    ].join("\n"), { mode: 0o600 });
+  } else {
+    writeFileSync(envfile, "synthetic-only=true\n", { mode: 0o600 });
+  }
+  // A systemd EnvironmentFile takes precedence over the four hardcoded
+  // Environment= assignments. Never let those keys redirect the app from
+  // the canonical data store or change its listener/runtime options.
+  const overriddenKey = ({
+    offenvdatadir: "AI_EXECUTIVE_DATA_DIR",
+    targetenvdatadir: "AI_EXECUTIVE_DATA_DIR",
+    offenvport: "PORT",
+    offenvnode: "NODE_ENV",
+    offenvtelemetry: "NEXT_TELEMETRY_DISABLED",
+  })[scenario];
+  if (overriddenKey) {
+    const value = overriddenKey === "AI_EXECUTIVE_DATA_DIR"
+      ? path.join(root, "var/lib/redirected-store") : "unexpected";
+    writeFileSync(envfile, readFileSync(envfile, "utf8") +
+      overriddenKey + "=" + value + "\n", { mode: 0o600 });
+  }
+  if (scenario === "offenvcomment") {
+    writeFileSync(envfile, readFileSync(envfile, "utf8") +
+      "# AI_EXECUTIVE_DATA_DIR=/var/lib/redirected-store\n", { mode: 0o600 });
+  }
+  // Test the deployment prefilter and canonical validator together. A clean
+  // disabled profile must stay on the fast path, while duplicates/malformed
+  // assignments must invoke --check and fail before taking down the service.
+  const offFlag = "AI_EXECUTIVE_TARGET_STAGING_HTTP_ENABLED";
+  const offProfiles = {
+    offduplicatefalse: [offFlag + "=false", offFlag + "=false"],
+    offduplicatequotedfalse: [offFlag + '="false"', offFlag + "=false"],
+    offduplicateunknownfalse: [
+      "AI_EXECUTIVE_TARGET_UNREVIEWED_ENABLED=false",
+      "AI_EXECUTIVE_TARGET_UNREVIEWED_ENABLED=false",
+    ],
+    offduplicaterequired: [
+      "AI_EXECUTIVE_TARGET_STAGING_DIRECTORY=/tmp/a",
+      "AI_EXECUTIVE_TARGET_STAGING_DIRECTORY=/tmp/b",
+    ],
+    offmalformedtarget: [offFlag + " =false"],
+    offvalidfalse: [offFlag + "=false"],
+    offvalidquotedfalse: [offFlag + '="false"'],
+    offvalidunknownfalse: ["AI_EXECUTIVE_TARGET_UNREVIEWED_ENABLED=false"],
+    offcommentedfalse: ["# " + offFlag + "=true"],
+  };
+  if (Object.hasOwn(offProfiles, scenario)) {
+    writeFileSync(envfile, offProfiles[scenario].join("\n") + "\n", { mode: 0o600 });
+  }
+  if (["offextraenvfile", "targetextraenvfile", "targetsystemddriftbuild"].includes(scenario)) {
+    // Exists only in the disposable sandbox, but is never read by the
+    // reviewed deploy code: the *loaded systemd list* must reject it.
+    writeFileSync(path.join(root, "etc/ai-executive/override.env"),
+      "AI_EXECUTIVE_TARGET_STAGING_HTTP_ENABLED=true\n", { mode: 0o600 });
+  }
   writeFileSync(path.join(data, "notes/safe.txt"), "synthetic note\n");
   writeFileSync(path.join(app, ".next/BUILD_ID"), "old build", { mode: 0o644 });
   writeFileSync(path.join(app, "node_modules/next/dist/bin/next"), "fake\n");
@@ -133,6 +207,13 @@ function sandbox(scenario) {
   }
   assert.ok(script.includes("/usr/bin/node"), "check data script still uses Node");
   script = script.replaceAll("/usr/bin/node", process.execPath);
+  if (scenario.startsWith("target")) {
+    // Only the exact canonical target path is rewritten in the synthetic sandbox.
+    const literal = '[ "$TARGET_DIRECTORY" = /var/lib/ai-executive-target/personal-v1 ]';
+    assert.equal(script.split(literal).length, 2);
+    script = script.replace(literal,
+      '[ "$TARGET_DIRECTORY" = ' + JSON.stringify(targetDirectory) + ' ]');
+  }
 
   const env = {
     ...process.env,
@@ -157,7 +238,7 @@ function sandbox(scenario) {
     };
   }
   return {
-    root, app, data, backups, lockDir, lockFile, execute,
+    root, app, data, backups, lockDir, lockFile, targetDirectory, execute,
     cleanup: () => rmSync(root, { recursive: true, force: true }),
   };
 }
@@ -510,6 +591,260 @@ scenarioCase("success: complete synthetic deploy validates build permissions and
   assert.equal(statSync(f.lockDir).mode & 0o777, 0o700, "lock directory is private");
   assert.equal(spawnSync("flock", ["-n", f.lockFile, "true"]).status, 0,
     "successful deploy releases lock without unlinking its inode");
+});
+
+
+scenarioCase("targetsuccess: quiesced target preflight, shared verified archive, post-start recheck", (r, f) => {
+  assert.equal(r.status, 0, r.output);
+  assert.equal(r.head, newSha);
+  assert.equal(r.service, "active");
+  assert.equal(r.backups.length, 1);
+  assert.equal(r.events.filter(value => value === "stop").length, 2);
+  assert.equal(r.events.filter(value => value === "start-b").length, 2);
+  assert.deepEqual(r.events.filter(value => value.startsWith("start-with-target-flags:")),
+    ["start-with-target-flags:31", "start-with-target-flags:31"],
+    "the two post-deployment service launches both use the fully reviewed profile");
+  assert.equal(r.events.filter(value => value === "target-check").length, 4,
+    "initial, post-copy, immediately-before-start and post-start semantic checks");
+  const firstStart = r.events.findIndex(value => value === "start-b");
+  assert.ok(r.events.slice(0, firstStart).filter(e => e === "target-check").length >= 3,
+    "all three pre-start checks must complete before target serves requests");
+  const archive = path.join(f.backups, r.backups[0]);
+  for (const name of ["lumi-target.sqlite", "lumi-target.journal", "lumi-target-witness.sqlite"])
+    assert.equal(readFileSync(path.join(archive, "target", name), "utf8"),
+      readFileSync(path.join(f.targetDirectory, name), "utf8"));
+  const manifest = readFileSync(path.join(archive, "SHA256SUMS"), "utf8");
+  assert.match(manifest, /target\/lumi-target.sqlite/);
+  assert.match(manifest, /target\/lumi-target.journal/);
+  assert.match(manifest, /target\/lumi-target-witness.sqlite/);
+});
+scenarioCase("targetstatedir: approved isolated StateDirectory permits target rollout", (r) => {
+  assert.equal(r.status, 0, r.output);
+  assert.equal(r.head, newSha);
+  assert.equal(r.service, "active");
+  assert.equal(r.events.filter(e => e === "target-check").length, 4);
+});
+
+scenarioCase("targetinvalid: reject partial activation without stopping service", (r) => {
+  assert.notEqual(r.status, 0);
+  assert.match(r.output, /neplatny nebo castecny profil/);
+  assert.match(r.output, /check names:/);
+  assert.equal(r.service, "active");
+  assert.equal(r.head, oldSha);
+  assert.equal(r.events.includes("stop"), false);
+  assert.deepEqual(r.backups, []);
+});
+for (const scenario of [
+  "offduplicatefalse", "offduplicatequotedfalse", "offduplicateunknownfalse",
+  "offduplicaterequired", "offmalformedtarget",
+]) {
+  scenarioCase(scenario + ": invalid off profile is rejected before service stop", (r) => {
+    assert.notEqual(r.status, 0);
+    assert.match(r.output, /neplatny nebo castecny profil/);
+    assert.equal(r.events.filter(e => e === "target-profile-source").length, 2,
+      "invalid disabled configurations must run the reviewed canonical checker");
+    assert.equal(r.head, oldSha);
+    assert.equal(r.service, "active");
+    assert.equal(r.events.includes("stop"), false, "invalid profile cannot cause downtime");
+    assert.equal(r.events.includes("merge"), false);
+    assert.deepEqual(r.backups, []);
+  });
+}
+for (const scenario of [
+  "offvalidfalse", "offvalidquotedfalse", "offvalidunknownfalse",
+  "offcommentedfalse",
+]) {
+  scenarioCase(scenario + ": valid off profile keeps the legacy fast path", (r) => {
+    assert.equal(r.status, 0, r.output);
+    assert.equal(r.events.includes("target-profile-source"), false,
+      "valid disabled profile must not load the target checker");
+    assert.equal(r.head, newSha);
+    assert.equal(r.service, "active");
+    assert.equal(r.backups.length, 1);
+  });
+}
+scenarioCase("targetunit: refuse writable-store activation without approved systemd sandbox", (r) => {
+  assert.notEqual(r.status, 0);
+  assert.match(r.output, /systemd sandbox nedovoluje zapis/);
+  assert.equal(r.events.includes("stop"), false);
+  assert.equal(r.service, "active");
+  assert.deepEqual(r.backups, []);
+});
+// `EnvironmentFile=` overrides fixed `Environment=` settings. Each
+// forbidden assignment must be rejected before stopping or backing up.
+for (const scenario of [
+  "offenvdatadir", "offenvport", "offenvnode", "offenvtelemetry",
+  "targetenvdatadir",
+]) {
+  scenarioCase(scenario + ": refuse service-unit env override before downtime", (r) => {
+    assert.notEqual(r.status, 0);
+    assert.match(r.output, /neoverene zdroje prostredi systemd/);
+    assert.equal(r.service, "active");
+    assert.equal(r.head, oldSha);
+    assert.equal(r.events.includes("stop"), false,
+      "do not back up one data store and restart the app on another");
+    assert.deepEqual(r.backups, []);
+  });
+}
+
+scenarioCase("offenvcomment: commented fixed-unit variable is not an override", (r) => {
+  assert.equal(r.status, 0, r.output);
+  assert.equal(r.head, newSha);
+  assert.equal(r.service, "active");
+});
+
+for (const scenario of [
+  "targetrwbroad", "targetrwparent", "targetweakprotect",
+  "targetstateextra", "targetmixedwrites", "offweakprotect",
+]) {
+  scenarioCase(scenario + ": refuse unapproved or weakened systemd sandbox", (r) => {
+    assert.notEqual(r.status, 0);
+    assert.match(r.output, /systemd sandbox nedovoluje zapis/);
+    assert.equal(r.service, "active");
+    assert.equal(r.head, oldSha);
+    assert.equal(r.events.includes("stop"), false);
+    assert.deepEqual(r.backups, []);
+  });
+}
+
+// The loaded EnvironmentFile must be the single reviewed operator file.
+for (const scenario of [
+  "offextraenvfile", "targetextraenvfile",
+]) {
+  scenarioCase(scenario + ": reject unverified effective systemd env before stop", (r) => {
+    assert.notEqual(r.status, 0);
+    assert.match(r.output, /neoverene zdroje prostredi systemd/);
+    assert.equal(r.service, "active");
+    assert.equal(r.head, oldSha);
+    assert.equal(r.events.includes("stop"), false, "reject before any downtime");
+    assert.equal(r.events.includes("merge"), false);
+    assert.deepEqual(r.backups, []);
+  });
+}
+
+scenarioCase("offsystemddriftbuild: rollback must not restart with a rejected loaded unit", (r) => {
+  assert.notEqual(r.status, 0);
+  assert.match(r.output, /zdroje prostredi systemd se pred startem zmenily/);
+  assert.match(r.output, /BEZPECNOSTNI BLOKACE: zdroje prostredi systemd pri rollbacku/);
+  assert.equal(r.events.includes("unit-env-changed-during-build"), true);
+  assert.equal(r.events.includes("reset"), true, "code-only rollback is allowed, not restart");
+  assert.equal(r.events.some(e => e.startsWith("start-")), false,
+    "the original service must not reload an unreviewed EnvironmentFile");
+  assert.equal(r.head, oldSha);
+  assert.equal(r.service, "inactive");
+  assert.equal(r.backups.length, 1, "verified backup remains for manual recovery");
+});
+
+scenarioCase("offenvdriftbuild: rollback must not restart with changed root env", (r) => {
+  assert.notEqual(r.status, 0);
+  assert.match(r.output, /env se pred startem zmenilo/);
+  assert.match(r.output, /BEZPECNOSTNI BLOKACE: zmeneny obsah \.env pri rollbacku/);
+  assert.equal(r.events.includes("env-changed-during-build"), true);
+  assert.equal(r.events.includes("reset"), true);
+  assert.equal(r.events.some(e => e.startsWith("start-")), false,
+    "off profile at initial preflight is insufficient after env mutation");
+  assert.equal(r.head, oldSha);
+  assert.equal(r.service, "inactive");
+  assert.equal(r.backups.length, 1);
+});
+
+scenarioCase("targetgeneration: mismatched generation never restarts under rejected flags", (r) => {
+  assert.notEqual(r.status, 0);
+  assert.match(r.output, /cilovy preflight: neshoda/);
+  assert.match(r.output, /Sluzba zustava zastavena/);
+  assert.equal(r.head, oldSha);
+  assert.equal(r.service, "inactive");
+  assert.equal(r.events.includes("stop"), true);
+  assert.equal(r.events.includes("merge"), false);
+  assert.equal(r.events.some(e => e.startsWith("start-")), false,
+    "no process may reload the unverified target EnvironmentFile");
+  assert.deepEqual(r.backups, []);
+});
+scenarioCase("targetbackupcorrupt: purge partial archive and fail closed without a restart", (r) => {
+  assert.notEqual(r.status, 0);
+  assert.match(r.output, /cilova zaloha obsahuje neodpovidajici/);
+  assert.match(r.output, /Sluzba zustava zastavena/);
+  assert.equal(r.head, oldSha);
+  assert.equal(r.service, "inactive");
+  assert.equal(r.events.includes("merge"), false);
+  assert.equal(r.events.some(e => e.startsWith("start-")), false);
+  assert.deepEqual(r.backups, []);
+});
+scenarioCase("targetidentityswap: changed owner/generation after copy preflight blocks first start", (r, f) => {
+  assert.notEqual(r.status, 0);
+  assert.match(r.output, /cilovy preflight se po zaloze zmenil/);
+  assert.match(r.output, /Sluzba zustava zastavena/);
+  assert.equal(r.head, oldSha, "deployment never switches code when identity changes");
+  assert.equal(r.service, "inactive", "rejected target cannot be served under old code");
+  assert.equal(r.events.includes("target-identity-swapped"), true);
+  assert.equal(r.events.filter(e => e === "target-check").length, 2,
+    "initial check and post-copy env-bound semantic check must both run");
+  assert.equal(r.events.some(e => e.startsWith("start-")), false,
+    "no target-enabled traffic is allowed before revalidating identity");
+  assert.deepEqual(r.backups, [], "unverified backup is discarded without touching live target files");
+  assert.match(readFileSync(path.join(f.targetDirectory, "lumi-target.sqlite"), "utf8"), /other-owner/,
+    "operator must investigate the changed live store, never auto-restore data");
+});
+scenarioCase("targetsystemddriftbuild: new loaded EnvironmentFile during build blocks first start", (r, f) => {
+  assert.notEqual(r.status, 0);
+  assert.match(r.output, /zdroje prostredi systemd se pred startem zmenily/);
+  assert.equal(r.events.includes("unit-env-changed-during-build"), true);
+  assert.equal(r.events.some(e => e.startsWith("start-")), false,
+    "no new-code process may load an extra EnvironmentFile");
+  assert.equal(r.service, "inactive");
+  assert.equal(r.head, oldSha);
+  assert.equal(r.events.includes("reset"), true);
+  assert.equal(r.backups.length, 1, "verified offline archive is retained");
+});
+
+scenarioCase("targetbuildidentitydrift: store swap during build blocks first start", (r, f) => {
+  assert.notEqual(r.status, 0);
+  assert.match(r.output, /cilovy preflight tesne pred startem/);
+  assert.match(r.output, /Sluzba zustava zastavena/);
+  assert.equal(r.events.includes("target-build-identity-drift"), true);
+  assert.equal(r.events.filter(e => e === "target-check").length, 3,
+    "the third check must detect a store changed after the verified archive");
+  assert.equal(r.events.some(e => e.startsWith("start-")), false,
+    "no request may be served from the new mismatched store");
+  assert.equal(r.head, oldSha, "failed pre-start code rollout reverts code only");
+  assert.equal(r.events.includes("reset"), true);
+  assert.equal(r.service, "inactive");
+  assert.equal(r.backups.length, 1, "verified original archive must be preserved");
+  const archived = readFileSync(path.join(f.backups, r.backups[0], "target", "lumi-target.sqlite"), "utf8");
+  assert.match(archived, /owner-01/, "archive still contains the previously verified owner");
+  assert.match(readFileSync(path.join(f.targetDirectory, "lumi-target.sqlite"), "utf8"), /different-owner/,
+    "live target never automatically restored or deleted");
+});
+
+scenarioCase("targetpostfail: code-only rollback stays stopped after new-code start failed", (r, f) => {
+  assert.notEqual(r.status, 0);
+  assert.match(r.output, /cilovy preflight po prvnim startu selhal/);
+  assert.match(r.output, /Sluzba zustava zastavena/);
+  assert.equal(r.head, oldSha);
+  assert.equal(r.service, "inactive");
+  assert.equal(r.events.includes("reset"), true);
+  assert.deepEqual(r.events.filter(e => e.startsWith("start-with-target-flags:")),
+    ["start-with-target-flags:31"],
+    "only the initial new-code start may see enabled flags");
+  assert.equal(r.events.includes("start-b"), true);
+  assert.equal(r.events.includes("start-a"), false,
+    "old code must never reload the rejected target profile");
+  assert.equal(r.backups.length, 1);
+  assert.equal(existsSync(path.join(f.backups, r.backups[0], "target", "lumi-target.sqlite")), true);
+});
+
+
+scenarioCase("targetbuildfail: code rollback does not reactivate rejected target profile", (r, f) => {
+  assert.notEqual(r.status, 0);
+  assert.match(r.output, /synthetic target-enabled build failure/);
+  assert.match(r.output, /BEZPECNOSTNI BLOKACE: neuspesna aktivace personal-v1/);
+  assert.equal(r.head, oldSha);
+  assert.equal(r.service, "inactive", "old service must remain stopped until explicit off confirmation");
+  assert.equal(r.events.includes("reset"), true, "code is rolled back without restoring data");
+  assert.equal(r.events.some(e => e.startsWith("start-")), false,
+    "service must not reload personal-v1 flags after target-enabled build failure");
+  assert.equal(r.backups.length, 1);
+  assert.equal(existsSync(path.join(f.backups, r.backups[0], "target", "lumi-target.sqlite")), true);
 });
 
 test("exclusive deployment lock rejects a second process before any service or repository change", { timeout: 15000 }, async () => {

@@ -24,8 +24,56 @@ BACKUP_VALIDATED=0
 # Rolling back code must not claim the affected Gmail consent/index survived.
 MAIL_PRESTART_INTEGRITY_FAILED=0
 MAIL_PRESTART_SNAPSHOT_FAILED=0
+# Off path remains identical; these are used only for an explicitly configured
+# personal-v1 target profile. No settings or private paths are printed.
+TARGET_PROFILE=off
+TARGET_DIRECTORY=""
+TARGET_OWNER=""
+TARGET_GENERATION=""
+PROFILE_TMP=""
+PROFILE_TOOL=""
+ENV_BASELINE_SHA=""
 
 die() { echo "STOP: $*" >&2; exit 1; }
+
+# Verify the active EnvironmentFile and disallow overriding fixed unit keys.
+verify_loaded_environment_sources() {
+  local files
+  files="$(systemctl show "$SERVICE" -p EnvironmentFiles --value)" || return 1
+  [ "$files" = "$ENVFILE (ignore_errors=no)" ] || return 1
+  if LC_ALL=C grep -Eq '^[[:space:]]*(export[[:space:]]+)?(NODE_ENV|PORT|NEXT_TELEMETRY_DISABLED|AI_EXECUTIVE_DATA_DIR)[[:space:]]*=' "$ENVFILE"; then
+    return 1
+  else
+    [ "$?" -eq 1 ]
+  fi
+}
+
+# Only the separately approved isolated StateDirectory is writable in target mode.
+verify_loaded_write_sandbox() {
+  local protect state rw
+  protect="$(systemctl show "$SERVICE" -p ProtectSystem --value)" || return 1
+  [ "$protect" = strict ] || return 1
+  state="$(systemctl show "$SERVICE" -p StateDirectory --value)" || return 1
+  rw="$(systemctl show "$SERVICE" -p ReadWritePaths --value)" || return 1
+  [ -z "$rw" ] || return 1
+  if [ "$TARGET_PROFILE" = personal-v1 ]; then
+    [ "$TARGET_DIRECTORY" = /var/lib/ai-executive-target/personal-v1 ] || return 1
+    [ "$state" = "ai-executive ai-executive-target" ] ||
+      [ "$state" = "ai-executive-target ai-executive" ] || return 1
+  else
+    [ "$state" = ai-executive ] ||
+      [ "$state" = "ai-executive ai-executive-target" ] ||
+      [ "$state" = "ai-executive-target ai-executive" ] || return 1
+  fi
+}
+
+# Fingerprint the exact reviewed root-owned env bytes. Even an off deployment
+# must not restart after an operator/attacker changes that file during a build
+# or rollback. No values or the digest are logged.
+env_file_unchanged() {
+  [ -n "$ENV_BASELINE_SHA" ] &&
+    [ "$(sha256sum -- "$ENVFILE")" = "$ENV_BASELINE_SHA" ]
+}
 
 # Explicit opt-in after a failed first rollout has left the service stopped.
 # Never interpret a stopped service as permission to recover automatically.
@@ -234,6 +282,12 @@ NODE
 on_exit() {
   local rc="$1"
   trap - EXIT INT TERM HUP
+  # Exact private temporary checker created by this invocation only.
+  if [ -n "$PROFILE_TMP" ] && [[ "$PROFILE_TMP" == "$LOCK_DIR"/profile-???????? ]] &&
+     [ -d "$PROFILE_TMP" ] && [ ! -L "$PROFILE_TMP" ]; then
+    rm -rf --one-file-system -- "$PROFILE_TMP" ||
+      echo "UPOZORNENI: nelze odstranit docasny profilovy checker" >&2
+  fi
   if [ "$rc" -eq 0 ]; then return 0; fi
   echo "NASAZENI SELHALO (kod $rc), zaloha: ${BACKUP:-nevytvorena}" >&2
   if [ "$MAIL_PRESTART_INTEGRITY_FAILED" = 1 ]; then
@@ -291,6 +345,30 @@ on_exit() {
       echo "KRITICKA CHYBA: rollback buildu selhal, sluzba zustava zastavena." >&2
       exit "$rc"
     fi
+  fi
+  # An explicitly activated target cannot safely fall back to old code just
+  # by restoring the git revision: systemd reloads the unchanged root-owned
+  # EnvironmentFile on start. That would activate the very profile that just
+  # failed semantic or archival verification. Preserve both data domains and
+  # the code-only rollback above, but require an operator to disable/verify
+  # the target flags before any recovery start.
+  if [ "$TARGET_PROFILE" = personal-v1 ]; then
+    echo "BEZPECNOSTNI BLOKACE: neuspesna aktivace personal-v1; restart s ponechanym .env je zakazan." >&2
+    echo "Kod byl pripadne vracen; ani legacy, ani cilova data nebyla obnovena nebo smazana." >&2
+    echo "Sluzba zustava zastavena. Operator musi explicitne vypnout cilove prepinace, overit profil off a schvalit samostatny postup obnovy." >&2
+    exit "$rc"
+  fi
+  # A failed off deployment can also see unit/env drift *after* its last
+  # pre-start validation. Never restart old code with newly rejected flags.
+  # These checks intentionally emit only a named failed policy, not values.
+  # Keep separate tests so an unexpected rollback block can be diagnosed.
+  if ! verify_loaded_environment_sources; then
+    echo "BEZPECNOSTNI BLOKACE: zdroje prostredi systemd pri rollbacku." >&2
+    exit "$rc"
+  fi
+  if ! env_file_unchanged; then
+    echo "BEZPECNOSTNI BLOKACE: zmeneny obsah .env pri rollbacku." >&2
+    exit "$rc"
   fi
   if systemctl start "$SERVICE" && verify_service; then
     if [ "$BACKUP_VALIDATED" = 1 ]; then
@@ -406,12 +484,95 @@ if git cat-file -e "$TARGET:lib/owner-session-revocation.ts" 2>/dev/null &&
   OWNER_SESSION_FIRST_ROLLOUT=1
 fi
 git diff --quiet "$PREV" "$TARGET" -- deployment/ai-executive.service || die "systemd jednotka se zmenila"
+# Fail before stopping, even when the main env file appears to be off:
+# a second loaded file or manager-global target flag can activate it.
+verify_loaded_environment_sources ||
+  die "neoverene zdroje prostredi systemd; kontrola konfigurace sluzby selhala"
+ENV_BASELINE_SHA="$(sha256sum -- "$ENVFILE")" ||
+  die "nelze overit hash konfigurace env"
+# Do not evaluate the root-owned EnvironmentFile as shell. In the dormant
+# legacy case we do no target probing, filesystem access or additional output.
+# The exact validator is loaded from the REVIEWED target commit before stop,
+# not from a possibly old checked-out version of the application.
+# Keep a valid, disabled profile on the legacy fast path, without target I/O.
+# Any duplicate disabled flag/operator setting or malformed target line still
+# requires the canonical validator: invalid must fail before service stop.
+# Capture a single non-secret marker; an awk I/O failure must not mean "off".
+profile_needs_check="$(awk '
+  /^[[:space:]]*(#|$)/ { next }
+  {
+    line=$0
+    sub(/^[[:space:]]*/, "", line)
+    if (line !~ /^AI_EXECUTIVE_TARGET_/) {
+      # The CLI rejects malformed assignments mentioning target variables.
+      if (line !~ /^[A-Za-z_][A-Za-z0-9_]*=/ &&
+          index(line, "AI_EXECUTIVE_TARGET_") > 0) { print 1; exit }
+      next
+    }
+    if (line !~ /^AI_EXECUTIVE_TARGET_[A-Za-z0-9_]+=/) {
+      print 1; exit
+    }
+    key=line
+    sub(/=.*/, "", key)
+    if (key ~ /_ENABLED$/ ||
+        key == "AI_EXECUTIVE_TARGET_STAGING_DIRECTORY" ||
+        key == "AI_EXECUTIVE_TARGET_STAGING_OWNER_USER_ID" ||
+        key == "AI_EXECUTIVE_TARGET_STAGING_RESTORE_GENERATION") {
+      if (++seen[key] > 1) { print 1; exit }
+    }
+    if (key ~ /_ENABLED$/) {
+      v=line
+      sub(/^[^=]*=/, "", v)
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", v)
+      if (v!="false" && v!="\"false\"" && v!="\047false\047") {
+        print 1; exit
+      }
+    }
+  }
+' "$ENVFILE")" || die "nelze zkontrolovat cilove prepinace v env"
+if [ "$profile_needs_check" = 1 ]; then
+  PROFILE_TMP="$(mktemp -d "$LOCK_DIR/profile-XXXXXXXX")"
+  chmod 0700 "$PROFILE_TMP"
+  mkdir -m 0700 "$PROFILE_TMP/scripts" "$PROFILE_TMP/lib"
+  git show "$TARGET:scripts/target-profile-env.mjs" > "$PROFILE_TMP/scripts/target-profile-env.mjs" ||
+    die "cil nema kontrolu profilu"
+  git show "$TARGET:lib/target-personal-profile.ts" > "$PROFILE_TMP/lib/target-personal-profile.ts" ||
+    die "cil nema definici profilu"
+  chmod 0600 "$PROFILE_TMP/scripts/target-profile-env.mjs" "$PROFILE_TMP/lib/target-personal-profile.ts"
+  PROFILE_TOOL="$PROFILE_TMP/scripts/target-profile-env.mjs"
+  TARGET_PROFILE="$(/usr/bin/node "$PROFILE_TOOL" --check "$ENVFILE")" ||
+    die "neplatny nebo castecny profil v env"
+  if [ "$TARGET_PROFILE" = personal-v1 ]; then
+    TARGET_DIRECTORY="$(/usr/bin/node "$PROFILE_TOOL" --setting "$ENVFILE" AI_EXECUTIVE_TARGET_STAGING_DIRECTORY)" ||
+      die "nelze nacist adresar ciloveho uloziste"
+    TARGET_OWNER="$(/usr/bin/node "$PROFILE_TOOL" --setting "$ENVFILE" AI_EXECUTIVE_TARGET_STAGING_OWNER_USER_ID)" ||
+      die "nelze nacist vlastnika ciloveho uloziste"
+    TARGET_GENERATION="$(/usr/bin/node "$PROFILE_TOOL" --setting "$ENVFILE" AI_EXECUTIVE_TARGET_STAGING_RESTORE_GENERATION)" ||
+      die "nelze nacist generaci ciloveho uloziste"
+    # Live database is NOT opened here: SQLite may currently hold -wal/-shm.
+    test -d "$TARGET_DIRECTORY" && test ! -L "$TARGET_DIRECTORY" ||
+      die "cilovy adresar neexistuje nebo je symlink"
+    case "$TARGET_DIRECTORY/" in "$DATA/"*) die "cilove uloziste prekryva legacy data";; esac
+    test "$(stat -c %u "$TARGET_DIRECTORY")" = "$(id -u ai-executive)" &&
+      test "$(stat -c %a "$TARGET_DIRECTORY")" = 700 ||
+      die "cilovy adresar nema vlastnika ai-executive a rezim 0700"
+  fi
+fi
+# Reject weakened sandboxing also for legacy-only/off deployments.
+verify_loaded_write_sandbox ||
+  die "systemd sandbox nedovoluje zapis do ciloveho uloziste nebo neni ProtectSystem=strict"
+env_file_unchanged || die "env se zmenilo behem predstartovniho overovani"
 echo "Stavajici: $PREV"
 echo "Cil:       $TARGET"
 
 # Check reserve before taking the service down. Backup and build might be on
 # different filesystems. If shared, the backup check includes the build reserve.
 data_kb=$(du -sk "$DATA" | awk '{print $1}')
+if [ "$TARGET_PROFILE" = personal-v1 ]; then
+  target_kb=$(du -sk "$TARGET_DIRECTORY" | awk '{print $1}')
+  [[ "$target_kb" =~ ^[0-9]+$ ]] || die "nelze zjistit velikost ciloveho uloziste"
+  data_kb=$((data_kb + target_kb))
+fi
 backup_free_kb=$(df -Pk "$BACKUP_DIR" | awk 'END {print $4}')
 app_free_kb=$(df -Pk "$APP" | awk 'END {print $4}')
 state_free_kb=$(df -Pk "$DATA" | awk 'END {print $4}')
@@ -437,10 +598,28 @@ chmod 0700 "$BACKUP"
 STOPPED=1
 systemctl stop "$SERVICE"
 ! systemctl is-active --quiet "$SERVICE" || die "sluzba se nezastavila"
+# Semantic check requires a quiet store. Run with the service effective UID;
+# never as root (the provision checker enforces UID identity).
+verify_target_store() {
+  local actual expected
+  actual="$(runuser -u ai-executive -- env AI_EXECUTIVE_DATA_DIR="$DATA" /usr/bin/node \
+    "$APP/scripts/target-store-provision.mjs" --check "$TARGET_DIRECTORY")" || return 1
+  expected="$(printf '%s\n' \
+    "AI_EXECUTIVE_TARGET_STAGING_DIRECTORY=$TARGET_DIRECTORY" \
+    "AI_EXECUTIVE_TARGET_STAGING_OWNER_USER_ID=$TARGET_OWNER" \
+    "AI_EXECUTIVE_TARGET_STAGING_RESTORE_GENERATION=$TARGET_GENERATION")"
+  [ "$actual" = "$expected" ]
+}
+if [ "$TARGET_PROFILE" = personal-v1 ]; then
+  verify_target_store || die "cilovy preflight: neshoda vlastnika, generace nebo integrity"
+fi
 (
   umask 077
   cp -a "$DATA" "$BACKUP/data"
   cp -a "$ENVFILE" "$BACKUP/env"
+  if [ "$TARGET_PROFILE" = personal-v1 ]; then
+    cp -a "$TARGET_DIRECTORY" "$BACKUP/target"
+  fi
 )
 cmp "$DATA/store.sqlite" "$BACKUP/data/store.sqlite"
 if [ -f "$DATA/store.sqlite-wal" ]; then
@@ -452,6 +631,15 @@ fi
 cmp -s "$ENVFILE" "$BACKUP/env" || die "zaloha env neodpovida originalu"
 diff -qr --exclude=store.sqlite-shm -- "$DATA" "$BACKUP/data" ||
   die "zaloha obsahuje neodpovidajici nebo chybejici soubory"
+if [ "$TARGET_PROFILE" = personal-v1 ]; then
+  diff -qr -- "$TARGET_DIRECTORY" "$BACKUP/target" ||
+    die "cilova zaloha obsahuje neodpovidajici nebo chybejici soubory"
+  # The backup is only safe to use if the *same* owner and restore
+  # generation still match the operator-approved env. A self-consistent
+  # but substituted target would pass --check without this comparison.
+  verify_target_store ||
+    die "cilovy preflight se po zaloze zmenil (vlastnik, generace nebo integrita)"
+fi
 runuser -u ai-executive -- /usr/bin/node \
   "$APP/scripts/check-data.mjs" "$DATA/store.sqlite" > "$BACKUP/before.json"
 snapshot_work_sessions > "$BACKUP/before-sessions.json"
@@ -474,8 +662,16 @@ NODE
 (
   umask 077
   cd "$BACKUP"
-  find data env -type f ! -name '*-shm' -print0 |
-    sort -z | xargs -0 sha256sum > SHA256SUMS
+  if [ "$TARGET_PROFILE" = personal-v1 ]; then
+    find data env target -type f ! -name '*-shm' -print0 |
+      sort -z | xargs -0 sha256sum > SHA256SUMS
+  else
+    find data env -type f ! -name '*-shm' -print0 |
+      sort -z | xargs -0 sha256sum > SHA256SUMS
+  fi
+  # All target sidecars, SQLite, witness and append-only journal are hashed in
+  # the SAME verified archive as the legacy store. Never restore data in trap.
+  # (The off branch intentionally retains the existing hash manifest.)
   sha256sum -c --quiet SHA256SUMS
 )
 BACKUP_VALIDATED=1
@@ -527,8 +723,46 @@ if ! verify_mail_sync_prestart "$BACKUP/before-mail.json" "$BACKUP/prestart-mail
 fi
 
 echo "=== START A PROVOZNI KONTROLY ==="
+if [ "$TARGET_PROFILE" = personal-v1 ]; then
+  # Catch a changed root-only env before allowing the first target request.
+  [ "$(/usr/bin/node "$PROFILE_TOOL" --check "$ENVFILE")" = personal-v1 ] ||
+    die "cilovy profil se pred startem zmenil"
+  [ "$(/usr/bin/node "$PROFILE_TOOL" --setting "$ENVFILE" AI_EXECUTIVE_TARGET_STAGING_DIRECTORY)" = "$TARGET_DIRECTORY" ] &&
+  [ "$(/usr/bin/node "$PROFILE_TOOL" --setting "$ENVFILE" AI_EXECUTIVE_TARGET_STAGING_OWNER_USER_ID)" = "$TARGET_OWNER" ] &&
+  [ "$(/usr/bin/node "$PROFILE_TOOL" --setting "$ENVFILE" AI_EXECUTIVE_TARGET_STAGING_RESTORE_GENERATION)" = "$TARGET_GENERATION" ] ||
+    die "cilove nastaveni se pred startem zmenilo"
+  # Install/build and auth/mail prestart operations run after the backup.
+  # Recheck the actual quiet store NOW, before it may serve any request.
+  verify_target_store ||
+    die "cilovy preflight tesne pred startem: neshoda vlastnika, generace nebo integrity"
+fi
+# systemd drop-ins can be changed independently of the checked-out repo.
+# Confirm the loaded environment sources again before allowing a start.
+verify_loaded_environment_sources ||
+  die "zdroje prostredi systemd se pred startem zmenily"
+verify_loaded_write_sandbox ||
+  die "systemd sandbox se pred startem zmenil"
+env_file_unchanged ||
+  die "env se pred startem zmenilo"
 systemctl start "$SERVICE"
 verify_service || die "sluzba nebo lokalni/HTTPS API nejsou dostupne"
+if [ "$TARGET_PROFILE" = personal-v1 ]; then
+  # Post-start semantic recheck must be offline. The live target SQLite may
+  # have transient sidecars; the provision checker deliberately rejects them.
+  # Re-quiesce the service, verify the real live store, then resume and check
+  # HTTP readiness again. Both failures retain the existing code-only rollback.
+  systemctl stop "$SERVICE"
+  ! systemctl is-active --quiet "$SERVICE" || die "sluzba se pri kontrole ciloveho uloziste nezastavila"
+  verify_target_store || die "cilovy preflight po prvnim startu selhal"
+  verify_loaded_environment_sources ||
+    die "zdroje prostredi systemd se pred druhym startem zmenily"
+  verify_loaded_write_sandbox ||
+    die "systemd sandbox se pred druhym startem zmenil"
+      env_file_unchanged ||
+    die "env se pred druhym startem zmenilo"
+  systemctl start "$SERVICE"
+  verify_service || die "sluzba po kontrole ciloveho uloziste neni dostupna"
+fi
 runuser -u ai-executive -- /usr/bin/node \
   "$APP/scripts/check-data.mjs" "$DATA/store.sqlite" > "$BACKUP/after.json"
 snapshot_work_sessions > "$BACKUP/after-sessions.json"
