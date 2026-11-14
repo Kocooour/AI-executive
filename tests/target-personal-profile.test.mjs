@@ -28,6 +28,7 @@ const INCOMPLETE_ALLOWED=new Set([]);
 const found=new Set(),nonBoolean=new Set(),incomplete=[];
 let staticDeploySentinels=0;
 let staticProfilePrefixes=0;
+let staticManagerEnvPrefixes=0;
 for(const file of tracked){
   let text;
   try{text=readFileSync(path.join(root,file),"utf8");}catch{continue;}
@@ -40,7 +41,13 @@ for(const file of tracked){
         token==="AI_EXECUTIVE_TARGET_" &&
         text.slice(match.index-'const prefix = "'.length,match.index+token.length+2) ===
           'const prefix = "AI_EXECUTIVE_TARGET_";';
+      // This static grep checks the systemd manager's inherited environment
+      // for *any* target name (not a dynamically assembled variable lookup).
+      const fixedManagerEnvPrefix=file==="deployment/deploy-safe.sh" &&
+        token==="AI_EXECUTIVE_TARGET_" &&
+        text.slice(match.index-1).startsWith("^AI_EXECUTIVE_TARGET_[A-Za-z0-9_]*=");
       if(fixedProfilePrefix)staticProfilePrefixes++;
+      else if(fixedManagerEnvPrefix)staticManagerEnvPrefixes++;
       else if(!INCOMPLETE_ALLOWED.has(file+"|"+token))
         incomplete.push(file+": "+token+" followed by "+JSON.stringify(text[match.index+token.length]));
     }else if(token.endsWith("_ENABLED"))found.add(token);
@@ -77,6 +84,7 @@ test("profile is sorted, unique and well-formed; every exclusion has a reason",(
 test("no flag name is assembled at runtime or split, so the scan cannot be bypassed",()=>{
   assert.equal(staticDeploySentinels,1,"only the single audited, static deploy sentinel is allowed");
   assert.equal(staticProfilePrefixes,1,"the CLI must declare exactly one fixed target-flag namespace");
+  assert.equal(staticManagerEnvPrefixes,1,"only one static manager-env target namespace scan is allowed");
   assert.deepEqual(incomplete,[]);
 });
 
