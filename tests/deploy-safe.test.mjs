@@ -9,6 +9,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
+import { targetPersonalV1Env } from "../lib/target-personal-profile.ts";
 
 const repo = process.cwd();
 const source = readFileSync(path.join(repo, "deployment/deploy-safe.sh"), "utf8");
@@ -28,13 +29,36 @@ function sandbox(scenario) {
   const bin = path.join(root, "bin");
   const lockDir = path.join(root, "run/lock/ai-executive");
   const lockFile = path.join(lockDir, "deploy.lock");
+  const targetDirectory = path.join(root, "var/lib/ai-executive-target/personal-v1");
+  const targetGeneration = "2a10b529-66a4-4790-a600-a27f2d996a0f";
+  const targetOwner = "owner-01";
 
   for (const p of [app, data, backups, path.dirname(envfile), state, bin,
     path.join(app, ".next/server"), path.join(app, "scripts"),
     path.join(app, "node_modules/next/dist/bin"), path.join(data, "notes")]) {
     mkdirSync(p, { recursive: true });
   }
-  writeFileSync(envfile, "synthetic-only=true\n", { mode: 0o600 });
+  if (scenario.startsWith("target")) {
+    mkdirSync(targetDirectory, { recursive: true });
+    chmodSync(targetDirectory, 0o700);
+    for (const name of ["lumi-target.sqlite", "lumi-target.journal", "lumi-target-witness.sqlite"])
+      writeFileSync(path.join(targetDirectory, name),
+        name === "lumi-target.sqlite" ? targetOwner + "\n" + targetGeneration : "synthetic " + name,
+        { mode: 0o600 });
+    const all = targetPersonalV1Env();
+    if (scenario === "targetinvalid") {
+      for (const name of Object.keys(all).slice(1)) delete all[name];
+    }
+    writeFileSync(envfile, [
+      ...Object.entries(all).map(([key, value]) => key + "=" + value),
+      "AI_EXECUTIVE_TARGET_STAGING_DIRECTORY=" + targetDirectory,
+      "AI_EXECUTIVE_TARGET_STAGING_OWNER_USER_ID=" + targetOwner,
+      "AI_EXECUTIVE_TARGET_STAGING_RESTORE_GENERATION=" + targetGeneration,
+      "",
+    ].join("\n"), { mode: 0o600 });
+  } else {
+    writeFileSync(envfile, "synthetic-only=true\n", { mode: 0o600 });
+  }
   writeFileSync(path.join(data, "notes/safe.txt"), "synthetic note\n");
   writeFileSync(path.join(app, ".next/BUILD_ID"), "old build", { mode: 0o644 });
   writeFileSync(path.join(app, "node_modules/next/dist/bin/next"), "fake\n");
@@ -157,7 +181,7 @@ function sandbox(scenario) {
     };
   }
   return {
-    root, app, data, backups, lockDir, lockFile, execute,
+    root, app, data, backups, lockDir, lockFile, targetDirectory, execute,
     cleanup: () => rmSync(root, { recursive: true, force: true }),
   };
 }
@@ -510,6 +534,68 @@ scenarioCase("success: complete synthetic deploy validates build permissions and
   assert.equal(statSync(f.lockDir).mode & 0o777, 0o700, "lock directory is private");
   assert.equal(spawnSync("flock", ["-n", f.lockFile, "true"]).status, 0,
     "successful deploy releases lock without unlinking its inode");
+});
+
+
+scenarioCase("targetsuccess: quiesced target preflight, shared verified archive, post-start recheck", (r, f) => {
+  assert.equal(r.status, 0, r.output);
+  assert.equal(r.head, newSha);
+  assert.equal(r.service, "active");
+  assert.equal(r.backups.length, 1);
+  assert.equal(r.events.filter(value => value === "stop").length, 2);
+  assert.equal(r.events.filter(value => value === "start-b").length, 2);
+  assert.equal(r.events.filter(value => value === "target-check").length, 3);
+  const archive = path.join(f.backups, r.backups[0]);
+  for (const name of ["lumi-target.sqlite", "lumi-target.journal", "lumi-target-witness.sqlite"])
+    assert.equal(readFileSync(path.join(archive, "target", name), "utf8"),
+      readFileSync(path.join(f.targetDirectory, name), "utf8"));
+  const manifest = readFileSync(path.join(archive, "SHA256SUMS"), "utf8");
+  assert.match(manifest, /target\/lumi-target.sqlite/);
+  assert.match(manifest, /target\/lumi-target.journal/);
+  assert.match(manifest, /target\/lumi-target-witness.sqlite/);
+});
+scenarioCase("targetinvalid: reject partial activation without stopping service", (r) => {
+  assert.notEqual(r.status, 0);
+  assert.match(r.output, /neplatny nebo castecny profil/);
+  assert.match(r.output, /check names:/);
+  assert.equal(r.service, "active");
+  assert.equal(r.head, oldSha);
+  assert.equal(r.events.includes("stop"), false);
+  assert.deepEqual(r.backups, []);
+});
+scenarioCase("targetunit: refuse writable-store activation without approved systemd sandbox", (r) => {
+  assert.notEqual(r.status, 0);
+  assert.match(r.output, /systemd sandbox nedovoluje zapis/);
+  assert.equal(r.events.includes("stop"), false);
+  assert.equal(r.service, "active");
+  assert.deepEqual(r.backups, []);
+});
+scenarioCase("targetgeneration: reject mismatched generation at quiesced preflight", (r) => {
+  assert.notEqual(r.status, 0);
+  assert.match(r.output, /cilovy preflight: neshoda/);
+  assert.equal(r.head, oldSha);
+  assert.equal(r.service, "active");
+  assert.equal(r.events.includes("stop"), true);
+  assert.equal(r.events.includes("merge"), false);
+  assert.deepEqual(r.backups, []);
+});
+scenarioCase("targetbackupcorrupt: purge partial archive and restart original service", (r) => {
+  assert.notEqual(r.status, 0);
+  assert.match(r.output, /cilova zaloha obsahuje neodpovidajici/);
+  assert.equal(r.head, oldSha);
+  assert.equal(r.service, "active");
+  assert.equal(r.events.includes("merge"), false);
+  assert.deepEqual(r.backups, []);
+});
+scenarioCase("targetpostfail: post-start semantic failure rolls back code only", (r, f) => {
+  assert.notEqual(r.status, 0);
+  assert.match(r.output, /cilovy preflight po prvnim startu selhal/);
+  assert.equal(r.head, oldSha);
+  assert.equal(r.service, "active");
+  assert.equal(r.events.includes("reset"), true);
+  assert.equal(r.events.includes("start-b"), true);
+  assert.equal(r.backups.length, 1);
+  assert.equal(existsSync(path.join(f.backups, r.backups[0], "target", "lumi-target.sqlite")), true);
 });
 
 test("exclusive deployment lock rejects a second process before any service or repository change", { timeout: 15000 }, async () => {
