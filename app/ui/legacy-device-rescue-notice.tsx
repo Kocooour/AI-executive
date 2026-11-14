@@ -2,7 +2,7 @@
 import { useEffect, useRef, useState } from "react";
 import { readLocalWithBase } from "../../lib/db";
 import { readRawRecoveryDrafts, readRawRecoveryMarkers } from "../../lib/d2b-recovery-local";
-import { createLegacyLocalCopy, detectLegacyPending, type LocalLegacyData } from "../../lib/legacy-device-rescue";
+import { createLegacyLocalCopy, detectLegacyPending, legacyLocalCopyFingerprint, type LocalLegacyData } from "../../lib/legacy-device-rescue";
 import { tabChannelName } from "../../lib/tab-coordination";
 
 type Status = { kind: "checking" | "none" | "pending" | "error"; count: number; atLeast: boolean };
@@ -27,23 +27,41 @@ export function LegacyDeviceRescueNotice({ language }: { language: string }) {
   const [prepared, setPrepared] = useState<string | null>(null);
   const [downloadError, setDownloadError] = useState(false);
   const version = useRef(0);
+  const preparedFingerprint = useRef<string | null>(null);
+  const preparedStorage = useRef<string | null>(null);
+  const invalidatePrepared = () => {
+    preparedFingerprint.current = null;
+    preparedStorage.current = null;
+    setPrepared(null);
+  };
 
   useEffect(() => {
     let mounted = true;
     const inspect = async () => {
       const current = ++version.current;
       try {
-        const assessment = detectLegacyPending(await readLocalCopy());
+        const latest = await readLocalCopy();
+        const assessment = detectLegacyPending(latest);
         if (!mounted || current !== version.current) return;
+        // A silent IndexedDB write in another tab need not emit a storage or
+        // BroadcastChannel event. Poll/focus refresh must revoke an old copy
+        // even when the number of unsent items has not changed.
+        if (preparedFingerprint.current !== null &&
+            (!assessment.pending || legacyLocalCopyFingerprint(latest) !== preparedFingerprint.current)) {
+          invalidatePrepared();
+        }
         setStatus({ kind: assessment.pending ? "pending" : "none", count: assessment.count, atLeast: assessment.atLeast });
       } catch {
-        if (mounted && current === version.current) setStatus({ kind: "error", count: 0, atLeast: true });
+        if (mounted && current === version.current) {
+          invalidatePrepared(); // an unreadable source cannot justify a saved snapshot
+          setStatus({ kind: "error", count: 0, atLeast: true });
+        }
       }
     };
     void inspect();
     // Other tabs may alter IndexedDB, shared markers or drafts while this
     // read-only tab stays open. Refresh the warning, not the local editor.
-    const changed = () => { setPrepared(null); void inspect(); };
+    const changed = () => { invalidatePrepared(); void inspect(); };
     const channel = typeof BroadcastChannel === "undefined" ? null : new BroadcastChannel(tabChannelName);
     if (channel) channel.onmessage = changed;
     window.addEventListener("storage", changed);
@@ -52,6 +70,8 @@ export function LegacyDeviceRescueNotice({ language }: { language: string }) {
     return () => {
       mounted = false;
       version.current += 1;
+      preparedFingerprint.current = null;
+      preparedStorage.current = null;
       window.removeEventListener("storage", changed);
       window.removeEventListener("focus", changed);
       window.clearInterval(timer);
@@ -62,7 +82,7 @@ export function LegacyDeviceRescueNotice({ language }: { language: string }) {
   async function prepare() {
     if (preparing) return;
     setPreparing(true);
-    setPrepared(null);
+    invalidatePrepared();
     setDownloadError(false);
     try {
       const first = await readLocalCopy();
@@ -71,6 +91,10 @@ export function LegacyDeviceRescueNotice({ language }: { language: string }) {
       if (JSON.stringify(first) !== JSON.stringify(second)) throw new Error("LOCAL_SNAPSHOT_CHANGED");
       const encoded = JSON.stringify(createLegacyLocalCopy(second, Date.now()));
       if (new TextEncoder().encode(encoded).byteLength > maxCopyBytes) throw new Error("LOCAL_COPY_TOO_LARGE");
+      preparedFingerprint.current = legacyLocalCopyFingerprint(second);
+      // These values can be re-read synchronously on the actual download click,
+      // preserving iOS Safari's requirement for direct user activation.
+      preparedStorage.current = JSON.stringify([second.markers, second.drafts]);
       setPrepared(encoded);
     } catch {
       setDownloadError(true);
@@ -80,7 +104,18 @@ export function LegacyDeviceRescueNotice({ language }: { language: string }) {
   }
 
   function download() {
-    if (!prepared) return;
+    if (!prepared || preparedFingerprint.current === null || preparedStorage.current === null) return;
+    try {
+      if (JSON.stringify([readRawRecoveryMarkers(localStorage), readRawRecoveryDrafts(localStorage)]) !== preparedStorage.current) {
+        invalidatePrepared();
+        setDownloadError(true);
+        return;
+      }
+    } catch {
+      invalidatePrepared();
+      setDownloadError(true);
+      return;
+    }
     const url = URL.createObjectURL(new Blob([prepared], { type: "application/json;charset=utf-8" }));
     const anchor = document.createElement("a");
     anchor.href = url;
@@ -116,8 +151,8 @@ export function LegacyDeviceRescueNotice({ language }: { language: string }) {
             ? "Soubor obsahuje osobní údaje. Uložte ho bezpečně; neprovádí automatickou obnovu."
             : "This file contains private data. Store it securely; it does not restore data automatically."}</p>}
           {downloadError && <p role="alert">{cs
-            ? "Kopii se nepodařilo bezpečně připravit. Data zůstala beze změny; zkuste to znovu."
-            : "The copy could not be prepared safely. Your data is unchanged; try again."}</p>}
+            ? "Kopii se nepodařilo bezpečně připravit nebo se místní data změnila. Původní data zůstala beze změny; připravte novou kopii."
+            : "The copy could not be prepared safely or the local data changed. Your original data is unchanged; prepare a new copy."}</p>}
         </>
       )}
     </section>

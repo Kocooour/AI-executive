@@ -2,6 +2,7 @@
 // legacy local-first editor. Pure: never writes storage, syncs or sends data.
 import type { Entity, Relation } from "./db";
 import { sameValue } from "./field-merge";
+import { sha256Hex } from "./sha256";
 import { forServer } from "./sendable";
 import type { RawRecoveryDraft } from "./d2b-recovery-local";
 
@@ -39,6 +40,13 @@ export function detectLegacyPending(data: LocalLegacyData) {
   const pendingMarkerOnly = data.markers.pendingSync && recordIds.size + drafts === 0;
   const count = recordIds.size + drafts + (pendingMarkerOnly ? 1 : 0);
   return { pending: count > 0, count, atLeast: pendingMarkerOnly || !data.base };
+}
+
+// Fingerprint the ENTIRE source, not only the unsent count, so a second-tab
+// edit that leaves the number of changes unchanged still invalidates an export.
+// The digest stays only in this browser's memory, never in URLs or telemetry.
+export function legacyLocalCopyFingerprint(data: LocalLegacyData): string {
+  return sha256Hex(JSON.stringify(data));
 }
 
 export function createLegacyLocalCopy(data: LocalLegacyData, createdAt: number) {

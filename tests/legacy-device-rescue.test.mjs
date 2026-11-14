@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-const { detectLegacyPending, createLegacyLocalCopy } = await import("../lib/legacy-device-rescue.ts");
+const { detectLegacyPending, createLegacyLocalCopy, legacyLocalCopyFingerprint } = await import("../lib/legacy-device-rescue.ts");
 const item = (id, updatedAt = 1, title = id) => ({
   id, type: "task", title, status: "open", workspaceId: "personal",
   properties: { inbox: true }, createdAt: 1, updatedAt,
@@ -52,4 +52,21 @@ test("counts relationships and removes as pending changes even without a marker"
   const relation = { id: "rel", workspaceId: "personal", sourceEntityId: "a", targetEntityId: "b", relationType: "belongs_to_area", createdAt: 1 };
   input.local.relations.push(relation);
   assert.equal(detectLegacyPending(input).count, 2);
+});
+
+test("export fingerprint detects same-count edits in records, markers and local drafts", () => {
+  const data = empty();
+  data.base.entities.push(item("original"));
+  data.local.entities.push(item("original", 2, "changed"));
+  const initial = legacyLocalCopyFingerprint(data);
+  assert.equal(legacyLocalCopyFingerprint(data), initial);
+  data.local.entities[0].title = "changed in another tab";
+  assert.notEqual(legacyLocalCopyFingerprint(data), initial);
+  const edited = legacyLocalCopyFingerprint(data);
+  data.markers.pendingSync = true;
+  assert.notEqual(legacyLocalCopyFingerprint(data), edited);
+  const marked = legacyLocalCopyFingerprint(data);
+  data.drafts.noteDrafts.push({ storageKey: "note:tab", rawValue: "new draft" });
+  assert.notEqual(legacyLocalCopyFingerprint(data), marked);
+  assert.equal(detectLegacyPending(data).count, 2);
 });

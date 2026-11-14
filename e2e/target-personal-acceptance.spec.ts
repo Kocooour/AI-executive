@@ -551,6 +551,46 @@ for (const width of [390, 1280]) {
     await expect(notice).toContainText("1");
     await notice.getByTestId("legacy-pending-prepare").click();
     await expect(notice.getByTestId("legacy-pending-download")).toBeVisible();
+
+    // Two-tab regression: IndexedDB changes do not necessarily send
+    // BroadcastChannel or localStorage notifications. A focus/periodic
+    // recheck must invalidate the prepared file even at the SAME item count.
+    const secondTab = await page.context().newPage();
+    secondTab.on("request", request => {
+      const pathname = new URL(request.url()).pathname;
+      if (["PUT", "POST", "PATCH", "DELETE"].includes(request.method()) &&
+          pathname.startsWith("/api/") && !pathname.startsWith("/api/target-staging/"))
+        writes.push("tab2 " + request.method() + " " + pathname);
+    });
+    await secondTab.goto("/?view=Home");
+    const updatedTitle = title + " (z druhé záložky)";
+    await secondTab.evaluate(async (updatedTitle) => {
+      const db = await new Promise<IDBDatabase>((resolve, reject) => {
+        const request = indexedDB.open("ai-executive");
+        request.onsuccess = () => resolve(request.result);
+        request.onerror = () => reject(request.error);
+      });
+      await new Promise<void>((resolve, reject) => {
+        const tx = db.transaction("entities", "readwrite");
+        const objectStore = tx.objectStore("entities");
+        const req = objectStore.get("local-unsent-c13");
+        req.onsuccess = () => {
+          if (!req.result) return;
+          objectStore.put({ ...req.result, title: updatedTitle, updatedAt: 3 });
+        };
+        req.onerror = () => reject(req.error);
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => reject(tx.error);
+      });
+      db.close();
+    }, updatedTitle);
+    await secondTab.close();
+    // Simulate the browser returning to the first tab. No localStorage
+    // mutation or channel event is needed for this refresh to find the edit.
+    await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+    await expect(notice.getByTestId("legacy-pending-download")).toHaveCount(0);
+    await notice.getByTestId("legacy-pending-prepare").click();
+    await expect(notice.getByTestId("legacy-pending-download")).toBeVisible();
     const downloadReady = page.waitForEvent("download");
     await notice.getByTestId("legacy-pending-download").click();
     const saved = await downloadReady;
@@ -559,7 +599,8 @@ for (const width of [390, 1280]) {
     const bundle = JSON.parse(await readFile(savedPath, "utf-8"));
     expect(bundle.format).toBe("lumi-legacy-device-copy");
     expect(bundle.automaticReplayAllowed).toBe(false);
-    expect(bundle.local.entities.some((item: {title: string}) => item.title === title)).toBe(true);
+    expect(bundle.local.entities.some((item: {title: string}) => item.title === updatedTitle)).toBe(true);
+    expect(bundle.local.entities.some((item: {title: string}) => item.title === title)).toBe(false);
     await page.goto("/?view=Inbox");
     await expect(page.getByTestId("legacy-pending-rescue")).toBeVisible();
     await page.goto("/?view=Today");
