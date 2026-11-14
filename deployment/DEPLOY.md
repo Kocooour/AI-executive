@@ -142,6 +142,10 @@ and generation from the configured env. A running SQLite store can have
 transient WAL/SHM files, so semantic inspection before stop is deliberately
 unsafe. The script backs up the complete target directory alongside legacy
 data and checks exact source/copy equality plus the common SHA-256 manifest.
+**After copying, before any new service start**, it repeats the semantic
+preflight and verifies the owner and restore generation are still identical
+to the approved environment; a substituted but internally valid store is
+rejected without serving requests.
 After startup it quiesces the service once more for a second semantic target
 check, restarts, and repeats HTTP readiness. **Any failure after a
 personal-v1 deployment has stopped the service leaves the service stopped.**
