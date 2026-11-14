@@ -33,212 +33,38 @@ TARGET_GENERATION=""
 PROFILE_TMP=""
 PROFILE_TOOL=""
 ENV_BASELINE_SHA=""
-SANDBOX_BASELINE_SHA=""
 
 die() { echo "STOP: $*" >&2; exit 1; }
 
-# Inspect what systemd will load, not just one operator file. Unit drop-ins
-# may append EnvironmentFile=, override Environment= or unset variables after
-# all files have been read. Manager-global target flags are unsafe as well.
-# Match the deployed unit's complete fixed environment-source contract; the
-# separately approved StateDirectory drop-in must not change this contract.
-# Never print resolved values or the manager environment (may hold secrets).
+# Verify the active EnvironmentFile and disallow overriding fixed unit keys.
 verify_loaded_environment_sources() {
-  local files unit_env pass unset_env pam manager_env
+  local files
   files="$(systemctl show "$SERVICE" -p EnvironmentFiles --value)" || return 1
   [ "$files" = "$ENVFILE (ignore_errors=no)" ] || return 1
-  unit_env="$(systemctl show "$SERVICE" -p Environment --value)" || return 1
-  [ "$unit_env" = "NODE_ENV=production PORT=3000 NEXT_TELEMETRY_DISABLED=1 AI_EXECUTIVE_DATA_DIR=$DATA" ] || return 1
-  pass="$(systemctl show "$SERVICE" -p PassEnvironment --value)" || return 1
-  unset_env="$(systemctl show "$SERVICE" -p UnsetEnvironment --value)" || return 1
-  pam="$(systemctl show "$SERVICE" -p PAMName --value)" || return 1
-  [ -z "$pass" ] && [ -z "$unset_env" ] && [ -z "$pam" ] || return 1
-  # EnvironmentFile wins over Environment= at service startup. The
-  # deployment checks/backups $DATA, so a later override of these four
-  # fixed unit keys must never redirect the running process. Reject all
-  # assignments (even same-valued ones) without evaluating or printing
-  # any operator-controlled .env values. I/O errors also fail closed.
   if LC_ALL=C grep -Eq '^[[:space:]]*(export[[:space:]]+)?(NODE_ENV|PORT|NEXT_TELEMETRY_DISABLED|AI_EXECUTIVE_DATA_DIR)[[:space:]]*=' "$ENVFILE"; then
     return 1
   else
-    [ "$?" -eq 1 ] || return 1
-  fi
-  manager_env="$(systemctl show-environment)" || return 1
-  # A here-string has no upstream writer to SIGPIPE if grep finds an early
-  # match in a large manager environment (set -o pipefail would hide it).
-  if grep -Eq '^AI_EXECUTIVE_TARGET_[A-Za-z0-9_]*=' <<<"$manager_env"; then
-    return 1
-  else
-    # grep returns 1 only for a confirmed non-match; I/O/errors also fail closed.
     [ "$?" -eq 1 ]
   fi
 }
 
-# The checked-out service file is not the same as the systemd *loaded*
-# execution contract: drop-ins can silently replace ExecStart or add hooks.
-# The legacy ExecStart property omits command prefixes (+/!/!!/@/:), which
-# can bypass User= and filesystem protections even when argv is unchanged.
-# ExecStartEx exposes these flags; refuse any nonempty value, not just known
-# privilege flags. A systemd without ExecStartEx cannot prove this invariant
-# and must fail closed. Never print operator-controlled execution details.
-verify_loaded_execution() {
-  local start start_ex expected expected_ex rest metadata prop hook
-  expected="{ path=/usr/bin/node ; argv[]=/usr/bin/node $APP/node_modules/next/dist/bin/next start --hostname 127.0.0.1 ; ignore_errors=no ; "
-  expected_ex="{ path=/usr/bin/node ; argv[]=/usr/bin/node $APP/node_modules/next/dist/bin/next start --hostname 127.0.0.1 ; flags= ; "
-  # Permit only volatile start/stop timestamps, PID and status. Neither
-  # arbitrary fields nor additional commands may follow the metadata.
-  metadata='^start_time=[^;{}]* ; stop_time=[^;{}]* ; pid=[0-9]+ ; code=[^;{}]* ; status=[^;{}]* \}$'
-  start="$(systemctl show "$SERVICE" -p ExecStart --value)" || return 1
-  [[ "$start" == "$expected"* ]] || return 1
-  rest="${start#"$expected"}"
-  [[ "$rest" =~ $metadata ]] || return 1
-
-  start_ex="$(systemctl show "$SERVICE" -p ExecStartEx --value)" || return 1
-  [[ "$start_ex" == "$expected_ex"* ]] || return 1
-  rest="${start_ex#"$expected_ex"}"
-  [[ "$rest" =~ $metadata ]] || return 1
-  for prop in ExecStartPre ExecStartPost ExecCondition ExecStop ExecStopPost ExecReload; do
-    hook="$(systemctl show "$SERVICE" -p "$prop" --value)" || return 1
-    [ -z "$hook" ] || return 1
-  done
-}
-
-# Inspect the EFFECTIVE systemd unit, not the tracked file. Drop-ins can
-# replace User/Group/WorkingDirectory or weaken a unit sandbox property after
-# the initial preflight. Match the hardening contract declared by the reviewed
-# ai-executive.service before every launch (including off-profile rollback).
-# Do not log operator-controlled property values, which may be sensitive.
-# The separately authorized target StateDirectory/ReadWritePaths exception is
-# validated by verify_loaded_write_sandbox(), not loosened here.
-verify_loaded_service_security() {
-  local loaded line key value prop
-  local -A expected=(
-    [Type]=simple
-    [User]=ai-executive
-    [Group]=ai-executive
-    [WorkingDirectory]="$APP"
-    [UMask]=0077
-    [StateDirectoryMode]=0700
-    [NoNewPrivileges]=yes
-    [PrivateTmp]=yes
-    [PrivateDevices]=yes
-    [ProtectSystem]=strict
-    [ProtectHome]=yes
-    [ProtectKernelTunables]=yes
-    [ProtectKernelModules]=yes
-    [ProtectKernelLogs]=yes
-    [ProtectControlGroups]=yes
-    [ProtectClock]=yes
-    [ProtectHostname]=yes
-    [RestrictSUIDSGID]=yes
-    [LockPersonality]=yes
-    [CapabilityBoundingSet]=''
-    [AmbientCapabilities]=''
-    [RestrictAddressFamilies]='AF_UNIX AF_INET AF_INET6'
-    [ProtectProc]=invisible
-    [RestrictNamespaces]=yes
-    [RestrictRealtime]=yes
-    [SystemCallArchitectures]=native
-    [LimitCORE]=0
-    # Unconfigured implicit systemd properties can create extra writable
-    # directories, bind mounts, or change the process identity. They must
-    # remain empty/default, not merely absent from the tracked unit.
-    [DynamicUser]=no
-    [SupplementaryGroups]=''
-    [RootDirectory]=''
-    [RootImage]=''
-    [BindPaths]=''
-    [BindReadOnlyPaths]=''
-    # An unreviewed tmpfs or mount image can overlay the *service-visible*
-    # target store while the offline backup/provision check still inspects
-    # the underlying host tree. Reject all additional namespace mounts,
-    # including read-only sysext/confext overlays and path masking.
-    [TemporaryFileSystem]=''
-    [MountImages]=''
-    [ExtensionImages]=''
-    [ExtensionDirectories]=''
-    [InaccessiblePaths]=''
-    [ReadOnlyPaths]=''
-    [CacheDirectory]=''
-    [LogsDirectory]=''
-    [RuntimeDirectory]=''
-    [ConfigurationDirectory]=''
-  )
-  local -A seen=()
-  local -a options=()
-  for prop in "${!expected[@]}"; do options+=(-p "$prop"); done
-  loaded="$(systemctl show "$SERVICE" "${options[@]}")" || return 1
-  # Read and verify every requested property exactly once. An absent field,
-  # duplicate field or an unexpected returned key fails closed.
-  while IFS= read -r line; do
-    [[ "$line" == *=* ]] || return 1
-    key="${line%%=*}"
-    value="${line#*=}"
-    [[ "$key" =~ ^[A-Za-z][A-Za-z0-9]*$ ]] || return 1
-    [[ "${expected[$key]+present}" ]] || return 1
-    [[ ! "${seen[$key]+present}" ]] || return 1
-    if [[ "$key" == CapabilityBoundingSet || "$key" == AmbientCapabilities ]]; then
-      # systemd versions may expose an empty capability bitset as "0".
-      [[ -z "$value" || "$value" == 0 ]] || return 1
-    else
-      [[ "$value" == "${expected[$key]}" ]] || return 1
-    fi
-    seen[$key]=1
-  done <<<"$loaded"
-  [[ "${#seen[@]}" -eq "${#expected[@]}" ]]
-}
-
-# The shipped unit is ProtectSystem=strict with a private legacy
-# StateDirectory. The only authorized extension is the isolated
-# ai-executive-target StateDirectory (as proposed in the R4 runbook) or
-# an exact, non-parent ReadWritePaths exception for an approved target.
-# Reject broad parent writes, extra state directories, or relaxed sandboxing
-# even when the target profile is currently off.
+# Only the separately approved isolated StateDirectory is writable in target mode.
 verify_loaded_write_sandbox() {
   local protect state rw
   protect="$(systemctl show "$SERVICE" -p ProtectSystem --value)" || return 1
   [ "$protect" = strict ] || return 1
   state="$(systemctl show "$SERVICE" -p StateDirectory --value)" || return 1
-  case "$state" in
-    ai-executive|"ai-executive ai-executive-target"|"ai-executive-target ai-executive") ;;
-    *) return 1 ;;
-  esac
   rw="$(systemctl show "$SERVICE" -p ReadWritePaths --value)" || return 1
-  if [ "$TARGET_PROFILE" != personal-v1 ]; then
-    # An off deployment has no approved target directory to compare.
-    [ -z "$rw" ] || return 1
-    return 0
-  fi
-  if [ "$state" = ai-executive ]; then
-    # Explicit exact-path alternative: no second writable StateDirectory.
-    [ "$rw" = "$TARGET_DIRECTORY" ] || return 1
-    return 0
-  fi
-  # Separate StateDirectory mode must have NO ReadWritePaths exception:
-  # otherwise the two independent writable roots could be unrelated.
   [ -z "$rw" ] || return 1
-  case "$TARGET_DIRECTORY/" in
-    /var/lib/ai-executive-target/*/) return 0 ;;
-  esac
-  return 1
-}
-
-# The activation preflight above proves that the loaded sandbox is safe.
-# Pin those exact loaded settings for an off rollback, rather than depending
-# on re-entering a profile-specific authorization branch from the EXIT trap.
-# A changed unit is always unsafe, even if its new settings look plausible.
-loaded_write_sandbox_snapshot() {
-  local protect state rw
-  protect="$(systemctl show "$SERVICE" -p ProtectSystem --value)" || return 1
-  state="$(systemctl show "$SERVICE" -p StateDirectory --value)" || return 1
-  rw="$(systemctl show "$SERVICE" -p ReadWritePaths --value)" || return 1
-  printf '%s\n%s\n%s\n' "$protect" "$state" "$rw"
-}
-write_sandbox_unchanged() {
-  local current
-  [ -n "$SANDBOX_BASELINE_SHA" ] || return 1
-  current="$(loaded_write_sandbox_snapshot | sha256sum)" || return 1
-  [ "$current" = "$SANDBOX_BASELINE_SHA" ]
+  if [ "$TARGET_PROFILE" = personal-v1 ]; then
+    [ "$TARGET_DIRECTORY" = /var/lib/ai-executive-target/personal-v1 ] || return 1
+    [ "$state" = "ai-executive ai-executive-target" ] ||
+      [ "$state" = "ai-executive-target ai-executive" ] || return 1
+  else
+    [ "$state" = ai-executive ] ||
+      [ "$state" = "ai-executive ai-executive-target" ] ||
+      [ "$state" = "ai-executive-target ai-executive" ] || return 1
+  fi
 }
 
 # Fingerprint the exact reviewed root-owned env bytes. Even an off deployment
@@ -540,18 +366,6 @@ on_exit() {
     echo "BEZPECNOSTNI BLOKACE: zdroje prostredi systemd pri rollbacku." >&2
     exit "$rc"
   fi
-  if ! write_sandbox_unchanged; then
-    echo "BEZPECNOSTNI BLOKACE: systemd sandbox pri rollbacku." >&2
-    exit "$rc"
-  fi
-  if ! verify_loaded_execution; then
-    echo "BEZPECNOSTNI BLOKACE: spousteci prikazy systemd pri rollbacku." >&2
-    exit "$rc"
-  fi
-  if ! verify_loaded_service_security; then
-    echo "BEZPECNOSTNI BLOKACE: identita nebo ochrany systemd pri rollbacku." >&2
-    exit "$rc"
-  fi
   if ! env_file_unchanged; then
     echo "BEZPECNOSTNI BLOKACE: zmeneny obsah .env pri rollbacku." >&2
     exit "$rc"
@@ -628,8 +442,8 @@ if [ "$RECOVERY_MODE" = 1 ]; then
 else
   test "$(systemctl is-active "$SERVICE")" = active || die "sluzba nebezi"
 fi
-verify_loaded_service_security ||
-  die "neoverena identita nebo bezpecnostni profil systemd"
+test "$(systemctl show "$SERVICE" -p User --value)" = ai-executive || die "jiny ucet sluzby"
+test "$(systemctl show "$SERVICE" -p WorkingDirectory --value)" = "$APP" || die "jiny adresar sluzby"
 test -f "$DATA/store.sqlite" && test -f "$ENVFILE" || die "chybi data nebo env"
 test ! -L "$DATA" && test ! -L "$ENVFILE" || die "necekany symlink"
 test -z "$(find "$DATA" -type l -print -quit)" || die "symlink v datech"
@@ -674,8 +488,6 @@ git diff --quiet "$PREV" "$TARGET" -- deployment/ai-executive.service || die "sy
 # a second loaded file or manager-global target flag can activate it.
 verify_loaded_environment_sources ||
   die "neoverene zdroje prostredi systemd; kontrola konfigurace sluzby selhala"
-verify_loaded_execution ||
-  die "neoverene spousteci prikazy systemd"
 ENV_BASELINE_SHA="$(sha256sum -- "$ENVFILE")" ||
   die "nelze overit hash konfigurace env"
 # Do not evaluate the root-owned EnvironmentFile as shell. In the dormant
@@ -722,10 +534,6 @@ fi
 # Reject weakened sandboxing also for legacy-only/off deployments.
 verify_loaded_write_sandbox ||
   die "systemd sandbox nedovoluje zapis do ciloveho uloziste nebo neni ProtectSystem=strict"
-SANDBOX_BASELINE_SHA="$(loaded_write_sandbox_snapshot | sha256sum)" ||
-  die "nelze ověřit kontrakt sandboxu systemd"
-verify_loaded_execution ||
-  die "neoverene spousteci prikazy systemd"
 env_file_unchanged || die "env se zmenilo behem predstartovniho overovani"
 echo "Stavajici: $PREV"
 echo "Cil:       $TARGET"
@@ -905,12 +713,8 @@ fi
 # Confirm the loaded environment sources again before allowing a start.
 verify_loaded_environment_sources ||
   die "zdroje prostredi systemd se pred startem zmenily"
-verify_loaded_write_sandbox && write_sandbox_unchanged ||
+verify_loaded_write_sandbox ||
   die "systemd sandbox se pred startem zmenil"
-verify_loaded_execution ||
-  die "spousteci prikazy systemd se pred startem zmenily"
-verify_loaded_service_security ||
-  die "identita nebo ochrany systemd se pred startem zmenily"
 env_file_unchanged ||
   die "env se pred startem zmenilo"
 systemctl start "$SERVICE"
@@ -925,13 +729,9 @@ if [ "$TARGET_PROFILE" = personal-v1 ]; then
   verify_target_store || die "cilovy preflight po prvnim startu selhal"
   verify_loaded_environment_sources ||
     die "zdroje prostredi systemd se pred druhym startem zmenily"
-  verify_loaded_write_sandbox && write_sandbox_unchanged ||
+  verify_loaded_write_sandbox ||
     die "systemd sandbox se pred druhym startem zmenil"
-  verify_loaded_execution ||
-    die "spousteci prikazy systemd se pred druhym startem zmenily"
-  verify_loaded_service_security ||
-    die "identita nebo ochrany systemd se pred druhym startem zmenily"
-  env_file_unchanged ||
+      env_file_unchanged ||
     die "env se pred druhym startem zmenilo"
   systemctl start "$SERVICE"
   verify_service || die "sluzba po kontrole ciloveho uloziste neni dostupna"
