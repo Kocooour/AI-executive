@@ -171,14 +171,28 @@ test("two fresh tabs keep a Quick Capture made while the second initial pull is 
     }))).toEqual({ generation: String(serverGeneration), synced: "1", fence: null });
 
     // Capture while B still cannot finish its very first pull. It MUST
-    // persist locally (pending marker) rather than silently discarding it.
+    // persist to IndexedDB rather than silently discard the submission.
+    // Do not rely on pending-sync staying "1": the sync can finish in B
+    // (including a 409/retry) and clear the marker BEFORE this assertion.
     const capture = second.locator(".capture input");
     await capture.fill(title);
     await capture.press("Enter");
-    await expect.poll(() => second.evaluate(() =>
-      localStorage.getItem("ai-executive-pending-sync")), { timeout: 10_000 }).toBe("1");
+    await expect.poll(() => second.evaluate(async expected => {
+      const db = await new Promise<IDBDatabase>((resolve, reject) => {
+        const request = indexedDB.open("ai-executive");
+        request.onsuccess = () => resolve(request.result);
+        request.onerror = () => reject(request.error);
+      });
+      try {
+        return await new Promise<boolean>((resolve, reject) => {
+          const request = db.transaction("entities", "readonly").objectStore("entities").getAll();
+          request.onsuccess = () => resolve(request.result.some((item: { title: string }) => item.title === expected));
+          request.onerror = () => reject(request.error);
+        });
+      } finally { db.close(); }
+    }, title), { timeout: 10_000 }).toBe(true);
 
-    // B's pending write survives the real first GET and its ensuing 409
+    // B's local write survives the real first GET and any 409 retry
     // (the server already has generation N). It reaches the real server.
     releaseSecond();
     await expect.poll(async () => (await serverEntities(owner)).some(entity => entity.title === title),
