@@ -604,6 +604,76 @@ for (const width of [390, 1280]) {
     await expect(notice.getByRole("alert")).toBeVisible();
     expect(downloads).toEqual([]);
     await secondTab.close();
+
+    // Safari regression: the previous fallback had a second *direct save*
+    // click which rechecked only localStorage, not IndexedDB. Exercise the
+    // Safari-specific branch with a user-agent override and an isolated popup
+    // spy (real Safari is not available on the Chromium CI runner).
+    const safariSibling = await page.context().newPage();
+    await safariSibling.goto("/api/store"); // same-origin, no Lumi tab events
+    await page.bringToFront();
+    await page.waitForTimeout(350);
+    await notice.getByTestId("legacy-pending-prepare").click();
+    await expect(notice.getByTestId("legacy-pending-download")).toBeVisible();
+    await page.evaluate(() => {
+      const safari = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.4 Mobile/15E148 Safari/604.1";
+      Object.defineProperty(navigator, "userAgent", { configurable: true, value: safari });
+      const spy = { navigations: [] as string[], closed: 0 };
+      const originalOpen = window.open;
+      Object.assign(window, { __c13SafariSpy: spy, __c13RestoreOpen: () => {
+        window.open = originalOpen;
+        Reflect.deleteProperty(navigator, "userAgent");
+      } });
+      window.open = (() => ({
+        document: { title: "", body: { textContent: "" } },
+        location: { replace: (url: string) => spy.navigations.push(url) },
+        close: () => { spy.closed += 1; },
+      })) as unknown as typeof window.open;
+    });
+    await notice.getByTestId("legacy-pending-download").click();
+    await expect.poll(() => page.evaluate(() =>
+      (window as Window & { __c13SafariSpy: { navigations: string[] } }).__c13SafariSpy.navigations.length,
+    )).toBe(1);
+    const safariCopy = JSON.parse(await page.evaluate(async () => {
+      const { navigations } = (window as Window & { __c13SafariSpy: { navigations: string[] } }).__c13SafariSpy;
+      return await (await fetch(navigations[0])).text();
+    }));
+    expect(safariCopy.local.entities.some((item: {title: string}) => item.title === updatedTitle)).toBe(true);
+
+    // A raw IndexedDB write after that successful verification must NOT be
+    // downloadable in Safari on another click without a new source read.
+    const newestTitle = updatedTitle + " (novější editace)";
+    await safariSibling.evaluate(async (title) => {
+      const db = await new Promise<IDBDatabase>((resolve, reject) => {
+        const req = indexedDB.open("ai-executive");
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => reject(req.error);
+      });
+      await new Promise<void>((resolve, reject) => {
+        const tx = db.transaction("entities", "readwrite");
+        const store = tx.objectStore("entities");
+        const request = store.get("local-unsent-c13");
+        request.onsuccess = () => {
+          if (request.result) store.put({ ...request.result, title, updatedAt: 4 });
+        };
+        request.onerror = () => reject(request.error);
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => reject(tx.error);
+      });
+      db.close();
+    }, newestTitle);
+    await notice.getByTestId("legacy-pending-download").click();
+    await expect(notice.getByTestId("legacy-pending-download")).toHaveCount(0);
+    await expect(notice.getByRole("alert")).toBeVisible();
+    expect(await page.evaluate(() => {
+      const spy = (window as Window & { __c13SafariSpy: { navigations: string[]; closed: number } }).__c13SafariSpy;
+      return { navigations: spy.navigations.length, closed: spy.closed };
+    })).toEqual({ navigations: 1, closed: 1 });
+    await safariSibling.close();
+    await page.evaluate(() =>
+      (window as Window & { __c13RestoreOpen: () => void }).__c13RestoreOpen(),
+    );
+
     await notice.getByTestId("legacy-pending-prepare").click();
     await expect(notice.getByTestId("legacy-pending-download")).toBeVisible();
     const downloadReady = page.waitForEvent("download");
@@ -614,7 +684,8 @@ for (const width of [390, 1280]) {
     const bundle = JSON.parse(await readFile(savedPath, "utf-8"));
     expect(bundle.format).toBe("lumi-legacy-device-copy");
     expect(bundle.automaticReplayAllowed).toBe(false);
-    expect(bundle.local.entities.some((item: {title: string}) => item.title === updatedTitle)).toBe(true);
+    expect(bundle.local.entities.some((item: {title: string}) => item.title === newestTitle)).toBe(true);
+    expect(bundle.local.entities.some((item: {title: string}) => item.title === updatedTitle)).toBe(false);
     expect(bundle.local.entities.some((item: {title: string}) => item.title === title)).toBe(false);
     await page.goto("/?view=Inbox");
     await expect(page.getByTestId("legacy-pending-rescue")).toBeVisible();
