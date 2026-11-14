@@ -1,0 +1,333 @@
+import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
+import { DatabaseSync } from "node:sqlite";
+import {
+  chmodSync, cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync,
+  readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync,
+} from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { test } from "node:test";
+import { TARGET_PERSONAL_V1_REQUIRED_SETTINGS } from "../lib/target-personal-profile.ts";
+import { isOwnedByOperator } from "../scripts/r4-store-ownership.mjs";
+
+const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const provision = path.join(repo, "scripts/target-store-provision.mjs");
+const rehearsal = path.join(repo, "deployment/rehearsal/cutover-restore-rehearsal.mjs");
+const names = TARGET_PERSONAL_V1_REQUIRED_SETTINGS.map(item => item.name);
+const files = ["lumi-target.journal", "lumi-target-witness.sqlite", "lumi-target.sqlite"].sort();
+const sha = file => createHash("sha256").update(readFileSync(file)).digest("hex");
+
+function fixture(t) {
+  const base = mkdtempSync(path.join(os.tmpdir(), "lumi-r4-provision-test-"));
+  t.after(() => rmSync(base, { recursive: true, force: true }));
+  const legacy = path.join(base, "legacy");
+  mkdirSync(legacy, { mode: 0o700 });
+  writeFileSync(path.join(legacy, "sentinel"), "never overwrite", { mode: 0o600 });
+  return { base, legacy };
+}
+
+function run(args, { legacy, cwd = repo, env = {}, script = provision } = {}) {
+  return spawnSync(process.execPath, [script, ...args], {
+    cwd, encoding: "utf8", timeout: 30000,
+    env: {
+      ...process.env,
+      AI_EXECUTIVE_DATA_DIR: legacy ?? "",
+      AI_EXECUTIVE_TARGET_STAGING_DIRECTORY: "",
+      ...env,
+    },
+  });
+}
+
+function rows(output) {
+  const lines = output.trimEnd().split("\n");
+  assert.equal(lines.length, 3);
+  const values = lines.map((line, i) => {
+    assert.ok(line.startsWith(names[i] + "="), line);
+    return line.slice(names[i].length + 1);
+  });
+  return values;
+}
+function snapshot(dir) {
+  return Object.fromEntries(files.map(name => [name, sha(path.join(dir, name))]));
+}
+function reject(args, options, candidate, hint = "") {
+  const result = run(args, options);
+  assert.notEqual(result.status, 0, hint + result.stderr);
+  assert.equal(result.stdout, "");
+  assert.match(result.stderr, /^R4 target provision: FAIL — [^\n]+\n$/);
+  if (candidate) assert.equal(existsSync(candidate), false, hint);
+  return result;
+}
+
+test("new target: exactly the required settings, private files, preflight, read-only --check", t => {
+  const { base, legacy } = fixture(t);
+  const dir = path.join(base, "target");
+  const first = run([dir, "owner:alpha", "--confirmed"], { legacy });
+  assert.equal(first.status, 0, first.stderr);
+  assert.equal(first.stderr, "", "success must not print even runtime warnings");
+  const initial = rows(first.stdout);
+  assert.equal(initial[0], dir);
+  assert.equal(initial[1], "owner:alpha");
+  assert.match(initial[2], /^[a-f0-9-]{36}$/i);
+  assert.deepEqual(readdirSync(dir).sort(), files);
+  assert.equal(lstatSync(dir).mode & 0o7777, 0o700);
+  assert.equal(lstatSync(dir).uid, process.geteuid());
+  for (const name of files) {
+    const st = lstatSync(path.join(dir, name));
+    assert.ok(st.isFile());
+    assert.equal(st.uid, process.geteuid(), name);
+    assert.equal(st.mode & 0o7777, 0o600, name);
+  }
+  assert.deepEqual(readdirSync(base).sort(), ["legacy", "target"]);
+  assert.equal(readFileSync(path.join(legacy, "sentinel"), "utf8"), "never overwrite");
+  const before = snapshot(dir);
+  const stats = files.map(name => lstatSync(path.join(dir, name)).mtimeMs);
+  const checked = run(["--check", dir], { legacy });
+  assert.equal(checked.status, 0, checked.stderr);
+  assert.equal(checked.stderr, "", "read-only check must not print runtime warnings");
+  assert.equal(checked.stdout, first.stdout);
+  assert.deepEqual(snapshot(dir), before);
+  assert.deepEqual(files.map(name => lstatSync(path.join(dir, name)).mtimeMs), stats);
+});
+
+test("strict invocation: confirmation, valid owner, absolute new target and existing parent required", t => {
+  const { base, legacy } = fixture(t);
+  const dir = path.join(base, "destination");
+  const options = { legacy };
+  reject([dir, "owner"], options, dir, "missing confirmation");
+  reject([dir, "owner", "--confirmed", "extra"], options, dir);
+  reject([dir, "bad\nowner", "--confirmed"], options, dir);
+  reject([dir, "owner", "--yes"], options, dir);
+  reject(["relative", "owner", "--confirmed"], options);
+  reject([path.join(base, "missing-parent", "target"), "owner", "--confirmed"], options);
+  reject(["--check", dir], options, dir, "missing check target");
+  reject(["--check", dir, "--confirmed"], options, dir);
+  mkdirSync(dir);
+  writeFileSync(path.join(dir, "sentinel"), "preserved");
+  const existing = reject([dir, "owner", "--confirmed"], options);
+  assert.match(existing.stderr, /already exists/);
+  assert.equal(readFileSync(path.join(dir, "sentinel"), "utf8"), "preserved");
+});
+
+test("reject known live legacy, implicit cwd/.data and configured target paths, including both overlap directions", t => {
+  const { base, legacy } = fixture(t);
+  const options = { legacy };
+  reject([path.join(legacy, "new"), "owner", "--confirmed"], options);
+  const configuredFuture = path.join(base, "future-live", "inner");
+  const ancestor = path.join(base, "future-live");
+  reject([ancestor, "owner", "--confirmed"], {
+    legacy, env: { AI_EXECUTIVE_TARGET_STAGING_DIRECTORY: configuredFuture },
+  }, ancestor, "must reject target ancestor of live path");
+  const currentTarget = path.join(base, "current-staging");
+  mkdirSync(currentTarget);
+  reject([path.join(currentTarget, "new"), "owner", "--confirmed"], {
+    legacy, env: { AI_EXECUTIVE_TARGET_STAGING_DIRECTORY: currentTarget },
+  });
+  const cwd = path.join(base, "cwd");
+  mkdirSync(cwd);
+  const implicit = path.join(cwd, ".data");
+  reject([implicit, "owner", "--confirmed"], {
+    legacy: "", cwd, env: { AI_EXECUTIVE_DATA_DIR: "" },
+  }, implicit);
+  mkdirSync(implicit);
+  reject([path.join(implicit, "new"), "owner", "--confirmed"], {
+    legacy: "", cwd, env: { AI_EXECUTIVE_DATA_DIR: "" },
+  });
+  const liveAlias = path.join(base, "live-alias");
+  symlinkSync(legacy, liveAlias, "dir");
+  reject([path.join(base, "other"), "owner", "--confirmed"], {
+    legacy, env: { AI_EXECUTIVE_TARGET_STAGING_DIRECTORY: path.join(liveAlias, "..", "other") },
+  }, path.join(base, "other"), "symlink-before-dotdot in configured paths");
+  assert.equal(readFileSync(path.join(legacy, "sentinel"), "utf8"), "never overwrite");
+});
+
+test("reject target symlinks, dangling links and normalized/path aliases before bootstrap", t => {
+  const { base, legacy } = fixture(t);
+  const options = { legacy };
+  const alias = path.join(base, "alias");
+  symlinkSync(base, alias, "dir");
+  reject([path.join(alias, "new"), "owner", "--confirmed"], options);
+  const dangling = path.join(base, "dangling");
+  symlinkSync(path.join(base, "missing"), dangling, "dir");
+  reject([dangling, "owner", "--confirmed"], options);
+  reject([path.join(base, "target") + "/", "owner", "--confirmed"], options);
+  reject([base + "/./target", "owner", "--confirmed"], options);
+  reject([base + "/new/../target", "owner", "--confirmed"], options);
+  assert.equal(existsSync(path.join(base, "target")), false);
+});
+
+test("reject unsafe writable ancestors without writes; permit sticky protected parent", t => {
+  const { base, legacy } = fixture(t);
+  const options = { legacy };
+  const parent = path.join(base, "writable-parent");
+  mkdirSync(parent, { mode: 0o700 });
+  const sentinel = path.join(parent, "sentinel");
+  writeFileSync(sentinel, "never overwrite", { mode: 0o600 });
+  for (const mode of [0o770, 0o707, 0o777]) {
+    chmodSync(parent, mode);
+    const candidate = path.join(parent, "new-target");
+    const denied = reject([candidate, "owner", "--confirmed"], options, candidate);
+    assert.match(denied.stderr, /unsafe group\/other write permissions/);
+    assert.equal(readFileSync(sentinel, "utf8"), "never overwrite");
+    assert.deepEqual(readdirSync(parent), ["sentinel"]);
+  }
+  // A sticky parent owned by the operator is safe against other UIDs
+  // replacing the operator-owned target; /tmp has the same root-owned model.
+  chmodSync(parent, 0o1777);
+  const target = path.join(parent, "sticky-target");
+  const created = run([target, "owner", "--confirmed"], options);
+  assert.equal(created.status, 0, created.stderr);
+  assert.equal(created.stderr, "");
+  const before = snapshot(target);
+  assert.equal(run(["--check", target], options).status, 0);
+
+  // A later mode regression on an ancestor must block --check without repair.
+  chmodSync(parent, 0o777);
+  const deniedCheck = reject(["--check", target], options);
+  assert.match(deniedCheck.stderr, /unsafe group\/other write permissions/);
+  assert.deepEqual(snapshot(target), before);
+  assert.equal(readFileSync(sentinel, "utf8"), "never overwrite");
+});
+
+test("foreign UID is rejected even with private POSIX modes (pure ownership policy)", () => {
+  const operatorUid = 1001;
+  for (const mode of [0o700, 0o600]) {
+    assert.equal(isOwnedByOperator({ uid: operatorUid, mode }, operatorUid), true);
+    assert.equal(isOwnedByOperator({ uid: operatorUid + 1, mode }, operatorUid), false);
+    assert.equal(isOwnedByOperator({ uid: 0, mode }, operatorUid), false);
+    assert.equal(isOwnedByOperator({ uid: operatorUid, mode }, undefined), false);
+    assert.equal(isOwnedByOperator({ uid: operatorUid, mode }, -1), false);
+  }
+});
+
+test("repeat provision cannot overwrite existing store, its generation or other bytes", t => {
+  const { base, legacy } = fixture(t);
+  const dir = path.join(base, "created-once");
+  const first = run([dir, "owner", "--confirmed"], { legacy });
+  assert.equal(first.status, 0, first.stderr);
+  const before = snapshot(dir);
+  const rerun = reject([dir, "other", "--confirmed"], { legacy });
+  assert.match(rerun.stderr, /already exists/);
+  assert.deepEqual(snapshot(dir), before);
+  const checked = run(["--check", dir], { legacy });
+  assert.equal(checked.status, 0, checked.stderr);
+  assert.equal(checked.stderr, "", "read-only check must not print runtime warnings");
+  assert.equal(checked.stdout, first.stdout);
+  assert.deepEqual(readdirSync(base).sort(), ["created-once", "legacy"]);
+});
+
+test("--check fails closed on permissions and missing security companion; never repairs anything", t => {
+  const { base, legacy } = fixture(t);
+  const dir = path.join(base, "checked");
+  assert.equal(run([dir, "owner", "--confirmed"], { legacy }).status, 0);
+  const journal = path.join(dir, "lumi-target.journal");
+  const journalHash = sha(journal);
+  chmodSync(journal, 0o644);
+  reject(["--check", dir], { legacy });
+  assert.equal(lstatSync(journal).mode & 0o7777, 0o644);
+  assert.equal(sha(journal), journalHash);
+  chmodSync(journal, 0o600);
+  rmSync(journal);
+  reject(["--check", dir], { legacy });
+  assert.equal(existsSync(journal), false);
+});
+
+test("synthetic provision -> --check -> archived target-offline rehearsal", t => {
+  const { base, legacy } = fixture(t);
+  const dir = path.join(base, "target");
+  const created = run([dir, "synthetic-owner", "--confirmed"], { legacy });
+  assert.equal(created.status, 0, created.stderr);
+  assert.equal(run(["--check", dir], { legacy }).stdout, created.stdout);
+  const offline = path.join(base, "offline-target-copy");
+  cpSync(dir, offline, { recursive: true });
+  // Node cpSync may create the destination root with a default 0755 mode;
+  // a real offline capture must restrict the root before semantic --check.
+  chmodSync(offline, 0o700);
+  for (const name of files) chmodSync(path.join(offline, name), 0o600);
+  const checkedCopy = run(["--check", offline], { legacy });
+  assert.equal(checkedCopy.status, 0, checkedCopy.stderr);
+  assert.equal(rows(checkedCopy.stdout)[2], rows(created.stdout)[2]);
+
+  const source = path.join(base, "offline-legacy-copy");
+  mkdirSync(source, { mode: 0o700 });
+  const db = new DatabaseSync(path.join(source, "store.sqlite"));
+  try {
+    db.exec("CREATE TABLE entities(id TEXT PRIMARY KEY, payload TEXT);");
+    db.prepare("INSERT INTO entities(id,payload) VALUES(?,?)").run("synthetic", "test-only");
+  } finally { db.close(); }
+  const out = path.join(base, "rehearsal");
+  const rehearsed = run([source, out, "--target-offline", offline, "--offline-confirmed"], {
+    legacy, script: rehearsal,
+  });
+  assert.equal(rehearsed.status, 0, rehearsed.stderr);
+  const report = JSON.parse(readFileSync(path.join(out, "rehearsal.json"), "utf8"));
+  assert.equal(report.target.status, "bytes_and_sqlite_verified");
+  assert.equal(report.target.files, 3);
+  assert.equal(report.verificationScope, "single_source_copy_fidelity");
+  assert.equal(report.independentCaptureEstablished, false);
+  assert.deepEqual(snapshot(offline), snapshot(dir));
+});
+
+
+test("runbook provisions and checks under the deployed service UID, not root", () => {
+  const unit = readFileSync(path.join(repo, "deployment/ai-executive.service"), "utf8");
+  assert.match(unit, /^User=ai-executive$/m);
+  assert.match(unit, /^Group=ai-executive$/m);
+  assert.match(unit, /^WorkingDirectory=\/opt\/ai-executive$/m);
+  assert.match(unit, /^ProtectSystem=strict$/m);
+  assert.match(unit, /^StateDirectory=ai-executive$/m);
+
+  const docs = readFileSync(path.join(repo, "docs/R4-CUTOVER-RUNBOOK.md"), "utf8");
+  const operatorStep = docs.split("## Target-store provision and check (#422; no activation)")[1]
+    ?.split("## Copy-only rehearsal commands and limitations")[0];
+  assert.ok(operatorStep, "operator instructions must exist");
+  assert.match(operatorStep, /test "\$SERVICE_USER" = ai-executive/);
+  assert.match(operatorStep, /test "\$SERVICE_GROUP" = ai-executive/);
+  assert.match(operatorStep, /test "\$SERVICE_UID" -ne 0/);
+  assert.match(operatorStep, /set -euo pipefail/);
+  assert.match(operatorStep, /test "\$MAINPID" -gt 0/);
+  assert.match(operatorStep, /systemctl is-active --quiet "\$UNIT"/);
+  assert.match(operatorStep, /done < "\/proc\/\$MAINPID\/environ"/);
+  assert.ok(operatorStep.includes('LIVE_LEGACY_DIR="${entry#AI_EXECUTIVE_DATA_DIR=}"'));
+  assert.ok(operatorStep.includes('LIVE_STAGING_DIR="${entry#AI_EXECUTIVE_TARGET_STAGING_DIRECTORY=}"'));
+  assert.match(operatorStep, /test "\$legacy_count" -eq 1/);
+  assert.match(operatorStep, /test "\$staging_count" -le 1/);
+  assert.match(operatorStep, /case "\$LIVE_LEGACY_DIR" in \/\*\)/);
+  assert.match(operatorStep, /case "\$LIVE_STAGING_DIR" in ''\|\/\*\)/);
+  assert.equal((operatorStep.match(/AI_EXECUTIVE_DATA_DIR="\$LIVE_LEGACY_DIR"/g) ?? []).length, 2);
+  assert.equal((operatorStep.match(/AI_EXECUTIVE_TARGET_STAGING_DIRECTORY="\$LIVE_STAGING_DIR"/g) ?? []).length, 2);
+  assert.doesNotMatch(operatorStep, /PATH=\/usr\/bin:\/bin HOME=\/nonexistent AI_EXECUTIVE_DATA_DIR=\/var\/lib/);
+  assert.match(operatorStep, /test "\$\(systemctl show "\$UNIT" -p MainPID --value\)" = "\$MAINPID"/);
+
+  const commands = operatorStep.match(/runuser -u "\$SERVICE_USER" -g "\$SERVICE_GROUP" -- env -i/g) ?? [];
+  assert.equal(commands.length, 2, "provision and --check must both drop to service UID");
+  assert.match(operatorStep, /node scripts\/target-store-provision\.mjs "\$TARGET_DIR" "\$OWNER_USER_ID" --confirmed/);
+  assert.match(operatorStep, /node scripts\/target-store-provision\.mjs --check "\$TARGET_DIR"/);
+  assert.match(operatorStep, /ProtectSystem=strict/);
+  assert.match(operatorStep, /StateDirectory=ai-executive/);
+  assert.match(operatorStep, /least-privilege.*writable-directory change/);
+  assert.match(operatorStep, /root-owned\/previously existing target must \*\*not\*\* be fixed with.*chown/);
+});
+
+
+test("operator-propagated live legacy and target paths block nested provisioning", t => {
+  const { base, legacy } = fixture(t);
+  const liveStaging = path.join(base, "active-target-staging");
+  mkdirSync(liveStaging, { mode: 0o700 });
+  writeFileSync(path.join(liveStaging, "sentinel"), "never overwrite", { mode: 0o600 });
+  const env = {
+    AI_EXECUTIVE_DATA_DIR: legacy,
+    AI_EXECUTIVE_TARGET_STAGING_DIRECTORY: liveStaging,
+  };
+  const nestedTarget = path.join(liveStaging, "new-target");
+  const deniedStaging = reject([nestedTarget, "owner", "--confirmed"], { legacy, env }, nestedTarget);
+  assert.match(deniedStaging.stderr, /overlaps a known live data location/);
+  const nestedLegacy = path.join(legacy, "new-target");
+  const deniedLegacy = reject([nestedLegacy, "owner", "--confirmed"], { legacy, env }, nestedLegacy);
+  assert.match(deniedLegacy.stderr, /overlaps a known live data location/);
+  assert.equal(readFileSync(path.join(liveStaging, "sentinel"), "utf8"), "never overwrite");
+  assert.equal(readFileSync(path.join(legacy, "sentinel"), "utf8"), "never overwrite");
+});

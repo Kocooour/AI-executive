@@ -1,0 +1,137 @@
+name: Release 0 C16 browser session and order regression
+
+# Focused two-spec reproductions only. The complete browser suite remains a
+# separate preproduction Release 0 gate; flags are intentionally default-off.
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/release0-c16-focused-browser.yml"
+      - "e2e/fixtures.ts"
+      - "e2e/session-recovery.spec.ts"
+      - "e2e/app.spec.ts"
+      - "e2e/data-boundary.spec.ts"
+      - "e2e/passkeys.spec.ts"
+      - "e2e/recovery.spec.ts"
+      - "e2e/tabs.spec.ts"
+      - "e2e/project-page.spec.ts"
+      - "e2e/inspector-return-focus-ui01e.spec.ts"
+      # C16 depends on auth setup, issued-cookie validation and revocation.
+      # Changes here must not silently bypass the targeted browser regressions.
+      - "e2e/auth.setup.ts"
+      - "e2e/helpers.ts"
+      - "playwright.config.ts"
+      - "app/api/auth/**"
+      - "lib/auth.ts"
+      - "lib/owner-session-revocation.ts"
+      - "lib/passkeys.ts"
+      - "lib/http-security.ts"
+      - "scripts/owner-session-revocation-init.mjs"
+      - "scripts/hash-password.mjs"
+      - "scripts/verify-release0-c16-pair.mjs"
+      - "tests/release0-c16-pair-selection.test.mjs"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: lumi-release0-c16-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  serial-session:
+    name: C16 logout to next test (Chromium, workers=1)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 55
+    env:
+      CI: "true"
+      NEXT_TELEMETRY_DISABLED: "1"
+      E2E_PORT: "3146"
+      E2E_SKIP_BUILD: "1"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+      - name: Install pnpm
+        uses: pnpm/action-setup@v5
+        with:
+          version: 10.20.0
+      - name: Set up Node
+        uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+          cache: pnpm
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Typecheck browser fixtures and tests
+        run: pnpm typecheck
+      - name: Build production app, preview flags off
+        run: pnpm build
+      - name: Install Chromium
+        run: pnpm exec playwright install --with-deps chromium
+      - name: Prove global revocation and next-test repair
+        run: pnpm exec playwright test e2e/session-recovery.spec.ts --project=desktop --workers=1 --trace=on
+      - name: Exact ordered logout predecessors then the original C4 failures
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Playwright 1.56 orders files alphabetically. Number temporary
+          # aliases so every pair runs against ONE synthetic server in the
+          # intended order, with global session revocation preserved.
+          created=()
+          trap 'rm -f "${created[@]}"' EXIT
+          run_pair() {
+            local label="$1" first_source="$2" first_title="$3" second_source="$4" second_title="$5"
+            local first_alias="e2e/c16-01-${first_source##*/}"
+            local second_alias="e2e/c16-02-${second_source##*/}"
+            local selected="${RUNNER_TEMP}/c16-${label}-selected.txt"
+            local executed="${RUNNER_TEMP}/c16-${label}-executed.txt"
+            created=("$first_alias" "$second_alias")
+            cp "$first_source" "$first_alias"
+            cp "$second_source" "$second_alias"
+            local grep="${first_title}|${second_title}"
+
+            # Fail closed if the selector drifts to C10 instead of the
+            # original aggregate deep-link failure from #405.
+            pnpm exec playwright test "${created[@]}" --project=desktop --workers=1 \
+              --grep "$grep" --list | tee "$selected"
+            node scripts/verify-release0-c16-pair.mjs "$selected" \
+              "$first_alias" "$first_title" "$second_alias" "$second_title" selection
+
+            pnpm exec playwright test "${created[@]}" --project=desktop --workers=1 \
+              --grep "$grep" --trace=on 2>&1 | tee "$executed"
+            node scripts/verify-release0-c16-pair.mjs "$executed" \
+              "$first_alias" "$first_title" "$second_alias" "$second_title" execution
+            rm -f "${created[@]}"
+            created=()
+          }
+
+          original='aggregate project deep links survive reload and stale list markers cannot reopen a record'
+          focus='UI-01e: keyboard A → close A → background-select B → close B does not restore stale A'
+          run_pair passkey-to-original e2e/passkeys.spec.ts \
+            'a passkey signs in until it is removed' e2e/project-page.spec.ts "$original"
+          run_pair app-logout-to-original e2e/app.spec.ts \
+            'signing out clears the local copy; signing in again restores it from the server' \
+            e2e/project-page.spec.ts "$original"
+          run_pair tabs-to-original e2e/tabs.spec.ts \
+            'signing out in one tab first saves a title being typed in another' \
+            e2e/project-page.spec.ts "$original"
+          run_pair recovery-to-original e2e/recovery.spec.ts \
+            'signing out after an offline start sends offline changes once the connection is back' \
+            e2e/project-page.spec.ts "$original"
+          run_pair boundary-to-original e2e/data-boundary.spec.ts \
+            'without a session every handler refuses, except the documented public ones' \
+            e2e/project-page.spec.ts "$original"
+          # Retain coverage of the other original C4 failure, focus restoration.
+          run_pair recovery-to-focus e2e/recovery.spec.ts \
+            'signing out after an offline start sends offline changes once the connection is back' \
+            e2e/inspector-return-focus-ui01e.spec.ts "$focus"
+      - name: Upload focused traces on failure
+        if: failure()
+        uses: actions/upload-artifact@v6
+        with:
+          name: lumi-release0-c16-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            test-results/
+            playwright-report/
+          if-no-files-found: ignore
+          retention-days: 7
