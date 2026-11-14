@@ -33,6 +33,7 @@ import { AssistantPanel } from "./views/assistant-panel";
 import { ConfirmDialog } from "./views/confirm-dialog";
 import { DeferPopover } from "./views/defer-popover";
 import { HeldBack } from "./views/held-back";
+import { LegacyDeviceRescueNotice } from "./legacy-device-rescue-notice";
 import { OfflineRecoveryDialog } from "./views/offline-recovery-dialog";
 
 // R3-FE-2: loaded (with its CSS) only when the server page enabled the target My Plan.
@@ -293,6 +294,7 @@ export function LumiAppRoot({ targetMyPlan, targetScopes, targetDetails, targetE
               </>}
             </p>
           )}
+          {legacyReadOnly && <LegacyDeviceRescueNotice language={language} />}
           {app.legacyWritesDisabled && app.legacyWriteAttempt && (
             <div className="navigationUnavailableNotice legacyReadOnlyNotice" role="alert" data-testid="legacy-write-blocked">
               <p>{detailCopy[language].legacyWriteBlocked}</p>

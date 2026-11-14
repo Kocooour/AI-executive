@@ -7,5 +7,5 @@ import { LegacyWritesContext } from "../legacy-writes-context";
 export function LegacyWriteGate({ children }: { children: ReactNode }) {
   const writes = useContext(LegacyWritesContext);
   if (!writes.disabled) return <>{children}</>;
-  return <fieldset disabled className="legacyWriteGate" title={writes.hint} aria-label={writes.hint} aria-disabled="true" style={{ display: "contents" }}>{children}</fieldset>;
+  return <fieldset disabled className="legacyWriteGate" title={writes.hint} aria-label={writes.hint} aria-disabled="true" role="group">{children}</fieldset>;
 }

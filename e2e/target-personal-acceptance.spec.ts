@@ -6,6 +6,7 @@
 import {test,expect} from "./fixtures";
 import { DatabaseSync } from "node:sqlite";
 import path from "node:path";
+import { readFile } from "node:fs/promises";
 import type {Page,Response} from "@playwright/test";
 import {isTargetReadRequest} from "../lib/target-edit-fetch";
 
@@ -497,5 +498,69 @@ for (const width of [390, 1280]) {
     const after = await (await page.request.get("/api/store")).body();
     expect(after.equals(before), "legacy store GET response bytes must stay unchanged").toBe(true);
     expect(legacyDbRows(), "canonical legacy SQLite tables must stay unchanged").toBe(beforeDb);
+  });
+}
+
+for (const width of [390, 1280]) {
+  test("local unsent legacy edit remains visible and exportable without server writes at " + width + "px", async ({ page }) => {
+    test.setTimeout(90_000);
+    await page.setViewportSize({ width, height: 844 });
+    const writes: string[] = [];
+    page.on("request", request => {
+      const pathname = new URL(request.url()).pathname;
+      if (["PUT", "POST", "PATCH", "DELETE"].includes(request.method()) &&
+          pathname.startsWith("/api/") && !pathname.startsWith("/api/target-staging/"))
+        writes.push(request.method() + " " + pathname);
+    });
+    await page.goto("/?view=Home");
+    await expect(page.getByTestId("legacy-read-only-notice")).toBeVisible();
+    const original = await (await page.request.get("/api/store")).body();
+    const originalDb = legacyDbRows();
+    const title = "Neodeslaná změna C13 " + width + " " + Date.now();
+    // Simulate a device that was edited offline BEFORE target mode started:
+    // insert a changed record and its old sync base only into IndexedDB.
+    await page.evaluate(async (title) => {
+      const db = await new Promise<IDBDatabase>((resolve, reject) => {
+        const request = indexedDB.open("ai-executive");
+        request.onsuccess = () => resolve(request.result);
+        request.onerror = () => reject(request.error);
+      });
+      const old = { id: "local-unsent-c13", type: "task", title: "Původní koncept",
+        status: "open", workspaceId: "personal", properties: { inbox: true },
+        createdAt: 1, updatedAt: 1 };
+      const next = { ...old, title, updatedAt: 2 };
+      await new Promise<void>((resolve, reject) => {
+        const tx = db.transaction(["entities", "baseEntities"], "readwrite");
+        tx.objectStore("baseEntities").put(old);
+        tx.objectStore("entities").put(next);
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => reject(tx.error);
+      });
+      db.close();
+      localStorage.setItem("ai-executive-pending-sync", "1");
+    }, title);
+    await page.reload();
+    const notice = page.getByTestId("legacy-pending-rescue");
+    await expect(notice).toBeVisible();
+    await expect(notice).toContainText("neodeslaly");
+    await expect(notice).toContainText("1");
+    await notice.getByTestId("legacy-pending-prepare").click();
+    await expect(notice.getByTestId("legacy-pending-download")).toBeVisible();
+    const downloadReady = page.waitForEvent("download");
+    await notice.getByTestId("legacy-pending-download").click();
+    const saved = await downloadReady;
+    const savedPath = await saved.path();
+    if (!savedPath) throw new Error("Local device copy was not downloaded");
+    const bundle = JSON.parse(await readFile(savedPath, "utf-8"));
+    expect(bundle.format).toBe("lumi-legacy-device-copy");
+    expect(bundle.automaticReplayAllowed).toBe(false);
+    expect(bundle.local.entities.some((item: {title: string}) => item.title === title)).toBe(true);
+    await page.goto("/?view=Inbox");
+    await expect(page.getByTestId("legacy-pending-rescue")).toBeVisible();
+    await page.goto("/?view=Today");
+    await expect(page.getByTestId("legacy-pending-rescue")).toBeVisible();
+    expect(writes).toEqual([]);
+    expect((await (await page.request.get("/api/store")).body()).equals(original)).toBe(true);
+    expect(legacyDbRows()).toBe(originalDb);
   });
 }
