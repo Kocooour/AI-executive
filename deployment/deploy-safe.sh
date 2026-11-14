@@ -424,7 +424,7 @@ git diff --quiet "$PREV" "$TARGET" -- deployment/ai-executive.service || die "sy
 # legacy case we do no target probing, filesystem access or additional output.
 # The exact validator is loaded from the REVIEWED target commit before stop,
 # not from a possibly old checked-out version of the application.
-if grep -Eq '^[[:space:]]*(export[[:space:]]+)?AI_EXECUTIVE_TARGET_[A-Z0-9_]+_ENABLED[[:space:]]*=' "$ENVFILE"; then
+if grep -Eq '^[[:space:]]*(export[[:space:]]+)?AI_EXECUTIVE_TARGET[A-Z0-9_]+_ENABLED[[:space:]]*=' "$ENVFILE"; then
   PROFILE_TMP="$(mktemp -d "$LOCK_DIR/profile-XXXXXXXX")"
   chmod 0700 "$PROFILE_TMP"
   mkdir -m 0700 "$PROFILE_TMP/scripts" "$PROFILE_TMP/lib"
@@ -574,9 +574,6 @@ NODE
   # All target sidecars, SQLite, witness and append-only journal are hashed in
   # the SAME verified archive as the legacy store. Never restore data in trap.
   # (The off branch intentionally retains the existing hash manifest.)
-  : '
-    sort -z | xargs -0 sha256sum > SHA256SUMS
-  '
   sha256sum -c --quiet SHA256SUMS
 )
 BACKUP_VALIDATED=1
