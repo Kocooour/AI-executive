@@ -73,6 +73,27 @@ export function isCrossTabAdoptionBlocked() {
     initialized ? knownInThisTab : undefined, browserStore(), wasSyncedAtLoad, completedAtLoad,
   );
 }
+// A first pull can stamp the shared generation but is NOT a restore. Only a
+// durable completed owner-adoption marker, advanced after this tab loaded and
+// matching the committed generation, authorizes a fresh tab to reload. During
+// adoption the owner fence remains active and must never be bypassed.
+export function completedOwnerAdoptionSince(
+  baseline: string | null, storage: Readable | null = browserStore(),
+): number | undefined {
+  if (!storage) return undefined;
+  try {
+    if (storage.getItem(ownerAdoptionFenceKey) !== null) return undefined;
+    const raw = storage.getItem(ownerAdoptionCompletedKey);
+    if (raw === null || raw === baseline) return undefined;
+    const generation = Number(raw);
+    if (!validGeneration(generation) || generation === 0 ||
+        raw !== String(generation) || storage.getItem(ownerAdoptionGenerationKey) !== raw) return undefined;
+    return generation;
+  } catch { return undefined; }
+}
+export function completedOwnerAdoptionSinceThisTabLoaded(): number | undefined {
+  return completedOwnerAdoptionSince(completedAtLoad);
+}
 // The marker records the *original* generation too. If the browser crashes
 // before the new generation is stamped, the owner can resume a certified
 // restore, or export the still-recoverable local data without inventing a
