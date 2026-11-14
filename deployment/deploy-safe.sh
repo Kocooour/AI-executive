@@ -149,6 +149,16 @@ verify_loaded_service_security() {
     [RootImage]=''
     [BindPaths]=''
     [BindReadOnlyPaths]=''
+    # An unreviewed tmpfs or mount image can overlay the *service-visible*
+    # target store while the offline backup/provision check still inspects
+    # the underlying host tree. Reject all additional namespace mounts,
+    # including read-only sysext/confext overlays and path masking.
+    [TemporaryFileSystem]=''
+    [MountImages]=''
+    [ExtensionImages]=''
+    [ExtensionDirectories]=''
+    [InaccessiblePaths]=''
+    [ReadOnlyPaths]=''
     [CacheDirectory]=''
     [LogsDirectory]=''
     [RuntimeDirectory]=''
