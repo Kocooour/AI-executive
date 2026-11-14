@@ -595,6 +595,21 @@ scenarioCase("targetbackupcorrupt: purge partial archive and fail closed without
   assert.equal(r.events.some(e => e.startsWith("start-")), false);
   assert.deepEqual(r.backups, []);
 });
+scenarioCase("targetidentityswap: changed owner/generation after copy preflight blocks first start", (r, f) => {
+  assert.notEqual(r.status, 0);
+  assert.match(r.output, /cilovy preflight se po zaloze zmenil/);
+  assert.match(r.output, /Sluzba zustava zastavena/);
+  assert.equal(r.head, oldSha, "deployment never switches code when identity changes");
+  assert.equal(r.service, "inactive", "rejected target cannot be served under old code");
+  assert.equal(r.events.includes("target-identity-swapped"), true);
+  assert.equal(r.events.filter(e => e === "target-check").length, 2,
+    "initial check and post-copy env-bound semantic check must both run");
+  assert.equal(r.events.some(e => e.startsWith("start-")), false,
+    "no target-enabled traffic is allowed before revalidating identity");
+  assert.deepEqual(r.backups, [], "unverified backup is discarded without touching live target files");
+  assert.match(readFileSync(path.join(f.targetDirectory, "lumi-target.sqlite"), "utf8"), /other-owner/,
+    "operator must investigate the changed live store, never auto-restore data");
+});
 scenarioCase("targetpostfail: code-only rollback stays stopped after new-code start failed", (r, f) => {
   assert.notEqual(r.status, 0);
   assert.match(r.output, /cilovy preflight po prvnim startu selhal/);
