@@ -316,17 +316,31 @@ export function inspectIsolatedTargetStore(
             typeof x.restoreGeneration==="string"&&uuid.test(x.restoreGeneration);
         }catch{return false;}
       });
-      const taskCancelValid = privateTaskCreateCancels.every(row => typeof row.key === "string" &&
-        sha256Hex.test(row.key.slice(TARGET_STAGING_PRIVATE_TASK_CREATE_CANCEL_PREFIX.length)) &&
-        row.value === "1" && !taskReceiptHashes.has(
-          row.key.slice(TARGET_STAGING_PRIVATE_TASK_CREATE_CANCEL_PREFIX.length)));
+      // New fences have a stable opaque actor bucket; original 64-hex keys
+      // remain readable and bounded as a single legacy bucket.
+      // Never expire fences: a delayed POST can otherwise insert after cancel.
+      const cancelLedgerValid = (list: typeof rows, prefix: string,
+        receiptHashes: Set<string>): boolean => {
+        const buckets = new Map<string, number>();
+        for (const row of list) {
+          if (typeof row.key !== "string" || row.value !== "1") return false;
+          const suffix = row.key.slice(prefix.length);
+          const match = /^(?:([a-f0-9]{64}):)?([a-f0-9]{64})$/.exec(suffix);
+          if (!match || receiptHashes.has(match[2])) return false;
+          const bucket = match[1] ?? "legacy";
+          const n = (buckets.get(bucket) ?? 0) + 1;
+          if (n > TARGET_STAGING_MAX_RECEIPTS) return false;
+          buckets.set(bucket, n);
+        }
+        return true;
+      };
+      const taskCancelValid = cancelLedgerValid(privateTaskCreateCancels,
+        TARGET_STAGING_PRIVATE_TASK_CREATE_CANCEL_PREFIX, taskReceiptHashes);
       const structureReceiptHashes = new Set(structureReceipts.map(row =>
         typeof row.key === "string"
           ? row.key.slice(TARGET_STAGING_PRIVATE_STRUCTURE_CREATE_RECEIPT_PREFIX.length) : ""));
-      const structureCancelValid = structureCancels.every(row => typeof row.key === "string" &&
-        sha256Hex.test(row.key.slice(TARGET_STAGING_PRIVATE_STRUCTURE_CREATE_CANCEL_PREFIX.length)) &&
-        row.value === "1" && !structureReceiptHashes.has(
-          row.key.slice(TARGET_STAGING_PRIVATE_STRUCTURE_CREATE_CANCEL_PREFIX.length)));
+      const structureCancelValid = cancelLedgerValid(structureCancels,
+        TARGET_STAGING_PRIVATE_STRUCTURE_CREATE_CANCEL_PREFIX, structureReceiptHashes);
       const structureRecoveryValid = structureRecoveries.every(row => {
         if (typeof row.key !== "string" ||
           !sha256Hex.test(row.key.slice(TARGET_STAGING_PRIVATE_STRUCTURE_CREATE_RECOVERY_PREFIX.length)) ||
@@ -359,10 +373,8 @@ export function inspectIsolatedTargetStore(
           deleteReceipts.length > TARGET_STAGING_MAX_RECEIPTS ||
           privateTaskCreateReceipts.length > TARGET_STAGING_MAX_RECEIPTS ||
           privateTaskCreateRecoveries.length > TARGET_STAGING_MAX_RECEIPTS ||
-          privateTaskCreateCancels.length > TARGET_STAGING_MAX_RECEIPTS ||
           structureReceipts.length > TARGET_STAGING_MAX_RECEIPTS ||
           structureRecoveries.length > TARGET_STAGING_MAX_RECEIPTS ||
-          structureCancels.length > TARGET_STAGING_MAX_RECEIPTS ||
           !structureCancelValid ||
           !structurePairsComplete ||
           !taskRecoveryValid || !taskCancelValid ||
