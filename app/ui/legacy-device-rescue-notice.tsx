@@ -140,11 +140,12 @@ export function LegacyDeviceRescueNotice({ language }: { language: string }) {
     // verification; no second click can download a stale prepared bundle.
     // Safari may preview the private JSON instead of downloading it directly;
     // the owner can use Share / Save to Files from that verified preview.
-    const iosSafari = (/iPad|iPhone|iPod/.test(navigator.userAgent) ||
-      (/Macintosh/.test(navigator.userAgent) && navigator.maxTouchPoints > 1)) &&
-      /Safari/.test(navigator.userAgent) && !/CriOS|FxiOS|EdgiOS/.test(navigator.userAgent);
-    const safariWindow = iosSafari ? window.open("about:blank", "_blank") : null;
-    if (iosSafari && !safariWindow) {
+    // All Safari versions (including macOS) need a trusted gesture before
+    // asynchronous IndexedDB reads; iOS third-party browsers also use WebKit.
+    const needsGestureWindow = /Safari/.test(navigator.userAgent) &&
+      !/Chrome|Chromium|Edg\\/|OPR\\//.test(navigator.userAgent);
+    const safariWindow = needsGestureWindow ? window.open("about:blank", "_blank") : null;
+    if (needsGestureWindow && !safariWindow) {
       setDownloadError(true);
       return;
     }
@@ -214,8 +215,8 @@ export function LegacyDeviceRescueNotice({ language }: { language: string }) {
             ? "Soubor obsahuje osobní údaje. Uložte ho bezpečně; neprovádí automatickou obnovu."
             : "This file contains private data. Store it securely; it does not restore data automatically."}</p>}
           {prepared && <p className="legacyDeviceRescueHint">{cs
-            ? "Na iPhonu nebo iPadu se kopie může otevřít v nové záložce. Uložte JSON pomocí nabídky Sdílet / Uložit do Souborů."
-            : "On iPhone or iPad the copy may open in a new tab. Save the JSON using Share / Save to Files."}</p>}
+            ? "V Safari se ověřená kopie může otevřít v nové záložce. JSON pak uložte pomocí Sdílet / Uložit do Souborů."
+            : "In Safari the verified copy may open in a new tab. Save the JSON using Share / Save to Files."}</p>}
           {downloadError && <p role="alert">{cs
             ? "Kopii se nepodařilo bezpečně připravit nebo se místní data změnila. Původní data zůstala beze změny; připravte novou kopii."
             : "The copy could not be prepared safely or the local data changed. Your original data is unchanged; prepare a new copy."}</p>}
