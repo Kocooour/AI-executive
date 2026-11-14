@@ -572,7 +572,7 @@ if awk '
 fi
 # Reject weakened sandboxing also for legacy-only/off deployments.
 verify_loaded_write_sandbox ||
-  die "systemd sandbox nedovoluje schvaleny rozsah zapisu nebo ProtectSystem=strict"
+  die "systemd sandbox nedovoluje zapis do ciloveho uloziste nebo neni ProtectSystem=strict"
 env_file_unchanged || die "env se zmenilo behem predstartovniho overovani"
 echo "Stavajici: $PREV"
 echo "Cil:       $TARGET"
