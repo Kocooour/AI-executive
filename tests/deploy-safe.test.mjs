@@ -59,6 +59,26 @@ function sandbox(scenario) {
   } else {
     writeFileSync(envfile, "synthetic-only=true\n", { mode: 0o600 });
   }
+  // A systemd EnvironmentFile takes precedence over the four hardcoded
+  // Environment= assignments. Never let those keys redirect the app from
+  // the canonical data store or change its listener/runtime options.
+  const overriddenKey = ({
+    offenvdatadir: "AI_EXECUTIVE_DATA_DIR",
+    targetenvdatadir: "AI_EXECUTIVE_DATA_DIR",
+    offenvport: "PORT",
+    offenvnode: "NODE_ENV",
+    offenvtelemetry: "NEXT_TELEMETRY_DISABLED",
+  })[scenario];
+  if (overriddenKey) {
+    const value = overriddenKey === "AI_EXECUTIVE_DATA_DIR"
+      ? path.join(root, "var/lib/redirected-store") : "unexpected";
+    writeFileSync(envfile, readFileSync(envfile, "utf8") +
+      overriddenKey + "=" + value + "\n", { mode: 0o600 });
+  }
+  if (scenario === "offenvcomment") {
+    writeFileSync(envfile, readFileSync(envfile, "utf8") +
+      "# AI_EXECUTIVE_DATA_DIR=/var/lib/redirected-store\n", { mode: 0o600 });
+  }
   if (["offextraenvfile", "targetextraenvfile", "targetsystemddriftbuild"].includes(scenario)) {
     // Exists only in the disposable sandbox, but is never read by the
     // reviewed deploy code: the *loaded systemd list* must reject it.
