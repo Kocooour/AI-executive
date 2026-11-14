@@ -560,6 +560,7 @@ for (const width of [390, 1280]) {
         writes.push("tab2 " + request.method() + " " + pathname);
     });
     await secondTab.goto("/?view=Home");
+    await page.bringToFront();
     await notice.getByTestId("legacy-pending-prepare").click();
     await expect(notice.getByTestId("legacy-pending-download")).toBeVisible();
 
@@ -587,11 +588,18 @@ for (const width of [390, 1280]) {
       });
       db.close();
     }, updatedTitle);
-    await secondTab.close();
-    // Simulate the browser returning to the first tab. No localStorage
-    // mutation or channel event is needed for this refresh to find the edit.
-    await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+    // Do NOT close the sibling tab, dispatch focus or send a channel event.
+    // The download button must discover a silent IndexedDB edit itself, even
+    // before the periodic 30-second refresh fires. Without this check, the
+    // stale prepared blob would download despite containing the old title.
+    const downloads: string[] = [];
+    page.on("download", item => downloads.push(item.suggestedFilename()));
+    await expect(notice.getByTestId("legacy-pending-download")).toBeVisible();
+    await notice.getByTestId("legacy-pending-download").click();
     await expect(notice.getByTestId("legacy-pending-download")).toHaveCount(0);
+    await expect(notice.getByRole("alert")).toBeVisible();
+    expect(downloads).toEqual([]);
+    await secondTab.close();
     await notice.getByTestId("legacy-pending-prepare").click();
     await expect(notice.getByTestId("legacy-pending-download")).toBeVisible();
     const downloadReady = page.waitForEvent("download");

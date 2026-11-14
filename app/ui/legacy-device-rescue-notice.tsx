@@ -26,12 +26,18 @@ export function LegacyDeviceRescueNotice({ language }: { language: string }) {
   const [preparing, setPreparing] = useState(false);
   const [prepared, setPrepared] = useState<string | null>(null);
   const [downloadError, setDownloadError] = useState(false);
+  const [verifyingDownload, setVerifyingDownload] = useState(false);
+  // An async IndexedDB read can lose browser user activation, especially in
+  // iOS Safari. In that case only, offer a second direct user click to save
+  // the newly verified snapshot. It is still marked as a point-in-time copy.
+  const [directSaveReady, setDirectSaveReady] = useState(false);
   const version = useRef(0);
   const preparedFingerprint = useRef<string | null>(null);
   const preparedStorage = useRef<string | null>(null);
   const invalidatePrepared = () => {
     preparedFingerprint.current = null;
     preparedStorage.current = null;
+    setDirectSaveReady(false);
     setPrepared(null);
   };
 
@@ -81,6 +87,7 @@ export function LegacyDeviceRescueNotice({ language }: { language: string }) {
 
   async function prepare() {
     if (preparing) return;
+    if (verifyingDownload) return;
     setPreparing(true);
     invalidatePrepared();
     setDownloadError(false);
@@ -103,20 +110,16 @@ export function LegacyDeviceRescueNotice({ language }: { language: string }) {
     }
   }
 
-  function download() {
-    if (!prepared || preparedFingerprint.current === null || preparedStorage.current === null) return;
-    try {
-      if (JSON.stringify([readRawRecoveryMarkers(localStorage), readRawRecoveryDrafts(localStorage)]) !== preparedStorage.current) {
-        invalidatePrepared();
-        setDownloadError(true);
-        return;
-      }
-    } catch {
-      invalidatePrepared();
-      setDownloadError(true);
-      return;
-    }
-    const url = URL.createObjectURL(new Blob([prepared], { type: "application/json;charset=utf-8" }));
+  // Synchronous check needed on the final direct click for iOS Safari.
+  // IndexedDB itself is asynchronous, so a regular download click must first
+  // perform a fresh IDB read; localStorage-only validation is insufficient.
+  function storageStillMatches() {
+    return preparedStorage.current !== null &&
+      JSON.stringify([readRawRecoveryMarkers(localStorage), readRawRecoveryDrafts(localStorage)]) === preparedStorage.current;
+  }
+
+  function savePreparedFile(bytes: string) {
+    const url = URL.createObjectURL(new Blob([bytes], { type: "application/json;charset=utf-8" }));
     const anchor = document.createElement("a");
     anchor.href = url;
     anchor.download = "lumi-legacy-local-copy.json";
@@ -125,6 +128,57 @@ export function LegacyDeviceRescueNotice({ language }: { language: string }) {
     try { anchor.click(); } finally {
       anchor.remove();
       window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
+    }
+  }
+
+  async function download() {
+    const initialBytes = prepared;
+    const initialFingerprint = preparedFingerprint.current;
+    if (!initialBytes || !initialFingerprint || verifyingDownload || preparing) return;
+    setDownloadError(false);
+
+    // Safari fallback: the previous click already verified IndexedDB; now
+    // consume a direct activation, without an await, to initiate the download.
+    // Raw drafts/markers are checked once more synchronously before saving.
+    if (directSaveReady) {
+      try {
+        if (!storageStillMatches() || prepared !== initialBytes || preparedFingerprint.current !== initialFingerprint)
+          throw new Error("STALE_LOCAL_COPY");
+        savePreparedFile(initialBytes);
+        setDirectSaveReady(false);
+      } catch {
+        invalidatePrepared();
+        setDownloadError(true);
+      }
+      return;
+    }
+
+    setVerifyingDownload(true);
+    try {
+      // The read transaction queues behind earlier IndexedDB writes from
+      // other tabs, even when no BroadcastChannel/storage/focus event fires.
+      // Do not download any bytes if either read differs from the prepared
+      // snapshot, or if data changes while verification is in progress.
+      const first = await readLocalCopy();
+      const second = await readLocalCopy();
+      if (JSON.stringify(first) !== JSON.stringify(second) ||
+          legacyLocalCopyFingerprint(second) !== initialFingerprint ||
+          preparedFingerprint.current !== initialFingerprint ||
+          !storageStillMatches()) throw new Error("STALE_LOCAL_COPY");
+      // On iOS Safari, a programmatic download after await may be blocked.
+      // Require a new direct click after the just-completed verification.
+      const iosSafari = /iPad|iPhone|iPod/.test(navigator.userAgent) &&
+        /Safari/.test(navigator.userAgent) && !/CriOS|FxiOS|EdgiOS/.test(navigator.userAgent);
+      if (iosSafari || navigator.userActivation?.isActive === false) {
+        setDirectSaveReady(true);
+      } else {
+        savePreparedFile(initialBytes);
+      }
+    } catch {
+      invalidatePrepared();
+      setDownloadError(true);
+    } finally {
+      setVerifyingDownload(false);
     }
   }
 
@@ -140,16 +194,21 @@ export function LegacyDeviceRescueNotice({ language }: { language: string }) {
             ? `Na tomto zařízení zůstalo ${status.atLeast ? "nejméně " : ""}${status.count} položek nebo konceptů, které se neodeslaly. V tomto režimu se už neodešlou. Můžete si uložit jejich soukromou kopii do souboru; původní data zůstávají na zařízení.`
             : `This device holds ${status.atLeast ? "at least " : ""}${status.count} unsent items or drafts. They will not be uploaded in this mode. You can save a private copy to a file; the originals remain on this device.`}</p>
           <div className="legacyDeviceRescueActions">
-            <button type="button" disabled={preparing} onClick={() => void prepare()} data-testid="legacy-pending-prepare">
+            <button type="button" disabled={preparing || verifyingDownload} onClick={() => void prepare()} data-testid="legacy-pending-prepare">
               {cs ? preparing ? "Připravuji kopii…" : "Připravit kopii" : preparing ? "Preparing copy…" : "Prepare copy"}
             </button>
-            {prepared && <button type="button" onClick={download} data-testid="legacy-pending-download">
-              {cs ? "Uložit kopii do souboru" : "Save copy to file"}
+            {prepared && <button type="button" disabled={preparing || verifyingDownload} onClick={() => void download()} data-testid="legacy-pending-download">
+              {cs
+                ? verifyingDownload ? "Ověřuji aktuální data…" : directSaveReady ? "Uložit ověřenou kopii" : "Ověřit a uložit kopii"
+                : verifyingDownload ? "Checking current data…" : directSaveReady ? "Save verified copy" : "Verify and save copy"}
             </button>}
           </div>
           {prepared && <p className="legacyDeviceRescueHint">{cs
             ? "Soubor obsahuje osobní údaje. Uložte ho bezpečně; neprovádí automatickou obnovu."
             : "This file contains private data. Store it securely; it does not restore data automatically."}</p>}
+          {directSaveReady && <p className="legacyDeviceRescueHint" role="status">{cs
+            ? "Kopie byla ověřena. Klepnutím na Uložit ověřenou kopii zahájíte stažení přímo v prohlížeči."
+            : "The copy was verified. Select Save verified copy to start the download directly in your browser."}</p>}
           {downloadError && <p role="alert">{cs
             ? "Kopii se nepodařilo bezpečně připravit nebo se místní data změnila. Původní data zůstala beze změny; připravte novou kopii."
             : "The copy could not be prepared safely or the local data changed. Your original data is unchanged; prepare a new copy."}</p>}
