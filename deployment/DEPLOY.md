@@ -143,11 +143,17 @@ transient WAL/SHM files, so semantic inspection before stop is deliberately
 unsafe. The script backs up the complete target directory alongside legacy
 data and checks exact source/copy equality plus the common SHA-256 manifest.
 After startup it quiesces the service once more for a second semantic target
-check, restarts, and repeats HTTP readiness. Failures use the existing
-**code-only** rollback; neither target nor legacy data are restored or
-deleted. Unverified incomplete backup directories alone may be removed.
-A return to legacy operation requires separately authorized disabling of
-target flags; the target files remain on disk.
+check, restarts, and repeats HTTP readiness. **Any failure after a
+personal-v1 deployment has stopped the service leaves the service stopped.**
+The rollback trap may restore the previous **code only**, but it MUST NOT
+restart the previous binary: systemd would reload the still-enabled target
+flags from the root-owned EnvironmentFile, even when semantic preflight
+rejected that target. Neither target nor legacy data are restored or deleted.
+Unverified incomplete backup directories alone may be removed. The operator
+must first independently disable all target flags, validate `off` on the
+effective EnvironmentFile, and follow a separately reviewed recovery/start
+procedure. Do not blindly run `systemctl start` or assume that restoring
+a previous git commit also restores the old process environment.
 
 These tests are synthetic service mocks, not proof of a real deployment:
 \`node --test tests/target-profile-env.test.mjs tests/deploy-safe.test.mjs
