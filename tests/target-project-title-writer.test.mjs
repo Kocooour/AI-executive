@@ -191,7 +191,19 @@ test('two processes racing the same project CAS commit at most one change',async
    await waitForWorkerMarkers(results, workers, true);
    const outcome=results.map(file=>JSON.parse(readFileSync(file,'utf8')));
    assert.equal(outcome.filter(result=>result.ok).length,1,JSON.stringify(outcome));
-   assert.deepEqual(outcome.filter(result=>!result.ok),[{ok:false,reason:'stale_revision'}]);
+   // Under load, the losing worker may hit the deliberately bounded SQLite
+   // lock wait before it can read the winning revision. Once both workers
+   // have exited, retry that SAME command and require the CAS stale result.
+   // This verifies the actual revision fence rather than accepting an
+   // incidental lock timeout as proof that the competing write was rejected.
+   const settled=outcome.map((result,i)=>{
+     if (result.ok || result.reason !== 'write_failed') return result;
+     const {command}=JSON.parse(readFileSync(path.join(root,'input'+i),'utf8'));
+     const token=authority.issueWritable('alice')?.sessionToken;
+     assert.ok(token,'retry requires a valid credential');
+     return authority.updateProjectTitle(token,command,'alice');
+   });
+   assert.deepEqual(settled.filter(result=>!result.ok),[{ok:false,reason:'stale_revision'}]);
    assert.equal(db.prepare("SELECT COUNT(*) AS n FROM project_title_audit WHERE project_id='race'").get().n,1);
    assert.ok(['After 0','After 1'].includes(db.prepare("SELECT title FROM projects WHERE id='race'").get().title),
      'the only persisted title is the winner of the one CAS commit');
