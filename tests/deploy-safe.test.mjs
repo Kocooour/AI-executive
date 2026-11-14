@@ -59,6 +59,12 @@ function sandbox(scenario) {
   } else {
     writeFileSync(envfile, "synthetic-only=true\n", { mode: 0o600 });
   }
+  if (["offextraenvfile", "targetextraenvfile"].includes(scenario)) {
+    // Exists only in the disposable sandbox, but is never read by the
+    // reviewed deploy code: the *loaded systemd list* must reject it.
+    writeFileSync(path.join(root, "etc/ai-executive/override.env"),
+      "AI_EXECUTIVE_TARGET_STAGING_HTTP_ENABLED=true\n", { mode: 0o600 });
+  }
   writeFileSync(path.join(data, "notes/safe.txt"), "synthetic note\n");
   writeFileSync(path.join(app, ".next/BUILD_ID"), "old build", { mode: 0o644 });
   writeFileSync(path.join(app, "node_modules/next/dist/bin/next"), "fake\n");
