@@ -81,7 +81,18 @@ switch (name) {
         "NODE_ENV=production", "PORT=3000", "NEXT_TELEMETRY_DISABLED=1",
         "AI_EXECUTIVE_DATA_DIR=" + path.join(root, "var/lib/ai-executive"),
       ].join(" ");
-      console.log(prop === "User" ? "ai-executive" :
+      const execChanged = ["offexechanged", "targetexechanged"].includes(scenario) ||
+        (["offexecdriftbuild", "targetexecdriftbuild"].includes(scenario) &&
+          fs.existsSync(stateFile("exec-changed")));
+      const expectedExec = "{ path=/usr/bin/node ; argv[]=/usr/bin/node " +
+        path.join(app, "node_modules/next/dist/bin/next") +
+        " start --hostname 127.0.0.1 ; ignore_errors=no ; " +
+        "start_time=[n/a] ; stop_time=[n/a] ; pid=0 ; code=(null) ; status=0/0 }";
+      console.log(prop === "ExecStart" ? (
+          execChanged ? expectedExec.replace("start --hostname 127.0.0.1", "start --hostname 0.0.0.0") : expectedExec) :
+        prop === "ExecStartPost" && scenario === "offextrahook" ?
+          "{ path=/usr/bin/touch ; argv[]=/usr/bin/touch /tmp/unreviewed ; ignore_errors=no ; start_time=[n/a] ; stop_time=[n/a] ; pid=0 ; code=(null) ; status=0/0 }" :
+        prop === "User" ? "ai-executive" :
         prop === "WorkingDirectory" ? app :
         prop === "EnvironmentFiles" ?
           envfile + " (ignore_errors=no)" +
@@ -234,6 +245,12 @@ switch (name) {
     if (args[0] === "install") { log("install"); break; }
     if (args[0] === "build") {
       log("build-" + get("head").slice(0, 1));
+      if (["offexecdriftbuild", "targetexecdriftbuild"].includes(scenario) &&
+          get("head") === target &&
+          !fs.existsSync(stateFile("exec-changed"))) {
+        set("exec-changed", "1");
+        log("unit-exec-changed-during-build");
+      }
       if (scenario === "offweakprotectbuild" && get("head") === target &&
           !fs.existsSync(stateFile("sandbox-changed"))) {
         set("sandbox-changed", "1");
