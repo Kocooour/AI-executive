@@ -306,6 +306,18 @@ on_exit() {
       exit "$rc"
     fi
   fi
+  # An explicitly activated target cannot safely fall back to old code just
+  # by restoring the git revision: systemd reloads the unchanged root-owned
+  # EnvironmentFile on start. That would activate the very profile that just
+  # failed semantic or archival verification. Preserve both data domains and
+  # the code-only rollback above, but require an operator to disable/verify
+  # the target flags before any recovery start.
+  if [ "$TARGET_PROFILE" = personal-v1 ]; then
+    echo "BEZPECNOSTNI BLOKACE: neuspesna aktivace personal-v1; restart s ponechanym .env je zakazan." >&2
+    echo "Kod byl pripadne vracen; ani legacy, ani cilova data nebyla obnovena nebo smazana." >&2
+    echo "Sluzba zustava zastavena. Operator musi explicitne vypnout cilove prepinace, overit profil off a schvalit samostatny postup obnovy." >&2
+    exit "$rc"
+  fi
   if systemctl start "$SERVICE" && verify_service; then
     if [ "$BACKUP_VALIDATED" = 1 ]; then
       if runuser -u ai-executive -- /usr/bin/node \
