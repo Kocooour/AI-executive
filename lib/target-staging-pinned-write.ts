@@ -112,6 +112,22 @@ export function noTargetStagingSidecars(
 }
 
 /**
+ * SQLite may unlink its rollback journal while another process is in lstat:
+ * on Linux a regular inode can momentarily have nlink=0 before its pathname
+ * vanishes. A zero-link observation is NOT a trustworthy file we may open,
+ * but it is also not evidence of a planted hard link. Refuse this attempt as
+ * retryable contention; never allow it to proceed until the path is absent.
+ * A symlink, a directory/FIFO, or a multi-link inode remains a strict denial.
+ */
+export function targetStagingRollbackSidecarShape(
+  sidecar: Pick<ReturnType<typeof lstatSync>, "isFile" | "isSymbolicLink" | "nlink">,
+): "retryable" | "denied" {
+  if (!sidecar.isFile() || sidecar.isSymbolicLink() || sidecar.nlink > 1 ||
+      sidecar.nlink < 0) return "denied";
+  return "retryable"; // nlink 1 = ordinary sidecar; 0 = concurrent unlink
+}
+
+/**
  * A rollback sidecar seen AFTER BEGIN IMMEDIATE, but BEFORE this transaction has
  * written anything, cannot be ours. A regular single-link sidecar is ambiguous:
  * another writer may have just released its lock while SQLite was unlinking it.
@@ -125,8 +141,7 @@ export function classifyPostLockTargetStagingSidecar(
   if (!noTargetStagingSidecars(databasePath, ["-wal", "-shm"])) return "denied";
   try {
     const sidecar = lstatSync(databasePath + "-journal");
-    return sidecar.isFile() && !sidecar.isSymbolicLink() && sidecar.nlink === 1
-      ? "retryable" : "denied";
+    return targetStagingRollbackSidecarShape(sidecar);
   } catch (error) {
     return (error as NodeJS.ErrnoException).code === "ENOENT" ? "clear" : "denied";
   }
@@ -426,7 +441,7 @@ function runPinnedTargetStagingTransaction<T, C>(
           !noTargetStagingSidecars(files.databasePath, ["-wal", "-shm"])) return deny("prelock_identity_or_wal");
       try {
         const sidecar = lstatSync(files.databasePath + "-journal");
-        if (!sidecar.isFile() || sidecar.isSymbolicLink() || sidecar.nlink !== 1) return deny("prelock_sidecar_structure");
+        if (targetStagingRollbackSidecarShape(sidecar) === "denied") return deny("prelock_sidecar_structure");
       } catch (error) {
         // ENOENT means the journal disappeared between observations. All
         // other filesystem errors are trust/boundary failures, not contention.
@@ -495,9 +510,20 @@ function runPinnedTargetStagingTransaction<T, C>(
     // This transaction has not written to main yet: a well-shaped rollback
     // sidecar is not ours and cannot distinguish in-flight unlink from a stale
     // journal. Do not open it or mutate it; fail this attempt as retryable.
-    const postLockSidecar = classifyPostLockTargetStagingSidecar(files.databasePath);
-    if (postLockSidecar === "denied") return deny("postlock_sidecar_structure");
-    if (postLockSidecar === "retryable") return failed();
+    // A previous transaction may still be unlinking its journal after the
+    // SQLite RESERVED lock becomes available. Give that unlink a bounded
+    // chance to finish instead of spuriously failing a valid CAS loser before
+    // it can observe the winner's revision. Never open or remove the sidecar.
+    const postLockDeadline = Date.now() + busyTimeoutMs;
+    while (true) {
+      const postLockSidecar = classifyPostLockTargetStagingSidecar(files.databasePath);
+      if (postLockSidecar === "denied") return deny("postlock_sidecar_structure");
+      if (postLockSidecar === "clear") break;
+      const remaining = postLockDeadline - Date.now();
+      if (remaining <= 0) return failed();
+      Atomics.wait(sidecarSleep, 0, 0, Math.min(5, remaining));
+      if (!identitiesStillTrusted()) return deny("postlock_identity");
+    }
 
     // A restored backup carries its own restore_generation in its metadata; it is checked by the
     // canonical preflight against ITSELF, and against the journal further below.
