@@ -102,6 +102,8 @@ test("invalid, duplicated, malformed and empty profile settings do not leak valu
     block() + settings[0] + "=/private/secret/duplicate\n",
     block().replace(TARGET_PERSONAL_V1_PROFILE[0] + "=true", TARGET_PERSONAL_V1_PROFILE[0] + "=unsafe"),
     block().replace(TARGET_PERSONAL_V1_PROFILE[0] + "=true", TARGET_PERSONAL_V1_PROFILE[0] + "=true # not a systemd comment"),
+    block().replace(TARGET_PERSONAL_V1_PROFILE[0] + "=true", "export " + TARGET_PERSONAL_V1_PROFILE[0] + "=true"),
+    block().replace(TARGET_PERSONAL_V1_PROFILE[0] + "=true", TARGET_PERSONAL_V1_PROFILE[0] + " =true"),
   ];
   for (const input of cases) withEnv(input, file => {
     const result = run("--check", file);
