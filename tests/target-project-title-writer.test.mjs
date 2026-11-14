@@ -178,7 +178,8 @@ test('two processes racing the same project CAS commit at most one change',async
    const input=path.join(root,'input'+i);
    writeFileSync(input,JSON.stringify({store,command:{projectId:'race',commandId:randomUUID(),title:'After '+i,
      expectedRevision:page.page.revision,writeAreaId:stage.unassignedAreaId,restoreGeneration:stage.restoreGeneration,principalBinding:proof('alice','race',stage.restoreGeneration)}}));
-   const worker=spawn(process.execPath,['--experimental-loader','./tests/ts-loader.mjs','./tests/support/project-title-race-child.mjs',input,ready[i],go,results[i]],{stdio:['ignore','ignore','pipe'],cwd:process.cwd()});
+   const worker=spawn(process.execPath,['--experimental-loader','./tests/ts-loader.mjs','./tests/support/project-title-race-child.mjs',input,ready[i],go,results[i]],{stdio:['ignore','ignore','pipe'],cwd:process.cwd(),
+     env:{...process.env,AI_EXECUTIVE_TARGET_STAGING_DIAGNOSTICS:'1'}});
    worker.capturedStderr='';
    worker.stderr.on('data', data => { worker.capturedStderr=(worker.capturedStderr+data.toString()).slice(-3000); });
    return worker;
