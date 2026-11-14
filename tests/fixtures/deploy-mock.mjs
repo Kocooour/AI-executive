@@ -75,6 +75,7 @@ switch (name) {
     }
     if (verb === "show") {
       const prop = args[args.indexOf("-p") + 1];
+      if (scenario === "offexecxunsupported" && prop === "ExecStartEx") process.exit(8);
       const envfile = path.join(root, "etc/ai-executive/ai-executive.env");
       const extraFile = path.join(root, "etc/ai-executive/override.env");
       const defaults = [
