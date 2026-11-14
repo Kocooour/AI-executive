@@ -90,7 +90,40 @@ switch (name) {
         path.join(app, "node_modules/next/dist/bin/next") +
         " start --hostname 127.0.0.1 ; ignore_errors=no ; " +
         "start_time=[n/a] ; stop_time=[n/a] ; pid=0 ; code=(null) ; status=0/0 }";
-      console.log(prop === "ExecStart" ? (
+      const lateIdentity = ["offuserdriftbuild", "targetuserdriftbuild"].includes(scenario) &&
+        fs.existsSync(stateFile("identity-changed"));
+      const lateProtection = ["offhardeningdriftbuild", "targethardeningdriftpoststart"].includes(scenario) &&
+        fs.existsSync(stateFile("hardening-changed"));
+      const security = {
+        Type: "simple",
+        User: ["offuserroot", "targetuserroot"].includes(scenario) || lateIdentity ? "root" : "ai-executive",
+        Group: scenario === "offbadgroup" ? "root" : "ai-executive",
+        WorkingDirectory: scenario === "offbadworkdir" ? "/tmp" : app,
+        UMask: "0077",
+        StateDirectoryMode: ["offstateworld", "targetstateworld"].includes(scenario) || lateProtection ? "0777" : "0700",
+        NoNewPrivileges: scenario === "targetnonewprivileges" ? "no" : "yes",
+        PrivateTmp: scenario === "offprivatetmp" ? "no" : "yes",
+        PrivateDevices: "yes",
+        ProtectHome: scenario === "offprotecthome" ? "no" : "yes",
+        ProtectKernelTunables: "yes",
+        ProtectKernelModules: "yes",
+        ProtectKernelLogs: "yes",
+        ProtectControlGroups: "yes",
+        ProtectClock: "yes",
+        ProtectHostname: "yes",
+        RestrictSUIDSGID: "yes",
+        LockPersonality: "yes",
+        CapabilityBoundingSet: scenario === "offcapabilities" ? "CAP_SYS_ADMIN" : "",
+        AmbientCapabilities: "",
+        RestrictAddressFamilies: "AF_UNIX AF_INET AF_INET6",
+        ProtectProc: "invisible",
+        RestrictNamespaces: "yes",
+        RestrictRealtime: "yes",
+        SystemCallArchitectures: "native",
+        LimitCORE: "0",
+      };
+      const valueFor = prop => (Object.hasOwn(security, prop) ? security[prop] :
+        prop === "ExecStart" ? (
           execChanged ? expectedExec.replace("start --hostname 127.0.0.1", "start --hostname 0.0.0.0") : expectedExec) :
         prop === "ExecStartPost" && scenario === "offextrahook" ?
           "{ path=/usr/bin/touch ; argv[]=/usr/bin/touch /tmp/unreviewed ; ignore_errors=no ; start_time=[n/a] ; stop_time=[n/a] ; pid=0 ; code=(null) ; status=0/0 }" :
@@ -123,9 +156,18 @@ switch (name) {
             path.join(root, scenario === "targetrwbroad" ? "var/lib" : "var/lib/ai-executive-target") :
             scenario.startsWith("target") && !["targetunit", "targetstatedir"].includes(scenario) ?
               path.join(root, "var/lib/ai-executive-target/personal-v1") : "") : "");
+      const requested = args.flatMap((arg, i) => arg === "-p" ? [args[i + 1]] : []);
+      if (args.includes("--value")) console.log(valueFor(prop));
+      else console.log(requested.map(key => key + "=" + valueFor(key)).join("\n"));
       break;
     }
     if (verb === "stop") {
+      if (scenario === "targethardeningdriftpoststart" && get("head") === target &&
+          fs.existsSync(stateFile("target-started")) &&
+          !fs.existsSync(stateFile("hardening-changed"))) {
+        set("hardening-changed", "1");
+        log("unit-hardening-changed-after-first-start");
+      }
       if (scenario === "targetexecdriftpoststart" && get("head") === target &&
           fs.existsSync(stateFile("target-started")) &&
           !fs.existsSync(stateFile("exec-changed"))) {
@@ -256,6 +298,16 @@ switch (name) {
     if (args[0] === "install") { log("install"); break; }
     if (args[0] === "build") {
       log("build-" + get("head").slice(0, 1));
+      if (["offuserdriftbuild", "targetuserdriftbuild"].includes(scenario) &&
+          get("head") === target && !fs.existsSync(stateFile("identity-changed"))) {
+        set("identity-changed", "1");
+        log("unit-identity-changed-during-build");
+      }
+      if (scenario === "offhardeningdriftbuild" &&
+          get("head") === target && !fs.existsSync(stateFile("hardening-changed"))) {
+        set("hardening-changed", "1");
+        log("unit-hardening-changed-during-build");
+      }
       if (["offexecdriftbuild", "targetexecdriftbuild"].includes(scenario) &&
           get("head") === target &&
           !fs.existsSync(stateFile("exec-changed"))) {
