@@ -131,6 +131,19 @@ verify_loaded_service_security() {
     [RestrictRealtime]=yes
     [SystemCallArchitectures]=native
     [LimitCORE]=0
+    # Unconfigured implicit systemd properties can create extra writable
+    # directories, bind mounts, or change the process identity. They must
+    # remain empty/default, not merely absent from the tracked unit.
+    [DynamicUser]=no
+    [SupplementaryGroups]=''
+    [RootDirectory]=''
+    [RootImage]=''
+    [BindPaths]=''
+    [BindReadOnlyPaths]=''
+    [CacheDirectory]=''
+    [LogsDirectory]=''
+    [RuntimeDirectory]=''
+    [ConfigurationDirectory]=''
   )
   local -A seen=()
   local -a options=()
