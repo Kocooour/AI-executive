@@ -1,6 +1,6 @@
-import { expect, test } from "./fixtures";
+import { expect, persistOwnerSession, test } from "./fixtures";
 import { sessionFile } from "../playwright.config";
-import { confirmDialog, expectOnServer, serverEntities, settingsSections, sidebarView, waitUntilSynced } from "./helpers";
+import { confirmDialog, expectOnServer, serverEntities, settingsSections, sidebarView, signIn, waitUntilSynced } from "./helpers";
 
 // Opened without a connection to the server, the app could not check access. This browser has
 // synchronized before, so it shows the data it holds, marked as offline (owner decision
@@ -559,11 +559,17 @@ test("signing out after an offline start sends offline changes once the connecti
   await page.getByRole("button", { name: "Odhlásit se" }).click();
   await expect(page.locator(".authCard")).toBeVisible({ timeout: 20_000 });
   await expect(confirmDialog(page)).not.toBeVisible();
-  // Signed out here; another device with a session sees the change on the server.
+  // Logout revokes ALL existing owner sessions. A second device using the old
+  // setup cookie must be rejected, then may sign in again and read the saved
+  // offline edit. Do not silently depend on a revoked shared session here.
   const other = await browser.newContext({ storageState: sessionFile, locale: "cs-CZ" });
   const otherPage = await other.newPage();
   await otherPage.goto("/");
+  await expect(otherPage.locator(".authCard")).toBeVisible();
+  expect(await otherPage.evaluate(() => fetch("/api/store").then((response) => response.status))).toBe(401);
+  await signIn(otherPage);
   await expect.poll(async () => (await serverEntities(otherPage)).some((entity) => entity.title === title)).toBe(true);
+  await persistOwnerSession(other);
   // A synchronization finishing late (another tab) cannot make this browser eligible again.
   await page.evaluate(() => localStorage.setItem("ai-executive-signed-in", "1"));
   await page.route("**/api/**", (route) => route.abort());

@@ -6,7 +6,7 @@
 
 ## Immutable safety boundary
 
-Neither this runbook nor any tool in #408 authorizes a production cutover, database/cache reset, migration, deletion, credential rotation, target flag activation, or replacement of persisted state. An agent **must not** run #408 tools against production. Only read-only observations of a pre-existing, independently captured **offline** copy and writes into **new, explicitly named, empty** output directories are in scope. Do not open the live SQLite file even for a "read-only" check: a SQLite connection may create or update WAL/SHM files. Keep copies of WAL with the main SQLite file; a bare copy of an active WAL-mode main file is not evidence of a consistent backup.
+Neither this runbook nor any tool in #408 authorizes a production cutover, database/cache reset, migration, deletion, credential rotation, target flag activation, or replacement of persisted state. The separate #422 tool may provision ONLY a brand-new isolated target directory on an operator-approved path, with explicit confirmation and preflight; this is not runtime activation or approval to operate on production data. An agent **must not** run #408 tools against production. Only read-only observations of a pre-existing, independently captured **offline** copy and writes into **new, explicitly named, empty** output directories are in scope. Do not open the live SQLite file even for a "read-only" check: a SQLite connection may create or update WAL/SHM files. Keep copies of WAL with the main SQLite file; a bare copy of an active WAL-mode main file is not evidence of a consistent backup.
 
 The old and target stores are distinct data domains. A backup of the legacy database (including the app's format-v2 owner-data export) is **not** a complete archival backup of credentials, passkeys, push subscriptions, integration secrets or target-store journal/witness state. Preserve the complete offline directory snapshot as the archive; treat app exports as additional, narrower recovery artifacts.
 
@@ -18,7 +18,8 @@ The old and target stores are distinct data domains. A backup of the legacy data
 | 1 | Enumerate active browser tabs, installed PWAs and browsers on phones/desktops; coordinate with everyone who has a local copy. | Device/client inventory (manual checklist below), with acknowledgement per client |
 | 2 | Confirm owner-session revocation from #402 is merged, explicitly provisioned and functional. | Init proof, successful owner logout/re-login, copied-cookie denial, clean CI |
 | 3 | Resolve #388 BFCache lifecycle failures and demonstrate stale/returning clients cannot write old state. | Focused BFCache/restore-generation barrier evidence, exact test SHA |
-| 4 | Capture a **consistent** archival snapshot while writers are quiesced or through an approved atomic filesystem/SQLite backup procedure. Preserve legacy DB + WAL, backups, credentials, integration state and, if present, target DB plus append-only journal and witness as one recovery unit. | Immutable archive identifier, restrictive permissions, file manifest/checksums, protected retention location |
+| 3a | After owner approval of the intended **new** target path and single-owner ID, run `scripts/target-store-provision.mjs` **as the effective OS service user `ai-executive`, not root**, then check it as the same UID **before the coordinated archival snapshot**. Create no legacy data; leave all target flags off. | Three private settings, service UID on target and all companions, same-UID read-only `--check`; no activation |
+| 4 | **After step 3a**, capture a **consistent, coordinated** archival snapshot while writers are quiesced or through an approved atomic filesystem/SQLite backup procedure. Preserve legacy DB + WAL, backups, credentials, integration state and the **new target SQLite + append-only journal + witness** as one recovery unit. Include a detached target-directory copy in step 6 with `--target-offline`. An earlier legacy-only backup is **not** a substitute for this combined capture. | Immutable combined archive identifier, restrictive permissions, file manifest/checksums, protected retention location |
 | 5 | Run `scripts/cutover-inventory.mjs` on the offline copy, giving a new output location. Review only aggregated counts, timestamp ranges and boolean presence. | Content-free JSON, short summary, secret-content rejection tests |
 | 6 | Run the copy-only rehearsal in `deployment/rehearsal/` using a new empty output location. Check copied files, table rows, SHA-256 digests and SQLite `integrity_check` plus tamper/missing-table/non-empty-destination negative tests. **One-source copy fidelity is not independent backup verification.** | Private backup manifest and scoped copy-fidelity report; optional comparison of two separate input paths; independent capture still requires external evidence |
 | 7 | Confirm the proposed target production store location and settings in [R4 target decision draft](R4-TARGET-STORE-DECISION-DRAFT.md); verify its own journal/witness/restore-generation plan and archival recovery, without implementing the switchover. | Owner-reviewed configuration proposal; no target flags enabled |
@@ -31,6 +32,110 @@ The old and target stores are distinct data domains. A backup of the legacy data
 > Schvaluji samostatné produkční nasazení cílového modelu Lumi pouze pro jednoho vlastníka a soukromé Oblasti, na přesně určeném commitu `<40-znakový SHA>`, s cílovým úložištěm `<ověřená absolutní cesta>`, se zachováním nedotčeného archivního originálu `<identifikátor zálohy>`, ověřenou obnovou a rollback plánem `<odkaz>`. Výslovně schvaluji pouze konkrétně vyjmenované přepínače a datové kroky v předloženém plánu. Neschvaluji smazání jiných databází, lokálních kopií, záloh ani přihlašovacích údajů.
 
 This text is an approval **template**, not an approval. If the owner-approved plan needs data import, migration, cache disposal or replacement, list each exact path and irreversible effect in a **separate** decision before implementing. Until then, all production flags remain off.
+
+## Target-store provision and check (#422; no activation)
+
+The operator selects an absolute **new, non-existing** target directory under an existing **trusted** parent and an explicit single owner ID. Every path ancestor must be owned by the operator's UID or root, and must not be writable by other users/groups unless it is a sticky-bit-protected directory owned by the operator or root (for example `/tmp`). Untrusted ancestors are refused for both provision and `--check`, because another UID could otherwise replace path entries between validation and filesystem writes. In addition, the target directory **and all three store files must be owned by the effective operator UID**: `--check` refuses foreign-owned 0700/0600 files even if run as root, because their owner could change them during preflight. Run `--check` as the account that owns the copy; do not use `sudo` to bypass ownership or automatically `chown` an unknown store. The CLI also refuses symlink/path aliases, overlap with configured legacy or existing target staging storage, and overlap with the implicit `<cwd>/.data` default. It bootstraps a private isolated store using the existing library, runs the supported **read-only** semantic preflight (schema, owner, restore generation, journal and witness) and publishes it only into a freshly created destination. It creates the directory with mode 0700 and the three store files with mode 0600. Re-running provision against an existing path fails without overwriting it. On a caught failure, the CLI removes only its own newly created working/output directories; a hard kill can leave an operator-private temporary directory that must be inspected.
+
+**The execution account is part of the safety contract.** The deployed [systemd unit](../deployment/ai-executive.service) specifies `User=ai-executive`, `Group=ai-executive`, `WorkingDirectory=/opt/ai-executive` and `AI_EXECUTIVE_DATA_DIR=/var/lib/ai-executive`. The CLI creates files owned by its effective UID; `--check` accepts only that same UID. A target created by root cannot be read/written by the service, and a correct target created by the service will be rejected by a root `--check`. The root-only GitHub test uses **synthetic `/tmp` fixtures**, never a service target.
+
+After **separate operator approval** of the exact new path, authenticated application owner ID, and private parent, confirm the loaded unit and invoke **both** commands using `runuser` as `ai-executive`. Capture both actual live data locations from the running process (including systemd `EnvironmentFile` and drop-in overrides) and pass them to the CLI; fail closed if that configuration is not available. Do not substitute known defaults. A one-time parent creation (only if absent, never overwrite existing) may be separately approved, e.g. `install -d -o ai-executive -g ai-executive -m 0700 /var/lib/ai-executive-target`. The candidate `/var/lib/ai-executive-target/personal-v1` is a **draft example, not approval**. The following block is a template **not to execute without authorization**; replace both placeholders.
+```bash
+# Run in an authorized root operator shell (bash; uses read -d '').
+set -euo pipefail
+test "$(id -u)" -eq 0
+UNIT=ai-executive.service
+SERVICE_USER="$(systemctl show "$UNIT" -p User --value)"
+SERVICE_GROUP="$(systemctl show "$UNIT" -p Group --value)"
+SERVICE_CWD="$(systemctl show "$UNIT" -p WorkingDirectory --value)"
+test "$SERVICE_USER" = ai-executive
+test "$SERVICE_GROUP" = ai-executive
+test "$SERVICE_CWD" = /opt/ai-executive
+test "$(systemctl show "$UNIT" -p DynamicUser --value)" != yes
+SERVICE_UID="$(id -u "$SERVICE_USER")"
+SERVICE_GID="$(id -g "$SERVICE_USER")"
+test "$SERVICE_UID" -ne 0
+test "$(id -gn "$SERVICE_USER")" = "$SERVICE_GROUP"
+
+# The running process has resolved Environment=, EnvironmentFile= and drop-ins.
+# Never log the environment (it can contain credentials), or shell-source it.
+systemctl is-active --quiet "$UNIT"
+MAINPID="$(systemctl show "$UNIT" -p MainPID --value)"
+test "$MAINPID" -gt 0
+test "$(awk '$1 == "Uid:" {print $3}' "/proc/$MAINPID/status")" = "$SERVICE_UID"
+test "$(awk '$1 == "Gid:" {print $3}' "/proc/$MAINPID/status")" = "$SERVICE_GID"
+LIVE_LEGACY_DIR=''
+LIVE_STAGING_DIR=''
+legacy_count=0
+staging_count=0
+while IFS= read -r -d '' entry; do
+  case "$entry" in
+    AI_EXECUTIVE_DATA_DIR=*)
+      legacy_count=$((legacy_count + 1))
+      LIVE_LEGACY_DIR="${entry#AI_EXECUTIVE_DATA_DIR=}" ;;
+    AI_EXECUTIVE_TARGET_STAGING_DIRECTORY=*)
+      staging_count=$((staging_count + 1))
+      LIVE_STAGING_DIR="${entry#AI_EXECUTIVE_TARGET_STAGING_DIRECTORY=}" ;;
+  esac
+done < "/proc/$MAINPID/environ"
+test "$legacy_count" -eq 1
+test "$staging_count" -le 1
+case "$LIVE_LEGACY_DIR" in /*) ;; *) echo 'STOP: invalid live legacy path' >&2; exit 1 ;; esac
+case "$LIVE_STAGING_DIR" in ''|/*) ;; *) echo 'STOP: invalid live staging path' >&2; exit 1 ;; esac
+
+TARGET_DIR='<approved-new-absolute-path>'
+OWNER_USER_ID='<verified-application-owner-id>'  # NOT the POSIX service username
+PARENT="$(dirname "$TARGET_DIR")"
+test "$(stat -c '%u:%a' "$PARENT")" = "$SERVICE_UID:700"
+test ! -e "$TARGET_DIR" && test ! -L "$TARGET_DIR"
+
+# Preserve BOTH live paths in the CLI's overlap guards, without passing secrets.
+cd "$SERVICE_CWD"
+test "$(systemctl show "$UNIT" -p MainPID --value)" = "$MAINPID"
+runuser -u "$SERVICE_USER" -g "$SERVICE_GROUP" -- env -i \
+  PATH=/usr/bin:/bin HOME=/nonexistent \
+  AI_EXECUTIVE_DATA_DIR="$LIVE_LEGACY_DIR" \
+  AI_EXECUTIVE_TARGET_STAGING_DIRECTORY="$LIVE_STAGING_DIR" \
+  /usr/bin/node scripts/target-store-provision.mjs "$TARGET_DIR" "$OWNER_USER_ID" --confirmed
+test "$(systemctl show "$UNIT" -p MainPID --value)" = "$MAINPID"
+runuser -u "$SERVICE_USER" -g "$SERVICE_GROUP" -- env -i \
+  PATH=/usr/bin:/bin HOME=/nonexistent \
+  AI_EXECUTIVE_DATA_DIR="$LIVE_LEGACY_DIR" \
+  AI_EXECUTIVE_TARGET_STAGING_DIRECTORY="$LIVE_STAGING_DIR" \
+  /usr/bin/node scripts/target-store-provision.mjs --check "$TARGET_DIR"
+
+test "$(stat -c '%u:%a' "$TARGET_DIR")" = "$SERVICE_UID:700"
+for name in lumi-target.sqlite lumi-target.journal lumi-target-witness.sqlite; do
+  test "$(stat -c '%u:%a' "$TARGET_DIR/$name")" = "$SERVICE_UID:600"
+done
+```
+
+**STOP on any mismatch.** The command reads only the two effective live storage paths from `/proc/$MAINPID/environ` and passes them into `safeTarget()` under the service UID. Never print the complete process environment (it can hold secrets), source `EnvironmentFile` as shell commands or hardcode a presumed live path. Confirm no separate service instance has another live storage location: the guard is scoped to this running unit. A root-owned/previously existing target must **not** be fixed with `chown`, reused, or overwritten; request a separately approved recovery procedure. For detached archival copies run `--check` as the account that actually owns that *copy*, never imply it establishes the service's access.
+
+**Separate systemd sandbox gate:** the current unit has `ProtectSystem=strict` and only `StateDirectory=ai-executive`. The proposed external `/var/lib/ai-executive-target` lies outside the unit's declared writable directories. A successful `runuser` operation verifies POSIX ownership but **does not prove the running sandboxed service can write the target**. Before any runtime activation, obtain separate approval and verify a least-privilege `StateDirectory`/writable-directory change for the approved target; this PR neither changes the unit nor authorizes cutover.
+
+
+A successful command prints **only** the three existing, exact settings:
+
+```text
+AI_EXECUTIVE_TARGET_STAGING_DIRECTORY=/absolute/new/target-store
+AI_EXECUTIVE_TARGET_STAGING_OWNER_USER_ID=owner-user-id
+AI_EXECUTIVE_TARGET_STAGING_RESTORE_GENERATION=<UUID from this store>
+```
+
+Save those values in restricted operator evidence; do not publish the actual values in PR descriptions or enable flags. The final `--confirmed` is permission to create a **new empty store only**, not production cutover approval. `--check` never creates, repairs or alters any file; a failed preflight or unsafe permissions block further action. Neither command performs legacy import, migration, credential reset or deployment changes.
+
+After creating the target in step 3a, **independently capture a coherent, protected offline copy of the complete recovery unit in step 4**, including both legacy and the target directory. If a legacy-only archive was previously taken, capture a new coordinated recovery unit; do not mix snapshots of unknown consistency. The archive/rehearsal required by #412 must then include it:
+
+```bash
+node deployment/rehearsal/cutover-restore-rehearsal.mjs \
+  /offline/legacy-copy /new/rehearsal-output \
+  --target-offline /offline/target-store-copy \
+  --offline-confirmed
+node scripts/target-store-provision.mjs --check /offline/target-store-copy
+```
+
+The rehearsal proves **byte/SQLite copy fidelity**, not journal/witness semantic validity or independent snapshot consistency. The separate `--check` provides the latter semantic preflight **only on the detached copy**, not cutover readiness. Before any deployment, still require owner approval, legacy/client/identity gates, verified independent backup/recovery, and exact-SHA release E2E.
 
 ## Copy-only rehearsal commands and limitations
 

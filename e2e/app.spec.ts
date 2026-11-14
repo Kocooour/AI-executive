@@ -1,6 +1,4 @@
-import { writeFileSync } from "node:fs";
-import { sessionFile } from "../playwright.config";
-import { expect, test } from "./fixtures";
+import { expect, persistOwnerSession, test } from "./fixtures";
 import { prepareOfflineRecovery } from "../lib/d2b-offline-reconciliation";
 import { encodeOfflineRecoveryFile } from "../lib/d2b-offline-recovery-file";
 import { confirmDialog, expectOnServer, heading, seeded, serverEntities, settingsSections, sidebarView, signIn, waitUntilSynced } from "./helpers";
@@ -725,16 +723,12 @@ test("signing out clears the local copy; signing in again restores it from the s
   await expectOnServer(page, (entity) => entity.id === "e2e-rename" && entity.properties?.notes === otherTab, true);
 
   // This sign-out globally revokes ALL previously issued owner cookies.
-  // Playwright's dependent setup wrote sessionFile before that revocation;
-  // in a serial app + backups + two-devices run every later scenario would
-  // otherwise reuse its now-invalid cookie (GET /api/store -> 401).
-  // Keep the real production revocation intact and refresh ONLY the test
-  // fixture with the newly issued, server-verified owner session. Persist no
-  // localStorage or IndexedDB from this test: each later scenario still starts
-  // in a clean browser with just an authenticated cookie.
+  // Use the shared fixture writer: only the newly authenticated cookie is
+  // persisted, never app localStorage/IndexedDB. The next test also verifies
+  // its owner cookie before creating any browser context.
   const { cookies } = await page.context().storageState();
   const freshSessionCookie = cookies.find((cookie) => cookie.name === "ai_executive_session")?.value;
   expect(freshSessionCookie).toBeTruthy();
   expect(freshSessionCookie).not.toBe(previousSessionCookie);
-  writeFileSync(sessionFile, JSON.stringify({ cookies, origins: [] }));
+  await persistOwnerSession(page.context());
 });

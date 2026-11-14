@@ -1,0 +1,108 @@
+name: Release 0 C16 browser session and order regression
+
+# Focused two-spec reproductions only. The complete browser suite remains a
+# separate preproduction Release 0 gate; flags are intentionally default-off.
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/release0-c16-focused-browser.yml"
+      - "e2e/fixtures.ts"
+      - "e2e/session-recovery.spec.ts"
+      - "e2e/app.spec.ts"
+      - "e2e/data-boundary.spec.ts"
+      - "e2e/passkeys.spec.ts"
+      - "e2e/recovery.spec.ts"
+      - "e2e/tabs.spec.ts"
+      - "e2e/project-page.spec.ts"
+      - "e2e/inspector-return-focus-ui01e.spec.ts"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: lumi-release0-c16-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  serial-session:
+    name: C16 logout to next test (Chromium, workers=1)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 55
+    env:
+      CI: "true"
+      NEXT_TELEMETRY_DISABLED: "1"
+      E2E_PORT: "3146"
+      E2E_SKIP_BUILD: "1"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+      - name: Install pnpm
+        uses: pnpm/action-setup@v5
+        with:
+          version: 10.20.0
+      - name: Set up Node
+        uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+          cache: pnpm
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Typecheck browser fixtures and tests
+        run: pnpm typecheck
+      - name: Build production app, preview flags off
+        run: pnpm build
+      - name: Install Chromium
+        run: pnpm exec playwright install --with-deps chromium
+      - name: Prove global revocation and next-test repair
+        run: pnpm exec playwright test e2e/session-recovery.spec.ts --project=desktop --workers=1 --trace=on
+      - name: Real passkey logout then project inspector
+        run: |
+          pnpm exec playwright test \
+            e2e/passkeys.spec.ts e2e/project-page.spec.ts \
+            --project=desktop --workers=1 \
+            --grep 'a passkey signs in until it is removed|C10: inspector Close preserves' \
+            --trace=on
+      - name: Offline logout then inspector focus (ordered same-instance pair)
+        shell: bash
+        run: |
+          ordered=(e2e/c16-01-recovery.spec.ts e2e/c16-02-inspector.spec.ts)
+          cp e2e/recovery.spec.ts "${ordered[0]}"
+          cp e2e/inspector-return-focus-ui01e.spec.ts "${ordered[1]}"
+          trap 'rm -f "${ordered[@]}"' EXIT
+          pnpm exec playwright test "${ordered[@]}" \
+            --project=desktop --workers=1 \
+            --grep 'signing out after an offline start sends offline changes once the connection is back|UI-01e: keyboard A' \
+            --trace=on
+      - name: Tab logout then project inspector (ordered same-instance pair)
+        shell: bash
+        run: |
+          ordered=(e2e/c16-01-tabs.spec.ts e2e/c16-02-project.spec.ts)
+          cp e2e/tabs.spec.ts "${ordered[0]}"
+          cp e2e/project-page.spec.ts "${ordered[1]}"
+          trap 'rm -f "${ordered[@]}"' EXIT
+          pnpm exec playwright test "${ordered[@]}" \
+            --project=desktop --workers=1 \
+            --grep 'signing out in one tab first saves a title being typed in another|C10: inspector Close preserves' \
+            --trace=on
+      - name: Anonymous boundary logout then project inspector (ordered pair)
+        shell: bash
+        run: |
+          ordered=(e2e/c16-01-boundary.spec.ts e2e/c16-02-project.spec.ts)
+          cp e2e/data-boundary.spec.ts "${ordered[0]}"
+          cp e2e/project-page.spec.ts "${ordered[1]}"
+          trap 'rm -f "${ordered[@]}"' EXIT
+          pnpm exec playwright test "${ordered[@]}" \
+            --project=desktop --workers=1 \
+            --grep 'without a session every handler refuses|C10: inspector Close preserves' \
+            --trace=on
+      - name: Upload focused traces on failure
+        if: failure()
+        uses: actions/upload-artifact@v6
+        with:
+          name: lumi-release0-c16-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            test-results/
+            playwright-report/
+          if-no-files-found: ignore
+          retention-days: 7

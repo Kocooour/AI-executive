@@ -65,6 +65,24 @@ jobs:
         if: steps.scope.outputs.code == 'true'
         run: pnpm typecheck
 
+      # This is a required gate for code PRs, NOT optional on file existence.
+      # A missing/renamed test file, skipped test or zero executed tests fails CI.
+      # Run only the dedicated synthetic /tmp regression with elevated UID.
+      - name: Privileged R4 ownership regression
+        if: steps.scope.outputs.code == 'true'
+        run: |
+          set -euo pipefail
+          tap_output="$(mktemp)"
+          trap 'rm -f "$tap_output"' EXIT
+          sudo -n env TMPDIR=/tmp R4_REQUIRE_ROOT_OWNERSHIP_TEST=1 \
+            "$(command -v node)" --experimental-loader ./tests/ts-loader.mjs \
+            --test --test-reporter=tap \
+            tests/target-store-provision-ownership-root.test.mjs | tee "$tap_output"
+          grep -Fxq '# tests 1' "$tap_output"
+          grep -Fxq '# pass 1' "$tap_output"
+          grep -Fxq '# fail 0' "$tap_output"
+          grep -Fxq '# skipped 0' "$tap_output"
+
       - name: Focused PR unit tests (including ACL/security when affected)
         if: steps.scope.outputs.code == 'true'
         run: node scripts/ci-pr-tests.mjs --test
