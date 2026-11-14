@@ -190,6 +190,20 @@ function main() {
   }
   console.log(`PR unit tests: ${full ? "full suite" : "focused suite"} (${selected.length}/${available.length} files)`);
   console.log(selected.join("\n"));
+  // Release and rollback safety must fail early: a broad PR suite can run
+  // for many minutes, obscuring which deployment invariant broke.
+  // The full selected suite still runs unchanged after this first gate.
+  if (selected.includes("tests/deploy-safe.test.mjs")) {
+    const smoke = spawnSync(process.execPath, [
+      "--experimental-loader", "./tests/ts-loader.mjs",
+      "--test", "tests/deploy-safe.test.mjs",
+    ], { stdio: "inherit", env: process.env });
+    if (smoke.error) throw smoke.error;
+    if (smoke.status !== 0) {
+      process.exitCode = smoke.status ?? 1;
+      return;
+    }
+  }
   const outcome = spawnSync(process.execPath, [
     "--experimental-loader", "./tests/ts-loader.mjs", "--test", ...selected,
   ], { stdio: "inherit", env: process.env });
