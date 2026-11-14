@@ -24,7 +24,10 @@ const tracked=execFileSync("git",["ls-files","-z"],{cwd:root,encoding:"utf8",max
   .split("\0").filter(file=>file&&!SKIPPED.test(file)&&!/\.(?:png|jpe?g|gif|ico|webp|woff2?|ttf|svg|pdf|md)$/i.test(file));
 // A name assembled at runtime cannot be classified, so it is refused: only these exact (file, fragment)
 // pairs may mention an incomplete AI_EXECUTIVE_TARGET_ identifier.
-const INCOMPLETE_ALLOWED=new Set([]);
+// The deploy launcher uses this exact literal as a static, anchored regex
+// prefix to detect even *unknown* enabled target flags before invoking the
+// strict checker. It never assembles or reads a particular flag by this name.
+const INCOMPLETE_ALLOWED=new Set(["deployment/deploy-safe.sh|AI_EXECUTIVE_TARGET"]);
 const found=new Set(),nonBoolean=new Set(),incomplete=[];
 for(const file of tracked){
   let text;
