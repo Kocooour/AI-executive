@@ -52,6 +52,16 @@ verify_loaded_environment_sources() {
   unset_env="$(systemctl show "$SERVICE" -p UnsetEnvironment --value)" || return 1
   pam="$(systemctl show "$SERVICE" -p PAMName --value)" || return 1
   [ -z "$pass" ] && [ -z "$unset_env" ] && [ -z "$pam" ] || return 1
+  # EnvironmentFile wins over Environment= at service startup. The
+  # deployment checks/backups $DATA, so a later override of these four
+  # fixed unit keys must never redirect the running process. Reject all
+  # assignments (even same-valued ones) without evaluating or printing
+  # any operator-controlled .env values. I/O errors also fail closed.
+  if LC_ALL=C grep -Eq '^[[:space:]]*(export[[:space:]]+)?(NODE_ENV|PORT|NEXT_TELEMETRY_DISABLED|AI_EXECUTIVE_DATA_DIR)[[:space:]]*=' "$ENVFILE"; then
+    return 1
+  else
+    [ "$?" -eq 1 ] || return 1
+  fi
   manager_env="$(systemctl show-environment)" || return 1
   # A here-string has no upstream writer to SIGPIPE if grep finds an early
   # match in a large manager environment (set -o pipefail would hide it).
@@ -61,6 +71,43 @@ verify_loaded_environment_sources() {
     # grep returns 1 only for a confirmed non-match; I/O/errors also fail closed.
     [ "$?" -eq 1 ]
   fi
+}
+
+# The shipped unit is ProtectSystem=strict with a private legacy
+# StateDirectory. The only authorized extension is the isolated
+# ai-executive-target StateDirectory (as proposed in the R4 runbook) or
+# an exact, non-parent ReadWritePaths exception for an approved target.
+# Reject broad parent writes, extra state directories, or relaxed sandboxing
+# even when the target profile is currently off.
+verify_loaded_write_sandbox() {
+  local protect state rw
+  protect="$(systemctl show "$SERVICE" -p ProtectSystem --value)" || return 1
+  [ "$protect" = strict ] || return 1
+  state="$(systemctl show "$SERVICE" -p StateDirectory --value)" || return 1
+  case "$state" in
+    ai-executive|"ai-executive ai-executive-target"|"ai-executive-target ai-executive") ;;
+    *) return 1 ;;
+  esac
+  rw="$(systemctl show "$SERVICE" -p ReadWritePaths --value)" || return 1
+  if [ "$TARGET_PROFILE" != personal-v1 ]; then
+    # An off deployment has no approved target directory to compare.
+    [ -z "$rw" ]
+    return
+  fi
+  if [ -n "$rw" ]; then
+    # Never accept ancestors such as /var/lib or the target parent,
+    # additional write paths, or systemd's optional '-' path syntax.
+    [ "$rw" = "$TARGET_DIRECTORY" ]
+    return
+  fi
+  case "$state" in
+    "ai-executive ai-executive-target"|"ai-executive-target ai-executive")
+      case "$TARGET_DIRECTORY/" in
+        /var/lib/ai-executive-target/*/) return 0 ;;
+      esac
+      ;;
+  esac
+  return 1
 }
 
 # Fingerprint the exact reviewed root-owned env bytes. Even an off deployment
@@ -356,7 +403,8 @@ on_exit() {
   fi
   # A failed off deployment can also see unit/env drift *after* its last
   # pre-start validation. Never restart old code with newly rejected flags.
-  if ! verify_loaded_environment_sources || ! env_file_unchanged; then
+  if ! verify_loaded_environment_sources || ! verify_loaded_write_sandbox ||
+     ! env_file_unchanged; then
     echo "BEZPECNOSTNI BLOKACE: zmenene zdroje prostredi systemd nebo obsah .env pri rollbacku." >&2
     echo "Sluzba zustava zastavena; oprav konfiguraci a schval samostatnou obnovu." >&2
     exit "$rc"
@@ -520,23 +568,11 @@ if awk '
     test "$(stat -c %u "$TARGET_DIRECTORY")" = "$(id -u ai-executive)" &&
       test "$(stat -c %a "$TARGET_DIRECTORY")" = 700 ||
       die "cilovy adresar nema vlastnika ai-executive a rezim 0700"
-    # ProtectSystem=strict: POSIX ownership alone does not grant write access.
-    # Accept only a loaded systemd writable directory covering this target.
-    target_unit_writable=0
-    for unit_dir in $(systemctl show "$SERVICE" -p StateDirectory --value); do
-      if [[ "$unit_dir" =~ ^[A-Za-z0-9_-]+$ ]]; then
-        case "$TARGET_DIRECTORY/" in "/var/lib/$unit_dir/"*) target_unit_writable=1;; esac
-      fi
-    done
-    for unit_path in $(systemctl show "$SERVICE" -p ReadWritePaths --value); do
-      if [[ "$unit_path" == /* && "$unit_path" != */../* ]]; then
-        case "$TARGET_DIRECTORY/" in "$unit_path/"*) target_unit_writable=1;; esac
-      fi
-    done
-    [ "$target_unit_writable" = 1 ] ||
-      die "systemd sandbox nedovoluje zapis do ciloveho uloziste; vyzaduje schvaleny drop-in"
   fi
 fi
+# Reject weakened sandboxing also for legacy-only/off deployments.
+verify_loaded_write_sandbox ||
+  die "systemd sandbox nedovoluje schvaleny rozsah zapisu nebo ProtectSystem=strict"
 env_file_unchanged || die "env se zmenilo behem predstartovniho overovani"
 echo "Stavajici: $PREV"
 echo "Cil:       $TARGET"
@@ -716,6 +752,8 @@ fi
 # Confirm the loaded environment sources again before allowing a start.
 verify_loaded_environment_sources ||
   die "zdroje prostredi systemd se pred startem zmenily"
+verify_loaded_write_sandbox ||
+  die "systemd sandbox se pred startem zmenil"
 env_file_unchanged ||
   die "env se pred startem zmenilo"
 systemctl start "$SERVICE"
@@ -730,6 +768,8 @@ if [ "$TARGET_PROFILE" = personal-v1 ]; then
   verify_target_store || die "cilovy preflight po prvnim startu selhal"
   verify_loaded_environment_sources ||
     die "zdroje prostredi systemd se pred druhym startem zmenily"
+  verify_loaded_write_sandbox ||
+    die "systemd sandbox se pred druhym startem zmenil"
   env_file_unchanged ||
     die "env se pred druhym startem zmenilo"
   systemctl start "$SERVICE"
