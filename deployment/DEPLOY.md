@@ -151,10 +151,15 @@ separately approved `ReadWritePaths` matching the **exact target directory**.
 Mixing both grants two writable roots and is rejected, as are parent paths
 (e.g. `/var/lib`), multiple exceptions and unexpected StateDirectories.
 In off mode ReadWritePaths must be empty. The effective service execution
-contract is also checked against the reviewed unit: exactly `/usr/bin/node`
-with the reviewed Next.js argv, and no added ExecStartPre/ExecStartPost,
-ExecCondition, ExecStop/ExecStopPost or ExecReload hooks. The dynamic
-systemd timestamps/PID may change, but the executed binary and argv may not.
+contract is checked against the reviewed unit using **both** the
+legacy `ExecStart` and the flag-aware `ExecStartEx`: exactly `/usr/bin/node`
+with the reviewed Next.js argv and an **empty `flags=` field**, and no
+ExecStartPre/ExecStartPost, ExecCondition, ExecStop/ExecStopPost or ExecReload
+hooks. Dynamic systemd timestamps/PID may change, but executable, argv
+and execution flags may not. The legacy `ExecStart` alone hides command
+prefixes such as `+` and `!` that bypass service-user/sandbox restrictions.
+If `ExecStartEx` is unsupported, empty or malformed, deployment must stop
+rather than guess that the command is unprivileged.
 The deploy additionally verifies the **effective** `User=ai-executive`,
 `Group=ai-executive`, `WorkingDirectory=/opt/ai-executive`, `UMask=0077`,
 `StateDirectoryMode=0700`, `NoNewPrivileges`, `PrivateTmp`, `PrivateDevices`,
