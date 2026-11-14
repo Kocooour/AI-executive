@@ -651,6 +651,11 @@ export function useSync() {
     // A suspended tab may miss storage events; on focus, inspect the same
     // certified marker, never a bare ordinary-sync generation update.
     const onFocus = () => {
+      // Only the newly opened, never-synchronized tab needs this extra
+      // fallback. Existing known-generation tabs keep the current storage and
+      // BroadcastChannel reload paths (and can be intentionally held stale
+      // in the write-fence regression tests).
+      if (loadedGeneration.current !== undefined || loadedWasSynced.current) return;
       const completed = completedOwnerAdoptionSinceThisTabLoaded();
       if (completed !== undefined) reloadForRestore(completed, true);
     };
