@@ -165,7 +165,10 @@ test("a task added from a project in another workspace goes to that workspace an
       baseRevision: snapshot.revision, restoreGeneration: snapshot.restoreGeneration,
       entities: [...snapshot.entities,
         entity(`workspace:${workspaceId}`, "workspace", "Druhý prostor", workspaceId, { properties: { kind: "shared", role: "owner", members: [{ id: "owner", role: "owner" }] } }),
-        entity(ids.projectId, "project", "Projekt v druhém prostoru", workspaceId),
+        // Explicit project Area prevents the server creating a protected fallback
+        // Area that a synthetic workspace teardown is not permitted to delete.
+        entity(ids.projectId, "project", "Projekt v druhém prostoru", workspaceId,
+          { properties: { areaId: ids.otherAreaId } }),
         entity(ids.otherAreaId, "area", "Oblast druhého prostoru", workspaceId),
         entity(ids.personalAreaId, "area", "Vlastní oblast", "personal")],
       relations: snapshot.relations, deletedIds: [], revivedIds: [],

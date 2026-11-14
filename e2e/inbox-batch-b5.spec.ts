@@ -28,7 +28,10 @@ async function seedInboxBatch(page: Page) {
       { inbox: true, originalCaptureText: "Původní záznam beta" });
     const project = make(`project:${token}`, "project", `B5 projekt ${token}`);
     const area = make(`area:${token}`, "area", `B5 oblast ${token}`);
-    const hidden = make(`hidden:${token}`, "task", `B5 tajné ${token}`, other, { inbox: true });
+    // Legacy label is intentional: the write normalizer creates this test-owned
+    // shared Area instead of the protected "Nezařazeno" fallback.
+    const hidden = make(`hidden:${token}`, "task", `B5 tajné ${token}`, other,
+      { inbox: true, area: `B5 shared area ${token}` });
     const workspace = make(`workspace:${other}`, "workspace", "B5 jiný prostor", other,
       { kind: "shared", role: "owner", members: [{ id: "owner", role: "owner" }] });
     const result = await fetch("/api/store", { method: "PUT", headers: { "content-type": "application/json" },

@@ -19,7 +19,7 @@ test("C23: no synthetic workspace survives the ordered fixture owners", async ({
       "area:b5-", "e2e-personal-area-", "e2e-own-area-"];
     const matches = (id: string, prefixes: string[]) => prefixes.some((prefix) => id.startsWith(prefix));
     return snapshot.entities.filter((entity: { id: string; type: string; workspaceId: string }) =>
-      (entity.type === "workspace" && matches(entity.workspaceId, workspacePrefixes)) ||
+      (entity.workspaceId !== "personal" && matches(entity.workspaceId, workspacePrefixes)) ||
       matches(entity.id, entityPrefixes)).map((entity: { id: string }) => entity.id).sort();
   });
   expect(leftovers, "all synthetic workspace fixtures must be deleted before the next spec").toEqual([]);

@@ -192,7 +192,10 @@ test("a task held for its unknown workspace is sent once the workspace exists", 
     request.onsuccess = () => {
       const now = Date.now();
       const put = request.result.transaction("entities", "readwrite").objectStore("entities").put({
-        id: taskId, type: "task", title: "Čeká na prostor", status: "open", workspaceId: workspace, properties: { inbox: true }, createdAt: now, updatedAt: now,
+        // Preserve the unknown-workspace hold, but make the eventual Area
+        // test-owned: the protected system fallback cannot be deleted.
+        id: taskId, type: "task", title: "Čeká na prostor", status: "open", workspaceId: workspace,
+        properties: { inbox: true, area: `E2E recovery area ${workspace}` }, createdAt: now, updatedAt: now,
       });
       put.onsuccess = () => { request.result.close(); resolve(); };
       put.onerror = () => reject(put.error);
