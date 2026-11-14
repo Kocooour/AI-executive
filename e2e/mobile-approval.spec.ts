@@ -1,8 +1,13 @@
 import { test, expect } from "./fixtures";
-import { waitUntilSynced, serverEntities } from "./helpers";
+import { waitUntilSynced, serverEntities, cleanupSyntheticFixtures } from "./helpers";
 
 test.describe("mobile proposal approval", () => {
   test.use({ viewport: { width: 375, height: 667 }, hasTouch: true, isMobile: true });
+  test.afterEach(async ({ page }, testInfo) => {
+    if (testInfo.title === "capture scope stays local, but switching the active workspace clears proposals and late replies") {
+      await cleanupSyntheticFixtures(page, { workspacePrefixes: ["approval-other-"] });
+    }
+  });
 
   test("shows real Inbox removal on a same-date reschedule before approval", async ({ page }) => {
     await page.goto("/");

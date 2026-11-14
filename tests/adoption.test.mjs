@@ -272,6 +272,21 @@ test("valid owner adoption fence can be saved as non-importable raw rescue when 
   ), /OWNER_RESCUE_INVALID/);
 });
 
+test("C23 verified sign-out clears adoption completion after database and fence cleanup", () => {
+  const source = readFileSync(new URL("../lib/local-data.ts", import.meta.url), "utf8");
+  const wipeStart = source.indexOf("await Promise.race([");
+  const purgeBaseline = source.indexOf("clearPurgedRestoreBaseline(localStorage);", wipeStart);
+  const finishFence = source.indexOf("finishOwnerAdoptionFence(localStorage);", purgeBaseline);
+  const removeCompletion = source.indexOf("localStorage.removeItem(ownerAdoptionCompletedKey);", finishFence);
+  const clearPending = source.indexOf("localStorage.removeItem(wipePendingKey);", removeCompletion);
+  assert.ok(wipeStart !== -1 && wipeStart < purgeBaseline && purgeBaseline < finishFence &&
+    finishFence < removeCompletion && removeCompletion < clearPending,
+    "completion cleanup must follow a verified wipe and fence retirement");
+  assert.ok(!source.slice(source.indexOf("export async function clearLocalData"), wipeStart)
+    .includes("localStorage.removeItem(ownerAdoptionCompletedKey)"),
+    "an unfinished sign-out cannot clear completion early");
+});
+
 test("C9 focused workflow triggers when each restore safety module or unit regression changes", () => {
   const yml = readFileSync(new URL("../.github/workflows/release0-backup-restore-browser.yml", import.meta.url), "utf8");
   const pullRequestPaths = yml.split("  workflow_dispatch:")[0]

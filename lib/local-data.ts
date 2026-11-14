@@ -5,7 +5,7 @@ import { clearAllMarkers, pendingDeletedIds, pendingRevivedIds } from "./pending
 import { clearNotesDrafts, keptNotesDrafts, notesDraftsKey } from "./notes-drafts";
 import { clearProjectContextDrafts, keptProjectContextDrafts } from "./project-context-drafts";
 import { clearOpenTexts } from "./open-texts";
-import { assertOwnerAdoptionCleanup, finishOwnerAdoptionFence } from "./owner-adoption-barrier";
+import { assertOwnerAdoptionCleanup, finishOwnerAdoptionFence, ownerAdoptionCompletedKey } from "./owner-adoption-barrier";
 import { attentionCacheKey } from "./attention-cache";
 
 // Browser-side copies of server data and the bookkeeping of unsent changes.
@@ -124,6 +124,9 @@ export async function clearLocalData(timeoutMs = 4000) {
   // A fully authorized, verified sign-out also retires an abandoned owner
   // restore fence. Partial wipes keep wipePending and cannot expose old rows.
   finishOwnerAdoptionFence(localStorage);
+  // Only a completed purge and retired fence can discard this stale completion
+  // marker. Wipe intent remains if this final step fails (#419).
+  localStorage.removeItem(ownerAdoptionCompletedKey);
   localStorage.removeItem(wipePendingKey);
   }, true);
 }

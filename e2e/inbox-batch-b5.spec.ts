@@ -1,8 +1,14 @@
 import { test, expect } from "./fixtures";
 import type { Page } from "@playwright/test";
-import { waitUntilSynced } from "./helpers";
+import { waitUntilSynced, cleanupSyntheticFixtures } from "./helpers";
 
 // Real canonical server fixtures, with a second workspace to detect leaks.
+test.afterEach(async ({ page }) => {
+  await cleanupSyntheticFixtures(page, {
+    workspacePrefixes: ["b5-"],
+    entityPrefixes: ["task:one:b5-", "task:two:b5-", "project:b5-", "area:b5-"],
+  });
+});
 async function seedInboxBatch(page: Page) {
   await page.goto("/?view=Inbox");
   await waitUntilSynced(page);

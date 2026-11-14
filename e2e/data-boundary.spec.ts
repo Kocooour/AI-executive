@@ -5,6 +5,7 @@ import { DatabaseSync } from "node:sqlite";
 import { unzipSync } from "fflate";
 import { request as playwrightRequest, type APIRequestContext } from "@playwright/test";
 import { expect, test } from "./fixtures";
+import { cleanupSyntheticFixtures } from "./helpers";
 import { integrationToken, sessionFile } from "../playwright.config";
 
 // Gate D data boundary. The handlers are listed from the file system, so a new endpoint is checked without editing this
@@ -167,6 +168,7 @@ test("an export holds every workspace of the owner, and is given only to the own
   live.prepare("INSERT INTO metadata (key, value) VALUES ('e2eVapidMarker', ?)").run(`${secret}-vapid`);
   const second = `e2e-boundary-ws-${Date.now()}`;
   const marker = `e2e-boundary-note-${Date.now()}`;
+  try {
   await page.evaluate(async ([workspaceId, noteId]) => {
     const snapshot = await fetch("/api/store", { cache: "no-store" }).then((response) => response.json());
     const now = Date.now();
@@ -176,7 +178,6 @@ test("an export holds every workspace of the owner, and is given only to the own
         { id: noteId, type: "note", title: "Boundary note", content: "x", status: "active", workspaceId, properties: {}, createdAt: now, updatedAt: now }],
       relations: snapshot.relations, deletedIds: [], revivedIds: [] }) });
   }, [second, marker]);
-  try {
     const owner = await client(baseURL!, "export-owner", { session: true });
     const bearer = await client(baseURL!, "export-bearer", { token: true });
     const anonymous = await client(baseURL!, "export-anonymous");
@@ -219,11 +220,6 @@ test("an export holds every workspace of the owner, and is given only to the own
     live.prepare("DELETE FROM push_subscriptions WHERE endpoint LIKE ?").run(`%${secret}%`);
     live.exec("DELETE FROM metadata WHERE key = 'e2eVapidMarker'");
     live.close();
-    await page.evaluate(async ([workspaceId, noteId]) => {
-      const snapshot = await fetch("/api/store", { cache: "no-store" }).then((response) => response.json());
-      const gone = [`workspace:${workspaceId}`, noteId];
-      await fetch("/api/store", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ baseRevision: snapshot.revision, restoreGeneration: snapshot.restoreGeneration,
-        entities: snapshot.entities.filter((entity: { id: string }) => !gone.includes(entity.id)), relations: snapshot.relations, deletedIds: gone, revivedIds: [] }) });
-    }, [second, marker]);
+    await cleanupSyntheticFixtures(page, { workspaceIds: [second] });
   }
 });

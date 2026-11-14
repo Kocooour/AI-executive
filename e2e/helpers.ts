@@ -86,7 +86,7 @@ export async function waitUntilQuiet(page: Page, quietMs = 500) {
 }
 
 export function serverEntities(page: Page) {
-  return page.evaluate(() => fetch("/api/store", { cache: "no-store" }).then((response) => response.json()).then((snapshot) => snapshot.entities as Array<{ id: string; type: string; title: string; status: string; properties?: Record<string, unknown> }>));
+  return page.evaluate(() => fetch("/api/store", { cache: "no-store" }).then((response) => response.json()).then((snapshot) => snapshot.entities as Array<{ id: string; type: string; title: string; status: string; workspaceId: string; properties?: Record<string, unknown> }>));
 }
 
 // The server copy is the proof that a change was sent.
@@ -119,4 +119,53 @@ export async function removeTasks(page: Page, ids: string[]) {
       deletedIds: gone, revivedIds: [] }) });
     return response.status;
   }, ids), { timeout: 15_000 }).toBe(200);
+}
+
+/**
+ * Remove only explicitly named synthetic fixtures from the shared browser-test
+ * server. Includes workspace contents, relations, CAS retries and verification.
+ */
+export async function cleanupSyntheticFixtures(page: Page, options: {
+  workspaceIds?: string[];
+  workspacePrefixes?: string[];
+  entityPrefixes?: string[];
+}) {
+  const { workspaceIds = [], workspacePrefixes = [], entityPrefixes = [] } = options;
+  if (!workspaceIds.length && !workspacePrefixes.length && !entityPrefixes.length)
+    throw new Error("Synthetic cleanup needs a fixture selector");
+  const prefixMatch = (value: string, prefixes: string[]) => prefixes.some((prefix) => value.startsWith(prefix));
+  const selected = (entity: { id: string; workspaceId: string }) =>
+    (entity.workspaceId !== "personal" &&
+      (workspaceIds.includes(entity.workspaceId) || prefixMatch(entity.workspaceId, workspacePrefixes))) ||
+    prefixMatch(entity.id, entityPrefixes);
+  await expect.poll(() => page.evaluate(async (selectors) => {
+    const snapshotResponse = await fetch("/api/store", { cache: "no-store" });
+    if (!snapshotResponse.ok) throw new Error(`Fixture snapshot: ${snapshotResponse.status}`);
+    const snapshot = await snapshotResponse.json();
+    const matches = (value: string, prefixes: string[]) => prefixes.some((prefix) => value.startsWith(prefix));
+    const removeWorkspace = (id: string) => id !== "personal" &&
+      (selectors.workspaceIds.includes(id) || matches(id, selectors.workspacePrefixes));
+    const removed = snapshot.entities.filter((entity: { id: string; workspaceId: string }) =>
+      removeWorkspace(entity.workspaceId) || matches(entity.id, selectors.entityPrefixes));
+    const gone = new Set<string>(removed.map((entity: { id: string }) => entity.id));
+    const removedRelations = snapshot.relations.filter((relation: {
+      id: string; workspaceId: string; sourceEntityId: string; targetEntityId: string;
+    }) => removeWorkspace(relation.workspaceId) || gone.has(relation.sourceEntityId) || gone.has(relation.targetEntityId));
+    if (!gone.size && !removedRelations.length) return true;
+    const relationIds = new Set<string>(removedRelations.map((relation: { id: string }) => relation.id));
+    const response = await fetch("/api/store", {
+      method: "PUT", headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        baseRevision: snapshot.revision, restoreGeneration: snapshot.restoreGeneration,
+        entities: snapshot.entities.filter((entity: { id: string }) => !gone.has(entity.id)),
+        relations: snapshot.relations.filter((relation: { id: string }) => !relationIds.has(relation.id)),
+        deletedIds: [...gone, ...relationIds], revivedIds: [],
+      }),
+    });
+    if (response.status === 409) return false;
+    if (!response.ok) throw new Error(`Fixture cleanup: ${response.status}`);
+    return true;
+  }, { workspaceIds, workspacePrefixes, entityPrefixes }), { timeout: 20_000 }).toBe(true);
+  await expect.poll(async () => (await serverEntities(page)).filter(selected).length,
+    { timeout: 15_000 }).toBe(0);
 }

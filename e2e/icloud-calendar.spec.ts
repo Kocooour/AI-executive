@@ -2,9 +2,9 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type { Page } from "@playwright/test";
 import { expect, test } from "./fixtures";
-import { caldavMockPort } from "../playwright.config";
+import { caldavMockPort, sessionFile } from "../playwright.config";
 import { mockAppleId, startCalDavMock, type CalDavMock } from "./caldav-mock";
-import { confirmDialog, settingsSections, waitUntilSynced } from "./helpers";
+import { confirmDialog, settingsSections, waitUntilSynced, cleanupSyntheticFixtures } from "./helpers";
 
 // iCloud calendar over CalDAV, read-only, against a local mock of iCloud (e2e/caldav-mock.ts). The scenarios build on each
 // other in file order: connect, a refused password and its recovery, disconnect, ICS alongside, the phone layout.
@@ -15,7 +15,24 @@ let mock: CalDavMock;
 let otherWorkspaceId = "";
 
 test.beforeAll(async () => { mock = await startCalDavMock(caldavMockPort, firstPassword); });
-test.afterAll(async () => { await mock?.close(); });
+test.afterAll(async ({ browser, baseURL }) => {
+  try {
+    // iCloud tests share one workspace across the whole file; clean it after
+    // the final scenario, including when an intermediate assertion fails.
+    if (otherWorkspaceId) {
+      const context = await browser.newContext({ storageState: sessionFile });
+      try {
+        const page = await context.newPage();
+        await page.goto(`${baseURL}/api/store`);
+        await cleanupSyntheticFixtures(page, { workspaceIds: [otherWorkspaceId] });
+      } finally {
+        await context.close();
+      }
+    }
+  } finally {
+    await mock?.close();
+  }
+});
 
 async function openCalendarSettings(page: Page) {
   await page.goto("/?view=Settings");

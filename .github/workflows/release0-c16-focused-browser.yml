@@ -17,6 +17,11 @@ on:
       - "e2e/project-overview-b2.spec.ts"
       - "e2e/inspector-return-focus-ui01e.spec.ts"
       - "e2e/record-links-ui01.spec.ts"
+      - "e2e/icloud-calendar.spec.ts"
+      - "e2e/inbox-batch-b5.spec.ts"
+      - "e2e/mobile-approval.spec.ts"
+      - "e2e/mobile-capture-b3.spec.ts"
+      - "e2e/zz-release0-c23-workspace-cleanup.spec.ts"
       # C16 depends on auth setup, issued-cookie validation and revocation.
       # Changes here must not silently bypass the targeted browser regressions.
       - "e2e/auth.setup.ts"
@@ -85,6 +90,17 @@ jobs:
           e2e/project-page.spec.ts e2e/record-links-ui01.spec.ts
           --project=desktop --workers=1
           --grep 'C21: workspace switcher keeps the last options reachable|aggregate project deep links survive|note URL and browser Back reload'
+          --trace=on
+      - name: C23 serial synthetic workspace cleanup across owning specs
+        run: >-
+          pnpm exec playwright test
+          e2e/app.spec.ts e2e/data-boundary.spec.ts e2e/icloud-calendar.spec.ts
+          e2e/inbox-batch-b5.spec.ts e2e/mobile-approval.spec.ts
+          e2e/mobile-capture-b3.spec.ts e2e/project-page.spec.ts
+          e2e/record-links-ui01.spec.ts e2e/recovery.spec.ts
+          e2e/zz-release0-c23-workspace-cleanup.spec.ts
+          --project=desktop --workers=1
+          --grep 'capture switches destination and area|a task added from a project in another workspace|an export holds every workspace|iCloud:|B5 |capture scope stays local|UI-08a:|browser Back restores a project across|note URL and browser Back reload|C21: workspace switcher|a task held for its unknown workspace|C23: no synthetic workspace'
           --trace=on
       - name: Exact ordered logout predecessors then the original C4 failures
         shell: bash
