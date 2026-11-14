@@ -27,6 +27,7 @@ const tracked=execFileSync("git",["ls-files","-z"],{cwd:root,encoding:"utf8",max
 const INCOMPLETE_ALLOWED=new Set([]);
 const found=new Set(),nonBoolean=new Set(),incomplete=[];
 let staticDeploySentinels=0;
+let staticDeployPrefixes=0;
 let staticProfilePrefixes=0;
 let staticManagerEnvPrefixes=0;
 for(const file of tracked){
@@ -46,7 +47,16 @@ for(const file of tracked){
       const fixedManagerEnvPrefix=file==="deployment/deploy-safe.sh" &&
         token==="AI_EXECUTIVE_TARGET_" &&
         text.slice(match.index-1).startsWith("^AI_EXECUTIVE_TARGET_[A-Za-z0-9_]*=");
+      // The off-mode prefilter uses exactly two static target-name regexes and
+      // one literal substring check; none assembles an environment key.
+      const fixedDeployPrefix=file==="deployment/deploy-safe.sh" &&
+        token==="AI_EXECUTIVE_TARGET_" &&
+        (text.slice(match.index-1).startsWith("^AI_EXECUTIVE_TARGET_/") ||
+         text.slice(match.index-1).startsWith("^AI_EXECUTIVE_TARGET_[A-Za-z0-9_]+=") ||
+         text.slice(match.index-'index(line, "'.length,match.index+token.length+2) ===
+           'index(line, "AI_EXECUTIVE_TARGET_")');
       if(fixedProfilePrefix)staticProfilePrefixes++;
+      else if(fixedDeployPrefix)staticDeployPrefixes++;
       else if(fixedManagerEnvPrefix)staticManagerEnvPrefixes++;
       else if(!INCOMPLETE_ALLOWED.has(file+"|"+token))
         incomplete.push(file+": "+token+" followed by "+JSON.stringify(text[match.index+token.length]));
@@ -82,7 +92,8 @@ test("profile is sorted, unique and well-formed; every exclusion has a reason",(
 });
 
 test("no flag name is assembled at runtime or split, so the scan cannot be bypassed",()=>{
-  assert.equal(staticDeploySentinels,1,"only the single audited, static deploy sentinel is allowed");
+  assert.equal(staticDeploySentinels,0,"the legacy deploy sentinel was replaced by the static off prefilter");
+  assert.equal(staticDeployPrefixes,3,"exactly three audited, static deploy prefixes are allowed");
   assert.equal(staticProfilePrefixes,1,"the CLI must declare exactly one fixed target-flag namespace");
   assert.equal(staticManagerEnvPrefixes,0,"no manager-global namespace scan is permitted in the approved scope");
   assert.deepEqual(incomplete,[]);
