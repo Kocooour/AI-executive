@@ -105,3 +105,52 @@ already exists. It exercises the stopped-service `--recover-stopped` path with
 a successful restart, rejects missing cutoff and pre-feature checkouts, and
 verifies that a same-SHA recovery does not reset the cutoff. No real
 production deployment or systemd commands run in CI.
+
+
+### Target personal-v1 activation preflight (C14 / issue #424)
+
+The default deployment remains legacy-only: with no enabled target flag in the
+root-owned env file, target preflight, target store reads, and target archival
+steps are skipped. Generate the **proposed** exact flag block (not an activation
+authorization) using \`node scripts/target-profile-env.mjs\`; fill the three
+\`TARGET_PERSONAL_V1_REQUIRED_SETTINGS\` values from a separately approved
+provisioned store and authenticated owner. \`node scripts/target-profile-env.mjs
+--check /etc/ai-executive/ai-executive.env\` returns exactly \`off\`,
+\`personal-v1\`, or \`invalid\` (nonzero on invalid), with only erroneous
+variable **names**, never values. A partial profile or any enabled excluded
+flag is refused before stopping the service.
+
+**A separate written owner decision is mandatory before activation.** The
+installed unit currently uses \`ProtectSystem=strict\` and writes only to
+\`StateDirectory=ai-executive\`. The recommended isolated target
+\`/var/lib/ai-executive-target/personal-v1\` requires a separately approved
+systemd drop-in adding a second \`StateDirectory\`, followed by
+\`systemctl daemon-reload\` and a reviewed service restart. Do not edit or
+install that override on the basis of this PR. The deployment script refuses
+target activation unless the **loaded** StateDirectory or ReadWritePaths
+covers the target. Changing the versioned \`deployment/ai-executive.service\`
+between release commits remains forbidden; a separately authorized operator
+drop-in is distinct from changing that tracked file. See
+[the cutover runbook](../docs/R4-CUTOVER-RUNBOOK.md) for a non-executable
+proposal and the authorization gates.
+
+With an independently approved, complete \`personal-v1\` configuration,
+the reviewed target deploy script validates the profile and path ownership
+before stopping. Only **after stop** does it execute the canonical
+\`target-store-provision.mjs --check\` **as \`ai-executive\`**, comparing owner
+and generation from the configured env. A running SQLite store can have
+transient WAL/SHM files, so semantic inspection before stop is deliberately
+unsafe. The script backs up the complete target directory alongside legacy
+data and checks exact source/copy equality plus the common SHA-256 manifest.
+After startup it quiesces the service once more for a second semantic target
+check, restarts, and repeats HTTP readiness. Failures use the existing
+**code-only** rollback; neither target nor legacy data are restored or
+deleted. Unverified incomplete backup directories alone may be removed.
+A return to legacy operation requires separately authorized disabling of
+target flags; the target files remain on disk.
+
+These tests are synthetic service mocks, not proof of a real deployment:
+\`node --test tests/target-profile-env.test.mjs tests/deploy-safe.test.mjs
+tests/reviewed-target-deploy.test.mjs\`. The exact release-SHA Browser E2E,
+backup/restore rehearsal, systemd sandbox verification and explicit operator
+approval are still production gates.
