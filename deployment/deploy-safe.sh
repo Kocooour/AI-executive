@@ -455,6 +455,7 @@ if awk '
     # Live database is NOT opened here: SQLite may currently hold -wal/-shm.
     test -d "$TARGET_DIRECTORY" && test ! -L "$TARGET_DIRECTORY" ||
       die "cilovy adresar neexistuje nebo je symlink"
+    case "$TARGET_DIRECTORY/" in "$DATA/"*) die "cilove uloziste prekryva legacy data";; esac
     test "$(stat -c %u "$TARGET_DIRECTORY")" = "$(id -u ai-executive)" &&
       test "$(stat -c %a "$TARGET_DIRECTORY")" = 700 ||
       die "cilovy adresar nema vlastnika ai-executive a rezim 0700"
@@ -515,7 +516,7 @@ systemctl stop "$SERVICE"
 # never as root (the provision checker enforces UID identity).
 verify_target_store() {
   local actual expected
-  actual="$(runuser -u ai-executive -- /usr/bin/node \
+  actual="$(runuser -u ai-executive -- env AI_EXECUTIVE_DATA_DIR="$DATA" /usr/bin/node \
     "$APP/scripts/target-store-provision.mjs" --check "$TARGET_DIRECTORY")" || return 1
   expected="$(printf '%s\n' \
     "AI_EXECUTIVE_TARGET_STAGING_DIRECTORY=$TARGET_DIRECTORY" \
@@ -547,7 +548,7 @@ diff -qr --exclude=store.sqlite-shm -- "$DATA" "$BACKUP/data" ||
 if [ "$TARGET_PROFILE" = personal-v1 ]; then
   diff -qr -- "$TARGET_DIRECTORY" "$BACKUP/target" ||
     die "cilova zaloha obsahuje neodpovidajici nebo chybejici soubory"
-  runuser -u ai-executive -- /usr/bin/node \
+  runuser -u ai-executive -- env AI_EXECUTIVE_DATA_DIR="$DATA" /usr/bin/node \
     "$APP/scripts/target-store-provision.mjs" --check "$TARGET_DIRECTORY" >/dev/null ||
     die "cilovy preflight se po zaloze zmenil"
 fi
