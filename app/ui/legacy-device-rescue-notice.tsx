@@ -27,17 +27,15 @@ export function LegacyDeviceRescueNotice({ language }: { language: string }) {
   const [prepared, setPrepared] = useState<string | null>(null);
   const [downloadError, setDownloadError] = useState(false);
   const [verifyingDownload, setVerifyingDownload] = useState(false);
-  // An async IndexedDB read can lose browser user activation, especially in
-  // iOS Safari. In that case only, offer a second direct user click to save
-  // the newly verified snapshot. It is still marked as a point-in-time copy.
-  const [directSaveReady, setDirectSaveReady] = useState(false);
+  // Safari needs the user gesture BEFORE the asynchronous IndexedDB read.
+  // Its dedicated window is opened synchronously, but receives NO private
+  // bytes until the current local snapshot has been revalidated.
   const version = useRef(0);
   const preparedFingerprint = useRef<string | null>(null);
   const preparedStorage = useRef<string | null>(null);
   const invalidatePrepared = () => {
     preparedFingerprint.current = null;
     preparedStorage.current = null;
-    setDirectSaveReady(false);
     setPrepared(null);
   };
 
@@ -137,20 +135,24 @@ export function LegacyDeviceRescueNotice({ language }: { language: string }) {
     if (!initialBytes || !initialFingerprint || verifyingDownload || preparing) return;
     setDownloadError(false);
 
-    // Safari fallback: the previous click already verified IndexedDB; now
-    // consume a direct activation, without an await, to initiate the download.
-    // Raw drafts/markers are checked once more synchronously before saving.
-    if (directSaveReady) {
-      try {
-        if (!storageStillMatches() || prepared !== initialBytes || preparedFingerprint.current !== initialFingerprint)
-          throw new Error("STALE_LOCAL_COPY");
-        savePreparedFile(initialBytes);
-        setDirectSaveReady(false);
-      } catch {
-        invalidatePrepared();
-        setDownloadError(true);
-      }
+    // On Safari, opening the window MUST occur within the trusted click.
+    // Navigating this already-opened window is allowed after asynchronous
+    // verification; no second click can download a stale prepared bundle.
+    // Safari may preview the private JSON instead of downloading it directly;
+    // the owner can use Share / Save to Files from that verified preview.
+    const iosSafari = (/iPad|iPhone|iPod/.test(navigator.userAgent) ||
+      (/Macintosh/.test(navigator.userAgent) && navigator.maxTouchPoints > 1)) &&
+      /Safari/.test(navigator.userAgent) && !/CriOS|FxiOS|EdgiOS/.test(navigator.userAgent);
+    const safariWindow = iosSafari ? window.open("about:blank", "_blank") : null;
+    if (iosSafari && !safariWindow) {
+      setDownloadError(true);
       return;
+    }
+    if (safariWindow) {
+      safariWindow.document.title = cs ? "Ověřování místní kopie" : "Checking local copy";
+      safariWindow.document.body.textContent = cs
+        ? "Ověřuji aktuální místní data před otevřením soukromé kopie…"
+        : "Verifying current local data before opening the private copy…";
     }
 
     setVerifyingDownload(true);
@@ -165,16 +167,21 @@ export function LegacyDeviceRescueNotice({ language }: { language: string }) {
           legacyLocalCopyFingerprint(second) !== initialFingerprint ||
           preparedFingerprint.current !== initialFingerprint ||
           !storageStillMatches()) throw new Error("STALE_LOCAL_COPY");
-      // On iOS Safari, a programmatic download after await may be blocked.
-      // Require a new direct click after the just-completed verification.
-      const iosSafari = /iPad|iPhone|iPod/.test(navigator.userAgent) &&
-        /Safari/.test(navigator.userAgent) && !/CriOS|FxiOS|EdgiOS/.test(navigator.userAgent);
-      if (iosSafari || navigator.userActivation?.isActive === false) {
-        setDirectSaveReady(true);
+      if (safariWindow) {
+        // This navigation is triggered inside the already user-opened window,
+        // never by a post-await popup or a second unverified click. A binary
+        // MIME prevents Safari from rendering sensitive JSON in the app pane.
+        const url = URL.createObjectURL(new Blob([initialBytes], { type: "application/octet-stream" }));
+        try {
+          safariWindow.location.replace(url);
+        } finally {
+          window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
+        }
       } else {
         savePreparedFile(initialBytes);
       }
     } catch {
+      try { safariWindow?.close(); } catch { /* best effort */ }
       invalidatePrepared();
       setDownloadError(true);
     } finally {
@@ -199,16 +206,16 @@ export function LegacyDeviceRescueNotice({ language }: { language: string }) {
             </button>
             {prepared && <button type="button" disabled={preparing || verifyingDownload} onClick={() => void download()} data-testid="legacy-pending-download">
               {cs
-                ? verifyingDownload ? "Ověřuji aktuální data…" : directSaveReady ? "Uložit ověřenou kopii" : "Ověřit a uložit kopii"
-                : verifyingDownload ? "Checking current data…" : directSaveReady ? "Save verified copy" : "Verify and save copy"}
+                ? verifyingDownload ? "Ověřuji aktuální data…" : "Ověřit a uložit kopii"
+                : verifyingDownload ? "Checking current data…" : "Verify and save copy"}
             </button>}
           </div>
           {prepared && <p className="legacyDeviceRescueHint">{cs
             ? "Soubor obsahuje osobní údaje. Uložte ho bezpečně; neprovádí automatickou obnovu."
             : "This file contains private data. Store it securely; it does not restore data automatically."}</p>}
-          {directSaveReady && <p className="legacyDeviceRescueHint" role="status">{cs
-            ? "Kopie byla ověřena. Klepnutím na Uložit ověřenou kopii zahájíte stažení přímo v prohlížeči."
-            : "The copy was verified. Select Save verified copy to start the download directly in your browser."}</p>}
+          {prepared && <p className="legacyDeviceRescueHint">{cs
+            ? "Na iPhonu nebo iPadu se kopie může otevřít v nové záložce. Uložte JSON pomocí nabídky Sdílet / Uložit do Souborů."
+            : "On iPhone or iPad the copy may open in a new tab. Save the JSON using Share / Save to Files."}</p>}
           {downloadError && <p role="alert">{cs
             ? "Kopii se nepodařilo bezpečně připravit nebo se místní data změnila. Původní data zůstala beze změny; připravte novou kopii."
             : "The copy could not be prepared safely or the local data changed. Your original data is unchanged; prepare a new copy."}</p>}
