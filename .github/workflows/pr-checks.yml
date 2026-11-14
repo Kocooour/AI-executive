@@ -83,6 +83,12 @@ jobs:
           grep -Fxq '# fail 0' "$tap_output"
           grep -Fxq '# skipped 0' "$tap_output"
 
+      # Fail fast on the safety-sensitive release/rollback contract before
+      # the broad PR matrix. The full scoped tests still run unchanged below.
+      - name: Deployment rollback and activation regression
+        if: steps.scope.outputs.code == 'true'
+        run: node --test tests/deploy-safe.test.mjs
+
       - name: Focused PR unit tests (including ACL/security when affected)
         if: steps.scope.outputs.code == 'true'
         run: node scripts/ci-pr-tests.mjs --test
