@@ -724,7 +724,7 @@ scenarioCase("offmanagerenvlargesafe: long manager env without target flags is a
 scenarioCase("offsystemddriftbuild: rollback must not restart with a rejected loaded unit", (r) => {
   assert.notEqual(r.status, 0);
   assert.match(r.output, /zdroje prostredi systemd se pred startem zmenily/);
-  assert.match(r.output, /BEZPECNOSTNI BLOKACE: zdroje prostredi systemd pri rollbacku (pozor: puvodne obsah \.env pri rollbacku/);
+  assert.match(r.output, /BEZPECNOSTNI BLOKACE: zdroje prostredi systemd pri rollbacku/);
   assert.equal(r.events.includes("unit-env-changed-during-build"), true);
   assert.equal(r.events.includes("reset"), true, "code-only rollback is allowed, not restart");
   assert.equal(r.events.some(e => e.startsWith("start-")), false,
