@@ -121,6 +121,16 @@ switch (name) {
         RestrictRealtime: "yes",
         SystemCallArchitectures: "native",
         LimitCORE: "0",
+        DynamicUser: "no",
+        SupplementaryGroups: scenario === "offextramembers" ? "root" : "",
+        RootDirectory: scenario === "offrootdir" ? "/srv/unapproved" : "",
+        RootImage: "",
+        BindPaths: scenario === "offbindpaths" ? "/etc:/mnt/other" : "",
+        BindReadOnlyPaths: "",
+        CacheDirectory: scenario === "targetcachedir" ? "unapproved-cache" : "",
+        LogsDirectory: "",
+        RuntimeDirectory: "",
+        ConfigurationDirectory: "",
       };
       const valueFor = prop => (Object.hasOwn(security, prop) ? security[prop] :
         prop === "ExecStart" ? (
