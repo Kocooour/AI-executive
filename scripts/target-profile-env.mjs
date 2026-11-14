@@ -94,6 +94,7 @@ if (args.length === 0) {
       process.stdout.write(values.get(args[2]) + "\n");
     }
   } catch {
+    if (args[0] === "--check") process.stdout.write("invalid\n");
     fail();
   }
 } else {
