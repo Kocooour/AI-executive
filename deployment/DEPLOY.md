@@ -125,7 +125,15 @@ the **loaded systemd environment sources** before stop: exactly the root-owned
 from the deployed service unit; no `PassEnvironment`, `UnsetEnvironment`
 or `PAMName`; and no target settings inherited from the system manager.
 Unexpected sources fail closed even when the root env reports `off`.
-The same source contract is rechecked before each target service start.
+The manager-global target scan reads the full captured environment without a
+`grep -q` pipeline (which could miss an early match under `pipefail` with
+a large output); scan errors fail closed. The root env's exact SHA-256
+fingerprint is recorded before profile classification and must still match
+before any start. **Even on a legacy-only (`off`) failed deployment**, the
+code-only rollback may restart the old service *only if* the loaded environment
+sources and the root env's original bytes are still unchanged. Any drift
+leaves the service stopped pending separately reviewed manual recovery.
+The same source contract is rechecked before both target service starts.
 This is a restrictive launch boundary: operator drop-ins may add the
 approved isolated `StateDirectory`, **not** any environment override.
 
