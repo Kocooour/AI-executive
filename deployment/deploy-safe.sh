@@ -35,6 +35,28 @@ PROFILE_TOOL=""
 
 die() { echo "STOP: $*" >&2; exit 1; }
 
+# Inspect what systemd will load, not just one operator file. Unit drop-ins
+# may append EnvironmentFile=, override Environment= or unset variables after
+# all files have been read. Manager-global target flags are unsafe as well.
+# Match the deployed unit's complete fixed environment-source contract; the
+# separately approved StateDirectory drop-in must not change this contract.
+# Never print resolved values or the manager environment (may hold secrets).
+verify_loaded_environment_sources() {
+  local files unit_env pass unset_env pam manager_env
+  files="$(systemctl show "$SERVICE" -p EnvironmentFiles --value)" || return 1
+  [ "$files" = "$ENVFILE (ignore_errors=no)" ] || return 1
+  unit_env="$(systemctl show "$SERVICE" -p Environment --value)" || return 1
+  [ "$unit_env" = "NODE_ENV=production PORT=3000 NEXT_TELEMETRY_DISABLED=1 AI_EXECUTIVE_DATA_DIR=$DATA" ] || return 1
+  pass="$(systemctl show "$SERVICE" -p PassEnvironment --value)" || return 1
+  unset_env="$(systemctl show "$SERVICE" -p UnsetEnvironment --value)" || return 1
+  pam="$(systemctl show "$SERVICE" -p PAMName --value)" || return 1
+  [ -z "$pass" ] && [ -z "$unset_env" ] && [ -z "$pam" ] || return 1
+  manager_env="$(systemctl show-environment)" || return 1
+  if printf '%s\n' "$manager_env" | grep -Eq '^AI_EXECUTIVE_TARGET_[A-Za-z0-9_]*='; then
+    return 1
+  fi
+}
+
 # Explicit opt-in after a failed first rollout has left the service stopped.
 # Never interpret a stopped service as permission to recover automatically.
 if [ "$#" -eq 2 ] && [ "$2" = "--recover-stopped" ]; then
@@ -432,6 +454,10 @@ if git cat-file -e "$TARGET:lib/owner-session-revocation.ts" 2>/dev/null &&
   OWNER_SESSION_FIRST_ROLLOUT=1
 fi
 git diff --quiet "$PREV" "$TARGET" -- deployment/ai-executive.service || die "systemd jednotka se zmenila"
+# Fail before stopping, even when the main env file appears to be off:
+# a second loaded file or manager-global target flag can activate it.
+verify_loaded_environment_sources ||
+  die "neoverene zdroje prostredi systemd; kontrola konfigurace sluzby selhala"
 # Do not evaluate the root-owned EnvironmentFile as shell. In the dormant
 # legacy case we do no target probing, filesystem access or additional output.
 # The exact validator is loaded from the REVIEWED target commit before stop,
@@ -657,7 +683,15 @@ if [ "$TARGET_PROFILE" = personal-v1 ]; then
   [ "$(/usr/bin/node "$PROFILE_TOOL" --setting "$ENVFILE" AI_EXECUTIVE_TARGET_STAGING_OWNER_USER_ID)" = "$TARGET_OWNER" ] &&
   [ "$(/usr/bin/node "$PROFILE_TOOL" --setting "$ENVFILE" AI_EXECUTIVE_TARGET_STAGING_RESTORE_GENERATION)" = "$TARGET_GENERATION" ] ||
     die "cilove nastaveni se pred startem zmenilo"
+  # Install/build and auth/mail prestart operations run after the backup.
+  # Recheck the actual quiet store NOW, before it may serve any request.
+  verify_target_store ||
+    die "cilovy preflight tesne pred startem: neshoda vlastnika, generace nebo integrity"
 fi
+# systemd drop-ins can be changed independently of the checked-out repo.
+# Confirm the loaded environment sources again before allowing a start.
+verify_loaded_environment_sources ||
+  die "zdroje prostredi systemd se pred startem zmenily"
 systemctl start "$SERVICE"
 verify_service || die "sluzba nebo lokalni/HTTPS API nejsou dostupne"
 if [ "$TARGET_PROFILE" = personal-v1 ]; then
@@ -668,6 +702,8 @@ if [ "$TARGET_PROFILE" = personal-v1 ]; then
   systemctl stop "$SERVICE"
   ! systemctl is-active --quiet "$SERVICE" || die "sluzba se pri kontrole ciloveho uloziste nezastavila"
   verify_target_store || die "cilovy preflight po prvnim startu selhal"
+  verify_loaded_environment_sources ||
+    die "zdroje prostredi systemd se pred druhym startem zmenily"
   systemctl start "$SERVICE"
   verify_service || die "sluzba po kontrole ciloveho uloziste neni dostupna"
 fi
