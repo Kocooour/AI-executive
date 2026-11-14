@@ -32,6 +32,7 @@ TARGET_OWNER=""
 TARGET_GENERATION=""
 PROFILE_TMP=""
 PROFILE_TOOL=""
+ENV_BASELINE_SHA=""
 
 die() { echo "STOP: $*" >&2; exit 1; }
 
@@ -52,9 +53,19 @@ verify_loaded_environment_sources() {
   pam="$(systemctl show "$SERVICE" -p PAMName --value)" || return 1
   [ -z "$pass" ] && [ -z "$unset_env" ] && [ -z "$pam" ] || return 1
   manager_env="$(systemctl show-environment)" || return 1
-  if printf '%s\n' "$manager_env" | grep -Eq '^AI_EXECUTIVE_TARGET_[A-Za-z0-9_]*='; then
+  # A here-string has no upstream writer to SIGPIPE if grep finds an early
+  # match in a large manager environment (set -o pipefail would hide it).
+  if grep -Eq '^AI_EXECUTIVE_TARGET_[A-Za-z0-9_]*=' <<<"$manager_env"; then
     return 1
   fi
+}
+
+# Fingerprint the exact reviewed root-owned env bytes. Even an off deployment
+# must not restart after an operator/attacker changes that file during a build
+# or rollback. No values or the digest are logged.
+env_file_unchanged() {
+  [ -n "$ENV_BASELINE_SHA" ] &&
+    [ "$(sha256sum -- "$ENVFILE")" = "$ENV_BASELINE_SHA" ]
 }
 
 # Explicit opt-in after a failed first rollout has left the service stopped.
@@ -340,6 +351,13 @@ on_exit() {
     echo "Sluzba zustava zastavena. Operator musi explicitne vypnout cilove prepinace, overit profil off a schvalit samostatny postup obnovy." >&2
     exit "$rc"
   fi
+  # A failed off deployment can also see unit/env drift *after* its last
+  # pre-start validation. Never restart old code with newly rejected flags.
+  if ! verify_loaded_environment_sources || ! env_file_unchanged; then
+    echo "BEZPECNOSTNI BLOKACE: zmenene zdroje prostredi systemd nebo obsah .env pri rollbacku." >&2
+    echo "Sluzba zustava zastavena; oprav konfiguraci a schval samostatnou obnovu." >&2
+    exit "$rc"
+  fi
   if systemctl start "$SERVICE" && verify_service; then
     if [ "$BACKUP_VALIDATED" = 1 ]; then
       if runuser -u ai-executive -- /usr/bin/node \
@@ -458,6 +476,8 @@ git diff --quiet "$PREV" "$TARGET" -- deployment/ai-executive.service || die "sy
 # a second loaded file or manager-global target flag can activate it.
 verify_loaded_environment_sources ||
   die "neoverene zdroje prostredi systemd; kontrola konfigurace sluzby selhala"
+ENV_BASELINE_SHA="$(sha256sum -- "$ENVFILE")" ||
+  die "nelze overit hash konfigurace env"
 # Do not evaluate the root-owned EnvironmentFile as shell. In the dormant
 # legacy case we do no target probing, filesystem access or additional output.
 # The exact validator is loaded from the REVIEWED target commit before stop,
@@ -514,6 +534,7 @@ if awk '
       die "systemd sandbox nedovoluje zapis do ciloveho uloziste; vyzaduje schvaleny drop-in"
   fi
 fi
+env_file_unchanged || die "env se zmenilo behem predstartovniho overovani"
 echo "Stavajici: $PREV"
 echo "Cil:       $TARGET"
 
@@ -692,6 +713,8 @@ fi
 # Confirm the loaded environment sources again before allowing a start.
 verify_loaded_environment_sources ||
   die "zdroje prostredi systemd se pred startem zmenily"
+env_file_unchanged ||
+  die "env se pred startem zmenilo"
 systemctl start "$SERVICE"
 verify_service || die "sluzba nebo lokalni/HTTPS API nejsou dostupne"
 if [ "$TARGET_PROFILE" = personal-v1 ]; then
@@ -704,6 +727,8 @@ if [ "$TARGET_PROFILE" = personal-v1 ]; then
   verify_target_store || die "cilovy preflight po prvnim startu selhal"
   verify_loaded_environment_sources ||
     die "zdroje prostredi systemd se pred druhym startem zmenily"
+  env_file_unchanged ||
+    die "env se pred druhym startem zmenilo"
   systemctl start "$SERVICE"
   verify_service || die "sluzba po kontrole ciloveho uloziste neni dostupna"
 fi
