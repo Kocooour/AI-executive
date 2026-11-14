@@ -366,7 +366,10 @@ function runChild(fx, mode, gate = "", rounds = 1) {
   const child = spawn(process.execPath, ["--experimental-loader", "./tests/ts-loader.mjs", "--no-warnings",
     "tests/support/target-anchor-gated-child.mjs", fx.stage.directory, fx.stage.restoreGeneration, mode, gate,
     String(rounds)],
-  { stdio: ["ignore", "pipe", "pipe"] });
+  { stdio: ["ignore", "pipe", "pipe"],
+    // Enable content-free failure stages only for the synthetic high-contention test.
+    env: { ...process.env, ...(mode === "raw-many"
+      ? { AI_EXECUTIVE_TARGET_STAGING_DIAGNOSTICS: "1" } : {}) } });
   let stdout = "", stderr = "";
   child.stdout.on("data", chunk => { stdout += chunk; });
   child.stderr.on("data", chunk => { stderr += chunk; });
@@ -539,6 +542,30 @@ test("symlinked SQLite rollback sidecar is still a strict boundary denial", () =
   assert.equal(durable.checkTargetStagingAnchorLive(fx.store), "ok");
 });
 
+test("post-lock sidecar verdict permits only regular rollback contention, never hostile sidecars", () => {
+  const fx = makeFixture();
+  const classify = () => pinned.classifyPostLockTargetStagingSidecar(fx.databasePath);
+  const journal = fx.databasePath + "-journal";
+  const wal = fx.databasePath + "-wal";
+  const target = path.join(root, fx.name + "-unsafe-sidecar");
+  assert.equal(classify(), "clear");
+  writeFileSync(journal, Buffer.alloc(512));
+  assert.equal(classify(), "retryable", "only an ordinary rollback journal may be transient contention");
+  writeFileSync(wal, "not WAL");
+  assert.equal(classify(), "denied", "WAL/SHM remain an unconditional denial");
+  unlinkSync(wal);
+  unlinkSync(journal);
+  writeFileSync(target, "untouched");
+  symlinkSync(target, journal);
+  assert.equal(classify(), "denied", "symlink is never retryable");
+  unlinkSync(journal);
+  linkSync(target, journal);
+  assert.equal(classify(), "denied", "hardlink is never retryable");
+  unlinkSync(journal);
+  assert.equal(readFileSync(target, "utf8"), "untouched");
+  assert.equal(classify(), "clear");
+});
+
 test("six un-retried concurrent writers at the original 6x80 load never confuse contention with trust denial", async () => {
   const fx = makeFixture();
   const workers = Array.from({ length: 6 }, () => runChild(fx, "raw-many", "", 80));
@@ -550,7 +577,7 @@ test("six un-retried concurrent writers at the original 6x80 load never confuse 
   }), { ok: 0, failed: 0, denied: 0 });
   assert.equal(totals.ok + totals.failed + totals.denied, 480, JSON.stringify(counts));
   assert.equal(totals.denied, 0, "legitimate concurrency must not be an authorization/trust refusal: " +
-    JSON.stringify(counts));
+    JSON.stringify({ counts, diagnostics: results.map(r => r.stderr.trim()).filter(Boolean) }));
   assert.ok(totals.ok > 0, "some writes must have committed");
   // A failed attempt may have fsynced its intent before a SQLite COMMIT failure.
   // Such an intent consumes an n and gets an abort at the NEXT write: anchor_seq
