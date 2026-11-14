@@ -54,8 +54,18 @@ switch (name) {
     if (verb === "show-environment") {
       // The system manager's inherited target flags can override an off
       // EnvironmentFile unless the loaded global environment is checked.
-      console.log(scenario === "targetmanagerenv" ?
-        "AI_EXECUTIVE_TARGET_STAGING_HTTP_ENABLED=true" : "LANG=C.UTF-8");
+      if (scenario === "offmanagerenvlarge") {
+        // Early forbidden flag + a large tail used to make grep -q close
+        // before printf finishes; under pipefail that could be misread as OK.
+        process.stdout.write("AI_EXECUTIVE_TARGET_STAGING_HTTP_ENABLED=true\n" +
+          "LONG_BENIGN_ENV=" + "x".repeat(256 * 1024) + "\n");
+      } else if (scenario === "offmanagerenvlargesafe") {
+        process.stdout.write("LANG=C.UTF-8\n" +
+          "LONG_BENIGN_ENV=" + "x".repeat(256 * 1024) + "\n");
+      } else {
+        console.log(scenario === "targetmanagerenv" ?
+          "AI_EXECUTIVE_TARGET_STAGING_HTTP_ENABLED=true" : "LANG=C.UTF-8");
+      }
       break;
     }
     if (verb === "is-active") {
@@ -76,7 +86,8 @@ switch (name) {
         prop === "EnvironmentFiles" ?
           envfile + " (ignore_errors=no)" +
           (["targetextraenvfile", "offextraenvfile"].includes(scenario) ||
-            (scenario === "targetsystemddriftbuild" && fs.existsSync(stateFile("unit-env-changed")))
+            (["targetsystemddriftbuild", "offsystemddriftbuild"].includes(scenario) &&
+              fs.existsSync(stateFile("unit-env-changed")))
             ? " " + extraFile + " (ignore_errors=no)" : "") :
         prop === "Environment" ?
           defaults + (scenario === "targetenvassignment" ?
@@ -214,10 +225,18 @@ switch (name) {
     if (args[0] === "install") { log("install"); break; }
     if (args[0] === "build") {
       log("build-" + get("head").slice(0, 1));
-      if (scenario === "targetsystemddriftbuild" && get("head") === target &&
+      if (["targetsystemddriftbuild", "offsystemddriftbuild"].includes(scenario) &&
+          get("head") === target &&
           !fs.existsSync(stateFile("unit-env-changed"))) {
         set("unit-env-changed", "1");
         log("unit-env-changed-during-build");
+      }
+      if (scenario === "offenvdriftbuild" && get("head") === target &&
+          !fs.existsSync(stateFile("env-changed"))) {
+        const envFile = path.join(root, "etc/ai-executive/ai-executive.env");
+        fs.appendFileSync(envFile, "AI_EXECUTIVE_TARGET_STAGING_HTTP_ENABLED=true\n");
+        set("env-changed", "1");
+        log("env-changed-during-build");
       }
       if (scenario === "targetbuildidentitydrift" && get("head") === target &&
           !fs.existsSync(stateFile("build-identity-drift"))) {
