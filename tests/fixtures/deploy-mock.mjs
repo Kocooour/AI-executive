@@ -98,7 +98,9 @@ switch (name) {
           "AI_EXECUTIVE_TARGET_STAGING_HTTP_ENABLED" :
         prop === "PAMName" && scenario === "targetpam" ? "login" :
         prop === "ProtectSystem" ?
-          (["targetweakprotect", "offweakprotect"].includes(scenario) ? "full" : "strict") :
+          (["targetweakprotect", "offweakprotect"].includes(scenario) ||
+            (scenario === "offweakprotectbuild" &&
+              fs.existsSync(stateFile("sandbox-changed"))) ? "full" : "strict") :
         prop === "StateDirectory" ?
           (scenario === "targetstateextra" ? "ai-executive ai-executive-target unexpected" :
             scenario === "targetstatedir" ? "ai-executive ai-executive-target" : "ai-executive") :
@@ -232,6 +234,11 @@ switch (name) {
     if (args[0] === "install") { log("install"); break; }
     if (args[0] === "build") {
       log("build-" + get("head").slice(0, 1));
+      if (scenario === "offweakprotectbuild" && get("head") === target &&
+          !fs.existsSync(stateFile("sandbox-changed"))) {
+        set("sandbox-changed", "1");
+        log("sandbox-changed-during-build");
+      }
       if (["targetsystemddriftbuild", "offsystemddriftbuild"].includes(scenario) &&
           get("head") === target &&
           !fs.existsSync(stateFile("unit-env-changed"))) {
