@@ -61,9 +61,17 @@ The deploy also verifies the *loaded* execution command, not merely the
 tracked service file: `ExecStart` must remain exactly the reviewed Node
 binary and Next.js argv (allowing only dynamic systemd PID/timestamps),
 and no ExecStartPre/ExecStartPost, ExecCondition, ExecStop/ExecStopPost or
-ExecReload hook may be added. A drop-in that injects commands while leaving
-Environment fields intact is a stop condition. Recheck before every
-service start, including legacy rollback. No configuration is auto-edited.
+ExecReload hook may be added. The *loaded* `User`, `Group` and
+`WorkingDirectory` must also match the reviewed service unit before each
+start; a switch to `User=root` during the build must never launch code.
+The loaded security properties (including `StateDirectoryMode=0700`,
+`UMask=0077`, `NoNewPrivileges=yes`, `PrivateTmp=yes`, `ProtectHome=yes`,
+private devices, kernel protection, empty capabilities, restricted namespaces,
+address families, proc exposure and core dumps) are checked against the
+reviewed hardened unit. A drop-in changing the executable, identity or
+hardening while leaving Environment fields intact is a stop condition.
+Recheck before **every** service start, including a legacy rollback.
+No configuration is auto-edited.
 
 **Decision proposal for the owner (not approved): choose (a)**, a separate
 systemd \`StateDirectory=ai-executive-target\` for an isolated absolute target
