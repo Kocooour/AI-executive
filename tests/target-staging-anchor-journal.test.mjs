@@ -369,7 +369,7 @@ function runChild(fx, mode, gate = "", rounds = 1) {
   { stdio: ["ignore", "pipe", "pipe"],
     // Content-free diagnostics for high contention and the independent cold
     // chain/200ms lock regression. Never enabled for normal application runs.
-    env: { ...process.env, ...((mode === "raw-many" || mode === "raw-cold-gated")
+    env: { ...process.env, ...((mode === "raw-many" || mode === "raw-cold-gated" || mode === "raw-inject-unlink")
       ? { AI_EXECUTIVE_TARGET_STAGING_DIAGNOSTICS: "1" } : {}) } });
   let stdout = "", stderr = "";
   child.stdout.on("data", chunk => { stdout += chunk; });
@@ -567,6 +567,8 @@ test("a concurrent journal unlink observed as zero-link before the lock never de
   const observed = JSON.parse(result.stdout);
   assert.deepEqual(observed, { outcome: "ok", injectedUnlink: true, sidecarStats: 2 },
     "the real pinned write path must see the disappearing inode, then proceed safely");
+  assert.match(result.stderr, /stage=prelock_sidecar_unlink reason=retryable_contention/,
+    "content-free diagnostics must prove which boundary actually observed the unlink");
   assert.equal(existsSync(fx.databasePath + "-journal"), false);
   assert.equal(anchorOf(fx), before + 1);
   assert.equal(journalState(fx).pending, null);
