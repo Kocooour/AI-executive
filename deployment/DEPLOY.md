@@ -134,8 +134,22 @@ code-only rollback may restart the old service *only if* the loaded environment
 sources and the root env's original bytes are still unchanged. Any drift
 leaves the service stopped pending separately reviewed manual recovery.
 The same source contract is rechecked before both target service starts.
-This is a restrictive launch boundary: operator drop-ins may add the
-approved isolated `StateDirectory`, **not** any environment override.
+**The sole loaded EnvironmentFile must not assign `AI_EXECUTIVE_DATA_DIR`,
+`PORT`, `NODE_ENV` or `NEXT_TELEMETRY_DISABLED`**, even to the expected
+value: systemd's EnvironmentFile takes precedence over the unit's fixed
+Environment assignments. This prevents the actual service from opening a
+different store than the deploy script backed up and verified. A comment
+mentioning a key is harmless. The check runs before service stop, before
+start, and during any off-profile rollback.
+
+The loaded sandbox must retain `ProtectSystem=strict` and the exact baseline
+`StateDirectory=ai-executive`, optionally extended **only** with the isolated
+`ai-executive-target` StateDirectory. An active personal-v1 deployment may
+instead use a separately approved `ReadWritePaths` matching its **exact
+target directory**, never a parent (`/var/lib`), another directory, or a
+list of exceptions. In off mode `ReadWritePaths` must be empty. This
+sandbox contract is checked both before stop and before any startup,
+including a legacy rollback. No permission changes are auto-applied.
 
 **A separate written owner decision is mandatory before activation.** The
 installed unit currently uses \`ProtectSystem=strict\` and writes only to
@@ -144,8 +158,9 @@ installed unit currently uses \`ProtectSystem=strict\` and writes only to
 systemd drop-in adding a second \`StateDirectory\`, followed by
 \`systemctl daemon-reload\` and a reviewed service restart. Do not edit or
 install that override on the basis of this PR. The deployment script refuses
-target activation unless the **loaded** StateDirectory or ReadWritePaths
-covers the target. Changing the versioned \`deployment/ai-executive.service\`
+target activation unless the **loaded** approved isolated StateDirectory
+covers the target or an exact (never ancestor) ReadWritePaths permits it,
+and it rejects any weakening of ProtectSystem=strict. Changing the versioned \`deployment/ai-executive.service\`
 between release commits remains forbidden; a separately authorized operator
 drop-in is distinct from changing that tracked file. See
 [the cutover runbook](../docs/R4-CUTOVER-RUNBOOK.md) for a non-executable
