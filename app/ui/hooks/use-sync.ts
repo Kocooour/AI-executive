@@ -9,16 +9,19 @@ import { writeTime } from "../../../lib/clock";
 import { settleSyncOperation } from "../../../lib/sync-result";
 import { hasChangesBeyond, postToTabs, requestTimeout, tabChannelName, withSyncLock, type TabMessage } from "../../../lib/tab-coordination";
 import { markSignedIn } from "../../../lib/local-data";
-import { beginAdoption, isAdopting, setAfterRestoreFlag } from "../../../lib/adoption";
+import { beginAdoption, isAdopting, isAdoptingInThisTab, setAfterRestoreFlag } from "../../../lib/adoption";
+import { advanceAdoptionGeneration, assertOwnerAdoptionCleanup, completedOwnerAdoptionSinceThisTabLoaded, finishOwnerAdoptionFence, initializeAdoptionGeneration, ownerAdoptionCompletedKey, ownerAdoptionFenceKey, ownerAdoptionFencePresent, ownerAdoptionReadyToFinish, persistOrdinaryGeneration, readOwnerAdoptionFence, startOwnerAdoptionFence, type OwnerAdoptionFence } from "../../../lib/owner-adoption-barrier";
+import { restoredSinceKnownGeneration, restoreGenerationDecision } from "../../../lib/restore-generation-origin";
 import { clearNotesDrafts } from "../../../lib/notes-drafts";
 import { clearProjectContextDrafts } from "../../../lib/project-context-drafts";
 import { installRestoreFence } from "../../../lib/restore-fence-client";
-import { beginOfflineRecoveryHoldSafely, offlineRecoveryIsHeld, offlineRecoveryHoldKey, offlineRecoveryIntentKey, readOfflineRecoveryHold, recoveryExportPlan, recoveryPullDecision } from "../../../lib/d2b-recovery-hold";
+import { beginOfflineRecoveryHoldSafely, offlineRecoveryIsHeld, offlineRecoveryHoldKey, offlineRecoveryIntentKey, readOfflineRecoveryHold, recoveryExportPlan, recoveryPullDecision, withOfflineRecoveryDataLock, withOfflineRecoveryStartupLock } from "../../../lib/d2b-recovery-hold";
 import { prepareOfflineRecovery } from "../../../lib/d2b-offline-reconciliation";
 import { encodeOfflineRecoveryFile, offlineRecoveryFile } from "../../../lib/d2b-offline-recovery-file";
 import { readRawRecoveryDrafts, readRawRecoveryMarkers } from "../../../lib/d2b-recovery-local";
 import { inspectOfflineRecoveryBytes, type OfflineRecoveryReviewSummary } from "../../../lib/d2b-recovery-review";
 import { runLatestRecoveryInspection, type RecoveryInspectionState } from "../../../lib/d2b-recovery-review-request";
+import { captureUnreadableOwnerRescueStorage, encodeUnreadableOwnerRescue, unreadableOwnerRescueFilename, type RawOwnerRescueLocal } from "../../../lib/owner-adoption-rescue";
 
 // The local copy of the data and its synchronization with the server: the records on screen,
 // the sync status, the revision of the server copy this device knows, the counter of local writes
@@ -51,10 +54,32 @@ export function useSync({ legacyReadOnly = false }: { legacyReadOnly?: boolean }
     const stored = Number(localStorage.getItem(generationKey));
     if (localStorage.getItem(generationKey) !== null && Number.isSafeInteger(stored)) restoreGeneration.current = stored;
   }
-  function rememberGeneration(value: number | undefined) {
-    if (typeof value !== "number" || !Number.isSafeInteger(value)) return;
-    restoreGeneration.current = value;
-    try { localStorage.setItem(generationKey, String(value)); } catch { /* storage unavailable: kept in memory */ }
+  async function rememberGeneration(value: number | undefined, strictly = false): Promise<boolean> {
+    if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) return false;
+    if (strictly) {
+      // Only used inside an already-held recovery-data Web Lock during owner
+      // adoption. Never reacquire it, which would deadlock.
+      localStorage.setItem(generationKey, String(value));
+      if (localStorage.getItem(generationKey) !== String(value))
+        throw new Error("OWNER_ADOPTION_GENERATION_NOT_PERSISTED");
+      restoreGeneration.current = value;
+      advanceAdoptionGeneration(value);
+      return true;
+    }
+    try {
+      // Normal snapshots must not stamp a stale generation after a sibling
+      // adopted a restore. Both the comparison AND the write occur under
+      // the same lock as owner adoption (not just the Dexie transaction).
+      return await withOfflineRecoveryDataLock(async () => {
+        if (signedOut.current || isAdopting()) return false;
+        if (!persistOrdinaryGeneration(localStorage, restoreGeneration.current, value)) return false;
+        restoreGeneration.current = value;
+        advanceAdoptionGeneration(value);
+        return true;
+      });
+    } catch {
+      return false; // Never advance a generation on uncertain storage state.
+    }
   }
   // Shown after the data was restored from a backup elsewhere and this device's unsent changes were discarded.
   const [restoredNotice, setRestoredNotice] = useState(false);
@@ -64,6 +89,11 @@ export function useSync({ legacyReadOnly = false }: { legacyReadOnly?: boolean }
   const [recoveryPreparing, setRecoveryPreparing] = useState(false);
   const [recoveryReady, setRecoveryReady] = useState(false);
   const [recoveryError, setRecoveryError] = useState(false);
+  // Raw, local-only salvage is available when the owner fence is malformed
+  // OR its valid generation cannot be safely replayed because the shared Web
+  // Lock could not be acquired. Neither case authorizes destructive recovery.
+  const [ownerFenceRawRescueReason, setOwnerFenceRawRescueReason] =
+    useState<"unreadable" | "lock-unavailable" | "verification-unavailable" | null>(null);
   // A local-only rescue does not claim fresh verification of the current server.
   const [recoveryOffline, setRecoveryOffline] = useState(false);
   const [recoveryDownloadRequested, setRecoveryDownloadRequested] = useState(false);
@@ -81,13 +111,21 @@ export function useSync({ legacyReadOnly = false }: { legacyReadOnly?: boolean }
   // before generations were tracked, or dormant) is treated the same once the server's generation is above 0: there is no way
   // to tell whether it predates a restore, so it adopts. One that never synchronized holds nothing to protect.
   function restoredSinceKnown(serverGeneration: number | undefined) {
-    if (typeof serverGeneration !== "number") return false;
-    const known = restoreGeneration.current;
-    if (known !== undefined) return serverGeneration !== known;
-    return serverGeneration > 0 && localStorage.getItem("ai-executive-server-synced") === "1";
+    return restoredSinceKnownGeneration(
+      restoreGeneration.current, serverGeneration, loadedWasSynced.current,
+    );
   }
   // The generation this page started with: another tab's adoption matters only if it is newer.
   const loadedGeneration = useRef<number | undefined>(restoreGeneration.current);
+  // Client components also render on the server, where localStorage does not exist.
+  // Capture this tab's previously-synced state only when browser storage is available.
+  const loadedWasSynced = useRef(
+    typeof localStorage !== "undefined" && localStorage.getItem("ai-executive-server-synced") === "1",
+  );
+  initializeAdoptionGeneration(restoreGeneration.current, loadedWasSynced.current);
+  // A fenced mutating API has already stopped in-tab writes synchronously;
+  // its authenticated GET must finish that same adoption, not return early.
+  const fencedRestore = useRef(false);
   const syncQueue = useRef<Promise<void>>(Promise.resolve());
   const localDataVersion = useRef(0);
   const signedOut = useRef(false);
@@ -227,9 +265,14 @@ export function useSync({ legacyReadOnly = false }: { legacyReadOnly?: boolean }
         if (linksDiffer && heldRelations.every(sendableEnds) && serverLinksPresent.every(sendableEnds)) requeue = true;
       }
     });
+    if (!(await rememberGeneration(snapshot.restoreGeneration))) {
+      // An owner adoption may have committed after this transaction. Do not
+      // certify the obsolete pull's revision or post a changed event.
+      setSyncStatus("offline");
+      throw new Error("LOCAL_DATA_CHANGED");
+    }
     serverRevision.current = snapshot.revision;
     recoveryBaseRevision.current = snapshot.revision;
-    rememberGeneration(snapshot.restoreGeneration);
     await load();
     postToTabs({ type: "changed", from: tabId.current });
     // At most two such saves in a row: if the server keeps answering with something else than was
@@ -253,13 +296,16 @@ export function useSync({ legacyReadOnly = false }: { legacyReadOnly?: boolean }
   // another GET, the sync queue or a cross-tab sync lock. The hold helper
   // engages the in-tab write fence synchronously, then serializes the durable
   // cross-tab marker with any already-authorized local wipe.
-  async function engageRecoveryForGeneration(observedGeneration: number | undefined) {
+  async function engageRecoveryForGeneration(
+    observedGeneration: number | undefined, knownGeneration: number | null | undefined = restoreGeneration.current,
+  ) {
     setRecoveryHeld(true);
     setSyncStatus("offline");
     try {
-      await beginOfflineRecoveryHoldSafely(restoreGeneration.current, observedGeneration);
+      await beginOfflineRecoveryHoldSafely(knownGeneration ?? undefined, observedGeneration);
     } catch (error) {
-      if (error instanceof Error && error.message === "OFFLINE_RECOVERY_WIPE_PRECEDED_HOLD") {
+      if (error instanceof Error && (error.message === "OFFLINE_RECOVERY_WIPE_PRECEDED_HOLD" ||
+          error.message === "OFFLINE_RECOVERY_ADOPTION_PRECEDED_HOLD")) {
         signedOut.current = true;
         window.location.replace("/");
         return false;
@@ -268,62 +314,245 @@ export function useSync({ legacyReadOnly = false }: { legacyReadOnly?: boolean }
     }
     return false;
   }
-  async function adoptServerCopy(source: ServerSnapshot, notice = false) {
-    // The generation mismatch is a STOP, not permission to wipe local data.
-    if (offlineRecoveryIsHeld() || restoredSinceKnown(source.restoreGeneration))
-      return engageRecoveryForGeneration(source.restoreGeneration);
-    if (isAdopting()) return true;
-    beginAdoption();
+  // Interrupted owner adoption has three outcomes: fully committed (finish
+  // the fence under the Web Lock), incomplete (re-fetch a certified snapshot
+  // and replay the *whole* adoption), or uncertifiable (preserve remaining
+  // local records under the D2b rescue hold). Never silently lift a fence.
+  async function finishInterruptedOwnerAdoption() {
+    if (!ownerAdoptionFencePresent()) return true;
+    let recoveryFence: OwnerAdoptionFence | null = null;
     try {
-      // Anything computed from the old copy (a save in progress, a pull) is discarded.
-      localDataVersion.current += 2;
-      try {
-        await adoptionTransaction(async () => {
-          await db.entities.clear();
-          await db.relations.clear();
-          await db.baseEntities.clear();
-          await db.baseRelations.clear();
-          if (source.entities.length) { await db.entities.bulkAdd(source.entities); await db.baseEntities.bulkAdd(source.entities); }
-          if (source.relations.length) { await db.relations.bulkAdd(source.relations); await db.baseRelations.bulkAdd(source.relations); }
-        });
-      } catch (error) {
-        // A different tab could have persisted a hold while this adoption transaction
-        // was pending. Never fall back to a destructive wipe in that case.
-        if (offlineRecoveryIsHeld()) {
-          setRecoveryHeld(true);
-          setSyncStatus("offline");
-          return false;
-        }
-        // The local copy could not be replaced (storage full or refused): it must not stay as it is, so it is emptied; the
-        // reloaded page then takes the server's data as a first synchronization. As a last resort the database is deleted.
-        console.error("Replacing the local copy failed; it is emptied instead:", error instanceof Error ? error.message : error);
+      // Fail closed if another tab never releases the exclusive recovery lock.
+      // Only acquiring it is timed out: once entered, the critical section
+      // must run to completion, without a late aborted cleanup or replay.
+      const state = await withOfflineRecoveryStartupLock(async () => {
+        if (offlineRecoveryIsHeld()) return { status: "held" } as const;
+        if (!ownerAdoptionFencePresent()) return { status: "done" } as const;
+        const fence = readOwnerAdoptionFence(localStorage);
+        if (!fence) return { status: "invalid" } as const;
         try {
-          await adoptionTransaction(async () => {
-            await db.entities.clear(); await db.relations.clear(); await db.baseEntities.clear(); await db.baseRelations.clear();
-          });
-        } catch {
-          try { await db.delete(); } catch { /* nothing more can be done; the reload still happens */ }
-        }
-      }
-      const attempt = (work: () => void) => { try { work(); } catch { /* storage unavailable */ } };
-      attempt(() => clearAllMarkers(localStorage));
-      attempt(() => clearNotesDrafts(localStorage));
-      attempt(() => clearProjectContextDrafts(localStorage));
-      attempt(() => { localStorage.removeItem(pendingKey); localStorage.setItem("ai-executive-server-synced", "1"); });
-      serverRevision.current = source.revision;
-      recoveryBaseRevision.current = source.revision;
-      rememberGeneration(source.restoreGeneration);
-    } finally {
-      if (offlineRecoveryIsHeld()) {
+          if (ownerAdoptionReadyToFinish(localStorage)) {
+            finishOwnerAdoptionFence(localStorage);
+            return { status: "done" } as const;
+          }
+        } catch { /* Interrupted localStorage cleanup; replay the certified adoption. */ }
+        return { status: "resume", fence } as const;
+      });
+      if (state.status === "done") return true;
+      if (state.status === "held") { setRecoveryHeld(true); setSyncStatus("offline"); return false; }
+      if (state.status === "invalid") {
+        // No trustworthy observed generation is available for D2b; do NOT
+        // forge a generation or leave a dead "Prepare" button. The raw export
+        // preserves the remaining IDB rows and local markers for manual help.
+        setOwnerFenceRawRescueReason("unreadable");
         setRecoveryHeld(true);
+        setRecoveryError(false);
+        setSyncStatus("offline");
+        return false;
+      }
+      recoveryFence = state.fence;
+      // The fence stored the exact owner-certified generation before the
+      // crash; verify that it STILL corresponds to the server origin. The
+      // server, not a locally persisted snapshot, is authoritative.
+      const response = await fetch("/api/store", { cache: "no-store", signal: requestTimeout() });
+      if (!response.ok) throw new Error("OWNER_ADOPTION_RESTART_UNVERIFIED");
+      const snapshot = (await response.json()) as ServerSnapshot;
+      if (snapshot.restoreKind !== "owner_restore" ||
+          snapshot.restoreGeneration !== recoveryFence.observedGeneration ||
+          !Array.isArray(snapshot.entities) || !Array.isArray(snapshot.relations))
+        throw new Error("OWNER_ADOPTION_RESTART_UNVERIFIED");
+      await adoptServerCopy(snapshot, true, recoveryFence);
+      return false; // adoptServerCopy triggers a reload after the full commit.
+    } catch {
+      // A temporarily unavailable server must not turn a recoverable owner
+      // fence into an irreversible D2b hold. The durable owner fence already
+      // blocks all writes across tabs; expose read-only rescue while offline
+      // and retry the certified adoption on the next reload when back online.
+      // If a partial IDB replacement occurred, its rescue remains explicitly
+      // marked as potentially incomplete.
+      if (recoveryFence) {
+        setOwnerFenceRawRescueReason("verification-unavailable");
+        setRecoveryHeld(true);
+        setRecoveryError(false);
         setSyncStatus("offline");
       } else {
-        setAfterRestoreFlag(notice ? "remote" : "sibling");
-        postToTabs({ type: "restore-adopted", from: tabId.current, generation: source.restoreGeneration });
-        window.location.reload();
+        // A missing/rejecting Web Lock fails *before* the callback can read a
+        // perfectly valid fence. Do not misclassify it as corrupt: that would
+        // show a rescue UI that rejects its own valid marker.
+        let reason: "unreadable" | "lock-unavailable" | null = null;
+        if (ownerAdoptionFencePresent()) {
+          try {
+            reason = readOwnerAdoptionFence(localStorage) === null ? "unreadable" : "lock-unavailable";
+          } catch { reason = "unreadable"; }
+        }
+        setOwnerFenceRawRescueReason(reason);
+        setRecoveryHeld(true);
+        setRecoveryError(reason === null);
+        setSyncStatus("offline");
       }
+      return false;
     }
-    return !offlineRecoveryIsHeld();
+  }
+  async function adoptServerCopy(
+    source: ServerSnapshot, notice = false, resumeFence?: OwnerAdoptionFence,
+  ) {
+    // Only a server-certified owner restore authorizes discarding old local
+    // data. A D2b hold always overrides that permission.
+    if (offlineRecoveryIsHeld()) return engageRecoveryForGeneration(source.restoreGeneration);
+    if (resumeFence) {
+      if (source.restoreKind !== "owner_restore" ||
+          source.restoreGeneration !== resumeFence.observedGeneration)
+        return engageRecoveryForGeneration(source.restoreGeneration, resumeFence.knownGeneration);
+    } else {
+      const decision = restoreGenerationDecision(
+        restoredSinceKnown(source.restoreGeneration), source.restoreKind, false,
+      );
+      // A restore certificate proves *why* the server generation changed, not
+      // that an unsynchronized browser's local work predates that change.
+      // Never destroy first-sync/offline-only data on a "normal" decision.
+      if (decision !== "adopt") return engageRecoveryForGeneration(source.restoreGeneration);
+    }
+    if (isAdoptingInThisTab() && !fencedRestore.current) return true;
+    fencedRestore.current = false;
+    if (!isAdoptingInThisTab()) beginAdoption();
+
+    let needsRecoveryHold = false;
+    let adoptionCompleted = false;
+    let generationCommitted = false;
+    try {
+      // A cross-tab hold must not be inserted halfway through either the
+      // IndexedDB replacement OR its localStorage marker/generation cleanup.
+      // The lock is also used by D2b holds and owner-authorized sign-out.
+      await withOfflineRecoveryDataLock(async () => {
+        if (offlineRecoveryIsHeld()) { needsRecoveryHold = true; return; }
+        const activeFence = readOwnerAdoptionFence(localStorage);
+        if (resumeFence) {
+          if (ownerAdoptionFencePresent() && JSON.stringify(activeFence) !== JSON.stringify(resumeFence)) {
+            needsRecoveryHold = true;
+            return;
+          }
+          if (!ownerAdoptionFencePresent()) {
+            // Another tab finished the same recovery while the lock was
+            // pending. Its new generation is authoritative; just reload.
+            if (localStorage.getItem(generationKey) === String(source.restoreGeneration)) {
+              adoptionCompleted = true;
+              return;
+            }
+            needsRecoveryHold = true;
+            return;
+          }
+        } else if (ownerAdoptionFencePresent()) { needsRecoveryHold = true; return; }
+        if (signedOut.current || localStorage.getItem("ai-executive-signed-out") === "1" ||
+            localStorage.getItem("ai-executive-wipe-pending") === "1") return;
+        // Invalid or missing certification must never erase the browser copy.
+        const adoptedGeneration = source.restoreGeneration;
+        if (typeof adoptedGeneration !== "number" || !Number.isSafeInteger(adoptedGeneration) ||
+            adoptedGeneration <= 0) { needsRecoveryHold = true; return; }
+        // Another tab can complete adoption while this one waits for the lock.
+        // Never let an obsolete snapshot overwrite the already adopted copy.
+        const persisted = localStorage.getItem(generationKey);
+        const latest = persisted === null ? undefined : Number(persisted);
+        if (!resumeFence &&
+            typeof source.restoreGeneration === "number" && Number.isSafeInteger(source.restoreGeneration) &&
+            typeof latest === "number" && Number.isSafeInteger(latest) &&
+            (latest > source.restoreGeneration ||
+              (latest === source.restoreGeneration && restoreGeneration.current !== latest))) {
+          adoptionCompleted = true; // A sibling already completed the replacement.
+          return;
+        }
+
+        // Synchronously fence ALL sibling writes before creating the
+        // overlapping IndexedDB readwrite transaction. Existing transactions
+        // run before ours; later ones see this marker and are refused.
+        if (!resumeFence) startOwnerAdoptionFence(localStorage, adoptedGeneration, restoreGeneration.current);
+        localDataVersion.current += 2;
+        try {
+          await adoptionTransaction(async () => {
+            await db.entities.clear();
+            await db.relations.clear();
+            await db.baseEntities.clear();
+            await db.baseRelations.clear();
+            if (source.entities.length) { await db.entities.bulkAdd(source.entities); await db.baseEntities.bulkAdd(source.entities); }
+            if (source.relations.length) { await db.relations.bulkAdd(source.relations); await db.baseRelations.bulkAdd(source.relations); }
+          });
+        } catch (error) {
+          // A failed replace can be recovered by an empty local store or by
+          // deleting the DB, but only while the SAME recovery lock is held.
+          // Never attempt these fallbacks after a hold was observed.
+          if (offlineRecoveryIsHeld()) { needsRecoveryHold = true; return; }
+          console.error("Replacing the local copy failed; it is emptied instead:",
+            error instanceof Error ? error.message : error);
+          try {
+            await adoptionTransaction(async () => {
+              await db.entities.clear(); await db.relations.clear();
+              await db.baseEntities.clear(); await db.baseRelations.clear();
+            });
+          } catch (clearError) {
+            try {
+              await db.delete();
+            } catch (deleteError) {
+              console.error("Could not replace, clear or delete the pre-restore local copy:", clearError, deleteError);
+              // Do NOT acquire the same lock recursively: it would deadlock.
+              // The hold is installed immediately after releasing this lock.
+              needsRecoveryHold = true;
+              return;
+            }
+          }
+        }
+
+        // Selective removeItem errors must never be certified as a complete
+        // purge. Keep the durable write fence on any failure and install D2b
+        // hold after releasing the shared Web Lock.
+        clearAllMarkers(localStorage);
+        clearNotesDrafts(localStorage);
+        clearProjectContextDrafts(localStorage);
+        localStorage.removeItem(pendingKey);
+        assertOwnerAdoptionCleanup(localStorage);
+        localStorage.setItem("ai-executive-server-synced", "1");
+        if (localStorage.getItem("ai-executive-server-synced") !== "1")
+          throw new Error("OWNER_ADOPTION_SYNC_BASE_NOT_PERSISTED");
+        await rememberGeneration(adoptedGeneration, true);
+        // All local data and metadata have committed. If only this final
+        // removal fails, reload and retry it; an equal-generation D2b hold
+        // would be invalid and could never export a rescue file.
+        generationCommitted = true;
+        finishOwnerAdoptionFence(localStorage);
+        serverRevision.current = source.revision;
+        recoveryBaseRevision.current = source.revision;
+        adoptionCompleted = true;
+      }, true);
+    } catch (error) {
+      // No Web Locks, or an unexpected storage error: never start/continue a
+      // destructive adoption without serialized access to the rescue barrier.
+      console.error("Owner restore adoption could not be serialized:", error);
+      if (generationCommitted) {
+        setAfterRestoreFlag(notice ? "remote" : "sibling");
+        window.location.reload();
+        return false;
+      }
+      needsRecoveryHold = true;
+    }
+    if (needsRecoveryHold) {
+      await engageRecoveryForGeneration(
+        source.restoreGeneration, resumeFence ? resumeFence.knownGeneration : restoreGeneration.current,
+      );
+      return false;
+    }
+    if (!adoptionCompleted) {
+      signedOut.current = true;
+      window.location.replace("/");
+      return false;
+    }
+    if (offlineRecoveryIsHeld()) {
+      // Includes a pre-existing hold which acquired the lock after our commit.
+      setRecoveryHeld(true);
+      setSyncStatus("offline");
+      return false;
+    }
+    setAfterRestoreFlag(notice ? "remote" : "sibling");
+    postToTabs({ type: "restore-adopted", from: tabId.current, generation: source.restoreGeneration });
+    window.location.reload();
+    return true;
   }
   async function replaceLocalWithServer(snapshot?: ServerSnapshot, notice = false) {
     if (signedOut.current) return false;
@@ -346,10 +575,18 @@ export function useSync({ legacyReadOnly = false }: { legacyReadOnly?: boolean }
   // Another tab of this browser adopted restored data (its message, or the generation it stored): this one reloads too, without
   // announcing it again, and only when that generation is newer than the one this page started with.
   function reloadForRestore(generation: number | undefined, fromStorage = false) {
-    if (isAdopting() || signedOut.current) return;
-    // A page that never knew a generation learns the first one from storage without reloading; a message is a restore.
-    if (fromStorage && loadedGeneration.current === undefined) return;
-    if (typeof generation === "number" && loadedGeneration.current !== undefined && generation <= loadedGeneration.current) return;
+    // Cross-tab adoption blocking must not suppress its own completion event.
+    // An existing D2b hold, in contrast, must preserve this tab's rescue state.
+    if (isAdoptingInThisTab() || offlineRecoveryIsHeld() || signedOut.current ||
+        ownerAdoptionFencePresent()) return;
+    if (typeof generation !== "number" || !Number.isSafeInteger(generation) || generation < 0) return;
+    // A sibling's first sync can stamp a generation without restoring data:
+    // fresh tabs must ignore that. A CERTIFIED completed owner restore is
+    // different: its durable completion marker changed since this page loaded.
+    // Without BroadcastChannel this is the only way to unfreeze a fresh tab.
+    if (fromStorage && loadedGeneration.current === undefined && !loadedWasSynced.current &&
+        completedOwnerAdoptionSinceThisTabLoaded() !== generation) return;
+    if (loadedGeneration.current !== undefined && generation <= loadedGeneration.current) return;
     beginAdoption();
     setAfterRestoreFlag("sibling");
     window.location.reload();
@@ -357,10 +594,41 @@ export function useSync({ legacyReadOnly = false }: { legacyReadOnly?: boolean }
   // Every mutation of the app carries the generation it knows; a refusal because of a restore adopts the restored data.
   useEffect(() => {
     installRestoreFence({ generation: () => restoreGeneration.current,
-      onRestored: (observedGeneration) => {
-        // The 409 already supplies the new generation. Do not wait for a
-        // failing follow-up network request before freezing local writes.
-        void engageRecoveryForGeneration(observedGeneration);
+      onRestored: (observedGeneration, restoreKind) => {
+        // A certified owner restore immediately fences ALL in-tab writes,
+        // including blur/save callbacks racing the subsequent server GET.
+        // The 409 carries no snapshot, so fetch the current authoritative one.
+        if (restoreKind === "owner_restore" && !offlineRecoveryIsHeld()) {
+          if (isAdopting()) {
+            if (!isAdoptingInThisTab()) reloadForRestore(observedGeneration);
+            return;
+          }
+          fencedRestore.current = true;
+          beginAdoption();
+          void (async () => {
+            try {
+              const response = await fetch("/api/store", { cache: "no-store", signal: requestTimeout() });
+              if (!response.ok) throw new Error("Server synchronization failed");
+              const snapshot = (await response.json()) as ServerSnapshot;
+              if (snapshot.restoreKind !== "owner_restore" ||
+                  !Number.isSafeInteger(snapshot.restoreGeneration) ||
+                  typeof observedGeneration !== "number" ||
+                  (snapshot.restoreGeneration as number) < observedGeneration) {
+                await engageRecoveryForGeneration(snapshot.restoreGeneration);
+                return;
+              }
+              await adoptServerCopy(snapshot, true);
+            } catch {
+              // Never resume stale writes if the GET or local adoption failed.
+              // The next startup checks the generation before local mutations.
+              setSyncStatus("offline");
+              window.location.reload();
+            }
+          })();
+        } else {
+          // Unknown or non-owner source keeps the D2b fail-closed barrier.
+          void engageRecoveryForGeneration(observedGeneration);
+        }
       },
     });
   }, []);
@@ -371,9 +639,32 @@ export function useSync({ legacyReadOnly = false }: { legacyReadOnly?: boolean }
         setSyncStatus("offline");
       }
       if (event.key === generationKey && event.newValue !== null) reloadForRestore(Number(event.newValue), true);
+      // The owner completion marker is written while the live fence exists.
+      // The later fence-removal event retries reload once adoption is safe.
+      if (event.key === ownerAdoptionCompletedKey && event.newValue !== null)
+        reloadForRestore(Number(event.newValue), true);
+      if (event.key === ownerAdoptionFenceKey && event.newValue === null) {
+        const raw = localStorage.getItem(generationKey);
+        if (raw !== null) reloadForRestore(Number(raw), true);
+      }
+    };
+    // A suspended tab may miss storage events; on focus, inspect the same
+    // certified marker, never a bare ordinary-sync generation update.
+    const onFocus = () => {
+      // Only the newly opened, never-synchronized tab needs this extra
+      // fallback. Existing known-generation tabs keep the current storage and
+      // BroadcastChannel reload paths (and can be intentionally held stale
+      // in the write-fence regression tests).
+      if (loadedGeneration.current !== undefined || loadedWasSynced.current) return;
+      const completed = completedOwnerAdoptionSinceThisTabLoaded();
+      if (completed !== undefined) reloadForRestore(completed, true);
     };
     window.addEventListener("storage", onStorage);
-    return () => window.removeEventListener("storage", onStorage);
+    window.addEventListener("focus", onFocus);
+    return () => {
+      window.removeEventListener("storage", onStorage);
+      window.removeEventListener("focus", onFocus);
+    };
   }, []);
   // Another tab changed the shared local copy: show it here too.
   useEffect(() => {
@@ -396,7 +687,7 @@ export function useSync({ legacyReadOnly = false }: { legacyReadOnly?: boolean }
     revivedIds: string[] = [],
     generation: number | undefined = restoreGeneration.current,
   ) {
-    if (offlineRecoveryIsHeld()) throw new Error("OFFLINE_RECOVERY_HELD");
+    if (isAdopting()) throw new Error("OFFLINE_RECOVERY_OR_ADOPTION_FENCED");
     return fetch("/api/store", {
       signal: requestTimeout(),
       method: "PUT",
@@ -482,6 +773,10 @@ export function useSync({ legacyReadOnly = false }: { legacyReadOnly?: boolean }
         mergedWithServer = true;
         const current = (await response.json()) as ServerSnapshot;
         if (current.code === "restored") {
+          if (isAdopting()) {
+            if (reportFailure) throw new Error("SYNC_NOT_CONFIRMED");
+            return;
+          }
           // The data was restored from a backup since this device last synchronized: what is unsent here was made against
           // data that no longer exists, and merging it would put that data back. Only a browser that never synchronized
           // (nothing from before to protect) learns the number and goes on.
@@ -490,7 +785,10 @@ export function useSync({ legacyReadOnly = false }: { legacyReadOnly?: boolean }
             if (reportFailure) throw new Error("SYNC_NOT_CONFIRMED");
             return;
           }
-          rememberGeneration(current.restoreGeneration);
+          if (!(await rememberGeneration(current.restoreGeneration))) {
+            if (reportFailure) throw new Error("SYNC_NOT_CONFIRMED");
+            return;
+          }
         }
         const deletedIds = new Set(sentMarkers.deleted);
         const revivedIds = new Set(sentMarkers.revived);
@@ -641,7 +939,7 @@ export function useSync({ legacyReadOnly = false }: { legacyReadOnly?: boolean }
   // TWO explicit steps: prepare a private byte array, then download from the
   // next direct button click. A delayed synthetic click is unreliable on iOS.
   async function prepareOfflineRecoveryDownload() {
-    if (!offlineRecoveryIsHeld() || recoveryPreparing) return;
+    if ((!offlineRecoveryIsHeld() && ownerFenceRawRescueReason === null) || recoveryPreparing) return;
     setRecoveryPreparing(true);
     setRecoveryReady(false);
     setRecoveryError(false);
@@ -649,6 +947,39 @@ export function useSync({ legacyReadOnly = false }: { legacyReadOnly?: boolean }
     recoveryFileBytes.current = null;
     recoveryStorageSnapshot.current = null;
     try {
+      if (ownerFenceRawRescueReason !== null) {
+        // Neither a corrupt marker nor failure to obtain the destructive Web
+        // Lock certifies a generation. This raw-only export is deliberately
+        // not an importable D2b recovery file; no destructive lock is needed.
+        if (offlineRecoveryIsHeld() || !ownerAdoptionFencePresent() ||
+            localStorage.getItem("ai-executive-wipe-pending") === "1")
+          throw new Error("OWNER_RESCUE_STATE_CHANGED");
+        const parsedFence = readOwnerAdoptionFence(localStorage);
+        if ((ownerFenceRawRescueReason === "unreadable") !== (parsedFence === null))
+          throw new Error("OWNER_RESCUE_STATE_CHANGED");
+        const rawBefore = captureUnreadableOwnerRescueStorage(localStorage);
+        const localBefore: RawOwnerRescueLocal | null = await readLocalWithBase().then(
+          ([entities, relations, base]) => ({ entities, relations, base }),
+        ).catch(() => null);
+        const localAfter: RawOwnerRescueLocal | null = await readLocalWithBase().then(
+          ([entities, relations, base]) => ({ entities, relations, base }),
+        ).catch(() => null);
+        const rawAfter = captureUnreadableOwnerRescueStorage(localStorage);
+        if (JSON.stringify(rawBefore) !== JSON.stringify(rawAfter) ||
+            JSON.stringify(localBefore) !== JSON.stringify(localAfter) ||
+            ((ownerFenceRawRescueReason === "unreadable") !==
+              (readOwnerAdoptionFence(localStorage) === null)) ||
+            localStorage.getItem("ai-executive-wipe-pending") === "1")
+          throw new Error("OWNER_RESCUE_UNSTABLE");
+        const bytes = encodeUnreadableOwnerRescue(localAfter, rawAfter, Date.now(),
+          ownerFenceRawRescueReason === "unreadable"
+            ? "unreadable-owner-adoption-fence" : "owner-adoption-lock-unavailable");
+        recoveryStorageSnapshot.current = JSON.stringify(rawAfter);
+        recoveryFileBytes.current = bytes;
+        setRecoveryOffline(true);
+        setRecoveryReady(true);
+        return;
+      }
       const hold = readOfflineRecoveryHold();
       if (!hold) throw new Error("OFFLINE_RECOVERY_HOLD_INVALID");
       // Online validation is best effort. Even if the owner is signed out or
@@ -713,13 +1044,22 @@ export function useSync({ legacyReadOnly = false }: { legacyReadOnly?: boolean }
   }
   function downloadOfflineRecovery() {
     const bytes = recoveryFileBytes.current;
-    if (!recoveryHeld || !offlineRecoveryIsHeld() || !bytes) return;
+    if (!recoveryHeld || (!offlineRecoveryIsHeld() && ownerFenceRawRescueReason === null) || !bytes) return;
     // localStorage reads are synchronous, so this check remains in the user's
     // direct click activation (required by mobile Safari). Reject stale bundles.
     try {
-      const current = JSON.stringify([readOfflineRecoveryHold(), readRawRecoveryDrafts(localStorage), readRawRecoveryMarkers(localStorage)]);
-      if (!recoveryStorageSnapshot.current || current !== recoveryStorageSnapshot.current)
-        throw new Error("OFFLINE_RECOVERY_UNSTABLE");
+      if (ownerFenceRawRescueReason !== null) {
+        if (offlineRecoveryIsHeld() || !ownerAdoptionFencePresent() ||
+            ((ownerFenceRawRescueReason === "unreadable") !==
+              (readOwnerAdoptionFence(localStorage) === null)) ||
+            localStorage.getItem("ai-executive-wipe-pending") === "1" ||
+            JSON.stringify(captureUnreadableOwnerRescueStorage(localStorage)) !== recoveryStorageSnapshot.current)
+          throw new Error("OWNER_RESCUE_UNSTABLE");
+      } else {
+        const current = JSON.stringify([readOfflineRecoveryHold(), readRawRecoveryDrafts(localStorage), readRawRecoveryMarkers(localStorage)]);
+        if (!recoveryStorageSnapshot.current || current !== recoveryStorageSnapshot.current)
+          throw new Error("OFFLINE_RECOVERY_UNSTABLE");
+      }
     } catch {
       recoveryFileBytes.current = null;
       recoveryStorageSnapshot.current = null;
@@ -731,7 +1071,9 @@ export function useSync({ legacyReadOnly = false }: { legacyReadOnly?: boolean }
     const url = URL.createObjectURL(blob);
     const anchor = document.createElement("a");
     anchor.href = url;
-    anchor.download = recoveryOffline ? offlineRecoveryFile.unverifiedFilename : offlineRecoveryFile.filename;
+    anchor.download = ownerFenceRawRescueReason !== null
+      ? unreadableOwnerRescueFilename
+      : recoveryOffline ? offlineRecoveryFile.unverifiedFilename : offlineRecoveryFile.filename;
     anchor.style.display = "none";
     document.body.appendChild(anchor);
     try {
@@ -788,6 +1130,7 @@ export function useSync({ legacyReadOnly = false }: { legacyReadOnly?: boolean }
 
   return {
     recoveryHeld,
+    ownerFenceRawRescueReason,
     recoveryPreparing,
     recoveryReady,
     recoveryError,
@@ -824,6 +1167,7 @@ export function useSync({ legacyReadOnly = false }: { legacyReadOnly?: boolean }
     restoredSinceKnown,
     rememberGeneration,
     adoptServerCopy,
+    finishInterruptedOwnerAdoption,
     restoredNotice,
     showRestoredNotice: () => setRestoredNotice(true),
     dismissRestoredNotice: () => setRestoredNotice(false),

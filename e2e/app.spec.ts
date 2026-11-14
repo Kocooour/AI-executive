@@ -1,4 +1,4 @@
-import { expect, test } from "./fixtures";
+import { expect, persistOwnerSession, test } from "./fixtures";
 import { prepareOfflineRecovery } from "../lib/d2b-offline-reconciliation";
 import { encodeOfflineRecoveryFile } from "../lib/d2b-offline-recovery-file";
 import { confirmDialog, expectOnServer, heading, seeded, serverEntities, settingsSections, sidebarView, signIn, waitUntilSynced } from "./helpers";
@@ -679,6 +679,9 @@ test("signing out without a connection is refused and removes nothing", async ({
 test("signing out clears the local copy; signing in again restores it from the server", async ({ page }) => {
   await page.goto("/?view=Settings");
   await waitUntilSynced(page);
+  const previousSessionCookie = (await page.context().cookies())
+    .find((cookie) => cookie.name === "ai_executive_session")?.value;
+  expect(previousSessionCookie).toBeTruthy();
   const plantDraft = (text: string, base: string) => page.evaluate((draft) => localStorage.setItem("ai-executive-notes-drafts",
     JSON.stringify({ "other-tab:e2e-rename": { id: "e2e-rename", ...draft, at: Date.now(), page: "other-tab" } })), { text, base });
   const base = String((await serverEntities(page)).find((entity) => entity.id === "e2e-rename")?.properties?.notes ?? "");
@@ -718,4 +721,14 @@ test("signing out clears the local copy; signing in again restores it from the s
   await sidebarView(page, "Doručené").click();
   await expect(page.getByText(seeded.plainTask)).toBeVisible();
   await expectOnServer(page, (entity) => entity.id === "e2e-rename" && entity.properties?.notes === otherTab, true);
+
+  // This sign-out globally revokes ALL previously issued owner cookies.
+  // Use the shared fixture writer: only the newly authenticated cookie is
+  // persisted, never app localStorage/IndexedDB. The next test also verifies
+  // its owner cookie before creating any browser context.
+  const { cookies } = await page.context().storageState();
+  const freshSessionCookie = cookies.find((cookie) => cookie.name === "ai_executive_session")?.value;
+  expect(freshSessionCookie).toBeTruthy();
+  expect(freshSessionCookie).not.toBe(previousSessionCookie);
+  await persistOwnerSession(page.context());
 });

@@ -50,8 +50,8 @@ function keysWithPrefix(storage: Store, prefix: string) {
 // moved to keys of their own; if two tabs do this at once an entry is there twice, which is
 // harmless (only the record ids are sent).
 function migrateLegacy(storage: Store) {
-  // Migration removes the legacy key; never change the rescue source after a hold.
-  if (offlineRecoveryIsHeld()) return;
+  // A stale sibling must not recreate old pending markers after the purge.
+  if (isAdopting()) return;
   for (const listKey of [deletedKey, revivedKey]) {
     const raw = storage.getItem(listKey);
     if (raw === null) continue;
@@ -147,9 +147,8 @@ export function captureMarkers(storage: Store): SentMarkers {
 }
 
 export function clearSentMarkers(storage: Store, sent: SentMarkers) {
-  // A save started before another tab detected the restore may complete afterwards.
-  // Its acknowledgement must not erase the owner's pending delete/revival evidence.
-  if (offlineRecoveryIsHeld()) return;
+  // A stale sibling's delayed acknowledgement must not touch new markers.
+  if (isAdopting()) return;
   for (const marker of [...sent.deletedEntries, ...sent.revivedEntries]) storage.removeItem(marker.key);
   if ((storage.getItem(pendingSeqKey) || "") === sent.seq) {
     storage.removeItem(pendingKey);

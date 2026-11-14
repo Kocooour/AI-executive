@@ -279,8 +279,12 @@ export function ProjectContext({ app, project }: { app: LumiApp; project: Entity
         className="projectContextFields"
         onFocus={() => { focused.current = true; }}
         onBlur={(event) => {
-          // Every field is saved when it is left (an unchanged context writes nothing); moving between the fields
-          // of the context does not count as leaving it, so a save does not reset a field that is about to be typed in.
+          // Every field is saved when left, including Tab to the next field.
+          // Exception: a pointer click on a goal's Remove button first blurs
+          // its input; saving in that blur can rerender away the button before
+          // its click handler executes. Remove explicitly saves the NEW draft.
+          if (event.relatedTarget instanceof Element &&
+              event.relatedTarget.closest(".projectGoalRemove")) return;
           if (!container.current?.contains(event.relatedTarget as Node | null)) focused.current = false;
           void save();
         }}

@@ -1,10 +1,12 @@
 import type { Entity, Relation } from "./db";
+import type { RestoreKind } from "./restore-generation-origin";
 import { limitConflicts, mergeEntity, mergeRelations, withConflicts } from "./field-merge";
 
 export interface ServerSnapshot {
   revision: number;
   // See StoreSnapshot.restoreGeneration (lib/server-store.ts); `code: "restored"` marks the refusal of a save made before a restore.
   restoreGeneration?: number;
+  restoreKind?: RestoreKind;
   code?: string;
   entities: Entity[];
   relations: Relation[];
