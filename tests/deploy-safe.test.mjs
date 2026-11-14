@@ -544,6 +544,9 @@ scenarioCase("targetsuccess: quiesced target preflight, shared verified archive,
   assert.equal(r.backups.length, 1);
   assert.equal(r.events.filter(value => value === "stop").length, 2);
   assert.equal(r.events.filter(value => value === "start-b").length, 2);
+  assert.deepEqual(r.events.filter(value => value.startsWith("start-with-target-flags:")),
+    ["start-with-target-flags:31", "start-with-target-flags:31"],
+    "the two post-deployment service launches both use the fully reviewed profile");
   assert.equal(r.events.filter(value => value === "target-check").length, 3);
   const archive = path.join(f.backups, r.backups[0]);
   for (const name of ["lumi-target.sqlite", "lumi-target.journal", "lumi-target-witness.sqlite"])
@@ -570,30 +573,55 @@ scenarioCase("targetunit: refuse writable-store activation without approved syst
   assert.equal(r.service, "active");
   assert.deepEqual(r.backups, []);
 });
-scenarioCase("targetgeneration: reject mismatched generation at quiesced preflight", (r) => {
+scenarioCase("targetgeneration: mismatched generation never restarts under rejected flags", (r) => {
   assert.notEqual(r.status, 0);
   assert.match(r.output, /cilovy preflight: neshoda/);
+  assert.match(r.output, /Sluzba zustava zastavena/);
   assert.equal(r.head, oldSha);
-  assert.equal(r.service, "active");
+  assert.equal(r.service, "inactive");
   assert.equal(r.events.includes("stop"), true);
   assert.equal(r.events.includes("merge"), false);
+  assert.equal(r.events.some(e => e.startsWith("start-")), false,
+    "no process may reload the unverified target EnvironmentFile");
   assert.deepEqual(r.backups, []);
 });
-scenarioCase("targetbackupcorrupt: purge partial archive and restart original service", (r) => {
+scenarioCase("targetbackupcorrupt: purge partial archive and fail closed without a restart", (r) => {
   assert.notEqual(r.status, 0);
   assert.match(r.output, /cilova zaloha obsahuje neodpovidajici/);
+  assert.match(r.output, /Sluzba zustava zastavena/);
   assert.equal(r.head, oldSha);
-  assert.equal(r.service, "active");
+  assert.equal(r.service, "inactive");
   assert.equal(r.events.includes("merge"), false);
+  assert.equal(r.events.some(e => e.startsWith("start-")), false);
   assert.deepEqual(r.backups, []);
 });
-scenarioCase("targetpostfail: post-start semantic failure rolls back code only", (r, f) => {
+scenarioCase("targetpostfail: code-only rollback stays stopped after new-code start failed", (r, f) => {
   assert.notEqual(r.status, 0);
   assert.match(r.output, /cilovy preflight po prvnim startu selhal/);
+  assert.match(r.output, /Sluzba zustava zastavena/);
   assert.equal(r.head, oldSha);
-  assert.equal(r.service, "active");
+  assert.equal(r.service, "inactive");
   assert.equal(r.events.includes("reset"), true);
+  assert.deepEqual(r.events.filter(e => e.startsWith("start-with-target-flags:")),
+    ["start-with-target-flags:31"],
+    "only the initial new-code start may see enabled flags");
   assert.equal(r.events.includes("start-b"), true);
+  assert.equal(r.events.includes("start-a"), false,
+    "old code must never reload the rejected target profile");
+  assert.equal(r.backups.length, 1);
+  assert.equal(existsSync(path.join(f.backups, r.backups[0], "target", "lumi-target.sqlite")), true);
+});
+
+
+scenarioCase("targetbuildfail: code rollback does not reactivate rejected target profile", (r, f) => {
+  assert.notEqual(r.status, 0);
+  assert.match(r.output, /synthetic target-enabled build failure/);
+  assert.match(r.output, /BEZPECNOSTNI BLOKACE: neuspesna aktivace personal-v1/);
+  assert.equal(r.head, oldSha);
+  assert.equal(r.service, "inactive", "old service must remain stopped until explicit off confirmation");
+  assert.equal(r.events.includes("reset"), true, "code is rolled back without restoring data");
+  assert.equal(r.events.some(e => e.startsWith("start-")), false,
+    "service must not reload personal-v1 flags after target-enabled build failure");
   assert.equal(r.backups.length, 1);
   assert.equal(existsSync(path.join(f.backups, r.backups[0], "target", "lumi-target.sqlite")), true);
 });
