@@ -442,7 +442,13 @@ function runPinnedTargetStagingTransaction<T, C>(
           !noTargetStagingSidecars(files.databasePath, ["-wal", "-shm"])) return deny("prelock_identity_or_wal");
       try {
         const sidecar = lstatSync(files.databasePath + "-journal");
-        if (targetStagingRollbackSidecarShape(sidecar) === "denied") return deny("prelock_sidecar_structure");
+        if (targetStagingRollbackSidecarShape(sidecar) === "denied") {
+          // Static, content-free categories let the stress test distinguish a
+          // planted link from a nonregular file, rather than guessing at races.
+          if (sidecar.isSymbolicLink()) return deny("prelock_sidecar_symlink");
+          if (!sidecar.isFile()) return deny("prelock_sidecar_nonregular");
+          return deny("prelock_sidecar_linkcount");
+        }
       } catch (error) {
         // ENOENT means the journal disappeared between observations. All
         // other filesystem errors are trust/boundary failures, not contention.
