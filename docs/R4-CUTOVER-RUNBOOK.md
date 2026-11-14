@@ -22,6 +22,19 @@ identity. \`--check <env-file>\` reports \`off\`, complete \`personal-v1\`, or
 flags are enabled by committed files, and this PR does not authorize an
 environment change.
 
+Before any service stop, the deploy launcher verifies the **loaded systemd
+environment-source contract**: only the single, mandatory
+`/etc/ai-executive/ai-executive.env` EnvironmentFile; the four fixed
+Environment assignments from the installed unit; empty PassEnvironment,
+UnsetEnvironment and PAMName; and no manager-global target settings.
+This applies even if the root-owned file reports `off`, because a
+second loaded file could otherwise enable an unchecked target. Repeat
+the loaded-unit contract check before both service starts. A systemd
+drop-in approved for target-store write access must change **only the
+StateDirectory permission boundary**, not inject/override environment
+variables. Any difference is a stop condition, not an invitation to
+auto-edit the systemd unit or live env.
+
 **Decision proposal for the owner (not approved): choose (a)**, a separate
 systemd \`StateDirectory=ai-executive-target\` for an isolated absolute target
 path under \`/var/lib/ai-executive-target/personal-v1\`. The current unit's
@@ -64,8 +77,12 @@ the source-versus-copy directory diff must match. Immediately after the
 copy, before any new-code start, the quiesced target store is checked again
 **against the configured owner and restore generation**, not just for internal
 consistency: this also rejects a substituted but valid store. On failure,
-only an unverified partial copy is deleted. Post-start checking quiesces the service
-again to avoid transient SQLite sidecars before a second semantic preflight,
+only an unverified partial copy is deleted. Because install/build and
+other prestart work can run after the archive verification, repeat the
+*same identity-bound semantic preflight* again on the still-quiesced
+target **immediately before the first service start**, so a later
+change cannot be served. Post-start checking quiesces the service
+again to avoid transient SQLite sidecars before a further semantic preflight,
 then restarts and checks HTTP readiness. Only code is automatically rolled
 back, **never either data domain**. This introduces a second short service
 restart exclusively for an activated target.
