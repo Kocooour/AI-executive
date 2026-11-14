@@ -10,7 +10,10 @@ export function selectedDesktopTests(output) {
   return clean.split(/\r?\n/).filter((line) => line.includes("[desktop] › ")).map((line) => {
     const match = line.match(/\[desktop\] › (?:e2e\/)?([^/:\s]+\.spec\.ts):\d+:\d+ › (.+)$/);
     if (!match) throw new Error(`Unrecognized Playwright desktop test line: ${line}`);
-    return { file: match[1], title: match[2].trim() };
+    // Execution lines append a duration, unlike --list. Strip only a final
+    // Playwright timing suffix; preserve the exact underlying test title.
+    const title = match[2].trim().replace(/ \\(\\d+(?:\\.\\d+)?(?:ms|s|m)\\)$/, "");
+    return { file: match[1], title };
   });
 }
 
