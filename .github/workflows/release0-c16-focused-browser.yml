@@ -14,7 +14,9 @@ on:
       - "e2e/recovery.spec.ts"
       - "e2e/tabs.spec.ts"
       - "e2e/project-page.spec.ts"
+      - "e2e/project-overview-b2.spec.ts"
       - "e2e/inspector-return-focus-ui01e.spec.ts"
+      - "e2e/record-links-ui01.spec.ts"
       # C16 depends on auth setup, issued-cookie validation and revocation.
       # Changes here must not silently bypass the targeted browser regressions.
       - "e2e/auth.setup.ts"
@@ -70,6 +72,13 @@ jobs:
         run: pnpm exec playwright install --with-deps chromium
       - name: Prove global revocation and next-test repair
         run: pnpm exec playwright test e2e/session-recovery.spec.ts --project=desktop --workers=1 --trace=on
+      - name: C20 B2 project cleanup before project and note deep links
+        run: >-
+          pnpm exec playwright test
+          e2e/project-overview-b2.spec.ts e2e/project-page.spec.ts e2e/record-links-ui01.spec.ts
+          --project=desktop --workers=1
+          --grep 'B2 project overview|C10: inspector Close preserves|aggregate project deep links survive|note URL and browser Back reload'
+          --trace=on
       - name: Exact ordered logout predecessors then the original C4 failures
         shell: bash
         run: |

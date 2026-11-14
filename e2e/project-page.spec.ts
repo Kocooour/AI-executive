@@ -295,7 +295,10 @@ test("C10: inspector Close preserves project Back origin and scoped typed parent
   const firstTitle = `C10 první úkol ${R}-${stamp}`;
   const secondTitle = `C10 druhý úkol ${R}-${stamp}`;
   expect(await seed(page, {
-    entities: [entity(projectId, "project", projectTitle),
+    // This scenario specifically tests opening from Home's seven-item project
+    // sidebar. Keep its fixture there even when earlier scenarios left projects.
+    entities: [entity(projectId, "project", projectTitle,
+      { manualOrders: { "personal:project:all": Number.MIN_SAFE_INTEGER } }),
       entity(firstId, "task", firstTitle), entity(secondId, "task", secondTitle)],
     relations: [member(stamp, firstId, projectId), member(stamp, secondId, projectId)],
   })).toBe(200);
