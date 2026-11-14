@@ -33,7 +33,9 @@ function parseEnv(filename) {
         (value.startsWith("'") && value.endsWith("'"))) {
       value = value.slice(1, -1);
     } else {
-      value = value.replace(/\s+#.*$/, "").trim();
+      // systemd EnvironmentFile does not treat inline # as a comment.
+      // A boolean followed by "#..." must be invalid, not accepted as true.
+      value = value.trim();
     }
     if (values.has(name) && (isFlag(name) || required.includes(name))) duplicate.add(name);
     values.set(name, value);
