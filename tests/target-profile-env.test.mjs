@@ -94,6 +94,20 @@ test("excluded and unknown enabled flags are both rejected", () => {
   }
 });
 
+test("earlier-sorting unknown target flag is never silently ignored", () => {
+  const earlier = "AI_EXECUTIVE_TARGET_AREAS_ENABLED";
+  assert.ok(earlier < TARGET_PERSONAL_V1_PROFILE[0],
+    "future flags can sort before the current first STAGING entry");
+  for (const input of [earlier + "=true\n", block() + earlier + "=true\n"]) {
+    withEnv(input, file => {
+      const result = run("--check", file);
+      assert.equal(result.status, 2);
+      assert.equal(result.stdout, "invalid\n");
+      assert.match(result.stderr, /AI_EXECUTIVE_TARGET_AREAS_ENABLED/);
+    });
+  }
+});
+
 test("invalid, duplicated, malformed and empty profile settings do not leak values", () => {
   const cases = [
     block().replace(settings[2] + "=" + generation, settings[2] + "=not-a-uuid"),
