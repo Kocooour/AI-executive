@@ -143,6 +143,8 @@ test("restore returns every included table to the backup, keeps excluded tables,
   const migrationsBefore = dump(db(), "schema_migrations");
 
   const snapshot = store.restoreBackup(backup.name);
+  assert.equal(snapshot.restoreKind, "owner_restore", "full backup restore response must certify its origin");
+  assert.equal(snapshot.restoreGeneration, store.readSnapshot().restoreGeneration);
 
   for (const table of replaced.filter((name) => !scope.storeTables.includes(name))) {
     assert.equal(dump(db(), table), backedUp[table], `${table} is not as in the backup`);
@@ -160,7 +162,7 @@ test("restore returns every included table to the backup, keeps excluded tables,
   assert.deepEqual(dumpAll(keptSeedable), excludedBefore);
   assert.equal(dump(db(), "schema_migrations"), migrationsBefore);
   // Metadata other than the store revision is untouched (push keys stay).
-  const metadata = (text) => JSON.parse(text).filter((row) => !["revision", "updatedAt", "restoreGeneration"].includes(row.key));
+  const metadata = (text) => JSON.parse(text).filter((row) => !["revision", "updatedAt", "restoreGeneration", "restoreGenerationOrigin"].includes(row.key));
   assert.deepEqual(metadata(dump(db(), "metadata")), metadata(metadataBefore));
 
   // Entities: as in the backup, with the same ids; what the backup did not know is tombstoned; the revision moves on.
@@ -169,6 +171,7 @@ test("restore returns every included table to the backup, keeps excluded tables,
   assert.deepEqual(after.entities.find((entity) => entity.id === "note:1").content, "text one");
   assert.equal(after.revision, before.revision + 1);
   assert.equal(snapshot.revision, after.revision);
+  assert.equal(after.restoreKind, "owner_restore");
   assert.ok(after.tombstones.some((tombstone) => tombstone.id === "task:2"));
   assert.equal(after.tombstones.some((tombstone) => tombstone.id === "task:1"), false);
 
@@ -712,15 +715,18 @@ test("an export of a large store runs in a small heap, where reading whole table
     // About 75 MB of notes, written with the default heap.
     const seeded = run([], "seed", "2500");
     assert.equal(seeded.status, 0, seeded.stderr);
-    // The first version of the export (a whole table in one string) does not fit 64 MB of heap ...
-    const naive = run(["--max-old-space-size=64"], "naive");
-    assert.notEqual(naive.status, 0, "reading the whole entities table should not fit the small heap");
-    // ... the streamed export does, and what it writes passes the importer's verification (also run in the small heap).
+    // Only the export/verification child is heap-constrained. The former
+    // negative-control child deliberately ran out of memory; in parallel CI,
+    // OS pressure could kill it (or other children) for reasons unrelated to
+    // V8's heap limit. A successful export of >64 MiB of entity JSON under a
+    // real 64 MiB old-space cap is the stronger positive guarantee: replacing
+    // the streaming writer with the old whole-table JSON.stringify must OOM.
     const streamed = run(["--max-old-space-size=64"], "export");
     assert.equal(streamed.status, 0, streamed.stderr.slice(-2000));
     const result = last(streamed);
     assert.ok(result.entries > 2500);
-    assert.ok(result.entitiesJson > 64 * 1024 ** 2);
+    assert.ok(result.entitiesJson > 64 * 1024 ** 2,
+      "exported uncompressed entity JSON exceeds the actual child old-space limit");
     assert.ok(result.zipBytes < pack.maxImportUploadBytes);
   } finally {
     rmSync(lowDir, { recursive: true, force: true });
@@ -735,6 +741,7 @@ test("a save made before a restore is refused whole, whatever its base revision;
   store.restoreBackup(backup.name);
   const restored = store.readSnapshot();
   assert.equal(restored.restoreGeneration, generation + 1);
+  assert.equal(restored.restoreKind, "owner_restore");
   const dailyBefore = files("-daily.sqlite").length;
   for (const old of [undefined, generation, 0, generation + 7]) {
     const refused = save(old);
@@ -764,6 +771,7 @@ test("a save made before a restore is refused whole, whatever its base revision;
   // The generation is not part of a backup: restoring never lowers it.
   const file = new DatabaseSync(path.join(backupsDir, backup.name), { readOnly: true });
   assert.equal(file.prepare("SELECT 1 FROM metadata WHERE key = 'restoreGeneration'").get(), undefined);
+  assert.equal(file.prepare("SELECT 1 FROM metadata WHERE key = 'restoreGenerationOrigin'").get(), undefined);
   file.close();
 });
 

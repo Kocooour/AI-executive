@@ -1,6 +1,7 @@
 "use client";
 import { useLayoutEffect, useRef } from "react";
 import type { LumiApp } from "../use-lumi-app";
+import { ownerAdoptionFencePresent } from "../../../lib/owner-adoption-barrier";
 
 // Non-dismissible safety barrier: the local copy is never discarded by closing
 // a modal, reloading the page or acknowledging a download prompt.
@@ -10,6 +11,7 @@ export function OfflineRecoveryDialog({ app }: { app: LumiApp }) {
   const inspectRef = useRef(app.inspectOfflineRecoveryFile);
   inspectRef.current = app.inspectOfflineRecoveryFile;
   const cs = app.language === "cs";
+  const interruptedOwnerRestore = ownerAdoptionFencePresent();
   useLayoutEffect(() => {
     const dialog = ref.current;
     if (!dialog || !app.recoveryHeld) return;
@@ -41,10 +43,32 @@ export function OfflineRecoveryDialog({ app }: { app: LumiApp }) {
       <div className="confirmDialogBody">
         <h2 id="offline-recovery-title">{cs ? "Lokální změny jsou chráněné" : "Local changes are protected"}</h2>
         <p id="offline-recovery-desc">
-          {cs
-            ? "Serverová data byla obnovena z jiné generace. Lumi zastavilo zápisy i přepsání místní kopie. Změny, poznámky a rozpracované texty zůstávají v tomto prohlížeči."
-            : "The server's restore generation changed. Lumi has blocked writes and replacement of your local copy. Local edits, notes and drafts stay in this browser."}
+          {interruptedOwnerRestore
+            ? cs
+              ? "Obnova byla přerušena. Lumi zastavilo zápisy, aby nedošlo k další ztrátě případně zbývajících místních dat."
+              : "The restore was interrupted. Lumi has blocked writes to protect any local data that may remain."
+            : cs
+              ? "Na serveru byla obnovena jiná kopie dat. Lumi pozastavilo synchronizaci, aby nepřepsalo změny uložené v tomto prohlížeči. Vaše poznámky a rozpracované texty zatím zůstávají zde."
+              : "A different copy of your data was restored on the server. Lumi paused synchronization to avoid overwriting changes saved in this browser. Your notes and drafts remain here for now."}
         </p>
+        {app.ownerFenceRawRescueReason !== null && <p role="alert">
+          {app.ownerFenceRawRescueReason === "unreadable"
+            ? cs
+              ? "Nepodařilo se přečíst údaje o přerušené obnově. Můžete si uložit kopii dat, která v tomto prohlížeči ještě zůstala, pro ruční záchranu. Soubor nelze přímo načíst zpět ani automaticky sloučit."
+              : "The information needed to resume the interrupted restore cannot be read. You can save a copy of the data still in this browser for manual recovery. The file cannot be imported or merged automatically."
+            : app.ownerFenceRawRescueReason === "verification-unavailable"
+              ? cs
+                ? "Server teď není dostupný nebo nebylo možné obnovu ověřit. Vaše místní data zůstávají chráněná. Až bude spojení fungovat, načtěte stránku znovu; případně si stáhněte kopii dat pro ruční záchranu."
+                : "The server is unavailable or the restore could not be verified. Your local data stays protected. Reload when the connection works again, or save a copy for manual recovery."
+              : cs
+                ? "Obnovu nelze nyní bezpečně dokončit, protože jiná záložka může pracovat se stejnými daty. Místní změny zůstávají chráněné. Uložte si jejich kopii pro ruční záchranu; soubor nelze automaticky importovat ani sloučit."
+                : "The restore cannot finish safely right now because another tab may be using the same data. Your local changes remain protected. You can save a copy for manual recovery, but it cannot be imported or merged automatically."}
+        </p>}
+        {interruptedOwnerRestore && <p role="status">
+          {cs
+            ? "Předchozí obnova byla přerušena. Místní kopie už může být částečně nahrazená; záchranný soubor nemusí obsahovat všechny původní změny."
+            : "A previous restore was interrupted. The local copy may already be partially replaced; a recovery file may not include all earlier edits."}
+        </p>}
         <p>
           {cs
             ? "Soubor může obsahovat soukromé údaje. Uložte ho pouze na bezpečné místo. Export není automatické sloučení; pro opětovné zapnutí synchronizace bude potřeba samostatné bezpečné rozhodnutí."
@@ -80,7 +104,7 @@ export function OfflineRecoveryDialog({ app }: { app: LumiApp }) {
             ? "Soubor je připravený. Klikněte na Stáhnout soubor; samotné připravení nic neukládá."
             : "The file is ready. Select Download file; preparing alone does not save it."}
         </p>}
-        <section aria-labelledby="offline-recovery-review-title">
+        {app.ownerFenceRawRescueReason === null && <section aria-labelledby="offline-recovery-review-title">
           <h3 id="offline-recovery-review-title">
             {cs ? "3. Zkontrolovat uložený soubor" : "3. Inspect a saved recovery file"}
           </h3>
@@ -144,7 +168,7 @@ export function OfflineRecoveryDialog({ app }: { app: LumiApp }) {
                 : "Even zero changes is not consent to discard. Permissions and ownership require separate review. Synchronization remains blocked."}
             </p>
           </div>}
-        </section>
+        </section>}
         {app.recoveryDownloadRequested && <p role="status">
           {cs
             ? "Stahování bylo vyžádáno. Ověřte, že soubor skutečně existuje a lze ho bezpečně uchovat. Synchronizace zůstává zablokovaná."

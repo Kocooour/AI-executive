@@ -65,14 +65,22 @@ async function cleanUp(page: Page) {
       await fetch("/api/context/sources", { method: "POST", headers: { "content-type": "application/json" },
         body: JSON.stringify({ action: "archive", idempotencyKey: crypto.randomUUID(), workspaceId: "personal", id: source.id, expectedRevision: source.revision }) });
     }
-    const snapshot = await fetch("/api/store", { cache: "no-store" }).then((response) => response.json());
-    const mine = snapshot.entities.filter((entity: { id: string }) => entity.id.startsWith("e2e-backup-"));
-    if (mine.length) {
-      await fetch("/api/store", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ baseRevision: snapshot.revision, restoreGeneration: snapshot.restoreGeneration,
-        entities: snapshot.entities.filter((entity: { id: string }) => !entity.id.startsWith("e2e-backup-")),
-        // Tasks carry their Area link (2a part 4): it goes with the task.
-        relations: snapshot.relations.filter((link: { sourceEntityId: string; targetEntityId: string }) => !link.sourceEntityId.startsWith("e2e-backup-") && !link.targetEntityId.startsWith("e2e-backup-")),
-        deletedIds: mine.map((entity: { id: string }) => entity.id), revivedIds: [] }) });
+    // A parallel app pull may advance the CAS revision after GET and before
+    // cleanup PUT. Retry the same scoped deletion rather than silently leaving
+    // e2e-backup-* records in the NEXT test's snapshot.
+    for (let attempt = 0; attempt < 6; attempt += 1) {
+      const snapshot = await fetch("/api/store", { cache: "no-store" }).then((response) => response.json());
+      const mine = snapshot.entities.filter((entity: { id: string }) => entity.id.startsWith("e2e-backup-"));
+      if (!mine.length) break;
+      const response = await fetch("/api/store", { method: "PUT", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ baseRevision: snapshot.revision, restoreGeneration: snapshot.restoreGeneration,
+          entities: snapshot.entities.filter((entity: { id: string }) => !entity.id.startsWith("e2e-backup-")),
+          relations: snapshot.relations.filter((link: { sourceEntityId: string; targetEntityId: string }) =>
+            !link.sourceEntityId.startsWith("e2e-backup-") && !link.targetEntityId.startsWith("e2e-backup-")),
+          deletedIds: mine.map((entity: { id: string }) => entity.id), revivedIds: [] }) });
+      if (!response.ok && response.status !== 409)
+        throw new Error(`backup test cleanup refused (${response.status})`);
+      if (attempt === 5) throw new Error("backup test cleanup failed after six CAS retries");
     }
   }, marker);
 }
@@ -105,6 +113,179 @@ const versionCount = async (page: Page, id: string) => {
   await waitUntilSynced(page);
   return page.locator(".revisionList li").count();
 };
+
+test("an unsent note edit survives an unrelated server revision without a restore", async ({ browser }) => {
+  const id = `e2e-backup-unreplaced-${stamp}`;
+  const unrelated = `e2e-backup-unrelated-${stamp}`;
+  const { first, second } = await twoDevices(browser);
+  try {
+    await first.page.goto("/");
+    await waitUntilSynced(first.page);
+    await setStore(first.page, [task(id, "Nesmazat: původní úkol")]);
+    await second.page.goto(`/?task=${id}`);
+    await waitUntilSynced(second.page);
+    // This is an ordinary conflict, NOT a backup restore. The offline device
+    // must retain its local draft and eventually send it.
+    await second.context.setOffline(true);
+    await second.page.getByLabel("Poznámky k úkolu").fill("Neodeslaná poznámka, kterou nesmí smazat revize");
+    await second.page.locator("input.titleEdit").focus();
+    await setStore(first.page, [task(unrelated, "Změna na jiném zařízení")]);
+    await second.context.setOffline(false);
+    await expect.poll(async () => {
+      const entities = await serverEntities(first.page);
+      return {
+        note: (entities.find((entity) => entity.id === id)?.properties as { notes?: string } | undefined)?.notes,
+        unrelatedPresent: entities.some((entity) => entity.id === unrelated),
+      };
+    }, { timeout: 30_000 }).toEqual({
+      note: "Neodeslaná poznámka, kterou nesmí smazat revize",
+      unrelatedPresent: true,
+    });
+    await second.page.reload();
+    await waitUntilSynced(second.page);
+    await second.page.goto(`/?task=${id}`);
+    await expect(second.page.getByLabel("Poznámky k úkolu")).toHaveValue(
+      "Neodeslaná poznámka, kterou nesmí smazat revize",
+    );
+    await expect(second.page.locator(".restoredNotice")).toHaveCount(0);
+  } finally {
+    await second.context.close();
+    // This browser-only scenario has its own contexts; do not depend on the
+    // generic page-fixture afterEach cleanup racing the next backup snapshot.
+    await cleanUp(first.page);
+    expect((await serverEntities(first.page)).some((entity) => entity.id === id || entity.id === unrelated)).toBe(false);
+    await first.context.close();
+  }
+});
+
+test("a browser that has NEVER synchronized retains local work when a restored-generation 409 arrives", async ({ browser }) => {
+  const id = `e2e-backup-first-sync-local-${stamp}`;
+  const ownerContext = await browser.newContext({ storageState: sessionFile, locale: "cs-CZ" });
+  const freshContext = await browser.newContext({ storageState: sessionFile, locale: "cs-CZ" });
+  const owner = await ownerContext.newPage(), fresh = await freshContext.newPage();
+  let releaseInitialStore: () => void = () => undefined;
+  try {
+    await owner.goto("/");
+    await waitUntilSynced(owner);
+    const backup = await createManualBackup(owner);
+    expect(await restoreByApi(owner, backup)).toBe(200);
+    const generation = await owner.evaluate(async () =>
+      (await fetch("/api/store", { cache: "no-store" }).then(r => r.json())).restoreGeneration as number);
+    expect(generation).toBeGreaterThan(0);
+
+    // Hold ONLY the initial store GET. This fresh browser has never loaded
+    // a server snapshot, but its IndexedDB already has a real offline record.
+    // Allow the later GET used to verify the 409 certificate.
+    let firstStoreGet = true;
+    await fresh.route("**/api/store", async route => {
+      if (route.request().method() !== "GET") return route.continue();
+      if (firstStoreGet) {
+        firstStoreGet = false;
+        await new Promise<void>(resolve => { releaseInitialStore = resolve; });
+      }
+      await route.continue();
+    });
+    await fresh.goto("/", { waitUntil: "domcontentloaded" });
+    await fresh.waitForFunction(() => Boolean((window as typeof window & { __lumiRestoreFence?: boolean }).__lumiRestoreFence));
+    await fresh.evaluate(async taskId => {
+      const database = await new Promise<IDBDatabase>((resolve, reject) => {
+        const request = indexedDB.open("ai-executive");
+        request.onupgradeneeded = () => {
+          const store = request.result.createObjectStore("entities", { keyPath: "id" });
+          for (const field of ["type", "status", "workspaceId", "updatedAt"]) store.createIndex(field, field);
+        };
+        request.onsuccess = () => resolve(request.result);
+        request.onerror = () => reject(request.error);
+      });
+      await new Promise<void>((resolve, reject) => {
+        const tx = database.transaction("entities", "readwrite");
+        tx.objectStore("entities").put({ id: taskId, type: "task", title: "Jen v tomto nikdy nesynchronizovaném prohlížeči",
+          status: "open", workspaceId: "personal", properties: { inbox: true }, createdAt: Date.now(), updatedAt: Date.now() });
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => reject(tx.error);
+      });
+      database.close();
+      localStorage.removeItem("ai-executive-server-synced");
+      localStorage.removeItem("ai-executive-restore-generation");
+      localStorage.setItem("ai-executive-pending-sync", "1");
+    }, id);
+
+    const refused = await fresh.evaluate(async () => {
+      const response = await fetch("/api/context/claims", { method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action: "create", workspaceId: "personal", id: crypto.randomUUID(),
+          idempotencyKey: crypto.randomUUID(), expectedRevision: 0,
+          subject: { entityId: "workspace:personal" }, predicate: "e2e.backup.no-sync",
+          literal: { type: "string", value: "must not erase local task" }, freshness: "current", sensitivity: "normal" }) });
+      return { status: response.status, code: (await response.json()).code };
+    });
+    expect(refused).toEqual({ status: 409, code: "restored" });
+    await expect(fresh.getByRole("alertdialog", { name: "Lokální změny jsou chráněné" }))
+      .toBeVisible({ timeout: 30_000 });
+    const local = await fresh.evaluate(async taskId => {
+      const db = await new Promise<IDBDatabase>((resolve, reject) => {
+        const req = indexedDB.open("ai-executive"); req.onsuccess = () => resolve(req.result); req.onerror = () => reject(req.error);
+      });
+      const entity = await new Promise<{ id: string } | undefined>((resolve, reject) => {
+        const req = db.transaction("entities").objectStore("entities").get(taskId);
+        req.onsuccess = () => resolve(req.result); req.onerror = () => reject(req.error);
+      });
+      db.close();
+      return { entity, pending: localStorage.getItem("ai-executive-pending-sync"),
+        generation: localStorage.getItem("ai-executive-restore-generation"),
+        hold: localStorage.getItem("ai-executive-offline-recovery-hold") };
+    }, id);
+    expect(local.entity?.id).toBe(id);
+    expect(local.pending).toBe("1");
+    expect(local.generation).toBeNull();
+    expect(local.hold).not.toBeNull();
+    expect((await serverEntities(owner)).some(entity => entity.id === id)).toBe(false);
+  } finally {
+    releaseInitialStore();
+    await freshContext.close();
+    await ownerContext.close();
+  }
+});
+
+test("an ordinary pull and save work when storage refuses redundant generation writes", async ({ browser }) => {
+  const id = `e2e-backup-storage-readonly-${stamp}`;
+  const title = "Běžný pull: bez zbytečného přepsání generace";
+  const changed = "Běžný pull: následná změna je uložena";
+  const { first, second } = await twoDevices(browser);
+  try {
+    await first.page.goto("/");
+    await second.page.goto("/?view=Inbox");
+    await waitUntilSynced(first.page);
+    await waitUntilSynced(second.page);
+    const generation = await second.page.evaluate(() => localStorage.getItem("ai-executive-restore-generation"));
+    expect(generation).not.toBeNull();
+    // Simulate a browser whose storage can no longer write this specific key.
+    // A normal revision change already has the correct durable generation.
+    await second.page.evaluate(() => {
+      const original = Storage.prototype.setItem;
+      Storage.prototype.setItem = function(key: string, value: string) {
+        if (this === localStorage && key === "ai-executive-restore-generation")
+          throw new DOMException("Storage is read-only", "QuotaExceededError");
+        return original.call(this, key, value);
+      };
+    });
+    await setStore(first.page, [task(id, title)]);
+    await remoteWakeUp(second.page);
+    await expect(second.page.locator("article", { hasText: title }).first()).toBeVisible({ timeout: 20_000 });
+    expect(await second.page.evaluate(() => localStorage.getItem("ai-executive-restore-generation"))).toBe(generation);
+    // The application must remain editable, not just display an offline copy.
+    await second.page.locator("article", { hasText: title }).first().click();
+    const edit = second.page.locator("input.titleEdit");
+    await edit.fill(changed);
+    await edit.blur();
+    await expect.poll(async () => (await serverEntities(first.page)).find((entity) => entity.id === id)?.title,
+      { timeout: 30_000 }).toBe(changed);
+  } finally {
+    await second.context.close();
+    await cleanUp(first.page);
+    await first.context.close();
+  }
+});
 
 test("restoring a full backup returns records, Context with its Undo step, sources and note versions", async ({ page }) => {
   const kept = `e2e-backup-kept-${stamp}`, removed = `e2e-backup-removed-${stamp}`, added = `e2e-backup-added-${stamp}`, noteId = `e2e-backup-note-${stamp}`;
@@ -596,6 +777,12 @@ test("a restore found by one tab reloads its sibling tab too: restored Context, 
     await openContext(tab1);
     await openContext(tab2);
     await expect(tab2.locator(".contextClaimCard", { hasText: predicate })).toBeVisible();
+    // Assert that the second tab really reloads, instead of merely
+    // becoming read-only after the first tab stamps a new generation.
+    await tab2.addInitScript(() => {
+      sessionStorage.setItem("e2e-sibling-reloaded",
+        String(Number(sessionStorage.getItem("e2e-sibling-reloaded") || "0") + 1));
+    });
     // The sibling holds a Context draft typed before the restore.
     await tab2.locator("#context-claim-editor").getByLabel("Vztah nebo vlastnost").fill("e2e.backup.stale-draft");
     await tab2.locator("#context-claim-editor").getByLabel("Hodnota", { exact: true }).fill("rozepsáno před obnovením");
@@ -604,6 +791,7 @@ test("a restore found by one tab reloads its sibling tab too: restored Context, 
     await remoteWakeUp(tab1);
     await expect(tab1.locator(".restoredNotice")).toContainText("Data byla obnovena ze zálohy.", { timeout: 30_000 });
     await expect(tab2.locator(".restoredNotice")).toContainText("Data byla obnovena ze zálohy.", { timeout: 30_000 });
+    expect(Number(await tab2.evaluate(() => sessionStorage.getItem("e2e-sibling-reloaded")))).toBeGreaterThan(0);
     await expect(tab2.locator(".contextClaimCard", { hasText: predicate })).toHaveCount(0);
     await expect(tab2.locator("#context-claim-editor").getByLabel("Vztah nebo vlastnost")).not.toHaveValue("e2e.backup.stale-draft");
     await expect(tab2.locator("#context-claim-editor").getByLabel("Hodnota", { exact: true })).toHaveValue("");
@@ -681,6 +869,367 @@ test("when the local copy cannot be replaced during adoption the page still relo
     await first.context.close();
     await second.context.close();
   }
+});
+
+test("failed replacement, fallback clear and database deletion keep the old generation and block stale replay", async ({ browser }) => {
+  const kept = `e2e-backup-failclosed-${stamp}`, local = `e2e-backup-failclosed-local-${stamp}`;
+  const markerKey = "ai-executive-pending-deletions:0000000000000-e2e-000002";
+  const { first, second } = await twoDevices(browser);
+  try {
+    await first.page.goto("/");
+    await waitUntilSynced(first.page);
+    await setStore(first.page, [task(kept, "Bezpečné zotavení: úkol na serveru")]);
+    await second.page.goto("/?view=Inbox");
+    await waitUntilSynced(second.page);
+    const name = await createManualBackup(first.page);
+    const oldGeneration = await second.page.evaluate(async ({ id, marker }) => {
+      const generation = localStorage.getItem("ai-executive-restore-generation");
+      const database = await new Promise<IDBDatabase>((resolve, reject) => {
+        const request = indexedDB.open("ai-executive");
+        request.onsuccess = () => resolve(request.result);
+        request.onerror = () => reject(request.error);
+      });
+      await new Promise<void>((resolve, reject) => {
+        const transaction = database.transaction("entities", "readwrite");
+        transaction.objectStore("entities").put({ id, type: "task", title: "Nesmí se odeslat po chybě obnovy",
+          status: "open", workspaceId: "personal", properties: { inbox: true }, createdAt: Date.now(), updatedAt: Date.now() + 60_000 });
+        transaction.oncomplete = () => resolve();
+        transaction.onerror = () => reject(transaction.error);
+      });
+      database.close();
+      localStorage.setItem(marker, id);
+      // Fail the main transaction and both destructive fallbacks. A missing
+      // quota is not enough: the existing fallback-clear test already passes.
+      const fail = () => { throw new DOMException("Injected storage failure", "QuotaExceededError"); };
+      const store = IDBObjectStore.prototype as unknown as Record<string, unknown>;
+      for (const method of ["add", "put", "clear"]) store[method] = fail;
+      (IDBFactory.prototype as unknown as Record<string, unknown>).deleteDatabase = fail;
+      return generation;
+    }, { id: local, marker: markerKey });
+    expect(oldGeneration).not.toBeNull();
+    expect(await restoreByApi(first.page, name)).toBe(200);
+    const currentGeneration = await first.page.evaluate(async () =>
+      (await fetch("/api/store", { cache: "no-store" }).then((response) => response.json())).restoreGeneration as number);
+    expect(Number(oldGeneration)).toBeLessThan(currentGeneration);
+    await remoteWakeUp(second.page);
+    await expect(second.page.getByRole("alertdialog", { name: "Lokální změny jsou chráněné" }))
+      .toBeVisible({ timeout: 30_000 });
+    const localCopy = await second.page.evaluate(async ({ id, marker }) => {
+      const database = await new Promise<IDBDatabase>((resolve, reject) => {
+        const request = indexedDB.open("ai-executive");
+        request.onsuccess = () => resolve(request.result);
+        request.onerror = () => reject(request.error);
+      });
+      const record = await new Promise<unknown>((resolve, reject) => {
+        const request = database.transaction("entities").objectStore("entities").get(id);
+        request.onsuccess = () => resolve(request.result);
+        request.onerror = () => reject(request.error);
+      });
+      database.close();
+      return { record, generation: localStorage.getItem("ai-executive-restore-generation"),
+        pendingDeletion: localStorage.getItem(marker), hold: localStorage.getItem("ai-executive-offline-recovery-hold") };
+    }, { id: local, marker: markerKey });
+    expect(localCopy.record).toMatchObject({ id: local, title: "Nesmí se odeslat po chybě obnovy" });
+    expect(localCopy.generation).toBe(oldGeneration);
+    expect(localCopy.pendingDeletion).toBe(local);
+    expect(localCopy.hold).not.toBeNull();
+    expect((await serverEntities(first.page)).map((entity) => entity.id)).not.toContain(local);
+    // The fail-closed marker is durable across reloads. This must not
+    // silently adopt old data as though they belonged to the new generation.
+    await second.page.reload();
+    await expect(second.page.getByRole("alertdialog", { name: "Lokální změny jsou chráněné" })).toBeVisible();
+    expect(await second.page.evaluate(() => localStorage.getItem("ai-executive-restore-generation"))).toBe(oldGeneration);
+    expect((await serverEntities(first.page)).map((entity) => entity.id)).not.toContain(local);
+  } finally {
+    await first.context.close();
+    await second.context.close();
+  }
+});
+
+// Force each side of the race to queue behind a known Web Lock holder.
+// No sleeps: navigator.locks.query confirms the order before the gate opens.
+async function gateRecoveryLock(page: Page) {
+  await page.evaluate(() => {
+    const gate = window as typeof window & { e2eRecoveryLockHeld?: boolean; e2eReleaseRecoveryLock?: () => void };
+    void navigator.locks.request("ai-executive-recovery-data", async () => {
+      await new Promise<void>((resolve) => {
+        gate.e2eReleaseRecoveryLock = resolve;
+        gate.e2eRecoveryLockHeld = true;
+      });
+    });
+  });
+  await expect.poll(() => page.evaluate(async () =>
+    (await navigator.locks.query()).held?.some((lock) => lock.name === "ai-executive-recovery-data") ?? false)).toBe(true);
+}
+async function pendingRecoveryLocks(page: Page, count: number) {
+  await expect.poll(() => page.evaluate(async () =>
+    (await navigator.locks.query()).pending?.filter((lock) => lock.name === "ai-executive-recovery-data").length ?? 0),
+  { timeout: 15_000 }).toBe(count);
+}
+
+test("owner adoption and D2b recovery hold serialize across sibling tabs, regardless of which acquires the lock first", async ({ browser }) => {
+  for (const firstToLock of ["hold", "adopt"] as const) {
+    const ownerContext = await browser.newContext({ storageState: sessionFile, locale: "cs-CZ" });
+    const tabs = await browser.newContext({ storageState: sessionFile, locale: "cs-CZ" });
+    const owner = await ownerContext.newPage(), adopter = await tabs.newPage(), holder = await tabs.newPage();
+    const taskId = `e2e-backup-lock-${firstToLock}-${stamp}`;
+    const localId = `e2e-backup-lock-local-${firstToLock}-${stamp}`;
+    const markerKey = `ai-executive-pending-deletions:0000000000000-e2e-${firstToLock}`;
+    const draftKey = `ai-executive-notes-drafts:e2e:${localId}`;
+    try {
+      await owner.goto("/");
+      await waitUntilSynced(owner);
+      await setStore(owner, [task(taskId, "Záloha: chráněný souběh")]);
+      await adopter.goto("/?view=Inbox");
+      await waitUntilSynced(adopter);
+      await holder.goto("/?view=Inbox");
+      await waitUntilSynced(holder);
+      const oldGeneration = await adopter.evaluate(() => localStorage.getItem("ai-executive-restore-generation"));
+      expect(oldGeneration).not.toBeNull();
+      const name = await createManualBackup(owner);
+      await gateRecoveryLock(adopter);
+      expect(await restoreByApi(owner, name)).toBe(200);
+      // Both tabs still have the original generation and unsent local content.
+      // The holder receives an uncertified generation (D2b path), while the
+      // adopter reads the certified owner restore. They compete for one lock.
+      await adopter.evaluate(async ({ id, marker, draft }) => {
+        const db = await new Promise<IDBDatabase>((resolve, reject) => {
+          const request = indexedDB.open("ai-executive");
+          request.onsuccess = () => resolve(request.result);
+          request.onerror = () => reject(request.error);
+        });
+        await new Promise<void>((resolve, reject) => {
+          const tx = db.transaction("entities", "readwrite");
+          tx.objectStore("entities").put({ id, type: "task", title: "Lokální před obnovením",
+            status: "open", workspaceId: "personal", properties: { inbox: true },
+            createdAt: Date.now(), updatedAt: Date.now() + 60_000 });
+          tx.oncomplete = () => resolve();
+          tx.onerror = () => reject(tx.error);
+        });
+        db.close();
+        localStorage.setItem(marker, id);
+        localStorage.setItem(draft, JSON.stringify({ id, page: "e2e", text: "Rozpracovaný text", base: "", at: Date.now() }));
+        localStorage.setItem("ai-executive-pending-sync", "1");
+      }, { id: localId, marker: markerKey, draft: draftKey });
+      // The pending-sync marker belongs to both sibling tabs. The holder
+      // may receive a restored-generation 409 from PUT rather than a GET;
+      // strip owner proof on either response so the real D2b hold wins first.
+      await holder.route("**/api/store", async (route) => {
+        const response = await route.fetch();
+        if (!response.ok() && response.status() !== 409)
+          return route.fulfill({ response });
+        const snapshot = await response.json();
+        delete snapshot.restoreKind;
+        await route.fulfill({ response, json: snapshot });
+      });
+      if (firstToLock === "hold") {
+        await remoteWakeUp(holder);
+        await pendingRecoveryLocks(adopter, 1);
+        await remoteWakeUp(adopter);
+      } else {
+        await remoteWakeUp(adopter);
+        await pendingRecoveryLocks(adopter, 1);
+        await remoteWakeUp(holder);
+      }
+      // Pulls share the outer ai-executive-sync Web Lock: the first pull is
+      // queued on recovery-data, while the second waits for the sync lock.
+      // Requiring two recovery-data requests would contradict that ordering.
+      await pendingRecoveryLocks(adopter, 1);
+      await expect.poll(() => adopter.evaluate(async () =>
+        (await navigator.locks.query()).pending?.some((lock) => lock.name === "ai-executive-sync") ?? false),
+      { timeout: 15_000 }).toBe(true);
+      await adopter.evaluate(() => (window as typeof window & { e2eReleaseRecoveryLock: () => void }).e2eReleaseRecoveryLock());
+      if (firstToLock === "hold") {
+        await expect(holder.getByRole("alertdialog", { name: "Lokální změny jsou chráněné" })).toBeVisible({ timeout: 30_000 });
+        await expect(adopter.getByRole("alertdialog", { name: "Lokální změny jsou chráněné" })).toBeVisible({ timeout: 30_000 });
+      } else {
+        await expect(adopter.locator(".restoredNotice")).toContainText("Data byla obnovena ze zálohy.", { timeout: 30_000 });
+        await expect(holder.getByRole("alertdialog", { name: "Lokální změny jsou chráněné" })).toHaveCount(0);
+      }
+      const state = await holder.evaluate(async ({ id, marker, draft }) => {
+        const db = await new Promise<IDBDatabase>((resolve, reject) => {
+          const request = indexedDB.open("ai-executive");
+          request.onsuccess = () => resolve(request.result);
+          request.onerror = () => reject(request.error);
+        });
+        const record = await new Promise<unknown>((resolve, reject) => {
+          const request = db.transaction("entities").objectStore("entities").get(id);
+          request.onsuccess = () => resolve(request.result);
+          request.onerror = () => reject(request.error);
+        });
+        db.close();
+        return { record, marker: localStorage.getItem(marker), draft: localStorage.getItem(draft),
+          generation: localStorage.getItem("ai-executive-restore-generation"),
+          hold: localStorage.getItem("ai-executive-offline-recovery-hold") };
+      }, { id: localId, marker: markerKey, draft: draftKey });
+      if (firstToLock === "hold") {
+        expect(state.record).toMatchObject({ id: localId });
+        expect(state.marker).toBe(localId);
+        expect(state.draft).toContain("Rozpracovaný text");
+        expect(state.generation).toBe(oldGeneration);
+        expect(state.hold).not.toBeNull();
+        await holder.reload();
+        await expect(holder.getByRole("alertdialog", { name: "Lokální změny jsou chráněné" })).toBeVisible();
+      } else {
+        expect(state.record).toBeUndefined();
+        expect(state.marker).toBeNull();
+        expect(state.draft).toBeNull();
+        expect(Number(state.generation)).toBeGreaterThan(Number(oldGeneration));
+        expect(state.hold).toBeNull(); // The late hold must not be installed over adopted data.
+      }
+      expect((await serverEntities(owner)).map((entry) => entry.id)).not.toContain(localId);
+    } finally {
+      await ownerContext.close();
+      await tabs.close();
+    }
+  }
+});
+
+test("owner adoption without Web Locks fails closed instead of replacing local data", async ({ browser }) => {
+  const { first, second } = await twoDevices(browser);
+  try {
+    await first.page.goto("/");
+    await waitUntilSynced(first.page);
+    await second.page.goto("/?view=Inbox");
+    await waitUntilSynced(second.page);
+    const name = await createManualBackup(first.page);
+    const before = await second.page.evaluate(() => localStorage.getItem("ai-executive-restore-generation"));
+    expect(await restoreByApi(first.page, name)).toBe(200);
+    await second.page.evaluate(() => {
+      Object.defineProperty(navigator, "locks", { configurable: true, value: undefined });
+      localStorage.setItem("ai-executive-pending-sync", "1");
+    });
+    await remoteWakeUp(second.page);
+    await expect(second.page.getByRole("alertdialog", { name: "Lokální změny jsou chráněné" }))
+      .toBeVisible({ timeout: 30_000 });
+    expect(await second.page.evaluate(() => localStorage.getItem("ai-executive-restore-generation"))).toBe(before);
+    expect(await second.page.evaluate(() => localStorage.getItem("ai-executive-pending-sync"))).toBe("1");
+  } finally {
+    await first.context.close();
+    await second.context.close();
+  }
+});
+
+
+test("a stale sibling cannot write old data during or after owner adoption, even without receiving reload events", async ({ browser }) => {
+  const id = `e2e-backup-stale-sibling-${stamp}`;
+  const title = "Souběh záložek: stav v záloze";
+  const owner = await browser.newContext({ storageState: sessionFile, locale: "cs-CZ" });
+  const tabs = await browser.newContext({ storageState: sessionFile, locale: "cs-CZ" });
+  const first = await owner.newPage(), adopter = await tabs.newPage(), stale = await tabs.newPage();
+  try {
+    await first.goto("/");
+    await waitUntilSynced(first);
+    await setStore(first, [task(id, title)]);
+    const name = await createManualBackup(first);
+    await adopter.goto(`/?task=${id}`);
+    await waitUntilSynced(adopter);
+    // A genuinely unnotified sibling: neither the generation notification,
+    // nor the NEW final owner-fence-removal notification may reload the page.
+    await stale.addInitScript(() => {
+      sessionStorage.setItem("e2e-stale-load-count",
+        String(Number(sessionStorage.getItem("e2e-stale-load-count") || "0") + 1));
+      Object.defineProperty(window, "BroadcastChannel", { value: undefined, configurable: true });
+      window.addEventListener("storage", (event) => {
+        if (event.key === "ai-executive-restore-generation" ||
+            event.key === "ai-executive-owner-adoption-fence")
+          event.stopImmediatePropagation();
+      }, true);
+    });
+    await stale.goto(`/?task=${id}`);
+    await waitUntilSynced(stale);
+    await expect(stale.locator("input.titleEdit")).toHaveValue(title);
+    // Keep an earlier IndexedDB transaction alive: adoption obtains the
+    // recovery lock and publishes the fence, then waits for this transaction.
+    await stale.evaluate(async () => {
+      const state = window as typeof window & { e2eReleaseStore?: boolean };
+      const database = await new Promise<IDBDatabase>((resolve, reject) => {
+        const request = indexedDB.open("ai-executive");
+        request.onsuccess = () => resolve(request.result);
+        request.onerror = () => reject(request.error);
+      });
+      const tx = database.transaction("entities", "readwrite");
+      const store = tx.objectStore("entities");
+      const keepAlive = () => { if (!state.e2eReleaseStore) store.get("e2e-hold").onsuccess = keepAlive; };
+      keepAlive();
+      tx.oncomplete = () => database.close();
+    });
+    expect(await restoreByApi(first, name)).toBe(200);
+    await remoteWakeUp(adopter);
+    await expect.poll(() => stale.evaluate(() =>
+      localStorage.getItem("ai-executive-owner-adoption-fence"))).not.toBeNull();
+    // The stale tab still shows the old title. Its normal title save must not
+    // add any old entity or pending marker while the adoption is in flight.
+    const field = stale.locator("input.titleEdit");
+    await field.fill("Souběh záložek: nepovolený zápis během převzetí");
+    await field.blur();
+    await stale.evaluate(() => { (window as typeof window & { e2eReleaseStore?: boolean }).e2eReleaseStore = true; });
+    await expect(adopter.locator(".restoredNotice")).toContainText("Data byla obnovena ze zálohy.", { timeout: 30_000 });
+    await expect.poll(() => stale.evaluate(() => localStorage.getItem("ai-executive-owner-adoption-fence"))).toBeNull();
+    expect(await stale.evaluate(() => sessionStorage.getItem("e2e-stale-load-count"))).toBe("1");
+    // The same stale tab is not allowed to write under the new generation,
+    // even though it has deliberately ignored both reload channels.
+    await field.fill("Souběh záložek: nepovolený zápis po převzetí");
+    await field.blur();
+    expect(await stale.evaluate(() => sessionStorage.getItem("e2e-stale-load-count"))).toBe("1");
+    const local = await stale.evaluate(async taskId => {
+      const db = await new Promise<IDBDatabase>((resolve, reject) => {
+        const req = indexedDB.open("ai-executive"); req.onsuccess = () => resolve(req.result); req.onerror = () => reject(req.error);
+      });
+      const result = await new Promise<{ title?: string } | undefined>((resolve, reject) => {
+        const req = db.transaction("entities").objectStore("entities").get(taskId);
+        req.onsuccess = () => resolve(req.result); req.onerror = () => reject(req.error);
+      });
+      db.close(); return { title: result?.title, generation: localStorage.getItem("ai-executive-restore-generation"),
+        pending: localStorage.getItem("ai-executive-pending-sync") };
+    }, id);
+    expect(local.title).toBe(title);
+    expect(local.pending).toBeNull();
+    expect((await serverEntities(first)).find(entity => entity.id === id)?.title).toBe(title);
+  } finally { await owner.close(); await tabs.close(); }
+});
+
+test("a selectively undeletable local tombstone fails owner adoption closed without stamping the new generation", async ({ browser }) => {
+  const id = `e2e-backup-stuck-tombstone-${stamp}`;
+  const { first, second } = await twoDevices(browser);
+  const deletionKey = "ai-executive-pending-deletions:0000000000000-e2e-stuck";
+  try {
+    await first.page.goto("/");
+    await waitUntilSynced(first.page);
+    await setStore(first.page, [task(id, "Obnova: serverový úkol musí zůstat")]);
+    await second.page.goto("/?view=Inbox");
+    await waitUntilSynced(second.page);
+    const name = await createManualBackup(first.page);
+    const oldGeneration = await second.page.evaluate(({ marker, taskId }) => {
+      localStorage.setItem(marker, taskId);
+      const original = Storage.prototype.removeItem;
+      Storage.prototype.removeItem = function(this: Storage, key: string) {
+        if (key === marker) throw new DOMException("Injected selective cleanup failure", "QuotaExceededError");
+        return original.call(this, key);
+      };
+      return localStorage.getItem("ai-executive-restore-generation");
+    }, { marker: deletionKey, taskId: id });
+    expect(oldGeneration).not.toBeNull();
+    expect(await restoreByApi(first.page, name)).toBe(200);
+    await remoteWakeUp(second.page);
+    await expect(second.page.getByRole("alertdialog", { name: "Lokální změny jsou chráněné" }))
+      .toBeVisible({ timeout: 30_000 });
+    const state = await second.page.evaluate((marker) => ({
+      generation: localStorage.getItem("ai-executive-restore-generation"),
+      deletion: localStorage.getItem(marker),
+      fence: localStorage.getItem("ai-executive-owner-adoption-fence"),
+      hold: localStorage.getItem("ai-executive-offline-recovery-hold"),
+    }), deletionKey);
+    expect(state.generation).toBe(oldGeneration);
+    expect(state.deletion).toBe(id);
+    expect(state.fence).not.toBeNull();
+    expect(state.hold).not.toBeNull();
+    expect((await serverEntities(first.page)).some(entry => entry.id === id)).toBe(true);
+    await second.page.reload();
+    await expect(second.page.getByRole("alertdialog", { name: "Lokální změny jsou chráněné" }))
+      .toBeVisible({ timeout: 30_000 });
+    expect((await serverEntities(first.page)).some(entry => entry.id === id)).toBe(true);
+  } finally { await first.context.close(); await second.context.close(); }
 });
 
 test("a browser that never stored a generation and holds an offline change adopts the restored data when the server has been restored", async ({ browser }) => {
@@ -774,4 +1323,673 @@ test("the backup section fits a 390 px screen and its controls are 44 px high", 
     return { covered: !(top === last || last.contains(top)), bottom: box.bottom, height: window.innerHeight };
   });
   expect(covered.covered).toBe(false);
+});
+
+test("a committed owner restore retries a failed final fence removal on reload without a false D2b hold", async ({ browser }) => {
+  const id = `e2e-backup-fence-retry-${stamp}`;
+  const { first, second } = await twoDevices(browser);
+  try {
+    await first.page.goto("/");
+    await waitUntilSynced(first.page);
+    await setStore(first.page, [task(id, "Záloha po opravě ochranné značky")]);
+    await second.page.goto("/?view=Inbox");
+    await waitUntilSynced(second.page);
+    const backup = await createManualBackup(first.page);
+    const oldGeneration = await second.page.evaluate(() => localStorage.getItem("ai-executive-restore-generation"));
+    expect(oldGeneration).not.toBeNull();
+
+    // Fail ONLY the final removeItem, after the replacement transaction,
+    // pending-marker cleanup and new generation have all committed.
+    await second.page.evaluate(() => {
+      const original = Storage.prototype.removeItem;
+      Storage.prototype.removeItem = function(this: Storage, key: string) {
+        if (key === "ai-executive-owner-adoption-fence") {
+          sessionStorage.setItem("e2e-owner-fence-remove-failed", "1");
+          throw new DOMException("Injected final-fence removal failure", "QuotaExceededError");
+        }
+        return original.call(this, key);
+      };
+    });
+    expect(await restoreByApi(first.page, backup)).toBe(200);
+    await remoteWakeUp(second.page);
+
+    // The tab reloads instead of creating an invalid D2b rescue hold.
+    // The new page no longer has the injected Storage prototype and can
+    // finish the committed adoption safely under the shared Web Lock.
+    await expect(second.page.locator(".restoredNotice")).toContainText("Data byla obnovena ze zálohy.", { timeout: 30_000 });
+    const state = await second.page.evaluate(() => ({
+      injected: sessionStorage.getItem("e2e-owner-fence-remove-failed"),
+      fence: localStorage.getItem("ai-executive-owner-adoption-fence"),
+      hold: localStorage.getItem("ai-executive-offline-recovery-hold"),
+      generation: localStorage.getItem("ai-executive-restore-generation"),
+    }));
+    expect(state.injected).toBe("1");
+    expect(state.fence).toBeNull();
+    expect(state.hold).toBeNull();
+    expect(Number(state.generation)).toBeGreaterThan(Number(oldGeneration));
+    await waitUntilSynced(second.page);
+    await expect(second.page.getByText("Záloha po opravě ochranné značky")).toBeVisible();
+    expect((await serverEntities(first.page)).some(entity => entity.id === id)).toBe(true);
+  } finally {
+    await first.context.close();
+    await second.context.close();
+  }
+});
+
+// Crash point: the certified owner's fence was persisted, but no IndexedDB
+// replacement or generation stamp occurred yet. Restart must verify the
+// current server origin and replay the adoption instead of stranding the tab.
+test("restart safely completes a certified owner adoption interrupted before its generation commit", async ({ browser }) => {
+  const kept = `e2e-backup-crash-keep-${stamp}`, local = `e2e-backup-crash-local-${stamp}`;
+  const marker = "ai-executive-pending-deletions:0000000000000-crash";
+  const { first, second } = await twoDevices(browser);
+  try {
+    await first.page.goto("/");
+    await waitUntilSynced(first.page);
+    await setStore(first.page, [task(kept, "Přerušená obnova: úkol ze zálohy")]);
+    await second.page.goto("/?view=Inbox");
+    await waitUntilSynced(second.page);
+    const name = await createManualBackup(first.page);
+    const oldGeneration = await second.page.evaluate(async ({ id, markerKey }) => {
+      const old = localStorage.getItem("ai-executive-restore-generation");
+      const db = await new Promise<IDBDatabase>((resolve, reject) => {
+        const req = indexedDB.open("ai-executive"); req.onsuccess = () => resolve(req.result); req.onerror = () => reject(req.error);
+      });
+      await new Promise<void>((resolve, reject) => {
+        const tx = db.transaction("entities", "readwrite");
+        tx.objectStore("entities").put({ id, type: "task", title: "Jen ve staré lokální kopii",
+          status: "open", workspaceId: "personal", properties: { inbox: true },
+          createdAt: Date.now(), updatedAt: Date.now() + 60_000 });
+        tx.oncomplete = () => resolve(); tx.onerror = () => reject(tx.error);
+      });
+      db.close();
+      localStorage.setItem(markerKey, id);
+      return old;
+    }, { id: local, markerKey: marker });
+    expect(oldGeneration).not.toBeNull();
+    expect(await restoreByApi(first.page, name)).toBe(200);
+    const latest = await first.page.evaluate(async () =>
+      (await fetch("/api/store", { cache: "no-store" }).then(r => r.json())).restoreGeneration as number);
+    expect(latest).toBeGreaterThan(Number(oldGeneration));
+    // Exactly the durable metadata that adoption writes BEFORE the IDB
+    // transaction; simulate termination by reloading without doing that work.
+    await second.page.evaluate(({ generation, known }) => {
+      localStorage.setItem("ai-executive-owner-adoption-fence",
+        JSON.stringify({ version: 1, observedGeneration: generation, knownGeneration: known }));
+    }, { generation: latest, known: Number(oldGeneration) });
+    // A free startup Web Lock must be ACQUIRED and used for certified replay,
+    // rather than silently falling through the read-only raw rescue fallback.
+    await second.page.addInitScript(() => {
+      const locks = navigator.locks;
+      const request = locks.request;
+      Object.defineProperty(locks, "request", {
+        configurable: true,
+        value: (...args: unknown[]) => {
+          if (args[0] === "ai-executive-recovery-data" && args.length === 3) {
+            const [name, options, callback] = args as [string, { signal: AbortSignal }, () => Promise<unknown>];
+            return Reflect.apply(request, locks, [name, options, async () => {
+              sessionStorage.setItem("e2e-owner-restart-lock-acquired", "1");
+              return callback();
+            }]);
+          }
+          return Reflect.apply(request, locks, args);
+        },
+      });
+    });
+    await second.page.reload();
+    await expect(second.page.locator(".restoredNotice"))
+      .toContainText("Data byla obnovena ze zálohy.", { timeout: 30_000 });
+    await waitUntilSynced(second.page);
+    expect(await second.page.evaluate(() => sessionStorage.getItem("e2e-owner-restart-lock-acquired"))).toBe("1");
+    await expect(second.page.getByRole("alertdialog", { name: "Lokální změny jsou chráněné" })).toHaveCount(0);
+    const state = await second.page.evaluate(async ({ id, markerKey }) => {
+      const db = await new Promise<IDBDatabase>((resolve, reject) => {
+        const req = indexedDB.open("ai-executive"); req.onsuccess = () => resolve(req.result); req.onerror = () => reject(req.error);
+      });
+      const local = await new Promise<unknown>((resolve, reject) => {
+        const req = db.transaction("entities").objectStore("entities").get(id);
+        req.onsuccess = () => resolve(req.result); req.onerror = () => reject(req.error);
+      });
+      db.close();
+      return { local, fence: localStorage.getItem("ai-executive-owner-adoption-fence"),
+        hold: localStorage.getItem("ai-executive-offline-recovery-hold"),
+        marker: localStorage.getItem(markerKey),
+        generation: localStorage.getItem("ai-executive-restore-generation") };
+    }, { id: local, markerKey: marker });
+    expect(state.local).toBeUndefined();
+    expect(state.fence).toBeNull();
+    expect(state.hold).toBeNull();
+    expect(state.marker).toBeNull();
+    expect(state.generation).toBe(String(latest));
+    expect((await serverEntities(first.page)).map(x => x.id)).not.toContain(local);
+    expect((await serverEntities(first.page)).map(x => x.id)).toContain(kept);
+  } finally { await first.context.close(); await second.context.close(); }
+});
+
+test("an interrupted owner adoption can be rescued offline and resumes when the server returns", async ({ browser }) => {
+  const { first, second } = await twoDevices(browser);
+  try {
+    await first.page.goto("/");
+    await waitUntilSynced(first.page);
+    await second.page.goto("/?view=Inbox");
+    await waitUntilSynced(second.page);
+    const name = await createManualBackup(first.page);
+    const old = await second.page.evaluate(() => localStorage.getItem("ai-executive-restore-generation"));
+    expect(old).not.toBeNull();
+    expect(await restoreByApi(first.page, name)).toBe(200);
+    const observed = await first.page.evaluate(async () =>
+      (await fetch("/api/store", { cache: "no-store" }).then(r => r.json())).restoreGeneration as number);
+    await second.page.evaluate(({ known, target }) => {
+      localStorage.setItem("ai-executive-owner-adoption-fence",
+        JSON.stringify({ version: 1, knownGeneration: known, observedGeneration: target }));
+    }, { known: Number(old), target: observed });
+    await second.page.route("**/api/store", route => route.abort("failed"));
+    await second.page.reload();
+    await expect(second.page.getByRole("alertdialog", { name: "Lokální změny jsou chráněné" }))
+      .toBeVisible({ timeout: 30_000 });
+    const hold = await second.page.evaluate(() => ({
+      hold: localStorage.getItem("ai-executive-offline-recovery-hold"),
+      fence: localStorage.getItem("ai-executive-owner-adoption-fence"),
+      generation: localStorage.getItem("ai-executive-restore-generation"),
+    }));
+    expect(hold.fence).not.toBeNull();
+    expect(hold.generation).toBe(old);
+    expect(hold.hold).toBeNull(); // A transient outage must never create an irreversible D2b hold.
+    // The owner fence alone continues to prevent writes and permits a manual
+    // local-only rescue while offline. An interrupted copy may be incomplete.
+    await expect(second.page.getByText(/Místní kopie už může být částečně nahrazená/)).toBeVisible();
+    await expect(second.page.getByText(/Až bude spojení fungovat, načtěte stránku znovu/)).toBeVisible();
+    await second.page.unroute("**/api/store");
+    await second.page.reload();
+    await expect(second.page.locator(".restoredNotice"))
+      .toContainText("Data byla obnovena ze zálohy.", { timeout: 30_000 });
+    const resumed = await second.page.evaluate(() => ({
+      hold: localStorage.getItem("ai-executive-offline-recovery-hold"),
+      fence: localStorage.getItem("ai-executive-owner-adoption-fence"),
+      generation: localStorage.getItem("ai-executive-restore-generation"),
+    }));
+    expect(resumed).toEqual({ hold: null, fence: null, generation: String(observed) });
+    await expect(second.page.getByRole("alertdialog", { name: "Lokální změny jsou chráněné" })).toHaveCount(0);
+  } finally { await first.context.close(); await second.context.close(); }
+});
+
+test("a paused ordinary pull never stamps its stale generation after a sibling owner restore", async ({ browser }) => {
+  const id = `e2e-backup-delayed-generation-${stamp}`;
+  const ownerContext = await browser.newContext({ storageState: sessionFile, locale: "cs-CZ" });
+  const tabs = await browser.newContext({ storageState: sessionFile, locale: "cs-CZ" });
+  const owner = await ownerContext.newPage(), delayed = await tabs.newPage(), adopter = await tabs.newPage();
+  try {
+    await owner.goto("/");
+    await waitUntilSynced(owner);
+    await delayed.addInitScript(() => {
+      // Keep this tab stale while the sibling commits the restore.
+      Object.defineProperty(window, "BroadcastChannel", { configurable: true, value: undefined });
+      window.addEventListener("storage", event => {
+        if (event.key === "ai-executive-restore-generation" ||
+            event.key === "ai-executive-owner-adoption-fence") event.stopImmediatePropagation();
+      }, true);
+    });
+    await delayed.goto("/?view=Inbox");
+    await waitUntilSynced(delayed);
+    const oldGeneration = await delayed.evaluate(() => localStorage.getItem("ai-executive-restore-generation"));
+    expect(oldGeneration).not.toBeNull();
+
+    await setStore(owner, [task(id, "Opožděné potvrzení generace")]);
+    const backupName = await createManualBackup(owner);
+    await openBackups(adopter);
+
+    // Pause only this page's NORMAL generation commit, after applySnapshot
+    // has completed its IndexedDB transaction. This does not acquire the
+    // actual recovery-data lock, so the owner's adoption can finish first.
+    await delayed.evaluate(() => {
+      const state = window as unknown as { e2eStampPending?: boolean; e2eStampComplete?: boolean; e2eReleaseStamp?: () => void };
+      const realLocks = navigator.locks;
+      const original = (name: string, callback: () => Promise<unknown>) =>
+        realLocks.request(name, callback);
+      Object.defineProperty(navigator, "locks", { configurable: true, value: {
+        request: (name: string, callback: () => Promise<unknown>) => {
+          if (name !== "ai-executive-recovery-data") return original(name, callback);
+          state.e2eStampPending = true;
+          return new Promise<unknown>((resolve, reject) => {
+            state.e2eReleaseStamp = () => {
+              void original(name, callback).then(resolve, reject).finally(() => { state.e2eStampComplete = true; });
+            };
+          });
+        },
+      } });
+    });
+    await remoteWakeUp(delayed);
+    await delayed.waitForFunction(() => Boolean(
+      (window as unknown as { e2eStampPending?: boolean }).e2eStampPending,
+    ));
+
+    // The delayed normal pull HOLDS the outer sync lock while its generation
+    // stamp is paused. A normal focus pull on the adopter would queue behind
+    // that lock and never reach adoption; use the actual owner-certified 409
+    // path, which must fence writes and adopt immediately, outside that queue.
+    expect(await restoreByApi(owner, backupName)).toBe(200);
+    const refused = await adopter.evaluate(async () =>
+      (await fetch("/api/context/claims", { method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action: "create", workspaceId: "personal", idempotencyKey: crypto.randomUUID(),
+          id: crypto.randomUUID(), expectedRevision: 0, subject: { entityId: "workspace:personal" },
+          predicate: "e2e.backup.stale-generation", literal: { type: "string", value: "must be refused" },
+          freshness: "current", sensitivity: "normal" }) })).status);
+    expect(refused).toBe(409);
+    await expect(adopter.locator(".restoredNotice"))
+      .toContainText("Data byla obnovena ze zálohy.", { timeout: 30_000 });
+    const newGeneration = await adopter.evaluate(() => localStorage.getItem("ai-executive-restore-generation"));
+    expect(Number(newGeneration)).toBeGreaterThan(Number(oldGeneration));
+    expect(await adopter.evaluate(() => localStorage.getItem("ai-executive-owner-adoption-fence"))).toBeNull();
+
+    await delayed.evaluate(() => {
+      (window as unknown as { e2eReleaseStamp?: () => void }).e2eReleaseStamp?.();
+    });
+    await expect.poll(() => delayed.evaluate(() =>
+      localStorage.getItem("ai-executive-restore-generation"))).toBe(newGeneration);
+    // Wait for the exact delayed callback, not just a transient shared
+    // storage read which could precede the stale continuation.
+    await delayed.waitForFunction(() =>
+      (window as unknown as { e2eStampComplete?: boolean }).e2eStampComplete === true);
+    expect(await delayed.evaluate(() => localStorage.getItem("ai-executive-restore-generation")))
+      .toBe(newGeneration);
+    expect(await adopter.evaluate(() => localStorage.getItem("ai-executive-restore-generation"))).toBe(newGeneration);
+    expect((await serverEntities(owner)).some(entity => entity.id === id)).toBe(true);
+  } finally { await ownerContext.close(); await tabs.close(); }
+});
+
+test("a corrupt owner fence offers a real raw-only local rescue download, never a false D2b bundle", async ({ browser }, testInfo) => {
+  const id = `e2e-backup-invalid-fence-${stamp}`;
+  const { first, second } = await twoDevices(browser);
+  const draftKey = "ai-executive-notes-drafts:corrupt-fence-rescue";
+  try {
+    await first.page.goto("/");
+    await waitUntilSynced(first.page);
+    await second.page.goto("/?view=Inbox");
+    await waitUntilSynced(second.page);
+    await second.page.evaluate(async ({ id, draftKey }) => {
+      const db = await new Promise<IDBDatabase>((resolve, reject) => {
+        const req = indexedDB.open("ai-executive");
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => reject(req.error);
+      });
+      await new Promise<void>((resolve, reject) => {
+        const tx = db.transaction("entities", "readwrite");
+        tx.objectStore("entities").put({
+          id, type: "task", title: "Zachránit lokální změnu",
+          status: "open", workspaceId: "personal", properties: { inbox: true },
+          createdAt: Date.now(), updatedAt: Date.now() + 60000,
+        });
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => reject(tx.error);
+      });
+      db.close();
+      localStorage.setItem(draftKey, "rozpracovaná poznámka");
+      localStorage.setItem("ai-executive-owner-adoption-fence", "{neplatná značka");
+    }, { id, draftKey });
+    await second.page.reload();
+    const dialog = second.page.getByRole("alertdialog", { name: "Lokální změny jsou chráněné" });
+    await expect(dialog).toBeVisible({ timeout: 30_000 });
+    await expect(dialog.getByText(/Nepodařilo se přečíst údaje o přerušené obnově/)).toBeVisible();
+    await dialog.getByRole("button", { name: "1. Připravit záchranný soubor" }).click();
+    await expect(dialog.getByRole("button", { name: "2. Stáhnout soubor" })).toBeEnabled();
+
+    const [download] = await Promise.all([
+      second.page.waitForEvent("download"),
+      dialog.getByRole("button", { name: "2. Stáhnout soubor" }).click(),
+    ]);
+    expect(download.suggestedFilename()).toBe("lumi-interrupted-restore-raw-unverified.json");
+    const file = testInfo.outputPath("corrupt-owner-fence-rescue.json");
+    await download.saveAs(file);
+    const data = JSON.parse(readFileSync(file, "utf8"));
+    expect(data).toMatchObject({
+      format: "lumi-owner-adoption-raw-rescue",
+      version: 1, verified: false, complete: false, autoImportPermitted: false,
+    });
+    expect(data.local.entities.some((entry: { id: string }) => entry.id === id)).toBe(true);
+    expect(data.storage).toContainEqual({ key: draftKey, value: "rozpracovaná poznámka" });
+    expect(data.storage).toContainEqual({
+      key: "ai-executive-owner-adoption-fence", value: "{neplatná značka",
+    });
+    const after = await second.page.evaluate(key => ({
+      fence: localStorage.getItem("ai-executive-owner-adoption-fence"),
+      draft: localStorage.getItem(key),
+      hold: localStorage.getItem("ai-executive-offline-recovery-hold"),
+    }), draftKey);
+    expect(after.fence).toBe("{neplatná značka");
+    expect(after.draft).toBe("rozpracovaná poznámka");
+    expect(after.hold).toBeNull();
+  } finally {
+    await first.context.close();
+    await second.context.close();
+  }
+});
+
+test("an authorized wipe retries a selectively failed final fence removal before attempting owner recovery", async ({ browser }) => {
+  const context = await browser.newContext({ storageState: sessionFile, locale: "cs-CZ" });
+  const page = await context.newPage();
+  const id = `e2e-backup-signout-wipe-retry-${stamp}`;
+  try {
+    await page.goto("/");
+    await waitUntilSynced(page);
+    await page.evaluate(async id => {
+      const known = Number(localStorage.getItem("ai-executive-restore-generation") || "0");
+      const db = await new Promise<IDBDatabase>((resolve, reject) => {
+        const req = indexedDB.open("ai-executive");
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => reject(req.error);
+      });
+      await new Promise<void>((resolve, reject) => {
+        const tx = db.transaction("entities", "readwrite");
+        tx.objectStore("entities").put({
+          id, type: "task", title: "Musí být bezpečně odstraněno",
+          status: "open", workspaceId: "personal", properties: { inbox: true },
+          createdAt: Date.now(), updatedAt: Date.now() + 60000,
+        });
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => reject(tx.error);
+      });
+      db.close();
+      // These are the durable markers of an already-authorized but interrupted
+      // sign-out, not a new permission to discard unsent data.
+      localStorage.setItem("ai-executive-owner-adoption-fence",
+        JSON.stringify({ version: 1, observedGeneration: known + 1, knownGeneration: known }));
+      localStorage.setItem("ai-executive-wipe-pending", "1");
+      localStorage.setItem("ai-executive-signed-out", "1");
+    }, id);
+    // The first restarted wipe clears IDB and the restore baseline, then
+    // fails ONLY at the very last owner-fence removeItem.
+    await page.addInitScript(() => {
+      if (sessionStorage.getItem("e2e-last-fence-remove-attempted")) return;
+      const original = Storage.prototype.removeItem;
+      Storage.prototype.removeItem = function(this: Storage, key: string) {
+        if (key === "ai-executive-owner-adoption-fence") {
+          sessionStorage.setItem("e2e-last-fence-remove-attempted", "1");
+          throw new DOMException("Injected final wipe fence failure", "QuotaExceededError");
+        }
+        return original.call(this, key);
+      };
+    });
+    await page.reload();
+    await expect.poll(() => page.evaluate(() =>
+      sessionStorage.getItem("e2e-last-fence-remove-attempted"))).toBe("1");
+    const first = await page.evaluate(() => ({
+      wipe: localStorage.getItem("ai-executive-wipe-pending"),
+      signedOut: localStorage.getItem("ai-executive-signed-out"),
+      fence: localStorage.getItem("ai-executive-owner-adoption-fence"),
+      generation: localStorage.getItem("ai-executive-restore-generation"),
+      hold: localStorage.getItem("ai-executive-offline-recovery-hold"),
+    }));
+    expect(first.wipe).toBe("1");
+    expect(first.signedOut).toBe("1");
+    expect(first.fence).not.toBeNull();
+    expect(first.generation).toBeNull();
+    expect(first.hold).toBeNull();
+
+    await page.reload();
+    await expect.poll(() => page.evaluate(() =>
+      localStorage.getItem("ai-executive-wipe-pending"))).toBeNull();
+    const state = await page.evaluate(async id => {
+      const db = await new Promise<IDBDatabase>((resolve, reject) => {
+        const req = indexedDB.open("ai-executive");
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => reject(req.error);
+      });
+      const record = await new Promise<unknown>((resolve, reject) => {
+        const req = db.transaction("entities").objectStore("entities").get(id);
+        req.onsuccess = () => resolve(req.result); req.onerror = () => reject(req.error);
+      });
+      db.close();
+      return {
+        record, fence: localStorage.getItem("ai-executive-owner-adoption-fence"),
+        signedOut: localStorage.getItem("ai-executive-signed-out"),
+        generation: localStorage.getItem("ai-executive-restore-generation"),
+        synced: localStorage.getItem("ai-executive-server-synced"),
+        hold: localStorage.getItem("ai-executive-offline-recovery-hold"),
+      };
+    }, id);
+    expect(state.record).toBeUndefined();
+    expect(state.fence).toBeNull();
+    expect(state.signedOut).toBe("1");
+    expect(state.generation).toBeNull();
+    expect(state.synced).toBeNull();
+    expect(state.hold).toBeNull();
+    await expect(page.getByRole("alertdialog", { name: "Lokální změny jsou chráněné" })).toHaveCount(0);
+  } finally { await context.close(); }
+});
+
+for (const mode of ["missing", "rejected"] as const) {
+  test(`a valid owner adoption fence can export raw rescue when the recovery Web Lock is ${mode}`, async ({ browser }, testInfo) => {
+    const id = `e2e-backup-valid-fence-no-lock-${mode}-${stamp}`;
+    const draftKey = `ai-executive-notes-drafts:lock-unavailable-${mode}`;
+    const { first, second } = await twoDevices(browser);
+    try {
+      await first.page.goto("/");
+      await waitUntilSynced(first.page);
+      await second.page.goto("/?view=Inbox");
+      await waitUntilSynced(second.page);
+      const expectedFence = await second.page.evaluate(async ({ id, draftKey }) => {
+        const oldGeneration = Number(localStorage.getItem("ai-executive-restore-generation") || "0");
+        const db = await new Promise<IDBDatabase>((resolve, reject) => {
+          const req = indexedDB.open("ai-executive");
+          req.onsuccess = () => resolve(req.result);
+          req.onerror = () => reject(req.error);
+        });
+        await new Promise<void>((resolve, reject) => {
+          const tx = db.transaction("entities", "readwrite");
+          tx.objectStore("entities").put({
+            id, type: "task", title: "Pouze místní nezapsaný úkol",
+            status: "open", workspaceId: "personal", properties: { inbox: true },
+            createdAt: Date.now(), updatedAt: Date.now() + 60000,
+          });
+          tx.oncomplete = () => resolve();
+          tx.onerror = () => reject(tx.error);
+        });
+        db.close();
+        localStorage.setItem(draftKey, "Neuložený místní text při chybě zámku");
+        const value = JSON.stringify({
+          version: 1, observedGeneration: oldGeneration + 1, knownGeneration: oldGeneration,
+        });
+        localStorage.setItem("ai-executive-owner-adoption-fence", value);
+        return value;
+      }, { id, draftKey });
+
+      // Failure happens BEFORE the recovery callback can read the fence.
+      // Other APIs stay intact for "rejected"; "missing" explicitly tests a
+      // browser that does not expose the Web Locks API at all.
+      await second.page.addInitScript(({ mode }) => {
+        const realLocks = navigator.locks;
+        Object.defineProperty(navigator, "locks", {
+          configurable: true,
+          value: mode === "missing" ? undefined : {
+            request: (name: string, callback: () => Promise<unknown>) =>
+              name === "ai-executive-recovery-data"
+                ? Promise.reject(new Error("Injected recovery lock rejection"))
+                : realLocks.request(name, callback),
+          },
+        });
+      }, { mode });
+      await second.page.reload();
+      const dialog = second.page.getByRole("alertdialog", { name: "Lokální změny jsou chráněné" });
+      await expect(dialog).toBeVisible({ timeout: 30_000 });
+      await expect(dialog.getByText(/Obnovu nelze nyní bezpečně dokončit/)).toBeVisible();
+      await dialog.getByRole("button", { name: "1. Připravit záchranný soubor" }).click();
+      const downloadButton = dialog.getByRole("button", { name: "2. Stáhnout soubor" });
+      await expect(downloadButton).toBeEnabled();
+      const [download] = await Promise.all([
+        second.page.waitForEvent("download"),
+        downloadButton.click(),
+      ]);
+      expect(download.suggestedFilename()).toBe("lumi-interrupted-restore-raw-unverified.json");
+      const file = testInfo.outputPath(`valid-owner-fence-${mode}-salvage.json`);
+      await download.saveAs(file);
+      const bundle = JSON.parse(readFileSync(file, "utf8"));
+      expect(bundle).toMatchObject({
+        format: "lumi-owner-adoption-raw-rescue",
+        reason: "owner-adoption-lock-unavailable",
+        verified: false, complete: false, autoImportPermitted: false,
+      });
+      expect(bundle.local.entities.some((item: { id: string }) => item.id === id)).toBe(true);
+      expect(bundle.storage).toContainEqual({ key: draftKey, value: "Neuložený místní text při chybě zámku" });
+      expect(bundle.storage).toContainEqual({
+        key: "ai-executive-owner-adoption-fence", value: expectedFence,
+      });
+      const retained = await second.page.evaluate(async id => {
+        const db = await new Promise<IDBDatabase>((resolve, reject) => {
+          const req = indexedDB.open("ai-executive");
+          req.onsuccess = () => resolve(req.result);
+          req.onerror = () => reject(req.error);
+        });
+        const row = await new Promise<{ id: string } | undefined>((resolve, reject) => {
+          const req = db.transaction("entities").objectStore("entities").get(id);
+          req.onsuccess = () => resolve(req.result);
+          req.onerror = () => reject(req.error);
+        });
+        db.close();
+        return {
+          row, fence: localStorage.getItem("ai-executive-owner-adoption-fence"),
+          hold: localStorage.getItem("ai-executive-offline-recovery-hold"),
+        };
+      }, id);
+      expect(retained.row?.id).toBe(id);
+      expect(retained.fence).toBe(expectedFence);
+      expect(retained.hold).toBeNull();
+      expect((await serverEntities(first.page)).some(item => item.id === id)).toBe(false);
+    } finally {
+      await first.context.close();
+      await second.context.close();
+    }
+  });
+}
+
+test("a valid owner fence with a recovery lock held forever still allows raw rescue without unlocking it", async ({ browser }, testInfo) => {
+  // Both pages must share the SAME origin lock namespace and local IndexedDB.
+  const context = await browser.newContext({ storageState: sessionFile, locale: "cs-CZ" });
+  const holder = await context.newPage();
+  const recovering = await context.newPage();
+  const id = `e2e-backup-busy-recovery-lock-${stamp}`;
+  const draftKey = "ai-executive-notes-drafts:busy-recovery-lock";
+  let fence = "";
+  try {
+    await holder.goto("/");
+    await waitUntilSynced(holder);
+    await recovering.goto("/?view=Inbox");
+    await waitUntilSynced(recovering);
+    // Hold the ACTUAL browser Web Lock from a sibling page; do not simulate
+    // a rejected request. The recovering tab has to abort its queued request
+    // and offer a salvage download while this lock is STILL held.
+    await holder.evaluate(() => {
+      const state = window as unknown as { e2eReleaseRecoveryLock?: () => void; e2eRecoveryLockHeld?: boolean };
+      void navigator.locks.request("ai-executive-recovery-data", async () => {
+        state.e2eRecoveryLockHeld = true;
+        await new Promise<void>(resolve => { state.e2eReleaseRecoveryLock = resolve; });
+      });
+    });
+    await holder.waitForFunction(() =>
+      (window as unknown as { e2eRecoveryLockHeld?: boolean }).e2eRecoveryLockHeld === true);
+
+    // Add the local unsent data only after the holder owns the lock, so no
+    // focus-triggered pull from the holder can race this fixture.
+    fence = await recovering.evaluate(async ({ id, draftKey }) => {
+      const known = Number(localStorage.getItem("ai-executive-restore-generation") || "0");
+      const db = await new Promise<IDBDatabase>((resolve, reject) => {
+        const req = indexedDB.open("ai-executive");
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => reject(req.error);
+      });
+      await new Promise<void>((resolve, reject) => {
+        const tx = db.transaction("entities", "readwrite");
+        tx.objectStore("entities").put({
+          id, type: "task", title: "Neodeslaný úkol při obsazeném zámku",
+          status: "open", workspaceId: "personal", properties: { inbox: true },
+          createdAt: Date.now(), updatedAt: Date.now() + 60000,
+        });
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => reject(tx.error);
+      });
+      db.close();
+      localStorage.setItem(draftKey, "Lokální text zůstává zachovaný");
+      const marker = JSON.stringify({
+        version: 1, observedGeneration: known + 1, knownGeneration: known,
+      });
+      localStorage.setItem("ai-executive-owner-adoption-fence", marker);
+      return marker;
+    }, { id, draftKey });
+
+    // Observe the REAL queued Web Locks request and its AbortSignal. A bad
+    // startup-lock argument can otherwise produce the same rescue dialog
+    // without attempting (or timing out) the lock request at all.
+    await recovering.addInitScript(() => {
+      const locks = navigator.locks;
+      const request = locks.request;
+      Object.defineProperty(locks, "request", {
+        configurable: true,
+        value: (...args: unknown[]) => {
+          if (args[0] === "ai-executive-recovery-data") {
+            sessionStorage.setItem("e2e-owner-startup-lock-requested", "1");
+            const options = args[1] as { signal?: AbortSignal } | undefined;
+            options?.signal?.addEventListener("abort", () => {
+              sessionStorage.setItem("e2e-owner-startup-lock-aborted", "1");
+            }, { once: true });
+          }
+          return Reflect.apply(request, locks, args);
+        },
+      });
+    });
+    await recovering.reload();
+    const dialog = recovering.getByRole("alertdialog", { name: "Lokální změny jsou chráněné" });
+    await expect(dialog).toBeVisible({ timeout: 20_000 });
+    await expect(dialog.getByText(/Obnovu nelze nyní bezpečně dokončit/)).toBeVisible();
+    const attempted = await recovering.evaluate(() => ({
+      requested: sessionStorage.getItem("e2e-owner-startup-lock-requested"),
+      aborted: sessionStorage.getItem("e2e-owner-startup-lock-aborted"),
+    }));
+    expect(attempted).toEqual({ requested: "1", aborted: "1" });
+    await dialog.getByRole("button", { name: "1. Připravit záchranný soubor" }).click();
+    const save = dialog.getByRole("button", { name: "2. Stáhnout soubor" });
+    await expect(save).toBeEnabled();
+    const [download] = await Promise.all([recovering.waitForEvent("download"), save.click()]);
+    expect(download.suggestedFilename()).toBe("lumi-interrupted-restore-raw-unverified.json");
+    const file = testInfo.outputPath("busy-web-lock-recovery.json");
+    await download.saveAs(file);
+    const raw = JSON.parse(readFileSync(file, "utf8"));
+    expect(raw).toMatchObject({
+      format: "lumi-owner-adoption-raw-rescue",
+      reason: "owner-adoption-lock-unavailable",
+      verified: false, complete: false, autoImportPermitted: false,
+    });
+    expect(raw.local.entities.some((entity: { id: string }) => entity.id === id)).toBe(true);
+    expect(raw.storage).toContainEqual({ key: draftKey, value: "Lokální text zůstává zachovaný" });
+    expect(raw.storage).toContainEqual({ key: "ai-executive-owner-adoption-fence", value: fence });
+
+    const lockStillHeld = await holder.evaluate(async () =>
+      (await navigator.locks.query()).held?.some(lock => lock.name === "ai-executive-recovery-data"));
+    expect(lockStillHeld).toBe(true);
+    const persisted = await recovering.evaluate(async id => {
+      const db = await new Promise<IDBDatabase>((resolve, reject) => {
+        const req = indexedDB.open("ai-executive");
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => reject(req.error);
+      });
+      const item = await new Promise<{ id: string } | undefined>((resolve, reject) => {
+        const req = db.transaction("entities").objectStore("entities").get(id);
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => reject(req.error);
+      });
+      db.close();
+      return {
+        item, fence: localStorage.getItem("ai-executive-owner-adoption-fence"),
+        hold: localStorage.getItem("ai-executive-offline-recovery-hold"),
+      };
+    }, id);
+    expect(persisted.item?.id).toBe(id);
+    expect(persisted.fence).toBe(fence);
+    expect(persisted.hold).toBeNull();
+    expect((await serverEntities(holder)).some(entity => entity.id === id)).toBe(false);
+  } finally {
+    await holder.evaluate(() => {
+      (window as unknown as { e2eReleaseRecoveryLock?: () => void }).e2eReleaseRecoveryLock?.();
+    }).catch(() => undefined);
+    await context.close();
+  }
 });
