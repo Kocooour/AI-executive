@@ -542,6 +542,22 @@ test("symlinked SQLite rollback sidecar is still a strict boundary denial", () =
   assert.equal(durable.checkTargetStagingAnchorLive(fx.store), "ok");
 });
 
+test("a regular zero-link unlink snapshot is retryable, never a trust denial", () => {
+  // SQLite can unlink its rollback sidecar while another process observes its
+  // metadata. A disappearing regular inode (nlink=0) cannot be opened and is
+  // a retryable obstruction, not evidence of an attacker-planted hard link.
+  const shape = (nlink, type = "file") => pinned.targetStagingRollbackSidecarShape({
+    nlink, isFile: () => type === "file", isSymbolicLink: () => type === "symlink",
+  });
+  assert.equal(shape(0), "retryable");
+  assert.equal(shape(1), "retryable");
+  assert.equal(shape(2), "denied", "real multi-link sidecar remains unsafe");
+  assert.equal(shape(0, "symlink"), "denied");
+  assert.equal(shape(1, "symlink"), "denied");
+  assert.equal(shape(1, "fifo"), "denied");
+  assert.equal(shape(-1), "denied");
+});
+
 test("post-lock sidecar verdict permits only regular rollback contention, never hostile sidecars", () => {
   const fx = makeFixture();
   const classify = () => pinned.classifyPostLockTargetStagingSidecar(fx.databasePath);
