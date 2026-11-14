@@ -367,8 +367,9 @@ function runChild(fx, mode, gate = "", rounds = 1) {
     "tests/support/target-anchor-gated-child.mjs", fx.stage.directory, fx.stage.restoreGeneration, mode, gate,
     String(rounds)],
   { stdio: ["ignore", "pipe", "pipe"],
-    // Enable content-free failure stages only for the synthetic high-contention test.
-    env: { ...process.env, ...(mode === "raw-many"
+    // Content-free diagnostics for high contention and the independent cold
+    // chain/200ms lock regression. Never enabled for normal application runs.
+    env: { ...process.env, ...((mode === "raw-many" || mode === "raw-cold-gated")
       ? { AI_EXECUTIVE_TARGET_STAGING_DIAGNOSTICS: "1" } : {}) } });
   let stdout = "", stderr = "";
   child.stdout.on("data", chunk => { stdout += chunk; });
