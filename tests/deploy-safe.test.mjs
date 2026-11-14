@@ -728,7 +728,8 @@ for (const scenario of [
   "offexechanged", "targetexechanged", "offextrahook",
   "offexecflagsplus", "targetexecflagsplus",
   "offexecflagsbang", "targetexecflagsbang",
-  "offexecflagsignore", "offexecxmissing", "offexecxchangedargv",
+  "offexecflagsignore", "offexecxmissing", "offexecxunsupported",
+  "offexecxchangedargv",
 ]) {
   scenarioCase(scenario + ": reject unreviewed loaded execution before downtime", (r) => {
     assert.notEqual(r.status, 0);
