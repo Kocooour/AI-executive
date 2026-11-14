@@ -600,7 +600,48 @@ for (const scenario of [
   });
 }
 
-()=>tests+marker
+scenarioCase("offmanagerenvlarge: early target flag in long manager env is rejected", (r) => {
+  assert.notEqual(r.status, 0);
+  assert.match(r.output, /neoverene zdroje prostredi systemd/);
+  assert.equal(r.head, oldSha);
+  assert.equal(r.service, "active");
+  assert.equal(r.events.includes("stop"), false, "an early forbidden flag must be caught under pipefail");
+  assert.deepEqual(r.backups, []);
+});
+
+scenarioCase("offmanagerenvlargesafe: long manager env without target flags is accepted", (r) => {
+  assert.equal(r.status, 0, r.output);
+  assert.equal(r.head, newSha);
+  assert.equal(r.service, "active");
+});
+
+scenarioCase("offsystemddriftbuild: rollback must not restart with a rejected loaded unit", (r) => {
+  assert.notEqual(r.status, 0);
+  assert.match(r.output, /zdroje prostredi systemd se pred startem zmenily/);
+  assert.match(r.output, /BEZPECNOSTNI BLOKACE: zmenene zdroje prostredi systemd nebo obsah \.env pri rollbacku/);
+  assert.equal(r.events.includes("unit-env-changed-during-build"), true);
+  assert.equal(r.events.includes("reset"), true, "code-only rollback is allowed, not restart");
+  assert.equal(r.events.some(e => e.startsWith("start-")), false,
+    "the original service must not reload an unreviewed EnvironmentFile");
+  assert.equal(r.head, oldSha);
+  assert.equal(r.service, "inactive");
+  assert.equal(r.backups.length, 1, "verified backup remains for manual recovery");
+});
+
+scenarioCase("offenvdriftbuild: rollback must not restart with changed root env", (r) => {
+  assert.notEqual(r.status, 0);
+  assert.match(r.output, /env se pred startem zmenilo/);
+  assert.match(r.output, /BEZPECNOSTNI BLOKACE: zmenene zdroje prostredi systemd nebo obsah \.env pri rollbacku/);
+  assert.equal(r.events.includes("env-changed-during-build"), true);
+  assert.equal(r.events.includes("reset"), true);
+  assert.equal(r.events.some(e => e.startsWith("start-")), false,
+    "off profile at initial preflight is insufficient after env mutation");
+  assert.equal(r.head, oldSha);
+  assert.equal(r.service, "inactive");
+  assert.equal(r.backups.length, 1);
+});
+
+scenarioCase("targetgeneration: mismatched generation never restarts under rejected flags", (r) => {
   assert.notEqual(r.status, 0);
   assert.match(r.output, /cilovy preflight: neshoda/);
   assert.match(r.output, /Sluzba zustava zastavena/);
