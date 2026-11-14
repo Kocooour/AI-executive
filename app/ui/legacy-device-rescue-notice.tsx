@@ -142,8 +142,9 @@ export function LegacyDeviceRescueNotice({ language }: { language: string }) {
     // the owner can use Share / Save to Files from that verified preview.
     // All Safari versions (including macOS) need a trusted gesture before
     // asynchronous IndexedDB reads; iOS third-party browsers also use WebKit.
-    const needsGestureWindow = /Safari/.test(navigator.userAgent) &&
-      !/Chrome|Chromium|Edg\\/|OPR\\//.test(navigator.userAgent);
+    const ua = navigator.userAgent;
+    const isIOSWebKit = /iPad|iPhone|iPod|CriOS|FxiOS|EdgiOS/.test(ua);
+    const needsGestureWindow = isIOSWebKit || (/Safari/.test(ua) && !/Chrome|Chromium|Edg|OPR/.test(ua));
     const safariWindow = needsGestureWindow ? window.open("about:blank", "_blank") : null;
     if (needsGestureWindow && !safariWindow) {
       setDownloadError(true);
