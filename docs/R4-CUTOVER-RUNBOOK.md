@@ -46,18 +46,24 @@ any downtime and rechecks the unchanged env and unit before each startup,
 including off-profile rollback. This ensures the runtime uses the data
 directory the script actually archived.
 
-The loaded systemd sandbox must keep `ProtectSystem=strict`,
-`StateDirectory=ai-executive` with no other state directories except an
-explicitly approved `ai-executive-target`, and no unapproved
-`ReadWritePaths`. A personal-v1 alternative may use a separately approved,
-**exact** `ReadWritePaths=<target-store-directory>` rather than a broader
-parent; `ReadWritePaths=/var/lib`, any parent path, lists of unrelated
-write exceptions and relaxed ProtectSystem are all rejected. With target
-flags off, `ReadWritePaths` must be empty. A systemd drop-in proposed
-below only changes the isolated StateDirectory permission boundary; it must
-not inject or override environment variables or weaken sandboxing.
-Any difference is a stop condition, not an invitation to auto-edit the
-systemd unit or live env.
+The loaded systemd sandbox must keep `ProtectSystem=strict` and
+`StateDirectory=ai-executive` as a base. Choose **one** write-access
+authorization: either add only `StateDirectory=ai-executive-target` with the
+approved target under `/var/lib/ai-executive-target/` and no ReadWritePaths,
+or retain only the baseline StateDirectory and add a separately approved,
+**exact** `ReadWritePaths=<target-store-directory>`. These modes cannot
+be combined: a second StateDirectory plus ReadWritePaths would expose two
+independent writable roots. `ReadWritePaths=/var/lib`, parent paths,
+unrelated exceptions, unexpected state directories and a weakened
+ProtectSystem are rejected. With flags off, ReadWritePaths must be empty.
+
+The deploy also verifies the *loaded* execution command, not merely the
+tracked service file: `ExecStart` must remain exactly the reviewed Node
+binary and Next.js argv (allowing only dynamic systemd PID/timestamps),
+and no ExecStartPre/ExecStartPost, ExecCondition, ExecStop/ExecStopPost or
+ExecReload hook may be added. A drop-in that injects commands while leaving
+Environment fields intact is a stop condition. Recheck before every
+service start, including legacy rollback. No configuration is auto-edited.
 
 **Decision proposal for the owner (not approved): choose (a)**, a separate
 systemd \`StateDirectory=ai-executive-target\` for an isolated absolute target
