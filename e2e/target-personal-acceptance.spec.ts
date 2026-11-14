@@ -403,10 +403,11 @@ for (const width of [390, 1280]) {
     const token = "legacy-c13-" + width + "-" + Date.now();
     const homeTitle = token + "-home";
     const inboxTitle = token + "-inbox";
+    const overdueTitle = token + "-overdue";
     const now = Date.now();
     seeding = true;
     try {
-      const seedStatus = await page.evaluate(async ({ homeTitle, inboxTitle, now }) => {
+      const seedStatus = await page.evaluate(async ({ homeTitle, inboxTitle, overdueTitle, now }) => {
         const current = await fetch("/api/store", { cache: "no-store" }).then(response => response.json());
         const task = (id: string, title: string, properties: Record<string, unknown>) => ({
           id, title, type: "task", status: "open", workspaceId: "personal",
@@ -417,13 +418,16 @@ for (const width of [390, 1280]) {
           body: JSON.stringify({
             baseRevision: current.revision, restoreGeneration: current.restoreGeneration,
             entities: [...current.entities,
-              task("c13:" + homeTitle, homeTitle, { today: true, deadline: "2020-01-01" }),
-              task("c13:" + inboxTitle, inboxTitle, { inbox: true })],
+              // Ordinary Home task must stay in the Today list. A separate overdue
+              // task exercises Attention without being deduplicated out of that list.
+              task("c13:" + homeTitle, homeTitle, { today: true }),
+              task("c13:" + inboxTitle, inboxTitle, { inbox: true }),
+              task("c13:" + overdueTitle, overdueTitle, { deadline: "2020-01-01" })],
             relations: current.relations, deletedIds: [], revivedIds: [],
           }),
         });
         return response.status;
-      }, { homeTitle, inboxTitle, now });
+      }, { homeTitle, inboxTitle, overdueTitle, now });
       expect(seedStatus).toBe(200);
     } finally {
       seeding = false;
@@ -444,9 +448,12 @@ for (const width of [390, 1280]) {
       await expect(row).toBeVisible();
       await expect(row.locator("button.check")).toBeDisabled();
       if (view === "Home") {
-        // A past deadline must generate a real candidate. Previously even this
-        // GET implicitly INSERTed into attention_states and attention_history.
-        await expect(page.locator(".attentionItem").filter({ hasText: homeTitle })).toBeVisible();
+        // A separate overdue task must appear in Attention: it previously caused
+        // GET /api/attention to INSERT lifecycle rows as a side effect.
+        await expect(page.locator(".attentionItem").filter({ hasText: overdueTitle })).toBeVisible();
+        // Its Home row is intentionally absent; only the ordinary Today task
+        // is available to open and inspect in the list below Attention.
+        await expect(page.locator(".homeTaskList article").filter({ hasText: overdueTitle })).toHaveCount(0);
         // A sibling running an older client can announce a changed IndexedDB
         // snapshot. This tab must continue showing the server's historical data.
         const sibling = await page.context().newPage();
