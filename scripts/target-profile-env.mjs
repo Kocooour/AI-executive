@@ -21,7 +21,7 @@ function parseEnv(filename) {
   const source = readFileSync(filename, "utf8");
   for (const line of source.split(/\r?\n/)) {
     if (/^\s*(?:#|$)/.test(line)) continue;
-    const match = /^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*?)\s*$/.exec(line);
+    // EnvironmentFile accepts KEY=VALUE, not shell export assignments.\n    const match = /^\s*([A-Za-z_][A-Za-z0-9_]*)=(.*?)\s*$/.exec(line);
     if (!match) {
       // A malformed target assignment cannot be silently treated as off.
       if (line.includes(prefix)) throw new Error("malformed target setting");
