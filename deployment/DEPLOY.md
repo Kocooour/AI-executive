@@ -118,7 +118,16 @@ provisioned store and authenticated owner. \`node scripts/target-profile-env.mjs
 --check /etc/ai-executive/ai-executive.env\` returns exactly \`off\`,
 \`personal-v1\`, or \`invalid\` (nonzero on invalid), with only erroneous
 variable **names**, never values. A partial profile or any enabled excluded
-flag is refused before stopping the service.
+flag is refused before stopping the service. Every deployment also checks
+the **loaded systemd environment sources** before stop: exactly the root-owned
+`/etc/ai-executive/ai-executive.env` (non-optional) as the sole
+`EnvironmentFiles` entry; the four expected fixed `Environment` assignments
+from the deployed service unit; no `PassEnvironment`, `UnsetEnvironment`
+or `PAMName`; and no target settings inherited from the system manager.
+Unexpected sources fail closed even when the root env reports `off`.
+The same source contract is rechecked before each target service start.
+This is a restrictive launch boundary: operator drop-ins may add the
+approved isolated `StateDirectory`, **not** any environment override.
 
 **A separate written owner decision is mandatory before activation.** The
 installed unit currently uses \`ProtectSystem=strict\` and writes only to
@@ -145,7 +154,11 @@ data and checks exact source/copy equality plus the common SHA-256 manifest.
 **After copying, before any new service start**, it repeats the semantic
 preflight and verifies the owner and restore generation are still identical
 to the approved environment; a substituted but internally valid store is
-rejected without serving requests.
+rejected without serving requests. Since package installation and build
+can be lengthy, the same owner/generation-bound semantic check runs **once
+more immediately before the first service start** (still quiesced), after
+all build and prestart snapshot work. If the store changed during that
+interval, no target request may be served.
 After startup it quiesces the service once more for a second semantic target
 check, restarts, and repeats HTTP readiness. **Any failure after a
 personal-v1 deployment has stopped the service leaves the service stopped.**
