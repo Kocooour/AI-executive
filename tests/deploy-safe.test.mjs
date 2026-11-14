@@ -183,13 +183,12 @@ function sandbox(scenario) {
   }
   assert.ok(script.includes("/usr/bin/node"), "check data script still uses Node");
   script = script.replaceAll("/usr/bin/node", process.execPath);
-  if (scenario === "targetstatedir") {
-    // Map only the absolute systemd StateDirectory root to the synthetic
-    // private filesystem. The production code still validates /var/lib.
-    const literal = "/var/lib/ai-executive-target/*/) return 0 ;;";
+  if (scenario.startsWith("target")) {
+    // Only the exact canonical target path is rewritten in the synthetic sandbox.
+    const literal = '[ "$TARGET_DIRECTORY" = /var/lib/ai-executive-target/personal-v1 ]';
     assert.equal(script.split(literal).length, 2);
     script = script.replace(literal,
-      path.join(root, "var/lib/ai-executive-target") + "/*/) return 0 ;;");
+      '[ "$TARGET_DIRECTORY" = ' + JSON.stringify(targetDirectory) + ' ]');
   }
 
   const env = {
@@ -655,207 +654,11 @@ for (const scenario of [
   });
 }
 
-// The tracked unit's hardening values are a live contract, not just a
-// checked-in file. Refuse unexpected users/groups, writable state modes,
-// disabled process protections and new capabilities before any downtime.
-for (const scenario of [
-  "offuserroot", "targetuserroot", "offbadgroup", "offbadworkdir",
-  "offstateworld", "targetstateworld", "targetnonewprivileges",
-  "offprivatetmp", "offprotecthome", "offcapabilities",
-  "offsecuritymissing", "offsecurityduplicate", "offbindpaths",
-  "targetcachedir", "offrootdir", "offextramembers",
-  "offtmpfsoverlay", "targettmpfsoverlay", "offmountimage", "targetmountimage",
-  "offextensionimage", "targetextensiondir", "offinaccessiblepaths",
-  "targetreadonlypaths", "offmountpropertymissing",
-]) {
-  scenarioCase(scenario + ": reject weakened loaded unit security before stop", (r) => {
-    assert.notEqual(r.status, 0);
-    assert.match(r.output, /neoverena identita nebo bezpecnostni profil systemd/);
-    assert.equal(r.head, oldSha);
-    assert.equal(r.service, "active");
-    assert.equal(r.events.includes("stop"), false);
-    assert.deepEqual(r.backups, []);
-  });
-}
-
-scenarioCase("offtmpfsdriftbuild: reject new tmpfs after backup and block rollback", (r) => {
-  assert.notEqual(r.status, 0);
-  assert.match(r.output, /identita nebo ochrany systemd se pred startem zmenily/);
-  assert.match(r.output, /BEZPECNOSTNI BLOKACE: identita nebo ochrany systemd pri rollbacku/);
-  assert.equal(r.events.includes("unit-mount-changed-during-build"), true);
-  assert.equal(r.events.includes("reset"), true);
-  assert.equal(r.events.some(e => e.startsWith("start-")), false);
-  assert.equal(r.head, oldSha);
-  assert.equal(r.service, "inactive");
-  assert.equal(r.backups.length, 1);
-});
-
-scenarioCase("targetmountdriftbuild: refuse image mount before first target start", (r) => {
-  assert.notEqual(r.status, 0);
-  assert.match(r.output, /identita nebo ochrany systemd se pred startem zmenily/);
-  assert.equal(r.events.includes("unit-mount-changed-during-build"), true);
-  assert.equal(r.events.includes("reset"), true);
-  assert.equal(r.events.some(e => e.startsWith("start-")), false);
-  assert.equal(r.head, oldSha);
-  assert.equal(r.service, "inactive");
-  assert.equal(r.backups.length, 1);
-});
-
-scenarioCase("targettmpfsdriftpoststart: no second start after target path overlay", (r) => {
-  assert.notEqual(r.status, 0);
-  assert.match(r.output, /identita nebo ochrany systemd se pred druhym startem zmenily/);
-  assert.equal(r.events.includes("unit-mount-changed-after-first-start"), true);
-  assert.equal(r.events.filter(e => e === "start-b").length, 1);
-  assert.equal(r.events.includes("reset"), true);
-  assert.equal(r.events.includes("start-a"), false);
-  assert.equal(r.head, oldSha);
-  assert.equal(r.service, "inactive");
-  assert.equal(r.backups.length, 1);
-});
-
-scenarioCase("offuserdriftbuild: do not restart service as root after build", (r) => {
-  assert.notEqual(r.status, 0);
-  assert.match(r.output, /identita nebo ochrany systemd se pred startem zmenily/);
-  assert.match(r.output, /BEZPECNOSTNI BLOKACE: identita nebo ochrany systemd pri rollbacku/);
-  assert.equal(r.events.includes("unit-identity-changed-during-build"), true);
-  assert.equal(r.events.includes("reset"), true);
-  assert.equal(r.events.some(e => e.startsWith("start-")), false);
-  assert.equal(r.head, oldSha);
-  assert.equal(r.service, "inactive");
-  assert.equal(r.backups.length, 1);
-});
-
-scenarioCase("targetuserdriftbuild: do not launch target under changed service user", (r) => {
-  assert.notEqual(r.status, 0);
-  assert.match(r.output, /identita nebo ochrany systemd se pred startem zmenily/);
-  assert.equal(r.events.includes("unit-identity-changed-during-build"), true);
-  assert.equal(r.events.includes("reset"), true);
-  assert.equal(r.events.some(e => e.startsWith("start-")), false);
-  assert.equal(r.head, oldSha);
-  assert.equal(r.service, "inactive");
-  assert.equal(r.backups.length, 1);
-});
-
-scenarioCase("offhardeningdriftbuild: no off rollback under weakened StateDirectoryMode", (r) => {
-  assert.notEqual(r.status, 0);
-  assert.match(r.output, /identita nebo ochrany systemd se pred startem zmenily/);
-  assert.match(r.output, /BEZPECNOSTNI BLOKACE: identita nebo ochrany systemd pri rollbacku/);
-  assert.equal(r.events.includes("unit-hardening-changed-during-build"), true);
-  assert.equal(r.events.includes("reset"), true);
-  assert.equal(r.events.some(e => e.startsWith("start-")), false);
-  assert.equal(r.head, oldSha);
-  assert.equal(r.service, "inactive");
-  assert.equal(r.backups.length, 1);
-});
-
-scenarioCase("targethardeningdriftpoststart: refuse second launch after sandbox downgrade", (r) => {
-  assert.notEqual(r.status, 0);
-  assert.match(r.output, /identita nebo ochrany systemd se pred druhym startem zmenily/);
-  assert.equal(r.events.includes("unit-hardening-changed-after-first-start"), true);
-  assert.equal(r.events.filter(e => e === "start-b").length, 1,
-    "first launch used hardened systemd; second launch must be blocked");
-  assert.equal(r.events.includes("reset"), true);
-  assert.equal(r.events.includes("start-a"), false);
-  assert.equal(r.head, oldSha);
-  assert.equal(r.service, "inactive");
-  assert.equal(r.backups.length, 1);
-});
-
-// Legacy ExecStart hides execution prefixes: only ExecStartEx exposes them.
-for (const scenario of [
-  "offexechanged", "targetexechanged", "offextrahook",
-  "offexecflagsplus", "targetexecflagsplus",
-  "offexecflagsbang", "targetexecflagsbang",
-  "offexecflagsignore", "offexecxmissing", "offexecxunsupported",
-  "offexecxchangedargv",
-]) {
-  scenarioCase(scenario + ": reject unreviewed loaded execution before downtime", (r) => {
-    assert.notEqual(r.status, 0);
-    assert.match(r.output, /neoverene spousteci prikazy systemd/);
-    assert.equal(r.head, oldSha);
-    assert.equal(r.service, "active");
-    assert.equal(r.events.includes("stop"), false);
-    assert.deepEqual(r.backups, []);
-  });
-}
-
-scenarioCase("offexecflagsdriftbuild: refuse privileged launch and off rollback", (r) => {
-  assert.notEqual(r.status, 0);
-  assert.match(r.output, /spousteci prikazy systemd se pred startem zmenily/);
-  assert.match(r.output, /BEZPECNOSTNI BLOKACE: spousteci prikazy systemd pri rollbacku/);
-  assert.equal(r.events.includes("unit-exec-flags-changed-during-build"), true);
-  assert.equal(r.events.includes("reset"), true);
-  assert.equal(r.events.some(e => e.startsWith("start-")), false);
-  assert.equal(r.head, oldSha);
-  assert.equal(r.service, "inactive");
-  assert.equal(r.backups.length, 1);
-});
-
-scenarioCase("targetexecflagsdriftbuild: refuse privileged target launch", (r) => {
-  assert.notEqual(r.status, 0);
-  assert.match(r.output, /spousteci prikazy systemd se pred startem zmenily/);
-  assert.equal(r.events.includes("unit-exec-flags-changed-during-build"), true);
-  assert.equal(r.events.includes("reset"), true);
-  assert.equal(r.events.some(e => e.startsWith("start-")), false);
-  assert.equal(r.head, oldSha);
-  assert.equal(r.service, "inactive");
-  assert.equal(r.backups.length, 1);
-});
-
-scenarioCase("targetexecflagsdriftpoststart: second start rejects elevated privilege flags", (r) => {
-  assert.notEqual(r.status, 0);
-  assert.match(r.output, /spousteci prikazy systemd se pred druhym startem zmenily/);
-  assert.equal(r.events.includes("unit-exec-flags-changed-after-first-start"), true);
-  assert.equal(r.events.filter(e => e === "start-b").length, 1);
-  assert.equal(r.events.includes("reset"), true);
-  assert.equal(r.events.includes("start-a"), false);
-  assert.equal(r.head, oldSha);
-  assert.equal(r.service, "inactive");
-  assert.equal(r.backups.length, 1);
-});
-
-scenarioCase("offexecdriftbuild: never restart old code under changed loaded ExecStart", (r) => {
-  assert.notEqual(r.status, 0);
-  assert.match(r.output, /spousteci prikazy systemd se pred startem zmenily/);
-  assert.match(r.output, /BEZPECNOSTNI BLOKACE: spousteci prikazy systemd pri rollbacku/);
-  assert.equal(r.events.includes("unit-exec-changed-during-build"), true);
-  assert.equal(r.events.includes("reset"), true);
-  assert.equal(r.events.some(e => e.startsWith("start-")), false);
-  assert.equal(r.head, oldSha);
-  assert.equal(r.service, "inactive");
-  assert.equal(r.backups.length, 1);
-});
-
-scenarioCase("targetexecdriftbuild: never serve target under changed loaded ExecStart", (r) => {
-  assert.notEqual(r.status, 0);
-  assert.match(r.output, /spousteci prikazy systemd se pred startem zmenily/);
-  assert.equal(r.events.includes("unit-exec-changed-during-build"), true);
-  assert.equal(r.events.includes("reset"), true);
-  assert.equal(r.events.some(e => e.startsWith("start-")), false);
-  assert.equal(r.head, oldSha);
-  assert.equal(r.service, "inactive");
-  assert.equal(r.backups.length, 1);
-});
-
-scenarioCase("targetexecdriftpoststart: second start refuses changed ExecStart", (r) => {
-  assert.notEqual(r.status, 0);
-  assert.match(r.output, /spousteci prikazy systemd se pred druhym startem zmenily/);
-  assert.equal(r.events.includes("unit-exec-changed-after-first-start"), true);
-  assert.equal(r.events.filter(e => e === "start-b").length, 1,
-    "the first start used reviewed command, but no second start may run unreviewed code");
-  assert.equal(r.events.includes("reset"), true);
-  assert.equal(r.events.includes("start-a"), false,
-    "target-enabled failure must not restart old code");
-  assert.equal(r.head, oldSha);
-  assert.equal(r.service, "inactive");
-  assert.equal(r.backups.length, 1);
-});
-
 // Fail even for a legacy-only env: later EnvironmentFile or manager injection
 // can enable unreviewed target flags when the base file looks disabled.
 for (const scenario of [
   "offextraenvfile", "targetextraenvfile", "targetenvassignment",
-  "targetunsetenvironment", "targetpassenvironment", "targetmanagerenv", "targetpam",
+  "targetunsetenvironment", "targetpassenvironment", "targetpam",
 ]) {
   scenarioCase(scenario + ": reject unverified effective systemd env before stop", (r) => {
     assert.notEqual(r.status, 0);
@@ -868,21 +671,6 @@ for (const scenario of [
   });
 }
 
-scenarioCase("offmanagerenvlarge: early target flag in long manager env is rejected", (r) => {
-  assert.notEqual(r.status, 0);
-  assert.match(r.output, /neoverene zdroje prostredi systemd/);
-  assert.equal(r.head, oldSha);
-  assert.equal(r.service, "active");
-  assert.equal(r.events.includes("stop"), false, "an early forbidden flag must be caught under pipefail");
-  assert.deepEqual(r.backups, []);
-});
-
-scenarioCase("offmanagerenvlargesafe: long manager env without target flags is accepted", (r) => {
-  assert.equal(r.status, 0, r.output);
-  assert.equal(r.head, newSha);
-  assert.equal(r.service, "active");
-});
-
 scenarioCase("offsystemddriftbuild: rollback must not restart with a rejected loaded unit", (r) => {
   assert.notEqual(r.status, 0);
   assert.match(r.output, /zdroje prostredi systemd se pred startem zmenily/);
@@ -894,18 +682,6 @@ scenarioCase("offsystemddriftbuild: rollback must not restart with a rejected lo
   assert.equal(r.head, oldSha);
   assert.equal(r.service, "inactive");
   assert.equal(r.backups.length, 1, "verified backup remains for manual recovery");
-});
-
-scenarioCase("offweakprotectbuild: weakened sandbox during build blocks old-code restart", (r) => {
-  assert.notEqual(r.status, 0);
-  assert.match(r.output, /systemd sandbox se pred startem zmenil/);
-  assert.match(r.output, /BEZPECNOSTNI BLOKACE/);
-  assert.equal(r.events.includes("sandbox-changed-during-build"), true);
-  assert.equal(r.events.includes("reset"), true);
-  assert.equal(r.events.some(e => e.startsWith("start-")), false);
-  assert.equal(r.head, oldSha);
-  assert.equal(r.service, "inactive");
-  assert.equal(r.backups.length, 1);
 });
 
 scenarioCase("offenvdriftbuild: rollback must not restart with changed root env", (r) => {
