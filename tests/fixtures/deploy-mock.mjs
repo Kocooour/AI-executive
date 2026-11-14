@@ -221,11 +221,13 @@ switch (name) {
       console.error("simulated read-only Gmail snapshot error");
       process.exit(29);
     }
-    if (scenario.startsWith("target") && exec === process.execPath &&
-        rest[0] === path.join(app, "scripts/target-store-provision.mjs") &&
-        rest[1] === "--check") {
+    if (scenario.startsWith("target") && exec === "env" &&
+        rest[0] === "AI_EXECUTIVE_DATA_DIR=" + path.join(root, "var/lib/ai-executive") &&
+        rest[1] === process.execPath &&
+        rest[2] === path.join(app, "scripts/target-store-provision.mjs") &&
+        rest[3] === "--check") {
       log("target-check");
-      const directory = rest[2];
+      const directory = rest[4];
       const expected = path.join(root, "var/lib/ai-executive-target/personal-v1");
       if (directory !== expected || get("service") !== "inactive") process.exit(9);
       if (scenario === "targetpostfail" && fs.existsSync(stateFile("target-started"))) {
