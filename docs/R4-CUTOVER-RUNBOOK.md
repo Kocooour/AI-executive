@@ -10,6 +10,78 @@ Neither this runbook nor any tool in #408 authorizes a production cutover, datab
 
 The old and target stores are distinct data domains. A backup of the legacy database (including the app's format-v2 owner-data export) is **not** a complete archival backup of credentials, passkeys, push subscriptions, integration secrets or target-store journal/witness state. Preserve the complete offline directory snapshot as the archive; treat app exports as additional, narrower recovery artifacts.
 
+
+## C14 — activation preflight and isolated target backup (#424; no production activation)
+
+This milestone adds \`scripts/target-profile-env.mjs\` and a guarded
+\`deployment/deploy-safe.sh\` path. Running the generator only **prints**
+a profile template; it never writes \`.env\`. The three existing operator
+settings must be supplied from the canonical provision output and verified
+identity. \`--check <env-file>\` reports \`off\`, complete \`personal-v1\`, or
+\`invalid\`, with only missing/extra variable names on error. No target
+flags are enabled by committed files, and this PR does not authorize an
+environment change.
+
+**Decision proposal for the owner (not approved): choose (a)**, a separate
+systemd \`StateDirectory=ai-executive-target\` for an isolated absolute target
+path under \`/var/lib/ai-executive-target/personal-v1\`. The current unit's
+\`ProtectSystem=strict\` makes that path unwritable despite POSIX 0700
+ownership. A second \`StateDirectory\` supplies both persistent ownership
+and an explicit systemd write exception, without weakening the legacy data
+boundary. **Reject (b)** (target as a subdirectory of
+\`/var/lib/ai-executive\`): that overlaps \`AI_EXECUTIVE_DATA_DIR\` under
+\`scripts/r4-path-boundary.mjs\` and must be rejected by provisioning. Do
+not change that path guard to make nested target stores appear valid.
+
+**Only after a separate explicit owner approval of the concrete path and
+unit configuration**, the operator may review a drop-in like the following.
+It is a proposal, **not a command to execute from this PR**:
+
+\`\`\`ini
+# /etc/systemd/system/ai-executive.service.d/target-store.conf
+[Service]
+StateDirectory=
+StateDirectory=ai-executive ai-executive-target
+\`\`\`
+
+The operator must independently install the approved override, perform
+\`systemctl daemon-reload\`, check \`systemctl show ai-executive
+-p StateDirectory -p ProtectSystem\`, verify an ordinary service restart
+and a service-user write test to the exact target directory **without
+touching real data files**. The versioned \`deployment/ai-executive.service\`
+remains unchanged, so the existing code-diff safety guard is not bypassed.
+A missing loaded write exception causes \`deploy-safe.sh\` to fail **before
+stop**.
+
+For \`personal-v1\` deployments: profile check, target directory existence,
+UID/permissions, and systemd writable-sandbox check happen before stop;
+canonical semantic \`target-store-provision.mjs --check\` runs with
+\`runuser -u ai-executive --\` only when service writers are stopped.
+The full directory (SQLite, witness, journal and companions) is saved as
+\`target/\` within the **same verified** \`deploy-XXXXXXXX\` backup as
+legacy \`data/\` and \`env\`. The common hash manifest covers all files and
+the source-versus-copy directory diff must match; on failure, only an
+unverified partial copy is deleted. Post-start checking quiesces the service
+again to avoid transient SQLite sidecars before a second semantic preflight,
+then restarts and checks HTTP readiness. Only code is automatically rolled
+back, **never either data domain**. This introduces a second short service
+restart exclusively for an activated target.
+
+**Return to legacy:** under separately reviewed operational authorization,
+set all 31 target profile flags to false/absent and validate \`off\` before
+a reviewed deployment or service restart. Do not remove, import, reset,
+overwrite or restore target and legacy stores as a side effect. Preserve
+the target archive and restore-generation evidence for subsequent
+incident review. A code-only rollback does not itself change \`.env\`;
+verify profile and functionality explicitly after any failed cutover.
+
+Before production: run the focused CLI/deploy regression suite and PR
+Checks, verify systemd sandbox with the actual service context, perform
+the controlled offline combined-store restore rehearsal, pass **full Browser
+E2E on the exact approved SHA**, and obtain the separate owner approval
+specified in this runbook.
+
+
 ## Ordered evidence and gates
 
 | Step | Human/operator action | Evidence required before proceeding |
