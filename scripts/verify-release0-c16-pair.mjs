@@ -12,7 +12,7 @@ export function selectedDesktopTests(output) {
     if (!match) throw new Error(`Unrecognized Playwright desktop test line: ${line}`);
     // Execution lines append a duration, unlike --list. Strip only a final
     // Playwright timing suffix; preserve the exact underlying test title.
-    const title = match[2].trim().replace(/ \\(\\d+(?:\\.\\d+)?(?:ms|s|m)\\)$/, "");
+    const title = match[2].trim().replace(/ \(\d+(?:\.\d+)?(?:ms|s|m)\)$/, "");
     return { file: match[1], title };
   });
 }
