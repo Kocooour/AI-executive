@@ -22,72 +22,26 @@ identity. \`--check <env-file>\` reports \`off\`, complete \`personal-v1\`, or
 flags are enabled by committed files, and this PR does not authorize an
 environment change.
 
-Before any service stop, the deploy launcher verifies the **loaded systemd
-environment-source contract**: only the single, mandatory
-`/etc/ai-executive/ai-executive.env` EnvironmentFile; the four fixed
-Environment assignments from the installed unit; empty PassEnvironment,
-UnsetEnvironment and PAMName; and no manager-global target settings.
-The manager-global scan must reject any target variable even when it occurs
-early in a very large environment dump; implementation avoids the
-`grep -q`/`pipefail` SIGPIPE trap and fails closed on scan errors.
-This applies even if the root-owned file reports `off`, because a
-second loaded file could otherwise enable an unchecked target. Repeat
-the loaded-unit contract check before both service starts. Record and compare
-the root-owned env's SHA-256 fingerprint before the first service stop
-and before any subsequent service start (including automatic rollback).
-**An `off` deployment may restore previous code but must NOT restart it**
-after any systemd source change or root env modification during the deployment.
-Leave it stopped and obtain independent operator approval for recovery.
-The sole loaded root EnvironmentFile must **never** assign the unit's
-fixed `AI_EXECUTIVE_DATA_DIR`, `PORT`, `NODE_ENV` or
-`NEXT_TELEMETRY_DISABLED`: EnvironmentFile assignments take precedence
-over the checked Environment values. The deploy rejects those names before
-any downtime and rechecks the unchanged env and unit before each startup,
-including off-profile rollback. This ensures the runtime uses the data
-directory the script actually archived.
+Before any service stop, the deployment validates the selected `off` or
+`personal-v1` profile in the root-owned EnvironmentFile, rejects malformed or
+partial activation, and rejects assignments that override fixed unit settings
+(`AI_EXECUTIVE_DATA_DIR`, `PORT`, `NODE_ENV`, `NEXT_TELEMETRY_DISABLED`).
+The loaded unit must use only that mandatory EnvironmentFile. Its exact bytes
+are fingerprinted and rechecked before starts and any off rollback.
 
-The loaded systemd sandbox must keep `ProtectSystem=strict` and
-`StateDirectory=ai-executive` as a base. Choose **one** write-access
-authorization: either add only `StateDirectory=ai-executive-target` with the
-approved target under `/var/lib/ai-executive-target/` and no ReadWritePaths,
-or retain only the baseline StateDirectory and add a separately approved,
-**exact** `ReadWritePaths=<target-store-directory>`. These modes cannot
-be combined: a second StateDirectory plus ReadWritePaths would expose two
-independent writable roots. `ReadWritePaths=/var/lib`, parent paths,
-unrelated exceptions, unexpected state directories and a weakened
-ProtectSystem are rejected. With flags off, ReadWritePaths must be empty.
+For target activation, the approved canonical path is
+`/var/lib/ai-executive-target/personal-v1`; the loaded unit must have
+`ProtectSystem=strict`, `StateDirectory=ai-executive ai-executive-target`
+(in either order) and **empty** `ReadWritePaths`. An alternative writable
+exception is not approved. Off-mode deployment accepts the original
+`StateDirectory=ai-executive` as well as the separately installed drop-in.
 
-The deploy also verifies the *loaded* execution command, not merely the
-tracked service file: both `ExecStart` and `ExecStartEx` must report
-exactly the reviewed Node binary and Next.js argv (allowing only dynamic
-systemd PID/timestamps). `ExecStartEx` must report **empty `flags=`**;
-privileged prefixes such as `+`, `!` and `!!` must not bypass `User=`
-and the sandbox, and other command prefixes are not authorized either.
-An absent or unsupported `ExecStartEx` is a fail-closed stop condition.
-No ExecStartPre/ExecStartPost, ExecCondition, ExecStop/ExecStopPost or
-ExecReload hook may be added. The *loaded* `User`, `Group` and
-`WorkingDirectory` must also match the reviewed service unit before each
-start; a switch to `User=root` during the build must never launch code.
-The loaded security properties (including `StateDirectoryMode=0700`,
-`UMask=0077`, `NoNewPrivileges=yes`, `PrivateTmp=yes`, `ProtectHome=yes`,
-private devices, kernel protection, empty capabilities, restricted namespaces,
-address families, proc exposure and core dumps) are checked against the
-reviewed hardened unit. Additional implicit settings must remain
-disabled/empty: `DynamicUser`, `SupplementaryGroups`, `RootDirectory`,
-`RootImage`, `BindPaths`, `BindReadOnlyPaths`,
-`TemporaryFileSystem`, `MountImages`, `ExtensionImages`,
-`ExtensionDirectories`, `InaccessiblePaths`, `ReadOnlyPaths`,
-`CacheDirectory`, `LogsDirectory`, `RuntimeDirectory` and
-`ConfigurationDirectory`. An unapproved tmpfs, mount image, extension
-overlay, path mask or extra systemd-managed directory can change the filesystem
-visible to the service independently of the offline verified and archived store.
-Such a drop-in must be rejected before any service start, including during
-a stopped-service rollback; the script does not modify the systemd unit. A drop-in changing the executable, identity or
-hardening while leaving Environment fields intact is a stop condition.
-Recheck before **every** service start, including a legacy rollback.
-No configuration is auto-edited.
+This is an operational-error model, not a defense against an administrator
+who controls root-owned systemd drop-ins. Full execution/hardening/mount
+pinning and manager environment inspection are not part of this PR.
+The script does not install or change the systemd unit itself.
 
-**Decision proposal for the owner (not approved): choose (a)**, a separate
+**Approved owner decision: option (a)**, a separate
 systemd \`StateDirectory=ai-executive-target\` for an isolated absolute target
 path under \`/var/lib/ai-executive-target/personal-v1\`. The current unit's
 \`ProtectSystem=strict\` makes that path unwritable despite POSIX 0700
@@ -98,9 +52,9 @@ boundary. **Reject (b)** (target as a subdirectory of
 \`scripts/r4-path-boundary.mjs\` and must be rejected by provisioning. Do
 not change that path guard to make nested target stores appear valid.
 
-**Only after a separate explicit owner approval of the concrete path and
-unit configuration**, the operator may review a drop-in like the following.
-It is a proposal, **not a command to execute from this PR**:
+The owner approved this exact path and second-StateDirectory design.
+Installing or enabling the drop-in is a **separate operator action**, never
+performed by this PR or the deploy script. The reviewed drop-in content is:
 
 \`\`\`ini
 # /etc/systemd/system/ai-executive.service.d/target-store.conf
