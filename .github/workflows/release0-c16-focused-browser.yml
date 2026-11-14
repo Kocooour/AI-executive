@@ -79,6 +79,13 @@ jobs:
           --project=desktop --workers=1
           --grep 'B2 project overview|C10: inspector Close preserves|aggregate project deep links survive|note URL and browser Back reload'
           --trace=on
+      - name: C21 workspace overflow and both original scope-switching failures
+        run: >-
+          pnpm exec playwright test
+          e2e/project-page.spec.ts e2e/record-links-ui01.spec.ts
+          --project=desktop --workers=1
+          --grep 'C21: workspace switcher keeps the last options reachable|aggregate project deep links survive|note URL and browser Back reload'
+          --trace=on
       - name: Exact ordered logout predecessors then the original C4 failures
         shell: bash
         run: |
