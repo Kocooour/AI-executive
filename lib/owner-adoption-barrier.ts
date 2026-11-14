@@ -67,6 +67,24 @@ export function advanceSignOutEpoch(storage: Writable): void {
   if (storage.getItem(ownerSignOutEpochKey) !== next)
     throw new Error("OWNER_SIGN_OUT_EPOCH_NOT_PERSISTED");
 }
+// A tab that itself finished the authorized IDB wipe is no longer stale: it
+// has no records to revive, and must be able to sign in again without requiring
+// another reload (for example, after retrying an interrupted sign-out on startup).
+// This acknowledgement is intentionally tab-local and is NEVER broadcast to
+// other open tabs, whose old baselines must remain fenced.
+export function acknowledgePurgedSignOutInThisTab(storage: Readable): void {
+  const epoch = storage.getItem(ownerSignOutEpochKey);
+  if (epoch === null || storage.getItem("ai-executive-signed-out") !== "1" ||
+      storage.getItem(ownerAdoptionGenerationKey) !== null ||
+      storage.getItem(ownerAdoptionFenceKey) !== null ||
+      storage.getItem(ownerAdoptionCompletedKey) !== null)
+    throw new Error("OWNER_SIGN_OUT_PURGE_NOT_VERIFIED");
+  knownInThisTab = undefined;
+  wasSyncedAtLoad = false;
+  completedAtLoad = null;
+  signOutEpochAtLoad = epoch;
+  initialized = true;
+}
 export function ownerAdoptionFencePresent(storage: Readable | null = browserStore()): boolean {
   if (!storage) return typeof window !== "undefined";
   try { return storage.getItem(ownerAdoptionFenceKey) !== null; } catch { return true; }

@@ -5,7 +5,7 @@ import { clearAllMarkers, pendingDeletedIds, pendingRevivedIds } from "./pending
 import { clearNotesDrafts, keptNotesDrafts, notesDraftsKey } from "./notes-drafts";
 import { clearProjectContextDrafts, keptProjectContextDrafts } from "./project-context-drafts";
 import { clearOpenTexts } from "./open-texts";
-import { advanceSignOutEpoch, assertOwnerAdoptionCleanup, finishOwnerAdoptionFence, ownerAdoptionCompletedKey } from "./owner-adoption-barrier";
+import { acknowledgePurgedSignOutInThisTab, advanceSignOutEpoch, assertOwnerAdoptionCleanup, finishOwnerAdoptionFence, ownerAdoptionCompletedKey } from "./owner-adoption-barrier";
 import { attentionCacheKey } from "./attention-cache";
 
 // Browser-side copies of server data and the bookkeeping of unsent changes.
@@ -131,6 +131,10 @@ export async function clearLocalData(timeoutMs = 4000) {
   // Only a completed purge and retired fence can discard this stale completion
   // marker. Wipe intent remains if this final step fails (#419).
   localStorage.removeItem(ownerAdoptionCompletedKey);
+  // The purging tab can re-authenticate without a reload after interrupted
+  // sign-out recovery. Other tabs retain their captured, stale epoch.
+  // Keep wipePending set if this verification fails (#419).
+  acknowledgePurgedSignOutInThisTab(localStorage);
   localStorage.removeItem(wipePendingKey);
   }, true);
 }

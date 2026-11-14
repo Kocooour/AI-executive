@@ -153,6 +153,25 @@ test("logout epoch blocks stale tabs through restore completion cleanup and late
     "a tab loaded after the second logout is not frozen by old logouts");
 });
 
+test("the tab completing an interrupted wipe can safely re-authenticate; stale siblings cannot", () => {
+  const state = memoryStorage();
+  const oldEpoch = state.getItem(barrier.ownerSignOutEpochKey);
+  state.setItem(barrier.ownerAdoptionGenerationKey, "8");
+  state.setItem("ai-executive-signed-out", "1");
+  state.setItem("ai-executive-wipe-pending", "1");
+  barrier.advanceSignOutEpoch(state);
+  state.removeItem(barrier.ownerAdoptionGenerationKey);
+  assert.equal(barrier.crossTabAdoptionBlocked(undefined, state, false, null, oldEpoch), true);
+  barrier.acknowledgePurgedSignOutInThisTab(state);
+  assert.equal(barrier.isCrossTabAdoptionBlocked(), false,
+    "the tab whose local data is fully purged may begin its next first pull");
+  assert.equal(barrier.crossTabAdoptionBlocked(undefined, state, false, null, oldEpoch), true,
+    "acknowledgement must not release a pre-logout sibling");
+  state.removeItem("ai-executive-wipe-pending");
+  state.setItem(barrier.ownerAdoptionGenerationKey, "8");
+  assert.equal(barrier.crossTabAdoptionBlocked(undefined, state, false, null, oldEpoch), true);
+});
+
 test("logout epoch fails closed when corrupt or unpersistable", () => {
   const corrupt = memoryStorage();
   corrupt.setItem(barrier.ownerSignOutEpochKey, "NaN");
@@ -160,6 +179,31 @@ test("logout epoch fails closed when corrupt or unpersistable", () => {
   const dropsWrites = memoryStorage();
   dropsWrites.setItem = () => {};
   assert.throws(() => barrier.advanceSignOutEpoch(dropsWrites), /OWNER_SIGN_OUT_EPOCH_NOT_PERSISTED/);
+});
+
+test("Dexie rejects an old tab write after sign-out even when login restores the old generation", async () => {
+  const state = memoryStorage();
+  const previous = globalThis.localStorage;
+  try {
+    globalThis.localStorage = state;
+    // An old, previously opened tab with no known restore generation.
+    // Fresh adoption module has no in-progress owner adoption flag.
+    const oldTab = await import(`../lib/adoption.ts?signout-guard=${Date.now()}`);
+    const { core, written } = fakeCore();
+    const guarded = oldTab.adoptionWriteGuard(core);
+    await guarded.table("entities").mutate({ trans: {}, type: "put", values: [{ id: "before" }] });
+    assert.equal(written.length, 1);
+    barrier.advanceSignOutEpoch(state);
+    state.setItem(barrier.ownerAdoptionGenerationKey, "4"); // server sync after re-login
+    await assert.rejects(
+      guarded.table("entities").mutate({ trans: {}, type: "put", values: [{ id: "stale" }] }),
+      oldTab.AdoptionWriteRefused,
+    );
+    assert.equal(written.length, 1, "stale IndexedDB content cannot be revived");
+  } finally {
+    if (previous === undefined) delete globalThis.localStorage;
+    else globalThis.localStorage = previous;
+  }
 });
 
 test("a certified owner completion releases a fresh tab on reload, unlike an ordinary first pull", () => {
@@ -326,10 +370,11 @@ test("C23 verified sign-out clears adoption completion after database and fence 
   const purgeBaseline = source.indexOf("clearPurgedRestoreBaseline(localStorage);", wipeStart);
   const finishFence = source.indexOf("finishOwnerAdoptionFence(localStorage);", purgeBaseline);
   const removeCompletion = source.indexOf("localStorage.removeItem(ownerAdoptionCompletedKey);", finishFence);
-  const clearPending = source.indexOf("localStorage.removeItem(wipePendingKey);", removeCompletion);
+  const acknowledgePurge = source.indexOf("acknowledgePurgedSignOutInThisTab(localStorage);", removeCompletion);
+  const clearPending = source.indexOf("localStorage.removeItem(wipePendingKey);", acknowledgePurge);
   assert.ok(stampEpoch !== -1 && stampEpoch < purgeStart && purgeStart < wipeStart &&
     wipeStart < purgeBaseline && purgeBaseline < finishFence &&
-    finishFence < removeCompletion && removeCompletion < clearPending,
+    finishFence < removeCompletion && removeCompletion < acknowledgePurge && acknowledgePurge < clearPending,
     "completion cleanup must follow a verified wipe and fence retirement");
   assert.ok(!source.slice(source.indexOf("export async function clearLocalData"), wipeStart)
     .includes("localStorage.removeItem(ownerAdoptionCompletedKey)"),

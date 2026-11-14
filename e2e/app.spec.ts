@@ -731,8 +731,11 @@ test("signing out clears the local copy; signing in again restores it from the s
   // Nor does the mark that lets an offline start show data.
   expect(await page.evaluate(() => localStorage.getItem("ai-executive-signed-in"))).toBeNull();
   expect(await page.evaluate(() => localStorage.getItem("ai-executive-owner-adoption-completed"))).toBeNull();
+  const signOutEpoch = await page.evaluate(() => localStorage.getItem("ai-executive-owner-sign-out-epoch"));
+  expect(signOutEpoch).toMatch(/^[1-9]\\d*$/);
   expect(await page.evaluate(() => fetch("/api/store").then((response) => response.status))).toBe(401);
   await signIn(page);
+  expect(await page.evaluate(() => localStorage.getItem("ai-executive-owner-sign-out-epoch"))).toBe(signOutEpoch);
   await sidebarView(page, "Doručené").click();
   await expect(page.getByText(seeded.plainTask)).toBeVisible();
   await expectOnServer(page, (entity) => entity.id === "e2e-rename" && entity.properties?.notes === otherTab, true);
