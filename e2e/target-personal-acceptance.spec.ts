@@ -540,6 +540,11 @@ for (const width of [390, 1280]) {
       localStorage.setItem("ai-executive-pending-sync", "1");
     }, title);
     await page.reload();
+    // The 390px v1 shell restores My Plan from the canonical bare URL after
+    // reload. The device-copy warning belongs on historical views only; use
+    // an explicit Home deep link instead of asserting against My Plan.
+    await page.goto("/?view=Home");
+    await expect(page.getByTestId("legacy-read-only-notice")).toBeVisible();
     const notice = page.getByTestId("legacy-pending-rescue");
     await expect(notice).toBeVisible();
     await expect(notice).toContainText("neodeslaly");
