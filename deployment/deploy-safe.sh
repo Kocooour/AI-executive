@@ -76,17 +76,26 @@ verify_loaded_environment_sources() {
 
 # The checked-out service file is not the same as the systemd *loaded*
 # execution contract: drop-ins can silently replace ExecStart or add hooks.
-# Validate the full command and allowed volatile systemd runtime metadata
-# before stopping or restarting. Do not print commands on failure.
+# The legacy ExecStart property omits command prefixes (+/!/!!/@/:), which
+# can bypass User= and filesystem protections even when argv is unchanged.
+# ExecStartEx exposes these flags; refuse any nonempty value, not just known
+# privilege flags. A systemd without ExecStartEx cannot prove this invariant
+# and must fail closed. Never print operator-controlled execution details.
 verify_loaded_execution() {
-  local start expected rest metadata prop hook
-  start="$(systemctl show "$SERVICE" -p ExecStart --value)" || return 1
+  local start start_ex expected expected_ex rest metadata prop hook
   expected="{ path=/usr/bin/node ; argv[]=/usr/bin/node $APP/node_modules/next/dist/bin/next start --hostname 127.0.0.1 ; ignore_errors=no ; "
+  expected_ex="{ path=/usr/bin/node ; argv[]=/usr/bin/node $APP/node_modules/next/dist/bin/next start --hostname 127.0.0.1 ; flags= ; "
+  # Permit only volatile start/stop timestamps, PID and status. Neither
+  # arbitrary fields nor additional commands may follow the metadata.
+  metadata='^start_time=[^;{}]* ; stop_time=[^;{}]* ; pid=[0-9]+ ; code=[^;{}]* ; status=[^;{}]* \}$'
+  start="$(systemctl show "$SERVICE" -p ExecStart --value)" || return 1
   [[ "$start" == "$expected"* ]] || return 1
   rest="${start#"$expected"}"
-  # Permit start/stop timestamps and PID/status to change, but not a
-  # second command, shell, altered argv, extra field or injected hook.
-  metadata='^start_time=[^;{}]* ; stop_time=[^;{}]* ; pid=[0-9]+ ; code=[^;{}]* ; status=[^;{}]* \}$'
+  [[ "$rest" =~ $metadata ]] || return 1
+
+  start_ex="$(systemctl show "$SERVICE" -p ExecStartEx --value)" || return 1
+  [[ "$start_ex" == "$expected_ex"* ]] || return 1
+  rest="${start_ex#"$expected_ex"}"
   [[ "$rest" =~ $metadata ]] || return 1
   for prop in ExecStartPre ExecStartPost ExecCondition ExecStop ExecStopPost ExecReload; do
     hook="$(systemctl show "$SERVICE" -p "$prop" --value)" || return 1
