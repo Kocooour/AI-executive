@@ -170,6 +170,17 @@ migrace, Attention v cílovém modelu, push/notifikace, HumanWiki, produkční z
    Domů/Doručené/Dnes a inspektoru, při současném odchytu jakéhokoli
    automatického `PUT`. Výsledek je nutné potvrdit zeleným CI během.
 
+   **Výjimka schválená vlastníkem 2026-11-14 (issue #443):**
+   Omezení „jen pro čtení“ se týká historického **obsahu** (úkoly,
+   poznámky, projekty a Pozornost), nikoli nastavení **integrací**.
+   V cílovém režimu zůstávají funkční připojení/aktualizace/odpojení
+   kalendáře přes ICS (`calendarAction`, `/api/calendar`), nastavení
+   iCloud (`/api/calendar/icloud`) a připojení Gmailu. Jejich zápisy
+   se nadále ukládají do dosavadního integračního úložiště; nemění
+   se chování ani příznaky. Statický inventář mutačních `fetch` volání
+   v `app/ui` je hlídán testem `tests/target-personal-ui-write-inventory.test.mjs`;
+   nový nebo neklasifikovaný zápis musí být před sloučením výslovně posouzen.
+
 7. **Odhlášení nezneplatní vlastnický token (potřeba rozhodnutí vlastníka).** Logout
    pouze maže cookie; bezstavový token zůstává na serveru platný až 7 dní
    (`lib/auth.ts`, `app/api/auth/logout/route.ts`); tester jej přehrál na
