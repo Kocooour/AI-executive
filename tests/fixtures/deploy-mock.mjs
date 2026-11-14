@@ -51,6 +51,13 @@ switch (name) {
     break;
   case "systemctl": {
     const verb = args[0];
+    if (verb === "show-environment") {
+      // The system manager's inherited target flags can override an off
+      // EnvironmentFile unless the loaded global environment is checked.
+      console.log(scenario === "targetmanagerenv" ?
+        "AI_EXECUTIVE_TARGET_STAGING_HTTP_ENABLED=true" : "LANG=C.UTF-8");
+      break;
+    }
     if (verb === "is-active") {
       const active = get("service") === "active";
       if (!args.includes("--quiet")) console.log(active ? "active" : "inactive");
@@ -58,8 +65,26 @@ switch (name) {
     }
     if (verb === "show") {
       const prop = args[args.indexOf("-p") + 1];
+      const envfile = path.join(root, "etc/ai-executive/ai-executive.env");
+      const extraFile = path.join(root, "etc/ai-executive/override.env");
+      const defaults = [
+        "NODE_ENV=production", "PORT=3000", "NEXT_TELEMETRY_DISABLED=1",
+        "AI_EXECUTIVE_DATA_DIR=" + path.join(root, "var/lib/ai-executive"),
+      ].join(" ");
       console.log(prop === "User" ? "ai-executive" :
         prop === "WorkingDirectory" ? app :
+        prop === "EnvironmentFiles" ?
+          envfile + " (ignore_errors=no)" +
+          (["targetextraenvfile", "offextraenvfile"].includes(scenario)
+            ? " " + extraFile + " (ignore_errors=no)" : "") :
+        prop === "Environment" ?
+          defaults + (scenario === "targetenvassignment" ?
+            " AI_EXECUTIVE_TARGET_STAGING_HTTP_ENABLED=false" : "") :
+        prop === "PassEnvironment" && scenario === "targetpassenvironment" ?
+          "AI_EXECUTIVE_TARGET_STAGING_HTTP_ENABLED" :
+        prop === "UnsetEnvironment" && scenario === "targetunsetenvironment" ?
+          "AI_EXECUTIVE_TARGET_STAGING_HTTP_ENABLED" :
+        prop === "PAMName" && scenario === "targetpam" ? "login" :
         prop === "StateDirectory" ? "ai-executive" :
         prop === "ReadWritePaths" && scenario.startsWith("target") && scenario !== "targetunit"
           ? path.join(root, "var/lib/ai-executive-target") : "");
@@ -188,6 +213,16 @@ switch (name) {
     if (args[0] === "install") { log("install"); break; }
     if (args[0] === "build") {
       log("build-" + get("head").slice(0, 1));
+      if (scenario === "targetbuildidentitydrift" && get("head") === target &&
+          !fs.existsSync(stateFile("build-identity-drift"))) {
+        // A different, internally valid target replaces the archive-checked
+        // store during a long offline build. The final pre-start check must
+        // detect it BEFORE any target-enabled service receives requests.
+        const store = path.join(root, "var/lib/ai-executive-target/personal-v1/lumi-target.sqlite");
+        fs.writeFileSync(store, "different-owner\n30cee2ba-feba-4f75-a5db-5fa21ab36ad0");
+        set("build-identity-drift", "1");
+        log("target-build-identity-drift");
+      }
       if (scenario === "mailprestartloss" && get("head") === target &&
           !fs.existsSync(stateFile("mail-consent-deleted"))) {
         // Fault injection: code/build work corrupts owner sync consent while
