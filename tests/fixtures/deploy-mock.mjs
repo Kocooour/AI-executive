@@ -130,6 +130,14 @@ switch (name) {
         } finally { db.close(); }
         set("mail-pruned", "1");
       }
+      if (scenario.startsWith("target")) {
+        // Observe the *effective* EnvironmentFile on every service start.
+        // In particular, an old-code rollback must not reload rejected flags.
+        const env = fs.readFileSync(path.join(root, "etc/ai-executive/ai-executive.env"), "utf8");
+        const enabled = env.split(/\r?\n/).filter(line =>
+          /^AI_EXECUTIVE_TARGET_[A-Z0-9_]+_ENABLED=true$/.test(line)).length;
+        log("start-with-target-flags:" + enabled);
+      }
       if (scenario.startsWith("target") && get("head") === target) set("target-started", "1");
       set("service", "active"); log("start-" + get("head").slice(0,1)); break;
     }
@@ -199,6 +207,10 @@ switch (name) {
           process.exit(91);
         }
         log("rollback-lock-held");
+      }
+      if (scenario === "targetbuildfail" && get("head") === target) {
+        console.error("synthetic target-enabled build failure");
+        process.exit(17);
       }
       if (scenario === "buildfail" && get("head") === target &&
           !fs.existsSync(stateFile("buildfailed"))) {
