@@ -59,7 +59,7 @@ function sandbox(scenario) {
   } else {
     writeFileSync(envfile, "synthetic-only=true\n", { mode: 0o600 });
   }
-  if (["offextraenvfile", "targetextraenvfile"].includes(scenario)) {
+  if (["offextraenvfile", "targetextraenvfile", "targetsystemddriftbuild"].includes(scenario)) {
     // Exists only in the disposable sandbox, but is never read by the
     // reviewed deploy code: the *loaded systemd list* must reject it.
     writeFileSync(path.join(root, "etc/ai-executive/override.env"),
@@ -637,6 +637,18 @@ scenarioCase("targetidentityswap: changed owner/generation after copy preflight 
   assert.match(readFileSync(path.join(f.targetDirectory, "lumi-target.sqlite"), "utf8"), /other-owner/,
     "operator must investigate the changed live store, never auto-restore data");
 });
+scenarioCase("targetsystemddriftbuild: new loaded EnvironmentFile during build blocks first start", (r, f) => {
+  assert.notEqual(r.status, 0);
+  assert.match(r.output, /zdroje prostredi systemd se pred startem zmenily/);
+  assert.equal(r.events.includes("unit-env-changed-during-build"), true);
+  assert.equal(r.events.some(e => e.startsWith("start-")), false,
+    "no new-code process may load an extra EnvironmentFile");
+  assert.equal(r.service, "inactive");
+  assert.equal(r.head, oldSha);
+  assert.equal(r.events.includes("reset"), true);
+  assert.equal(r.backups.length, 1, "verified offline archive is retained");
+});
+
 scenarioCase("targetbuildidentitydrift: store swap during build blocks first start", (r, f) => {
   assert.notEqual(r.status, 0);
   assert.match(r.output, /cilovy preflight tesne pred startem/);
