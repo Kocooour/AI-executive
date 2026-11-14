@@ -90,14 +90,14 @@ export function keepProjectContextDraft(storage: DraftStorage, entry: KeptProjec
   } catch { return false; }
 }
 export function dropProjectContextDraft(storage: DraftStorage, page: string, workspaceId: string, projectId: string) {
-  if (offlineRecoveryIsHeld()) return;
+  if (isAdopting()) return;
   try { storage.removeItem(keyOf(page, workspaceId, projectId)); } catch { /* read-only browser storage */ }
 }
 
 // An in-flight save must not remove a newer draft typed while it was awaiting the server.
 export function settleProjectContextDraft(storage: DraftStorage, page: string, workspaceId: string,
   projectId: string, saved: ProjectContextText, newBase: ProjectContext) {
-  if (offlineRecoveryIsHeld()) return;
+  if (isAdopting()) return;
   const key = keyOf(page, workspaceId, projectId);
   let current: KeptProjectContextDraft | null = null;
   try { current = parse(storage.getItem(key)); } catch { /* unavailable */ }

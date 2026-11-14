@@ -1,9 +1,13 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 
 const adoption = await import("../lib/adoption.ts");
 const markers = await import("../lib/pending-markers.ts");
 const drafts = await import("../lib/notes-drafts.ts");
+const barrier = await import("../lib/owner-adoption-barrier.ts");
+const unreadable = await import("../lib/owner-adoption-rescue.ts");
+const recoveryLock = await import("../lib/d2b-recovery-hold.ts");
 
 // A Dexie DBCore stand-in: records the writes that reach the database.
 function fakeCore() {
@@ -70,4 +74,229 @@ test("after adoption has begun no pending mark, deletion, restoration or notes d
   assert.deepEqual([...storage.store.keys()], []);
   assert.deepEqual(markers.pendingDeletedIds(storage), []);
   assert.deepEqual(drafts.keptNotesDrafts(storage), []);
+});
+
+test("a sibling cannot write while owner adoption is fenced or after another tab advances generation", () => {
+  const state = memoryStorage();
+  assert.equal(barrier.crossTabAdoptionBlocked(undefined, state), false);
+  state.setItem(barrier.ownerAdoptionGenerationKey, "4");
+  state.setItem("ai-executive-server-synced", "1");
+  assert.equal(barrier.crossTabAdoptionBlocked(undefined, state), true, "legacy synced tab has no generation");
+  assert.equal(barrier.crossTabAdoptionBlocked(4, state), false);
+  barrier.startOwnerAdoptionFence(state, 5);
+  assert.equal(barrier.crossTabAdoptionBlocked(4, state), true);
+  assert.equal(barrier.crossTabAdoptionBlocked(5, state), true);
+  barrier.finishOwnerAdoptionFence(state);
+  state.setItem(barrier.ownerAdoptionGenerationKey, "5");
+  assert.equal(barrier.crossTabAdoptionBlocked(4, state), true);
+  assert.equal(barrier.crossTabAdoptionBlocked(5, state), false);
+});
+test("a single undeleted tombstone or context draft blocks owner adoption certification", () => {
+  const state = memoryStorage();
+  state.setItem("ai-executive-pending-deletions:e2e", "task-1");
+  assert.throws(() => barrier.assertOwnerAdoptionCleanup(state), /OWNER_ADOPTION_LOCAL_CLEANUP_INCOMPLETE/);
+  state.removeItem("ai-executive-pending-deletions:e2e");
+  state.setItem("ai-executive-project-context-drafts:old", "unsent");
+  assert.throws(() => barrier.assertOwnerAdoptionCleanup(state), /OWNER_ADOPTION_LOCAL_CLEANUP_INCOMPLETE/);
+  state.removeItem("ai-executive-project-context-drafts:old");
+  assert.doesNotThrow(() => barrier.assertOwnerAdoptionCleanup(state));
+});
+
+test("only a fully committed owner adoption can finish a stale fence", () => {
+  const store = memoryStorage();
+  store.setItem("ai-executive-server-synced", "1");
+  barrier.startOwnerAdoptionFence(store, 7);
+  assert.equal(barrier.ownerAdoptionReadyToFinish(store), false, "old generation still current");
+  store.setItem(barrier.ownerAdoptionGenerationKey, "7");
+  assert.equal(barrier.ownerAdoptionReadyToFinish(store), true);
+  store.setItem("ai-executive-pending-deletions:e2e", "old-item");
+  assert.throws(() => barrier.ownerAdoptionReadyToFinish(store), /OWNER_ADOPTION_LOCAL_CLEANUP_INCOMPLETE/);
+  store.removeItem("ai-executive-pending-deletions:e2e");
+  const originalRemove = store.removeItem;
+  store.removeItem = key => {
+    if (key === barrier.ownerAdoptionFenceKey) throw new Error("injected fence removal failure");
+    originalRemove(key);
+  };
+  assert.throws(() => barrier.finishOwnerAdoptionFence(store), /injected fence removal failure/);
+  assert.equal(barrier.ownerAdoptionReadyToFinish(store), true, "commit remains recoverable after failed fence removal");
+  store.removeItem = originalRemove;
+  barrier.finishOwnerAdoptionFence(store);
+  assert.equal(store.getItem(barrier.ownerAdoptionFenceKey), null);
+});
+
+
+test("a late ordinary sync cannot roll back a certified owner-adopted generation", () => {
+  const storage = memoryStorage();
+  storage.setItem(barrier.ownerAdoptionGenerationKey, "4");
+  assert.equal(barrier.persistOrdinaryGeneration(storage, 4, 4), true);
+  barrier.startOwnerAdoptionFence(storage, 5, 4);
+  assert.deepEqual(barrier.readOwnerAdoptionFence(storage), {
+    version: 1, observedGeneration: 5, knownGeneration: 4,
+  });
+  assert.equal(barrier.persistOrdinaryGeneration(storage, 4, 4), false, "stale stamp is refused during adoption");
+  storage.setItem(barrier.ownerAdoptionGenerationKey, "5");
+  storage.setItem("ai-executive-server-synced", "1");
+  barrier.finishOwnerAdoptionFence(storage);
+  assert.equal(barrier.persistOrdinaryGeneration(storage, 4, 4), false, "late sync cannot roll generation back");
+  assert.equal(storage.getItem(barrier.ownerAdoptionGenerationKey), "5");
+  assert.equal(barrier.persistOrdinaryGeneration(storage, 5, 4), false, "ordinary sync cannot certify an earlier generation");
+  assert.equal(barrier.persistOrdinaryGeneration(storage, 5, 5), true);
+});
+
+test("ordinary pulls remain usable when rewriting an already-known generation is refused by storage", () => {
+  const storage = memoryStorage();
+  storage.setItem(barrier.ownerAdoptionGenerationKey, "4");
+  const original = storage.setItem;
+  storage.setItem = () => { throw new Error("browser quota denied writes"); };
+  assert.equal(barrier.persistOrdinaryGeneration(storage, 4, 4), true,
+    "a matching persisted generation needs no further writes");
+  assert.equal(barrier.persistOrdinaryGeneration(storage, 4, 5), false,
+    "a new generation must still refuse unsafe certification");
+  storage.setItem = original;
+  assert.equal(storage.getItem(barrier.ownerAdoptionGenerationKey), "4");
+});
+
+test("an unfinished owner restore cannot be mistaken for a completed adoption", () => {
+  const storage = memoryStorage();
+  storage.setItem("ai-executive-server-synced", "1");
+  storage.setItem(barrier.ownerAdoptionGenerationKey, "3");
+  barrier.startOwnerAdoptionFence(storage, 4, 3);
+  assert.equal(barrier.ownerAdoptionReadyToFinish(storage), false);
+  assert.equal(barrier.readOwnerAdoptionFence(storage).knownGeneration, 3);
+  storage.setItem(barrier.ownerAdoptionGenerationKey, "4");
+  storage.setItem("ai-executive-pending-deletions:stale", "id");
+  assert.throws(() => barrier.ownerAdoptionReadyToFinish(storage), /LOCAL_CLEANUP_INCOMPLETE/);
+  storage.removeItem("ai-executive-pending-deletions:stale");
+  assert.equal(barrier.ownerAdoptionReadyToFinish(storage), true);
+});
+
+test("malformed owner-fence salvage preserves raw user data without exporting other origin storage keys", () => {
+  const store = memoryStorage();
+  store.setItem("ai-executive-owner-adoption-fence", "{truncated");
+  store.setItem("ai-executive-notes-drafts:page:task", "{unparsed draft");
+  store.setItem("ai-executive-pending-deletions:op", "task-1");
+  store.setItem("oauth-secret-token", "MUST_NOT_EXPORT");
+  store.setItem("ai-executive-language", "cs");
+  const captured = unreadable.captureUnreadableOwnerRescueStorage(store);
+  assert.deepEqual(captured.map(x => x.key), [
+    "ai-executive-notes-drafts:page:task",
+    "ai-executive-owner-adoption-fence",
+    "ai-executive-pending-deletions:op",
+  ].sort((a, b) => a.localeCompare(b)));
+  assert.equal(captured.some(x => x.value === "MUST_NOT_EXPORT"), false);
+  const local = { entities: [{ id: "task-1", title: "offline local" }], relations: [], base: null };
+  const bytes = unreadable.encodeUnreadableOwnerRescue(local, captured, 12345);
+  const file = JSON.parse(new TextDecoder().decode(bytes));
+  assert.equal(file.format, "lumi-owner-adoption-raw-rescue");
+  assert.equal(file.verified, false);
+  assert.equal(file.complete, false);
+  assert.equal(file.autoImportPermitted, false);
+  assert.equal(file.indexedDbReadable, true);
+  assert.equal(file.local.entities[0].id, "task-1");
+  assert.equal(file.storage.find(x => x.key === "ai-executive-owner-adoption-fence").value, "{truncated");
+  assert.throws(() => unreadable.encodeUnreadableOwnerRescue(null, [], 12345), /OWNER_RESCUE_INVALID/);
+  assert.equal(JSON.parse(new TextDecoder().decode(
+    unreadable.encodeUnreadableOwnerRescue(null, captured, 12345),
+  )).indexedDbReadable, false);
+});
+
+test("valid owner adoption fence can be saved as non-importable raw rescue when its Web Lock is unavailable", () => {
+  const store = memoryStorage();
+  barrier.startOwnerAdoptionFence(store, 9, 8);
+  const captured = unreadable.captureUnreadableOwnerRescueStorage(store);
+  const bytes = unreadable.encodeUnreadableOwnerRescue(
+    null, captured, 12345, "owner-adoption-lock-unavailable",
+  );
+  const bundle = JSON.parse(new TextDecoder().decode(bytes));
+  assert.equal(bundle.reason, "owner-adoption-lock-unavailable");
+  assert.equal(bundle.verified, false);
+  assert.equal(bundle.complete, false);
+  assert.equal(bundle.autoImportPermitted, false);
+  assert.equal(bundle.indexedDbReadable, false);
+  assert.equal(bundle.storage.find(x => x.key === barrier.ownerAdoptionFenceKey).value,
+    store.getItem(barrier.ownerAdoptionFenceKey));
+  assert.equal(barrier.ownerAdoptionFencePresent(store), true);
+  assert.throws(() => unreadable.encodeUnreadableOwnerRescue(
+    null, captured, 12345, "unsupported-fence-reason",
+  ), /OWNER_RESCUE_INVALID/);
+});
+
+test("C9 focused workflow triggers when each restore safety module or unit regression changes", () => {
+  const yml = readFileSync(new URL("../.github/workflows/release0-backup-restore-browser.yml", import.meta.url), "utf8");
+  const pullRequestPaths = yml.split("  workflow_dispatch:")[0]
+    .split("\n").map(line => /^\s+- "([^"]+)"$/.exec(line)?.[1]).filter(Boolean);
+  const matches = (filename, pattern) => new RegExp("^" + pattern.split("*")
+    .map(part => part.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+    .join("[^/]*") + "$").test(filename);
+  for (const file of [
+    "lib/local-data.ts",
+    "lib/owner-adoption-barrier.ts",
+    "lib/owner-adoption-rescue.ts",
+    "tests/adoption.test.mjs",
+  ]) {
+    assert.ok(pullRequestPaths.some(pattern => matches(file, pattern)),
+      `C9 PR workflow must run when ${file} changes`);
+  }
+});
+
+test("startup recovery lock times out ONLY before acquisition and never runs a late callback", async () => {
+  const priorNavigator = Object.getOwnPropertyDescriptor(globalThis, "navigator");
+  let pendingCallback;
+  let acquisitionSignal;
+  let ran = false;
+  Object.defineProperty(globalThis, "navigator", {
+    configurable: true,
+    value: { locks: {
+      request(name, options, callback) {
+        assert.equal(name, "ai-executive-recovery-data");
+        acquisitionSignal = options.signal;
+        pendingCallback = callback;
+        return new Promise((_resolve, reject) => {
+          options.signal.addEventListener("abort", () =>
+            reject(Object.assign(new Error("request aborted"), { name: "AbortError" })), { once: true });
+        });
+      },
+    } },
+  });
+  try {
+    await assert.rejects(
+      recoveryLock.withOfflineRecoveryStartupLock(async () => { ran = true; }, 20),
+      /OFFLINE_RECOVERY_LOCK_ACQUIRE_TIMEOUT/,
+    );
+    assert.equal(acquisitionSignal.aborted, true, "only the queued lock was cancelled");
+    assert.equal(ran, false, "destructive callback never ran");
+    await assert.rejects(pendingCallback(), /OFFLINE_RECOVERY_LOCK_ACQUIRE_TIMEOUT/,
+      "even a buggy late callback must fail closed");
+    assert.equal(ran, false);
+  } finally {
+    if (priorNavigator) Object.defineProperty(globalThis, "navigator", priorNavigator);
+    else delete globalThis.navigator;
+  }
+});
+
+test("startup lock acquisition timeout is disarmed as soon as its callback starts", async () => {
+  const priorNavigator = Object.getOwnPropertyDescriptor(globalThis, "navigator");
+  let acquiredSignal;
+  let release;
+  Object.defineProperty(globalThis, "navigator", {
+    configurable: true,
+    value: { locks: {
+      request(_name, options, callback) {
+        acquiredSignal = options.signal;
+        return callback(); // Callback acquired the lock immediately.
+      },
+    } },
+  });
+  try {
+    const work = recoveryLock.withOfflineRecoveryStartupLock(
+      () => new Promise(resolve => { release = resolve; }), 20,
+    );
+    await new Promise(resolve => setTimeout(resolve, 45));
+    assert.equal(acquiredSignal.aborted, false, "no abort after entry, even when work exceeds the acquisition timeout");
+    release("committed");
+    assert.equal(await work, "committed");
+  } finally {
+    if (priorNavigator) Object.defineProperty(globalThis, "navigator", priorNavigator);
+    else delete globalThis.navigator;
+  }
 });

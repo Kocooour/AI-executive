@@ -1,3 +1,5 @@
+import { writeFileSync } from "node:fs";
+import { sessionFile } from "../playwright.config";
 import { expect, test } from "./fixtures";
 import { prepareOfflineRecovery } from "../lib/d2b-offline-reconciliation";
 import { encodeOfflineRecoveryFile } from "../lib/d2b-offline-recovery-file";
@@ -679,6 +681,9 @@ test("signing out without a connection is refused and removes nothing", async ({
 test("signing out clears the local copy; signing in again restores it from the server", async ({ page }) => {
   await page.goto("/?view=Settings");
   await waitUntilSynced(page);
+  const previousSessionCookie = (await page.context().cookies())
+    .find((cookie) => cookie.name === "ai_executive_session")?.value;
+  expect(previousSessionCookie).toBeTruthy();
   const plantDraft = (text: string, base: string) => page.evaluate((draft) => localStorage.setItem("ai-executive-notes-drafts",
     JSON.stringify({ "other-tab:e2e-rename": { id: "e2e-rename", ...draft, at: Date.now(), page: "other-tab" } })), { text, base });
   const base = String((await serverEntities(page)).find((entity) => entity.id === "e2e-rename")?.properties?.notes ?? "");
@@ -718,4 +723,18 @@ test("signing out clears the local copy; signing in again restores it from the s
   await sidebarView(page, "Doručené").click();
   await expect(page.getByText(seeded.plainTask)).toBeVisible();
   await expectOnServer(page, (entity) => entity.id === "e2e-rename" && entity.properties?.notes === otherTab, true);
+
+  // This sign-out globally revokes ALL previously issued owner cookies.
+  // Playwright's dependent setup wrote sessionFile before that revocation;
+  // in a serial app + backups + two-devices run every later scenario would
+  // otherwise reuse its now-invalid cookie (GET /api/store -> 401).
+  // Keep the real production revocation intact and refresh ONLY the test
+  // fixture with the newly issued, server-verified owner session. Persist no
+  // localStorage or IndexedDB from this test: each later scenario still starts
+  // in a clean browser with just an authenticated cookie.
+  const { cookies } = await page.context().storageState();
+  const freshSessionCookie = cookies.find((cookie) => cookie.name === "ai_executive_session")?.value;
+  expect(freshSessionCookie).toBeTruthy();
+  expect(freshSessionCookie).not.toBe(previousSessionCookie);
+  writeFileSync(sessionFile, JSON.stringify({ cookies, origins: [] }));
 });

@@ -231,9 +231,9 @@ export function useLumiApp(options: { targetDetails?: boolean; targetUnified?: b
   // A workspace change invalidates both visible conversation content and replies still in flight.
   const assistantRequestVersion = useRef(0);
   const { items, relations, unsent, heldBack, heldReasons, syncStatus, setSyncStatus, serverRevision, syncQueue, localDataVersion, signedOut, pendingKey,
-    deletedKey, revivedKey, pendingDeletedIds, pendingRevivedIds, load, applySnapshot, replaceLocalWithServer, restoreGeneration, restoredSinceKnown, adoptServerCopy, showRestoredNotice, restoredNotice, dismissRestoredNotice, putSnapshot, syncToServer,
+    deletedKey, revivedKey, pendingDeletedIds, pendingRevivedIds, load, applySnapshot, replaceLocalWithServer, restoreGeneration, restoredSinceKnown, adoptServerCopy, finishInterruptedOwnerAdoption, showRestoredNotice, restoredNotice, dismissRestoredNotice, putSnapshot, syncToServer,
     pullFromServer, tabId, captureMarkers, clearSentMarkers,
-    recoveryHeld, recoveryPreparing, recoveryReady, recoveryError, recoveryOffline, recoveryDownloadRequested,
+    recoveryHeld, ownerFenceRawRescueReason, recoveryPreparing, recoveryReady, recoveryError, recoveryOffline, recoveryDownloadRequested,
     recoveryInspecting, recoveryInspection, recoveryInspectionError, inspectOfflineRecoveryFile,
     prepareOfflineRecoveryDownload, downloadOfflineRecovery } = useSync();
   // Reconcile each project independently against acknowledged base data and
@@ -1558,6 +1558,30 @@ export function useLumiApp(options: { targetDetails?: boolean; targetUnified?: b
       // Do not migrate, seed, or clean any local data while rescue is required.
       if (offlineRecoveryIsHeld()) {
         await load();
+        setSyncStatus("offline");
+        return;
+      }
+      // A persisted wipe-pending marker means the owner already authorized
+      // deletion. Finish it under the shared Web Lock BEFORE interpreting a
+      // potentially obsolete owner-adoption fence (which may outlive the DB).
+      if (localStorage.getItem("ai-executive-wipe-pending") === "1") {
+        await finishInterruptedWipe();
+        if (localStorage.getItem("ai-executive-wipe-pending") === "1") {
+          setSyncStatus("offline");
+          return;
+        }
+        restoreGeneration.current = undefined;
+        // Do not fetch/seed server data straight back into the just-signed-out
+        // browser. A later explicit login starts a new synchronization.
+        if (localStorage.getItem("ai-executive-signed-out") === "1") {
+          setSyncStatus("offline");
+          return;
+        }
+      }
+      // Resume a fully committed owner restore whose final localStorage
+      // fence removal failed before starting normal reads or migrations.
+      if (!(await finishInterruptedOwnerAdoption())) {
+        await load().catch(() => undefined);
         setSyncStatus("offline");
         return;
       }
@@ -4897,6 +4921,7 @@ export function useLumiApp(options: { targetDetails?: boolean; targetUnified?: b
     restoredNotice,
     dismissRestoredNotice,
     recoveryHeld,
+    ownerFenceRawRescueReason,
     recoveryPreparing,
     recoveryReady,
     recoveryError,
