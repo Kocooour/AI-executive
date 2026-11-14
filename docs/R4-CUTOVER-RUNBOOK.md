@@ -60,8 +60,11 @@ canonical semantic \`target-store-provision.mjs --check\` runs with
 The full directory (SQLite, witness, journal and companions) is saved as
 \`target/\` within the **same verified** \`deploy-XXXXXXXX\` backup as
 legacy \`data/\` and \`env\`. The common hash manifest covers all files and
-the source-versus-copy directory diff must match; on failure, only an
-unverified partial copy is deleted. Post-start checking quiesces the service
+the source-versus-copy directory diff must match. Immediately after the
+copy, before any new-code start, the quiesced target store is checked again
+**against the configured owner and restore generation**, not just for internal
+consistency: this also rejects a substituted but valid store. On failure,
+only an unverified partial copy is deleted. Post-start checking quiesces the service
 again to avoid transient SQLite sidecars before a second semantic preflight,
 then restarts and checks HTTP readiness. Only code is automatically rolled
 back, **never either data domain**. This introduces a second short service
