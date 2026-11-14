@@ -15,6 +15,20 @@ on:
       - "e2e/tabs.spec.ts"
       - "e2e/project-page.spec.ts"
       - "e2e/inspector-return-focus-ui01e.spec.ts"
+      # C16 depends on auth setup, issued-cookie validation and revocation.
+      # Changes here must not silently bypass the targeted browser regressions.
+      - "e2e/auth.setup.ts"
+      - "e2e/helpers.ts"
+      - "playwright.config.ts"
+      - "app/api/auth/**"
+      - "lib/auth.ts"
+      - "lib/owner-session-revocation.ts"
+      - "lib/passkeys.ts"
+      - "lib/http-security.ts"
+      - "scripts/owner-session-revocation-init.mjs"
+      - "scripts/hash-password.mjs"
+      - "scripts/verify-release0-c16-pair.mjs"
+      - "tests/release0-c16-pair-selection.test.mjs"
   workflow_dispatch:
 
 permissions:
@@ -56,46 +70,61 @@ jobs:
         run: pnpm exec playwright install --with-deps chromium
       - name: Prove global revocation and next-test repair
         run: pnpm exec playwright test e2e/session-recovery.spec.ts --project=desktop --workers=1 --trace=on
-      - name: Real passkey logout then project inspector
-        run: |
-          pnpm exec playwright test \
-            e2e/passkeys.spec.ts e2e/project-page.spec.ts \
-            --project=desktop --workers=1 \
-            --grep 'a passkey signs in until it is removed|C10: inspector Close preserves' \
-            --trace=on
-      - name: Offline logout then inspector focus (ordered same-instance pair)
+      - name: Exact ordered logout predecessors then the original C4 failures
         shell: bash
         run: |
-          ordered=(e2e/c16-01-recovery.spec.ts e2e/c16-02-inspector.spec.ts)
-          cp e2e/recovery.spec.ts "${ordered[0]}"
-          cp e2e/inspector-return-focus-ui01e.spec.ts "${ordered[1]}"
-          trap 'rm -f "${ordered[@]}"' EXIT
-          pnpm exec playwright test "${ordered[@]}" \
-            --project=desktop --workers=1 \
-            --grep 'signing out after an offline start sends offline changes once the connection is back|UI-01e: keyboard A' \
-            --trace=on
-      - name: Tab logout then project inspector (ordered same-instance pair)
-        shell: bash
-        run: |
-          ordered=(e2e/c16-01-tabs.spec.ts e2e/c16-02-project.spec.ts)
-          cp e2e/tabs.spec.ts "${ordered[0]}"
-          cp e2e/project-page.spec.ts "${ordered[1]}"
-          trap 'rm -f "${ordered[@]}"' EXIT
-          pnpm exec playwright test "${ordered[@]}" \
-            --project=desktop --workers=1 \
-            --grep 'signing out in one tab first saves a title being typed in another|C10: inspector Close preserves' \
-            --trace=on
-      - name: Anonymous boundary logout then project inspector (ordered pair)
-        shell: bash
-        run: |
-          ordered=(e2e/c16-01-boundary.spec.ts e2e/c16-02-project.spec.ts)
-          cp e2e/data-boundary.spec.ts "${ordered[0]}"
-          cp e2e/project-page.spec.ts "${ordered[1]}"
-          trap 'rm -f "${ordered[@]}"' EXIT
-          pnpm exec playwright test "${ordered[@]}" \
-            --project=desktop --workers=1 \
-            --grep 'without a session every handler refuses|C10: inspector Close preserves' \
-            --trace=on
+          set -euo pipefail
+          # Playwright 1.56 orders files alphabetically. Number temporary
+          # aliases so every pair runs against ONE synthetic server in the
+          # intended order, with global session revocation preserved.
+          created=()
+          trap 'rm -f "${created[@]}"' EXIT
+          run_pair() {
+            local label="$1" first_source="$2" first_title="$3" second_source="$4" second_title="$5"
+            local first_alias="e2e/c16-01-${first_source##*/}"
+            local second_alias="e2e/c16-02-${second_source##*/}"
+            local selected="${RUNNER_TEMP}/c16-${label}-selected.txt"
+            local executed="${RUNNER_TEMP}/c16-${label}-executed.txt"
+            created=("$first_alias" "$second_alias")
+            cp "$first_source" "$first_alias"
+            cp "$second_source" "$second_alias"
+            local grep="${first_title}|${second_title}"
+
+            # Fail closed if the selector drifts to C10 instead of the
+            # original aggregate deep-link failure from #405.
+            pnpm exec playwright test "${created[@]}" --project=desktop --workers=1 \
+              --grep "$grep" --list | tee "$selected"
+            node scripts/verify-release0-c16-pair.mjs "$selected" \
+              "$first_alias" "$first_title" "$second_alias" "$second_title" selection
+
+            pnpm exec playwright test "${created[@]}" --project=desktop --workers=1 \
+              --grep "$grep" --trace=on 2>&1 | tee "$executed"
+            node scripts/verify-release0-c16-pair.mjs "$executed" \
+              "$first_alias" "$first_title" "$second_alias" "$second_title" execution
+            rm -f "${created[@]}"
+            created=()
+          }
+
+          original='aggregate project deep links survive reload and stale list markers cannot reopen a record'
+          focus='UI-01e: keyboard A → close A → background-select B → close B does not restore stale A'
+          run_pair passkey-to-original e2e/passkeys.spec.ts \
+            'a passkey signs in until it is removed' e2e/project-page.spec.ts "$original"
+          run_pair app-logout-to-original e2e/app.spec.ts \
+            'signing out clears the local copy; signing in again restores it from the server' \
+            e2e/project-page.spec.ts "$original"
+          run_pair tabs-to-original e2e/tabs.spec.ts \
+            'signing out in one tab first saves a title being typed in another' \
+            e2e/project-page.spec.ts "$original"
+          run_pair recovery-to-original e2e/recovery.spec.ts \
+            'signing out after an offline start sends offline changes once the connection is back' \
+            e2e/project-page.spec.ts "$original"
+          run_pair boundary-to-original e2e/data-boundary.spec.ts \
+            'without a session every handler refuses, except the documented public ones' \
+            e2e/project-page.spec.ts "$original"
+          # Retain coverage of the other original C4 failure, focus restoration.
+          run_pair recovery-to-focus e2e/recovery.spec.ts \
+            'signing out after an offline start sends offline changes once the connection is back' \
+            e2e/inspector-return-focus-ui01e.spec.ts "$focus"
       - name: Upload focused traces on failure
         if: failure()
         uses: actions/upload-artifact@v6
