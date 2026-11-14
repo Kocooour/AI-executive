@@ -90,6 +90,17 @@ switch (name) {
         path.join(app, "node_modules/next/dist/bin/next") +
         " start --hostname 127.0.0.1 ; ignore_errors=no ; " +
         "start_time=[n/a] ; stop_time=[n/a] ; pid=0 ; code=(null) ; status=0/0 }";
+      // Legacy ExecStart deliberately hides the prefix flags. Mock the
+      // distinct ExecStartEx format so a +/!/!! command with identical argv
+      // passes the legacy check but fails the actual privilege guard.
+      const privilegedPrefix = ["offexecflagsplus", "targetexecflagsplus"].includes(scenario) ||
+        (["offexecflagsdriftbuild", "targetexecflagsdriftbuild", "targetexecflagsdriftpoststart"].includes(scenario) &&
+          fs.existsSync(stateFile("exec-flags-changed")));
+      const ignoredIdentity = ["offexecflagsbang", "targetexecflagsbang"].includes(scenario);
+      const unrelatedPrefix = scenario === "offexecflagsignore";
+      const flags = privilegedPrefix ? "fully-privileged" :
+        ignoredIdentity ? "no-setuid" : unrelatedPrefix ? "ignore-failure" : "";
+      const expectedExecEx = expectedExec.replace("ignore_errors=no", "flags=" + flags);
       const lateIdentity = ["offuserdriftbuild", "targetuserdriftbuild"].includes(scenario) &&
         fs.existsSync(stateFile("identity-changed"));
       const lateProtection = ["offhardeningdriftbuild", "targethardeningdriftpoststart"].includes(scenario) &&
@@ -135,6 +146,11 @@ switch (name) {
       const valueFor = prop => (Object.hasOwn(security, prop) ? security[prop] :
         prop === "ExecStart" ? (
           execChanged ? expectedExec.replace("start --hostname 127.0.0.1", "start --hostname 0.0.0.0") : expectedExec) :
+        prop === "ExecStartEx" ?
+          (scenario === "offexecxmissing" ? "" : scenario === "offexecxchangedargv" ?
+            expectedExecEx.replace("start --hostname 127.0.0.1", "start --hostname 0.0.0.0") :
+            execChanged ? expectedExecEx.replace("start --hostname 127.0.0.1", "start --hostname 0.0.0.0") :
+            expectedExecEx) :
         prop === "ExecStartPost" && scenario === "offextrahook" ?
           "{ path=/usr/bin/touch ; argv[]=/usr/bin/touch /tmp/unreviewed ; ignore_errors=no ; start_time=[n/a] ; stop_time=[n/a] ; pid=0 ; code=(null) ; status=0/0 }" :
         prop === "User" ? "ai-executive" :
@@ -178,6 +194,12 @@ switch (name) {
       break;
     }
     if (verb === "stop") {
+      if (scenario === "targetexecflagsdriftpoststart" && get("head") === target &&
+          fs.existsSync(stateFile("target-started")) &&
+          !fs.existsSync(stateFile("exec-flags-changed"))) {
+        set("exec-flags-changed", "1");
+        log("unit-exec-flags-changed-after-first-start");
+      }
       if (scenario === "targethardeningdriftpoststart" && get("head") === target &&
           fs.existsSync(stateFile("target-started")) &&
           !fs.existsSync(stateFile("hardening-changed"))) {
@@ -323,6 +345,11 @@ switch (name) {
           get("head") === target && !fs.existsSync(stateFile("hardening-changed"))) {
         set("hardening-changed", "1");
         log("unit-hardening-changed-during-build");
+      }
+      if (["offexecflagsdriftbuild", "targetexecflagsdriftbuild"].includes(scenario) &&
+          get("head") === target && !fs.existsSync(stateFile("exec-flags-changed"))) {
+        set("exec-flags-changed", "1");
+        log("unit-exec-flags-changed-during-build");
       }
       if (["offexecdriftbuild", "targetexecdriftbuild"].includes(scenario) &&
           get("head") === target &&
