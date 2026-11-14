@@ -29,6 +29,10 @@ switch (name) {
     process.exit(8);
   case "stat":
     if (args[0] === "-c" && args[1] === "%u") { console.log("0"); break; }
+    if (args[0] === "-c" && args[1] === "%a") {
+      console.log((fs.statSync(args[args.length - 1]).mode & 0o777).toString(8));
+      break;
+    }
     process.exit(8);
   case "du":
     console.log("5120\t" + args[args.length - 1]); break;
@@ -54,7 +58,11 @@ switch (name) {
     }
     if (verb === "show") {
       const prop = args[args.indexOf("-p") + 1];
-      console.log(prop === "User" ? "ai-executive" : prop === "WorkingDirectory" ? app : "");
+      console.log(prop === "User" ? "ai-executive" :
+        prop === "WorkingDirectory" ? app :
+        prop === "StateDirectory" ? "ai-executive" :
+        prop === "ReadWritePaths" && scenario.startsWith("target") && scenario !== "targetunit"
+          ? path.join(root, "var/lib/ai-executive-target") : "");
       break;
     }
     if (verb === "stop") { set("service", "inactive"); log("stop"); break; }
@@ -122,6 +130,7 @@ switch (name) {
         } finally { db.close(); }
         set("mail-pruned", "1");
       }
+      if (scenario.startsWith("target") && get("head") === target) set("target-started", "1");
       set("service", "active"); log("start-" + get("head").slice(0,1)); break;
     }
     process.exit(8);
@@ -132,6 +141,15 @@ switch (name) {
     else if (verb === "status" && args[1] === "--porcelain") {}
     else if (verb === "rev-parse") console.log(args[1] === "FETCH_HEAD" ? target : get("head"));
     else if (verb === "fetch" || verb === "merge-base" || verb === "diff") {}
+    else if (verb === "show") {
+      const spec = args[1] || "";
+      if (!spec.startsWith(target + ":")) process.exit(8);
+      const file = spec.slice(target.length + 1);
+      if (!["scripts/target-profile-env.mjs", "lib/target-personal-profile.ts"].includes(file))
+        process.exit(8);
+      process.stdout.write(fs.readFileSync(new URL("../../" + file, import.meta.url)));
+      log("target-profile-source");
+    }
     else if (verb === "cat-file" && args[1] === "-e") {
       // Synthetic pre-feature -> revocation-feature transition. Earlier deploy
       // tests intentionally do not advertise this module in either commit.
@@ -203,6 +221,29 @@ switch (name) {
       console.error("simulated read-only Gmail snapshot error");
       process.exit(29);
     }
+    if (scenario.startsWith("target") && exec === process.execPath &&
+        rest[0] === path.join(app, "scripts/target-store-provision.mjs") &&
+        rest[1] === "--check") {
+      log("target-check");
+      const directory = rest[2];
+      const expected = path.join(root, "var/lib/ai-executive-target/personal-v1");
+      if (directory !== expected || get("service") !== "inactive") process.exit(9);
+      if (scenario === "targetpostfail" && fs.existsSync(stateFile("target-started"))) {
+        console.error("synthetic post-start target preflight failure");
+        process.exit(40);
+      }
+      const names = fs.readdirSync(directory).sort();
+      if (names.join(",") !== ["lumi-target.journal", "lumi-target-witness.sqlite", "lumi-target.sqlite"].join(","))
+        process.exit(41);
+      const [owner, generation] = fs.readFileSync(path.join(directory, "lumi-target.sqlite"), "utf8").split("\n");
+      console.log([
+        "AI_EXECUTIVE_TARGET_STAGING_DIRECTORY=" + directory,
+        "AI_EXECUTIVE_TARGET_STAGING_OWNER_USER_ID=" + owner,
+        "AI_EXECUTIVE_TARGET_STAGING_RESTORE_GENERATION=" +
+          (scenario === "targetgeneration" ? "different-generation" : generation),
+      ].join("\n"));
+      break;
+    }
     if (exec === "test") {
       const file = rest[1], mode = rest[0];
       const perm = fs.statSync(file).mode & 0o777;
@@ -222,6 +263,13 @@ switch (name) {
       fs.writeFileSync(path.join(destination, "incomplete"), Buffer.alloc(512 * 1024));
       console.error("simulated ENOSPC while copying");
       process.exit(28);
+    }
+    if (scenario === "targetbackupcorrupt" &&
+        args[args.length - 2] === path.join(root, "var/lib/ai-executive-target/personal-v1")) {
+      const copied = spawnSync("/bin/cp", args, { stdio: "inherit" });
+      if (copied.status !== 0) process.exit(copied.status || 1);
+      fs.appendFileSync(path.join(args[args.length - 1], "lumi-target.journal"), "tampered");
+      break;
     }
     if (scenario === "corruptcopy" && args[args.length - 2] === path.join(root, "etc/ai-executive/ai-executive.env")) {
       const saved = spawnSync("/bin/cp", args, { stdio: "inherit" });
