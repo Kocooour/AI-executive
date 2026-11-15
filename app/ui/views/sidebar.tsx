@@ -162,7 +162,7 @@ export function Sidebar({ app, targetPlan = false, onTargetCapture }: {
               className={`${active ? "active" : ""} ${dragTarget === `section:${x}` ? "dropActive" : ""}`.trim()}
               aria-current={active ? "page" : undefined}
               aria-label={planPreview ? (targetPlan
-                ? (language === "cs" ? "Můj plán – serverový plán ze stagingu" : "My Plan – server plan from staging")
+                ? (language === "cs" ? "Můj plán – aktuální úkoly ze serveru" : "My Plan – current tasks from the server")
                 : (language === "cs"
                   ? "Můj plán – vývojový náhled nad stávajícími daty"
                   : "My Plan – development preview with legacy data")) : undefined}

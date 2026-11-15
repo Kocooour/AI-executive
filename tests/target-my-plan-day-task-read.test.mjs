@@ -204,3 +204,39 @@ test("staging authority uses canonical preflight; live guard binds session and p
   assert.equal(revokeAllDurableTargetStagingSessionsForUser(f.store,"bob").ok,true);
   assert.notEqual(check(refreshed).ok,true);
 });
+
+
+test("undated window returns only open private tasks without When or due date",()=>{
+  const f=fixture();
+  f.db.prepare("INSERT INTO projects(id,area_id,title) VALUES ('bob-project','bob-private','Bob project')").run();
+  f.db.prepare("INSERT INTO tasks(id,project_id,title) VALUES ('p-child', 'bob-project','Child undated')").run();
+  f.db.prepare("INSERT INTO tasks(id,area_id,title) VALUES ('s-empty','family-area','Shared empty')").run();
+  f.db.prepare("INSERT INTO tasks(id,area_id,title) VALUES ('p-completed','bob-private','Completed')").run();
+  f.db.prepare("UPDATE tasks SET status='completed',completed_at_ms=1793800000000 WHERE id='p-completed'").run();
+  const undated=page(f,"bob","undated");
+  assert.deepEqual(ids(undated),["p-child","p-empty"]);
+  assert.ok(undated.tasks.every(row=>row.areaKind==="private"&&
+    row.dueOn===null&&row.whenOn===null&&row.attentionOn===null));
+  assert.deepEqual(ids(page(f,"bob","undated","shared")),[]);
+  assert.deepEqual(ids(page(f,"bob","undated","personal")),ids(undated));
+  assert.deepEqual(ids(page(f,"alice","undated")),[]);
+  assert.deepEqual(ids(page(f,"carol","undated")),[]);
+  assert.equal(page(f,"bob","undated","all",{throughDate:"2026-11-05"}),null);
+  const first=page(f,"bob","undated","all",{limit:1,offset:0});
+  assert.equal(first.hasMore,true);
+  assert.deepEqual(ids(first),["p-child"]);
+  assert.deepEqual(ids(page(f,"bob","undated","all",{limit:1,offset:1})),["p-empty"]);
+  const before=undated.revision;
+  f.db.prepare("INSERT INTO personal_task_plans(user_id,task_id,when_on) VALUES ('bob','p-empty','2026-11-04')").run();
+  assert.deepEqual(ids(page(f,"bob","undated")),["p-child"]);
+  assert.notEqual(page(f,"bob","undated").revision,before);
+  const snap=f.authority.readMyPlanTwoDayTaskPage("bob","all","2026-11-04","2026-11-05",100,0,0,0);
+  assert.ok(snap);
+  assert.deepEqual(ids(snap.undated),["p-child"]);
+  // Existing 7-argument readers (e.g. security matrix) must start the new bucket at zero.
+  const legacy=f.authority.readMyPlanTwoDayTaskPage(
+    "bob","all","2026-11-04","2026-11-05",100,0,0);
+  assert.ok(legacy);
+  assert.deepEqual(ids(legacy.undated),ids(snap.undated));
+  assert.deepEqual(snap.today.tasks.map(t=>t.taskId).filter(id=>id==="p-empty"),["p-empty"]);
+});

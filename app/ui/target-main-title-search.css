@@ -20,8 +20,19 @@
   border-radius:10px;color:var(--text);}
 .targetMainSearchItems{list-style:none;display:grid;gap:6px;margin:0;padding:0;}
 .targetMainSearchItem{display:flex;gap:12px;align-items:center;min-height:56px;
-  padding:10px 14px;border-radius:13px;
+  padding:0;border-radius:13px;overflow:hidden;
   background:var(--surface-subtle);color:var(--text);}
+.targetMainSearchItemButton,.targetMainSearchRowContent{
+  display:flex;gap:12px;align-items:center;width:100%;min-height:56px;
+  padding:10px 14px;text-align:start;color:inherit;font:inherit;
+}
+.targetMainSearchItemButton{
+  background:transparent;border:0;cursor:pointer;
+}
+.targetMainSearchItemButton:hover{background:var(--surface);}
+.targetMainSearchItemButton:focus-visible{
+  outline:3px solid var(--focus-ring);outline-offset:-3px;
+}
 .targetMainSearchItem[data-area-kind="private"]{
   border-inline-start:3px solid #15803d;}
 .targetMainSearchItem[data-area-kind="shared"]{

@@ -33,6 +33,7 @@ import { AssistantPanel } from "./views/assistant-panel";
 import { ConfirmDialog } from "./views/confirm-dialog";
 import { DeferPopover } from "./views/defer-popover";
 import { HeldBack } from "./views/held-back";
+import { LegacyDeviceRescueNotice } from "./legacy-device-rescue-notice";
 import { OfflineRecoveryDialog } from "./views/offline-recovery-dialog";
 
 // R3-FE-2: loaded (with its CSS) only when the server page enabled the target My Plan.
@@ -56,9 +57,10 @@ const TargetPrivateTaskCreatedNotice = dynamic(() => import("./target-private-ta
 export type TargetDetailsProps = { task: boolean; project: boolean; note: boolean };
 export type TargetScopesProps = { enabled: boolean; projects: boolean; notes: boolean };
 export type TargetEditsProps = TargetUiEdits;
+export type TargetCreatesProps = { projects:boolean; projectTasks:boolean };
 export type TargetMyPlanProps = { enabled: boolean; statusWrite: boolean; whenWrite: boolean };
 
-export function LumiAppRoot({ targetMyPlan, targetScopes, targetDetails, targetEdits, targetNoteEdit = false, targetProjectEdit = false, targetPrivateNoteAreas = false, targetPrivateNoteCreate = false, targetPrivateTaskCreate = false, targetSearch = false, humanWikiSourceStatusEnabled = false }: { targetMyPlan?: TargetMyPlanProps; targetScopes?: TargetScopesProps; targetDetails?: TargetDetailsProps; targetEdits?: TargetEditsProps; targetNoteEdit?: boolean; targetProjectEdit?: boolean; targetPrivateNoteAreas?: boolean; targetPrivateNoteCreate?: boolean; targetPrivateTaskCreate?: boolean; targetSearch?: boolean; humanWikiSourceStatusEnabled?: boolean } = {}) {
+export function LumiAppRoot({ targetMyPlan, targetScopes, targetDetails, targetEdits, targetCreates, targetNoteEdit = false, targetProjectEdit = false, targetPrivateNoteAreas = false, targetPrivateNoteCreate = false, targetPrivateTaskCreate = false, targetSearch = false, humanWikiSourceStatusEnabled = false }: { targetMyPlan?: TargetMyPlanProps; targetScopes?: TargetScopesProps; targetDetails?: TargetDetailsProps; targetEdits?: TargetEditsProps; targetCreates?: TargetCreatesProps; targetNoteEdit?: boolean; targetProjectEdit?: boolean; targetPrivateNoteAreas?: boolean; targetPrivateNoteCreate?: boolean; targetPrivateTaskCreate?: boolean; targetSearch?: boolean; humanWikiSourceStatusEnabled?: boolean } = {}) {
   // Owner decision 2026-11-09: with target scopes on, the single global scope governs the
   // sidebar projects, the inspector and quick capture (see docs/R3-FE-04A-DETAILS.md).
   const scopesOn = Boolean(targetScopes?.enabled);
@@ -206,7 +208,9 @@ export function LumiAppRoot({ targetMyPlan, targetScopes, targetDetails, targetE
   const targetView = scopeList !== null || targetPlan || (targetSearch && view==="Search");
   const legacyInspector = Boolean(app.selected) && !(scopesOn && targetView);
   // Unified target mode: views that still show legacy data are read-only (no target create/edit API yet).
-  const legacyReadOnly = app.legacyWritesDisabled && !targetView;
+  const legacyReadOnly = app.legacyWritesDisabled && !targetView && ["Home", "Inbox", "Today"].includes(view);
+  // A navigable My Plan requires both its target feature gate and the v1 shell.
+  const legacyMyPlanAvailable = Boolean(targetMyPlan?.enabled && mobileDesignV1Preview);
   // Do not mount legacy task rows or local held-back titles underneath
   // server-authorized Search, including before the first explicit query.
   const legacySearchSurfaces = mainTitleSearchLegacySurfaces(targetSearch,view);
@@ -264,8 +268,8 @@ export function LumiAppRoot({ targetMyPlan, targetScopes, targetDetails, targetE
         {targetPlan && (
           <p className="mobileV1PreviewNotice" role="status" data-plan-source="target-staging">
             {language === "cs"
-              ? "Zobrazený plán je serverový plán ze stagingu: vaše soukromé úkoly a sdílené úkoly přiřazené vám. Dosavadní místní seznam Dnes se zde nepoužívá."
-              : "This plan comes from the staging server: your private tasks and the shared tasks assigned to you. The existing local Today list is not used here."}
+              ? "Můj plán zobrazuje úkoly uložené na serveru: vaše soukromé úkoly a sdílené úkoly přiřazené vám. Původní místní seznam Dnes se zde nepoužívá."
+              : "My Plan shows tasks stored on the server: your private tasks and shared tasks assigned to you. The previous local Today list is not used here."}
           </p>
         )}
         {!targetPlan && mobileDesignV1Preview && app.mobilePlanPreviewActive && view === "Today" && (
@@ -278,9 +282,19 @@ export function LumiAppRoot({ targetMyPlan, targetScopes, targetDetails, targetE
         <div className="content">
           {legacyReadOnly && (
             <p className="navigationUnavailableNotice legacyReadOnlyNotice" role="status" data-testid="legacy-read-only-notice">
-              {detailCopy[language].legacyReadOnlyNotice}
+              {legacyMyPlanAvailable ? detailCopy[language].legacyReadOnlyNotice
+                : language === "cs"
+                  ? "Tady vidíte dřívější data jen pro čtení. Můj plán zde zatím není dostupný."
+                  : "This view shows earlier data, read-only. My Plan is not available here yet."}
+              {legacyMyPlanAvailable && <>{" "}
+                <button type="button" className="textAction" onClick={() => {
+                  app.closeDetail();
+                  app.setView("Today", { previewMyPlan: true });
+                }}>{language === "cs" ? "Otevřít Můj plán" : "Open My Plan"}</button>
+              </>}
             </p>
           )}
+          {legacyReadOnly && <LegacyDeviceRescueNotice language={language} />}
           {app.legacyWritesDisabled && app.legacyWriteAttempt && (
             <div className="navigationUnavailableNotice legacyReadOnlyNotice" role="alert" data-testid="legacy-write-blocked">
               <p>{detailCopy[language].legacyWriteBlocked}</p>
@@ -313,7 +327,7 @@ export function LumiAppRoot({ targetMyPlan, targetScopes, targetDetails, targetE
           <HomeView app={app} />
           {view === "Today" && !targetPlan && <TodayTop app={app} />}
           {view==="Search" && targetSearch
-            ? <TargetMainTitleSearch query={app.query} language={language} />
+            ? <TargetMainTitleSearch query={app.query} language={language} details={detailGates} detailViews={targetViews} />
             : <SearchResults app={app} />}
           <ContextView app={app} humanWikiSourceStatusEnabled={humanWikiSourceStatusEnabled} />
           <AgentsView app={app} />
@@ -322,7 +336,8 @@ export function LumiAppRoot({ targetMyPlan, targetScopes, targetDetails, targetE
             ? <TargetMyPlan gates={targetMyPlan} language={language} scopeDriven={scopesOn} taskDetail={detailGates.task} />
             : scopeList
               ? <TargetScopeLists key={scopeList==="note"?scopeList+":"+noteListRevision:scopeList} kind={scopeList} language={language}
-                detail={scopeList === "project" ? detailGates.project : detailGates.note} />
+                detail={scopeList === "project" ? detailGates.project : detailGates.note}
+                createProject={Boolean(targetCreates?.projects&&scopeList==="project")} />
               : legacySearchSurfaces.entityList
                 ? <EntityList app={app} />
                 : null}
@@ -341,7 +356,7 @@ export function LumiAppRoot({ targetMyPlan, targetScopes, targetDetails, targetE
           :<TargetPrivateNoteAreaChooser language={language} createEnabled={targetPrivateNoteCreate}
             onClose={closeAreaChooser} onCreated={createdPrivateNote}/>)}
       {!(scopesOn && targetView) && <DetailPanel app={app} />}
-      {detailPanel && <TargetDetailPanel route={detailRoute} language={language} gates={detailGates} edits={targetEdits} noteEdit={targetNoteEdit && detailGates.note} projectEdit={targetProjectEdit && detailGates.project} onPrivateCapture={targetCapture?()=>openAreaChooser(true):undefined} />}
+      {detailPanel && <TargetDetailPanel route={detailRoute} language={language} gates={detailGates} edits={targetEdits} noteEdit={targetNoteEdit && detailGates.note} projectEdit={targetProjectEdit && detailGates.project} createTask={Boolean(targetCreates?.projectTasks && detailGates.project && detailGates.task)} onPrivateCapture={targetCapture?()=>openAreaChooser(true):undefined} />}
       <AssistantPanel app={app} />
       <DeferPopover app={app} />
       <ConfirmDialog app={app} />

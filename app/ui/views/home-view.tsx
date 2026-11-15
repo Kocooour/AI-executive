@@ -155,6 +155,7 @@ export function HomeView({ app }: { app: LumiApp }) {
                   onClick={(event) => { event.stopPropagation(); void done(task.id); }} />
               ) : (
                 <button type="button" className="check" aria-label={`Complete ${task.title}`}
+                  disabled={app.legacyWritesDisabled} title={app.legacyReadOnlyHint}
                   onClick={(event) => { event.stopPropagation(); void done(task.id); }}>○</button>
               )}
               <div><strong>{task.title || tr("untitledItem")}<RecordMarks app={app} entity={task} /></strong><small>{taskDueSummary(task, today, language) || (task.properties.priority && task.properties.priority !== "none" ? tr(String(task.properties.priority)) : tr("Today"))}</small></div>

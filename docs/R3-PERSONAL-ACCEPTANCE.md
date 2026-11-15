@@ -43,12 +43,46 @@ požadavek není mockován (`page.on("request")` pouze počítá).
 ```
 NEXT_PUBLIC_LUMI_DESIGN_V1_PREVIEW=1 pnpm build
 LUMI_TARGET_PERSONAL_ACCEPTANCE_E2E=true E2E_SKIP_BUILD=1 \
-  pnpm exec playwright test e2e/target-personal-acceptance.spec.ts --project=desktop
+  pnpm exec playwright test e2e/target-personal-acceptance.spec.ts e2e/target-personal-my-plan.spec.ts --project=desktop
 ```
 
 Bez `LUMI_TARGET_PERSONAL_ACCEPTANCE_E2E=true` se test přeskočí a nevznikne
 žádný store. CI: `.github/workflows/r3-personal-acceptance-browser.yml`
-(port 3130, path filter, profilový unit test + build + jen tato spec).
+(port 3130, path filter, profilový unit test + build + obě real-store spec).
+
+## C17 — nativní BFCache a přeformulovaná release brána #388
+
+Nad izolovaným profilem `personal-v1` běží `e2e/target-personal-native-bfcache.spec.ts`
+pro **390 a 1280 px**, v samostatném nativním Chromu bez Playwright přepínače
+`--disable-back-forward-cache`. Ve striktním `workflow_dispatch`
+(`LUMI_REAL_BFCACHE_E2E=true`) musí být vidět původní i návratový skutečný
+`pageshow`. Přijímají se pouze dvě doložené větve:
+
+- **`restored`:** `persisted === true`, totožný token dokumentu,
+  původní přísné privacy/autorizační invarianty (nové dokončené přímé GET 200:
+  session → soukromé Oblasti), nulové `POST /api/target-staging/tasks`.
+- **`not_restored`:** `persisted === false`, **neprázdné důvody**
+  z `Page.backForwardCacheNotUsed`, nový token dokumentu, prázdný soukromý
+  formulář a Oblast, nový dokončený přímý GET 200 pro relaci před otevřením
+  editoru a nový GET 200 pro Oblasti před dalším výběrem či uložením;
+  nulové `POST /api/target-staging/tasks`.
+
+U obou větví musí původní text chybět v DOM a úložišti, zůstat
+neodeslatelný i po opětovném výběru Oblasti a stisknutí Uložit.
+`NATIVE_REAL_BFCACHE_EVIDENCE` obsahuje `evaluatedBranch`,
+`checkedOutSha`, CDP důvody, autorizovaná čtení a počty CREATE.
+Bez události, bez důvodů při `not_restored` nebo při jakémkoli CREATE
+striktní test selže. `Cache-Control: no-store` se **nemění**.
+
+Běžné Playwright testy v `target-personal-bfcache.spec.ts` a
+`target-global-private-capture.spec.ts` jsou oddělené regresní
+scénáře reloadu a simulované lifecycle cesty, nikoli nativní svědek
+release brány. Oba ruční workflow dispatch běhy na integrační větvi
+jsou pouze **zkouška brány**; před R4 musí proběhnout na přesném release SHA
+a doplnit ruční ověření Safari, plnou E2E, zálohy a schválení vlastníka
+podle [runbooku](R4-CUTOVER-RUNBOOK.md). Rozhodnutí:
+[#388](https://github.com/Kocooour/AI-executive/issues/388#issuecomment-6866991120)
+a implementační issue [#429](https://github.com/Kocooour/AI-executive/issues/429).
 
 ## Co se seeduje a proč
 
@@ -61,16 +95,18 @@ přihlášení se mapuje na tohoto staging vlastníka.
 
 ## Mimo rozsah
 
-Sdílené Oblasti, vytvoření projektu, úkol v projektu, legacy Domů/Doručené/
-Dnes, Attention, push/notifikace, HumanWiki, produkční zapnutí.
+Sdílené Oblasti, vytvoření projektu, úkol v projektu, legacy zápisy či
+migrace, Attention v cílovém modelu, push/notifikace, HumanWiki, produkční zapnutí.
 
 ## Nalezené mezery
 
-1. **Undo dokončení neobnoví naplánovaný den.** Dokončení smaže řádek osobního
-   plánu (trigger `personal_task_plan_task_reconcile`,
-   `lib/target-store-bootstrap.ts` :409); po Undo je úkol znovu otevřený,
-   ale v Mém plánu se neobjeví, dokud se znovu nenaplánuje. Test ověřuje
-   otevřený stav v detailu projektu. Reprodukce: naplánovat, Dokončit, Undo.
+1. **OPRAVENO v PR #409 — Undo obnovuje naplánovaný den.** Dokončení dál
+   bezpečně odstraní řádek plánu (`personal_task_plan_task_reconcile`), ale
+   potvrzení dokončení váže původní osobní den a nové Undo jej obnoví
+   atomicky s otevřením úkolu. Obnovu dovolí jen původní potvrzený příkaz,
+   nová CAS revize a aktuální oprávnění; revokace ani změna úkolu neobnoví
+   zastaralý plán. Ochrana: `tests/target-task-temporal-status-writer.test.mjs`
+   a `tests/target-staging-my-plan-slice-http.test.mjs` (R3-A3 Undo).
 2. **Závod při rychlém otevření Quick Capture — OPRAVENO v tomto PR.** Čtení
    Mého plánu, výběr Oblastí a `create-preview` šly mimo sdílenou frontu
    `lib/target-read-queue.ts`, ačkoli server povolí jen dva souběžné read
@@ -84,30 +120,67 @@ Dnes, Attention, push/notifikace, HumanWiki, produkční zapnutí.
    `isTargetReadRequest` nově počítá i `create-preview`, `create-recovery`,
    `create-status`. Hlídá to krok 1b scénáře (klik na **+** bez čekání na obou
    šířkách), `peakReads ≤ 2` a `tests/target-app-fetch.test.mjs`.
-3. **Výsledky hledání nejsou otevíratelné** (`app/ui/target-main-title-search.tsx`,
-   řádky `<li>` jsou jen text), takže znovu otevřený, ale neplánovaný úkol
-   není z UI dosažitelný jinak než přes jeho projekt.
-4. **Nově zachycený úkol bez „Kdy“ není v Mém plánu vidět.** Po zavření potvrzení
-   („Zobrazit úkol“) se k němu z hlavního UI nelze dostat: Můj plán ukazuje jen
-   naplánované dny, seznam úkolů cílový režim nemá a výsledky hledání nejsou
-   otevíratelné (bod 3). [LUMI-FR-013](PRODUCT.md#lumi-fr-013) přitom říká, že Můj
-   plán obsahuje všechny soukromé úkoly uživatele. Test proto úkol plánuje
-   přímo z potvrzení. Řeší druhý PR milníku A.
-5. **Interní žargon v textech cílového režimu (neopraveno).**
-   `lib/target-my-plan-copy.ts:106` („stagingový přehled“), `:127`–`:128`
-   („Izolovaný stagingový…“, „novým CAS“), `:168` („dueOn“, „Každý zápis
-   vyžaduje nový CAS; žádná offline fronta.“), `:169` („serverové CAS“),
-   `app/ui/lumi-app-root.tsx:267` („ze stagingu“), `app/ui/views/sidebar.tsx:165`
-   a `app/ui/views/mobile-nav.tsx:43` („serverový plán ze stagingu“).
-6. **Legacy Domů v cílovém režimu (ověřeno, zápis neprochází).** Na 1280 px ukazuje
-   Domů legacy úkoly, sekci Pozornost, počty v postranním panelu a ikony řádků.
-   V běhu na skutečném store: zaškrtnutí i „Kdy“ jsou `disabled`; položky
-   „Odložit o 24 h“ a „Skrýt“ v menu „Další akce“ jsou aktivní, ale
-   `blockLegacyWrite` (`app/ui/use-lumi-app.tsx:83`) je zastaví hláškou „Změna nebyla
-   provedena…jen pro čtení“, bez zápisu a se stejným legacy store. Při načtení
-   stránky proběhne jeden automatický `PUT /api/store` (synchronizační baseline,
-   ne uživatelská změna; porovnání s během bez target příznaků neověřeno).
-   Inspektor legacy řádku nebyl ověřen.
+3. **Výsledky hledání — opraveno v pracovním proudu C6 / issue #407.**
+   Při zapnutém odpovídajícím detailu je výsledek přístupné tlačítko,
+   které otevře existující serverem autorizovaný detail úkolu, projektu či
+   poznámky. Neplatné ID a vypnuté druhy detailu zůstávají textem. Po zavření
+   se fokus vrací na původní řádek pomocí jednorázového výsledku v paměti,
+   který se při změně oprávnění, identity, dotazu, rozsahu, skrytí či odpojení
+   zahodí. Krytí: `tests/target-main-title-search-ui.test.mjs`,
+   `e2e/target-main-title-search.spec.ts` (vypnuté příznaky),
+   `e2e/target-personal-search-open.spec.ts` (real-store opt-in). Poslední
+   prohlížečový test je nově zařazen do real-store opt-in profilu v
+   `playwright.config.ts`, se samostatnými seedovanými daty. **Akceptace je
+   ověřená až po úspěšném běhu obou scénářů v CI.**
+4. **OPRAVENO v PR #409 — soukromé úkoly bez data jsou v Mém plánu.**
+   Třetí sekce „Bez data“ zobrazuje otevřené úkoly soukromých Oblastí bez
+   osobního „Kdy“ a bez termínu; úkoly v projektech dědí Oblast. Po potvrzeném
+   Quick Capture se přehled znovu autorizovaně načte, bez optimistického
+   doplňování. Ochrana: `tests/target-my-plan-day-task-read.test.mjs`,
+   `tests/target-staging-my-plan-slice-http.test.mjs` a
+   `e2e/target-personal-my-plan.spec.ts` (390/1280 px, skutečný store).
+   Playwright `testMatch` a CI nyní spouštějí všechny tři real-store spec pouze při
+   explicitním opt-in; plný E2E běh zůstává předprodukční kontrolou.
+5. **OPRAVENO v PR #409 — interní žargon nahrazen srozumitelným textem.**
+   Česká i anglická verze Mého plánu, navigace a informační hlášky nyní
+   vysvětlují bezpečné ověřování a absenci offline ukládání bez interních
+   názvů implementace. Ochrana: `tests/target-my-plan-i18n.test.mjs` včetně
+   českého snapshotu a kontroly zakázaných technických výrazů.
+6. **OPRAVENO v C13 / issue #423 — dosavadní Domů/Doručené/Dnes jsou pouze pro čtení.**
+   V cílovém profilu zůstávají tyto historické obrazovky dostupné k prohlížení,
+   ale veškeré jejich zápisové prvky (včetně titulku a polí inspektoru,
+   dokončení, plánování, hromadného Inbox třídění, Pozornosti a konfliktů)
+   jsou nativně vypnuté nebo pouze pro čtení. Český a anglický banner ukazuje
+   cestu do aktuálního **Mého plánu**, aniž by blokoval navigaci.
+   `blockLegacyWrite` zůstává druhou ochrannou vrstvou.
+   **Příčina automatického `PUT /api/store`:** dřívější úvodní synchronizace
+   při dosud neoznačeném klientovi nebo čekajících lokálních změnách posílala
+   plný sloučený snapshot, i když uživatel pouze otevřel stránku. V cílovém
+   profilu se nyní historická kopie pouze načte z `GET /api/store` do
+   paměti: nezakládají se ukázková data, nemigruje se IndexedDB a čekající
+   změny se neodesílají; běžný režim synchronizace zůstává beze změny.
+   Regrese navíc kontroluje disabled mobilního dokončení, odolnost vůči změně
+   v další záložce, navigaci při vypnutém Mém plánu a všechny mutační
+   legacy HTTP metody. Vedle GET snapshotu porovnává přímo relevantní
+   kanonické SQLite tabulky včetně Pozornosti a pracovních bloků.
+   Regrese: `e2e/target-personal-acceptance.spec.ts`, oba viewporty
+   **390/1280 px**, skutečné HTTP route handlery, autentizovaný izolovaný target
+   store; po explicitním testovacím zasetí legacy úkolů se porovnává
+   **bajtově totožná odpověď `GET /api/store`** před a po procházení
+   Domů/Doručené/Dnes a inspektoru, při současném odchytu jakéhokoli
+   automatického `PUT`. Výsledek je nutné potvrdit zeleným CI během.
+
+   **Výjimka schválená vlastníkem 2026-11-14 (issue #443):**
+   Omezení „jen pro čtení“ se týká historického **obsahu** (úkoly,
+   poznámky, projekty a Pozornost), nikoli nastavení **integrací**.
+   V cílovém režimu zůstávají funkční připojení/aktualizace/odpojení
+   kalendáře přes ICS (`calendarAction`, `/api/calendar`), nastavení
+   iCloud (`/api/calendar/icloud`) a připojení Gmailu. Jejich zápisy
+   se nadále ukládají do dosavadního integračního úložiště; nemění
+   se chování ani příznaky. Statický inventář mutačních `fetch` volání
+   v `app/ui` je hlídán testem `tests/target-personal-ui-write-inventory.test.mjs`;
+   nový nebo neklasifikovaný zápis musí být před sloučením výslovně posouzen.
+
 7. **Odhlášení nezneplatní vlastnický token (potřeba rozhodnutí vlastníka).** Logout
    pouze maže cookie; bezstavový token zůstává na serveru platný až 7 dní
    (`lib/auth.ts`, `app/api/auth/logout/route.ts`); tester jej přehrál na
