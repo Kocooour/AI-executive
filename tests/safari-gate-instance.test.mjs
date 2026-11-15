@@ -6,6 +6,7 @@ import {
 } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { runInNewContext } from "node:vm";
 import {
   SAFARI_GATE_OWNER, assertSafeGateTmpRoot, assertIsolatedGateRunDirectory,
   assertNoGateRuntimeEnvFiles, assertSafeGateBuildOutput,
@@ -201,4 +202,60 @@ test("launcher rebuilds from clean SHA and HTTPS probe never disables trust", ()
   assert.ok(launcher.includes("requestedPort ?? await availableLoopbackPort()"));
   assert.ok(proxy.includes("private Quick Capture Areas endpoint failed over HTTPS"));
   assert.doesNotMatch(proxy, /rejectUnauthorized\s*:\s*false|NODE_TLS_REJECT_UNAUTHORIZED/);
+});
+
+async function exercisePreflight({ databases = [], cacheKeys = [], registrations = [],
+  localCount = 0, sessionCount = 0, supported = true } = {}) {
+  const fields = {
+    status: { textContent: "" },
+    detail: { textContent: "" },
+    continue: {
+      disabled: true,
+      addEventListener(type, callback) { if (type === "click") this.click = callback; },
+    },
+  };
+  const events = [];
+  const script = safariGatePreflightHtml().match(/<script>([\\s\\S]*?)<\\/script>/)?.[1];
+  assert.ok(script, "preflight script must be present");
+  const idb = { databases: supported ? async () => databases : undefined };
+  const cacheStorage = { keys: async () => cacheKeys };
+  const sw = { getRegistrations: async () => registrations, controller: null };
+  const navigation = [];
+  await runInNewContext(script, {
+    window: { indexedDB: idb, caches: cacheStorage },
+    indexedDB: idb, caches: cacheStorage, navigator: { serviceWorker: sw },
+    localStorage: { length: localCount }, sessionStorage: { length: sessionCount },
+    document: { getElementById(id) { return fields[id]; } },
+    location: { replace(value) { navigation.push(value); } },
+    console: {
+      info(...args) { events.push(["info", ...args]); },
+      error(...args) { events.push(["error", ...args]); },
+    },
+  });
+  return { fields, events, navigation };
+}
+
+test("actual browser bootstrap only enables Continue for a clean origin", async () => {
+  const fresh = await exercisePreflight();
+  assert.equal(fresh.fields.continue.disabled, false);
+  assert.ok(fresh.events.some(item => item[1] === "LUMI_SAFARI_GATE_ORIGIN_CLEAN"));
+  fresh.fields.continue.click();
+  assert.deepEqual(fresh.navigation, ["/?view=Calendar&scope=personal"]);
+
+  for (const seeded of [
+    { databases: [{ name: "ai-executive" }] },
+    { cacheKeys: ["ai-executive-shell-v11"] },
+    { registrations: [{}] },
+    { localCount: 1 },
+    { sessionCount: 1 },
+  ]) {
+    const stale = await exercisePreflight(seeded);
+    assert.equal(stale.fields.continue.disabled, true);
+    assert.ok(stale.events.some(item => item[1] === "LUMI_SAFARI_GATE_ORIGIN_REUSED"));
+    assert.deepEqual(stale.navigation, []);
+  }
+
+  const unsupported = await exercisePreflight({ supported: false });
+  assert.equal(unsupported.fields.continue.disabled, true);
+  assert.ok(unsupported.events.some(item => item[1] === "LUMI_SAFARI_GATE_ORIGIN_INCONCLUSIVE"));
 });
