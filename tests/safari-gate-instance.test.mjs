@@ -14,6 +14,8 @@ import {
 } from "../scripts/safari-gate-instance-lib.mjs";
 import {
   SAFARI_GATE_PREFLIGHT_PATH, safariGatePreflightHtml,
+  safariGateBrowserCookieName, gateOwnerCookieFromBrowserHeader,
+  gateSetCookiesForBrowser,
 } from "../scripts/safari-gate-https.mjs";
 import {
   TARGET_PERSONAL_V1_PROFILE, TARGET_PERSONAL_V1_EXCLUDED,
@@ -195,17 +197,23 @@ test("launcher rebuilds from clean SHA and HTTPS probe never disables trust", ()
   const root = path.resolve(import.meta.dirname, "..");
   const launcher = readFileSync(path.join(root, "scripts/safari-gate-instance.mjs"), "utf8");
   const proxy = readFileSync(path.join(root, "scripts/safari-gate-https.mjs"), "utf8");
-  assert.ok(launcher.includes('spawnSync("pnpm", ["build"]'));
+  assert.ok(launcher.includes('spawnSync(process.execPath, [nextCli, "build"]'));
+  assert.ok(launcher.includes('buildScript !== "next build"'));
+  assert.ok(launcher.includes('COREPACK_ENABLE_NETWORK: "0"'));
+  assert.ok(launcher.includes('npm_config_offline: "true"'));
+  assert.doesNotMatch(launcher, /spawnSync\("pnpm"/);
   assert.ok(launcher.includes('if (builtSha !== sha || postBuildDirty ||'));
   assert.ok(launcher.includes("verifySafariGateHttps({"));
   assert.ok(launcher.includes("SAFARI_GATE_PREFLIGHT_PATH"));
   assert.ok(launcher.includes("requestedPort ?? await availableLoopbackPort()"));
+  assert.ok(launcher.includes("safariGateBrowserCookieName("));
+  assert.ok(launcher.includes("password, browserCookieName,"));
   assert.ok(proxy.includes("private Quick Capture Areas endpoint failed over HTTPS"));
   assert.doesNotMatch(proxy, /rejectUnauthorized\s*:\s*false|NODE_TLS_REJECT_UNAUTHORIZED/);
 });
 
 async function exercisePreflight({ databases = [], cacheKeys = [], registrations = [],
-  localCount = 0, sessionCount = 0, supported = true, cookieDetected = false } = {}) {
+  localCount = 0, sessionCount = 0, supported = true } = {}) {
   const fields = {
     status: { textContent: "" },
     detail: { textContent: "" },
@@ -215,7 +223,7 @@ async function exercisePreflight({ databases = [], cacheKeys = [], registrations
     },
   };
   const events = [];
-  const script = safariGatePreflightHtml(cookieDetected).match(/<script>([\s\S]*?)<\/script>/)?.[1];
+  const script = safariGatePreflightHtml().match(/<script>([\s\S]*?)<\/script>/)?.[1];
   assert.ok(script, "preflight script must be present");
   const idb = { databases: supported ? async () => databases : undefined };
   const cacheStorage = { keys: async () => cacheKeys };
@@ -248,7 +256,6 @@ test("actual browser bootstrap only enables Continue for a clean origin", async 
     { registrations: [{}] },
     { localCount: 1 },
     { sessionCount: 1 },
-    { cookieDetected: true },
   ]) {
     const stale = await exercisePreflight(seeded);
     assert.equal(stale.fields.continue.disabled, true);
@@ -259,4 +266,63 @@ test("actual browser bootstrap only enables Continue for a clean origin", async 
   const unsupported = await exercisePreflight({ supported: false });
   assert.equal(unsupported.fields.continue.disabled, true);
   assert.ok(unsupported.events.some(item => item[1] === "LUMI_SAFARI_GATE_ORIGIN_INCONCLUSIVE"));
+});
+
+
+test("gate cookie names isolate every run even though Safari sends host cookies across ports", () => {
+  const first = safariGateBrowserCookieName("a".repeat(32));
+  const second = safariGateBrowserCookieName("b".repeat(32));
+  assert.notEqual(first, second);
+  assert.ok(first.startsWith("__Host-"));
+  const oldHostCookies = [
+    first + "=old.token",
+    "ai_executive_session=old.production",
+    "third_party_cookie=unrelated"
+  ].join("; ");
+  assert.equal(gateOwnerCookieFromBrowserHeader(oldHostCookies, second), undefined);
+  assert.equal(gateOwnerCookieFromBrowserHeader(oldHostCookies, first),
+    "ai_executive_session=old.token");
+  assert.equal(gateOwnerCookieFromBrowserHeader(
+    oldHostCookies + "; " + second + "=new.token", second),
+    "ai_executive_session=new.token");
+  assert.equal(gateOwnerCookieFromBrowserHeader(
+    second + "=a.b; " + second + "=c.d", second), undefined,
+    "duplicate current-run cookies must not be accepted");
+  assert.equal(gateOwnerCookieFromBrowserHeader(
+    "ai_executive_session=old.production", second), undefined,
+    "legacy owner cookies must never be accepted directly");
+  assert.throws(() => safariGateBrowserCookieName("invalid"), /invalid/);
+});
+
+test("cookie rewrite retains Secure/HttpOnly/SameSite/Path and never emits production name", () => {
+  const browser = safariGateBrowserCookieName("c".repeat(32));
+  const original = "ai_executive_session=owner.token; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=604800";
+  const rewritten = gateSetCookiesForBrowser([original], browser);
+  assert.deepEqual(rewritten, [
+    browser + "=owner.token; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=604800",
+  ]);
+  assert.equal(gateSetCookiesForBrowser(undefined, browser), undefined);
+  assert.deepEqual(gateSetCookiesForBrowser([
+    "ai_executive_session=; Path=/; Max-Age=0; Secure; HttpOnly"
+  ], browser), [
+    browser + "=; Path=/; Max-Age=0; Secure; HttpOnly"
+  ]);
+  assert.throws(() => gateSetCookiesForBrowser([
+    "some_unexpected_cookie=sensitive; Path=/"
+  ], browser), /unexpected cookie/);
+  assert.throws(() => gateSetCookiesForBrowser([original], "unsafe"), /invalid/);
+});
+
+test("Safari preflight intentionally ignores unrelated host cookies after proxy isolation", async () => {
+  const checked = await exercisePreflight();
+  assert.equal(checked.fields.continue.disabled, false);
+  const html = safariGatePreflightHtml();
+  assert.doesNotMatch(html, /document\.cookie|staleCookie|cookieDetected/);
+  const proxy = readFileSync(
+    path.resolve(import.meta.dirname, "../scripts/safari-gate-https.mjs"), "utf8");
+  assert.ok(proxy.includes("delete headers.cookie"));
+  assert.ok(proxy.includes("gateOwnerCookieFromBrowserHeader("));
+  assert.ok(proxy.includes("gateSetCookiesForBrowser("));
+  assert.ok(proxy.includes("HTTPS proxy accepted an unrelated owner cookie"));
+  assert.ok(proxy.includes("proxy leaked host-wide owner cookie scope"));
 });
