@@ -205,7 +205,7 @@ test("launcher rebuilds from clean SHA and HTTPS probe never disables trust", ()
 });
 
 async function exercisePreflight({ databases = [], cacheKeys = [], registrations = [],
-  localCount = 0, sessionCount = 0, supported = true } = {}) {
+  localCount = 0, sessionCount = 0, supported = true, cookieDetected = false } = {}) {
   const fields = {
     status: { textContent: "" },
     detail: { textContent: "" },
@@ -215,7 +215,7 @@ async function exercisePreflight({ databases = [], cacheKeys = [], registrations
     },
   };
   const events = [];
-  const script = safariGatePreflightHtml().match(/<script>([\s\S]*?)<\/script>/)?.[1];
+  const script = safariGatePreflightHtml(cookieDetected).match(/<script>([\s\S]*?)<\/script>/)?.[1];
   assert.ok(script, "preflight script must be present");
   const idb = { databases: supported ? async () => databases : undefined };
   const cacheStorage = { keys: async () => cacheKeys };
@@ -248,6 +248,7 @@ test("actual browser bootstrap only enables Continue for a clean origin", async 
     { registrations: [{}] },
     { localCount: 1 },
     { sessionCount: 1 },
+    { cookieDetected: true },
   ]) {
     const stale = await exercisePreflight(seeded);
     assert.equal(stale.fields.continue.disabled, true);
