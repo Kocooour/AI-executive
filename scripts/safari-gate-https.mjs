@@ -7,7 +7,7 @@ export const SAFARI_GATE_PREFLIGHT_PATH = "/__lumi_safari_gate__/fresh-origin";
 
 // Checks the browser's persistent origin state, not the server's test data.
 // Never clears anything automatically.
-export function safariGatePreflightHtml() {
+export function safariGatePreflightHtml(cookieDetected = false) {
   return String.raw`<!doctype html>
 <html lang="cs"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
@@ -24,6 +24,7 @@ button{font:inherit;padding:.6rem 1.2rem}</style></head><body>
   const status = document.getElementById("status");
   const detail = document.getElementById("detail");
   const button = document.getElementById("continue");
+  const staleCookie = ${cookieDetected ? "true" : "false"};
   try {
     if (!("indexedDB" in window) ||
         typeof indexedDB.databases !== "function" ||
@@ -42,7 +43,7 @@ button{font:inherit;padding:.6rem 1.2rem}</style></head><body>
       localStorage: localStorage.length, sessionStorage: sessionStorage.length,
       serviceWorkerController: navigator.serviceWorker.controller ? 1 : 0
     };
-    if (Object.values(counts).some(value => value !== 0)) {
+    if (staleCookie || Object.values(counts).some(value => value !== 0)) {
       status.textContent = "STOP: Tento web již obsahuje data předchozí relace.";
       detail.textContent = "V Safari smažte data tohoto testovacího webu, zavřete jeho karty a otevřete adresu znovu. Nemažte data produkční Lumi.";
       console.error("LUMI_SAFARI_GATE_ORIGIN_REUSED", JSON.stringify(counts));
@@ -80,7 +81,7 @@ export function createSafariGateTlsProxy(certPath, keyPath, externalPort, intern
         "x-content-type-options": "nosniff",
         "content-security-policy": "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
       });
-      response.end(safariGatePreflightHtml());
+      response.end(safariGatePreflightHtml(Boolean(request.headers.cookie)));
       return;
     }
     const headers = {
