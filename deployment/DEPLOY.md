@@ -132,7 +132,8 @@ different store than the deploy script backed up and verified. A comment
 mentioning a key is harmless. The check runs before service stop, before
 start, and during any off-profile rollback.
 
-The loaded unit must retain `ProtectSystem=strict`, with `ReadWritePaths`
+The loaded unit must retain `ProtectSystem=strict` and
+`StateDirectoryMode=0700`, with `ReadWritePaths`
 either empty or exactly `/var/lib/ai-executive-security/outbox` (the approved
 security-alert outbox only).
 For `personal-v1`, it must expose exactly the baseline
@@ -147,8 +148,27 @@ The existing preflight still checks the service user and working directory.
 installed unit currently uses \`ProtectSystem=strict\` and writes only to
 \`StateDirectory=ai-executive\`. The recommended isolated target
 \`/var/lib/ai-executive-target/personal-v1\` requires a separately approved
-systemd drop-in adding a second \`StateDirectory\`, followed by
-\`systemctl daemon-reload\` and a reviewed service restart. Do not edit or
+systemd drop-in adding a second \`StateDirectory\` and explicitly preserving
+\`StateDirectoryMode=0700\`, followed by \`systemctl daemon-reload\` and a
+reviewed service restart. Approved drop-in content:
+
+```ini
+[Service]
+StateDirectory=
+StateDirectory=ai-executive ai-executive-target
+StateDirectoryMode=0700
+```
+
+The empty \`StateDirectory=\` also resets its mode to systemd's default
+\`0755\` unless \`StateDirectoryMode=0700\` is set explicitly. That would
+weaken permissions on both the legacy and target directories at restart.
+After \`daemon-reload\`, **before** restarting, require:
+
+```sh
+test "$(systemctl show ai-executive -p StateDirectoryMode --value)" = 0700
+```
+
+Abort on a mismatch; correct the drop-in and reload it first. Do not edit or
 install that override on the basis of this PR. The deployment script refuses
 target activation unless the **loaded** approved isolated StateDirectory
 covers the canonical target path, with `ReadWritePaths` empty or containing
