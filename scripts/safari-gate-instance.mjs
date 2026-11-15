@@ -17,6 +17,7 @@ import {
 } from "./safari-gate-instance-lib.mjs";
 import {
   SAFARI_GATE_PREFLIGHT_PATH, createSafariGateTlsProxy, verifySafariGateHttps,
+  safariGateBrowserCookieName,
 } from "./safari-gate-https.mjs";
 
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -125,8 +126,17 @@ async function main() {
       cwd: repo, env: processEnv, encoding: "utf8",
     }).trim();
     if (dirty) throw new Error("checkout is not clean; exact-SHA gate refused");
-    if (!existsSync(path.join(repo, "node_modules", "next", "dist", "bin", "next"))) {
+    const nextCli = path.join(repo, "node_modules", "next", "dist", "bin", "next");
+    if (!existsSync(nextCli)) {
       throw new Error("run pnpm install --frozen-lockfile first");
+    }
+    // The repository's build script is exactly "next build". Execute the
+    // already-installed Next CLI directly, rather than the Corepack/pnpm shim:
+    // a fresh sandbox HOME has no Corepack cache and must never download pnpm.
+    const buildScript = JSON.parse(readFileSync(
+      path.join(repo, "package.json"), "utf8")).scripts?.build;
+    if (buildScript !== "next build") {
+      throw new Error("unsupported build script; inspect before offline Safari gate");
     }
     try {
       execFileSync("mkcert", ["-version"], {
@@ -136,8 +146,9 @@ async function main() {
       throw new Error("mkcert missing: install and trust it locally (brew install mkcert; mkcert -install)");
     }
 
-    // An OS-selected port creates a fresh browser origin by default. With
-    // --port, the mandatory in-browser preflight will refuse stale site data.
+    // Random ports isolate browser origin storage. Cookies are host-scoped,
+    // so the HTTPS proxy independently namespaces the owner cookie per run.
+    // Explicit --port still requires a clean IndexedDB / SW preflight.
     const port = requestedPort ?? await availableLoopbackPort();
     runDir = mkdtempSync(path.join(tmpRoot, "lumi-e2e-"));
     chmodSync(runDir, 0o700);
@@ -175,12 +186,16 @@ async function main() {
     // Never serve an ignored/stale .next from another checkout: produce the
     // build NOW from the verified clean source using only synthetic settings.
     // This also prevents a production env from affecting the build.
-    const built = spawnSync("pnpm", ["build"], {
-      cwd: repo, env: { ...env, PATH: pathEnv, HOME: runDir },
+    const built = spawnSync(process.execPath, [nextCli, "build"], {
+      cwd: repo,
+      env: {
+        ...env, PATH: pathEnv, HOME: runDir,
+        COREPACK_ENABLE_NETWORK: "0", npm_config_offline: "true",
+      },
       stdio: "inherit", timeout: 900_000,
     });
     if (built.error) throw built.error;
-    if (built.status !== 0) throw new Error("isolated exact-SHA pnpm build failed");
+    if (built.status !== 0) throw new Error("isolated exact-SHA Next build failed");
     const builtSha = execFileSync("git", ["rev-parse", "HEAD"], {
       cwd: repo, env: processEnv, encoding: "utf8",
     }).trim();
@@ -202,7 +217,7 @@ async function main() {
 
     const internalPort = await availableLoopbackPort(port);
     next = spawn(process.execPath, [
-      path.join(repo, "node_modules", "next", "dist", "bin", "next"),
+      nextCli,
       "start", "--hostname", "127.0.0.1", "--port", String(internalPort),
     ], {
       cwd: repo,
@@ -213,7 +228,10 @@ async function main() {
     await waitForNext(next, internalPort, () => stopping, () => childSpawnError);
     if (stopping) throw new Error("interrupted");
 
-    proxy = createSafariGateTlsProxy(cert, key, port, internalPort);
+    const browserCookieName = safariGateBrowserCookieName(
+      randomBytes(16).toString("hex"));
+    proxy = createSafariGateTlsProxy(
+      cert, key, port, internalPort, browserCookieName);
     await new Promise((resolve, reject) => {
       proxy.once("error", reject);
       proxy.listen(port, "127.0.0.1", resolve);
@@ -224,7 +242,8 @@ async function main() {
       cwd: runDir, env: processEnv, encoding: "utf8",
     }).trim();
     await verifySafariGateHttps({
-      port, ca: readFileSync(path.join(caRoot, "rootCA.pem")), password,
+      port, ca: readFileSync(path.join(caRoot, "rootCA.pem")),
+      password, browserCookieName,
     });
     if (stopping) throw new Error("interrupted");
     process.stdout.write(
