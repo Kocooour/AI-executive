@@ -13,7 +13,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   SAFARI_GATE_OWNER, assertSafeGateTmpRoot, assertIsolatedGateRunDirectory,
-  assertNoGateRuntimeEnvFiles, buildSafariGateEnvironment, validateGatePort,
+  assertNoGateRuntimeEnvFiles, assertSafeGateBuildOutput, buildSafariGateEnvironment, validateGatePort,
 } from "./safari-gate-instance-lib.mjs";
 import {
   SAFARI_GATE_PREFLIGHT_PATH, createSafariGateTlsProxy, verifySafariGateHttps,
@@ -115,6 +115,7 @@ async function main() {
       tmpRoot: os.tmpdir(), cwd: repo, env: process.env,
     });
     assertNoGateRuntimeEnvFiles(repo);
+    assertSafeGateBuildOutput(repo);
     const sha = execFileSync("git", ["rev-parse", "HEAD"], {
       cwd: repo, env: processEnv, encoding: "utf8",
     }).trim();
