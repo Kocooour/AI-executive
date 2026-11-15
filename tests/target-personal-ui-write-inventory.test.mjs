@@ -35,6 +35,7 @@ const knownSites=[
   ["hooks/use-sign-in.ts","POST","/api/auth/passkeys/login/options"],
   ["hooks/use-sign-in.ts","POST","/api/auth/passkeys/login/verify"],
   ["hooks/use-sync.ts","PUT","/api/store"],
+  ["target-detail-edit.tsx","<unknown-options>","<input>"], // target write controller, routed fetch
   ["use-lumi-app.tsx","POST","/api/ai"],
   ["use-lumi-app.tsx","POST","/api/ai/actions"],
   ["use-lumi-app.tsx","POST","/api/ai/actions"],
@@ -176,6 +177,40 @@ function delegatedInventory(){
   }
   return result.sort();
 }
+/** One pre-existing generic fetch adapter is intentionally dynamic: the
+ * target detail write controller sends all mutations through routeTargetFetch.
+ * Pin that exact AST shape so the exception cannot silently become an
+ * unreviewed fetch(input, init) at a new call site.
+ */
+test("the only generic UI fetch adapter is routed through target edit read/write separation",()=>{
+  const dynamic=inventory().filter(site=>site.includes("|<unknown-options>|"));
+  assert.deepEqual(dynamic,["target-detail-edit.tsx|<unknown-options>|<input>"]);
+  const file=path.join(root,"target-detail-edit.tsx");
+  const ast=ts.createSourceFile(file,readFileSync(file,"utf8"),
+    ts.ScriptTarget.Latest,true,ts.ScriptKind.TSX);
+  let routed=0;
+  function visit(node){
+    if(ts.isCallExpression(node)&&ts.isIdentifier(node.expression)&&
+      node.expression.text==="fetch"&&node.arguments.length===2&&
+      ts.isIdentifier(node.arguments[0])&&node.arguments[0].text==="input"&&
+      ts.isIdentifier(node.arguments[1])&&node.arguments[1].text==="init"){
+      const callback=node.parent;
+      const route=callback?.parent;
+      if(ts.isArrowFunction(callback)&&callback.body===node&&
+        callback.parameters.length===2&&
+        callback.parameters[0].name.getText(ast)==="input"&&
+        callback.parameters[1].name.getText(ast)==="init"&&
+        ts.isCallExpression(route)&&ts.isIdentifier(route.expression)&&
+        route.expression.text==="routeTargetFetch"&&
+        route.arguments.length===2&&route.arguments[1]===callback&&
+        ts.isIdentifier(route.arguments[0])&&route.arguments[0].text==="readFetch")
+        routed++;
+    }
+    ts.forEachChild(node,visit);
+  }
+  visit(ast);
+  assert.equal(routed,1,"dynamic fetch must remain the direct adapter of routeTargetFetch");
+});
 test("dynamic Gmail and context write wrappers have a closed destination inventory",()=>{
   assert.deepEqual(delegatedInventory(),delegatedSites);
 });
