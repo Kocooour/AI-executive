@@ -531,39 +531,57 @@ trusted-HTTPS staging endpoint. Do not expose this helper on the LAN.
 
 On the Mac, use a **clean checkout of the exact SHA** with no runtime
 `.env`, `.env.local`, `.env.production` or `.env.*.local` files anywhere in
-the checkout root. Build before launch: Next may otherwise read such files
-during build or `next start`. Never copy live settings into the checkout.
+the checkout root. Next can otherwise read those settings during build or
+`next start`. Never copy live settings into the checkout. The helper builds
+the exact clean checkout **again** with test-only environment variables;
+pre-existing `.next` output is never accepted as release-SHA evidence.
 
 ~~~sh
-git checkout <exact-40-character-release-sha>
+RELEASE_SHA="paste-the-approved-40-character-commit-sha"
+git checkout --detach "$RELEASE_SHA"
 git status --porcelain       # must be empty
 pnpm install --frozen-lockfile
-pnpm build
+pnpm build                  # initial build; helper performs a sanitized rebuild
 # First-time local certificate setup (operator action, NOT performed by script):
 brew install mkcert
 mkcert -install
-node scripts/safari-gate-instance.mjs --port 3210
+node scripts/safari-gate-instance.mjs
+# Optional fixed port: node scripts/safari-gate-instance.mjs --port 3210
 ~~~
 
-The script requires Node 24, a completed production build and trusted
-`mkcert`. It refuses a dirty checkout, runtime env files, unsafe paths or
-a missing build. It creates a new owner-only 0700 `lumi-e2e-*` directory
+The script requires Node 24, installed dependencies, and trusted `mkcert`.
+It refuses a dirty checkout, runtime env files or unsafe paths, performs
+a fresh `pnpm build` with synthetic settings, rechecks the SHA and worktree,
+and refuses to start unless the new build succeeds. It creates a new owner-only 0700 `lumi-e2e-*` directory
 under the system temporary root, provisions the synthetic `e2e-owner`
 target store with private Area **Tvoření**, initializes owner-session
 revocation only in its own data directory, and starts `next start`
 bound to 127.0.0.1 with exactly the canonical `personal-v1` target flags.
 Other env values are isolated test credentials and local-only safeguards;
-no production env is inherited by the server. The HTTPS proxy also binds
-only 127.0.0.1, retaining the production `Secure` login cookie behavior
-without changing auth code.
+no production env is inherited by the build or server. The HTTPS proxy also
+binds only 127.0.0.1, retaining the production `Secure` login cookie behavior
+without changing auth code. Before printing credentials the helper performs
+a CA-verified HTTPS smoke: unauthenticated status, owner login, secure cookie,
+authenticated status, and private `Tvoření` Area fetch.
 
-Open the **printed** `https://127.0.0.1:3210/` URL in Safari; verify the
-certificate is **trusted without an exception or warning** and sign in
-with the displayed one-time test password. Confirm Quick Capture offers
-the synthetic private Area **Tvoření** before proceeding with the BFCache
-steps below. Record the printed Git SHA and run directory in the evidence
-template; the build must have been created from that same clean SHA.
-A successful command launch alone is not proof of the manual Safari check.
+Open the **printed Safari gate URL** in Safari (it ends with
+`/__lumi_safari_gate__/fresh-origin`). Without `--port`, each run receives
+an OS-selected random loopback HTTPS port to avoid sharing the origin with
+previous runs. With `--port`, the same explicit origin may be reused.
+The initial page checks IndexedDB, Cache Storage, local/session storage and
+service-worker registrations; proceed **only** when it reports a clean
+origin and the Inspector logs `LUMI_SAFARI_GATE_ORIGIN_CLEAN`.
+If it reports reused data or cannot check the storage, **STOP**: remove
+website data for this exact local test origin via Safari → Settings →
+Privacy → Manage Website Data, close prior tabs and repeat. Do not clear
+production Lumi site data, and do not treat an inconclusive preflight as PASS.
+
+Verify the TLS certificate is **trusted without a browser warning**; click
+**Pokračovat do testovací Lumi**, then sign in with the displayed one-time
+test password. Confirm Quick Capture offers the synthetic private Area
+**Tvoření** before proceeding with the BFCache steps below. Record the
+printed Git SHA and run directory in the evidence template. The helper's
+successful HTTPS smoke is **not** the independent manual Safari witness.
 
 On macOS Safari, go to **Safari → Settings → Advanced** and enable
 **Show features for web developers** (older versions: **Show Develop menu**),
@@ -575,9 +593,8 @@ To stop, press **Ctrl+C** in the terminal running the helper. The run
 directory intentionally remains for operator inspection; after preserving
 only redacted evidence, delete **only the exact printed `lumi-e2e-*` run
 directory**, for example `rm -r "/exact/printed/tmp/lumi-e2e-XXXXXX"`.
-Never use a wildcard or delete a real data directory. The certificate,
-test credentials and synthetic SQLite files must not be reused for another
-SHA. Do not submit the printed test password to a PR or issue.
+Never use a wildcard or delete a real data directory. The certificate, test credentials and synthetic SQLite files must not be
+reused for another SHA. Do not submit the printed test password to a PR or issue.
 
 
 **Do once per release SHA, not once per PR.** Use test-only data and an
