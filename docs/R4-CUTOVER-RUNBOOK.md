@@ -523,11 +523,11 @@ remaining exact-SHA release gates.
 ### 3. Manual Safari through a disposable Linux instance and SSH tunnel (#456)
 
 **Linux-only target store:** The target staging store uses Linux-specific pinned
-file-descriptor semantics (\`/proc/self/fd/N\`). macOS cannot run the target store
+file-descriptor semantics (`/proc/self/fd/N`). macOS cannot run the target store
 safely. Do **not** port, weaken or bypass the pinned/journal code. Use a clean
 single-use instance on the Linux server, running **as hermesadmin**, not as
-\`root\` or the \`ai-executive\` production service account. Its new \`lumi-e2e-*\`
-0700 directory lives under that user's \`os.tmpdir()\`; no live store, service,
+`root` or the `ai-executive` production service account. Its new `lumi-e2e-*`
+0700 directory lives under that user's `os.tmpdir()`; no live store, service,
 credential or production environment is touched. Both Next and the TLS proxy
 listen **only on 127.0.0.1**. Safari on the Mac reaches the proxy only through
 an SSH local tunnel. This is the manual Safari release gate, not a deployment
@@ -556,9 +556,9 @@ chmod 600 "$MAC_TLS_DIR/safari-local.key"
 ~~~
 
 **2. Transfer only three explicit files into a NEW operator-owned 0700 directory
-on Linux.** Replace \`<server>\` with the actual SSH host. Do not transfer
-\`rootCA-key.pem\`, a whole mkcert directory, production \`.env\` or any live data.
-This step uses the \`hermesadmin\` SSH account.
+on Linux.** Replace `<server>` with the actual SSH host. Do not transfer
+`rootCA-key.pem`, a whole mkcert directory, production `.env` or any live data.
+This step uses the `hermesadmin` SSH account.
 
 ~~~sh
 SERVER="hermesadmin@<server>"
@@ -573,18 +573,18 @@ ssh "$SERVER" 'chmod 600 "$HOME/lumi-safari-tls-456/safari-local.key"'
 Stop if the destination already exists, is shared, is not operator-owned or
 cannot be verified as 0700. The launcher rejects non-regular or foreign-owned
 TLS files, symlinks, keys without **exact** 0600 permissions, certificates
-without IP SAN \`127.0.0.1\`, certificates not signed by the supplied
-\`rootCA.pem\`, and CA private keys even when renamed. All three TLS options
-must be provided together, with the explicit \`--port\`. In this mode it does
+without IP SAN `127.0.0.1`, certificates not signed by the supplied
+`rootCA.pem`, and CA private keys even when renamed. All three TLS options
+must be provided together, with the explicit `--port`. In this mode it does
 not invoke mkcert. With no TLS options, its original local **Linux** mkcert
 mode remains available, but the Mac is never a valid target-store host.
 
 **3. Linux — clean disposable checkout, exact SHA, and isolated start.**
-Run in the operator's home directory, **never in \`/opt/ai-executive\`**.
-Use \`hermesadmin\`, never root or the production \`ai-executive\` account.
+Run in the operator's home directory, **never in `/opt/ai-executive`**.
+Use `hermesadmin`, never root or the production `ai-executive` account.
 Do not source, copy or pass production environment files. The repository must
-have no runtime \`.env*\` files or unsafe \`.next\` entries. The helper performs
-its own sanitized exact-SHA Next build; do **not** run \`pnpm build\` separately.
+have no runtime `.env*` files or unsafe `.next` entries. The helper performs
+its own sanitized exact-SHA Next build; do **not** run `pnpm build` separately.
 
 ~~~sh
 test "$(id -un)" = hermesadmin
@@ -603,8 +603,8 @@ env -i HOME="$HOME" PATH="$PATH" \
     --tls-ca "$TLS_DIR/rootCA.pem"
 ~~~
 
-Leave this terminal running. It must report **\`HTTPS owner login + private
-Area smoke: PASS\`** before handing the URL to Safari; the smoke verifies the
+Leave this terminal running. It must report **`HTTPS owner login + private
+Area smoke: PASS`** before handing the URL to Safari; the smoke verifies the
 CA-authenticated certificate, owner login/cookie isolation and synthetic private
 Area **Tvoření**. Capture the exact checkout SHA and printed test-only run
 directory. A successful smoke is **not** the independent manual Safari witness.
@@ -619,15 +619,15 @@ ssh -N -L 127.0.0.1:3443:127.0.0.1:3443 "$SERVER"
 ~~~
 
 The **local and remote tunnel ports must be identical** to the launcher
-\`--port 3443\`, and the Mac endpoint must stay on \`127.0.0.1\`. Open the
-**printed** \`https://127.0.0.1:3443/__lumi_safari_gate__/fresh-origin\`
+`--port 3443`, and the Mac endpoint must stay on `127.0.0.1`. Open the
+**printed** `https://127.0.0.1:3443/__lumi_safari_gate__/fresh-origin`
 in macOS Safari, with the tunnel active. Safari must trust the mkcert leaf
 **without a warning**. A previously used origin can contain IndexedDB,
 Cache Storage or service-worker state; the browser preflight must report
-\`LUMI_SAFARI_GATE_ORIGIN_CLEAN\`. Otherwise STOP, remove **only the test
+`LUMI_SAFARI_GATE_ORIGIN_CLEAN`. Otherwise STOP, remove **only the test
 origin's** website data in Safari Settings → Privacy → Manage Website Data,
 close previous test tabs and repeat. Never clear production Lumi data.
-The per-run \`__Host-lumi_safari_gate_*\` cookie prevents cross-run reuse even
+The per-run `__Host-lumi_safari_gate_*` cookie prevents cross-run reuse even
 though cookies are host-scoped rather than port-scoped. Only after the clean
 origin check, use **Pokračovat do testovací Lumi**, the printed one-time
 password and Quick Capture's private Area **Tvoření**.
@@ -640,14 +640,14 @@ An iPhone cannot reach the Mac's 127.0.0.1 tunnel automatically; iOS needs
 a separately reviewed staging arrangement.
 
 **5. Stop and delete only the exact disposable paths.** Press **Ctrl+C**
-in the Linux helper terminal and stop the Mac \`ssh -N\` tunnel. Preserve
+in the Linux helper terminal and stop the Mac `ssh -N` tunnel. Preserve
 redacted release evidence first; never publish the one-time password,
 private key or test-only private data. The helper intentionally **retains**
-its printed \`lumi-e2e-*\` run directory, which the operator must inspect and
+its printed `lumi-e2e-*` run directory, which the operator must inspect and
 remove by its **exact printed absolute path** (no wildcard). Remove only
-the dedicated \`$HOME/lumi-safari-tls-456\` directory and
-\`$HOME/lumi-safari-checkout-456\` clone after verifying them, and delete
-\`$MAC_TLS_DIR\` on the Mac. Do not delete any other files, saved backup,
+the dedicated `$HOME/lumi-safari-tls-456` directory and
+`$HOME/lumi-safari-checkout-456` clone after verifying them, and delete
+`$MAC_TLS_DIR` on the Mac. Do not delete any other files, saved backup,
 service state, or production data. A fresh run must use new test credentials
 and a newly verified checkout.
 
