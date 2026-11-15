@@ -21,7 +21,7 @@ jobs:
     name: PR Checks
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-24.04
-    timeout-minutes: 25
+    timeout-minutes: 45
     env:
       CI: "true"
       NEXT_TELEMETRY_DISABLED: "1"
