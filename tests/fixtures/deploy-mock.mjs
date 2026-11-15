@@ -119,6 +119,8 @@ switch (name) {
         targetsecurityoutbox: securityOutbox,
         offsecurityparent: "/var/lib/ai-executive-security",
         targetsecurityparent: "/var/lib/ai-executive-security",
+        targetsecuritybroad: "/var/lib",
+        targetsecuritytrailing: securityOutbox + "/",
         offsecuritymulti: securityOutbox + " /tmp/unapproved",
         targetsecuritymulti: securityOutbox + " /var/lib/ai-executive-target",
         targetsecurityprefixdash: "-" + securityOutbox,
