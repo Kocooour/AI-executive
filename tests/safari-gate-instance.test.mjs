@@ -201,16 +201,26 @@ test("Next build output refuses root and nested symlinks without following them"
   assert.doesNotThrow(() => assertSafeGateBuildOutput(cwd));
 });
 
-test("runbook never executes an unisolated operator-shell build", () => {
+test("runbook uses an isolated Linux build and exact matching SSH tunnel port", () => {
   const runbook = readFileSync(path.resolve(
     import.meta.dirname, "../docs/R4-CUTOVER-RUNBOOK.md"), "utf8");
-  const helper = runbook.split("**Local Mac staging helper (#454):**")[1];
-  assert.ok(helper, "manual Safari helper instructions must exist");
-  const example = helper.split("~~~sh")[1]?.split("~~~")[0];
-  assert.ok(example, "helper shell commands must be documented");
-  assert.match(example, /^pnpm install --frozen-lockfile$/m);
-  assert.doesNotMatch(example, /^\s*pnpm build(?:\s|$)/m);
-  assert.match(example, /^node scripts\/safari-gate-instance\.mjs$/m);
+  const helper = runbook.split("### 3. Manual Safari through a disposable Linux instance")[1]
+    ?.split("**Do once per release SHA, not once per PR.**")[0];
+  assert.ok(helper, "Linux Safari helper instructions must exist");
+  const linux = helper.split("**3. Linux")[1]?.split("~~~sh")[1]?.split("~~~")[0];
+  assert.ok(linux, "Linux helper shell commands must be documented");
+  assert.match(linux, /^pnpm install --frozen-lockfile$/m);
+  assert.doesNotMatch(linux, /^\s*pnpm build(?:\s|$)/m);
+  assert.match(linux, /node scripts\/safari-gate-instance\.mjs --port 3443/);
+  assert.match(linux, /--tls-cert/);
+  assert.match(linux, /--tls-key/);
+  assert.match(linux, /--tls-ca/);
+  assert.match(helper, /ssh -N -L 127\.0\.0\.1:3443:127\.0\.0\.1:3443/);
+  assert.match(helper, /Never|NEVER|never/);
+  const transferred = helper.split('scp "$MAC_TLS_DIR/safari-local.crt"')[1]
+    ?.split('ssh "$SERVER"')[0];
+  assert.ok(transferred, "copy only the scoped TLS files");
+  assert.doesNotMatch(transferred, /rootCA-key\.pem/);
 });
 
 test("browser preflight refuses any persistent website state before opening Lumi", () => {
