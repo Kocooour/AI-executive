@@ -26,7 +26,8 @@ import {
 
 // Fail before any checkout read, build, process launch or temporary data write.
 assertSafariGatePlatform();
-if (typeof process.getuid !== "function" || process.getuid() === 0) {
+if (typeof process.getuid !== "function" || process.getuid() === 0 ||
+    os.userInfo().username === "ai-executive") {
   throw new Error("Safari gate must run as a non-root operator, never as root or ai-executive");
 }
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
