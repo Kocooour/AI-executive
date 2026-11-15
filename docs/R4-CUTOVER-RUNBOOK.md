@@ -32,8 +32,9 @@ are fingerprinted and rechecked before starts and any off rollback.
 For target activation, the approved canonical path is
 `/var/lib/ai-executive-target/personal-v1`; the loaded unit must have
 `ProtectSystem=strict`, `StateDirectory=ai-executive ai-executive-target`
-(in either order) and **empty** `ReadWritePaths`. An alternative writable
-exception is not approved. Off-mode deployment accepts the original
+(in either order) and `ReadWritePaths` either **empty** or exactly
+`/var/lib/ai-executive-security/outbox` (the approved security-alert outbox).
+No other writable exception is approved. Off-mode deployment accepts the original
 `StateDirectory=ai-executive` as well as the separately installed drop-in.
 
 This is an operational-error model, not a defense against an administrator
@@ -104,8 +105,9 @@ files and operator configuration; do not auto-edit the env file, restore a
 data directory, or start the old code.
 
 **Return to legacy:** under separately reviewed operational authorization,
-set all 31 target profile flags to false/absent and validate the `off`
-profile before a separately reviewed recovery/service restart. Confirm the
+set all flags of the `personal-v1` profile (`lib/target-personal-profile.ts`)
+to false/absent and validate the `off` profile before a separately reviewed
+recovery/service restart. Confirm the
 actual loaded EnvironmentFile has the verified `off` profile, not merely
 the previous git revision. Do not remove, import, reset, overwrite or
 restore target and legacy stores as a side effect. Preserve the target

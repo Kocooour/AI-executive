@@ -132,7 +132,9 @@ different store than the deploy script backed up and verified. A comment
 mentioning a key is harmless. The check runs before service stop, before
 start, and during any off-profile rollback.
 
-The loaded unit must retain `ProtectSystem=strict`, with no `ReadWritePaths`.
+The loaded unit must retain `ProtectSystem=strict`, with `ReadWritePaths`
+either empty or exactly `/var/lib/ai-executive-security/outbox` (the approved
+security-alert outbox only).
 For `personal-v1`, it must expose exactly the baseline
 `StateDirectory=ai-executive` plus the separately approved
 `StateDirectory=ai-executive-target`, and the target directory must be exactly
@@ -149,8 +151,9 @@ systemd drop-in adding a second \`StateDirectory\`, followed by
 \`systemctl daemon-reload\` and a reviewed service restart. Do not edit or
 install that override on the basis of this PR. The deployment script refuses
 target activation unless the **loaded** approved isolated StateDirectory
-covers the canonical target path, without any ReadWritePaths,
-and it rejects any weakening of ProtectSystem=strict. Changing the versioned \`deployment/ai-executive.service\`
+covers the canonical target path, with `ReadWritePaths` empty or containing
+only the exact approved security-alert outbox, and it rejects any weakening
+of ProtectSystem=strict. Changing the versioned \`deployment/ai-executive.service\`
 between release commits remains forbidden; a separately authorized operator
 drop-in is distinct from changing that tracked file. See
 [the cutover runbook](../docs/R4-CUTOVER-RUNBOOK.md) for a non-executable

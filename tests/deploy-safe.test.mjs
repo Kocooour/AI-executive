@@ -665,6 +665,21 @@ for (const scenario of [
     assert.equal(r.backups.length, 1);
   });
 }
+// The installed security-alert outbox is allowed for both profiles and the
+// complete deployment path must still succeed, including pre-start rechecks.
+for (const scenario of ["offsecurityoutbox", "targetsecurityoutbox"]) {
+  scenarioCase(scenario + ": exact approved security outbox permits deployment", (r) => {
+    assert.equal(r.status, 0, r.output);
+    assert.equal(r.head, newSha);
+    assert.equal(r.service, "active");
+    assert.equal(r.backups.length, 1);
+    assert.ok(r.events.includes("stop"), "a successful deploy reaches the service stop");
+    if (scenario.startsWith("target")) {
+      assert.equal(r.events.filter(e => e === "target-check").length, 4);
+      assert.equal(r.events.filter(e => e === "start-b").length, 2);
+    }
+  });
+}
 scenarioCase("targetunit: refuse writable-store activation without approved systemd sandbox", (r) => {
   assert.notEqual(r.status, 0);
   assert.match(r.output, /systemd sandbox nedovoluje zapis/);
@@ -698,6 +713,13 @@ scenarioCase("offenvcomment: commented fixed-unit variable is not an override", 
 for (const scenario of [
   "targetrwbroad", "targetrwparent", "targetweakprotect",
   "targetstateextra", "targetmixedwrites", "offweakprotect",
+  // Reject parent, extra path, systemd +/- modifiers, and any target/legacy
+  // storage exception. The approved outbox must be an exact single match.
+  "offsecurityparent", "targetsecurityparent",
+  "targetsecuritybroad", "targetsecuritytrailing",
+  "offsecuritymulti", "targetsecuritymulti",
+  "targetsecurityprefixdash", "targetsecurityprefixplus",
+  "targetsecuritynested", "targetsecuritylegacy", "targetsecuritytargetparent",
 ]) {
   scenarioCase(scenario + ": refuse unapproved or weakened systemd sandbox", (r) => {
     assert.notEqual(r.status, 0);

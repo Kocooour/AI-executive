@@ -48,14 +48,18 @@ verify_loaded_environment_sources() {
   fi
 }
 
-# Only the separately approved isolated StateDirectory is writable in target mode.
+# The approved isolated StateDirectory and exact security-alert outbox are the
+# only writable exceptions. Never allow a generic ReadWritePaths override.
 verify_loaded_write_sandbox() {
   local protect state rw
   protect="$(systemctl show "$SERVICE" -p ProtectSystem --value)" || return 1
   [ "$protect" = strict ] || return 1
   state="$(systemctl show "$SERVICE" -p StateDirectory --value)" || return 1
   rw="$(systemctl show "$SERVICE" -p ReadWritePaths --value)" || return 1
-  [ -z "$rw" ] || return 1
+  case "$rw" in
+    ""|/var/lib/ai-executive-security/outbox) ;;
+    *) return 1 ;;
+  esac
   if [ "$TARGET_PROFILE" = personal-v1 ]; then
     [ "$TARGET_DIRECTORY" = /var/lib/ai-executive-target/personal-v1 ] || return 1
     [ "$state" = "ai-executive ai-executive-target" ] ||

@@ -111,6 +111,27 @@ switch (name) {
       const lateImage = scenario === "targetmountdriftbuild" &&
         fs.existsSync(stateFile("mount-changed"));
       const targetStore = path.join(root, "var/lib/ai-executive-target/personal-v1");
+      // Only this exact production drop-in path is approved. Invalid variants
+      // model systemctl's loaded value, not a file created by the test.
+      const securityOutbox = "/var/lib/ai-executive-security/outbox";
+      const readWritePaths = {
+        offsecurityoutbox: securityOutbox,
+        targetsecurityoutbox: securityOutbox,
+        offsecurityparent: "/var/lib/ai-executive-security",
+        targetsecurityparent: "/var/lib/ai-executive-security",
+        targetsecuritybroad: "/var/lib",
+        targetsecuritytrailing: securityOutbox + "/",
+        offsecuritymulti: securityOutbox + " /tmp/unapproved",
+        targetsecuritymulti: securityOutbox + " /var/lib/ai-executive-target",
+        targetsecurityprefixdash: "-" + securityOutbox,
+        targetsecurityprefixplus: "+" + securityOutbox,
+        targetsecuritynested: targetStore + "/unapproved",
+        targetsecuritylegacy: path.join(root, "var/lib/ai-executive"),
+        targetsecuritytargetparent: "/var/lib/ai-executive-target",
+        targetrwbroad: path.join(root, "var/lib"),
+        targetrwparent: path.join(root, "var/lib/ai-executive-target"),
+        targetmixedwrites: targetStore,
+      };
       const security = {
         Type: "simple",
         User: ["offuserroot", "targetuserroot"].includes(scenario) || lateIdentity ? "root" : "ai-executive",
@@ -191,11 +212,7 @@ switch (name) {
           (scenario === "targetstateextra" ? "ai-executive ai-executive-target unexpected" :
             scenario.startsWith("target") && scenario !== "targetunit" ?
               "ai-executive ai-executive-target" : "ai-executive") :
-        prop === "ReadWritePaths" ?
-          (["targetrwbroad", "targetrwparent"].includes(scenario) ?
-            path.join(root, scenario === "targetrwbroad" ? "var/lib" : "var/lib/ai-executive-target") :
-            scenario === "targetmixedwrites" ?
-              path.join(root, "var/lib/ai-executive-target/personal-v1") : "") : "");
+        prop === "ReadWritePaths" ? (readWritePaths[scenario] ?? "") : "");
       const requested = args.flatMap((arg, i) => arg === "-p" ? [args[i + 1]] : []);
       if (args.includes("--value")) console.log(valueFor(prop));
       else {
