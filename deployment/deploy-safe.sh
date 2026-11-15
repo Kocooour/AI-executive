@@ -51,10 +51,14 @@ verify_loaded_environment_sources() {
 # The approved isolated StateDirectory and exact security-alert outbox are the
 # only writable exceptions. Never allow a generic ReadWritePaths override.
 verify_loaded_write_sandbox() {
-  local protect state rw
+  local protect state state_mode rw
   protect="$(systemctl show "$SERVICE" -p ProtectSystem --value)" || return 1
   [ "$protect" = strict ] || return 1
   state="$(systemctl show "$SERVICE" -p StateDirectory --value)" || return 1
+  # Resetting StateDirectory= also resets its mode to systemd's 0755 default.
+  # Never allow that fallback to make either persistent data directory readable.
+  state_mode="$(systemctl show "$SERVICE" -p StateDirectoryMode --value)" || return 1
+  [ "$state_mode" = 0700 ] || return 1
   rw="$(systemctl show "$SERVICE" -p ReadWritePaths --value)" || return 1
   case "$rw" in
     ""|/var/lib/ai-executive-security/outbox) ;;
@@ -374,6 +378,10 @@ on_exit() {
     echo "BEZPECNOSTNI BLOKACE: zmeneny obsah .env pri rollbacku." >&2
     exit "$rc"
   fi
+  if ! verify_loaded_write_sandbox; then
+    echo "BEZPECNOSTNI BLOKACE: systemd sandbox pri rollbacku." >&2
+    exit "$rc"
+  fi
   if systemctl start "$SERVICE" && verify_service; then
     if [ "$BACKUP_VALIDATED" = 1 ]; then
       if runuser -u ai-executive -- /usr/bin/node \
@@ -564,7 +572,7 @@ if [ "$profile_needs_check" = 1 ]; then
 fi
 # Reject weakened sandboxing also for legacy-only/off deployments.
 verify_loaded_write_sandbox ||
-  die "systemd sandbox nedovoluje zapis do ciloveho uloziste nebo neni ProtectSystem=strict"
+  die "systemd sandbox nedovoluje zapis do ciloveho uloziste, ProtectSystem=strict nebo StateDirectoryMode=0700"
 env_file_unchanged || die "env se zmenilo behem predstartovniho overovani"
 echo "Stavajici: $PREV"
 echo "Cil:       $TARGET"
