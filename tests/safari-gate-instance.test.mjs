@@ -201,6 +201,18 @@ test("Next build output refuses root and nested symlinks without following them"
   assert.doesNotThrow(() => assertSafeGateBuildOutput(cwd));
 });
 
+test("runbook never executes an unisolated operator-shell build", () => {
+  const runbook = readFileSync(path.resolve(
+    import.meta.dirname, "../docs/R4-CUTOVER-RUNBOOK.md"), "utf8");
+  const helper = runbook.split("**Local Mac staging helper (#454):**")[1];
+  assert.ok(helper, "manual Safari helper instructions must exist");
+  const example = helper.split("~~~sh")[1]?.split("~~~")[0];
+  assert.ok(example, "helper shell commands must be documented");
+  assert.match(example, /^pnpm install --frozen-lockfile$/m);
+  assert.doesNotMatch(example, /^\s*pnpm build(?:\s|$)/m);
+  assert.match(example, /^node scripts\/safari-gate-instance\.mjs$/m);
+});
+
 test("browser preflight refuses any persistent website state before opening Lumi", () => {
   const html = safariGatePreflightHtml();
   assert.equal(SAFARI_GATE_PREFLIGHT_PATH,
