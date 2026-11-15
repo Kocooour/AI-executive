@@ -1,13 +1,12 @@
 #!/usr/bin/env node
 // R4 C27 — local-only Safari manual release gate. Run AFTER a clean exact-SHA
 // checkout has been built. No production env is inherited or sourced.
-import { execFileSync, spawn } from "node:child_process";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { randomBytes, scryptSync } from "node:crypto";
 import {
   chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync,
 } from "node:fs";
 import http from "node:http";
-import https from "node:https";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
@@ -16,18 +15,20 @@ import {
   SAFARI_GATE_OWNER, assertSafeGateTmpRoot, assertIsolatedGateRunDirectory,
   assertNoGateRuntimeEnvFiles, buildSafariGateEnvironment, validateGatePort,
 } from "./safari-gate-instance-lib.mjs";
+import {
+  SAFARI_GATE_PREFLIGHT_PATH, createSafariGateTlsProxy, verifySafariGateHttps,
+} from "./safari-gate-https.mjs";
 
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const args = process.argv.slice(2);
-let port = 3210;
+let requestedPort = null;
 if (args.length) {
   if (args.length !== 2 || args[0] !== "--port" ||
       !/^[0-9]+$/.test(args[1])) {
     throw new Error("usage: node scripts/safari-gate-instance.mjs [--port 3210]");
   }
-  port = Number(args[1]);
+  requestedPort = validateGatePort(Number(args[1]));
 }
-validateGatePort(port);
 
 const pathEnv = process.env.PATH || "/usr/bin:/bin";
 const processEnv = { PATH: pathEnv, HOME: process.env.HOME || os.homedir() };
@@ -86,55 +87,22 @@ async function waitForNext(child, port, isStopping) {
   throw new Error("next start did not become ready within 30 seconds");
 }
 
-function createTlsProxy(cert, key, externalPort, internalPort) {
-  return https.createServer({
-    cert: readFileSync(cert), key: readFileSync(key),
-  }, (request, response) => {
-    // Do not act as a general-purpose reverse proxy for arbitrary hosts.
-    if (request.headers.host !== "127.0.0.1:" + externalPort) {
-      response.writeHead(421);
-      response.end();
-      return;
-    }
-    const headers = {
-      ...request.headers,
-      host: "127.0.0.1:" + internalPort,
-      "x-forwarded-host": "127.0.0.1:" + externalPort,
-      "x-forwarded-proto": "https",
-      "x-forwarded-for": "127.0.0.1",
-      "x-real-ip": "127.0.0.1",
-    };
-    const upstream = http.request({
-      hostname: "127.0.0.1", port: internalPort,
-      path: request.url, method: request.method, headers,
-    }, upstreamResponse => {
-      response.writeHead(upstreamResponse.statusCode || 502, upstreamResponse.headers);
-      upstreamResponse.pipe(response);
-    });
-    upstream.on("error", () => {
-      if (!response.headersSent) response.writeHead(502);
-      response.end();
-    });
-    request.on("aborted", () => upstream.destroy());
-    request.pipe(upstream);
-  });
-}
-
 async function main() {
   let runDir;
   let next;
   let proxy;
   let stopping = false;
+  let childSpawnError = null;
   const stop = () => {
     stopping = true;
     if (proxy?.listening) {
       proxy.close();
       proxy.closeAllConnections?.();
     }
-    if (next && next.exitCode === null) {
+    if (next && next.exitCode === null && next.signalCode === null && next.pid) {
       next.kill("SIGTERM");
       setTimeout(() => {
-        if (next.exitCode === null) next.kill("SIGKILL");
+        if (next.exitCode === null && next.signalCode === null) next.kill("SIGKILL");
       }, 3000).unref();
     }
   };
@@ -155,9 +123,8 @@ async function main() {
       cwd: repo, env: processEnv, encoding: "utf8",
     }).trim();
     if (dirty) throw new Error("checkout is not clean; exact-SHA gate refused");
-    if (!existsSync(path.join(repo, ".next", "BUILD_ID")) ||
-        !existsSync(path.join(repo, "node_modules", "next", "dist", "bin", "next"))) {
-      throw new Error("run pnpm install --frozen-lockfile && pnpm build first");
+    if (!existsSync(path.join(repo, "node_modules", "next", "dist", "bin", "next"))) {
+      throw new Error("run pnpm install --frozen-lockfile first");
     }
     try {
       execFileSync("mkcert", ["-version"], {
@@ -167,6 +134,9 @@ async function main() {
       throw new Error("mkcert missing: install and trust it locally (brew install mkcert; mkcert -install)");
     }
 
+    // An OS-selected port creates a fresh browser origin by default. With
+    // --port, the mandatory in-browser preflight will refuse stale site data.
+    const port = requestedPort ?? await availableLoopbackPort();
     runDir = mkdtempSync(path.join(tmpRoot, "lumi-e2e-"));
     chmodSync(runDir, 0o700);
     assertIsolatedGateRunDirectory(runDir, {
@@ -200,6 +170,25 @@ async function main() {
     const env = buildSafariGateEnvironment({
       runDir, stage, passwordHash, sessionSecret, port,
     });
+    // Never serve an ignored/stale .next from another checkout: produce the
+    // build NOW from the verified clean source using only synthetic settings.
+    // This also prevents a production env from affecting the build.
+    const built = spawnSync("pnpm", ["build"], {
+      cwd: repo, env: { ...env, PATH: pathEnv, HOME: runDir },
+      stdio: "inherit", timeout: 900_000,
+    });
+    if (built.error) throw built.error;
+    if (built.status !== 0) throw new Error("isolated exact-SHA pnpm build failed");
+    const builtSha = execFileSync("git", ["rev-parse", "HEAD"], {
+      cwd: repo, env: processEnv, encoding: "utf8",
+    }).trim();
+    const postBuildDirty = execFileSync("git", ["status", "--porcelain"], {
+      cwd: repo, env: processEnv, encoding: "utf8",
+    }).trim();
+    if (builtSha !== sha || postBuildDirty ||
+        !existsSync(path.join(repo, ".next", "BUILD_ID"))) {
+      throw new Error("build checkout SHA changed, is dirty or has no BUILD_ID");
+    }
     const cert = path.join(runDir, "safari-local.crt");
     const key = path.join(runDir, "safari-local.key");
     // mkcert uses only the operator's local CA; the script never installs a
@@ -218,23 +207,38 @@ async function main() {
       env: { ...env, PATH: pathEnv, HOME: runDir },
       stdio: "inherit",
     });
-    await waitForNext(next, internalPort, () => stopping);
+    next.on("error", error => { childSpawnError = error; });
+    await waitForNext(next, internalPort, () => stopping || childSpawnError !== null);
     if (stopping) throw new Error("interrupted");
 
-    proxy = createTlsProxy(cert, key, port, internalPort);
+    proxy = createSafariGateTlsProxy(cert, key, port, internalPort);
     await new Promise((resolve, reject) => {
       proxy.once("error", reject);
       proxy.listen(port, "127.0.0.1", resolve);
     });
+    // Fail closed before handing a URL to Safari: verify CA-authenticated TLS,
+    // the unchanged Secure owner cookie and the private Tvoření Area endpoint.
+    const caRoot = execFileSync("mkcert", ["-CAROOT"], {
+      cwd: runDir, env: processEnv, encoding: "utf8",
+    }).trim();
+    await verifySafariGateHttps({
+      port, ca: readFileSync(path.join(caRoot, "rootCA.pem")), password,
+    });
+    if (stopping) throw new Error("interrupted");
     process.stdout.write(
-      "\nSafari gate URL: https://127.0.0.1:" + port + "/\n" +
+      "\nHTTPS owner login + private Area smoke: PASS\n" +
+      "Safari gate URL: https://127.0.0.1:" + port + SAFARI_GATE_PREFLIGHT_PATH + "\n" +
       "Test password: " + password + "\n" +
       "Checkout SHA: " + sha + "\n" +
       "Synthetic owner: " + SAFARI_GATE_OWNER + "\n" +
       "Run directory: " + runDir + "\n" +
+      "Safari must report LUMI_SAFARI_GATE_ORIGIN_CLEAN before continuing.\n" +
       "Ctrl+C stops the instance (run directory is preserved).\n\n"
     );
-    await new Promise(resolve => next.once("exit", resolve));
+    await new Promise(resolve => {
+      if (next.exitCode !== null || next.signalCode !== null) resolve();
+      else next.once("exit", resolve);
+    });
     if (!stopping) throw new Error("next start terminated unexpectedly");
   } finally {
     stop();
