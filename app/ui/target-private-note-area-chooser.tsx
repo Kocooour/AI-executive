@@ -234,15 +234,15 @@ export default function TargetPrivateNoteAreaChooser({
       }
       setWritePhase("uncertain");
       setWriteMessage(language==="cs"
-        ?"Uložení není potvrzené. Nevytvářejte další příkaz; ověřte výsledek."
-        :"The create is unconfirmed. Do not send a new command; check the receipt.");
+        ?"Uložení se nepodařilo potvrdit. Nevytvářejte poznámku znovu; nejdřív ověřte výsledek."
+        :"The save could not be confirmed. Do not create the note again; check the result first.");
     });
   }
   async function checkReceipt(){
     if(!createEnabled||!runtime||!stillLive()||writePhase==="receipt")return;
     const current=privateNoteCreateMarker(generation);
     if(current.kind!=="blocked"){
-      setWriteMessage(language==="cs"?"Není dostupný platný příkaz k ověření.":"No valid command to confirm.");
+      setWriteMessage(language==="cs"?"Předchozí vytvoření teď nelze ověřit. Zkuste to znovu později.":"The previous creation cannot be checked now. Try again later.");
       return;
     }
     const seq=++writeSerial.current;
@@ -262,7 +262,7 @@ export default function TargetPrivateNoteAreaChooser({
     }
     setWritePhase("uncertain");
     setWriteMessage(receipt==="not_recorded"
-      ?(language==="cs"?"Server zápis zatím nepotvrdil. Nový příkaz je stále zablokovaný.":"The server has not confirmed the create. A new command remains blocked.")
+      ?(language==="cs"?"Uložení zatím není potvrzené. Další poznámku teď nelze vytvořit.":"The save is not confirmed yet. You cannot create another note right now.")
       :(language==="cs"?"Zápis nelze potvrdit. Zkuste ověření později.":"The create cannot be confirmed. Check again later."));
   }
   void trackedRevision; // render after an unmounted POST settles
@@ -290,7 +290,7 @@ export default function TargetPrivateNoteAreaChooser({
       {!createEnabled&&<p role="note">{c.unfinished}</p>}
       {createEnabled&&blocked&&<section data-testid="target-private-create-unresolved">
         <p role="alert">{marker.kind==="unavailable"
-          ?(language==="cs"?"Úložiště záložky není dostupné. Nelze bezpečně zapisovat.":"Tab storage unavailable; write disabled.")
+          ?(language==="cs"?"Vytváření není nyní možné. Obnovte stránku. Pokud problém trvá, povolte ukládání dat pro tento web.":"Cannot create a note right now. Reload the page. If the problem continues, allow this site to store data.")
           :(language==="cs"?"Předchozí vytvoření poznámky není potvrzené. Nové zápisy jsou zablokované.":"Previous note creation is unconfirmed; new writes are blocked.")}</p>
         {marker.kind==="blocked"&&<button type="button" disabled={!ready||writePhase==="receipt"}
           data-testid="target-private-create-receipt" onClick={()=>{void checkReceipt();}}>

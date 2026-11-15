@@ -88,7 +88,7 @@
   "moreBusy": "Načítám…",
   "more": "Načíst další úkoly",
   "scopeWhen": "Nastavení Kdy mění pouze váš osobní plán, nikoli společný termín. Každá změna se ověří vůči aktuální uložené verzi; bez automatického ukládání při výpadku připojení.",
-  "scopeStatus": "Dokončení a vrácení změny se ověřují proti aktuální uložené verzi. Změny se při výpadku připojení samy neodešlou. Přesun dne není dostupný.",
+  "scopeStatus": "Dokončení a vrácení změny se ověřují proti aktuální uložené verzi. Změny se při výpadku připojení samy neodešlou. Přesunutí úkolu na jiný den není dostupné.",
   "scopeReadOnly": "Tento přehled slouží jen ke čtení: dokončení, přesun ani vrácení změny nejsou dostupné.",
   "scopeServer": "Oprávnění se ověřují na serveru při každém načtení.",
   "gateChecking": "Ověřuji přihlášení k serverovému plánu…",
