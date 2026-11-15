@@ -1,6 +1,7 @@
 #!/usr/bin/env node
-// R4 C27 — local-only Safari manual release gate. Run AFTER a clean exact-SHA
-// checkout has been built. No production env is inherited or sourced.
+// R4 C27 — local-only Safari manual release gate. Run after pnpm install
+// on a clean exact-SHA checkout; the helper builds with synthetic env itself.
+// No production env is inherited or sourced.
 import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { randomBytes, scryptSync } from "node:crypto";
 import {
