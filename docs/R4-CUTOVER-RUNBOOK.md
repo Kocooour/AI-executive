@@ -522,6 +522,64 @@ remaining exact-SHA release gates.
 
 ### 3. Manual Safari on the exact-SHA staging instance (macOS or iOS)
 
+
+**Local Mac staging helper (#454):** Use this for the manual macOS Safari
+witness on the exact proposed release SHA. This is a throwaway, loopback-only
+instance, not production and not a deployment. An iPhone cannot reach the
+Mac's 127.0.0.1 address; iOS requires a separately approved, isolated,
+trusted-HTTPS staging endpoint. Do not expose this helper on the LAN.
+
+On the Mac, use a **clean checkout of the exact SHA** with no runtime
+`.env`, `.env.local`, `.env.production` or `.env.*.local` files anywhere in
+the checkout root. Build before launch: Next may otherwise read such files
+during build or `next start`. Never copy live settings into the checkout.
+
+~~~sh
+git checkout <exact-40-character-release-sha>
+git status --porcelain       # must be empty
+pnpm install --frozen-lockfile
+pnpm build
+# First-time local certificate setup (operator action, NOT performed by script):
+brew install mkcert
+mkcert -install
+node scripts/safari-gate-instance.mjs --port 3210
+~~~
+
+The script requires Node 24, a completed production build and trusted
+`mkcert`. It refuses a dirty checkout, runtime env files, unsafe paths or
+a missing build. It creates a new owner-only 0700 `lumi-e2e-*` directory
+under the system temporary root, provisions the synthetic `e2e-owner`
+target store with private Area **Tvoření**, initializes owner-session
+revocation only in its own data directory, and starts `next start`
+bound to 127.0.0.1 with exactly the canonical `personal-v1` target flags.
+Other env values are isolated test credentials and local-only safeguards;
+no production env is inherited by the server. The HTTPS proxy also binds
+only 127.0.0.1, retaining the production `Secure` login cookie behavior
+without changing auth code.
+
+Open the **printed** `https://127.0.0.1:3210/` URL in Safari; verify the
+certificate is **trusted without an exception or warning** and sign in
+with the displayed one-time test password. Confirm Quick Capture offers
+the synthetic private Area **Tvoření** before proceeding with the BFCache
+steps below. Record the printed Git SHA and run directory in the evidence
+template; the build must have been created from that same clean SHA.
+A successful command launch alone is not proof of the manual Safari check.
+
+On macOS Safari, go to **Safari → Settings → Advanced** and enable
+**Show features for web developers** (older versions: **Show Develop menu**),
+then open **Develop → Show Web Inspector**. In the Inspector's **Sources**
+tab choose **+ → Inspector Bootstrap Script**, insert the script shown in
+step 2 below, enable it and preserve console history.
+
+To stop, press **Ctrl+C** in the terminal running the helper. The run
+directory intentionally remains for operator inspection; after preserving
+only redacted evidence, delete **only the exact printed `lumi-e2e-*` run
+directory**, for example `rm -r "/exact/printed/tmp/lumi-e2e-XXXXXX"`.
+Never use a wildcard or delete a real data directory. The certificate,
+test credentials and synthetic SQLite files must not be reused for another
+SHA. Do not submit the printed test password to a PR or issue.
+
+
 **Do once per release SHA, not once per PR.** Use test-only data and an
 isolated authenticated staging instance, never production data. Record
 the deployed/checked-out SHA, Safari version and device/viewport.
