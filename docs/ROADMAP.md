@@ -1,5 +1,9 @@
 # Lumi — aktuální roadmapa vývoje
 
+**R4 C14 / #424 (implementováno v samostatném PR, zatím bez souhlasu s nasazením):** přesný \`personal-v1\` preflight z definice TypeScript profilu, fail-closed odmítnutí neúplných příznaků, společná ověřená záloha legacy a cílového úložiště při zastavené službě a code-only rollback. Blokátor před produkční aktivací: vlastník musí výslovně schválit umístění cílového úložiště a samostatný systemd \`StateDirectory\` drop-in; verzovaná jednotka se v PR nemění. Zůstává nutná plná Browser E2E na release SHA a skutečná zkouška obnovy.
+
+
+
 ## Cesta k prvnímu releasu — 2026-11-12
 
 **Plán aktualizován 2026-11-14: Release 0 nasazen (`4bc0a88`), milník A v integračním PR, milník B v přípravě (#412, #426, #436).** Tento oddíl je platný plán; vše pod ním je historický záznam iterací. [Rozhodnutí vlastníka o rozsahu](decisions/2026-11-12-rozsah-prvniho-releasu.md): první release cílového modelu je **jeden uživatel a soukromé Oblasti**; sdílení a pozvánky jsou R5, HumanWiki H1-real je pozastaveno do [#400](https://github.com/Kocooour/AI-executive/issues/400).
