@@ -4,10 +4,55 @@ import https from "node:https";
 import http from "node:http";
 
 export const SAFARI_GATE_PREFLIGHT_PATH = "/__lumi_safari_gate__/fresh-origin";
+const OWNER_COOKIE_NAME = "ai_executive_session";
+const GATE_COOKIE_PREFIX = "__Host-lumi_safari_gate_";
+
+// Cookies are host-scoped, NOT port-scoped. Each launch uses its own name in
+// Safari; the loopback proxy translates only that name to the unchanged owner
+// cookie expected by Next. An old Safari session can never authenticate a new
+// run, even when the browser sends all 127.0.0.1 cookies to every port.
+export function safariGateBrowserCookieName(nonce) {
+  if (!/^[a-f0-9]{32}$/.test(nonce)) throw new Error("invalid Safari gate cookie nonce");
+  return GATE_COOKIE_PREFIX + nonce;
+}
+
+function assertGateCookieName(name) {
+  if (typeof name !== "string" ||
+      !/^__Host-lumi_safari_gate_[a-f0-9]{32}$/.test(name)) {
+    throw new Error("invalid Safari gate browser cookie name");
+  }
+  return name;
+}
+
+export function gateOwnerCookieFromBrowserHeader(cookieHeader, browserCookieName) {
+  assertGateCookieName(browserCookieName);
+  if (typeof cookieHeader !== "string") return undefined;
+  const matched = cookieHeader.split(";").map(part => part.trim())
+    .filter(part => part.startsWith(browserCookieName + "="));
+  // Ambiguous duplicate cookies fail closed rather than choose a stale token.
+  if (matched.length !== 1) return undefined;
+  const value = matched[0].slice(browserCookieName.length + 1);
+  if (!/^[A-Za-z0-9_.-]{1,2048}$/.test(value)) return undefined;
+  return OWNER_COOKIE_NAME + "=" + value;
+}
+
+// Never let an upstream cookie escape under the production name. Fail closed
+// on an unexpected Set-Cookie: only owner login/logout may issue one here.
+export function gateSetCookiesForBrowser(setCookieHeader, browserCookieName) {
+  assertGateCookieName(browserCookieName);
+  if (setCookieHeader === undefined) return undefined;
+  const cookies = Array.isArray(setCookieHeader) ? setCookieHeader : [setCookieHeader];
+  if (!cookies.every(cookie =>
+    typeof cookie === "string" && cookie.startsWith(OWNER_COOKIE_NAME + "="))) {
+    throw new Error("unexpected cookie emitted by local Safari gate");
+  }
+  return cookies.map(cookie =>
+    browserCookieName + cookie.slice(OWNER_COOKIE_NAME.length));
+}
 
 // Checks the browser's persistent origin state, not the server's test data.
 // Never clears anything automatically.
-export function safariGatePreflightHtml(cookieDetected = false) {
+export function safariGatePreflightHtml() {
   return String.raw`<!doctype html>
 <html lang="cs"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
@@ -24,7 +69,6 @@ button{font:inherit;padding:.6rem 1.2rem}</style></head><body>
   const status = document.getElementById("status");
   const detail = document.getElementById("detail");
   const button = document.getElementById("continue");
-  const staleCookie = ${cookieDetected ? "true" : "false"};
   try {
     if (!("indexedDB" in window) ||
         typeof indexedDB.databases !== "function" ||
@@ -43,7 +87,7 @@ button{font:inherit;padding:.6rem 1.2rem}</style></head><body>
       localStorage: localStorage.length, sessionStorage: sessionStorage.length,
       serviceWorkerController: navigator.serviceWorker.controller ? 1 : 0
     };
-    if (staleCookie || Object.values(counts).some(value => value !== 0)) {
+    if (Object.values(counts).some(value => value !== 0)) {
       status.textContent = "STOP: Tento web již obsahuje data předchozí relace.";
       detail.textContent = "V Safari smažte data tohoto testovacího webu, zavřete jeho karty a otevřete adresu znovu. Nemažte data produkční Lumi.";
       console.error("LUMI_SAFARI_GATE_ORIGIN_REUSED", JSON.stringify(counts));
@@ -64,7 +108,8 @@ button{font:inherit;padding:.6rem 1.2rem}</style></head><body>
 </script></body></html>`;
 }
 
-export function createSafariGateTlsProxy(certPath, keyPath, externalPort, internalPort) {
+export function createSafariGateTlsProxy(certPath, keyPath, externalPort, internalPort, browserCookieName) {
+  assertGateCookieName(browserCookieName);
   return https.createServer({
     cert: readFileSync(certPath), key: readFileSync(keyPath),
   }, (request, response) => {
@@ -81,7 +126,7 @@ export function createSafariGateTlsProxy(certPath, keyPath, externalPort, intern
         "x-content-type-options": "nosniff",
         "content-security-policy": "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
       });
-      response.end(safariGatePreflightHtml(Boolean(request.headers.cookie)));
+      response.end(safariGatePreflightHtml());
       return;
     }
     const headers = {
@@ -92,11 +137,29 @@ export function createSafariGateTlsProxy(certPath, keyPath, externalPort, intern
       "x-forwarded-for": "127.0.0.1",
       "x-real-ip": "127.0.0.1",
     };
+    // Drop EVERY browser cookie other than this launch's random namespace.
+    // Older gate cookies, the production-named cookie and unrelated host
+    // cookies must never reach Next.
+    delete headers.cookie;
+    const ownerCookie = gateOwnerCookieFromBrowserHeader(
+      request.headers.cookie, browserCookieName);
+    if (ownerCookie) headers.cookie = ownerCookie;
     const upstream = http.request({
       hostname: "127.0.0.1", port: internalPort,
       path: request.url, method: request.method, headers,
     }, upstreamResponse => {
-      response.writeHead(upstreamResponse.statusCode || 502, upstreamResponse.headers);
+      const replyHeaders = { ...upstreamResponse.headers };
+      try {
+        const mapped = gateSetCookiesForBrowser(
+          upstreamResponse.headers["set-cookie"], browserCookieName);
+        if (mapped !== undefined) replyHeaders["set-cookie"] = mapped;
+      } catch {
+        upstreamResponse.resume();
+        response.writeHead(502);
+        response.end();
+        return;
+      }
+      response.writeHead(upstreamResponse.statusCode || 502, replyHeaders);
       upstreamResponse.pipe(response);
     });
     upstream.on("error", () => {
@@ -141,7 +204,8 @@ function parseJson(response) {
   catch { throw new Error("local HTTPS smoke returned invalid JSON"); }
 }
 
-export async function verifySafariGateHttps({ port, ca, password }) {
+export async function verifySafariGateHttps({ port, ca, password, browserCookieName }) {
+  assertGateCookieName(browserCookieName);
   const request = (endpoint, options = {}) =>
     httpsGateRequest({ port, ca, endpoint, ...options });
   const anonymous = await request("/api/auth/status");
@@ -150,6 +214,13 @@ export async function verifySafariGateHttps({ port, ca, password }) {
   if (before.enabled !== true || before.configured !== true ||
       before.authenticated !== false) {
     throw new Error("HTTPS auth status is not isolated and anonymous");
+  }
+  // A stale production-named owner cookie must never authenticate the gate.
+  const stale = await request("/api/auth/status", {
+    headers: { cookie: OWNER_COOKIE_NAME + "=stale.some-signature" },
+  });
+  if (stale.status !== 200 || parseJson(stale).authenticated !== false) {
+    throw new Error("HTTPS proxy accepted an unrelated owner cookie");
   }
   const origin = "https://127.0.0.1:" + port;
   const payload = JSON.stringify({ password });
@@ -163,7 +234,7 @@ export async function verifySafariGateHttps({ port, ca, password }) {
   if (login.status !== 200) throw new Error("HTTPS login failed");
   const setCookie = login.headers["set-cookie"];
   const ownerCookie = (Array.isArray(setCookie) ? setCookie : []).find(value =>
-    value.startsWith("ai_executive_session="));
+    value.startsWith(browserCookieName + "="));
   if (!ownerCookie || !/;\s*secure(?:;|$)/i.test(ownerCookie) ||
       !/;\s*httponly(?:;|$)/i.test(ownerCookie) ||
       !/;\s*samesite=strict(?:;|$)/i.test(ownerCookie)) {
@@ -176,6 +247,15 @@ export async function verifySafariGateHttps({ port, ca, password }) {
   if (authenticated.status !== 200 ||
       parseJson(authenticated).authenticated !== true) {
     throw new Error("owner session cookie failed through the HTTPS proxy");
+  }
+  // No browser-visible owner cookie may bypass the per-run namespace.
+  const originalCookie = OWNER_COOKIE_NAME + "=" +
+    cookie.slice(browserCookieName.length + 1);
+  const bypass = await request("/api/auth/status", {
+    headers: { cookie: originalCookie },
+  });
+  if (bypass.status !== 200 || parseJson(bypass).authenticated !== false) {
+    throw new Error("proxy leaked host-wide owner cookie scope");
   }
   const areasResponse = await request("/api/target-staging/notes/create-targets", {
     headers: { cookie },
