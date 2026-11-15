@@ -191,12 +191,17 @@ for(const width of [390,1280]){
     await expect(page.getByTestId("target-scope-list")).toHaveAttribute("data-state","ready");
     await page.getByTestId("target-project-create-open").click();
     await expect(page.getByTestId("target-structure-unresolved")).toBeVisible();
-    const cancelled=page.waitForResponse(r=>r.request().method()==="POST"&&
-      new URL(r.url()).pathname===projectPath+"/create-cancel");
+    // Capture the server's cancel body at the network layer: reading it later
+    // via response.json() can race with Chromium's Network.getResponseBody
+    // eviction. The real server response is forwarded unchanged.
+    let proof:{status:number;body:unknown}|undefined;
+    await page.route("**/api/target-staging/projects/create-cancel",async route=>{
+      const response=await route.fetch();
+      proof={status:response.status(),body:await response.json()};
+      await route.fulfill({response});
+    },{times:1});
     await page.getByTestId("target-structure-cancel").click();
-    const proof=await cancelled;
-    expect(proof.status()).toBe(200);
-    expect(await proof.json()).toEqual({status:"cancelled"});
+    await expect.poll(()=>proof).toEqual({status:200,body:{status:"cancelled"}});
     await expect(page.getByTestId("target-structure-unresolved")).toHaveCount(0);
     // The same tab is now safely free to create with a NEW command UUID.
     await page.getByTestId("target-project-create-area")

@@ -9,7 +9,9 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
-import { targetPersonalV1Env } from "../lib/target-personal-profile.ts";
+import { TARGET_PERSONAL_V1_PROFILE, targetPersonalV1Env } from "../lib/target-personal-profile.ts";
+// Every start must load the complete reviewed profile, whatever its current size.
+const fullProfileStart = "start-with-target-flags:" + TARGET_PERSONAL_V1_PROFILE.length;
 
 const repo = process.cwd();
 const source = readFileSync(path.join(repo, "deployment/deploy-safe.sh"), "utf8");
@@ -602,7 +604,7 @@ scenarioCase("targetsuccess: quiesced target preflight, shared verified archive,
   assert.equal(r.events.filter(value => value === "stop").length, 2);
   assert.equal(r.events.filter(value => value === "start-b").length, 2);
   assert.deepEqual(r.events.filter(value => value.startsWith("start-with-target-flags:")),
-    ["start-with-target-flags:31", "start-with-target-flags:31"],
+    [fullProfileStart, fullProfileStart],
     "the two post-deployment service launches both use the fully reviewed profile");
   assert.equal(r.events.filter(value => value === "target-check").length, 4,
     "initial, post-copy, immediately-before-start and post-start semantic checks");
@@ -824,7 +826,7 @@ scenarioCase("targetpostfail: code-only rollback stays stopped after new-code st
   assert.equal(r.service, "inactive");
   assert.equal(r.events.includes("reset"), true);
   assert.deepEqual(r.events.filter(e => e.startsWith("start-with-target-flags:")),
-    ["start-with-target-flags:31"],
+    [fullProfileStart],
     "only the initial new-code start may see enabled flags");
   assert.equal(r.events.includes("start-b"), true);
   assert.equal(r.events.includes("start-a"), false,
