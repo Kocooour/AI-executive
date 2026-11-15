@@ -2,14 +2,18 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
   chmodSync, mkdirSync, mkdtempSync, rmSync, symlinkSync,
-  writeFileSync,
+  writeFileSync, readFileSync,
 } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import {
   SAFARI_GATE_OWNER, assertSafeGateTmpRoot, assertIsolatedGateRunDirectory,
-  assertNoGateRuntimeEnvFiles, buildSafariGateEnvironment, validateGatePort,
+  assertNoGateRuntimeEnvFiles, assertSafeGateBuildOutput,
+  buildSafariGateEnvironment, validateGatePort,
 } from "../scripts/safari-gate-instance-lib.mjs";
+import {
+  SAFARI_GATE_PREFLIGHT_PATH, safariGatePreflightHtml,
+} from "../scripts/safari-gate-https.mjs";
 import {
   TARGET_PERSONAL_V1_PROFILE, TARGET_PERSONAL_V1_EXCLUDED,
   TARGET_PERSONAL_V1_REQUIRED_SETTINGS, targetPersonalV1Env,
@@ -155,4 +159,46 @@ test("port validation fails closed", () => {
     assert.throws(() => validateGatePort(port), /--port/);
   }
   assert.equal(validateGatePort(3210), 3210);
+});
+
+test("unsafe build output cannot redirect the sandboxed pnpm build", t => {
+  const { root, cwd } = fixture(t);
+  assert.doesNotThrow(() => assertSafeGateBuildOutput(cwd));
+  const alias = path.join(cwd, ".next");
+  symlinkSync(root, alias);
+  assert.throws(() => assertSafeGateBuildOutput(cwd), /unsafe .next/);
+  rmSync(alias);
+  mkdirSync(alias);
+  assert.doesNotThrow(() => assertSafeGateBuildOutput(cwd));
+});
+
+test("browser preflight refuses any persistent website state before opening Lumi", () => {
+  const html = safariGatePreflightHtml();
+  assert.equal(SAFARI_GATE_PREFLIGHT_PATH,
+    "/__lumi_safari_gate__/fresh-origin");
+  for (const required of [
+    "indexedDB.databases()", "caches.keys()",
+    "navigator.serviceWorker.getRegistrations()",
+    "navigator.serviceWorker.controller",
+    "localStorage.length", "sessionStorage.length",
+    "LUMI_SAFARI_GATE_ORIGIN_REUSED",
+    "LUMI_SAFARI_GATE_ORIGIN_INCONCLUSIVE",
+    "LUMI_SAFARI_GATE_ORIGIN_CLEAN",
+    "button.disabled = false",
+  ]) assert.ok(html.includes(required), required);
+  assert.match(html, /<button[^>]* disabled>/);
+  assert.doesNotMatch(html, /localStorage\.clear\(|indexedDB\.deleteDatabase\(|caches\.delete\(/);
+});
+
+test("launcher rebuilds from clean SHA and HTTPS probe never disables trust", () => {
+  const root = path.resolve(import.meta.dirname, "..");
+  const launcher = readFileSync(path.join(root, "scripts/safari-gate-instance.mjs"), "utf8");
+  const proxy = readFileSync(path.join(root, "scripts/safari-gate-https.mjs"), "utf8");
+  assert.ok(launcher.includes('spawnSync("pnpm", ["build"]'));
+  assert.ok(launcher.includes('if (builtSha !== sha || postBuildDirty ||'));
+  assert.ok(launcher.includes("verifySafariGateHttps({"));
+  assert.ok(launcher.includes("SAFARI_GATE_PREFLIGHT_PATH"));
+  assert.ok(launcher.includes("requestedPort ?? await availableLoopbackPort()"));
+  assert.ok(proxy.includes("private Quick Capture Areas endpoint failed over HTTPS"));
+  assert.doesNotMatch(proxy, /rejectUnauthorized\s*:\s*false|NODE_TLS_REJECT_UNAUTHORIZED/);
 });
