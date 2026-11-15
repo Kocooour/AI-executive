@@ -249,7 +249,7 @@ for(const width of [390,1280]){
     // authoritative assertions. Reading the POST response body *after*
     // navigation can race with Chromium's Network.getResponseBody eviction.
     await expect(page.getByTestId("target-structure-unresolved")).toHaveCount(0);
-    await expect(page.getByText("Původní vytvoření se dokončilo. Položku lze otevřít."))
+    await expect(page.getByText("Předchozí vytvoření se dokončilo. Položku můžete otevřít."))
       .toBeVisible();
     await expect(page.getByTestId("target-project-created-open")).toBeVisible();
     await page.getByTestId("target-project-created-open").click();
