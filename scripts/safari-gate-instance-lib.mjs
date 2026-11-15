@@ -97,16 +97,36 @@ export function assertNoGateRuntimeEnvFiles(cwd) {
   }
 }
 
-// A build writes to .next. Refuse a symlink (including to a live store)
-// before pnpm can follow it; this does not delete existing build artifacts.
+// Next may reuse ignored .next/cache and other generated paths. Even when
+// .next itself is a regular directory, a nested symlink can redirect build
+// writes to real data. Walk the EXISTING tree with lstat (never follow links)
+// before starting the clean test-only build; do not delete or rewrite it.
 export function assertSafeGateBuildOutput(cwd) {
+  const output = path.join(cwd, ".next");
+  let root;
   try {
-    const stat = lstatSync(path.join(cwd, ".next"));
-    if (!stat.isDirectory() || stat.isSymbolicLink()) {
-      throw new Error("unsafe .next build output: expected a real directory");
-    }
+    root = lstatSync(output);
   } catch (error) {
-    if (error?.code !== "ENOENT") throw error;
+    if (error?.code === "ENOENT") return; // No previous build to inspect.
+    throw error;
+  }
+  if (!root.isDirectory() || root.isSymbolicLink()) {
+    throw new Error("unsafe .next build output: expected a real directory");
+  }
+  const pending = [output];
+  while (pending.length) {
+    const directory = pending.pop();
+    for (const name of readdirSync(directory)) {
+      const entry = path.join(directory, name);
+      const stat = lstatSync(entry);
+      if (stat.isSymbolicLink()) {
+        throw new Error("unsafe .next build output: nested symlink refused");
+      }
+      if (stat.isDirectory()) pending.push(entry);
+      else if (!stat.isFile()) {
+        throw new Error("unsafe .next build output: unexpected file type");
+      }
+    }
   }
 }
 
