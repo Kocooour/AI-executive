@@ -1,7 +1,7 @@
 import { expect, persistOwnerSession, test } from "./fixtures";
 import { prepareOfflineRecovery } from "../lib/d2b-offline-reconciliation";
 import { encodeOfflineRecoveryFile } from "../lib/d2b-offline-recovery-file";
-import { confirmDialog, expectOnServer, heading, seeded, serverEntities, settingsSections, sidebarView, signIn, waitUntilSynced } from "./helpers";
+import { confirmDialog, expectOnServer, heading, seeded, serverEntities, settingsSections, sidebarView, signIn, waitUntilSynced, cleanupSyntheticFixtures } from "./helpers";
 
 // The scenarios share one instance and run in this order, one at a time (see the config).
 // A failing scenario does not stop the ones after it. Signing out comes last.
@@ -12,7 +12,14 @@ test.beforeEach(async ({ page }) => {
   systemDialogs.length = 0;
   page.on("dialog", (dialog) => { systemDialogs.push(dialog.message()); void dialog.dismiss(); });
 });
-test.afterEach(() => {
+test.afterEach(async ({ page }, testInfo) => {
+  if (testInfo.title === "capture switches destination and area to the selected workspace" ||
+      testInfo.title === "a task added from a project in another workspace goes to that workspace and inherits the project's area") {
+    await cleanupSyntheticFixtures(page, {
+      workspacePrefixes: ["e2e-family-workspace-", "e2e-project-workspace-"],
+      entityPrefixes: ["e2e-personal-area-", "e2e-own-area-"],
+    });
+  }
   expect(systemDialogs).toEqual([]);
 });
 
@@ -158,7 +165,10 @@ test("a task added from a project in another workspace goes to that workspace an
       baseRevision: snapshot.revision, restoreGeneration: snapshot.restoreGeneration,
       entities: [...snapshot.entities,
         entity(`workspace:${workspaceId}`, "workspace", "Druhý prostor", workspaceId, { properties: { kind: "shared", role: "owner", members: [{ id: "owner", role: "owner" }] } }),
-        entity(ids.projectId, "project", "Projekt v druhém prostoru", workspaceId),
+        // Explicit project Area prevents the server creating a protected fallback
+        // Area that a synthetic workspace teardown is not permitted to delete.
+        entity(ids.projectId, "project", "Projekt v druhém prostoru", workspaceId,
+          { properties: { areaId: ids.otherAreaId } }),
         entity(ids.otherAreaId, "area", "Oblast druhého prostoru", workspaceId),
         entity(ids.personalAreaId, "area", "Vlastní oblast", "personal")],
       relations: snapshot.relations, deletedIds: [], revivedIds: [],
@@ -679,6 +689,10 @@ test("signing out without a connection is refused and removes nothing", async ({
 test("signing out clears the local copy; signing in again restores it from the server", async ({ page }) => {
   await page.goto("/?view=Settings");
   await waitUntilSynced(page);
+  // Reload to capture a stale completion marker as this tab's baseline.
+  await page.evaluate(() => localStorage.setItem("ai-executive-owner-adoption-completed", "stale-e2e-completion"));
+  await page.reload();
+  await waitUntilSynced(page);
   const previousSessionCookie = (await page.context().cookies())
     .find((cookie) => cookie.name === "ai_executive_session")?.value;
   expect(previousSessionCookie).toBeTruthy();
@@ -716,8 +730,12 @@ test("signing out clears the local copy; signing in again restores it from the s
   expect(await page.evaluate(() => localStorage.getItem("ai-executive-attention"))).toBeNull();
   // Nor does the mark that lets an offline start show data.
   expect(await page.evaluate(() => localStorage.getItem("ai-executive-signed-in"))).toBeNull();
+  expect(await page.evaluate(() => localStorage.getItem("ai-executive-owner-adoption-completed"))).toBeNull();
+  const signOutEpoch = await page.evaluate(() => localStorage.getItem("ai-executive-owner-sign-out-epoch"));
+  expect(signOutEpoch).toMatch(/^[1-9]\d*$/);
   expect(await page.evaluate(() => fetch("/api/store").then((response) => response.status))).toBe(401);
   await signIn(page);
+  expect(await page.evaluate(() => localStorage.getItem("ai-executive-owner-sign-out-epoch"))).toBe(signOutEpoch);
   await sidebarView(page, "Doručené").click();
   await expect(page.getByText(seeded.plainTask)).toBeVisible();
   await expectOnServer(page, (entity) => entity.id === "e2e-rename" && entity.properties?.notes === otherTab, true);

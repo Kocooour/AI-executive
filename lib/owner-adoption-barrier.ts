@@ -5,6 +5,10 @@ export const ownerAdoptionGenerationKey = "ai-executive-restore-generation";
 // Unlike an ordinary first pull, a completed owner adoption must also fence
 // pre-existing tabs that started before any generation was known.
 export const ownerAdoptionCompletedKey = "ai-executive-owner-adoption-completed";
+// Sign-out removes the owner-adoption completion and generation markers. A
+// separate durable, monotonically advancing epoch must still fence tabs that
+// loaded BEFORE the sign-out, even if they missed all storage/channel events.
+export const ownerSignOutEpochKey = "ai-executive-owner-sign-out-epoch";
 
 type Readable = Pick<Storage, "getItem">;
 type Writable = Pick<Storage, "getItem" | "setItem" | "removeItem">;
@@ -27,6 +31,7 @@ function browserStore(): Readable | null {
 let knownInThisTab: number | undefined;
 let wasSyncedAtLoad = false;
 let completedAtLoad: string | null = null;
+let signOutEpochAtLoad: string | null = null;
 let initialized = false;
 export function initializeAdoptionGeneration(known: number | undefined, previouslySynced = false) {
   if (initialized) return;
@@ -34,12 +39,50 @@ export function initializeAdoptionGeneration(known: number | undefined, previous
   wasSyncedAtLoad = previouslySynced;
   // This is a per-tab baseline, not the shared value after a sibling's pull.
   // Only a real completed owner adoption changes this marker.
-  try { completedAtLoad = browserStore()?.getItem(ownerAdoptionCompletedKey) ?? null; }
-  catch { completedAtLoad = null; }
+  try {
+    const storage = browserStore();
+    completedAtLoad = storage?.getItem(ownerAdoptionCompletedKey) ?? null;
+    signOutEpochAtLoad = storage?.getItem(ownerSignOutEpochKey) ?? null;
+  } catch {
+    completedAtLoad = null;
+    signOutEpochAtLoad = null;
+  }
   initialized = true;
 }
 export function advanceAdoptionGeneration(generation: number) {
   knownInThisTab = generation;
+  initialized = true;
+}
+// Must be called under the recovery-data Web Lock immediately after the
+// durable signed-out intent, BEFORE any local copy or restore marker is removed.
+// Never reset this key on sign-in: only a fresh page load may adopt the epoch.
+export function advanceSignOutEpoch(storage: Writable): void {
+  const raw = storage.getItem(ownerSignOutEpochKey);
+  const previous = raw === null ? 0 : Number(raw);
+  if (!Number.isSafeInteger(previous) || previous < 0 || previous >= Number.MAX_SAFE_INTEGER ||
+      (raw !== null && raw !== String(previous)))
+    throw new Error("OWNER_SIGN_OUT_EPOCH_UNAVAILABLE");
+  const next = String(previous + 1);
+  storage.setItem(ownerSignOutEpochKey, next);
+  if (storage.getItem(ownerSignOutEpochKey) !== next)
+    throw new Error("OWNER_SIGN_OUT_EPOCH_NOT_PERSISTED");
+}
+// A tab that itself finished the authorized IDB wipe is no longer stale: it
+// has no records to revive, and must be able to sign in again without requiring
+// another reload (for example, after retrying an interrupted sign-out on startup).
+// This acknowledgement is intentionally tab-local and is NEVER broadcast to
+// other open tabs, whose old baselines must remain fenced.
+export function acknowledgePurgedSignOutInThisTab(storage: Readable): void {
+  const epoch = storage.getItem(ownerSignOutEpochKey);
+  if (epoch === null || storage.getItem("ai-executive-signed-out") !== "1" ||
+      storage.getItem(ownerAdoptionGenerationKey) !== null ||
+      storage.getItem(ownerAdoptionFenceKey) !== null ||
+      storage.getItem(ownerAdoptionCompletedKey) !== null)
+    throw new Error("OWNER_SIGN_OUT_PURGE_NOT_VERIFIED");
+  knownInThisTab = undefined;
+  wasSyncedAtLoad = false;
+  completedAtLoad = null;
+  signOutEpochAtLoad = epoch;
   initialized = true;
 }
 export function ownerAdoptionFencePresent(storage: Readable | null = browserStore()): boolean {
@@ -49,9 +92,14 @@ export function ownerAdoptionFencePresent(storage: Readable | null = browserStor
 export function crossTabAdoptionBlocked(
   known: number | undefined, storage: Readable | null = browserStore(),
   previouslySyncedAtLoad = false, ownerCompletedAtLoad: string | null = null,
+  signOutEpochAtStart: string | null = null,
 ): boolean {
   if (!storage) return typeof window !== "undefined";
   try {
+    // This fence survives certified completion-marker cleanup and a subsequent
+    // sign-in that clears ai-executive-signed-out. It also covers tabs with no
+    // known generation, which would otherwise resume writes after logout.
+    if (storage.getItem(ownerSignOutEpochKey) !== signOutEpochAtStart) return true;
     if (storage.getItem(ownerAdoptionFenceKey) !== null) return true;
     // Even a never-synced tab must not revive data after a sibling has
     // COMPLETED a real restore while this page remained open.
@@ -70,7 +118,7 @@ export function crossTabAdoptionBlocked(
 }
 export function isCrossTabAdoptionBlocked() {
   return crossTabAdoptionBlocked(
-    initialized ? knownInThisTab : undefined, browserStore(), wasSyncedAtLoad, completedAtLoad,
+    initialized ? knownInThisTab : undefined, browserStore(), wasSyncedAtLoad, completedAtLoad, signOutEpochAtLoad,
   );
 }
 // A first pull can stamp the shared generation but is NOT a restore. Only a

@@ -5,7 +5,7 @@ import { clearAllMarkers, pendingDeletedIds, pendingRevivedIds } from "./pending
 import { clearNotesDrafts, keptNotesDrafts, notesDraftsKey } from "./notes-drafts";
 import { clearProjectContextDrafts, keptProjectContextDrafts } from "./project-context-drafts";
 import { clearOpenTexts } from "./open-texts";
-import { assertOwnerAdoptionCleanup, finishOwnerAdoptionFence } from "./owner-adoption-barrier";
+import { acknowledgePurgedSignOutInThisTab, advanceSignOutEpoch, assertOwnerAdoptionCleanup, finishOwnerAdoptionFence, ownerAdoptionCompletedKey } from "./owner-adoption-barrier";
 import { attentionCacheKey } from "./attention-cache";
 
 // Browser-side copies of server data and the bookkeeping of unsent changes.
@@ -81,6 +81,10 @@ export async function clearLocalData(timeoutMs = 4000) {
   localStorage.setItem(wipePendingKey, "1");
   assertNotHeld();
   localStorage.setItem(signedOutKey, "1");
+  // A completed owner restore marker is removed at the END of the wipe, but
+  // old tabs must remain fenced across logout and later re-authentication.
+  // Advancing under the same Web Lock also fences in-flight stale writes.
+  advanceSignOutEpoch(localStorage);
   localDataKeys.forEach((key) => {
     assertNotHeld();
     localStorage.removeItem(key);
@@ -124,6 +128,13 @@ export async function clearLocalData(timeoutMs = 4000) {
   // A fully authorized, verified sign-out also retires an abandoned owner
   // restore fence. Partial wipes keep wipePending and cannot expose old rows.
   finishOwnerAdoptionFence(localStorage);
+  // Only a completed purge and retired fence can discard this stale completion
+  // marker. Wipe intent remains if this final step fails (#419).
+  localStorage.removeItem(ownerAdoptionCompletedKey);
+  // The purging tab can re-authenticate without a reload after interrupted
+  // sign-out recovery. Other tabs retain their captured, stale epoch.
+  // Keep wipePending set if this verification fails (#419).
+  acknowledgePurgedSignOutInThisTab(localStorage);
   localStorage.removeItem(wipePendingKey);
   }, true);
 }

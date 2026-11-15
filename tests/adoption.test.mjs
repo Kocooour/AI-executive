@@ -116,6 +116,107 @@ test("an owner restore completing in a sibling still fences a fresh tab with no 
   assert.equal(barrier.crossTabAdoptionBlocked(5, state), false);
 });
 
+test("logout epoch blocks stale tabs through restore completion cleanup and later sign-in", () => {
+  const state = memoryStorage();
+  // Tab A was opened before another tab B completed an owner restore.
+  // A had never synchronized and may miss all storage/BroadcastChannel events.
+  const tabA = { known: undefined, completed: null, signOutEpoch: state.getItem(barrier.ownerSignOutEpochKey) };
+  state.setItem(barrier.ownerAdoptionGenerationKey, "4");
+  barrier.startOwnerAdoptionFence(state, 5, 4);
+  state.setItem(barrier.ownerAdoptionGenerationKey, "5");
+  barrier.finishOwnerAdoptionFence(state);
+  assert.equal(barrier.crossTabAdoptionBlocked(tabA.known, state, false, tabA.completed, tabA.signOutEpoch), true);
+
+  // Successful logout clears the restore generation and completion marker.
+  // It MUST preserve a separate epoch, even after signed-out is cleared at login.
+  barrier.advanceSignOutEpoch(state);
+  const firstEpoch = state.getItem(barrier.ownerSignOutEpochKey);
+  assert.equal(firstEpoch, "1");
+  state.removeItem(barrier.ownerAdoptionGenerationKey);
+  state.removeItem(barrier.ownerAdoptionCompletedKey);
+  assert.equal(barrier.crossTabAdoptionBlocked(tabA.known, state, false, tabA.completed, tabA.signOutEpoch), true,
+    "a missed owner restore event must not revive stale records after logout");
+
+  state.setItem(barrier.ownerAdoptionGenerationKey, "5"); // new signed-in tab's first pull
+  assert.equal(barrier.crossTabAdoptionBlocked(tabA.known, state, false, tabA.completed, tabA.signOutEpoch), true,
+    "removing signed-out on re-authentication must NOT re-enable the old tab");
+  assert.equal(barrier.crossTabAdoptionBlocked(5, state, false, null, firstEpoch), false,
+    "a freshly loaded and authenticated tab uses the current epoch");
+  assert.equal(barrier.crossTabAdoptionBlocked(5, state, false, null, null), true,
+    "even an old tab that knew the same generation remains blocked");
+
+  // A second logout must advance again; a one-way boolean would fail here.
+  barrier.advanceSignOutEpoch(state);
+  assert.equal(state.getItem(barrier.ownerSignOutEpochKey), "2");
+  assert.equal(barrier.crossTabAdoptionBlocked(5, state, false, null, firstEpoch), true);
+  assert.equal(barrier.crossTabAdoptionBlocked(undefined, state, false, null, "2"), false,
+    "a tab loaded after the second logout is not frozen by old logouts");
+});
+
+test("the tab completing an interrupted wipe can safely re-authenticate; stale siblings cannot", async () => {
+  const state = memoryStorage();
+  const previous = globalThis.localStorage;
+  try {
+    globalThis.localStorage = state;
+    // Isolate this tab's module globals from the siblings and the other tests.
+    const finishingTab = await import(`../lib/owner-adoption-barrier.ts?purged-tab=${Date.now()}`);
+    finishingTab.initializeAdoptionGeneration(undefined, false);
+    const oldEpoch = state.getItem(finishingTab.ownerSignOutEpochKey);
+    state.setItem(finishingTab.ownerAdoptionGenerationKey, "8");
+    state.setItem("ai-executive-signed-out", "1");
+    state.setItem("ai-executive-wipe-pending", "1");
+    finishingTab.advanceSignOutEpoch(state);
+    state.removeItem(finishingTab.ownerAdoptionGenerationKey);
+    assert.equal(finishingTab.isCrossTabAdoptionBlocked(), true, "this tab is fenced during its own wipe");
+    assert.equal(finishingTab.crossTabAdoptionBlocked(undefined, state, false, null, oldEpoch), true);
+    finishingTab.acknowledgePurgedSignOutInThisTab(state);
+    assert.equal(finishingTab.isCrossTabAdoptionBlocked(), false,
+      "the tab whose local data is fully purged may begin its next first pull");
+    assert.equal(finishingTab.crossTabAdoptionBlocked(undefined, state, false, null, oldEpoch), true,
+      "acknowledgement must not release a pre-logout sibling");
+    state.removeItem("ai-executive-wipe-pending");
+    state.setItem(finishingTab.ownerAdoptionGenerationKey, "8");
+    assert.equal(finishingTab.crossTabAdoptionBlocked(undefined, state, false, null, oldEpoch), true);
+  } finally {
+    if (previous === undefined) delete globalThis.localStorage;
+    else globalThis.localStorage = previous;
+  }
+});
+
+test("logout epoch fails closed when corrupt or unpersistable", () => {
+  const corrupt = memoryStorage();
+  corrupt.setItem(barrier.ownerSignOutEpochKey, "NaN");
+  assert.throws(() => barrier.advanceSignOutEpoch(corrupt), /OWNER_SIGN_OUT_EPOCH_UNAVAILABLE/);
+  const dropsWrites = memoryStorage();
+  dropsWrites.setItem = () => {};
+  assert.throws(() => barrier.advanceSignOutEpoch(dropsWrites), /OWNER_SIGN_OUT_EPOCH_NOT_PERSISTED/);
+});
+
+test("Dexie rejects an old tab write after sign-out even when login restores the old generation", async () => {
+  const state = memoryStorage();
+  const previous = globalThis.localStorage;
+  try {
+    globalThis.localStorage = state;
+    // An old, previously opened tab with no known restore generation.
+    // Fresh adoption module has no in-progress owner adoption flag.
+    const oldTab = await import(`../lib/adoption.ts?signout-guard=${Date.now()}`);
+    const { core, written } = fakeCore();
+    const guarded = oldTab.adoptionWriteGuard(core);
+    await guarded.table("entities").mutate({ trans: {}, type: "put", values: [{ id: "before" }] });
+    assert.equal(written.length, 1);
+    barrier.advanceSignOutEpoch(state);
+    state.setItem(barrier.ownerAdoptionGenerationKey, "4"); // server sync after re-login
+    await assert.rejects(
+      guarded.table("entities").mutate({ trans: {}, type: "put", values: [{ id: "stale" }] }),
+      oldTab.AdoptionWriteRefused,
+    );
+    assert.equal(written.length, 1, "stale IndexedDB content cannot be revived");
+  } finally {
+    if (previous === undefined) delete globalThis.localStorage;
+    else globalThis.localStorage = previous;
+  }
+});
+
 test("a certified owner completion releases a fresh tab on reload, unlike an ordinary first pull", () => {
   const state = memoryStorage();
   assert.equal(barrier.completedOwnerAdoptionSince(null, state), undefined);
@@ -270,6 +371,25 @@ test("valid owner adoption fence can be saved as non-importable raw rescue when 
   assert.throws(() => unreadable.encodeUnreadableOwnerRescue(
     null, captured, 12345, "unsupported-fence-reason",
   ), /OWNER_RESCUE_INVALID/);
+});
+
+test("C23 verified sign-out clears adoption completion after database and fence cleanup", () => {
+  const source = readFileSync(new URL("../lib/local-data.ts", import.meta.url), "utf8");
+  const stampEpoch = source.indexOf("advanceSignOutEpoch(localStorage);");
+  const purgeStart = source.indexOf("const wipe = adoptionTransaction", stampEpoch);
+  const wipeStart = source.indexOf("await Promise.race([");
+  const purgeBaseline = source.indexOf("clearPurgedRestoreBaseline(localStorage);", wipeStart);
+  const finishFence = source.indexOf("finishOwnerAdoptionFence(localStorage);", purgeBaseline);
+  const removeCompletion = source.indexOf("localStorage.removeItem(ownerAdoptionCompletedKey);", finishFence);
+  const acknowledgePurge = source.indexOf("acknowledgePurgedSignOutInThisTab(localStorage);", removeCompletion);
+  const clearPending = source.indexOf("localStorage.removeItem(wipePendingKey);", acknowledgePurge);
+  assert.ok(stampEpoch !== -1 && stampEpoch < purgeStart && purgeStart < wipeStart &&
+    wipeStart < purgeBaseline && purgeBaseline < finishFence &&
+    finishFence < removeCompletion && removeCompletion < acknowledgePurge && acknowledgePurge < clearPending,
+    "completion cleanup must follow a verified wipe and fence retirement");
+  assert.ok(!source.slice(source.indexOf("export async function clearLocalData"), wipeStart)
+    .includes("localStorage.removeItem(ownerAdoptionCompletedKey)"),
+    "an unfinished sign-out cannot clear completion early");
 });
 
 test("C9 focused workflow triggers when each restore safety module or unit regression changes", () => {

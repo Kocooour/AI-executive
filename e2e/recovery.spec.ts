@@ -1,6 +1,6 @@
 import { expect, persistOwnerSession, test } from "./fixtures";
 import { sessionFile } from "../playwright.config";
-import { confirmDialog, expectOnServer, serverEntities, settingsSections, sidebarView, signIn, waitUntilSynced } from "./helpers";
+import { confirmDialog, expectOnServer, serverEntities, settingsSections, sidebarView, signIn, waitUntilSynced, cleanupSyntheticFixtures } from "./helpers";
 
 // Opened without a connection to the server, the app could not check access. This browser has
 // synchronized before, so it shows the data it holds, marked as offline (owner decision
@@ -186,12 +186,16 @@ test("a task held for its unknown workspace is sent once the workspace exists", 
   const stamp = Date.now();
   const workspaceId = `e2e-later-${stamp}`;
   const id = `e2e-held-ws-${stamp}`;
+  try {
   await page.evaluate(({ taskId, workspace }) => new Promise<void>((resolve, reject) => {
     const request = indexedDB.open("ai-executive");
     request.onsuccess = () => {
       const now = Date.now();
       const put = request.result.transaction("entities", "readwrite").objectStore("entities").put({
-        id: taskId, type: "task", title: "Čeká na prostor", status: "open", workspaceId: workspace, properties: { inbox: true }, createdAt: now, updatedAt: now,
+        // Preserve the unknown-workspace hold, but make the eventual Area
+        // test-owned: the protected system fallback cannot be deleted.
+        id: taskId, type: "task", title: "Čeká na prostor", status: "open", workspaceId: workspace,
+        properties: { inbox: true, area: `E2E recovery area ${workspace}` }, createdAt: now, updatedAt: now,
       });
       put.onsuccess = () => { request.result.close(); resolve(); };
       put.onerror = () => reject(put.error);
@@ -212,6 +216,9 @@ test("a task held for its unknown workspace is sent once the workspace exists", 
   }, workspaceId);
   await page.evaluate(() => window.dispatchEvent(new Event("focus")));
   await expectOnServer(page, (entity) => entity.id === id, true);
+  } finally {
+    await cleanupSyntheticFixtures(page, { workspaceIds: [workspaceId] });
+  }
 });
 
 // A workspace the server knows, with a name it would refuse (left by an older version): it is
