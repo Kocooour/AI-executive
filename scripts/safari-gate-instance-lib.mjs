@@ -97,6 +97,19 @@ export function assertNoGateRuntimeEnvFiles(cwd) {
   }
 }
 
+// A build writes to .next. Refuse a symlink (including to a live store)
+// before pnpm can follow it; this does not delete existing build artifacts.
+export function assertSafeGateBuildOutput(cwd) {
+  try {
+    const stat = lstatSync(path.join(cwd, ".next"));
+    if (!stat.isDirectory() || stat.isSymbolicLink()) {
+      throw new Error("unsafe .next build output: expected a real directory");
+    }
+  } catch (error) {
+    if (error?.code !== "ENOENT") throw error;
+  }
+}
+
 export function validateGatePort(port) {
   if (!Number.isInteger(port) || port < 1024 || port > 65535) {
     throw new Error("--port must be an integer from 1024 through 65535");
