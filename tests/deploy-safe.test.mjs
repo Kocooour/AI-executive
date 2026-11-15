@@ -731,6 +731,20 @@ for (const scenario of [
   });
 }
 
+// StateDirectory= resets the unit mode to the systemd default (0755) unless
+// StateDirectoryMode=0700 is explicitly retained. Fail closed in both modes.
+for (const scenario of ["offstatedirmode0755", "targetstatedirmode0755"]) {
+  scenarioCase(scenario + ": reject public StateDirectory mode before downtime", (r) => {
+    assert.notEqual(r.status, 0);
+    assert.match(r.output, /StateDirectoryMode=0700/);
+    assert.equal(r.service, "active");
+    assert.equal(r.head, oldSha);
+    assert.equal(r.events.includes("stop"), false);
+    assert.equal(r.events.includes("merge"), false);
+    assert.deepEqual(r.backups, []);
+  });
+}
+
 // The loaded EnvironmentFile must be the single reviewed operator file.
 for (const scenario of [
   "offextraenvfile", "targetextraenvfile",
@@ -743,6 +757,22 @@ for (const scenario of [
     assert.equal(r.events.includes("stop"), false, "reject before any downtime");
     assert.equal(r.events.includes("merge"), false);
     assert.deepEqual(r.backups, []);
+  });
+}
+
+for (const scenario of ["offstatedirmodedriftbuild", "targetstatedirmodedriftbuild"]) {
+  scenarioCase(scenario + ": detect StateDirectoryMode 0700 to 0755 drift before start", (r) => {
+    assert.notEqual(r.status, 0);
+    assert.match(r.output, /systemd sandbox se pred startem zmenil/);
+    assert.equal(r.events.includes("statedir-mode-changed-during-build"), true);
+    assert.equal(r.events.some(e => e.startsWith("start-")), false,
+      "neither the new code nor an unsafe off rollback may be started");
+    if (scenario.startsWith("off"))
+      assert.match(r.output, /BEZPECNOSTNI BLOKACE: systemd sandbox pri rollbacku/);
+    assert.equal(r.events.includes("reset"), true);
+    assert.equal(r.head, oldSha);
+    assert.equal(r.service, "inactive");
+    assert.equal(r.backups.length, 1, "retain verified archive for manual recovery");
   });
 }
 

@@ -138,7 +138,10 @@ switch (name) {
         Group: scenario === "offbadgroup" ? "root" : "ai-executive",
         WorkingDirectory: scenario === "offbadworkdir" ? "/tmp" : app,
         UMask: "0077",
-        StateDirectoryMode: ["offstateworld", "targetstateworld"].includes(scenario) || lateProtection ? "0777" : "0700",
+        StateDirectoryMode: ["offstateworld", "targetstateworld"].includes(scenario) || lateProtection ? "0777" :
+          (["offstatedirmode0755", "targetstatedirmode0755"].includes(scenario) ||
+            (["offstatedirmodedriftbuild", "targetstatedirmodedriftbuild"].includes(scenario) &&
+              fs.existsSync(stateFile("statedir-mode-changed")))) ? "0755" : "0700",
         NoNewPrivileges: scenario === "targetnonewprivileges" ? "no" : "yes",
         PrivateTmp: scenario === "offprivatetmp" ? "no" : "yes",
         PrivateDevices: "yes",
@@ -400,6 +403,11 @@ switch (name) {
           !fs.existsSync(stateFile("exec-changed"))) {
         set("exec-changed", "1");
         log("unit-exec-changed-during-build");
+      }
+      if (["offstatedirmodedriftbuild", "targetstatedirmodedriftbuild"].includes(scenario) &&
+          get("head") === target && !fs.existsSync(stateFile("statedir-mode-changed"))) {
+        set("statedir-mode-changed", "1");
+        log("statedir-mode-changed-during-build");
       }
       if (scenario === "offweakprotectbuild" && get("head") === target &&
           !fs.existsSync(stateFile("sandbox-changed"))) {

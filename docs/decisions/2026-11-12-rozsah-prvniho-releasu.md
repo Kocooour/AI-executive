@@ -29,7 +29,7 @@ Vlastník 2026-11-12 schválil návrh revize v bodech 1, 2 a 4 a u bodu 3 potvrd
 10. **První release bez Undo po vytvoření úkolu** ([#397](https://github.com/Kocooour/AI-executive/issues/397)); chybně vytvořený úkol lze upravit nebo dokončit.
 11. **BFCache brána [#388](https://github.com/Kocooour/AI-executive/issues/388#issuecomment-6866991120) přeformulována:** `Cache-Control: no-store` zůstává; na release SHA stačí nativní Chrome se skutečně pozorovaným `restored` nebo doloženým `not_restored` (vždy bez úniku konceptu a bez CREATE) a ruční ověření v Safari.
 12. **Neodeslané legacy změny** v cílovém režimu: zařízení zobrazí upozornění a nabídne soukromý export; nic se neodesílá ani nemaže.
-13. **Produkční cílové úložiště** bude `/var/lib/ai-executive-target/personal-v1` přes samostatně schválený systemd drop-in (druhý `StateDirectory`); nasazovací skript se brání chybám konfigurace, ne útočníkovi s rootem ([#424](https://github.com/Kocooour/AI-executive/issues/424#issuecomment-6880225283)).
+13. **Produkční cílové úložiště** bude `/var/lib/ai-executive-target/personal-v1` přes samostatně schválený systemd drop-in (druhý `StateDirectory` a explicitní `StateDirectoryMode=0700`, protože reset `StateDirectory=` jinak vrací výchozí `0755`); nasazovací skript se brání chybám konfigurace, ne útočníkovi s rootem ([#424](https://github.com/Kocooour/AI-executive/issues/424#issuecomment-6880225283)).
 
 14. **Nastavení integrací není součástí zákazu legacy zápisů v cílovém režimu (2026-11-14).**
     Omezení „jen pro čtení“ z bodu 3 platí pro obsah (úkoly, poznámky,
