@@ -215,7 +215,7 @@ async function exercisePreflight({ databases = [], cacheKeys = [], registrations
     },
   };
   const events = [];
-  const script = safariGatePreflightHtml().match(/<script>([\\s\\S]*?)<\\/script>/)?.[1];
+  const script = safariGatePreflightHtml().match(/<script>([\s\S]*?)<\/script>/)?.[1];
   assert.ok(script, "preflight script must be present");
   const idb = { databases: supported ? async () => databases : undefined };
   const cacheStorage = { keys: async () => cacheKeys };
