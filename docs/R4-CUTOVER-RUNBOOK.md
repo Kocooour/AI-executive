@@ -533,7 +533,7 @@ On the Mac, use a **clean checkout of the exact SHA** with no runtime
 `.env`, `.env.local`, `.env.production` or `.env.*.local` files anywhere in
 the checkout root. Next can otherwise read those settings during build or
 `next start`. Never copy live settings into the checkout. The helper builds
-the exact clean checkout **again** with test-only environment variables
+the exact clean checkout inside the launcher with test-only environment variables
 by invoking the **already installed Next CLI via Node**, not pnpm/Corepack;
 pre-existing `.next` output is never accepted as release-SHA evidence.
 No Corepack cache or package-manager download is needed during launch.
@@ -543,7 +543,8 @@ RELEASE_SHA="paste-the-approved-40-character-commit-sha"
 git checkout --detach "$RELEASE_SHA"
 git status --porcelain       # must be empty
 pnpm install --frozen-lockfile
-pnpm build                  # optional initial build; helper rebuilds directly via Node
+# Do NOT run pnpm build here: it could inherit real shell credentials.
+# The helper runs its own guarded, test-only Next build.
 # First-time local certificate setup (operator action, NOT performed by script):
 brew install mkcert
 mkcert -install
@@ -552,7 +553,8 @@ node scripts/safari-gate-instance.mjs
 ~~~
 
 The script requires Node 24, installed dependencies, and trusted `mkcert`.
-It refuses a dirty checkout, runtime env files or unsafe paths, performs
+It refuses a dirty checkout, runtime env files, unsafe paths or any symlink
+inside an existing ignored `.next` directory, and performs
 a fresh `node node_modules/next/dist/bin/next build` with synthetic settings,
 disables Corepack/package-manager network fetches, rechecks SHA and worktree,
 and refuses to start unless the new build succeeds. It creates a new owner-only 0700 `lumi-e2e-*` directory
