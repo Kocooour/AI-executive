@@ -164,14 +164,40 @@ test("port validation fails closed", () => {
   assert.equal(validateGatePort(3210), 3210);
 });
 
-test("unsafe build output cannot redirect the sandboxed pnpm build", t => {
-  const { root, cwd } = fixture(t);
-  assert.doesNotThrow(() => assertSafeGateBuildOutput(cwd));
-  const alias = path.join(cwd, ".next");
-  symlinkSync(root, alias);
+test("Next build output refuses root and nested symlinks without following them", t => {
+  const { root, cwd, live } = fixture(t);
+  assert.doesNotThrow(() => assertSafeGateBuildOutput(cwd)); // No old .next.
+  const output = path.join(cwd, ".next");
+  symlinkSync(root, output);
   assert.throws(() => assertSafeGateBuildOutput(cwd), /unsafe .next/);
-  rmSync(alias);
-  mkdirSync(alias);
+  rmSync(output);
+
+  // Ordinary nested cache trees are safe to reuse after inspection.
+  const cache = path.join(output, "cache");
+  const deeplyNested = path.join(cache, "webpack", "client-production");
+  mkdirSync(deeplyNested, { recursive: true });
+  writeFileSync(path.join(deeplyNested, "cache.pack"), "synthetic cache");
+  assert.doesNotThrow(() => assertSafeGateBuildOutput(cwd));
+
+  // A previously ignored .next/cache symlink could redirect all build writes
+  // into live data even though .next itself is an ordinary directory.
+  const linkToLive = path.join(cache, "live-alias");
+  symlinkSync(live, linkToLive);
+  assert.throws(() => assertSafeGateBuildOutput(cwd), /nested symlink/);
+  rmSync(linkToLive);
+
+  const realFile = path.join(live, "do-not-touch.txt");
+  writeFileSync(realFile, "live contents");
+  const deepFileAlias = path.join(deeplyNested, "cache-alias.pack");
+  symlinkSync(realFile, deepFileAlias);
+  assert.throws(() => assertSafeGateBuildOutput(cwd), /nested symlink/);
+  assert.equal(readFileSync(realFile, "utf8"), "live contents");
+  rmSync(deepFileAlias);
+
+  const brokenLink = path.join(deeplyNested, "dangling");
+  symlinkSync(path.join(root, "does-not-exist"), brokenLink);
+  assert.throws(() => assertSafeGateBuildOutput(cwd), /nested symlink/);
+  rmSync(brokenLink);
   assert.doesNotThrow(() => assertSafeGateBuildOutput(cwd));
 });
 
