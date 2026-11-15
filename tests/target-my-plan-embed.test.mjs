@@ -121,7 +121,11 @@ test("flag off: the root loads the target screen lazily and only for target mode
   // The plan switches only in the v1 shell's "Můj plán" entry (view Today); decided by a pure helper (lib/target-shell-views.ts).
   assert.match(rootSource,/const \{ scopeList, targetPlan, active: activeTargetView \} = activeTargetViewFor\(\{ \.\.\.shellInput, view, planActive \}\)/);
   assert.match(read("lib/target-shell-views.ts"),/const targetPlan=input\.myPlan&&input\.v1Shell&&input\.planActive&&input\.view==="Today"/);
-  assert.match(rootSource,/targetPlan && targetMyPlan\s*\n\s*\? <TargetMyPlan gates=\{targetMyPlan\} language=\{language\} scopeDriven=\{scopesOn\} taskDetail=\{detailGates\.task\} \/>\s*\n\s*: scopeList\s*\n\s*\? <TargetScopeLists key=\{scopeList==="note"\?scopeList\+":"\+noteListRevision:scopeList\} kind=\{scopeList\} language=\{language\}\s*\n\s*detail=\{scopeList === "project" \? detailGates\.project : detailGates\.note\} \/>\s*\n\s*: legacySearchSurfaces\.entityList\s*\? <EntityList app=\{app\} \/>\s*: null\}/);
+  assert.match(rootSource,/targetPlan && targetMyPlan\s*\n\s*\? <TargetMyPlan gates=\{targetMyPlan\} language=\{language\} scopeDriven=\{scopesOn\} taskDetail=\{detailGates\.task\} \/>/);
+  assert.match(rootSource,/: scopeList\s*\n\s*\? <TargetScopeLists key=\{scopeList==="note"\?scopeList\+":"\+noteListRevision:scopeList\}/);
+  assert.match(rootSource,/detail=\{scopeList === "project" \? detailGates\.project : detailGates\.note\}/);
+  assert.match(rootSource,/createProject=\{Boolean\(targetCreates\?\.projects&&scopeList==="project"\)\}/);
+  assert.match(rootSource,/: legacySearchSurfaces\.entityList\s*\? <EntityList app=\{app\} \/>\s*: null\}/);
   // Target Search must not mount any legacy row or held-back title either.
   assert.match(rootSource,/\{legacySearchSurfaces\.heldBack && <HeldBack app=\{app\} \/>\}/);
   // Legacy pieces that would claim legacy data are suppressed in target mode.
@@ -221,8 +225,9 @@ test("nav labels never claim legacy data in target mode",()=>{
   for(const file of ["app/ui/views/mobile-nav.tsx","app/ui/views/sidebar.tsx"]){
     const source=read(file);
     assert.match(source,/targetPlan = false/,file);
-    assert.match(source,/serverový plán ze stagingu/,file);
-    assert.match(source,/server plan from staging/,file);
+    assert.match(source,/Můj plán – aktuální úkoly ze serveru/,file);
+    assert.match(source,/My Plan – current tasks from the server/,file);
+    assert.doesNotMatch(source,/serverový plán ze stagingu|server plan from staging/,file);
   }
   const rootSource=read("app/ui/lumi-app-root.tsx");
   // Root wiring may grow extra independently gated props; the target-plan

@@ -52,7 +52,7 @@ test("English My Plan copy has no Czech diacritics, status codes or technical le
   }
 });
 
-test("Czech My Plan copy is unchanged from R3-FE-2 (representative pins)",()=>{
+test("Czech My Plan copy retains the important interaction messages",()=>{
   const cs=myPlanCopy.cs;
   assert.equal(cs.locale,"cs-CZ");
   assert.equal(cs.readReasons.offline,"Připojení se nezdařilo. Žádné úkoly nebyly změněny.");
@@ -116,7 +116,7 @@ test("target client action labels exist per language with identical keys",()=>{
 test("wiring: root passes language to TargetMyPlan, which passes it on; standalone page stays Czech",()=>{
   const rootSource=read("app/ui/lumi-app-root.tsx");
   assert.match(rootSource,/<TargetMyPlan gates=\{targetMyPlan\} language=\{language\} scopeDriven=\{scopesOn\} taskDetail=\{detailGates\.task\} \/>/);
-  assert.match(rootSource,/data-plan-source="target-staging"[\s\S]*?language === "cs"[\s\S]*?: "This plan comes from the staging server/);
+  assert.match(rootSource,/data-plan-source="target-staging"[\s\S]*?language === "cs"[\s\S]*?: "My Plan shows tasks stored on the server/);
   const plan=read("app/ui/target-my-plan.tsx");
   assert.match(plan,/<TargetStagingMyPlanPreview key=\{gate\.generation\} embedded language=\{language\}/);
   assert.equal((plan.match(/<TargetDataStatus[\s\S]*?\/>/g)??[]).filter(tag=>!tag.includes("language={language}")).length,0);
@@ -138,10 +138,21 @@ test("the preview component keeps no inline Czech UI text outside comments",()=>
   assert.doesNotMatch(source,/"cs-CZ"[\s\S]*"cs-CZ"[\s\S]*"cs-CZ"/); // only the default parameter values
 });
 
-test("Czech My Plan copy matches the full R3-FE-2 snapshot (every value)",()=>{
-  // Snapshot verified string-by-string against the pre-R3-FE-2b JSX. The one
-  // deliberate change is the space between the status-undo failure reason and
-  // the "Předchozí dokončení…" sentence, which JSX previously dropped.
+test("Czech My Plan copy matches the current approved snapshot (every value)",()=>{
+  // Snapshot is updated with user-facing copy changes; internal jargon must
+  // not leak into either language.
   const snapshot=JSON.parse(read("tests/fixtures/target-my-plan-copy-cs.json"));
   assert.deepEqual(flatten(myPlanCopy.cs),snapshot);
+});
+
+test("My Plan copy and navigation avoid internal implementation jargon",()=>{
+  const jargon=/staging|dueOn|\bCAS\b|\bPATCH\b|endpoint|offline fronta/i;
+  for(const language of ["cs","en"]){
+    for(const [key,value] of Object.entries(flatten(myPlanCopy[language]))){
+      assert.doesNotMatch(value,jargon,language+"."+key);
+    }
+  }
+  for(const file of ["app/ui/lumi-app-root.tsx","app/ui/views/sidebar.tsx","app/ui/views/mobile-nav.tsx"]){
+    assert.doesNotMatch(read(file),/serverový plán ze stagingu|server plan from staging|staging server/i,file);
+  }
 });

@@ -18,7 +18,7 @@ const ui=()=>readFileSync(path.join(root,
   "app/ui/target-staging-my-plan-preview.tsx"),"utf8");
 const originalStatus={
   commandId:"123e4567-e89b-42d3-a456-426614174000",
-  taskId:"completed-A",status:"completed",
+  taskId:"completed-A",status:"completed",previousWhenOn:null,
   expectedRevision:"a".repeat(64),writeAreaId:"private-area",
   restoreGeneration:"765e4567-e89b-42d3-a456-426614174000",
 };
@@ -45,6 +45,7 @@ const whenPreview={
 const dayPage={
   evaluationDate:"2026-11-06",areaFilter:"all",
   today:{tasks:[],hasMore:false},tomorrow:{tasks:[],hasMore:false},
+  undated:{tasks:[],hasMore:false},
   hasMore:false,nextCursor:null,
 };
 const json=(body,status=200)=>Response.json(body,{

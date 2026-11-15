@@ -165,3 +165,50 @@ test("opaque receipts bind actor/task/command and reject caller timestamps or al
   assert.equal(validTargetStagingTemporalStatusCommand({...cmd,actorUserId:"bob"}),false);
   assert.equal(validTargetStagingTemporalStatusCommand({...cmd,writeAreaId:""}),false);
 });
+
+
+test("R3-A3 completion receipts restore previous When in same transaction and reject stale Undo",()=>{
+  const fx=fixture(),token=fx.authority.issueWritable("alice").sessionToken;
+  fx.db.prepare("INSERT INTO personal_task_plans(user_id,task_id,when_on) VALUES ('alice','private-task','2026-11-04')").run();
+  const wrong={...command(fx,token,"private-task","completed"),
+    previousWhenOn:"2026-11-05"};
+  assert.deepEqual(fx.authority.changeTemporalTaskStatus(token,wrong),
+    denial("stale_revision"),"completion must verify client-supplied day");
+  assert.equal(state(fx,"private-task").status,"open");
+  assert.equal(receipts(fx).length,0);
+  const completion={...command(fx,token,"private-task","completed"),
+    previousWhenOn:"2026-11-04"};
+  assert.equal(validTargetStagingTemporalStatusCommand(completion),true);
+  assert.deepEqual(fx.authority.changeTemporalTaskStatus(token,completion),{ok:true});
+  assert.equal(fx.db.prepare("SELECT COUNT(*) AS n FROM personal_task_plans WHERE task_id='private-task'").get().n,0);
+  const undo={...command(fx,token,"private-task","open"),undoOf:completion};
+  assert.equal(validTargetStagingTemporalStatusCommand(undo),true);
+  assert.deepEqual(fx.authority.changeTemporalTaskStatus(token,undo),{ok:true});
+  assert.equal(fx.db.prepare("SELECT when_on AS d FROM personal_task_plans WHERE task_id='private-task'").get().d,"2026-11-04");
+  assert.deepEqual(fx.authority.changeTemporalTaskStatus(token,undo),{ok:true,replayed:true});
+  assert.equal(fx.db.prepare("SELECT COUNT(*) AS n FROM personal_task_plans WHERE task_id='private-task'").get().n,1);
+  assert.equal(receipts(fx).length,2);
+  assert.deepEqual(inspectIsolatedTargetStore({
+    stagingDirectory:fx.stage.directory,expectedRestoreGeneration:fx.stage.restoreGeneration,
+    mode:"r2-model",
+  }),{ok:true,mode:"r2-model",issues:[]});
+
+  const second={...command(fx,token,"private-task","completed"),
+    previousWhenOn:"2026-11-04"};
+  assert.deepEqual(fx.authority.changeTemporalTaskStatus(token,second),{ok:true});
+  // Any intervening task revision after completion blocks a stale Undo even
+  // when the caller can fetch a fresh current CAS for reopening.
+  fx.db.prepare("UPDATE tasks SET title='Changed after completion' WHERE id='private-task'").run();
+  const staleUndo={...command(fx,token,"private-task","open"),undoOf:second};
+  assert.deepEqual(fx.authority.changeTemporalTaskStatus(token,staleUndo),
+    denial("stale_revision"));
+  assert.equal(state(fx,"private-task").status,"completed");
+  assert.equal(fx.db.prepare("SELECT COUNT(*) AS n FROM personal_task_plans WHERE task_id='private-task'").get().n,0);
+  assert.equal(validTargetStagingTemporalStatusCommand({
+    ...staleUndo,undoOf:{...second,previousWhenOn:"2026-11-05"},
+  }),true,"structurally valid but not receipted as the original completion");
+  assert.deepEqual(fx.authority.changeTemporalTaskStatus(token,{
+    ...staleUndo,commandId:randomUUID(),
+    undoOf:{...second,previousWhenOn:"2026-11-05"},
+  }),denial("stale_revision"));
+});

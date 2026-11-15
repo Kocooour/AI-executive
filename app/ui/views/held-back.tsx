@@ -79,7 +79,7 @@ export function HeldBack({ app }: { app: LumiApp }) {
                 {fixable.has(app.heldReasons.get(entity.id) || "invalid")
                   ? <button onClick={() => inspect(entity)}>{tr("heldBackFix")}</button>
                   : <small className="heldBackNoFix">{tr("heldBackOnlyDelete")}</small>}
-                <button onClick={() => remove(entity)}>{tr("delete")}</button>
+                <button disabled={app.legacyWritesDisabled} title={app.legacyReadOnlyHint} onClick={() => remove(entity)}>{tr("delete")}</button>
               </>}
           </div>
         </div>

@@ -214,10 +214,26 @@ test("BFCache lifecycle and real back navigation never revive private draft or A
   await page.goBack({waitUntil:"domcontentloaded"});
   const restored=await page.evaluate(()=>
     (window as Window & {__lumiBfcacheRestored?:boolean}).__lumiBfcacheRestored);
-  // Release-only browser gate MUST prove a real BFCache cache hit; the regular
-  // PR test separately exercises the persisted event path and reload fallback.
-  if(process.env.LUMI_REAL_BFCACHE_E2E==="true")
-    expect(restored,"real BFCache restore was not observed (pageshow.persisted never fired); this release browser run cannot certify BFCache privacy").toBe(true);
+  // This fixture-only Playwright test exercises synthetic lifecycle and reload.
+  // Release #388 instead requires an independent strict native Chrome witness:
+  // a real restore OR an explained miss, both with real-store privacy invariants.
+  const reasons=await page.evaluate(()=>{
+    const nav=performance.getEntriesByType("navigation")[0] as
+      (PerformanceNavigationTiming & {notRestoredReasons?:unknown})|undefined;
+    return {browserUserAgent:navigator.userAgent,navigationType:nav?.type??"unavailable",
+      notRestoredReasons:nav?.notRestoredReasons??null};
+  });
+  const evidence={persisted:restored,...reasons,mode:"mocked target API",checkedOutSha:process.env.LUMI_TESTED_CHECKOUT_SHA??null};
+  console.log("GLOBAL_CAPTURE_REAL_BFCACHE_EVIDENCE "+JSON.stringify(evidence));
+  await test.info().attach("global-capture-bfcache.json",{
+    body:Buffer.from(JSON.stringify(evidence,null,2)),
+    contentType:"application/json",
+  });
+  // Playwright launches Chromium with --disable-back-forward-cache and its
+  // goBack() cannot test an actual thaw. Native Chrome in the real-store
+  // workflow owns the strict two-branch real-store proof; this synthetic suite
+  // continues to assert the pagehide/pageshow and real reload paths.
+  expect(restored,"Playwright cannot certify a BFCache hit").toBe(false);
   if(restored){
     await expect(modal).toBeVisible();
   }else{

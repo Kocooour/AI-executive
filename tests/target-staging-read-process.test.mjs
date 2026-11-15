@@ -3,6 +3,7 @@ import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import { test } from "node:test";
 import { createStagingReadRunner, parseStagingPersonalPage } from "../lib/target-staging-read-process.ts";
+import {MAX_MY_PLAN_SLICE_OUTPUT_BYTES} from "../lib/target-my-plan-read-limits.ts";
 
 const config = {
   stagingDirectory: "/synthetic/stage",
@@ -176,4 +177,27 @@ test("master staging HTTP flag is forwarded from the parent, never forced on", a
     else process.env[key] = previous;
   }
   assert.deepEqual(seen, ["", "false", "true"]);
+});
+
+test("three-window My Plan child accepts full 100-row buckets but remains bounded",async()=>{
+  const children=[];
+  const run=createStagingReadRunner(()=>{const child=fakeChild();children.push(child);return child;},1000);
+  const title="x"+String.fromCharCode(1).repeat(4095);
+  const tasks=Array.from({length:100},(_,i)=>({taskId:String(i).padStart(3,"0"),title}));
+  const payload={ok:true,today:{tasks},tomorrow:{tasks},undated:{tasks}};
+  const size=Buffer.byteLength(JSON.stringify(payload),"utf8");
+  assert.ok(size>1024*1024);
+  assert.ok(size<MAX_MY_PLAN_SLICE_OUTPUT_BYTES);
+  const read=run(config,"target-staging-my-plan-slice-child.mjs",[]);
+  children[0].finish(payload);
+  assert.deepEqual(await read,payload);
+  assert.deepEqual(children[0].kills,[]);
+  const tooBig=run(config,"target-staging-my-plan-slice-child.mjs",[]);
+  children[1].stdout.write(Buffer.alloc(MAX_MY_PLAN_SLICE_OUTPUT_BYTES+1));
+  assert.equal(await tooBig,null);
+  assert.deepEqual(children[1].kills,["SIGKILL"]);
+  const unaffected=run(config,"target-staging-detail-child.mjs",[]);
+  children[2].stdout.write(Buffer.alloc(1024*1024+1));
+  assert.equal(await unaffected,null);
+  assert.deepEqual(children[2].kills,["SIGKILL"]);
 });

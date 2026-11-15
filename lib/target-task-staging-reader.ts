@@ -603,8 +603,8 @@ export function readPreflightedStoreSnapshot<T>(
 export function readPreflightedMyPlanTwoDayTaskPage(
   store:TargetStagingReadStore,access:TargetStagingReadCredential,
   request:{areaFilter:MyPlanTaskAreaFilter;evaluationDate:string;nextDate:string;
-    limit:number;offsetToday:number;offsetTomorrow:number},
-):{today:MyPlanDayTaskPage;tomorrow:MyPlanDayTaskPage}|null {
+    limit:number;offsetToday:number;offsetTomorrow:number;offsetUndated:number},
+):{today:MyPlanDayTaskPage;tomorrow:MyPlanDayTaskPage;undated:MyPlanDayTaskPage}|null {
   return withPreflightedStore(store,()=>null,(db,preflight)=>
     inReadSnapshot(db,()=>{
       if(!preflight(db))return null;
@@ -621,16 +621,22 @@ export function readPreflightedMyPlanTwoDayTaskPage(
         ...common,window:"upcoming",throughDate:request.nextDate,
         offset:request.offsetTomorrow,
       });
+      const undated=readAuthorizedMyPlanDayTaskPage(db,{
+        ...common,window:"undated",throughDate:null,
+        offset:request.offsetUndated,
+      });
       // Dates are parsed by the canonical model. The child must not provide a
       // non-adjacent second day, even if both windows would otherwise be valid.
       const adjacent=temporalCalendarOrdinal(request.evaluationDate);
       const next=temporalCalendarOrdinal(request.nextDate);
-      if(!tomorrow||adjacent===null||next===null||next-adjacent!==1||
-        today.privateEpoch!==tomorrow.privateEpoch||
+      if(!tomorrow||!undated||adjacent===null||next===null||next-adjacent!==1||
+        today.privateEpoch!==tomorrow.privateEpoch||today.privateEpoch!==undated.privateEpoch||
         JSON.stringify(today.linearization)!==JSON.stringify(tomorrow.linearization)||
-        JSON.stringify(today.areaEpochs)!==JSON.stringify(tomorrow.areaEpochs))
+        JSON.stringify(today.linearization)!==JSON.stringify(undated.linearization)||
+        JSON.stringify(today.areaEpochs)!==JSON.stringify(tomorrow.areaEpochs)||
+        JSON.stringify(today.areaEpochs)!==JSON.stringify(undated.areaEpochs))
         return null;
-      return {today,tomorrow};
+      return {today,tomorrow,undated};
     },()=>null));
 }
 
@@ -776,7 +782,7 @@ export function readPreflightedTemporalTaskDetail(
  * read-only hint; the writer revalidates everything under BEGIN IMMEDIATE. */
 export function readPreflightedTemporalStatusPreview(
   store: TargetStagingReadStore, access: TargetStagingReadCredential, taskId: string,
-): {detail: TemporalTaskDetail; expectedRevision: string} | null {
+): {detail: TemporalTaskDetail; expectedRevision: string; previousWhenOn:string|null} | null {
   return withPreflightedStore(store, () => null, (db, preflight) =>
     inReadSnapshot(db, () => {
       if (!preflight(db)) return null;
@@ -788,7 +794,13 @@ export function readPreflightedTemporalStatusPreview(
           detail.linearization.areas.length !== 1 ||
           !["private-owner", "editor", "admin"].includes(detail.linearization.areas[0].access))
         return null;
-      return {detail, expectedRevision: revision};
+      // Read the actor-private day in the SAME pinned status/CAS snapshot.
+      // A shared editor who is not the assignee may still complete: the
+      // actor has no personal plan row, so the before-day is null.
+      const plan=db.prepare("SELECT when_on AS whenOn FROM personal_task_plans WHERE user_id=? AND task_id=?")
+        .get(actor,taskId) as {whenOn:string}|undefined;
+      if(plan && temporalCalendarOrdinal(plan.whenOn)===null)return null;
+      return {detail,expectedRevision:revision,previousWhenOn:plan?.whenOn??null};
     }, () => null));
 }
 
@@ -798,7 +810,9 @@ export function readPreflightedTemporalStatusPreview(
 export function readPreflightedTemporalDueOnPreview(
   store:TargetStagingReadStore,access:TargetStagingReadCredential,taskId:string,
 ):{detail:TemporalTaskDetail;expectedRevision:string}|null {
-  return readPreflightedTemporalStatusPreview(store,access,taskId);
+  const preview=readPreflightedTemporalStatusPreview(store,access,taskId);
+  // The dueOn-only API must not inherit the actor-private completion witness.
+  return preview?{detail:preview.detail,expectedRevision:preview.expectedRevision}:null;
 }
 
 /**

@@ -7,6 +7,8 @@ export type MyPlanStatus="open"|"completed";
 export type MyPlanStatusCommand={
   commandId:string;taskId:string;status:MyPlanStatus;
   expectedRevision:string;writeAreaId:string;restoreGeneration:string;
+  previousWhenOn?:string|null;
+  undoOf?:Omit<MyPlanStatusCommand,"undoOf">;
 };
 export type MyPlanStatusFailure="signed-out"|"stale"|"unavailable"|
   "invalid-response"|"invalid-request"|"offline"|"aborted";
@@ -40,7 +42,26 @@ export function validStatusTaskId(value:unknown):value is string{
   catch{return false;}
 }
 export function validStatusCommand(value:unknown):value is MyPlanStatusCommand{
-  if(!object(value)||!keys(value,known))return false;
+  if(!object(value))return false;
+  const undo="undoOf" in value;
+  const previous="previousWhenOn" in value;
+  if(!keys(value,[...known,...(undo?["undoOf"]:[]),
+       ...(previous?["previousWhenOn"]:[])]))return false;
+  if(previous&&(value.status!=="completed"||
+    (value.previousWhenOn!==null&&
+     (typeof value.previousWhenOn!=="string"||
+      !/^\d{4}-\d{2}-\d{2}$/.test(value.previousWhenOn)||
+      !Number.isFinite(Date.parse(value.previousWhenOn+"T00:00:00.000Z"))||
+      new Date(value.previousWhenOn+"T00:00:00.000Z").toISOString().slice(0,10)!==value.previousWhenOn))))return false;
+  if(undo){
+    if(value.status!=="open"||!object(value.undoOf)||
+      !("previousWhenOn" in value.undoOf)||
+      value.undoOf.status!=="completed"||
+      !validStatusCommand(value.undoOf)||value.undoOf.taskId!==value.taskId||
+      value.undoOf.writeAreaId!==value.writeAreaId||
+      value.undoOf.restoreGeneration!==value.restoreGeneration||
+      value.undoOf.commandId===value.commandId)return false;
+  }
   return typeof value.commandId==="string"&&uuid.test(value.commandId)&&
     validStatusTaskId(value.taskId)&&
     (value.status==="open"||value.status==="completed")&&
@@ -75,12 +96,19 @@ const writeOptions=(command:MyPlanStatusCommand,method:"PATCH"|"POST",signal?:Ab
  * Area equality is an additional stale-page guard, not ACL authorization. */
 export async function prepareMyPlanStatus(
   params:{taskId:string;areaId:string;status:MyPlanStatus;
-    commandId?:string;signal?:AbortSignal},
+    commandId?:string;signal?:AbortSignal;
+    undoOf?:Omit<MyPlanStatusCommand,"undoOf">;
+    previousWhenOn?:string|null},
   fetchImpl:typeof fetch=targetAppFetch,
 ):Promise<MyPlanStatusPreparation>{
   if(!validStatusTaskId(params.taskId)||!area.test(params.areaId)||
     !["open","completed"].includes(params.status)||
-    (params.commandId!==undefined&&!uuid.test(params.commandId)))
+    (params.commandId!==undefined&&!uuid.test(params.commandId))||
+    (params.previousWhenOn!==undefined&&params.status!=="completed")||
+    (params.undoOf!==undefined&&(params.status!=="open"||
+      !validStatusCommand(params.undoOf)||params.undoOf.status!=="completed"||
+      params.undoOf.taskId!==params.taskId||
+      params.undoOf.writeAreaId!==params.areaId)))
     return {ok:false,reason:"invalid-request"};
   let response:Response;
   try{
@@ -106,6 +134,9 @@ export async function prepareMyPlanStatus(
       taskId:params.taskId,status:params.status,
       expectedRevision:json.expectedRevision,
       writeAreaId:json.writeAreaId,restoreGeneration:json.restoreGeneration,
+      ...(params.undoOf?{undoOf:params.undoOf}:{}),
+      ...(Object.prototype.hasOwnProperty.call(params,"previousWhenOn")
+        ?{previousWhenOn:params.previousWhenOn}:{}),
     };
     return validStatusCommand(command)
       ?{ok:true,command}:{ok:false,reason:"invalid-response"};

@@ -9,10 +9,15 @@ try{
   const stagingDirectory=process.env.AI_EXECUTIVE_TARGET_STAGING_DIRECTORY;
   const expectedRestoreGeneration=process.env.AI_EXECUTIVE_TARGET_STAGING_RESTORE_GENERATION;
   const ownerUserId=process.env.AI_EXECUTIVE_TARGET_STAGING_OWNER_USER_ID;
+  // One actor-authorized read model serves note and structure create targets;
+  // an enabled project create must not require note UI or note write flags.
+  const notes=process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_NOTES_ENABLED==="true"&&
+    process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_PRIVATE_NOTE_AREAS_ENABLED==="true";
+  const structure=process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_PROJECTS_CREATE_ENABLED==="true"||
+    process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_PROJECT_TASKS_CREATE_ENABLED==="true";
   if(process.argv.length!==2||
     process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_ENABLED!=="true"||
-    process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_NOTES_ENABLED!=="true"||
-    process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_PRIVATE_NOTE_AREAS_ENABLED!=="true"||
+    !(notes||structure)||
     !stagingDirectory||!path.isAbsolute(stagingDirectory)||
     !expectedRestoreGeneration||!ownerUserId)throw Error("Unavailable");
   const authority=new TargetStagingSessionAuthority({

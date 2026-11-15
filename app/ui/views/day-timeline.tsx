@@ -176,7 +176,7 @@ export function DayTimeline({ app, mode, empty, day, dayEvents }: {
         <p className="timeMenuHead"><strong>{entry.title}</strong><span>{[when, kindText(entry), flags(entry)].filter(Boolean).join(" · ")}</span></p>
         {continuation && <p className="dayTimelineNote">{continuation}</p>}
         {entry.kind === "event" && event && (entry.hidden ? (
-          <div className="calendarEventRow"><button type="button" className="calendarEventHide" data-event-unhide={event.id} aria-label={fill(tr("calEventUnhideLabel"), { title: event.title })}
+          <div className="calendarEventRow"><button type="button" className="calendarEventHide" data-event-unhide={event.id} disabled={app.legacyWritesDisabled} title={app.legacyReadOnlyHint} aria-label={fill(tr("calEventUnhideLabel"), { title: event.title })}
             onClick={() => { close(false); void unhideCalendarEvent(event); }}>{tr("calEventUnhide")}</button></div>
         ) : (
           <>
@@ -184,7 +184,7 @@ export function DayTimeline({ app, mode, empty, day, dayEvents }: {
             <CalendarEventActions app={app} event={event}
               linkedTask={fetchedLinkedTasks ? dayLinkedTasks.get(event.id) ?? null : undefined} />
             {!calendarEventNeedsQuestion(event) && (
-              <button type="button" data-event-create-task={event.id} onClick={() => void createCalendarEventTask(event)}>{tr("calEventCreateTask")}</button>
+              <button type="button" data-event-create-task={event.id} disabled={app.legacyWritesDisabled} title={app.legacyReadOnlyHint} onClick={() => void createCalendarEventTask(event)}>{tr("calEventCreateTask")}</button>
             )}
           </>
         ))}
@@ -196,7 +196,7 @@ export function DayTimeline({ app, mode, empty, day, dayEvents }: {
             {entry.proposal && <p className="dayTimelineNote">{tr("calendarProposalNeedsApproval")}</p>}
             {entry.task && <button type="button" onClick={() => { close(false); void inspect(entry.task as Entity); }}>{tr("timelineOpenTask")}</button>}
             {entry.proposal && entry.block && (
-              <button type="button" className="primaryAction" disabled={dayPlanBusy} onClick={() => { close(true); void applyDayPlanAction(entry.block as DayPlanItem, "accepted"); }}>{tr("calendarReviewProposal")}</button>
+              <button type="button" className="primaryAction" disabled={dayPlanBusy || app.legacyWritesDisabled} title={app.legacyReadOnlyHint} onClick={() => { close(true); void applyDayPlanAction(entry.block as DayPlanItem, "accepted"); }}>{tr("calendarReviewProposal")}</button>
             )}
           </div>
         )}
@@ -290,6 +290,7 @@ export function DayTimeline({ app, mode, empty, day, dayEvents }: {
                       onClick={() => void app.done(task.id)} />
                   ) : (
                     <button type="button" className="check" aria-label={`${tr("complete")} ${task.title || tr("untitledItem")}`}
+                       disabled={app.legacyWritesDisabled} title={app.legacyReadOnlyHint}
                       onClick={() => void app.done(task.id)}>○</button>
                   )}
                   <span className="dayTimelineUntimedMain">

@@ -53,7 +53,7 @@ test("task completion uses square control with screen reader label and large tou
   const css=source("app/target-staging/my-plan/preview/preview.css");
   assert.match(ui,/statusWriteEnabled=false/);
   assert.match(ui,/statusWriteEnabled\s*\?\s*copy\.headerStatus/);
-  assert.match(copySource(),/headerStatus:"Izolovaný stagingový náhled s dokončením/);
+  assert.match(copySource(),/headerStatus:"Dokončení a vrácení změny se ověřují na serveru/);
   assert.match(ui,/\{canComplete[\s\S]*?<button type="button" className="stagingMyPlanSquare stagingMyPlanComplete"/);
   assert.match(ui,/aria-label=\{copy\.completeTask\(task\.title\)\}/);
   assert.match(copySource(),/completeTask:title=>"Dokončit úkol: "\+title/);
@@ -134,7 +134,8 @@ test("P1: uncertain PATCH + failed list GET can reauthorize, then reconcile orig
   const params={evaluationDate:"2026-11-06",areaFilter:"all"};
   const emptyPage={
     ...params,today:{tasks:[],hasMore:false},
-    tomorrow:{tasks:[],hasMore:false},hasMore:false,nextCursor:null,
+    tomorrow:{tasks:[],hasMore:false},undated:{tasks:[],hasMore:false},
+    hasMore:false,nextCursor:null,
   };
   const readCalls=[];
   const read=async(success)=>{

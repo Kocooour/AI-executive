@@ -228,7 +228,9 @@ test("private note, standalone task and project creation have independent defaul
   assert.match(projectHttp,/AI_EXECUTIVE_TARGET_STAGING_HTTP_WRITE_ENABLED/);
   assert.match(projectHttp,/process\.env\.AI_EXECUTIVE_TARGET_STAGING_HTTP_PROJECTS_CREATE_ENABLED==="true"/);
   const projectProfile=read("lib/target-personal-profile.ts");
-  assert.match(projectProfile,/\{flag:"AI_EXECUTIVE_TARGET_STAGING_HTTP_PROJECTS_CREATE_ENABLED"/);
+  assert.match(projectProfile,/^\s+"AI_EXECUTIVE_TARGET_STAGING_HTTP_PROJECTS_CREATE_ENABLED",/m);
+  assert.match(projectProfile,/^\s+"AI_EXECUTIVE_TARGET_STAGING_HTTP_PROJECT_TASKS_CREATE_ENABLED",/m);
+  assert.doesNotMatch(projectProfile,/\{flag:"AI_EXECUTIVE_TARGET_STAGING_HTTP_PROJECTS_CREATE_ENABLED"/);
   const noteRoute=read("app/api/target-staging/notes/route.ts");
   assert.match(noteRoute,/export async function POST/);
   assert.match(noteRoute,/AI_EXECUTIVE_TARGET_STAGING_HTTP_NOTES_CREATE_ENABLED/);
@@ -328,11 +330,19 @@ test("a typed link to another active target view switches to it and opens (addre
 });
 
 test("unified mode: legacy views stay visible read-only with a calm cs/en notice (owner decision 2026-11-09, option 1)",()=>{
-  assert.match(rootSource,/const legacyReadOnly = app\.legacyWritesDisabled && !targetView;/);
+  assert.match(rootSource,/const legacyReadOnly = app\.legacyWritesDisabled && !targetView && \["Home", "Inbox", "Today"\]\.includes\(view\);/);
   assert.match(rootSource,/\{legacyReadOnly && \(\s*<p className="navigationUnavailableNotice legacyReadOnlyNotice" role="status"/);
   const copy=read("lib/target-detail-copy.ts");
-  assert.match(copy,/Tento pohled zatím ukazuje dosavadní data; úpravy jsou v režimu serverových dat vypnuté\./);
-  assert.match(copy,/This view still shows the existing data; editing is switched off in server-data mode\./);
+  assert.match(copy,/Tady vidíte dřívější data jen pro čtení\. S aktuálními úkoly pracujte v Mém plánu\./);
+  assert.match(copy,/This view shows earlier data, read-only\. Work with your current tasks in My Plan\./);
+  assert.match(rootSource,/const legacyMyPlanAvailable = Boolean\(targetMyPlan\?\.enabled && mobileDesignV1Preview\);/);
+  assert.match(rootSource,/\{legacyMyPlanAvailable && <>/);
+  assert.match(rootSource,/Můj plán zde zatím není dostupný/);
+  assert.match(rootSource,/My Plan is not available here yet/);
+  assert.match(read("app/ui/views/detail-panel.tsx"),/disabled=\{!taskPreviewMayToggle \|\| app\.legacyWritesDisabled\}/);
+  assert.match(read("app/ui/hooks/use-sync.ts"),/!signedOut\.current && !legacyReadOnly/);
+  assert.match(rootSource,/Otevřít Můj plán/);
+  assert.match(rootSource,/Open My Plan/);
   // The views themselves are not hidden.
   assert.doesNotMatch(rootSource,/legacyReadOnly \? null/);
 });

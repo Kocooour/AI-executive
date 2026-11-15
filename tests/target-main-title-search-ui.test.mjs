@@ -6,6 +6,8 @@ import {
   TARGET_MAIN_TITLE_SEARCH_FLAGS,targetMainTitleSearchEnabled,
   visibleMainTitleSearchResult,mainTitleSearchCopy,
   subscribeMainTitleSearchAclInvalidation,mainTitleSearchLegacySurfaces,
+  mainTitleSearchDetailRoute,rememberMainTitleSearchReturn,
+  consumeMainTitleSearchReturn,clearMainTitleSearchReturn,
 } from "../lib/target-main-title-search-ui.ts";
 
 const all=Object.fromEntries(TARGET_MAIN_TITLE_SEARCH_FLAGS.map(k=>[k,"true"]));
@@ -36,6 +38,90 @@ test("titles and count vanish immediately on actor, scope, raw query or gate cha
   assert.equal(visibleMainTitleSearchResult({...bound,snapshot:{...snapshot,scope:"personal"}},binding,true),null);
   assert.equal(visibleMainTitleSearchResult({...bound,snapshot:{...snapshot,query:"other"}},binding,true),null);
 });
+test("Search opens only existing target view destinations, with valid IDs and kind gates",()=>{
+  const gates={task:true,project:true,note:true};
+  const views=["Projects","Notes","MyPlanPreview"];
+  for(const [kind,view] of [["project","Projects"],["task","MyPlanPreview"],["note","Notes"]]){
+    const item={kind,id:kind+"-1",title:"Title",areaId:"area-1",areaKind:"private",
+      ...(kind==="project"?{}:{projectId:kind==="task"?"project-1":null})};
+    const route=mainTitleSearchDetailRoute(item,gates,views);
+    assert.deepEqual(route,{kind,id:item.id,view},kind);
+    assert.equal(mainTitleSearchDetailRoute(item,{...gates,[kind]:false},views),null,kind+" off");
+    for(const badId of [" padded ","bad/id",".","..","x".repeat(257),"x\\\\y"]){
+      assert.equal(mainTitleSearchDetailRoute({...item,id:badId},gates,views),null,kind+" "+badId);
+    }
+    assert.equal(mainTitleSearchDetailRoute(item,gates,[]),null,kind+" no target destination");
+    if(kind!=="task"){
+      assert.equal(mainTitleSearchDetailRoute(item,gates,views.filter(v=>v!==view)),null,
+        kind+" destination disabled");
+    }
+  }
+  const task={kind:"task",id:"task-1",title:"Task",areaId:"area-1",areaKind:"private",projectId:"project-1"};
+  assert.deepEqual(mainTitleSearchDetailRoute(task,gates,["Projects"]),
+    {kind:"task",id:"task-1",view:"Projects",projectId:"project-1"},
+    "project task can open from Search without My Plan");
+  assert.equal(mainTitleSearchDetailRoute({...task,projectId:null},gates,["Projects"]),null,
+    "standalone task cannot open via a fake Projects link");
+  assert.equal(mainTitleSearchDetailRoute({...task,projectId:"bad/id"},gates,["Projects"]),null,
+    "invalid project ID cannot open a Projects task detail");
+  assert.equal(mainTitleSearchDetailRoute(task,gates,["Notes"]),null,
+    "task is not clickable when only Notes is active");
+  assert.equal(mainTitleSearchDetailRoute(task,{...gates,task:false},["Projects"]),null);
+});
+
+test("one-use Search return bridge is erased across A→B→A rotation and security clears",()=>{
+  const before=Object.fromEntries(["window","document","navigator"].map(key=>
+    [key,Object.getOwnPropertyDescriptor(globalThis,key)]));
+  const win=new EventTarget();
+  const doc=Object.assign(new EventTarget(),{visibilityState:"visible"});
+  Object.defineProperty(globalThis,"window",{configurable:true,value:win});
+  Object.defineProperty(globalThis,"document",{configurable:true,value:doc});
+  Object.defineProperty(globalThis,"navigator",{configurable:true,value:{onLine:true}});
+  const generations=new Set(),security=new Set(),ticks=new Set(),outcomes=new Set();
+  let generation="g1";
+  const observe=set=>fn=>{set.add(fn);return ()=>set.delete(fn);};
+  const runtime={
+    generation:()=>generation,lastOutcome:()=>"ok",
+    subscribe:observe(generations),subscribeSecurityClear:observe(security),
+    subscribeTick:observe(ticks),subscribeOutcome:observe(outcomes),
+  };
+  const fire=set=>{for(const callback of [...set])callback();};
+  try{
+    clearMainTitleSearchReturn();
+    rememberMainTitleSearchReturn(bound,binding,runtime);
+    assert.equal(consumeMainTitleSearchReturn(binding,runtime)?.snapshot.items[0].title,"School",
+      "unchanged identity gets one focus-return result");
+    assert.equal(consumeMainTitleSearchReturn(binding,runtime),null,"bridge is single-use");
+
+    rememberMainTitleSearchReturn(bound,binding,runtime);
+    generation="g2";fire(generations);
+    generation="g1";fire(generations);
+    assert.equal(consumeMainTitleSearchReturn(binding,runtime),null,
+      "A→B→A must not recover A's old titles");
+
+    rememberMainTitleSearchReturn(bound,binding,runtime);
+    fire(security);
+    assert.equal(consumeMainTitleSearchReturn(binding,runtime),null,"explicit sign-out erases titles");
+
+    rememberMainTitleSearchReturn(bound,binding,runtime);
+    fire(ticks);
+    assert.equal(consumeMainTitleSearchReturn(binding,runtime),null,
+      "same-generation ACL revalidation also erases titles");
+
+    rememberMainTitleSearchReturn(bound,binding,runtime);
+    generation="g3";
+    assert.equal(consumeMainTitleSearchReturn(binding,runtime),null,
+      "consume checks generation even if a listener did not fire");
+  }finally{
+    clearMainTitleSearchReturn();
+    for(const key of ["window","document","navigator"]){
+      const descriptor=before[key];
+      if(descriptor)Object.defineProperty(globalThis,key,descriptor);
+      else delete globalThis[key];
+    }
+  }
+});
+
 test("main Search copy is bilingual and never calls All my personal work",()=>{
   const cs=mainTitleSearchCopy.cs,en=mainTitleSearchCopy.en;
   assert.deepEqual(Object.keys(cs).sort(),Object.keys(en).sort());
@@ -43,6 +129,10 @@ test("main Search copy is bilingual and never calls All my personal work",()=>{
   assert.match(cs.intro,/Vše není Můj plán/);
   assert.match(en.intro,/All is not My Plan/);
   assert.ok(cs.count(3).includes("3")&&en.count(3).includes("3"));
+  assert.equal(cs.refresh,"Obnovit hledání");
+  assert.equal(en.refresh,"Refresh search");
+  assert.notEqual(cs.more,cs.refresh,"a stale cursor must not be labeled Load more");
+  assert.notEqual(en.more,en.refresh);
 });
 test("shell switches exactly the Search view to server titles; no new bottom nav link",()=>{
   const root=readFileSync("app/ui/lumi-app-root.tsx","utf8");

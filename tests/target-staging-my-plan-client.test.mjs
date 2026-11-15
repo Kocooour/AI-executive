@@ -6,6 +6,7 @@ import {
   appendMyPlanSlice,fetchMyPlanSlice,localMyPlanDate,
   parseMyPlanSlice,validMyPlanDate,
 } from "../lib/target-staging-my-plan-client.ts";
+import {MAX_MY_PLAN_SLICE_OUTPUT_BYTES} from "../lib/target-my-plan-read-limits.ts";
 
 const date="2026-11-05";
 const task=(id,on,areaKind="private")=>({
@@ -18,7 +19,9 @@ const page=(today,tomorrow,opts={})=>({
   evaluationDate:date,areaFilter:"all",
   today:{tasks:today,hasMore:opts.todayMore??false},
   tomorrow:{tasks:tomorrow,hasMore:opts.tomorrowMore??false},
-  hasMore:(opts.todayMore??false)||(opts.tomorrowMore??false),
+  undated:{tasks:opts.undated??[],hasMore:opts.undatedMore??false},
+  hasMore:(opts.todayMore??false)||(opts.tomorrowMore??false)||
+    (opts.undatedMore??false),
   nextCursor:opts.cursor??null,
 });
 const current=()=>page([task("old","2026-11-04")],
@@ -192,11 +195,13 @@ test("BE-14 bounds actual received bytes, not understated Content-Length",async(
   }));
   assert.deepEqual(result,{ok:false,reason:"invalid-response"});
   assert.equal(cancelled,true);
-  assert.ok(pulls<=12,"should not buffer unbounded response");
+  assert.ok(pulls<=Math.ceil(MAX_MY_PLAN_SLICE_OUTPUT_BYTES/(1024*1024))+2,
+    "reader must stop at the bounded limit, allowing at most one prefetched chunk");
 });
 
 test("BE-14 rejects oversized or malformed Content-Length before reading",async()=>{
-  for(const length of [String(8*1024*1024+1),"999999999999999999999",
+  for(const length of [String(MAX_MY_PLAN_SLICE_OUTPUT_BYTES+1),
+    "999999999999999999999",
     "1e7","-1","42,42","12x"]){
     let cancelled=false;
     const stream=new ReadableStream({cancel(){cancelled=true;}},{
@@ -349,4 +354,22 @@ test("BE-15 aborted signal never sends GET; overlapping reads stay ordered",asyn
       ()=>reject(Error("old stream remained open")),2000)),
   ]);
   assert.equal(calls,2);
+});
+
+test("My Plan browser accepts bounded JSON-escaped three-bucket pages at limits 50 and 100",async()=>{
+  const bigTitle="x"+String.fromCharCode(1).repeat(4095);
+  const rows=(prefix,on,limit)=>Array.from({length:limit},(_,i)=>({
+    ...task(prefix+String(i).padStart(3,"0"),on),title:bigTitle,
+  }));
+  for(const limit of [50,100]){
+    const payload=page(rows("d","2026-11-05",limit),
+      rows("t","2026-11-06",limit),{undated:rows("u",null,limit)});
+    const encoded=JSON.stringify(payload);
+    assert.ok(Buffer.byteLength(encoded,"utf8")>1024*1024);
+    const result=await fetchMyPlanSlice({...params,limit},async()=>goodResponse(payload));
+    assert.equal(result.ok,true,JSON.stringify(result).slice(0,100));
+    assert.equal(result.page.today.tasks.length,limit);
+    assert.equal(result.page.tomorrow.tasks.length,limit);
+    assert.equal(result.page.undated.tasks.length,limit);
+  }
 });

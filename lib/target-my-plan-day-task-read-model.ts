@@ -13,7 +13,7 @@ import {temporalCalendarOrdinal} from "./target-task-temporal-read-model";
 import type {TargetReadLinearization} from "./target-task-read-model";
 import type {HomeSummaryAreaEpoch} from "./target-my-plan-home-summary";
 
-export type MyPlanTaskDayWindow="today"|"upcoming";
+export type MyPlanTaskDayWindow="today"|"upcoming"|"undated";
 export type MyPlanTaskAreaFilter="all"|"personal"|"shared";
 export type MyPlanDayTask={
   taskId:string;title:string;projectId:string|null;
@@ -22,7 +22,8 @@ export type MyPlanDayTask={
   assignedToMe?:true;
   dueOn:string|null;whenOn:string|null;
   /** Earliest deadline or the actor's personal planned day. */
-  attentionOn:string;
+  /** Null only for an open private task without either date. */
+  attentionOn:string|null;
 };
 export type MyPlanDayTaskPage={
   tasks:MyPlanDayTask[];hasMore:boolean;revision:string;
@@ -58,16 +59,16 @@ export function readAuthorizedMyPlanDayTaskPage(db:DatabaseSync,request:{
 }):MyPlanDayTaskPage|null {
   if(!request||typeof request.actorUserId!=="string"||!ACTOR.test(request.actorUserId)||
     !["all","personal","shared"].includes(request.areaFilter)||
-    !["today","upcoming"].includes(request.window)||
+    !["today","upcoming","undated"].includes(request.window)||
     !safeInt(request.limit)||request.limit<1||request.limit>100||
     !safeInt(request.offset)||request.offset>1_000_000||
     typeof request.restoreGeneration!=="string"||!UUID.test(request.restoreGeneration))
     return null;
   const day=temporalCalendarOrdinal(request.evaluationDate);
   const end=request.throughDate===null?null:temporalCalendarOrdinal(request.throughDate);
-  if(day===null||(request.window==="today"
-    ?request.throughDate!==null
-    :end===null||end-day<1||end-day>90))return null;
+  if(day===null||(request.window==="upcoming"
+    ?end===null||end-day<1||end-day>90
+    :request.throughDate!==null))return null;
   try {
     const privateRow=db.prepare(
       "SELECT revision FROM personal_plan_epochs WHERE user_id=?"
@@ -118,15 +119,15 @@ export function readAuthorizedMyPlanDayTaskPage(db:DatabaseSync,request:{
               m.role IN ('editor','admin') AND t.assignee_user_id=actor.id))
         AND (?='all' OR (?='personal' AND a.kind='private')
              OR (?='shared' AND a.kind='shared'))
+        ${request.window==="undated"?"AND a.kind='private'":""}
     ) SELECT * FROM eligible
-      WHERE attentionOn IS NOT NULL AND
-        ${request.window==="today" ? "attentionOn <= ?" :
-          "attentionOn > ? AND attentionOn <= ?"}
-      ORDER BY attentionOn COLLATE BINARY ASC,taskId COLLATE BINARY ASC
+      WHERE ${request.window==="undated" ? "attentionOn IS NULL" :
+        request.window==="today" ? "attentionOn IS NOT NULL AND attentionOn <= ?" :
+        "attentionOn IS NOT NULL AND attentionOn > ? AND attentionOn <= ?"}
+      ORDER BY ${request.window==="undated"?"":"attentionOn COLLATE BINARY ASC,"}taskId COLLATE BINARY ASC
       LIMIT ? OFFSET ?`;
-    const dates=request.window==="today"
-      ?[request.evaluationDate]
-      :[request.evaluationDate,request.throughDate];
+    const dates=request.window==="undated"?[]:request.window==="today"
+      ?[request.evaluationDate]:[request.evaluationDate,request.throughDate];
     const rows=db.prepare(q).all(request.actorUserId,
       request.areaFilter,request.areaFilter,request.areaFilter,
       ...dates,request.limit+1,request.offset) as unknown as Row[];
@@ -138,11 +139,14 @@ export function readAuthorizedMyPlanDayTaskPage(db:DatabaseSync,request:{
       (row.areaKind!=="private"&&row.areaKind!=="shared")||
       (row.dueOn!==null&&temporalCalendarOrdinal(row.dueOn)===null)||
       (row.whenOn!==null&&temporalCalendarOrdinal(row.whenOn)===null)||
-      temporalCalendarOrdinal(row.attentionOn)===null||
+      (request.window==="undated"
+        ?row.attentionOn!==null||row.dueOn!==null||row.whenOn!==null||
+          row.areaKind!=="private"
+        :row.attentionOn===null||temporalCalendarOrdinal(row.attentionOn)===null)||
       (row.whenOn===null?row.plannedRevision!==null:
         !safeInt(row.plannedRevision))||
-      row.attentionOn!==[row.dueOn,row.whenOn]
-        .filter((d):d is string=>d!==null).sort()[0]))
+      row.attentionOn!==([row.dueOn,row.whenOn]
+        .filter((d):d is string=>d!==null).sort()[0]??null)))
       return null;
 
     // A project-only content epoch must invalidate signed HTTP continuations,

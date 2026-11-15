@@ -125,6 +125,46 @@ export const readTaskWriteContext=(
   ?readWriteContext(
     "/api/target-staging/task-temporal/status?"+new URLSearchParams({taskId}),areaId,fetchImpl,signal)
   :Promise.resolve({ok:false,reason:"invalid-request"});
+/** Completion receives the actor's original day from the status-owned
+ * authorized snapshot, not the separately gated personal-When write route.
+ * The status writer compares this date again in its pinned write transaction. */
+export async function readTaskCompletionContext(
+  taskId:string,areaId:string,fetchImpl:typeof fetch=fetch,signal?:AbortSignal,
+):Promise<{ok:true;context:WriteContext;previousWhenOn:string|null}|{ok:false;reason:EditFailure}>{
+  if(!validEditId(taskId)||!validEditAreaId(areaId))return {ok:false,reason:"invalid-request"};
+  if(signal?.aborted)return {ok:false,reason:"aborted"};
+  let response:Response;
+  try{
+    response=await fetchImpl("/api/target-staging/task-temporal/status?"+
+      new URLSearchParams({taskId,completion:"1"}),readOptions(signal));
+  }catch{return {ok:false,reason:signal?.aborted?"aborted":"offline"};}
+  if(signal?.aborted)return {ok:false,reason:"aborted"};
+  if(response.status!==200)return {ok:false,reason:failureFor(response.status)};
+  if(!safeResponse(response))return {ok:false,reason:"invalid-response"};
+  try{
+    const body:unknown=await response.json();
+    if(signal?.aborted)return {ok:false,reason:"aborted"};
+    if(!object(body)||!exact(body,[
+      "expectedRevision","writeAreaId","restoreGeneration","previousWhenOn",
+    ]))return {ok:false,reason:"invalid-response"};
+    const {previousWhenOn,...context}=body;
+    if(!validWriteContext(context)||!validActorPrivatePlanDay(previousWhenOn))
+      return {ok:false,reason:"invalid-response"};
+    if(context.writeAreaId!==areaId)return {ok:false,reason:"conflict"};
+    return {ok:true,context,previousWhenOn};
+  }catch{return {ok:false,reason:signal?.aborted?"aborted":"invalid-response"};}
+}
+
+/** Exact Gregorian date-only validation without importing server SQLite into the browser. */
+function validActorPrivatePlanDay(value:unknown):value is string|null{
+  if(value===null)return true;
+  if(typeof value!=="string"||!/^[0-9]{4}-[0-9]{2}-[0-9]{2}$/.test(value))return false;
+  const year=Number(value.slice(0,4)),month=Number(value.slice(5,7)),day=Number(value.slice(8));
+  if(year<1||month<1||month>12||day<1)return false;
+  const leap=year%4===0&&(year%100!==0||year%400===0);
+  return day<=[31,leap?29:28,31,30,31,30,31,31,30,31,30,31][month-1];
+}
+
 export const readNoteWriteContext=(
   noteId:string,areaId:string,fetchImpl:typeof fetch=fetch,signal?:AbortSignal,
 ):Promise<ContextResult>=>validEditId(noteId)

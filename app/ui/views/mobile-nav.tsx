@@ -40,7 +40,7 @@ export function MobileNav({ app, targetPlan = false, onTargetCapture, targetIncl
             ref={x === "More" ? moreTriggerRef : undefined}
             className={(x === "More" && moreOpen) || (!moreOpen && current) ? "active" : ""}
             aria-label={planPreview ? (targetPlan
-              ? (language === "cs" ? "Můj plán – serverový plán ze stagingu" : "My Plan – server plan from staging")
+              ? (language === "cs" ? "Můj plán – aktuální úkoly ze serveru" : "My Plan – current tasks from the server")
               : (language === "cs" ? "Můj plán – vývojový náhled nad stávajícími daty" : "My Plan – development preview with legacy data")) : label}
             data-nav-view={planPreview ? "Today" : x}
             data-nav-tab={planPreview ? "my-plan-preview" : x}

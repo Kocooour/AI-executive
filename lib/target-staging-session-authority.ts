@@ -1,7 +1,8 @@
-import {createPreflightedPrivateStructure,validPrivateStructureCreateCommand,
+import {createPreflightedPrivateStructure,cancelPreflightedPrivateStructureCreate,
+  validPrivateStructureCreateCommand,
   type PrivateStructureKind,type PrivateStructureCreateCommand,
   type PrivateStructureCreateResult,type PrivateStructureCreateStatus,
-  type PrivateStructureCreateRecovery} from "./target-private-structure-create-writer";
+  type PrivateStructureCreateRecovery,type PrivateStructureCancelResult} from "./target-private-structure-create-writer";
 import type {TargetProjectTitleRecovery} from "./target-project-title-command-status";
 import {cancelTargetProjectTitle,validProjectTitleCancelCommand,type ProjectTitleCancelCommand,type ProjectTitleCancelResult} from "./target-project-title-cancel";
 import { writeTargetProjectTitle, validProjectTitleCommand, type ProjectTitleCommand, type ProjectTitleResult } from "./target-project-title-writer";
@@ -600,17 +601,19 @@ export class TargetStagingSessionAuthority {
     }catch{return null;}
   }
 
-  /** R3-slice/BE-02: one pinned actor snapshot for Today and Tomorrow. */
+  /** R3-slice/BE-02: one pinned actor snapshot for Today, Tomorrow, Undated.
+   * Preserve the seven-argument read interface: old callers page the dated
+   * buckets while the new third bucket starts at offset zero by default. */
   readMyPlanTwoDayTaskPage(
     actorUserId:string,areaFilter:MyPlanTaskAreaFilter,
     evaluationDate:string,nextDate:string,limit:number,
-    offsetToday:number,offsetTomorrow:number,
-  ):{today:MyPlanDayTaskPage;tomorrow:MyPlanDayTaskPage}|null {
+    offsetToday:number,offsetTomorrow:number,offsetUndated=0,
+  ):{today:MyPlanDayTaskPage;tomorrow:MyPlanDayTaskPage;undated:MyPlanDayTaskPage}|null {
     if(this.#closed)return null;
     try {
       const credential=this.#oneShotReadCredential(actorUserId);
       return credential?readPreflightedMyPlanTwoDayTaskPage(this.#store,credential,{
-        areaFilter,evaluationDate,nextDate,limit,offsetToday,offsetTomorrow,
+        areaFilter,evaluationDate,nextDate,limit,offsetToday,offsetTomorrow,offsetUndated,
       }):null;
     }catch{return null;}
   }
@@ -627,7 +630,7 @@ export class TargetStagingSessionAuthority {
   /** BE-04: single actor-bound, pinned CAS + temporal guard read. */
   readTemporalStatusPreview(
     actorUserId: string, taskId: string,
-  ): {detail: TemporalTaskDetail; expectedRevision: string} | null {
+  ): {detail: TemporalTaskDetail; expectedRevision: string;previousWhenOn:string|null} | null {
     if (this.#closed) return null;
     try {
       const credential = this.#oneShotReadCredential(actorUserId);
@@ -1373,6 +1376,16 @@ export class TargetStagingSessionAuthority {
       return {ok:false,reason:"invalid_request"};
     return createPreflightedPrivateStructure(this.#store,credential,kind,command,
       durableSessionTokenHash);
+  }
+  /** An actor-scoped terminal create fence, never an Area authorization. */
+  cancelPrivateStructureCreate(
+    sessionToken:string,kind:PrivateStructureKind,commandId:string,durableSessionTokenHash?:string,
+  ):PrivateStructureCancelResult{
+    const credential=this.#credential(sessionToken,true);
+    return credential
+      ?cancelPreflightedPrivateStructureCreate(this.#store,credential,kind,commandId,
+        durableSessionTokenHash)
+      :{ok:false,reason:"unauthorized"};
   }
   privateStructureCreateStatus(
     sessionToken:string,kind:PrivateStructureKind,command:PrivateStructureCreateCommand,
