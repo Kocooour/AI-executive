@@ -32,7 +32,7 @@ are fingerprinted and rechecked before starts and any off rollback.
 For target activation, the approved canonical path is
 `/var/lib/ai-executive-target/personal-v1`; the loaded unit must have
 `ProtectSystem=strict`, `StateDirectory=ai-executive ai-executive-target`
-(in either order) and `ReadWritePaths` either **empty** or exactly
+(in either order), `StateDirectoryMode=0700` and `ReadWritePaths` either **empty** or exactly
 `/var/lib/ai-executive-security/outbox` (the approved security-alert outbox).
 No other writable exception is approved. Off-mode deployment accepts the original
 `StateDirectory=ai-executive` as well as the separately installed drop-in.
@@ -62,11 +62,25 @@ performed by this PR or the deploy script. The reviewed drop-in content is:
 [Service]
 StateDirectory=
 StateDirectory=ai-executive ai-executive-target
+StateDirectoryMode=0700
 \`\`\`
 
-The operator must independently install the approved override, perform
-\`systemctl daemon-reload\`, check \`systemctl show ai-executive
--p StateDirectory -p ProtectSystem\`, verify an ordinary service restart
+The `StateDirectoryMode=0700` line is mandatory: clearing `StateDirectory=`
+resets its mode to systemd's default `0755`. Without the explicit mode,
+the next restart can weaken permissions on **both** the legacy and target
+state directories, even if the tracked service unit specifies `0700`.
+
+The operator must independently install the approved override and run
+`systemctl daemon-reload`. **Before any service restart**, check the loaded
+mode explicitly:
+
+```sh
+test "$(systemctl show ai-executive -p StateDirectoryMode --value)" = 0700
+systemctl show ai-executive -p StateDirectory -p ProtectSystem -p StateDirectoryMode
+```
+
+Stop if this assertion fails; correct the drop-in and repeat `daemon-reload`
+without restarting the service. Only then perform an ordinary service restart
 and a service-user write test to the exact target directory **without
 touching real data files**. The versioned \`deployment/ai-executive.service\`
 remains unchanged, so the existing code-diff safety guard is not bypassed.
