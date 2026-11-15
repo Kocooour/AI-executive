@@ -2,7 +2,7 @@
  * Real signed write audience, pinned SQLite and append-only journal, NO HTTP.
  */
 import assert from "node:assert/strict";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -24,6 +24,8 @@ const { PRIVATE_TASK_CREATE_RECEIPT_PREFIX, validPrivateTaskCreateCommand }=
   await import("../lib/target-private-task-create-writer.ts");
 const durable=await import("../lib/target-staging-durable-session.ts");
 const { withPinnedTargetStagingWrite }=await import("../lib/target-staging-pinned-write.ts");
+const {actorScopedCreateCancelPrefix}=await import("../lib/target-private-create-cancel-key.ts");
+const {TARGET_STAGING_PRIVATE_TASK_CREATE_CANCEL_PREFIX}=await import("../lib/target-store-bootstrap.ts");
 
 const fixtures=[];
 function fixture(){
@@ -296,6 +298,45 @@ test("a committed task defeats later cancel; a foreign actor cannot cancel it",(
   assert.deepEqual(fx.authority.cancelPrivateTaskCreate(
     alice.sessionToken,cmd.commandId),{ok:true,status:"settled"});
   assert.deepEqual(state(fx),after,"settled proof cannot alter a task or its receipt");
+  assert.deepEqual(inspectIsolatedTargetStore({stagingDirectory:fx.stage.directory}),
+    {ok:true,mode:"stage",issues:[]});
+});
+
+test("one actor exhausting private task create cancellations never blocks another actor",()=>{
+  const fx=fixture(),alice=fx.authority.issueWritable("alice"),
+    bob=fx.authority.issueWritable("bob");
+  assert.ok(alice&&bob);
+  const prefix=actorScopedCreateCancelPrefix(TARGET_STAGING_PRIVATE_TASK_CREATE_CANCEL_PREFIX,"alice");
+  const add=fx.db.prepare("INSERT INTO metadata(key,value) VALUES (?, '1')");
+  fx.db.exec("BEGIN");
+  for(let i=0;i<4096;i++)add.run(prefix+i.toString(16).padStart(64,"0"));
+  fx.db.exec("COMMIT");
+  assert.deepEqual(inspectIsolatedTargetStore({stagingDirectory:fx.stage.directory}),
+    {ok:true,mode:"stage",issues:[]});
+  assert.deepEqual(fx.authority.cancelPrivateTaskCreate(alice.sessionToken,randomUUID()),
+    rejected("write_failed"));
+  const bobCommand=randomUUID();
+  assert.deepEqual(fx.authority.cancelPrivateTaskCreate(bob.sessionToken,bobCommand),
+    {ok:true,status:"cancelled"});
+  assert.deepEqual(inspectIsolatedTargetStore({stagingDirectory:fx.stage.directory}),
+    {ok:true,mode:"stage",issues:[]});
+  const cmd=request(fx.stage,"bob-private",{commandId:bobCommand});
+  assert.deepEqual(fx.authority.createPrivateTask(bob.sessionToken,cmd),
+    rejected("idempotency_conflict"),"late POST cannot bypass Bob's fence");
+});
+
+test("legacy private task cancellation metadata continues to fence late creates",()=>{
+  const fx=fixture(),alice=fx.authority.issueWritable("alice");
+  assert.ok(alice);
+  const cmd=request(fx.stage,fx.stage.unassignedAreaId);
+  const oldHash=createHash("sha256")
+    .update(JSON.stringify(["alice",cmd.commandId.toLowerCase()])).digest("hex");
+  fx.db.prepare("INSERT INTO metadata(key,value) VALUES (?, '1')")
+    .run(TARGET_STAGING_PRIVATE_TASK_CREATE_CANCEL_PREFIX+oldHash);
+  assert.deepEqual(fx.authority.cancelPrivateTaskCreate(alice.sessionToken,cmd.commandId),
+    {ok:true,status:"cancelled"});
+  assert.deepEqual(fx.authority.createPrivateTask(alice.sessionToken,cmd),
+    rejected("idempotency_conflict"));
   assert.deepEqual(inspectIsolatedTargetStore({stagingDirectory:fx.stage.directory}),
     {ok:true,mode:"stage",issues:[]});
 });

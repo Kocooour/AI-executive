@@ -31,6 +31,16 @@ Vlastník 2026-11-12 schválil návrh revize v bodech 1, 2 a 4 a u bodu 3 potvrd
 12. **Neodeslané legacy změny** v cílovém režimu: zařízení zobrazí upozornění a nabídne soukromý export; nic se neodesílá ani nemaže.
 13. **Produkční cílové úložiště** bude `/var/lib/ai-executive-target/personal-v1` přes samostatně schválený systemd drop-in (druhý `StateDirectory`); nasazovací skript se brání chybám konfigurace, ne útočníkovi s rootem ([#424](https://github.com/Kocooour/AI-executive/issues/424#issuecomment-6880225283)).
 
+14. **Nastavení integrací není součástí zákazu legacy zápisů v cílovém režimu (2026-11-14).**
+    Omezení „jen pro čtení“ z bodu 3 platí pro obsah (úkoly, poznámky,
+    projekty, Pozornost), nikoli pro nastavení integrací. ICS kalendáře
+    (`calendarAction`: connect/refresh/disconnect), iCloud a připojení
+    Gmailu mají zůstat funkční a smějí nadále zapisovat do původního
+    integračního úložiště. Nezavádí se žádná změna jejich chování ani nové
+    příznaky. Pro ostatní UI zápisové cesty platí explicitní inventář
+    a existující brány; nové nehlídané mutace zachytí unit test
+    `tests/target-personal-ui-write-inventory.test.mjs` (issue #443).
+
 Mimo první release zůstávají vypnuté a tím jej neblokují: web-push (host politika), provider route AI bundle, Attention nad cílovými daty, note-sync a všechny preview příznaky.
 
 ## Co se neschvaluje

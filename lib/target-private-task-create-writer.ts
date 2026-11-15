@@ -8,6 +8,7 @@
  * A request never provides an actor, workspace, parent project or sharing hint.
  */
 import { createHash } from "node:crypto";
+import {actorScopedCreateCancelPrefix} from "./target-private-create-cancel-key";
 import { fingerprint } from "./target-task-staging-writer";
 import {
   isTargetStagingSessionTokenHash, lookupLiveTargetStagingSession,
@@ -68,6 +69,10 @@ function recoveryKey(actor:string,commandId:string):string{
   return TARGET_STAGING_PRIVATE_TASK_CREATE_RECOVERY_PREFIX+commandHash(actor,commandId);
 }
 function cancelKey(actor:string,commandId:string):string{
+  return actorScopedCreateCancelPrefix(TARGET_STAGING_PRIVATE_TASK_CREATE_CANCEL_PREFIX,actor)+
+    commandHash(actor,commandId);
+}
+function legacyCancelKey(actor:string,commandId:string):string{
   return TARGET_STAGING_PRIVATE_TASK_CREATE_CANCEL_PREFIX+commandHash(actor,commandId);
 }
 const HEX=/^[0-9a-f]{64}$/;
@@ -221,7 +226,8 @@ export function createPreflightedPrivateTask(
     }
     // The cancel fence and CREATE serialize under the SAME BEGIN IMMEDIATE.
     // A pending original request can never commit once its UUID is cancelled.
-    if(db.prepare("SELECT 1 FROM metadata WHERE key=?").get(cancelKey(actor,request.commandId)))
+    if(db.prepare("SELECT 1 FROM metadata WHERE key IN (?,?)").get(
+      cancelKey(actor,request.commandId),legacyCancelKey(actor,request.commandId)))
       return {ok:false,reason:"idempotency_conflict"};
     // No task-ID reuse or overwrite, even after a tombstone. Do not disclose
     // which of an existing task or foreign tombstone caused the denial.
@@ -307,11 +313,12 @@ export function cancelPreflightedPrivateTaskCreate(
     if(db.prepare("SELECT 1 FROM metadata WHERE key=?")
       .get(PRIVATE_TASK_CREATE_RECEIPT_PREFIX+digest))
       return {ok:true,status:"settled"};
-    const key=TARGET_STAGING_PRIVATE_TASK_CREATE_CANCEL_PREFIX+digest;
-    if(db.prepare("SELECT 1 FROM metadata WHERE key=?").get(key))
+    const key=cancelKey(actor,commandId);
+    if(db.prepare("SELECT 1 FROM metadata WHERE key IN (?,?)").get(
+      key,legacyCancelKey(actor,commandId)))
       return {ok:true,status:"cancelled"};
     const count=db.prepare("SELECT COUNT(*) AS n FROM metadata WHERE key LIKE ?")
-      .get(TARGET_STAGING_PRIVATE_TASK_CREATE_CANCEL_PREFIX+"%") as {n:number};
+      .get(actorScopedCreateCancelPrefix(TARGET_STAGING_PRIVATE_TASK_CREATE_CANCEL_PREFIX,actor)+"%") as {n:number};
     if(!Number.isSafeInteger(count.n)||count.n>=TARGET_STAGING_MAX_RECEIPTS)
       return failed();
     // A revoked Area cannot authorize a new CREATE, but its signed actor

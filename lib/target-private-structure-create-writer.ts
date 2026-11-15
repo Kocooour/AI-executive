@@ -3,6 +3,7 @@
  * All decisions and idempotency state live inside the pinned BEGIN IMMEDIATE.
  */
 import {createHash} from "node:crypto";
+import {actorScopedCreateCancelPrefix} from "./target-private-create-cancel-key";
 import type {DatabaseSync} from "node:sqlite";
 import {fingerprint} from "./target-task-staging-writer";
 import {isTargetStagingSessionTokenHash,lookupLiveTargetStagingSession}
@@ -75,7 +76,9 @@ const receiptKey=(actor:string,commandId:string)=>PRIVATE_STRUCTURE_CREATE_RECEI
   keyHash(actor,commandId);
 const recoveryKey=(actor:string,commandId:string)=>PRIVATE_STRUCTURE_CREATE_RECOVERY_PREFIX+
   keyHash(actor,commandId);
-const cancelKey=(actor:string,commandId:string)=>PRIVATE_STRUCTURE_CREATE_CANCEL_PREFIX+
+const cancelKey=(actor:string,commandId:string)=>
+  actorScopedCreateCancelPrefix(PRIVATE_STRUCTURE_CREATE_CANCEL_PREFIX,actor)+keyHash(actor,commandId);
+const legacyCancelKey=(actor:string,commandId:string)=>PRIVATE_STRUCTURE_CREATE_CANCEL_PREFIX+
   keyHash(actor,commandId);
 // Use a fixed field order; semantically identical JSON with reordered keys
 // must be an idempotent replay, never a conflict.
@@ -180,7 +183,8 @@ export function createPreflightedPrivateStructure(
     }
     // Same pinned BEGIN IMMEDIATE as cancellation: a late POST with a
     // terminally cancelled command UUID can NEVER create a record.
-    if(db.prepare("SELECT 1 FROM metadata WHERE key=?").get(cancelKey(actor,command.commandId)))
+    if(db.prepare("SELECT 1 FROM metadata WHERE key IN (?,?)").get(
+      cancelKey(actor,command.commandId),legacyCancelKey(actor,command.commandId)))
       return {ok:false,reason:"idempotency_conflict"};
     // A stale, partially corrupted receipt/witness pair fails closed.
     if(db.prepare("SELECT 1 FROM metadata WHERE key=?").get(wk))
@@ -303,10 +307,11 @@ export function cancelPreflightedPrivateStructureCreate(
     if(db.prepare("SELECT 1 FROM metadata WHERE key=?")
       .get(receiptKey(actor,commandId)))return {ok:true,status:"settled"};
     const key=cancelKey(actor,commandId);
-    if(db.prepare("SELECT 1 FROM metadata WHERE key=?").get(key))
+    if(db.prepare("SELECT 1 FROM metadata WHERE key IN (?,?)").get(
+      key,legacyCancelKey(actor,commandId)))
       return {ok:true,status:"cancelled"};
     const count=(db.prepare("SELECT COUNT(*) AS n FROM metadata WHERE key LIKE ?")
-      .get(PRIVATE_STRUCTURE_CREATE_CANCEL_PREFIX+"%") as {n:number}).n;
+      .get(actorScopedCreateCancelPrefix(PRIVATE_STRUCTURE_CREATE_CANCEL_PREFIX,actor)+"%") as {n:number}).n;
     if(!Number.isSafeInteger(count)||count>=TARGET_STAGING_MAX_RECEIPTS)return failed();
     if(!context.stillPinned()||!context.noSidecars()||!sessionLive())return failed();
     db.prepare("INSERT INTO metadata(key,value) VALUES(?,?)").run(key,"1");

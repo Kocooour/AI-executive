@@ -318,5 +318,44 @@ test("same-origin cross-owner reads and valid private writes are rejected indepe
     assert.deepEqual(JSON.parse(text), { error: "Not found" },
       method + " " + route + " must refuse generically, not reveal Alice's data");
     assert.deepEqual(state(), before, method + " " + route + " changed the target store");
+
   }
+  // A valid Bob session must never be able to cancel or recover an Alice
+  // project/child command by replaying its UUID and Alice's owner-bound scope.
+  const {privateStructureActorScope}=await import("../lib/target-private-structure-owner-scope.ts");
+  const ownerScope=privateStructureActorScope("alice",stage.restoreGeneration);
+  assert.ok(ownerScope);
+  const projectCreate={
+    projectId:randomUUID(),commandId:randomUUID(),areaId:stage.unassignedAreaId,
+    restoreGeneration:stage.restoreGeneration,title:"Alice confidential project",
+  };
+  const childCreate={
+    taskId:randomUUID(),commandId:randomUUID(),projectId:"alice-project",
+    restoreGeneration:stage.restoreGeneration,title:"Alice confidential child",
+  };
+  assert.equal((await call("projects","POST",aliceCookie,projectCreate)).status,201);
+  assert.equal((await call("project-tasks","POST",aliceCookie,childCreate)).status,201);
+  for(const [route,cmd] of [
+    ["projects/create-cancel",projectCreate],
+    ["project-tasks/create-cancel",childCreate],
+    ["projects/create-recovery",projectCreate],
+    ["project-tasks/create-recovery",childCreate],
+  ]){
+    const before=state();
+    const response=await call(route,"POST",bobCookie,{
+      commandId:cmd.commandId,ownerScope,
+    });
+    assert.equal(response.status,404,route+" must not accept another actor's scope");
+    assert.deepEqual(await response.json(),{error:"Not found"});
+    assert.deepEqual(state(),before,route+" must not write to Alice's target store");
+  }
+  const beforeTargets=state();
+  const targetResponse=await call("projects/create-targets","GET",bobCookie);
+  assert.equal(targetResponse.status,200);
+  const targetData=await targetResponse.json();
+  assert.ok(Array.isArray(targetData.areas));
+  assert.ok(targetData.areas.some(area=>area.id==="bob-private"),"Bob's private Area is visible");
+  assert.ok(targetData.areas.every(area=>area.id!=="team-area"&&area.id!==stage.unassignedAreaId),
+    "Alice's and shared Areas must not appear in Bob's private create targets");
+  assert.deepEqual(state(),beforeTargets,"create-targets is a read-only actor projection");
 });

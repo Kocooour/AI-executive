@@ -122,7 +122,7 @@ export async function verifyStructureCreate(
   if(entry?.phase==="saving")return "unavailable";
   const result=entry?.marker.commandId===marker.commandId
     ?await check(marker.kind,entry.command,signal)
-    :await recover(marker.kind,marker.commandId,null,signal);
+    :await recover(marker.kind,marker.commandId,ownerScope,signal);
   if(typeof result==="object"&&result.status==="committed"&&!signal.aborted&&
     runtime.known()&&runtime.generation()===generation&&release(marker)){
     if(entry?.marker.commandId===marker.commandId){active.delete(runtime);entry.unregister();}
@@ -154,7 +154,7 @@ export async function cancelStructureCreate(
   // Even after a full reload, the server's actor-scoped receipt witness
   // provides the original created ID without storing any title or Area locally.
   const found=result==="settled"
-    ?await recover(current.marker.kind,current.marker.commandId,null,signal)
+    ?await recover(current.marker.kind,current.marker.commandId,ownerScope,signal)
     :null;
   if(signal.aborted||!runtime.known()||runtime.generation()!==generation||
     !release(current.marker))return "unavailable";

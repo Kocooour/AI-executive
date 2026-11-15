@@ -119,10 +119,10 @@ test("R3 A/3: one create POST, exact success or uncertain; status/recovery are q
     assert.deepEqual(status,decodedCommitted);
     assert.equal(await checkStructureCreateStatus(kind,cmd,signal,
       async()=>json({status:"committed",id:randomUUID()})),"unavailable");
-    const recovery=await recoverStructureCreate(kind,cmd.commandId,null,signal,
+    const recovery=await recoverStructureCreate(kind,cmd.commandId,ownerScope,signal,
       async(url,options)=>{
         assert.equal(url,path+"/create-recovery");
-        assert.deepEqual(JSON.parse(options.body),{commandId:cmd.commandId});
+        assert.deepEqual(JSON.parse(options.body),{commandId:cmd.commandId,ownerScope});
         return json(httpCommitted);
       });
     assert.deepEqual(recovery,decodedCommitted);
@@ -139,7 +139,7 @@ test("R3 A/3: one create POST, exact success or uncertain; status/recovery are q
         assert.equal(await checkStructureCreateStatus(kind,cmd,signal,
           async()=>json(malformed)),"unavailable");
       }
-    }else assert.equal(await recoverStructureCreate(kind,cmd.commandId,null,signal,
+    }else assert.equal(await recoverStructureCreate(kind,cmd.commandId,ownerScope,signal,
       async()=>json({...httpCommitted,projectId:"leaked"})),"unavailable");
     assert.equal(isTargetReadRequest(path+"/create-status",{method:"POST"}),true);
     assert.equal(isTargetReadRequest(path+"/create-recovery",{method:"POST"}),true);
@@ -180,7 +180,7 @@ test("R3 A/3: reload retains only opaque command ID; verified recovery clears it
     async()=>{throw Error("must not use status without original command");},
     async(kind,id,parent)=>{
       assert.equal(kind,"project-task");assert.equal(id,cmd.commandId);
-      assert.equal(parent,null);
+      assert.equal(parent,ownerScope);
       return {status:"committed",kind:"project-task",id:cmd.taskId,projectId:cmd.projectId};
     });
   assert.deepEqual(result,{status:"committed",kind:"project-task",
@@ -321,7 +321,7 @@ test("R3 A/3: recovery handles maximum escaped private project IDs without leaki
     const t=child(parent);
     const response={status:"committed",id:t.taskId,projectId:parent};
     assert.ok(Buffer.byteLength(JSON.stringify(response),"utf8")>1024);
-    const result=await recoverStructureCreate("project-task",t.commandId,null,signal,
+    const result=await recoverStructureCreate("project-task",t.commandId,ownerScope,signal,
       async()=>json(response));
     assert.deepEqual(result,{...response,kind:"project-task"});
     assert.equal(await checkStructureCreateStatus("project-task",t,signal,

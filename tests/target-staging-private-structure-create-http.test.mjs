@@ -58,6 +58,7 @@ const {POST:CHILD_CANCEL}=await import("../app/api/target-staging/project-tasks/
 const {GET:PROJECT_TARGETS}=await import("../app/api/target-staging/projects/create-targets/route.ts");
 const {isTargetReadRequest}=await import("../lib/target-edit-fetch.ts");
 const {privateStructureActorScope}=await import("../lib/target-private-structure-owner-scope.ts");
+const {actorScopedCreateCancelPrefix}=await import("../lib/target-private-create-cancel-key.ts");
 
 const fixtures=[];
 function assertValidStore(fx){
@@ -133,11 +134,11 @@ async function checked(response,status){
 const cp=(cmd,cookie)=>call(PROJECT,"/projects",cmd,cookie);
 const cs=(cmd,cookie)=>call(PROJECT_STATUS,"/projects/create-status",cmd,cookie);
 const cr=(cmd,cookie)=>call(PROJECT_RECOVERY,"/projects/create-recovery",
-  {commandId:cmd.commandId},cookie);
+  {commandId:cmd.commandId,ownerScope:scoped()},cookie);
 const ct=(cmd,cookie)=>call(CHILD,"/project-tasks",cmd,cookie);
 const cts=(cmd,cookie)=>call(CHILD_STATUS,"/project-tasks/create-status",cmd,cookie);
 const ctr=(cmd,cookie)=>call(CHILD_RECOVERY,"/project-tasks/create-recovery",
-  {commandId:cmd.commandId},cookie);
+  {commandId:cmd.commandId,ownerScope:scoped()},cookie);
 const scoped=(actor="alice")=>privateStructureActorScope(actor,
   process.env.AI_EXECUTIVE_TARGET_STAGING_RESTORE_GENERATION);
 const pc=(cmd,cookie,ownerScope=scoped())=>call(PROJECT_CANCEL,"/projects/create-cancel",
@@ -236,14 +237,14 @@ test("actor-scoped receipts forbid command reuse, and stolen commands cannot rep
   await checked(await cp({...p,title:"Changed"}),409);
   const bob=session(fx,"bob");
   await checked(await cp(p,bob.cookie),404);
-  assert.deepEqual(await checked(await cr(p,bob.cookie),200),{status:"not_recorded"});
+  await checked(await cr(p,bob.cookie),404);
   await checked(await cs(p,bob.cookie),404);
   const t=child(fx,p.projectId);
   await checked(await ct(t),201);
   await checked(await ct({...t,taskId:randomUUID()}),409);
   await checked(await ct({...t,title:"Changed"}),409);
   await checked(await ct(t,bob.cookie),404);
-  assert.deepEqual(await checked(await ctr(t,bob.cookie),200),{status:"not_recorded"});
+  await checked(await ctr(t,bob.cookie),404);
 });
 test("revoked durable session cannot create, confirm or recover",async()=>{
   const fx=fixture(),p=project(fx),live=session(fx,"alice");
@@ -495,4 +496,37 @@ test("reauth to same actor retains scope and fences delayed old-session POST; an
     assertValidStore(fx);
   }
   assert.equal(state(fx).cancels,2);
+});
+
+test("per-actor cancellation cap cannot block a second actor or erase late-POST fences",async()=>{
+  const fx=fixture();
+  const prefix=actorScopedCreateCancelPrefix(PRIVATE_STRUCTURE_CREATE_CANCEL_PREFIX,"alice");
+  const db=new DatabaseSync(fx.stage.databasePath);
+  const insert=db.prepare("INSERT INTO metadata(key,value) VALUES (?, '1')");
+  db.exec("BEGIN");
+  for(let i=0;i<4096;i++)insert.run(prefix+i.toString(16).padStart(64,"0"));
+  db.exec("COMMIT");db.close();
+  assertValidStore(fx);
+  const a=project(fx),b=project(fx),bob=session(fx,"bob");
+  await checked(await pc(a),503);
+  assert.deepEqual(await checked(await pc(b,bob.cookie,scoped("bob")),200),
+    {status:"cancelled"},"Bob's capacity must be independent of Alice");
+  assert.equal(state(fx).cancels,4097);
+  assertValidStore(fx);
+  await checked(await cp(b,bob.cookie),404,"Bob still cannot create in Alice's private Area");
+});
+
+test("pre-upgrade cancellation fences remain terminal after key format change",async()=>{
+  const fx=fixture(),command=project(fx);
+  const {createHash}=await import("node:crypto");
+  const oldHash=createHash("sha256")
+    .update(JSON.stringify(["alice",command.commandId.toLowerCase()])).digest("hex");
+  const db=new DatabaseSync(fx.stage.databasePath);
+  db.prepare("INSERT INTO metadata(key,value) VALUES (?, '1')")
+    .run(PRIVATE_STRUCTURE_CREATE_CANCEL_PREFIX+oldHash);
+  db.close();
+  assertValidStore(fx);
+  assert.deepEqual(await checked(await pc(command),200),{status:"cancelled"});
+  await checked(await cp(command),409,"legacy terminal fence must still block a late POST");
+  assertValidStore(fx);
 });
