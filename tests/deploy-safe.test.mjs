@@ -716,6 +716,7 @@ for (const scenario of [
   // Reject parent, extra path, systemd +/- modifiers, and any target/legacy
   // storage exception. The approved outbox must be an exact single match.
   "offsecurityparent", "targetsecurityparent",
+  "targetsecuritybroad", "targetsecuritytrailing",
   "offsecuritymulti", "targetsecuritymulti",
   "targetsecurityprefixdash", "targetsecurityprefixplus",
   "targetsecuritynested", "targetsecuritylegacy", "targetsecuritytargetparent",
