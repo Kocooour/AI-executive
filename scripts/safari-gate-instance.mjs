@@ -55,9 +55,10 @@ async function availableLoopbackPort(except) {
   }
 }
 
-async function waitForNext(child, port, isStopping) {
+async function waitForNext(child, port, isStopping, getSpawnFailure) {
   for (let attempts = 0; attempts < 150; attempts++) {
     if (isStopping()) throw new Error("interrupted");
+    if (getSpawnFailure()) throw new Error("next start failed to spawn");
     if (child.exitCode !== null) throw new Error("next start exited before readiness");
     try {
       const ready = await new Promise((resolve, reject) => {
@@ -209,7 +210,7 @@ async function main() {
       stdio: "inherit",
     });
     next.on("error", error => { childSpawnError = error; });
-    await waitForNext(next, internalPort, () => stopping || childSpawnError !== null);
+    await waitForNext(next, internalPort, () => stopping, () => childSpawnError);
     if (stopping) throw new Error("interrupted");
 
     proxy = createSafariGateTlsProxy(cert, key, port, internalPort);
