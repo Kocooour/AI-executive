@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { test } from "node:test";
 import {
   chmodSync, mkdirSync, mkdtempSync, rmSync, symlinkSync,
-  writeFileSync, readFileSync,
+  writeFileSync, readFileSync, existsSync,
 } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -209,18 +210,50 @@ test("runbook uses an isolated Linux build and exact matching SSH tunnel port", 
   assert.ok(helper, "Linux Safari helper instructions must exist");
   const linux = helper.split("**3. Linux")[1]?.split("~~~sh")[1]?.split("~~~")[0];
   assert.ok(linux, "Linux helper shell commands must be documented");
+  assert.match(linux, /^set -eu$/m);
+  assert.match(linux, /^test "\$\(git rev-parse HEAD\)" = "\$RELEASE_SHA"$/m);
   assert.match(linux, /^pnpm install --frozen-lockfile$/m);
   assert.doesNotMatch(linux, /^\s*pnpm build(?:\s|$)/m);
   assert.match(linux, /node scripts\/safari-gate-instance\.mjs --port 3443/);
   assert.match(linux, /--tls-cert/);
   assert.match(linux, /--tls-key/);
   assert.match(linux, /--tls-ca/);
-  assert.match(helper, /ssh -N -L 127\.0\.0\.1:3443:127\.0\.0\.1:3443/);
+  assert.match(linux, /--expected-sha "\$RELEASE_SHA"/);
+  assert.match(helper, /ssh -o ExitOnForwardFailure=yes -N -L 127\.0\.0\.1:3443:127\.0\.0\.1:3443/);
   assert.match(helper, /Never|NEVER|never/);
+  const transfer = helper.split("**2. Transfer")[1]?.split("~~~sh")[1]?.split("~~~")[0];
+  assert.ok(transfer, "Mac transfer script exists");
+  assert.match(transfer, /^set -eu$/m);
+  assert.match(transfer, /mkdir -m 700/);
+  assert.match(transfer, /stat -c "%u:%a"/);
   const transferred = helper.split('scp "$MAC_TLS_DIR/safari-local.crt"')[1]
     ?.split('ssh "$SERVER"')[0];
   assert.ok(transferred, "copy only the scoped TLS files");
   assert.doesNotMatch(transferred, /rootCA-key\.pem/);
+});
+
+
+test("a failed SSH TLS-directory setup prevents scp from running", t => {
+  const { root } = fixture(t);
+  const runbook = readFileSync(path.resolve(
+    import.meta.dirname, "../docs/R4-CUTOVER-RUNBOOK.md"), "utf8");
+  const helper = runbook.split("### 3. Manual Safari through a disposable Linux instance")[1];
+  const transfer = helper?.split("**2. Transfer")[1]?.split("~~~sh")[1]?.split("~~~")[0];
+  assert.ok(transfer);
+  const bin = path.join(root, "bin");
+  mkdirSync(bin);
+  const sentinel = path.join(root, "scp-was-called");
+  writeFileSync(path.join(bin, "ssh"), "#!/bin/sh\\nexit 31\\n".replaceAll("\\n", "\n"));
+  writeFileSync(path.join(bin, "scp"), "#!/bin/sh\\ntouch \"$GUARD_SENTINEL\"\\n".replaceAll("\\n", "\n"));
+  chmodSync(path.join(bin, "ssh"), 0o755);
+  chmodSync(path.join(bin, "scp"), 0o755);
+  const result = spawnSync("bash", ["-c", transfer], {
+    env: { ...process.env, PATH: bin + path.delimiter + process.env.PATH,
+      MAC_TLS_DIR: root, GUARD_SENTINEL: sentinel },
+    encoding: "utf8",
+  });
+  assert.notEqual(result.status, 0, "failed TLS directory setup must stop the script");
+  assert.equal(existsSync(sentinel), false, "scp may not run after a failed ssh");
 });
 
 test("browser preflight refuses any persistent website state before opening Lumi", () => {
