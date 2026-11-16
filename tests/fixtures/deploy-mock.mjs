@@ -378,6 +378,7 @@ switch (name) {
     if (args[0] === "install") { log("install"); break; }
     if (args[0] === "build") {
       log("build-" + get("head").slice(0, 1));
+      log("build-shell:" + (process.env.NEXT_PUBLIC_LUMI_DESIGN_V1_PREVIEW ?? "absent"));
       if (["offtmpfsdriftbuild", "targetmountdriftbuild"].includes(scenario) &&
           get("head") === target && !fs.existsSync(stateFile("mount-changed"))) {
         set("mount-changed", "1");
