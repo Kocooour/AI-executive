@@ -157,6 +157,13 @@ test("PEM input contains only one public certificate, never appended CA keys", t
   ]));
   assert.throws(() => validateSafariGateExternalTls({ ...options, cert: combinedLeaf }),
     /exactly one public PEM certificate/);
+  const combinedKey = path.join(root, "leaf-with-extra-ca-key.key");
+  writeFileSync(combinedKey, Buffer.concat([
+    readFileSync(options.key), Buffer.from("\n"), readFileSync(ca.key),
+  ]));
+  chmodSync(combinedKey, 0o600);
+  assert.throws(() => validateSafariGateExternalTls({ ...options, key: combinedKey }),
+    /exactly one PEM private key/);
   const extraCert = path.join(root, "root-with-another-cert.pem");
   writeFileSync(extraCert, Buffer.concat([
     originalCa, Buffer.from("\n"), readFileSync(options.cert),
