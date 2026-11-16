@@ -204,6 +204,15 @@ function parseJson(response) {
   catch { throw new Error("local HTTPS smoke returned invalid JSON"); }
 }
 
+// The shell flag is compiled by Next; a green API smoke alone would miss an
+// off-profile HTML shell with no Quick Capture button. Read SSR output over
+// the authenticated, CA-verified HTTPS proxy before handing the URL to Safari.
+export function assertSafariGateV1ShellHtml(html) {
+  if (typeof html !== "string" || !html.includes('data-design-system="lumi-v1"')) {
+    throw new Error("Safari gate built without the v1 shell (Quick Capture unavailable)");
+  }
+}
+
 export async function verifySafariGateHttps({ port, ca, password, browserCookieName }) {
   assertGateCookieName(browserCookieName);
   const request = (endpoint, options = {}) =>
@@ -257,6 +266,12 @@ export async function verifySafariGateHttps({ port, ca, password, browserCookieN
   if (bypass.status !== 200 || parseJson(bypass).authenticated !== false) {
     throw new Error("proxy leaked host-wide owner cookie scope");
   }
+  const ownerPage = await request("/", { headers: { cookie } });
+  if (ownerPage.status !== 200 ||
+      !String(ownerPage.headers["content-type"] || "").includes("text/html")) {
+    throw new Error("Safari gate owner HTML not reachable");
+  }
+  assertSafariGateV1ShellHtml(ownerPage.body);
   const areasResponse = await request("/api/target-staging/notes/create-targets", {
     headers: { cookie },
   });
