@@ -16,11 +16,12 @@ import {
 import {
   SAFARI_GATE_PREFLIGHT_PATH, safariGatePreflightHtml,
   safariGateBrowserCookieName, gateOwnerCookieFromBrowserHeader,
-  gateSetCookiesForBrowser,
+  gateSetCookiesForBrowser, assertSafariGateV1ShellHtml,
 } from "../scripts/safari-gate-https.mjs";
 import {
   TARGET_PERSONAL_V1_PROFILE, TARGET_PERSONAL_V1_EXCLUDED,
   TARGET_PERSONAL_V1_REQUIRED_SETTINGS, targetPersonalV1Env,
+  TARGET_PERSONAL_V1_BUILD_ENV,
 } from "../lib/target-personal-profile.ts";
 
 function fixture(t) {
@@ -126,6 +127,9 @@ test("local server has only the exact personal-v1 flags and three target setting
     sessionSecret: "synthetic-session-secret-at-least-32-characters",
     port: 3210,
   });
+  assert.deepEqual(Object.fromEntries(Object.entries(env).filter(([name]) =>
+    name.startsWith("NEXT_PUBLIC_"))), TARGET_PERSONAL_V1_BUILD_ENV,
+    "Safari builds the same v1 shell as personal-v1 deployment");
   const targetNames = Object.keys(env).filter(name => name.startsWith("AI_EXECUTIVE_TARGET_"));
   assert.deepEqual(new Set(targetNames), new Set([
     ...TARGET_PERSONAL_V1_PROFILE,
@@ -157,6 +161,13 @@ test("local server has only the exact personal-v1 flags and three target setting
 function runDirForProfile(tmpRoot) {
   return path.join(tmpRoot, "lumi-e2e-synthetic");
 }
+
+test("authenticated Safari HTML probe rejects an off-profile build", () => {
+  assert.throws(() => assertSafariGateV1ShellHtml("<main data-workspace-tone='personal'></main>"),
+    /v1 shell/);
+  assert.doesNotThrow(() => assertSafariGateV1ShellHtml(
+    '<main data-design-system="lumi-v1" data-workspace-tone="personal"></main>'));
+});
 
 test("port validation fails closed", () => {
   for (const port of [0, 80, 65536, NaN, Infinity, 3210.5, "3210"]) {
