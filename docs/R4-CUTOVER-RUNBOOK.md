@@ -22,6 +22,20 @@ identity. \`--check <env-file>\` reports \`off\`, complete \`personal-v1\`, or
 flags are enabled by committed files, and this PR does not authorize an
 environment change.
 
+**C29 / owner decision 2026-11-16 — build profile is part of the cutover.**
+A validated `personal-v1` build MUST compile the v1 shell with
+`NEXT_PUBLIC_LUMI_DESIGN_V1_PREVIEW=1`, including the Quick Capture "+" on
+mobile and desktop. A validated `off` build MUST unset the flag even when
+the operator supplied it in the shell. The source of truth is
+`TARGET_PERSONAL_V1_BUILD_ENV` in `lib/target-personal-profile.ts`.
+`deploy-safe.sh` uses the profile-bound builder for the forward and
+rollback build and verifies `.next/lumi-build-profile.json` (profile,
+build ID and checkout SHA) before start. The root-owned EnvironmentFile
+must not assign any `NEXT_PUBLIC_*` variable. Safari's disposable
+`personal-v1` instance compiles with the same constant; an HTTPS owner
+HTML smoke refuses a missing v1 shell before opening Safari. This is a
+release gate, **not** production activation.
+
 Before any service stop, the deployment validates the selected `off` or
 `personal-v1` profile in the root-owned EnvironmentFile, rejects malformed or
 partial activation, and rejects assignments that override fixed unit settings
@@ -121,7 +135,11 @@ data directory, or start the old code.
 **Return to legacy:** under separately reviewed operational authorization,
 set all flags of the `personal-v1` profile (`lib/target-personal-profile.ts`)
 to false/absent and validate the `off` profile before a separately reviewed
-recovery/service restart. Confirm the
+recovery. **Do not restart the old process or reuse an existing `.next`.**
+An authorized return to legacy means validating `off` in the effective env
+and performing a **fresh `off` build through the reviewed
+`deployment/deploy-safe.sh` recovery/deploy procedure**. A restart alone
+cannot change Next's compiled flags. Confirm the
 actual loaded EnvironmentFile has the verified `off` profile, not merely
 the previous git revision. Do not remove, import, reset, overwrite or
 restore target and legacy stores as a side effect. Preserve the target
