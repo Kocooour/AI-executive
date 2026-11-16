@@ -23,7 +23,7 @@ function sandbox(t) {
   const pnpm = path.join(root, "bin/pnpm");
   writeFileSync(pnpm, `#!/bin/sh
 test "$1" = build || exit 1
-printf '%s' "${NEXT_PUBLIC_LUMI_DESIGN_V1_PREVIEW-unset}" > "$LUMI_CAPTURE"
+printf '%s' "\${NEXT_PUBLIC_LUMI_DESIGN_V1_PREVIEW-unset}" > "$LUMI_CAPTURE"
 printf '%s' "$LUMI_BUILD_ID" > .next/BUILD_ID
 `);
   const git = path.join(root, "bin/git");
