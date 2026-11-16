@@ -39,7 +39,7 @@ if (action === "--build") {
   for (const name of [".env", ".env.local", ".env.production", ".env.production.local"]) {
     const file = path.join(app, name);
     if (existsSync(file) &&
-        /^\\s*(?:export\\s+)?NEXT_PUBLIC_LUMI_DESIGN_V1_PREVIEW\\s*=/m
+        /^\s*(?:export\s+)?NEXT_PUBLIC_LUMI_DESIGN_V1_PREVIEW\s*=/m
           .test(readFileSync(file, "utf8"))) {
       throw new Error("checkout dotenv attempts to control the compile-time v1 shell");
     }
