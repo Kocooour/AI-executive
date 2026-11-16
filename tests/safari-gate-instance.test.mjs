@@ -233,6 +233,35 @@ test("runbook uses an isolated Linux build and exact matching SSH tunnel port", 
 });
 
 
+
+test("a failed detached release checkout cannot continue to package install", t => {
+  const { root } = fixture(t);
+  const runbook = readFileSync(path.resolve(
+    import.meta.dirname, "../docs/R4-CUTOVER-RUNBOOK.md"), "utf8");
+  const helper = runbook.split("### 3. Manual Safari through a disposable Linux instance")[1];
+  const linux = helper?.split("**3. Linux")[1]?.split("~~~sh")[1]?.split("~~~")[0];
+  assert.ok(linux);
+  const start = linux.indexOf('git checkout --detach "$RELEASE_SHA"');
+  const end = linux.indexOf('TLS_DIR=', start);
+  assert.ok(start >= 0 && end > start);
+  const checkoutPart = linux.slice(start, end);
+  const bin = path.join(root, "checkout-bin");
+  mkdirSync(bin);
+  const sentinel = path.join(root, "pnpm-was-called");
+  writeFileSync(path.join(bin, "git"), "#!/bin/sh\\nexit 23\\n".replaceAll("\\n", "\n"));
+  writeFileSync(path.join(bin, "pnpm"), "#!/bin/sh\\ntouch \"$GUARD_SENTINEL\"\\n".replaceAll("\\n", "\n"));
+  chmodSync(path.join(bin, "git"), 0o755);
+  chmodSync(path.join(bin, "pnpm"), 0o755);
+  const script = 'set -eu\\nRELEASE_SHA="' + "a".repeat(40) +
+    '"\\n' + checkoutPart;
+  const result = spawnSync("bash", ["-c", script.replaceAll("\\n", "\n")], {
+    env: { ...process.env, PATH: bin + path.delimiter + process.env.PATH,
+      GUARD_SENTINEL: sentinel }, encoding: "utf8",
+  });
+  assert.notEqual(result.status, 0, "failed checkout must abort");
+  assert.equal(existsSync(sentinel), false, "pnpm may not run after checkout failure");
+});
+
 test("a failed SSH TLS-directory setup prevents scp from running", t => {
   const { root } = fixture(t);
   const runbook = readFileSync(path.resolve(
@@ -284,6 +313,8 @@ test("launcher rebuilds from clean SHA and HTTPS probe never disables trust", ()
   assert.ok(launcher.includes('npm_config_offline: "true"'));
   assert.doesNotMatch(launcher, /spawnSync\("pnpm"/);
   assert.ok(launcher.includes('if (builtSha !== sha || postBuildDirty ||'));
+  assert.ok(launcher.includes("assertSafariGateExpectedSha(sha, expectedSha)"));
+  assert.ok(launcher.includes("assertSafariGateExpectedSha(builtSha, expectedSha)"));
   assert.ok(launcher.includes("verifySafariGateHttps({"));
   assert.ok(launcher.includes("SAFARI_GATE_PREFLIGHT_PATH"));
   assert.ok(launcher.includes("requestedPort ?? await availableLoopbackPort()"));
