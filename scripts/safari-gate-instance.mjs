@@ -21,7 +21,8 @@ import {
   safariGateBrowserCookieName,
 } from "./safari-gate-https.mjs";
 import {
-  assertSafariGatePlatform, parseSafariGateArguments, selectSafariGateTls,
+  assertSafariGatePlatform, assertSafariGateExpectedSha, parseSafariGateArguments,
+  selectSafariGateTls,
 } from "./safari-gate-external-tls.mjs";
 
 // Fail before any checkout read, build, process launch or temporary data write.
@@ -31,7 +32,8 @@ if (typeof process.getuid !== "function" || process.getuid() === 0 ||
   throw new Error("Safari gate must run as a non-root operator, never as root or ai-executive");
 }
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const { requestedPort, externalTls } = parseSafariGateArguments(process.argv.slice(2));
+const { requestedPort, externalTls, expectedSha } =
+  parseSafariGateArguments(process.argv.slice(2));
 
 const pathEnv = process.env.PATH || "/usr/bin:/bin";
 const processEnv = { PATH: pathEnv, HOME: process.env.HOME || os.homedir() };
@@ -124,6 +126,7 @@ async function main() {
       cwd: repo, env: processEnv, encoding: "utf8",
     }).trim();
     if (!/^[0-9a-f]{40}$/.test(sha)) throw new Error("invalid checkout SHA");
+    assertSafariGateExpectedSha(sha, expectedSha);
     const dirty = execFileSync("git", ["status", "--porcelain"], {
       cwd: repo, env: processEnv, encoding: "utf8",
     }).trim();
@@ -211,6 +214,7 @@ async function main() {
     const postBuildDirty = execFileSync("git", ["status", "--porcelain"], {
       cwd: repo, env: processEnv, encoding: "utf8",
     }).trim();
+    assertSafariGateExpectedSha(builtSha, expectedSha);
     if (builtSha !== sha || postBuildDirty ||
         !existsSync(path.join(repo, ".next", "BUILD_ID"))) {
       throw new Error("build checkout SHA changed, is dirty or has no BUILD_ID");
