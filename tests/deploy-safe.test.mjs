@@ -36,7 +36,7 @@ function sandbox(scenario) {
   const targetOwner = "owner-01";
 
   for (const p of [app, data, backups, path.dirname(envfile), state, bin,
-    path.join(app, ".next/server"), path.join(app, "scripts"),
+    path.join(app, ".next/server"), path.join(app, "scripts"), path.join(app, "lib"),
     path.join(app, "node_modules/next/dist/bin"), path.join(data, "notes")]) {
     mkdirSync(p, { recursive: true });
   }
@@ -115,6 +115,12 @@ function sandbox(scenario) {
   writeFileSync(path.join(app, ".next/BUILD_ID"), "old build", { mode: 0o644 });
   writeFileSync(path.join(app, "node_modules/next/dist/bin/next"), "fake\n");
   copyFileSync(path.join(repo, "scripts/check-data.mjs"), path.join(app, "scripts/check-data.mjs"));
+  // The synthetic checkout must expose the build wrapper and canonical TS
+  // contract, even when the mocked git reset represents a pre-C29 commit.
+  copyFileSync(path.join(repo, "scripts/target-build-profile.mjs"),
+    path.join(app, "scripts/target-build-profile.mjs"));
+  copyFileSync(path.join(repo, "lib/target-personal-profile.ts"),
+    path.join(app, "lib/target-personal-profile.ts"));
 
   const sqlite = new DatabaseSync(path.join(data, "store.sqlite"));
   try {
@@ -226,7 +232,12 @@ function sandbox(scenario) {
   };
   function execute({ recovery = false } = {}) {
     const result = spawnSync("bash", ["-c", script, "--", newSha, ...(recovery ? ["--recover-stopped"] : [])], {
-      cwd: root, env: { ...env, LUMI_TEST_RECOVERY_MODE: recovery ? "true" : "false" },
+      cwd: root, env: {
+        ...env,
+        ...(scenario === "offoperatorflag"
+          ? { NEXT_PUBLIC_LUMI_DESIGN_V1_PREVIEW: "1" } : {}),
+        LUMI_TEST_RECOVERY_MODE: recovery ? "true" : "false",
+      },
       encoding: "utf8", timeout: 40000, maxBuffer: 3 * 1024 * 1024,
     });
     assert.ifError(result.error);
@@ -627,6 +638,22 @@ scenarioCase("targetstatedir: approved isolated StateDirectory permits target ro
   assert.equal(r.events.filter(e => e === "target-check").length, 4);
 });
 
+
+scenarioCase("offoperatorflag: leaked operator v1 flag cannot contaminate off build", r => {
+  assert.equal(r.status, 0, r.output);
+  assert.ok(r.events.includes("build-shell:absent"), "off build must unset inherited public flag");
+});
+scenarioCase("targetsuccess: personal-v1 build compiles the v1 shell", r => {
+  assert.equal(r.status, 0, r.output);
+  assert.ok(r.events.includes("build-shell:1"), "target build must compile v1 shell");
+});
+scenarioCase("targetbuildfail: target rollback also retains v1 build environment", r => {
+  assert.notEqual(r.status, 0);
+  assert.deepEqual(r.events.filter(event => event.startsWith("build-shell:")),
+    ["build-shell:1", "build-shell:1"]);
+  assert.equal(r.service, "inactive", "activated profile must never restart after failed target build");
+});
+
 scenarioCase("targetinvalid: reject partial activation without stopping service", (r) => {
   assert.notEqual(r.status, 0);
   assert.match(r.output, /neplatny nebo castecny profil/);
@@ -701,6 +728,14 @@ for (const scenario of [
     assert.equal(r.events.includes("stop"), false,
       "do not back up one data store and restart the app on another");
     assert.deepEqual(r.backups, []);
+  });
+}
+
+for (const scenario of ["offenvpublic", "targetenvpublic"]) {
+  scenarioCase(scenario + ": root-owned NEXT_PUBLIC is rejected before stop", r => {
+    assert.notEqual(r.status, 0);
+    assert.match(r.output, /neoverene zdroje prostredi systemd/);
+    assert.equal(r.events.includes("stop"), false);
   });
 }
 
