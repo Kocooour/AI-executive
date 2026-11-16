@@ -90,12 +90,26 @@ function assertOperatorOwnedRegularFile(file, label, requireMode = null) {
 }
 
 // X509Certificate accepts the first PEM object and can ignore trailing blocks.
- // The CA/leaf inputs must be *only* a single public certificate; in particular
- // never allow a CA private key concatenated after rootCA.pem to be transferred.
+// The CA/leaf inputs must be *only* a single public certificate; in particular
+// never allow a CA private key concatenated after rootCA.pem to be transferred.
 export function assertSinglePublicCertificatePem(bytes, label) {
   const pem = bytes.toString("utf8").trim();
   if (!/^-----BEGIN CERTIFICATE-----\r?\n(?:[A-Za-z0-9+/=]+\r?\n)+-----END CERTIFICATE-----$/.test(pem)) {
     throw new Error(label + " must contain exactly one public PEM certificate, without private keys or extra objects");
+  }
+  return bytes;
+}
+
+// mkcert leaf keys can use PKCS#8, traditional RSA or SEC1 EC PEM encoding.
+ // Reject additional appended PEM material, including a hidden root CA key.
+export function assertSingleLeafPrivateKeyPem(bytes) {
+  const pem = bytes.toString("utf8").trim();
+  const types = ["PRIVATE KEY", "RSA PRIVATE KEY", "EC PRIVATE KEY"];
+  const single = types.some(type =>
+    new RegExp("^-----BEGIN " + type + "-----\\r?\\n(?:[A-Za-z0-9+/=]+\\r?\\n)+-----END " +
+      type + "-----$").test(pem));
+  if (!single) {
+    throw new Error("TLS private key must contain exactly one PEM private key and no extra objects");
   }
   return bytes;
 }
@@ -114,7 +128,8 @@ export function validateSafariGateExternalTls({ cert, key, ca }) {
   }
   const certPem = assertSinglePublicCertificatePem(
     assertOperatorOwnedRegularFile(cert, "TLS certificate"), "TLS certificate");
-  const keyPem = assertOperatorOwnedRegularFile(key, "TLS private key", 0o600);
+  const keyPem = assertSingleLeafPrivateKeyPem(
+    assertOperatorOwnedRegularFile(key, "TLS private key", 0o600));
   const caPem = assertSinglePublicCertificatePem(
     assertOperatorOwnedRegularFile(ca, "TLS root CA certificate"), "TLS root CA certificate");
   let leaf;
