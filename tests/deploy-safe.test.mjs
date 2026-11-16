@@ -70,6 +70,8 @@ function sandbox(scenario) {
     offenvport: "PORT",
     offenvnode: "NODE_ENV",
     offenvtelemetry: "NEXT_TELEMETRY_DISABLED",
+    offenvpublic: "NEXT_PUBLIC_LUMI_DESIGN_V1_PREVIEW",
+    targetenvpublic: "NEXT_PUBLIC_LUMI_DESIGN_V1_PREVIEW",
   })[scenario];
   if (overriddenKey) {
     const value = overriddenKey === "AI_EXECUTIVE_DATA_DIR"
