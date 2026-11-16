@@ -8,7 +8,8 @@ import {
 import os from "node:os";
 import path from "node:path";
 import {
-  assertSafariGatePlatform, parseSafariGateArguments,
+  assertSafariGatePlatform, assertSafariGateExpectedSha,
+  assertSinglePublicCertificatePem, parseSafariGateArguments,
   selectSafariGateTls, validateSafariGateExternalTls,
 } from "../scripts/safari-gate-external-tls.mjs";
 
@@ -56,13 +57,15 @@ test("Darwin and other non-Linux hosts fail closed before the launcher build", (
 });
 
 test("external TLS options are all-or-none, require explicit tunnel port, and cannot be duplicated", () => {
-  assert.deepEqual(parseSafariGateArguments([]), { requestedPort: null, externalTls: null });
+  assert.deepEqual(parseSafariGateArguments([]),
+    { requestedPort: null, expectedSha: null, externalTls: null });
   assert.deepEqual(parseSafariGateArguments(["--port", "3443"]),
-    { requestedPort: 3443, externalTls: null });
+    { requestedPort: 3443, expectedSha: null, externalTls: null });
   assert.deepEqual(parseSafariGateArguments([
     "--tls-cert", "/tmp/leaf.crt", "--port", "3443",
     "--tls-key", "/tmp/leaf.key", "--tls-ca", "/tmp/rootCA.pem",
-  ]), { requestedPort: 3443, externalTls: {
+    "--expected-sha", "A".repeat(40),
+  ]), { requestedPort: 3443, expectedSha: "a".repeat(40), externalTls: {
     cert: "/tmp/leaf.crt", key: "/tmp/leaf.key", ca: "/tmp/rootCA.pem",
   } });
   for (const args of [
@@ -72,6 +75,12 @@ test("external TLS options are all-or-none, require explicit tunnel port, and ca
   assert.throws(() => parseSafariGateArguments([
     "--tls-cert", "cert", "--tls-key", "key", "--tls-ca", "ca",
   ]), /--port is required/);
+  assert.throws(() => parseSafariGateArguments([
+    "--port", "3443", "--tls-cert", "/tmp/c", "--tls-key", "/tmp/k", "--tls-ca", "/tmp/a",
+  ]), /--expected-sha is mandatory/);
+  assert.throws(() => parseSafariGateArguments([
+    "--port", "3443", "--expected-sha", "short",
+  ]), /exact 40-character/);
   assert.throws(() => parseSafariGateArguments(["--port", "80"]), /--port/);
   assert.throws(() => parseSafariGateArguments(["--port", "3443", "--port", "3444"]), /usage/);
   assert.throws(() => parseSafariGateArguments(["--something", "value"]), /usage/);
@@ -122,4 +131,40 @@ test("external TLS refuses untrusted CA, missing IP SAN and CA private keys", t 
     /CA private key is prohibited/);
   assert.throws(() => validateSafariGateExternalTls({ ...options, key: otherCa.key }),
     /does not match/);
+});
+
+test("intended release SHA mismatch fails closed independent of a clean checkout", () => {
+  const sha = "a".repeat(40);
+  assert.doesNotThrow(() => assertSafariGateExpectedSha(sha, sha));
+  assert.doesNotThrow(() => assertSafariGateExpectedSha(sha, null)); // local mkcert mode
+  assert.throws(() => assertSafariGateExpectedSha("b".repeat(40), sha), /does not match/);
+  assert.throws(() => assertSafariGateExpectedSha(sha, "invalid"), /does not match/);
+});
+
+test("PEM input contains only one public certificate, never appended CA keys", t => {
+  const { root, ca, options } = tlsFixture(t);
+  const originalCa = readFileSync(options.ca);
+  assert.deepEqual(assertSinglePublicCertificatePem(originalCa, "CA"), originalCa);
+  const concatenatedCa = path.join(root, "root-with-key.pem");
+  writeFileSync(concatenatedCa, Buffer.concat([
+    originalCa, Buffer.from("\n"), readFileSync(ca.key),
+  ]));
+  assert.throws(() => validateSafariGateExternalTls({ ...options, ca: concatenatedCa }),
+    /exactly one public PEM certificate/);
+  const combinedLeaf = path.join(root, "leaf-with-ca-key.crt");
+  writeFileSync(combinedLeaf, Buffer.concat([
+    readFileSync(options.cert), Buffer.from("\n"), readFileSync(ca.key),
+  ]));
+  assert.throws(() => validateSafariGateExternalTls({ ...options, cert: combinedLeaf }),
+    /exactly one public PEM certificate/);
+  const extraCert = path.join(root, "root-with-another-cert.pem");
+  writeFileSync(extraCert, Buffer.concat([
+    originalCa, Buffer.from("\n"), readFileSync(options.cert),
+  ]));
+  assert.throws(() => validateSafariGateExternalTls({ ...options, ca: extraCert }),
+    /exactly one public PEM certificate/);
+  const trailingComment = path.join(root, "root-with-extra-text.pem");
+  writeFileSync(trailingComment, Buffer.concat([originalCa, Buffer.from("\nextra text\n")]));
+  assert.throws(() => validateSafariGateExternalTls({ ...options, ca: trailingComment }),
+    /exactly one public PEM certificate/);
 });
