@@ -90,7 +90,7 @@ test("target capture remains gated by the compiled v1 shell, not profile flags a
   const root = readFileSync(path.join(repo, "app/ui/lumi-app-root.tsx"), "utf8");
   const navigation = readFileSync(path.join(repo, "app/ui/navigation.ts"), "utf8");
   assert.match(navigation,
-    /mobileDesignV1Preview = process\\.env\\.NEXT_PUBLIC_LUMI_DESIGN_V1_PREVIEW === "1"/);
-  assert.match(root, /const targetCapture=Boolean\\([\\s\\S]*?targetPrivateNoteCreate&&mobileDesignV1Preview\\)/);
+    /mobileDesignV1Preview = process\.env\.NEXT_PUBLIC_LUMI_DESIGN_V1_PREVIEW === "1"/);
+  assert.match(root, /const targetCapture=Boolean\([\s\S]*?targetPrivateNoteCreate&&mobileDesignV1Preview\)/);
   assert.match(root, /v1Shell: mobileDesignV1Preview/);
 });
