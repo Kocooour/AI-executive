@@ -41,7 +41,7 @@ verify_loaded_environment_sources() {
   local files
   files="$(systemctl show "$SERVICE" -p EnvironmentFiles --value)" || return 1
   [ "$files" = "$ENVFILE (ignore_errors=no)" ] || return 1
-  if LC_ALL=C grep -Eq '^[[:space:]]*(export[[:space:]]+)?(NODE_ENV|PORT|NEXT_TELEMETRY_DISABLED|AI_EXECUTIVE_DATA_DIR)[[:space:]]*=' "$ENVFILE"; then
+  if LC_ALL=C grep -Eq '^[[:space:]]*(export[[:space:]]+)?(NODE_ENV|PORT|NEXT_TELEMETRY_DISABLED|AI_EXECUTIVE_DATA_DIR|NEXT_PUBLIC_[A-Za-z0-9_]+)[[:space:]]*=' "$ENVFILE"; then
     return 1
   else
     [ "$?" -eq 1 ]
@@ -341,15 +341,25 @@ on_exit() {
   fi
   if [ "$CHANGED" = 1 ]; then
     echo "Vracim pouze kod na $PREV; produkcni data neobnovuji." >&2
+    # Preserve the reviewed TARGET build helper across reset to a PREV commit
+    # that does not yet contain C29. The wrapper builds even rollback code with
+    # the validated profile; no operator NEXT_PUBLIC_* can bleed through.
+    local rollback_helper
+    rollback_helper="$(mktemp -d "$LOCK_DIR/build-XXXXXXXX")" || exit "$rc"
+    mkdir -m 0700 "$rollback_helper/scripts" "$rollback_helper/lib" || exit "$rc"
+    cp "$APP/scripts/target-build-profile.mjs" "$rollback_helper/scripts/" &&
+      cp "$APP/lib/target-personal-profile.ts" "$rollback_helper/lib/" || exit "$rc"
     (
       cd "$APP" &&
       git reset --hard "$PREV" &&
       umask 022 &&
       pnpm install --frozen-lockfile &&
-      pnpm build &&
+      /usr/bin/node "$rollback_helper/scripts/target-build-profile.mjs" --build "$TARGET_PROFILE" "$APP" &&
       fix_build_permissions
     )
-    if [ "$?" -ne 0 ]; then
+    local rollback_result="$?"
+    rm -rf --one-file-system -- "$rollback_helper"
+    if [ "$rollback_result" -ne 0 ]; then
       echo "KRITICKA CHYBA: rollback buildu selhal, sluzba zustava zastavena." >&2
       exit "$rc"
     fi
@@ -696,7 +706,8 @@ fi
 test "$(git rev-parse HEAD)" = "$TARGET"
 umask 022
 pnpm install --frozen-lockfile
-pnpm build
+# The verified profile controls the *compiled* shell. A restart cannot switch it.
+/usr/bin/node "$APP/scripts/target-build-profile.mjs" --build "$TARGET_PROFILE" "$APP"
 fix_build_permissions
 test -z "$(git status --porcelain)"
 
@@ -735,6 +746,9 @@ if ! verify_mail_sync_prestart "$BACKUP/before-mail.json" "$BACKUP/prestart-mail
 fi
 
 echo "=== START A PROVOZNI KONTROLY ==="
+# Catch build/profile/checkout drift before the first service start.
+/usr/bin/node "$APP/scripts/target-build-profile.mjs" --check "$TARGET_PROFILE" "$APP" ||
+  die "profil sestavene aplikace neodpovida schvalenemu profilu"
 if [ "$TARGET_PROFILE" = personal-v1 ]; then
   # Catch a changed root-only env before allowing the first target request.
   [ "$(/usr/bin/node "$PROFILE_TOOL" --check "$ENVFILE")" = personal-v1 ] ||
