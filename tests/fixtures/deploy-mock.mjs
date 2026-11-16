@@ -343,7 +343,8 @@ switch (name) {
       const spec = args[1] || "";
       if (!spec.startsWith(target + ":")) process.exit(8);
       const file = spec.slice(target.length + 1);
-      if (!["scripts/target-profile-env.mjs", "lib/target-personal-profile.ts"].includes(file))
+      if (!["scripts/target-profile-env.mjs", "scripts/target-build-profile.mjs",
+            "lib/target-personal-profile.ts"].includes(file))
         process.exit(8);
       process.stdout.write(fs.readFileSync(new URL("../../" + file, import.meta.url)));
       log("target-profile-source");
