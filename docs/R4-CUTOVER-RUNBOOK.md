@@ -541,9 +541,12 @@ and stop if server headroom is insufficient. No public/LAN listener is permitted
 **1. Mac — issue and trust a loopback certificate from the Mac's own mkcert CA.**
 Use Node 24 and mkcert on the Mac for certificate generation only. Install the
 local CA in the Mac trust store if needed. Keep its CA private key on the Mac,
-never on the server.
+never on the server. Run the Mac preparation and transfer blocks in
+the same shell; every block uses `set -eu` and **must stop at the first
+failed command**. Do not run subsequent blocks after a failure.
 
 ~~~sh
+set -eu
 brew install mkcert                 # if not already installed
 mkcert -install                     # Mac trust store; operator action
 umask 077
@@ -559,15 +562,26 @@ chmod 600 "$MAC_TLS_DIR/safari-local.key"
 on Linux.** Replace `<server>` with the actual SSH host. Do not transfer
 `rootCA-key.pem`, a whole mkcert directory, production `.env` or any live data.
 This step uses the `hermesadmin` SSH account.
+The remote directory creation **and its ownership/mode check must succeed**
+before `scp` is allowed to send any key material.
 
 ~~~sh
+set -eu
 SERVER="hermesadmin@<server>"
-ssh "$SERVER" 'umask 077; mkdir -m 700 "$HOME/lumi-safari-tls-456"'
+ssh "$SERVER" 'set -eu
+  dir="$HOME/lumi-safari-tls-456"
+  test ! -e "$dir" && test ! -L "$dir"
+  umask 077
+  mkdir -m 700 "$dir"
+  test "$(stat -c "%u:%a" "$dir")" = "$(id -u):700"'
 scp "$MAC_TLS_DIR/safari-local.crt" \
   "$MAC_TLS_DIR/safari-local.key" \
   "$MAC_TLS_DIR/rootCA.pem" \
   "$SERVER:lumi-safari-tls-456/"
-ssh "$SERVER" 'chmod 600 "$HOME/lumi-safari-tls-456/safari-local.key"'
+ssh "$SERVER" 'set -eu
+  dir="$HOME/lumi-safari-tls-456"
+  test "$(stat -c "%u:%a" "$dir")" = "$(id -u):700"
+  chmod 600 "$dir/safari-local.key"'
 ~~~
 
 Stop if the destination already exists, is shared, is not operator-owned or
@@ -587,17 +601,20 @@ have no runtime `.env*` files or unsafe `.next` entries. The helper performs
 its own sanitized exact-SHA Next build; do **not** run `pnpm build` separately.
 
 ~~~sh
+set -eu
 test "$(id -un)" = hermesadmin
 test "$(id -u)" -ne 0
 RELEASE_SHA="paste-the-approved-40-character-commit-sha"
 git clone git@github.com:Kocooour/AI-executive.git "$HOME/lumi-safari-checkout-456"
 cd "$HOME/lumi-safari-checkout-456"
 git checkout --detach "$RELEASE_SHA"
+test "$(git rev-parse HEAD)" = "$RELEASE_SHA"
 test -z "$(git status --porcelain)"
 pnpm install --frozen-lockfile
 TLS_DIR="$HOME/lumi-safari-tls-456"
 env -i HOME="$HOME" PATH="$PATH" \
   node scripts/safari-gate-instance.mjs --port 3443 \
+    --expected-sha "$RELEASE_SHA" \
     --tls-cert "$TLS_DIR/safari-local.crt" \
     --tls-key "$TLS_DIR/safari-local.key" \
     --tls-ca "$TLS_DIR/rootCA.pem"
@@ -610,12 +627,17 @@ Area **Tvoření**. Capture the exact checkout SHA and printed test-only run
 directory. A successful smoke is **not** the independent manual Safari witness.
 On a failed smoke, stop; do not weaken TLS validation or switch to production
 data. The launcher must be invoked from a checkout with its dependencies
-already installed; it does not fetch packages during build.
+already installed; it does not fetch packages during build. The explicit
+`--expected-sha` is mandatory with external TLS: a clean checkout of the
+wrong SHA is not a valid release witness, and the launcher rechecks this value
+before the build and after the build.
 
 **4. Mac — SSH tunnel and Safari.** In a separate Mac terminal:
 
 ~~~sh
-ssh -N -L 127.0.0.1:3443:127.0.0.1:3443 "$SERVER"
+set -eu
+SERVER="hermesadmin@<server>"
+ssh -o ExitOnForwardFailure=yes -N -L 127.0.0.1:3443:127.0.0.1:3443 "$SERVER"
 ~~~
 
 The **local and remote tunnel ports must be identical** to the launcher
