@@ -347,8 +347,10 @@ on_exit() {
     local rollback_helper
     rollback_helper="$(mktemp -d "$LOCK_DIR/build-XXXXXXXX")" || exit "$rc"
     mkdir -m 0700 "$rollback_helper/scripts" "$rollback_helper/lib" || exit "$rc"
-    cp "$APP/scripts/target-build-profile.mjs" "$rollback_helper/scripts/" &&
-      cp "$APP/lib/target-personal-profile.ts" "$rollback_helper/lib/" || exit "$rc"
+    # Load from the reviewed target object, even if fast-forward failed before
+    # its files reached the checkout.
+    git show "$TARGET:scripts/target-build-profile.mjs" > "$rollback_helper/scripts/target-build-profile.mjs" &&
+      git show "$TARGET:lib/target-personal-profile.ts" > "$rollback_helper/lib/target-personal-profile.ts" || exit "$rc"
     (
       cd "$APP" &&
       git reset --hard "$PREV" &&
