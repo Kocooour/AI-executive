@@ -14,23 +14,26 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   SAFARI_GATE_OWNER, assertSafeGateTmpRoot, assertIsolatedGateRunDirectory,
-  assertNoGateRuntimeEnvFiles, assertSafeGateBuildOutput, buildSafariGateEnvironment, validateGatePort,
+  assertNoGateRuntimeEnvFiles, assertSafeGateBuildOutput, buildSafariGateEnvironment,
 } from "./safari-gate-instance-lib.mjs";
 import {
   SAFARI_GATE_PREFLIGHT_PATH, createSafariGateTlsProxy, verifySafariGateHttps,
   safariGateBrowserCookieName,
 } from "./safari-gate-https.mjs";
+import {
+  assertSafariGatePlatform, assertSafariGateExpectedSha, parseSafariGateArguments,
+  selectSafariGateTls,
+} from "./safari-gate-external-tls.mjs";
 
-const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const args = process.argv.slice(2);
-let requestedPort = null;
-if (args.length) {
-  if (args.length !== 2 || args[0] !== "--port" ||
-      !/^[0-9]+$/.test(args[1])) {
-    throw new Error("usage: node scripts/safari-gate-instance.mjs [--port 3210]");
-  }
-  requestedPort = validateGatePort(Number(args[1]));
+// Fail before any checkout read, build, process launch or temporary data write.
+assertSafariGatePlatform();
+if (typeof process.getuid !== "function" || process.getuid() === 0 ||
+    os.userInfo().username === "ai-executive") {
+  throw new Error("Safari gate must run as a non-root operator, never as root or ai-executive");
 }
+const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const { requestedPort, externalTls, expectedSha } =
+  parseSafariGateArguments(process.argv.slice(2));
 
 const pathEnv = process.env.PATH || "/usr/bin:/bin";
 const processEnv = { PATH: pathEnv, HOME: process.env.HOME || os.homedir() };
@@ -123,6 +126,7 @@ async function main() {
       cwd: repo, env: processEnv, encoding: "utf8",
     }).trim();
     if (!/^[0-9a-f]{40}$/.test(sha)) throw new Error("invalid checkout SHA");
+    assertSafariGateExpectedSha(sha, expectedSha);
     const dirty = execFileSync("git", ["status", "--porcelain"], {
       cwd: repo, env: processEnv, encoding: "utf8",
     }).trim();
@@ -139,12 +143,19 @@ async function main() {
     if (buildScript !== "next build") {
       throw new Error("unsupported build script; inspect before offline Safari gate");
     }
-    try {
-      execFileSync("mkcert", ["-version"], {
-        env: processEnv, stdio: "ignore",
-      });
-    } catch {
-      throw new Error("mkcert missing: install and trust it locally (brew install mkcert; mkcert -install)");
+    // External certs are validated before the build, with no mkcert invocation.
+    const suppliedTls = externalTls ? selectSafariGateTls({
+      externalTls,
+      makeLocalTls: () => { throw new Error("external TLS must never run mkcert"); },
+    }) : null;
+    if (!suppliedTls) {
+      try {
+        execFileSync("mkcert", ["-version"], {
+          env: processEnv, stdio: "ignore",
+        });
+      } catch {
+        throw new Error("mkcert missing: install and trust it locally before launch");
+      }
     }
 
     // Random ports isolate browser origin storage. Cookies are host-scoped,
@@ -203,18 +214,27 @@ async function main() {
     const postBuildDirty = execFileSync("git", ["status", "--porcelain"], {
       cwd: repo, env: processEnv, encoding: "utf8",
     }).trim();
+    assertSafariGateExpectedSha(builtSha, expectedSha);
     if (builtSha !== sha || postBuildDirty ||
         !existsSync(path.join(repo, ".next", "BUILD_ID"))) {
       throw new Error("build checkout SHA changed, is dirty or has no BUILD_ID");
     }
-    const cert = path.join(runDir, "safari-local.crt");
-    const key = path.join(runDir, "safari-local.key");
-    // mkcert uses only the operator's local CA; the script never installs a
-    // global CA, alters the production auth route or exposes a LAN listener.
-    execFileSync("mkcert", [
-      "-cert-file", cert, "-key-file", key, "127.0.0.1", "localhost",
-    ], { cwd: runDir, env: processEnv, stdio: "ignore" });
-    chmodSync(key, 0o600);
+    const tls = suppliedTls ?? selectSafariGateTls({
+      externalTls: null,
+      makeLocalTls: () => {
+        const cert = path.join(runDir, "safari-local.crt");
+        const key = path.join(runDir, "safari-local.key");
+        // Local Linux mode retains the existing mkcert behavior.
+        execFileSync("mkcert", [
+          "-cert-file", cert, "-key-file", key, "127.0.0.1", "localhost",
+        ], { cwd: runDir, env: processEnv, stdio: "ignore" });
+        chmodSync(key, 0o600);
+        const caRoot = execFileSync("mkcert", ["-CAROOT"], {
+          cwd: runDir, env: processEnv, encoding: "utf8",
+        }).trim();
+        return { cert, key, ca: readFileSync(path.join(caRoot, "rootCA.pem")) };
+      },
+    });
 
     const internalPort = await availableLoopbackPort(port);
     next = spawn(process.execPath, [
@@ -232,19 +252,15 @@ async function main() {
     const browserCookieName = safariGateBrowserCookieName(
       randomBytes(16).toString("hex"));
     proxy = createSafariGateTlsProxy(
-      cert, key, port, internalPort, browserCookieName);
+      tls.cert, tls.key, port, internalPort, browserCookieName);
     await new Promise((resolve, reject) => {
       proxy.once("error", reject);
       proxy.listen(port, "127.0.0.1", resolve);
     });
     // Fail closed before handing a URL to Safari: verify CA-authenticated TLS,
     // the unchanged Secure owner cookie and the private Tvoření Area endpoint.
-    const caRoot = execFileSync("mkcert", ["-CAROOT"], {
-      cwd: runDir, env: processEnv, encoding: "utf8",
-    }).trim();
     await verifySafariGateHttps({
-      port, ca: readFileSync(path.join(caRoot, "rootCA.pem")),
-      password, browserCookieName,
+      port, ca: tls.ca, password, browserCookieName,
     });
     if (stopping) throw new Error("interrupted");
     process.stdout.write(

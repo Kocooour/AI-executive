@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { test } from "node:test";
 import {
   chmodSync, mkdirSync, mkdtempSync, rmSync, symlinkSync,
-  writeFileSync, readFileSync,
+  writeFileSync, readFileSync, existsSync,
 } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -201,16 +202,87 @@ test("Next build output refuses root and nested symlinks without following them"
   assert.doesNotThrow(() => assertSafeGateBuildOutput(cwd));
 });
 
-test("runbook never executes an unisolated operator-shell build", () => {
+test("runbook uses an isolated Linux build and exact matching SSH tunnel port", () => {
   const runbook = readFileSync(path.resolve(
     import.meta.dirname, "../docs/R4-CUTOVER-RUNBOOK.md"), "utf8");
-  const helper = runbook.split("**Local Mac staging helper (#454):**")[1];
-  assert.ok(helper, "manual Safari helper instructions must exist");
-  const example = helper.split("~~~sh")[1]?.split("~~~")[0];
-  assert.ok(example, "helper shell commands must be documented");
-  assert.match(example, /^pnpm install --frozen-lockfile$/m);
-  assert.doesNotMatch(example, /^\s*pnpm build(?:\s|$)/m);
-  assert.match(example, /^node scripts\/safari-gate-instance\.mjs$/m);
+  const helper = runbook.split("### 3. Manual Safari through a disposable Linux instance")[1]
+    ?.split("**Do once per release SHA, not once per PR.**")[0];
+  assert.ok(helper, "Linux Safari helper instructions must exist");
+  const linux = helper.split("**3. Linux")[1]?.split("~~~sh")[1]?.split("~~~")[0];
+  assert.ok(linux, "Linux helper shell commands must be documented");
+  assert.match(linux, /^set -eu$/m);
+  assert.match(linux, /^test "\$\(git rev-parse HEAD\)" = "\$RELEASE_SHA"$/m);
+  assert.match(linux, /^pnpm install --frozen-lockfile$/m);
+  assert.doesNotMatch(linux, /^\s*pnpm build(?:\s|$)/m);
+  assert.match(linux, /node scripts\/safari-gate-instance\.mjs --port 3443/);
+  assert.match(linux, /--tls-cert/);
+  assert.match(linux, /--tls-key/);
+  assert.match(linux, /--tls-ca/);
+  assert.match(linux, /--expected-sha "\$RELEASE_SHA"/);
+  assert.match(helper, /ssh -o ExitOnForwardFailure=yes -N -L 127\.0\.0\.1:3443:127\.0\.0\.1:3443/);
+  assert.match(helper, /Never|NEVER|never/);
+  const transfer = helper.split("**2. Transfer")[1]?.split("~~~sh")[1]?.split("~~~")[0];
+  assert.ok(transfer, "Mac transfer script exists");
+  assert.match(transfer, /^set -eu$/m);
+  assert.match(transfer, /mkdir -m 700/);
+  assert.match(transfer, /stat -c "%u:%a"/);
+  const transferred = helper.split('scp "$MAC_TLS_DIR/safari-local.crt"')[1]
+    ?.split('ssh "$SERVER"')[0];
+  assert.ok(transferred, "copy only the scoped TLS files");
+  assert.doesNotMatch(transferred, /rootCA-key\.pem/);
+});
+
+
+
+test("a failed detached release checkout cannot continue to package install", t => {
+  const { root } = fixture(t);
+  const runbook = readFileSync(path.resolve(
+    import.meta.dirname, "../docs/R4-CUTOVER-RUNBOOK.md"), "utf8");
+  const helper = runbook.split("### 3. Manual Safari through a disposable Linux instance")[1];
+  const linux = helper?.split("**3. Linux")[1]?.split("~~~sh")[1]?.split("~~~")[0];
+  assert.ok(linux);
+  const start = linux.indexOf('git checkout --detach "$RELEASE_SHA"');
+  const end = linux.indexOf('TLS_DIR=', start);
+  assert.ok(start >= 0 && end > start);
+  const checkoutPart = linux.slice(start, end);
+  const bin = path.join(root, "checkout-bin");
+  mkdirSync(bin);
+  const sentinel = path.join(root, "pnpm-was-called");
+  writeFileSync(path.join(bin, "git"), "#!/bin/sh\\nexit 23\\n".replaceAll("\\n", "\n"));
+  writeFileSync(path.join(bin, "pnpm"), "#!/bin/sh\\ntouch \"$GUARD_SENTINEL\"\\n".replaceAll("\\n", "\n"));
+  chmodSync(path.join(bin, "git"), 0o755);
+  chmodSync(path.join(bin, "pnpm"), 0o755);
+  const script = 'set -eu\\nRELEASE_SHA="' + "a".repeat(40) +
+    '"\\n' + checkoutPart;
+  const result = spawnSync("bash", ["-c", script.replaceAll("\\n", "\n")], {
+    env: { ...process.env, PATH: bin + path.delimiter + process.env.PATH,
+      GUARD_SENTINEL: sentinel }, encoding: "utf8",
+  });
+  assert.notEqual(result.status, 0, "failed checkout must abort");
+  assert.equal(existsSync(sentinel), false, "pnpm may not run after checkout failure");
+});
+
+test("a failed SSH TLS-directory setup prevents scp from running", t => {
+  const { root } = fixture(t);
+  const runbook = readFileSync(path.resolve(
+    import.meta.dirname, "../docs/R4-CUTOVER-RUNBOOK.md"), "utf8");
+  const helper = runbook.split("### 3. Manual Safari through a disposable Linux instance")[1];
+  const transfer = helper?.split("**2. Transfer")[1]?.split("~~~sh")[1]?.split("~~~")[0];
+  assert.ok(transfer);
+  const bin = path.join(root, "bin");
+  mkdirSync(bin);
+  const sentinel = path.join(root, "scp-was-called");
+  writeFileSync(path.join(bin, "ssh"), "#!/bin/sh\\nexit 31\\n".replaceAll("\\n", "\n"));
+  writeFileSync(path.join(bin, "scp"), "#!/bin/sh\\ntouch \"$GUARD_SENTINEL\"\\n".replaceAll("\\n", "\n"));
+  chmodSync(path.join(bin, "ssh"), 0o755);
+  chmodSync(path.join(bin, "scp"), 0o755);
+  const result = spawnSync("bash", ["-c", transfer], {
+    env: { ...process.env, PATH: bin + path.delimiter + process.env.PATH,
+      MAC_TLS_DIR: root, GUARD_SENTINEL: sentinel },
+    encoding: "utf8",
+  });
+  assert.notEqual(result.status, 0, "failed TLS directory setup must stop the script");
+  assert.equal(existsSync(sentinel), false, "scp may not run after a failed ssh");
 });
 
 test("browser preflight refuses any persistent website state before opening Lumi", () => {
@@ -241,6 +313,8 @@ test("launcher rebuilds from clean SHA and HTTPS probe never disables trust", ()
   assert.ok(launcher.includes('npm_config_offline: "true"'));
   assert.doesNotMatch(launcher, /spawnSync\("pnpm"/);
   assert.ok(launcher.includes('if (builtSha !== sha || postBuildDirty ||'));
+  assert.ok(launcher.includes("assertSafariGateExpectedSha(sha, expectedSha)"));
+  assert.ok(launcher.includes("assertSafariGateExpectedSha(builtSha, expectedSha)"));
   assert.ok(launcher.includes("verifySafariGateHttps({"));
   assert.ok(launcher.includes("SAFARI_GATE_PREFLIGHT_PATH"));
   assert.ok(launcher.includes("requestedPort ?? await availableLoopbackPort()"));

@@ -520,95 +520,158 @@ still requires the **independent Safari witness** in section 3 and the
 remaining exact-SHA release gates.
 
 
-### 3. Manual Safari on the exact-SHA staging instance (macOS or iOS)
+### 3. Manual Safari through a disposable Linux instance and SSH tunnel (#456)
 
+**Linux-only target store:** The target staging store uses Linux-specific pinned
+file-descriptor semantics (`/proc/self/fd/N`). macOS cannot run the target store
+safely. Do **not** port, weaken or bypass the pinned/journal code. Use a clean
+single-use instance on the Linux server, running **as hermesadmin**, not as
+`root` or the `ai-executive` production service account. Its new `lumi-e2e-*`
+0700 directory lives under that user's `os.tmpdir()`; no live store, service,
+credential or production environment is touched. Both Next and the TLS proxy
+listen **only on 127.0.0.1**. Safari on the Mac reaches the proxy only through
+an SSH local tunnel. This is the manual Safari release gate, not a deployment
+or authorization to enable target flags in production.
 
-**Local Mac staging helper (#454):** Use this for the manual macOS Safari
-witness on the exact proposed release SHA. This is a throwaway, loopback-only
-instance, not production and not a deployment. An iPhone cannot reach the
-Mac's 127.0.0.1 address; iOS requires a separately approved, isolated,
-trusted-HTTPS staging endpoint. Do not expose this helper on the LAN.
+**Resource caution:** This instance performs a fresh isolated production Next
+build on the **production Linux server**. The build can temporarily consume
+significant CPU and RAM; choose an appropriate low-load maintenance window
+and stop if server headroom is insufficient. No public/LAN listener is permitted.
 
-On the Mac, use a **clean checkout of the exact SHA** with no runtime
-`.env`, `.env.local`, `.env.production` or `.env.*.local` files anywhere in
-the checkout root. Next can otherwise read those settings during build or
-`next start`. Never copy live settings into the checkout. The helper builds
-the exact clean checkout inside the launcher with test-only environment variables
-by invoking the **already installed Next CLI via Node**, not pnpm/Corepack;
-pre-existing `.next` output is never accepted as release-SHA evidence.
-No Corepack cache or package-manager download is needed during launch.
+**1. Mac — issue and trust a loopback certificate from the Mac's own mkcert CA.**
+Use Node 24 and mkcert on the Mac for certificate generation only. Install the
+local CA in the Mac trust store if needed. Keep its CA private key on the Mac,
+never on the server. Run the Mac preparation and transfer blocks in
+the same shell; every block uses `set -eu` and **must stop at the first
+failed command**. Do not run subsequent blocks after a failure.
 
 ~~~sh
-RELEASE_SHA="paste-the-approved-40-character-commit-sha"
-git checkout --detach "$RELEASE_SHA"
-git status --porcelain       # must be empty
-pnpm install --frozen-lockfile
-# Do NOT run pnpm build here: it could inherit real shell credentials.
-# The helper runs its own guarded, test-only Next build.
-# First-time local certificate setup (operator action, NOT performed by script):
-brew install mkcert
-mkcert -install
-node scripts/safari-gate-instance.mjs
-# Optional fixed port: node scripts/safari-gate-instance.mjs --port 3210
+set -eu
+brew install mkcert                 # if not already installed
+mkcert -install                     # Mac trust store; operator action
+umask 077
+MAC_TLS_DIR="$(mktemp -d)"
+mkcert -cert-file "$MAC_TLS_DIR/safari-local.crt" \
+  -key-file "$MAC_TLS_DIR/safari-local.key" 127.0.0.1 localhost
+cp "$(mkcert -CAROOT)/rootCA.pem" "$MAC_TLS_DIR/rootCA.pem"
+chmod 600 "$MAC_TLS_DIR/safari-local.key"
+# NEVER copy rootCA-key.pem to the server.
 ~~~
 
-The script requires Node 24, installed dependencies, and trusted `mkcert`.
-It refuses a dirty checkout, runtime env files, unsafe paths or any symlink
-inside an existing ignored `.next` directory, and performs
-a fresh `node node_modules/next/dist/bin/next build` with synthetic settings,
-disables Corepack/package-manager network fetches, rechecks SHA and worktree,
-and refuses to start unless the new build succeeds. It creates a new owner-only 0700 `lumi-e2e-*` directory
-under the system temporary root, provisions the synthetic `e2e-owner`
-target store with private Area **Tvoření**, initializes owner-session
-revocation only in its own data directory, and starts `next start`
-bound to 127.0.0.1 with exactly the canonical `personal-v1` target flags.
-Other env values are isolated test credentials and local-only safeguards;
-no production env is inherited by the build or server. The HTTPS proxy also
-binds only 127.0.0.1 and keeps production `Secure; HttpOnly; SameSite=Strict`
-login cookie semantics without changing auth code. To avoid sharing a
-host-scoped cookie across ports, it translates the owner cookie to a random
-`__Host-lumi_safari_gate_*` browser cookie **specific to that run** and
-forwards only this run's cookie back to Next. Old localhost cookies are
-ignored, never deleted or forwarded; changing ports alone does not isolate
-cookies. Before printing credentials the helper performs
-a CA-verified HTTPS smoke: unauthenticated status, owner login, secure cookie,
-authenticated status, and private `Tvoření` Area fetch.
+**2. Transfer only three explicit files into a NEW operator-owned 0700 directory
+on Linux.** Replace `<server>` with the actual SSH host. Do not transfer
+`rootCA-key.pem`, a whole mkcert directory, production `.env` or any live data.
+This step uses the `hermesadmin` SSH account.
+The remote directory creation **and its ownership/mode check must succeed**
+before `scp` is allowed to send any key material.
 
-Open the **printed Safari gate URL** in Safari (it ends with
-`/__lumi_safari_gate__/fresh-origin`). Without `--port`, each run receives
-an OS-selected random loopback HTTPS port to isolate IndexedDB and other
-origin-scoped browser storage. The per-run browser cookie name independently
-isolates owner sessions. With `--port`, the same explicit origin may be reused.
-The initial page checks IndexedDB, Cache Storage, local/session storage and
-service-worker registrations. Other cookies on the same loopback host are
-harmless because the proxy does not forward them. Proceed **only** when the
-page reports a clean
-origin and the Inspector logs `LUMI_SAFARI_GATE_ORIGIN_CLEAN`.
-If it reports reused data or cannot check the storage, **STOP**: remove
-website data for this exact local test origin via Safari → Settings →
-Privacy → Manage Website Data, close prior tabs and repeat. Do not clear
-production Lumi site data, and do not treat an inconclusive preflight as PASS.
+~~~sh
+set -eu
+SERVER="hermesadmin@<server>"
+ssh "$SERVER" 'set -eu
+  dir="$HOME/lumi-safari-tls-456"
+  test ! -e "$dir" && test ! -L "$dir"
+  umask 077
+  mkdir -m 700 "$dir"
+  test "$(stat -c "%u:%a" "$dir")" = "$(id -u):700"'
+scp "$MAC_TLS_DIR/safari-local.crt" \
+  "$MAC_TLS_DIR/safari-local.key" \
+  "$MAC_TLS_DIR/rootCA.pem" \
+  "$SERVER:lumi-safari-tls-456/"
+ssh "$SERVER" 'set -eu
+  dir="$HOME/lumi-safari-tls-456"
+  test "$(stat -c "%u:%a" "$dir")" = "$(id -u):700"
+  chmod 600 "$dir/safari-local.key"'
+~~~
 
-Verify the TLS certificate is **trusted without a browser warning**; click
-**Pokračovat do testovací Lumi**, then sign in with the displayed one-time
-test password. Confirm Quick Capture offers the synthetic private Area
-**Tvoření** before proceeding with the BFCache steps below. Record the
-printed Git SHA and run directory in the evidence template. The helper's
-successful HTTPS smoke is **not** the independent manual Safari witness.
+Stop if the destination already exists, is shared, is not operator-owned or
+cannot be verified as 0700. The launcher rejects non-regular or foreign-owned
+TLS files, symlinks, keys without **exact** 0600 permissions, certificates
+without IP SAN `127.0.0.1`, certificates not signed by the supplied
+`rootCA.pem`, and CA private keys even when renamed. All three TLS options
+must be provided together, with the explicit `--port`. In this mode it does
+not invoke mkcert. With no TLS options, its original local **Linux** mkcert
+mode remains available, but the Mac is never a valid target-store host.
 
-On macOS Safari, go to **Safari → Settings → Advanced** and enable
-**Show features for web developers** (older versions: **Show Develop menu**),
-then open **Develop → Show Web Inspector**. In the Inspector's **Sources**
-tab choose **+ → Inspector Bootstrap Script**, insert the script shown in
-step 2 below, enable it and preserve console history.
+**3. Linux — clean disposable checkout, exact SHA, and isolated start.**
+Run in the operator's home directory, **never in `/opt/ai-executive`**.
+Use `hermesadmin`, never root or the production `ai-executive` account.
+Do not source, copy or pass production environment files. The repository must
+have no runtime `.env*` files or unsafe `.next` entries. The helper performs
+its own sanitized exact-SHA Next build; do **not** run `pnpm build` separately.
 
-To stop, press **Ctrl+C** in the terminal running the helper. The run
-directory intentionally remains for operator inspection; after preserving
-only redacted evidence, delete **only the exact printed `lumi-e2e-*` run
-directory**, for example `rm -r "/exact/printed/tmp/lumi-e2e-XXXXXX"`.
-Never use a wildcard or delete a real data directory. The certificate, test credentials and synthetic SQLite files must not be
-reused for another SHA. Do not submit the printed test password to a PR or issue.
+~~~sh
+set -eu
+test "$(id -un)" = hermesadmin
+test "$(id -u)" -ne 0
+RELEASE_SHA="paste-the-approved-40-character-commit-sha"
+git clone git@github.com:Kocooour/AI-executive.git "$HOME/lumi-safari-checkout-456"
+cd "$HOME/lumi-safari-checkout-456"
+git checkout --detach "$RELEASE_SHA"
+test "$(git rev-parse HEAD)" = "$RELEASE_SHA"
+test -z "$(git status --porcelain)"
+pnpm install --frozen-lockfile
+TLS_DIR="$HOME/lumi-safari-tls-456"
+env -i HOME="$HOME" PATH="$PATH" \
+  node scripts/safari-gate-instance.mjs --port 3443 \
+    --expected-sha "$RELEASE_SHA" \
+    --tls-cert "$TLS_DIR/safari-local.crt" \
+    --tls-key "$TLS_DIR/safari-local.key" \
+    --tls-ca "$TLS_DIR/rootCA.pem"
+~~~
 
+Leave this terminal running. It must report **`HTTPS owner login + private
+Area smoke: PASS`** before handing the URL to Safari; the smoke verifies the
+CA-authenticated certificate, owner login/cookie isolation and synthetic private
+Area **Tvoření**. Capture the exact checkout SHA and printed test-only run
+directory. A successful smoke is **not** the independent manual Safari witness.
+On a failed smoke, stop; do not weaken TLS validation or switch to production
+data. The launcher must be invoked from a checkout with its dependencies
+already installed; it does not fetch packages during build. The explicit
+`--expected-sha` is mandatory with external TLS: a clean checkout of the
+wrong SHA is not a valid release witness, and the launcher rechecks this value
+before the build and after the build.
+
+**4. Mac — SSH tunnel and Safari.** In a separate Mac terminal:
+
+~~~sh
+set -eu
+SERVER="hermesadmin@<server>"
+ssh -o ExitOnForwardFailure=yes -N -L 127.0.0.1:3443:127.0.0.1:3443 "$SERVER"
+~~~
+
+The **local and remote tunnel ports must be identical** to the launcher
+`--port 3443`, and the Mac endpoint must stay on `127.0.0.1`. Open the
+**printed** `https://127.0.0.1:3443/__lumi_safari_gate__/fresh-origin`
+in macOS Safari, with the tunnel active. Safari must trust the mkcert leaf
+**without a warning**. A previously used origin can contain IndexedDB,
+Cache Storage or service-worker state; the browser preflight must report
+`LUMI_SAFARI_GATE_ORIGIN_CLEAN`. Otherwise STOP, remove **only the test
+origin's** website data in Safari Settings → Privacy → Manage Website Data,
+close previous test tabs and repeat. Never clear production Lumi data.
+The per-run `__Host-lumi_safari_gate_*` cookie prevents cross-run reuse even
+though cookies are host-scoped rather than port-scoped. Only after the clean
+origin check, use **Pokračovat do testovací Lumi**, the printed one-time
+password and Quick Capture's private Area **Tvoření**.
+
+On macOS Safari go to **Safari → Settings → Advanced**, enable **Show
+features for web developers**, then open **Develop → Show Web Inspector**.
+In **Sources → + → Inspector Bootstrap Script** install the instrument
+described in step 2 below and preserve console history before navigation.
+An iPhone cannot reach the Mac's 127.0.0.1 tunnel automatically; iOS needs
+a separately reviewed staging arrangement.
+
+**5. Stop and delete only the exact disposable paths.** Press **Ctrl+C**
+in the Linux helper terminal and stop the Mac `ssh -N` tunnel. Preserve
+redacted release evidence first; never publish the one-time password,
+private key or test-only private data. The helper intentionally **retains**
+its printed `lumi-e2e-*` run directory, which the operator must inspect and
+remove by its **exact printed absolute path** (no wildcard). Remove only
+the dedicated `$HOME/lumi-safari-tls-456` directory and
+`$HOME/lumi-safari-checkout-456` clone after verifying them, and delete
+`$MAC_TLS_DIR` on the Mac. Do not delete any other files, saved backup,
+service state, or production data. A fresh run must use new test credentials
+and a newly verified checkout.
 
 **Do once per release SHA, not once per PR.** Use test-only data and an
 isolated authenticated staging instance, never production data. Record
