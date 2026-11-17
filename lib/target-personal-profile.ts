@@ -91,6 +91,12 @@ export const TARGET_PERSONAL_V1_EXCLUDED_PREFIXES:readonly {readonly prefix:stri
   {prefix:"AI_EXECUTIVE_HUMANWIKI_",reason:"HumanWiki is a separate, out-of-scope integration."},
 ];
 
+/** Canonical Next.js compile-time shell contract for the selected release profile.
+ * Off builds must delete this variable rather than inherit operator shell state. */
+export const TARGET_PERSONAL_V1_BUILD_ENV = Object.freeze({
+  NEXT_PUBLIC_LUMI_DESIGN_V1_PREVIEW: "1",
+} as const);
+
 /** Env for an isolated instance: every profile flag set to "true". */
 export function targetPersonalV1Env():Record<string,"true">{
   return Object.fromEntries(TARGET_PERSONAL_V1_PROFILE.map(name=>[name,"true" as const]));

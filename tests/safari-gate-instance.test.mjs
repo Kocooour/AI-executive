@@ -16,11 +16,13 @@ import {
 import {
   SAFARI_GATE_PREFLIGHT_PATH, safariGatePreflightHtml,
   safariGateBrowserCookieName, gateOwnerCookieFromBrowserHeader,
-  gateSetCookiesForBrowser,
+  gateSetCookiesForBrowser, safariGateV1PageChunkPath,
+  assertSafariGateV1ShellChunk, verifySafariGateV1ShellBundle,
 } from "../scripts/safari-gate-https.mjs";
 import {
   TARGET_PERSONAL_V1_PROFILE, TARGET_PERSONAL_V1_EXCLUDED,
   TARGET_PERSONAL_V1_REQUIRED_SETTINGS, targetPersonalV1Env,
+  TARGET_PERSONAL_V1_BUILD_ENV,
 } from "../lib/target-personal-profile.ts";
 
 function fixture(t) {
@@ -126,6 +128,9 @@ test("local server has only the exact personal-v1 flags and three target setting
     sessionSecret: "synthetic-session-secret-at-least-32-characters",
     port: 3210,
   });
+  assert.deepEqual(Object.fromEntries(Object.entries(env).filter(([name]) =>
+    name.startsWith("NEXT_PUBLIC_"))), TARGET_PERSONAL_V1_BUILD_ENV,
+    "Safari builds the same v1 shell as personal-v1 deployment");
   const targetNames = Object.keys(env).filter(name => name.startsWith("AI_EXECUTIVE_TARGET_"));
   assert.deepEqual(new Set(targetNames), new Set([
     ...TARGET_PERSONAL_V1_PROFILE,
@@ -157,6 +162,56 @@ test("local server has only the exact personal-v1 flags and three target setting
 function runDirForProfile(tmpRoot) {
   return path.join(tmpRoot, "lumi-e2e-synthetic");
 }
+
+test("Safari shell gate selects precisely one page chunk from SSR auth placeholder", () => {
+  // Authenticated root still serves the hydration placeholder before React is ready.
+  const html = '<div data-auth-state="loading"></div>' +
+    '<script src="/_next/static/chunks/webpack-abcd.js"></script>' +
+    '<script async src="/_next/static/chunks/app/page-abc123.js"></script>';
+  assert.equal(safariGateV1PageChunkPath(html), "/_next/static/chunks/app/page-abc123.js");
+  assert.throws(() => safariGateV1PageChunkPath("<div>Loading...</div>"), /exactly one/);
+  assert.throws(() => safariGateV1PageChunkPath(html +
+    '<script src="/_next/static/chunks/app/page-def456.js"></script>'), /exactly one/);
+  assert.throws(() => safariGateV1PageChunkPath(
+    '<script src="/_next/static/chunks/app/page-abc123.js?wrong=1"></script>'), /exactly one/);
+  assert.throws(() => safariGateV1PageChunkPath(
+    '<script src="/_next/static/chunks/app/page-../../private.js"></script>'), /exactly one/);
+});
+
+test("Safari HTTPS shell smoke accepts only a genuine v1 app/page bundle", async () => {
+  const pageChunk = "/_next/static/chunks/app/page-abc123.js";
+  const ownerHtml = '<div>Sign-in loading...</div>' +
+    '<script src="/_next/static/chunks/webpack-1.js"></script>' +
+    '<script src="' + pageChunk + '" async></script>';
+  const v1Bundle = '(()=>{return {"data-design-system":"lumi-v1"};})();';
+  const requests = [];
+  const request = async (endpoint, options) => {
+    requests.push({ endpoint, options });
+    return endpoint === "/" ?
+      { status: 200, headers: { "content-type": "text/html; charset=utf-8" }, body: ownerHtml } :
+      { status: 200, headers: { "content-type": "application/javascript" }, body: v1Bundle };
+  };
+  await verifySafariGateV1ShellBundle(request, "gate-cookie=owner");
+  assert.deepEqual(requests.map(r => r.endpoint), ["/", pageChunk]);
+  assert.deepEqual(requests.map(r => r.options.headers.cookie),
+    ["gate-cookie=owner", "gate-cookie=owner"]);
+  assert.equal(requests[1].options.maxResponseBytes, 4 * 1024 * 1024);
+  assert.doesNotThrow(() => assertSafariGateV1ShellChunk(v1Bundle));
+  assert.throws(() => assertSafariGateV1ShellChunk('{"data-workspace-tone":"personal"}'),
+    /v1 shell/, "off build must fail without the compiled marker");
+  await assert.rejects(() => verifySafariGateV1ShellBundle(async endpoint =>
+    endpoint === "/" ?
+      { status: 200, headers: { "content-type": "text/html" }, body: ownerHtml } :
+      { status: 200, headers: { "content-type": "application/javascript" },
+        body: '{"data-workspace-tone":"personal"}' }, "gate-cookie=owner"), /v1 shell/);
+  // Never trust an SSR marker, a 404 chunk, or an HTML fallback masquerading as JS.
+  await assert.rejects(() => verifySafariGateV1ShellBundle(async endpoint =>
+    endpoint === "/" ?
+      { status: 200, headers: { "content-type": "text/html" },
+        body: ownerHtml + '<main data-design-system="lumi-v1"></main>' } :
+      { status: 404, headers: { "content-type": "text/html" }, body: v1Bundle },
+    "gate-cookie=owner"), /not reachable as JavaScript/);
+});
 
 test("port validation fails closed", () => {
   for (const port of [0, 80, 65536, NaN, Infinity, 3210.5, "3210"]) {

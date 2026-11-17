@@ -109,6 +109,20 @@ production deployment or systemd commands run in CI.
 
 ### Target personal-v1 activation preflight (C14 / issue #424)
 
+**C29 (decision 2026-11-16): the selected runtime profile is also a build
+contract.** `personal-v1` MUST compile with
+`NEXT_PUBLIC_LUMI_DESIGN_V1_PREVIEW=1` (v1 shell and Quick Capture).
+`off` MUST compile with that variable removed, including when it was set
+in the operator's calling environment. `lib/target-personal-profile.ts`
+is the canonical build-environment definition; the checked-out
+`scripts/target-build-profile.mjs` performs both normal and rollback builds,
+writes `.next/lumi-build-profile.json`, and verifies profile + BUILD_ID + SHA
+before starting the service. Every `off ↔ personal-v1` change requires
+a **new build via `deploy-safe.sh`**, not a process restart. The root-owned
+EnvironmentFile must not assign any `NEXT_PUBLIC_*` key. A mismatched build,
+unexpected dotenv shell switch, or manifest drift aborts before service start.
+Do not manually restart a stale `.next` during a return to legacy.
+
 The default deployment remains legacy-only: with no enabled target flag in the
 root-owned env file, target preflight, target store reads, and target archival
 steps are skipped. Generate the **proposed** exact flag block (not an activation
@@ -125,7 +139,7 @@ Changes to the loaded file list or env bytes block unsafe restarts. No
 manager-global environment, execution hooks, or complete hardening profile is
 pinned: these fall outside the approved accidental-configuration-drift model.
 **The sole loaded EnvironmentFile must not assign `AI_EXECUTIVE_DATA_DIR`,
-`PORT`, `NODE_ENV` or `NEXT_TELEMETRY_DISABLED`**, even to the expected
+`PORT`, `NODE_ENV`, `NEXT_TELEMETRY_DISABLED` or any `NEXT_PUBLIC_*`**, even to the expected
 value: systemd's EnvironmentFile takes precedence over the unit's fixed
 Environment assignments. This prevents the actual service from opening a
 different store than the deploy script backed up and verified. A comment

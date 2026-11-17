@@ -2,7 +2,7 @@
 // No production env file is opened and no state is created by this module.
 import { lstatSync, realpathSync, readdirSync } from "node:fs";
 import path from "node:path";
-import { targetPersonalV1Env } from "../lib/target-personal-profile.ts";
+import { targetPersonalV1Env, TARGET_PERSONAL_V1_BUILD_ENV } from "../lib/target-personal-profile.ts";
 import { isWithinPath } from "./r4-path-boundary.mjs";
 
 export const SAFARI_GATE_OWNER = "e2e-owner";
@@ -155,6 +155,7 @@ export function buildSafariGateEnvironment({
   }
   return {
     ...targetPersonalV1Env(),
+    ...TARGET_PERSONAL_V1_BUILD_ENV,
     AI_EXECUTIVE_TARGET_STAGING_DIRECTORY: stage.directory,
     AI_EXECUTIVE_TARGET_STAGING_OWNER_USER_ID: stage.ownerUserId,
     AI_EXECUTIVE_TARGET_STAGING_RESTORE_GENERATION: stage.restoreGeneration,

@@ -343,7 +343,8 @@ switch (name) {
       const spec = args[1] || "";
       if (!spec.startsWith(target + ":")) process.exit(8);
       const file = spec.slice(target.length + 1);
-      if (!["scripts/target-profile-env.mjs", "lib/target-personal-profile.ts"].includes(file))
+      if (!["scripts/target-profile-env.mjs", "scripts/target-build-profile.mjs",
+            "lib/target-personal-profile.ts"].includes(file))
         process.exit(8);
       process.stdout.write(fs.readFileSync(new URL("../../" + file, import.meta.url)));
       log("target-profile-source");
@@ -378,6 +379,7 @@ switch (name) {
     if (args[0] === "install") { log("install"); break; }
     if (args[0] === "build") {
       log("build-" + get("head").slice(0, 1));
+      log("build-shell:" + (process.env.NEXT_PUBLIC_LUMI_DESIGN_V1_PREVIEW ?? "absent"));
       if (["offtmpfsdriftbuild", "targetmountdriftbuild"].includes(scenario) &&
           get("head") === target && !fs.existsSync(stateFile("mount-changed"))) {
         set("mount-changed", "1");

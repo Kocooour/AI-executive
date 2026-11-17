@@ -7,11 +7,12 @@
  * but both branches must prove private draft fencing and fresh authorization.
  */
 import {spawn} from "node:child_process";
-import {existsSync,mkdtempSync,readFileSync,rmSync} from "node:fs";
+import {existsSync,mkdtempSync,readFileSync} from "node:fs";
 import path from "node:path";
 import {randomUUID} from "node:crypto";
 import {chromium,test,expect} from "@playwright/test";
 import {matchingNativeBackReasons,validateNativeBackEvidence} from "./target-personal-native-bfcache-gate";
+import {stopNativeChromeAndRemoveProfile,watchNativeChromeClose} from "./native-chrome-cleanup";
 import type {NativeBackEvidence,NativeCacheNotUsedEvent} from "./target-personal-native-bfcache-gate";
 
 test.skip(process.env.LUMI_TARGET_PERSONAL_ACCEPTANCE_E2E!=="true",
@@ -93,6 +94,8 @@ async function nativeBrowser(width:number){
     "--remote-debugging-port=0","--user-data-dir="+profile,
     "--window-size="+width+",844","about:blank",
   ],{stdio:"ignore"});
+  // Observe close immediately after spawn; exit/close may precede teardown.
+  const closeWatch=watchNativeChromeClose(chrome);
   try{
     const port=await waitFor("Chrome DevToolsActivePort",async()=>{
       if(chrome.exitCode!==null)throw Error("Chrome exited "+chrome.exitCode);
@@ -124,9 +127,10 @@ async function nativeBrowser(width:number){
     await cdp.send("Page.addScriptToEvaluateOnNewDocument",{source:
       "window.__lumiNative={shows:[],docToken:Math.random().toString(36).slice(2)};"+
       "addEventListener('pageshow',e=>window.__lumiNative.shows.push(e.persisted))"});
-    return {profile,chrome,cdp};
+    return {profile,chrome,closeWatch,cdp};
   }catch(e){
-    chrome.kill("SIGKILL");rmSync(profile,{recursive:true,force:true,maxRetries:20,retryDelay:100});throw e;
+    await stopNativeChromeAndRemoveProfile(chrome,closeWatch,profile);
+    throw e;
   }
 }
 function snapshotExpression(secret:string){
@@ -154,7 +158,7 @@ function snapshotExpression(secret:string){
 for(const width of [390,1280]){
   test("native Chrome actual BFCache witness "+width+"px",async()=>{
     test.setTimeout(120000);
-    const {profile,chrome,cdp}=await nativeBrowser(width);
+    const {profile,chrome,closeWatch,cdp}=await nativeBrowser(width);
     let phase="before initial navigation";
     let secret="";
     let preBack: {shows:boolean[];docToken:string}|null=null;
@@ -481,8 +485,8 @@ for(const width of [390,1280]){
       unsubscribeFinished();
       unsubscribeFailed();
       unsubscribeNotUsed();
-      cdp.close();chrome.kill("SIGKILL");
-      rmSync(profile,{recursive:true,force:true,maxRetries:20,retryDelay:100});
+      cdp.close();
+      await stopNativeChromeAndRemoveProfile(chrome,closeWatch,profile);
     }
   });
 }
