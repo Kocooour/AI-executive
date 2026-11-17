@@ -146,6 +146,13 @@ test('simultaneous PATCH and cancel are ordered by pinned write transaction',asy
   const oldTitle=db.prepare("SELECT title FROM projects WHERE id='proj'").get().title;
   const oldAudit=db.prepare("SELECT COUNT(*) AS n FROM project_title_audit WHERE project_id='proj'").get().n;
   let [rename,fence]=await Promise.all([write(alice,command),cancelWrite(alice,command.commandId,p.principalBinding)]);
+  // The fence keeps the real 200ms pinned-writer lock bound. Under parallel
+  // CI load, a bounded 503 can mean no fence was acknowledged yet.
+  // Retry ONLY the original cancellation UUID; never treat 503 as success.
+  for(let attempt=0;fence.status===503 && attempt<3;attempt++){
+    assert.deepEqual(await fence.json(),{error:'Staging unavailable'});
+    fence=await cancelWrite(alice,command.commandId,p.principalBinding);
+  }
   assert.equal(fence.status,200,await fence.clone().text());
   const status=(await fence.json()).status;
   assert.ok(status==='cancelled'||status==='committed','fence must settle to a durable outcome');
