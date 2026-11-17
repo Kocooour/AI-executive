@@ -46,8 +46,8 @@ interface Entry extends TimelineSource {
   minutes?: number;
 }
 
-export function DayTimeline({ app, mode, empty, day, dayEvents }: {
-  app: LumiApp; mode: "today" | "calendar"; empty?: ReactNode; day?: string; dayEvents?: CalendarEvent[];
+export function DayTimeline({ app, mode, empty, day, dayEvents, eventsOnly = false }: {
+  app: LumiApp; mode: "today" | "calendar"; empty?: ReactNode; day?: string; dayEvents?: CalendarEvent[]; eventsOnly?:boolean;
 }) {
   const { applyDayPlanAction, activeWorkspaceId, writeWorkspaceId, busyCalendarDayEvents, calendarDayEvents, calendarDayEventsAll, calendarEvents, calendarEventTasks, calendarTimezone, calendarToday, createCalendarEventTask,
     dayPlanBusy, dayPlanNow, todayTimelineTaskIds, inspect, isCalendarEventHidden, items, language, notificationState, todayTasks, tr, unhideCalendarEvent, visibleDayPlan, calendarEventNeedsQuestion, effectiveBusyCalendarEvents } = app;
@@ -94,7 +94,7 @@ export function DayTimeline({ app, mode, empty, day, dayEvents }: {
     const result: Entry[] = [];
     const taskIds = new Set<string>();
     for (const event of selectedDayEvents) {
-      const task = dayLinkedTasks.get(event.id);
+      const task = eventsOnly ? null : dayLinkedTasks.get(event.id);
       if (task) {
         // Today shows the task only where it is a Today task (same predicate as the list leaving it out).
         if (mode === "today" && !todayTimelineTaskIds.has(task.id)) continue;
@@ -109,7 +109,7 @@ export function DayTimeline({ app, mode, empty, day, dayEvents }: {
       if (mode === "today" ? !agendaIds.has(event.id) : false) continue;
       result.push({ id: `event:${event.id}`, kind: "event", title: event.title, start: event.start, end: event.end, event, hidden, busy: event.busy, allDay: event.allDay, underlay: hidden });
     }
-    if (visibleDayPlan && isCurrentDay) {
+    if (!eventsOnly && visibleDayPlan && isCurrentDay) {
       const blocks = [
         ...visibleDayPlan.existingBlocks.map((block) => ({ block, proposal: false })),
         ...visibleDayPlan.planBlocks.map((block) => ({ block, proposal: true })),
@@ -133,7 +133,7 @@ export function DayTimeline({ app, mode, empty, day, dayEvents }: {
       }
     }
     return result;
-  }, [mode, todayTimelineTaskIds, calendarDayEvents, selectedDayEvents, dayLinkedTasks, calendarTimezone, selectedBusyEvents, isCalendarEventHidden, items, visibleDayPlan, isCurrentDay]);
+  }, [mode, todayTimelineTaskIds, calendarDayEvents, selectedDayEvents, dayLinkedTasks, calendarTimezone, selectedBusyEvents, isCalendarEventHidden, items, visibleDayPlan, isCurrentDay, eventsOnly]);
 
   const allDay = useMemo(() => entries.filter((entry) => entry.allDay), [entries]);
   const timed = useMemo(() => entries.filter((entry) => !entry.allDay), [entries]);
@@ -148,7 +148,7 @@ export function DayTimeline({ app, mode, empty, day, dayEvents }: {
   const placedTaskIds = new Set(entries.flatMap((entry) => entry.task ? [entry.task.id] : []));
   const scheduledTasks = isCurrentDay ? todayTasks : items.filter((item) =>
     item.type === "task" && item.workspaceId === calendarWorkspaceId && item.properties.when === shownDay);
-  const untimed = mode === "calendar" ? scheduledTasks.filter((task) =>
+  const untimed = mode === "calendar" && !eventsOnly ? scheduledTasks.filter((task) =>
     task.type === "task" && task.status === "open" && !placedTaskIds.has(task.id)) : [];
   const planSlots = isCurrentDay ? planSlotsByTask(visibleDayPlan) : new Map();
 
