@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import {test} from "node:test";
-import {activeTargetViewFor,detailsActive,targetViewsFor} from "../lib/target-shell-views.ts";
+import {activeTargetViewFor,detailsActive,targetViewsFor,targetShellNavigationFor,SHELL_NAVIGATION_VIEWS} from "../lib/target-shell-views.ts";
 import {refusalBudgetFor} from "../lib/target-refusal-budget.ts";
 import {detailIdOk} from "../lib/target-detail-route.ts";
 import {validTaskPreviewId} from "../lib/target-staging-task-preview-client.ts";
@@ -73,4 +73,34 @@ test("ID parity: whatever the detail layer opens, every strict client and the ad
   // Rows for IDs the layer cannot open are text: these are exactly the server-only IDs.
   for(const serverOnly of ["", " padded ","a/b"])assert.equal(detailIdOk(serverOnly),false);
   assert.equal(scopeFromSearch("?scope=shared"),"shared");
+});
+
+const personalV1={scopesOn:true,projectsList:true,notesList:true,myPlan:true,
+  v1Shell:true,targetSearch:true,quickCapture:true};
+
+test("C-1: personal-v1 never puts a legacy-data view in primary navigation",()=>{
+  const model=targetShellNavigationFor(personalV1);
+  assert.equal(model.personalV1,true);
+  assert.deepEqual(model.primary,["MyPlanPreview","Projects","Notes","Calendar","Search"]);
+  assert.deepEqual(model.archive,["Home","Inbox","Today","Upcoming","Overdue","Anytime",
+    "Someday","Completed","Areas","Context"]);
+  assert.equal(model.quickCapture,true);
+  assert.equal(model.byView.Today,"archive","legacy Today must not masquerade as My Plan");
+  assert.equal(model.byView.MyPlanPreview,"primary");
+  assert.equal(model.byView.Settings,"hidden");
+  assert.equal(model.byView.Agents,"hidden");
+  assert.deepEqual(Object.keys(model.byView).sort(),[...SHELL_NAVIGATION_VIEWS].sort(),
+    "every shell destination is classified once");
+  assert.equal(new Set([...model.primary,...model.archive,...model.hidden]).size,SHELL_NAVIGATION_VIEWS.length);
+});
+
+test("C-1: off and partial flags must not activate archive navigation",()=>{
+  for(const absent of Object.keys(personalV1)){
+    const model=targetShellNavigationFor({...personalV1,[absent]:false});
+    assert.equal(model.personalV1,false,absent);
+    assert.deepEqual(model.primary,[],absent);
+    assert.deepEqual(model.archive,[],absent);
+    assert.equal(model.quickCapture,false,absent);
+  }
+  assert.equal(targetShellNavigationFor({...personalV1,...off,targetSearch:false,quickCapture:false}).personalV1,false);
 });
