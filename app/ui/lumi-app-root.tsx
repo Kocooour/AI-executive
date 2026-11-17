@@ -211,7 +211,8 @@ export function LumiAppRoot({ targetMyPlan, targetScopes, targetDetails, targetE
   const targetView = scopeList !== null || targetPlan || (targetSearch && view==="Search");
   const legacyInspector = Boolean(app.selected) && !(scopesOn && targetView);
   // Unified target mode: views that still show legacy data are read-only (no target create/edit API yet).
-  const archiveView=shellNavigation.personalV1&&
+  // The router internally represents target My Plan as Today; it is *not* archival.
+  const archiveView=shellNavigation.personalV1&&!targetPlan&&
     shellNavigation.byView[view as keyof typeof shellNavigation.byView]==="archive";
   const legacyReadOnly = app.legacyWritesDisabled &&
     (archiveView||(!targetView&&["Home","Inbox","Today"].includes(view)));
