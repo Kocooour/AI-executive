@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import {EventEmitter} from "node:events";
 import {existsSync,mkdtempSync,rmSync,writeFileSync} from "node:fs";
+import {rm} from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import {test} from "node:test";
@@ -10,6 +11,7 @@ function fixture(t){
   const dir=mkdtempSync(path.join(os.tmpdir(),"lumi-native-chrome-cleanup-"));
   t.after(()=>rmSync(dir,{recursive:true,force:true}));
   const child=new EventEmitter();
+  child.pid=undefined;
   child.exitCode=null;
   child.signalCode=null;
   const signals=[];
@@ -54,13 +56,16 @@ test("an unresponsive Chrome receives SIGKILL only after bounded graceful wait",
   assert.equal(existsSync(dir),false);
 });
 
-test("refuses to delete a still-running Chrome profile after both timeouts",async t=>{
+test("retains a still-running Chrome profile and warns without failing the test",async t=>{
   const {dir,child,closeWatch,signals}=fixture(t);
-  await assert.rejects(
-    stopNativeChromeAndRemoveProfile(child,closeWatch,dir,{graceMs:10,forceMs:10}),
-    /retaining its profile/);
+  const warnings=[];
+  await stopNativeChromeAndRemoveProfile(child,closeWatch,dir,{
+    graceMs:10,forceMs:10,warn:message=>warnings.push(message)});
   assert.deepEqual(signals,["SIGTERM","SIGKILL"]);
-  assert.equal(existsSync(dir),true,"keep the profile for manual diagnostics");
+  assert.equal(existsSync(dir),true,"keep the active profile for manual diagnostics");
+  assert.equal(warnings.length,1);
+  assert.match(warnings[0],/did not close.*retaining profile/);
+  assert.ok(warnings[0].includes(dir));
 });
 
 test("exit status before close must not permit early profile removal",async t=>{
@@ -101,4 +106,43 @@ test("already observed close allows cleanup without signaling",async t=>{
   await stopNativeChromeAndRemoveProfile(child,closeWatch,dir);
   assert.deepEqual(signals,[]);
   assert.equal(existsSync(dir),false);
+});
+
+test("transient ENOTEMPTY is retried until the profile is removed",async t=>{
+  const {dir,child,closeWatch}=fixture(t);
+  child.exitCode=0;
+  child.emit("close",0,null);
+  let attempts=0;
+  const warnings=[];
+  await stopNativeChromeAndRemoveProfile(child,closeWatch,dir,{
+    cleanupMs:100,retryMs:1,warn:message=>warnings.push(message),
+    removeProfile:async name=>{
+      attempts++;
+      if(attempts===1)throw Object.assign(new Error("rmdir racing Chrome"),{code:"ENOTEMPTY"});
+      await rm(name,{recursive:true,force:true});
+    },
+  });
+  assert.equal(attempts,2);
+  assert.equal(existsSync(dir),false);
+  assert.deepEqual(warnings,[]);
+});
+
+test("permanent ENOTEMPTY is warned with profile path but never thrown",async t=>{
+  const {dir,child,closeWatch}=fixture(t);
+  child.exitCode=0;
+  child.emit("close",0,null);
+  let attempts=0;
+  const warnings=[];
+  await stopNativeChromeAndRemoveProfile(child,closeWatch,dir,{
+    cleanupMs:15,retryMs:1,warn:message=>warnings.push(message),
+    removeProfile:()=>{
+      attempts++;
+      throw Object.assign(new Error("rmdir racing Chrome"),{code:"ENOTEMPTY"});
+    },
+  });
+  assert.ok(attempts>1,"must retry a transient error");
+  assert.equal(existsSync(dir),true,"leave the profile for diagnostics");
+  assert.equal(warnings.length,1);
+  assert.match(warnings[0],/cleanup failed/);
+  assert.ok(warnings[0].includes(dir),"warning identifies the remaining profile");
 });
