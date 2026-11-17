@@ -126,6 +126,57 @@ for(const width of [390,1280]){
     expect(writes).toHaveLength(0);
   });
 }
+/** A live read deadline (including a stalled 200 body) must not become a
+ * permanent unavailable state after wake; it needs a NEW fetch signal. */
+test("C31 post-wake Area timeout retries under fresh authorization",async({page})=>{
+  test.setTimeout(40000);
+  await page.setViewportSize({width:390,height:844});
+  const writes=await setup(page,(route,cmd)=>
+    reply(route,{ok:true,taskId:cmd.taskId},201));
+  const calls:string[]=[];
+  let areaRequests=0;
+  let held:Route|null=null;
+  await page.route("**/api/target-staging/session",route=>{
+    calls.push("session");
+    return reply(route,{generation});
+  });
+  await page.route("**/api/target-staging/notes/create-targets",route=>{
+    const attempt=++areaRequests;
+    calls.push("area:"+attempt);
+    if(attempt===2){
+      held=route; // simulate a GET whose body never finishes
+      return;
+    }
+    return reply(route,{areas:[attempt===1
+      ?{id:"private-a",title:"Původní Oblast"}
+      :{id:"private-b",title:"Ověřená Oblast"}]});
+  });
+  await page.goto("/?view=Calendar&scope=personal");
+  await openAndFill(page,390,"Abandoned draft");
+  await page.evaluate(()=>{
+    Object.defineProperty(document,"visibilityState",{
+      configurable:true,value:"hidden",
+    });
+    document.dispatchEvent(new Event("visibilitychange"));
+  });
+  await expect(page.getByTestId("target-private-task-form")).toHaveCount(0);
+  await page.evaluate(()=>{
+    Reflect.deleteProperty(document,"visibilityState");
+    document.dispatchEvent(new Event("visibilitychange"));
+  });
+  await expect.poll(()=>areaRequests,{timeout:25000}).toBe(3);
+  const retryFrom=calls.indexOf("area:2"),retryTo=calls.indexOf("area:3");
+  expect(calls.slice(retryFrom+1,retryTo)).toContain("session");
+  const area=page.getByTestId("target-private-task-area");
+  await expect(area.locator('option[value="private-b"]')).toHaveCount(1);
+  await expect(area.locator('option[value="private-a"]')).toHaveCount(0);
+  await expect(area).toHaveValue("");
+  await area.selectOption("private-b");
+  await expect(page.getByTestId("target-private-task-form")
+    .getByRole("textbox",{name:"Název úkolu"})).toHaveValue("");
+  expect(writes).toHaveLength(0);
+  if(held)await (held as Route).abort("failed").catch(()=>{});
+});
 for(const width of [390,1280]){
   test("exact single POST, server confirmation, and authorized detail at "+width+"px",async({page})=>{
     await page.setViewportSize({width,height:844});
