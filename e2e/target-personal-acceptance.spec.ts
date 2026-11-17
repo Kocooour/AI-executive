@@ -482,6 +482,24 @@ for (const width of [390, 1280]) {
       await expect(page.getByTestId("target-archive-heading")).toBeVisible();
       await expect(page.getByTestId("legacy-read-only-notice")).toBeVisible();
     }
+    // C-1: desktop system views stay reachable without appearing among target lists.
+    if (width === 1280) {
+      const agents = page.locator('.sidebarActions [data-nav-system="Agents"]');
+      await expect(agents).toBeVisible();
+      await agents.click();
+      await expect(page.locator(".agentsPanel")).toBeVisible();
+      await assertNoLegacyInCurrentView();
+    }
+    // In the target Calendar, the shortcut must open authorized My Plan, never archival Today.
+    await page.locator(width === 1280
+      ? '.appShell > aside > nav [data-nav-view="Calendar"]'
+      : '.mobileNav [data-nav-tab="Calendar"]').click();
+    const openTodaysWork = page.locator(".calendarView button.textAction").first();
+    await expect(openTodaysWork).toBeVisible();
+    await openTodaysWork.click();
+    await expect(page.getByTestId("target-my-plan")).toBeVisible();
+    await assertNoLegacyInCurrentView();
+
     // Direct old links are still readable but never promoted to current views.
     const before = await (await page.request.get("/api/store")).body();
     const beforeDb = legacyDbRows();
