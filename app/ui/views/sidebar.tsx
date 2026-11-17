@@ -212,8 +212,8 @@ export function Sidebar({ app, navigation, targetPlan = false, onTargetCapture }
             <div className="secondaryNav" role="navigation"
               aria-label={language==="cs"?"Archivní pohledy":"Archived views"}>
               {navigation.archive.map(x=><button key={x} type="button"
-                className={view===x?"active":""} data-nav-view={x}
-                data-nav-archive="true" aria-current={view===x?"page":undefined}
+                className={view===x&&!(x==="Today"&&app.mobilePlanPreviewActive)?"active":""} data-nav-view={x}
+                data-nav-archive="true" aria-current={view===x&&!(x==="Today"&&app.mobilePlanPreviewActive)?"page":undefined}
                 onClick={event=>navigateToView(x,event.currentTarget)}>{tr(x)}</button>)}
             </div>
           </section>
