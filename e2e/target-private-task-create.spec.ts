@@ -202,17 +202,17 @@ test("C31 recovers from HTTP 200 followed by interrupted Area response body",asy
     __lumiC31BodyEvidence:{areaAttempts:number;events:string[];
       returned200:boolean;firstChunkDelivered:boolean;bodyInterrupted:boolean};
   }).__lumiC31BodyEvidence);
-  expect(proof.areaAttempts).toBe(3,"exactly one retry");
-  expect(proof.returned200).toBe(true,"response headers arrived before body error");
+  expect(proof.areaAttempts,"exactly one retry").toBe(3);
+  expect(proof.returned200,"response headers arrived before body error").toBe(true);
   expect(proof.firstChunkDelivered).toBe(true);
   expect(proof.bodyInterrupted).toBe(true);
   const failed=proof.events.indexOf("area:2"),retried=proof.events.indexOf("area:3");
   expect(proof.events.slice(failed+1,retried)).toContain("session:200");
-  expect(completedAreaGets).toBe(2,"one original and one fresh completed HTTP GET");
+  expect(completedAreaGets,"one original and one fresh completed HTTP GET").toBe(2);
   await area.selectOption("private-b");
   await expect(page.getByTestId("target-private-task-form")
     .getByRole("textbox",{name:"Název úkolu"})).toHaveValue("");
-  expect(writes).toHaveLength(0,"recovery must not create a task");
+  expect(writes,"recovery must not create a task").toHaveLength(0);
 });
 /** A live read deadline (including a stalled 200 body) must not become a
  * permanent unavailable state after wake; it needs a NEW fetch signal. */
