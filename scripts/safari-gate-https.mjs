@@ -172,7 +172,8 @@ export function createSafariGateTlsProxy(certPath, keyPath, externalPort, intern
 }
 
 // No browser cookies or storage are touched. TLS verification is always on.
-export function httpsGateRequest({ port, ca, method = "GET", endpoint, headers = {}, body = "" }) {
+export function httpsGateRequest({ port, ca, method = "GET", endpoint, headers = {}, body = "",
+  maxResponseBytes = 256 * 1024 }) {
   return new Promise((resolve, reject) => {
     const request = https.request({
       hostname: "127.0.0.1", port, method, path: endpoint, ca,
@@ -182,7 +183,7 @@ export function httpsGateRequest({ port, ca, method = "GET", endpoint, headers =
       let received = 0;
       response.on("data", chunk => {
         received += chunk.length;
-        if (received > 256 * 1024) {
+        if (received > maxResponseBytes) {
           request.destroy(new Error("HTTPS smoke response exceeds limit"));
         } else chunks.push(chunk);
       });
@@ -204,13 +205,47 @@ function parseJson(response) {
   catch { throw new Error("local HTTPS smoke returned invalid JSON"); }
 }
 
-// The shell flag is compiled by Next; a green API smoke alone would miss an
-// off-profile HTML shell with no Quick Capture button. Read SSR output over
-// the authenticated, CA-verified HTTPS proxy before handing the URL to Safari.
-export function assertSafariGateV1ShellHtml(html) {
-  if (typeof html !== "string" || !html.includes('data-design-system="lumi-v1"')) {
+// The authenticated root HTML initially contains only the auth placeholder:
+// LumiAppRoot renders the v1 app shell after client hydration. Verify the actual
+// page chunk linked by that HTML instead of looking for a marker in SSR output.
+export function safariGateV1PageChunkPath(html) {
+  if (typeof html !== "string") throw new Error("Safari gate owner HTML missing");
+  const scripts = [...html.matchAll(/<script\\b[^>]*>/gi)];
+  const sources = scripts.map(([tag]) => /\\ssrc\\s*=\\s*(["'])(.*?)\\1/i.exec(tag)?.[2])
+    .filter(Boolean);
+  const candidates = sources.filter(src =>
+    src.startsWith("/_next/static/chunks/app/page-"));
+  if (candidates.length !== 1 ||
+      !/^\\/_next\\/static\\/chunks\\/app\\/page-[A-Za-z0-9_-]+\\.js$/.test(candidates[0])) {
+    throw new Error("Safari gate requires exactly one valid Next app/page chunk");
+  }
+  return candidates[0];
+}
+
+export function assertSafariGateV1ShellChunk(source) {
+  // Compile-time flag is visible in the exact JS loaded by the page. A check
+  // against SSR HTML would always fail because authState is initially loading.
+  if (typeof source !== "string" ||
+      !source.includes('"data-design-system":"lumi-v1"')) {
     throw new Error("Safari gate built without the v1 shell (Quick Capture unavailable)");
   }
+}
+
+export async function verifySafariGateV1ShellBundle(request, cookie) {
+  const ownerPage = await request("/", { headers: { cookie } });
+  if (ownerPage.status !== 200 ||
+      !String(ownerPage.headers["content-type"] || "").includes("text/html")) {
+    throw new Error("Safari gate owner HTML not reachable");
+  }
+  const chunkPath = safariGateV1PageChunkPath(ownerPage.body);
+  const bundle = await request(chunkPath, {
+    headers: { cookie }, maxResponseBytes: 4 * 1024 * 1024,
+  });
+  if (bundle.status !== 200 ||
+      !/javascript|ecmascript/i.test(String(bundle.headers["content-type"] || ""))) {
+    throw new Error("Safari gate Next app/page chunk not reachable as JavaScript");
+  }
+  assertSafariGateV1ShellChunk(bundle.body);
 }
 
 export async function verifySafariGateHttps({ port, ca, password, browserCookieName }) {
@@ -266,12 +301,7 @@ export async function verifySafariGateHttps({ port, ca, password, browserCookieN
   if (bypass.status !== 200 || parseJson(bypass).authenticated !== false) {
     throw new Error("proxy leaked host-wide owner cookie scope");
   }
-  const ownerPage = await request("/", { headers: { cookie } });
-  if (ownerPage.status !== 200 ||
-      !String(ownerPage.headers["content-type"] || "").includes("text/html")) {
-    throw new Error("Safari gate owner HTML not reachable");
-  }
-  assertSafariGateV1ShellHtml(ownerPage.body);
+  await verifySafariGateV1ShellBundle(request, cookie);
   const areasResponse = await request("/api/target-staging/notes/create-targets", {
     headers: { cookie },
   });
