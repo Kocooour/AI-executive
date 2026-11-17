@@ -1,7 +1,7 @@
 /** R3-BE-4c.2: two default-off, private-only task creation HTTP boundaries.
  * Never writes the legacy DB. No actor, parent project or sharing may be supplied. */
 import path from "node:path";
-import {HttpInputError,enforceRateLimit,readJsonBody,requireSameOrigin}
+import {HttpInputError,enforceRateLimit,readJsonBody,requireTargetSameOrigin}
   from "./http-security";
 import {logStagingFailure} from "./target-staging-failure-log";
 import {resolveStagingHttpIdentity,stagingAnchorRefusal,stagingUnauthenticatedRefusal,
@@ -84,9 +84,7 @@ async function handle(request:Request,mode:"create"|"status"|"recovery"|"cancel"
   const store={stagingDirectory:base.stagingDirectory,
     expectedRestoreGeneration:base.expectedRestoreGeneration};
   try{
-    requireSameOrigin(request);
-    if(request.headers.get("origin")!==new URL(request.url).origin)
-      return answer(403,"Cross-origin request rejected");
+    requireTargetSameOrigin(request);
     const admitted=admitStagingIdentity(request,identity,store);
     if(admitted)return admitted;
     if(new URL(request.url).search!=="")return answer(400,"Invalid request");
