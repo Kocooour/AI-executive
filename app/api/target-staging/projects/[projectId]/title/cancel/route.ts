@@ -2,7 +2,7 @@
  * Serializes with PATCH under pinned BEGIN IMMEDIATE and anti-rollback journal. */
 import path from "node:path";
 import {logStagingFailure} from "../../../../../../../lib/target-staging-failure-log";
-import {HttpInputError,enforceRateLimit,readJsonBody,requireSameOrigin} from "../../../../../../../lib/http-security";
+import {HttpInputError,enforceRateLimit,readJsonBody,requireTargetSameOrigin} from "../../../../../../../lib/http-security";
 import {resolveStagingHttpIdentity,stagingAnchorRefusal,stagingUnauthenticatedRefusal,
   stagingChildSessionConfig,admitStagingIdentity,stagingIdentityRefusal,
   verifyStagingIdentityBeforeRelease,stagingUnauthorizedRefusal} from "../../../../../../../lib/target-staging-http-identity";
@@ -45,8 +45,7 @@ export async function POST(request:Request,context:{params:Promise<{projectId:st
   const base=config();if(!base)return answer(503,"Staging unavailable");
   const bound={...base,...stagingChildSessionConfig(identity)};
   try{
-    requireSameOrigin(request);
-    if(request.headers.get("origin")!==new URL(request.url).origin)return answer(403,"Cross-origin request rejected");
+    requireTargetSameOrigin(request);
     const refused=admitStagingIdentity(request,identity,bound);if(refused)return refused;
     const params=await context.params;
     const projectId=params&&Object.keys(params).join(",")==="projectId"&&
