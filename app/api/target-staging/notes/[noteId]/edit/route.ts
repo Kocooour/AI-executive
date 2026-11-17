@@ -1,7 +1,7 @@
 /** R2d.2c.2d: opt-in CAS preflight and edit of an EXISTING staging note.
  * No creation, deletion, sync, UI or production integration. */
 import path from "node:path";
-import { HttpInputError, enforceRateLimit, readJsonBody, requireSameOrigin } from "../../../../../../lib/http-security";
+import { HttpInputError, enforceRateLimit, readJsonBody, requireTargetSameOrigin } from "../../../../../../lib/http-security";
 import { logStagingFailure } from "../../../../../../lib/target-staging-failure-log";
 import {
   resolveStagingHttpIdentity, stagingAnchorRefusal, stagingUnauthenticatedRefusal,
@@ -109,9 +109,7 @@ export async function PATCH(request: Request, context: { params: Promise<{ noteI
   const base = config();
   if (!base) return answer(503, "Staging unavailable");
   try {
-    requireSameOrigin(request);
-    if (request.headers.get("origin") !== new URL(request.url).origin)
-      return stampNoteEditPrecommit(request, answer(403, "Cross-origin request rejected"));
+    requireTargetSameOrigin(request);
     const admitted = admitStagingIdentity(request, identity, base);
     if (admitted) return admitted;
     const noteId = await noteIdFrom(context);
