@@ -32,9 +32,12 @@ the operator supplied it in the shell. The source of truth is
 rollback build and verifies `.next/lumi-build-profile.json` (profile,
 build ID and checkout SHA) before start. The root-owned EnvironmentFile
 must not assign any `NEXT_PUBLIC_*` variable. Safari's disposable
-`personal-v1` instance compiles with the same constant; an HTTPS owner
-HTML smoke refuses a missing v1 shell before opening Safari. This is a
-release gate, **not** production activation.
+`personal-v1` instance compiles with the same constant. Before opening
+Safari, an authenticated, CA-verified HTTPS smoke reads the owner HTML only
+to locate its unique Next `app/page-*.js` client bundle, fetches that bundle
+through the same proxy and refuses a missing compiled v1 shell marker.
+SSR HTML alone is insufficient because the app shell renders after hydration.
+This is a release gate, **not** production activation.
 
 Before any service stop, the deployment validates the selected `off` or
 `personal-v1` profile in the root-owned EnvironmentFile, rejects malformed or
@@ -640,7 +643,8 @@ env -i HOME="$HOME" PATH="$PATH" \
 
 Leave this terminal running. It must report **`HTTPS owner login + private
 Area smoke: PASS`** before handing the URL to Safari; the smoke verifies the
-CA-authenticated certificate, owner login/cookie isolation and synthetic private
+CA-authenticated certificate, owner login/cookie isolation, the v1 shell marker
+in the *served client page bundle* (not SSR HTML), and synthetic private
 Area **Tvoření**. Capture the exact checkout SHA and printed test-only run
 directory. A successful smoke is **not** the independent manual Safari witness.
 On a failed smoke, stop; do not weaken TLS validation or switch to production
