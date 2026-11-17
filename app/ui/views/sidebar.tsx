@@ -289,6 +289,16 @@ export function Sidebar({ app, navigation, targetPlan = false, onTargetCapture }
               </button>
             </>
           )}
+          {/* System navigation is separate from the target-only primary and the legacy Archive. */}
+          {personalV1 && (
+            <button type="button" data-nav-system="Agents"
+              className={view === "Agents" ? "active" : ""}
+              aria-current={view === "Agents" ? "page" : undefined}
+              onClick={(event) => navigateToView("Agents", event.currentTarget)}
+            >
+              <span aria-hidden="true"><ViewIcon name="Agents" /></span> {tr("Agents")}
+            </button>
+          )}
           <button
             className={view === "Settings" ? "active" : ""}
             onClick={(event) => navigateToView("Settings", event.currentTarget)}
