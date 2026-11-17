@@ -125,7 +125,7 @@ export function MobileNav({ app, navigation, targetPlan = false, onTargetCapture
                 {navigation.archive.map(item=>
                   <button key={item} type="button" className="mobileMoreItem"
                     data-nav-view={item} data-nav-archive="true"
-                    aria-current={view===item?"page":undefined}
+                    aria-current={view===item&&!(item==="Today"&&mobilePlanPreviewActive)?"page":undefined}
                     onClick={()=>{markMobileMoreNavigation(item);setView(item);closeDetail();setMoreOpen(false);}}>
                     <span className="mobileMoreItemIcon" aria-hidden="true">
                       <ViewIcon name={item==="Today"?"TodayV1":item} />
