@@ -210,13 +210,13 @@ function parseJson(response) {
 // page chunk linked by that HTML instead of looking for a marker in SSR output.
 export function safariGateV1PageChunkPath(html) {
   if (typeof html !== "string") throw new Error("Safari gate owner HTML missing");
-  const scripts = [...html.matchAll(/<script\\b[^>]*>/gi)];
-  const sources = scripts.map(([tag]) => /\\ssrc\\s*=\\s*(["'])(.*?)\\1/i.exec(tag)?.[2])
+  const scripts = [...html.matchAll(/<script\b[^>]*>/gi)];
+  const sources = scripts.map(([tag]) => /\ssrc\s*=\s*(["'])(.*?)\1/i.exec(tag)?.[2])
     .filter(Boolean);
   const candidates = sources.filter(src =>
     src.startsWith("/_next/static/chunks/app/page-"));
   if (candidates.length !== 1 ||
-      !/^\\/_next\\/static\\/chunks\\/app\\/page-[A-Za-z0-9_-]+\\.js$/.test(candidates[0])) {
+      !/^\/_next\/static\/chunks\/app\/page-[A-Za-z0-9_-]+\.js$/.test(candidates[0])) {
     throw new Error("Safari gate requires exactly one valid Next app/page chunk");
   }
   return candidates[0];
