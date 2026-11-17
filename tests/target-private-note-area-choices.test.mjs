@@ -91,7 +91,7 @@ test("C31 partial HTTP 200 Area body fails closed after reader.read()",async()=>
         controller.error(new TypeError("C31 body interrupted after 200"));
       }
     },
-  });
+  },{highWaterMark:0}); // no prefetch: first reader.read gets the chunk, second errors
   let requests=0;
   const result=await loadPrivateNoteAreaChoices(new AbortController().signal,
     async(url,init)=>{
