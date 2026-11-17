@@ -175,7 +175,8 @@ for(const width of [390,1280]){
     type NativeRead={
       requestId:string;path:string;method:string;requestOrder:number;
       responseOrder?:number;status?:number;finishedOrder?:number;
-      failed?:boolean;fromServiceWorker?:boolean;fromDiskCache?:boolean;
+      failed?:boolean;failureReason?:string;cancelled?:boolean;
+      fromServiceWorker?:boolean;fromDiskCache?:boolean;
       fromPrefetchCache?:boolean;cacheServed?:boolean
     };
     const reads:NativeRead[]=[];
@@ -227,9 +228,13 @@ for(const width of [390,1280]){
       pendingReads.delete(read.requestId);
     });
     const unsubscribeFailed=cdp.on("Network.loadingFailed",event=>{
-      const read=pendingReads.get((event as {requestId:string}).requestId);
+      const failure=event as {requestId:string;errorText?:string;canceled?:boolean};
+      const read=pendingReads.get(failure.requestId);
       if(!read)return;
       read.failed=true;
+      // Transport metadata only; never include private response content.
+      read.failureReason=failure.errorText;
+      read.cancelled=failure.canceled===true;
       pendingReads.delete(read.requestId);
     });
     const successfulRead=(path:string)=>reads.find(read=>
@@ -276,6 +281,7 @@ for(const width of [390,1280]){
           path:read.path,method:read.method,status:read.status??null,
           responseOrder:read.responseOrder??null,requestOrder:read.requestOrder,
           finished:read.finishedOrder!==undefined,failed:read.failed===true,
+          failureReason:read.failureReason??null,cancelled:read.cancelled??null,
           fromServiceWorker:read.fromServiceWorker??null,
           fromDiskCache:read.fromDiskCache??null,
           fromPrefetchCache:read.fromPrefetchCache??null,

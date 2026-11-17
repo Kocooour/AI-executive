@@ -74,6 +74,197 @@ async function openAndFill(page:Page,width:number,title="Citlivý nový úkol"){
   await page.getByTestId("target-private-task-form").getByRole("textbox",{name:"Název úkolu"}).fill(title);
   return modal;
 }
+/** C31: a live wake must never keep an old private Area or draft, even
+ * when the first fresh Area GET after reauthorization is interrupted. */
+for(const width of [390,1280]){
+  test("C31 retries one interrupted post-wake Area GET at "+width+"px",async({page})=>{
+    await page.setViewportSize({width,height:844});
+    const writes=await setup(page,(route,cmd)=>
+      reply(route,{ok:true,taskId:cmd.taskId},201));
+    const calls:string[]=[];
+    let areaRequests=0;
+    await page.route("**/api/target-staging/session",route=>{
+      calls.push("session");
+      return reply(route,{generation});
+    });
+    await page.route("**/api/target-staging/notes/create-targets",route=>{
+      const attempt=++areaRequests;
+      calls.push("area:"+attempt);
+      // 1: initial catalog; 2: first read after wake fails on transport;
+      // 3: only after another successful, direct session verification.
+      if(attempt===2)return route.abort("failed");
+      return reply(route,{areas:[attempt===1
+        ?{id:"private-a",title:"Rodina"}
+        :{id:"private-b",title:"Nová Oblast"}]});
+    });
+    await page.goto("/?view=Calendar&scope=personal");
+    await openAndFill(page,width,"Abandoned private task title");
+    await page.evaluate(()=>{
+      Object.defineProperty(document,"visibilityState",{
+        configurable:true,value:"hidden",
+      });
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
+    // The hide must synchronously clear both the selected Area and draft.
+    await expect(page.getByTestId("target-private-task-form")).toHaveCount(0);
+    await page.evaluate(()=>{
+      Reflect.deleteProperty(document,"visibilityState");
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
+    await expect.poll(()=>areaRequests).toBe(3);
+    const area=page.getByTestId("target-private-task-area");
+    await expect(area.locator('option[value="private-b"]')).toHaveCount(1);
+    await expect(area.locator('option[value="private-a"]')).toHaveCount(0);
+    await expect(area).toHaveValue("");
+    const aborted=calls.indexOf("area:2"),retried=calls.indexOf("area:3");
+    expect(aborted).toBeGreaterThan(-1);
+    expect(retried).toBeGreaterThan(aborted);
+    expect(calls.slice(aborted+1,retried)).toContain("session");
+    await area.selectOption("private-b");
+    await expect(page.getByTestId("target-private-task-form")
+      .getByRole("textbox",{name:"Název úkolu"})).toHaveValue("");
+    expect(writes).toHaveLength(0);
+  });
+}
+/** The original C31 failure happened AFTER HTTP 200 response headers,
+ * while reader.read() consumed the body. Synthetic Fetch Response 200 below
+ * provides one partial JSON chunk then errors the stream (not the fetch).
+ * The unaffected requests still hit the isolated HTTP mock. */
+test("C31 recovers from HTTP 200 followed by interrupted Area response body",async({page})=>{
+  await page.setViewportSize({width:390,height:844});
+  const writes=await setup(page,(route,cmd)=>
+    reply(route,{ok:true,taskId:cmd.taskId},201));
+  let completedAreaGets=0;
+  await page.route("**/api/target-staging/notes/create-targets",route=>{
+    completedAreaGets++;
+    return reply(route,{areas:[completedAreaGets===1
+      ?{id:"private-a",title:"Old private Area"}
+      :{id:"private-b",title:"Fresh private Area"}]});
+  });
+  await page.addInitScript(()=>{
+    const evidence={areaAttempts:0,events:[] as string[],
+      returned200:false,firstChunkDelivered:false,bodyInterrupted:false};
+    Object.assign(window,{__lumiC31BodyEvidence:evidence});
+    const original=window.fetch.bind(window);
+    window.fetch=(input,init)=>{
+      const raw=typeof input==="string"?input:
+        input instanceof URL?input.href:input.url;
+      const path=new URL(raw,location.href).pathname;
+      if(path==="/api/target-staging/session"){
+        evidence.events.push("session:start");
+        return original(input,init).then(response=>{
+          evidence.events.push("session:"+response.status);
+          return response;
+        });
+      }
+      if(path!=="/api/target-staging/notes/create-targets")
+        return original(input,init);
+      const attempt=++evidence.areaAttempts;
+      evidence.events.push("area:"+attempt);
+      if(attempt!==2)return original(input,init);
+      // Fetch resolves successfully with HTTP 200 and correct no-store
+      // headers; the first body read succeeds, the next one rejects.
+      const body=new ReadableStream<Uint8Array>({
+        start(controller){
+          controller.enqueue(new TextEncoder().encode('{"areas":['));
+          evidence.firstChunkDelivered=true;
+          setTimeout(()=>{
+            evidence.bodyInterrupted=true;
+            controller.error(new TypeError("C31 interrupted response body"));
+          },20);
+        },
+      });
+      const response=new Response(body,{status:200,headers:{
+        "content-type":"application/json","cache-control":"no-store",
+      }});
+      evidence.returned200=response.status===200;
+      return Promise.resolve(response);
+    };
+  });
+  await page.goto("/?view=Calendar&scope=personal");
+  await openAndFill(page,390,"Discard this private title");
+  await page.evaluate(()=>{
+    Object.defineProperty(document,"visibilityState",{
+      configurable:true,value:"hidden",
+    });
+    document.dispatchEvent(new Event("visibilitychange"));
+  });
+  await expect(page.getByTestId("target-private-task-form")).toHaveCount(0);
+  await page.evaluate(()=>{
+    Reflect.deleteProperty(document,"visibilityState");
+    document.dispatchEvent(new Event("visibilitychange"));
+  });
+  const area=page.getByTestId("target-private-task-area");
+  await expect(area.locator('option[value="private-b"]')).toHaveCount(1);
+  await expect(area.locator('option[value="private-a"]')).toHaveCount(0);
+  await expect(area).toHaveValue("");
+  const proof=await page.evaluate(()=>(window as typeof window & {
+    __lumiC31BodyEvidence:{areaAttempts:number;events:string[];
+      returned200:boolean;firstChunkDelivered:boolean;bodyInterrupted:boolean};
+  }).__lumiC31BodyEvidence);
+  expect(proof.areaAttempts,"exactly one retry").toBe(3);
+  expect(proof.returned200,"response headers arrived before body error").toBe(true);
+  expect(proof.firstChunkDelivered).toBe(true);
+  expect(proof.bodyInterrupted).toBe(true);
+  const failed=proof.events.indexOf("area:2"),retried=proof.events.indexOf("area:3");
+  expect(proof.events.slice(failed+1,retried)).toContain("session:200");
+  expect(completedAreaGets,"one original and one fresh completed HTTP GET").toBe(2);
+  await area.selectOption("private-b");
+  await expect(page.getByTestId("target-private-task-form")
+    .getByRole("textbox",{name:"Název úkolu"})).toHaveValue("");
+  expect(writes,"recovery must not create a task").toHaveLength(0);
+});
+/** A live read deadline (including a stalled 200 body) must not become a
+ * permanent unavailable state after wake; it needs a NEW fetch signal. */
+test("C31 post-wake Area timeout retries under fresh authorization",async({page})=>{
+  test.setTimeout(40000);
+  await page.setViewportSize({width:390,height:844});
+  const writes=await setup(page,(route,cmd)=>
+    reply(route,{ok:true,taskId:cmd.taskId},201));
+  const calls:string[]=[];
+  let areaRequests=0;
+  let held:Route|null=null;
+  await page.route("**/api/target-staging/session",route=>{
+    calls.push("session");
+    return reply(route,{generation});
+  });
+  await page.route("**/api/target-staging/notes/create-targets",route=>{
+    const attempt=++areaRequests;
+    calls.push("area:"+attempt);
+    if(attempt===2){
+      held=route; // simulate a GET whose body never finishes
+      return;
+    }
+    return reply(route,{areas:[attempt===1
+      ?{id:"private-a",title:"Původní Oblast"}
+      :{id:"private-b",title:"Ověřená Oblast"}]});
+  });
+  await page.goto("/?view=Calendar&scope=personal");
+  await openAndFill(page,390,"Abandoned draft");
+  await page.evaluate(()=>{
+    Object.defineProperty(document,"visibilityState",{
+      configurable:true,value:"hidden",
+    });
+    document.dispatchEvent(new Event("visibilitychange"));
+  });
+  await expect(page.getByTestId("target-private-task-form")).toHaveCount(0);
+  await page.evaluate(()=>{
+    Reflect.deleteProperty(document,"visibilityState");
+    document.dispatchEvent(new Event("visibilitychange"));
+  });
+  await expect.poll(()=>areaRequests,{timeout:25000}).toBe(3);
+  const retryFrom=calls.indexOf("area:2"),retryTo=calls.indexOf("area:3");
+  expect(calls.slice(retryFrom+1,retryTo)).toContain("session");
+  const area=page.getByTestId("target-private-task-area");
+  await expect(area.locator('option[value="private-b"]')).toHaveCount(1);
+  await expect(area.locator('option[value="private-a"]')).toHaveCount(0);
+  await expect(area).toHaveValue("");
+  await area.selectOption("private-b");
+  await expect(page.getByTestId("target-private-task-form")
+    .getByRole("textbox",{name:"Název úkolu"})).toHaveValue("");
+  expect(writes).toHaveLength(0);
+  if(held)await (held as Route).abort("failed").catch(()=>{});
+});
 for(const width of [390,1280]){
   test("exact single POST, server confirmation, and authorized detail at "+width+"px",async({page})=>{
     await page.setViewportSize({width,height:844});

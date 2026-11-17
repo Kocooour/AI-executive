@@ -135,30 +135,56 @@ export default function TargetPrivateTaskAreaChooser({
     return ()=>window.removeEventListener("pageshow",show);
   },[generation]);
   useEffect(()=>{
-    const controller=new AbortController();
+    const lifetime=new AbortController();
     let active=true;
+    let inFlight:AbortController|null=null;
+    const stop=()=>{lifetime.abort();inFlight?.abort();};
     setAreas({kind:"loading",generation});setChosen("");
     if(!runtime?.known()||runtime.generation()!==generation||
       document.visibilityState!=="visible"||!navigator.onLine){
       setAreas({kind:"unavailable",generation});
-      return ()=>{active=false;controller.abort();};
+      return ()=>{active=false;stop();};
     }
-    const unregister=runtime.register({
-      dispose:()=>controller.abort(),suspend:()=>controller.abort(),
-    });
-    const timer=setTimeout(()=>{
-      controller.abort();
-      if(active)setAreas({kind:"unavailable",generation});
-    },8000);
-    void loadPrivateNoteAreaChoices(controller.signal).then(result=>{
-      if(!active||controller.signal.aborted||!live())return;
+    const unregister=runtime.register({dispose:stop,suspend:stop});
+    const stillLive=()=>active&&!lifetime.signal.aborted&&live();
+    async function read(){
+      const controller=new AbortController();
+      inFlight=controller;
+      let timedOut=false;
+      const timer=setTimeout(()=>{timedOut=true;controller.abort();},8000);
+      try{
+        const result=await loadPrivateNoteAreaChoices(controller.signal);
+        // An expired read cannot authorize an Area even if its response raced
+        // the deadline. A timeout is retryable only while the lifetime is live.
+        return {result:timedOut?{ok:false as const,reason:"aborted" as const}:result,
+          timedOut};
+      }finally{
+        clearTimeout(timer);
+        if(inFlight===controller)inFlight=null;
+      }
+    }
+    void (async()=>{
+      if(!stillLive())return;
+      let {result,timedOut}=await read();
+      if(!stillLive())return;
+      // A body interrupted after HTTP 200, network error, or read deadline is
+      // not a valid Area catalog. Reverify the identity before ONE new no-store
+      // GET. Runtime suspend, unmount, generation rotation, 401/403 and invalid
+      // catalogs are never retried.
+      if(result.ok===false&&(result.reason==="unavailable"||timedOut)){
+        const verified=await runtime.refresh().catch(()=>"unavailable" as const);
+        if(!stillLive())return;
+        if(verified==="ok"){
+          ({result}=await read());
+          if(!stillLive())return;
+        }
+      }
       if(result.ok===true)setAreas({kind:"ready",generation,items:result.areas});
       else if(result.ok===false&&result.reason==="signed-out"){
         setAreas({kind:"signed-out",generation});void runtime.reportRefusal();
       }else setAreas({kind:"unavailable",generation});
-    }).catch(()=>{if(active&&!controller.signal.aborted)setAreas({kind:"unavailable",generation});})
-      .finally(()=>clearTimeout(timer));
-    return ()=>{active=false;clearTimeout(timer);controller.abort();unregister();};
+    })().catch(()=>{if(stillLive())setAreas({kind:"unavailable",generation});});
+    return ()=>{active=false;stop();unregister();};
   },[runtime,generation,nonce]);
   const ready=live()&&areas.kind==="ready"&&areas.generation===generation;
   const items=ready&&areas.kind==="ready"?areas.items.filter(a=>validPrivateTaskAreaId(a.id)):[];
