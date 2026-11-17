@@ -332,7 +332,7 @@ test("a typed link to another active target view switches to it and opens (addre
 });
 
 test("unified mode: legacy views stay visible read-only with a calm cs/en notice (owner decision 2026-11-09, option 1)",()=>{
-  assert.match(rootSource,/const archiveView=shellNavigation\.personalV1&&\s*shellNavigation\.byView\[view as keyof typeof shellNavigation\.byView\]==="archive";/);
+  assert.match(rootSource,/const archiveView=shellNavigation\.personalV1&&!targetPlan&&\s*shellNavigation\.byView\[view as keyof typeof shellNavigation\.byView\]==="archive";/);
   assert.match(rootSource,/const legacyReadOnly = app\.legacyWritesDisabled &&\s*\(archiveView\|\|\(!targetView&&\["Home", "Inbox", "Today"\]\.includes\(view\)\)\);/);
   assert.match(rootSource,/\{legacyReadOnly && \(\s*<p className="navigationUnavailableNotice legacyReadOnlyNotice" role="status"/);
   const copy=read("lib/target-detail-copy.ts");
