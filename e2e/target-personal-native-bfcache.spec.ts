@@ -7,11 +7,12 @@
  * but both branches must prove private draft fencing and fresh authorization.
  */
 import {spawn} from "node:child_process";
-import {existsSync,mkdtempSync,readFileSync,rmSync} from "node:fs";
+import {existsSync,mkdtempSync,readFileSync} from "node:fs";
 import path from "node:path";
 import {randomUUID} from "node:crypto";
 import {chromium,test,expect} from "@playwright/test";
 import {matchingNativeBackReasons,validateNativeBackEvidence} from "./target-personal-native-bfcache-gate";
+import {stopNativeChromeAndRemoveProfile} from "./native-chrome-cleanup";
 import type {NativeBackEvidence,NativeCacheNotUsedEvent} from "./target-personal-native-bfcache-gate";
 
 test.skip(process.env.LUMI_TARGET_PERSONAL_ACCEPTANCE_E2E!=="true",
@@ -126,7 +127,8 @@ async function nativeBrowser(width:number){
       "addEventListener('pageshow',e=>window.__lumiNative.shows.push(e.persisted))"});
     return {profile,chrome,cdp};
   }catch(e){
-    chrome.kill("SIGKILL");rmSync(profile,{recursive:true,force:true,maxRetries:20,retryDelay:100});throw e;
+    await stopNativeChromeAndRemoveProfile(chrome,profile);
+    throw e;
   }
 }
 function snapshotExpression(secret:string){
@@ -481,8 +483,8 @@ for(const width of [390,1280]){
       unsubscribeFinished();
       unsubscribeFailed();
       unsubscribeNotUsed();
-      cdp.close();chrome.kill("SIGKILL");
-      rmSync(profile,{recursive:true,force:true,maxRetries:20,retryDelay:100});
+      cdp.close();
+      await stopNativeChromeAndRemoveProfile(chrome,profile);
     }
   });
 }
