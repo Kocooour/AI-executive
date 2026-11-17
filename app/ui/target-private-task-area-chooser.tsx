@@ -164,6 +164,7 @@ export default function TargetPrivateTaskAreaChooser({
       }
     }
     void (async()=>{
+      if(!stillLive())return;
       let {result,timedOut}=await read();
       if(!stillLive())return;
       // A body interrupted after HTTP 200, network error, or read deadline is
