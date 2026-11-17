@@ -93,7 +93,7 @@ async function nativeBrowser(width:number){
     "--headless=new","--no-sandbox","--no-first-run",
     "--remote-debugging-port=0","--user-data-dir="+profile,
     "--window-size="+width+",844","about:blank",
-  ],{stdio:"ignore"});
+  ],{stdio:"ignore",detached:process.platform!=="win32"});
   // Observe close immediately after spawn; exit/close may precede teardown.
   const closeWatch=watchNativeChromeClose(chrome);
   try{
