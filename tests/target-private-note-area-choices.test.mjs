@@ -76,6 +76,38 @@ test("fetch is same-origin no-store and fails closed on response and network err
     {ok:false,reason:"aborted"});
 });
 
+/** C31: HTTP 200 is not a successful catalog until the entire JSON body
+ * has been read. The first chunk can arrive before the connection fails. */
+test("C31 partial HTTP 200 Area body fails closed after reader.read()",async()=>{
+  const chunks=[];
+  const brokenBody=new ReadableStream({
+    pull(controller){
+      if(chunks.length===0){
+        const first=new TextEncoder().encode('{"areas":[{"id":"area-a"');
+        chunks.push(first.length);
+        controller.enqueue(first);
+      }else{
+        chunks.push("failed");
+        controller.error(new TypeError("C31 body interrupted after 200"));
+      }
+    },
+  });
+  let requests=0;
+  const result=await loadPrivateNoteAreaChoices(new AbortController().signal,
+    async(url,init)=>{
+      requests++;
+      assert.equal(url,"/api/target-staging/notes/create-targets");
+      assert.equal(init.method,"GET");
+      assert.equal(init.cache,"no-store");
+      return new Response(brokenBody,{status:200,headers:{
+        "content-type":"application/json","cache-control":"no-store",
+      }});
+    });
+  assert.deepEqual(result,{ok:false,reason:"unavailable"});
+  assert.deepEqual(chunks.at(-1),"failed","stream error must be observed during body read");
+  assert.equal(requests,1,"transport never retries or exposes a partial catalog");
+});
+
 test("private chooser is separately default-off, and wires no note writes",()=>{
   const all=Object.fromEntries(TARGET_PRIVATE_NOTE_AREA_UI_FLAGS.map(flag=>[flag,"true"]));
   assert.equal(targetPrivateNoteAreaUiEnabled(all),true);
