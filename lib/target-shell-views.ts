@@ -33,3 +33,51 @@ export function activeTargetViewFor(input:TargetShellInput&{view:string;planActi
     :scopeList==="project"?"Projects":scopeList==="note"?"Notes":null;
   return {scopeList,targetPlan,active};
 }
+/** C-1: one pure classification for every addressable shell view. Never use
+ * legacy list membership/counts to decide whether a target view is current.
+ * personal-v1 is an all-gates opt-in; incomplete configurations and 'off'
+ * keep their existing navigation rather than advertising legacy data as live.
+ * Quick Capture is a target action, not a view/address. */
+export const SHELL_NAVIGATION_VIEWS=[
+  "MyPlanPreview","Home","Inbox","Today","Upcoming","Projects","Areas","Notes",
+  "Calendar","Search","Overdue","Anytime","Someday","Completed","Context",
+  "Agents","Settings",
+] as const;
+export type ShellNavigationView=(typeof SHELL_NAVIGATION_VIEWS)[number];
+export type ShellNavigationPlacement="primary"|"archive"|"hidden";
+export type ShellNavigationModel={
+  personalV1:boolean;
+  byView:Readonly<Record<ShellNavigationView,ShellNavigationPlacement>>;
+  primary:readonly ShellNavigationView[];
+  archive:readonly ShellNavigationView[];
+  hidden:readonly ShellNavigationView[];
+  quickCapture:boolean;
+};
+export type ShellNavigationInput=TargetShellInput&{
+  /** The main authorized title search, not the legacy search. */
+  targetSearch:boolean;
+  /** Global target private capture is ready; never fall back to legacy capture. */
+  quickCapture:boolean;
+};
+const PERSONAL_V1_PRIMARY:readonly ShellNavigationView[]=[
+  "MyPlanPreview","Projects","Notes","Calendar","Search",
+];
+const PERSONAL_V1_ARCHIVE:readonly ShellNavigationView[]=[
+  "Home","Inbox","Today","Upcoming","Overdue","Anytime","Someday",
+  "Completed","Areas","Context",
+];
+/** System views (Agents, Settings) remain accessible outside primary/archive. */
+export function targetShellNavigationFor(input:ShellNavigationInput):ShellNavigationModel{
+  const personalV1=input.v1Shell&&input.scopesOn&&input.projectsList&&
+    input.notesList&&input.myPlan&&input.targetSearch&&input.quickCapture;
+  const primary=personalV1?PERSONAL_V1_PRIMARY:[];
+  const archive=personalV1?PERSONAL_V1_ARCHIVE:[];
+  const primarySet=new Set<string>(primary);
+  const archiveSet=new Set<string>(archive);
+  const byView=Object.fromEntries(SHELL_NAVIGATION_VIEWS.map(view=>
+    [view,primarySet.has(view)?"primary":archiveSet.has(view)?"archive":"hidden"]
+  )) as Record<ShellNavigationView,ShellNavigationPlacement>;
+  return {personalV1,byView,primary,archive,
+    hidden:SHELL_NAVIGATION_VIEWS.filter(view=>byView[view]==="hidden"),
+    quickCapture:personalV1&&input.quickCapture};
+}
