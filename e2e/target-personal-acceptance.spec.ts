@@ -449,6 +449,8 @@ for (const width of [390, 1280]) {
       await expect(page.getByTestId("target-archive-heading")).toHaveCount(0);
     };
     const currentViews = ["MyPlanPreview", "Projects", "Notes", "Calendar", "Search"] as const;
+    await expect(page.locator('[data-target-private-capture-fab="' +
+      (width === 390 ? "mobile" : "desktop") + '"]')).toBeVisible();
     if (width === 1280) {
       const primary = page.locator(".appShell > aside > nav [data-nav-view]");
       await expect(primary).toHaveCount(currentViews.length);
