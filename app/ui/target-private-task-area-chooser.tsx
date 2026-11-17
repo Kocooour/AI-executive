@@ -150,13 +150,26 @@ export default function TargetPrivateTaskAreaChooser({
       controller.abort();
       if(active)setAreas({kind:"unavailable",generation});
     },8000);
-    void loadPrivateNoteAreaChoices(controller.signal).then(result=>{
+    void (async()=>{
+      let result=await loadPrivateNoteAreaChoices(controller.signal);
       if(!active||controller.signal.aborted||!live())return;
+      // A transport failure (including a body interrupted after HTTP 200)
+      // is not a valid Area catalog. Reverify the live identity first and
+      // make at most ONE additional no-store GET in this read lifecycle.
+      // Never retry auth refusals, invalid catalogs or an intentional abort.
+      if(result.ok===false&&result.reason==="unavailable"){
+        const verified=await runtime.refresh().catch(()=>"unavailable" as const);
+        if(!active||controller.signal.aborted||!live())return;
+        if(verified==="ok"){
+          result=await loadPrivateNoteAreaChoices(controller.signal);
+          if(!active||controller.signal.aborted||!live())return;
+        }
+      }
       if(result.ok===true)setAreas({kind:"ready",generation,items:result.areas});
       else if(result.ok===false&&result.reason==="signed-out"){
         setAreas({kind:"signed-out",generation});void runtime.reportRefusal();
       }else setAreas({kind:"unavailable",generation});
-    }).catch(()=>{if(active&&!controller.signal.aborted)setAreas({kind:"unavailable",generation});})
+    })().catch(()=>{if(active&&!controller.signal.aborted)setAreas({kind:"unavailable",generation});})
       .finally(()=>clearTimeout(timer));
     return ()=>{active=false;clearTimeout(timer);controller.abort();unregister();};
   },[runtime,generation,nonce]);
