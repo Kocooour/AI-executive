@@ -9,12 +9,13 @@ import { ProjectIcon, ViewIcon } from "./project-icon";
 import { WorkspaceTile, workspaceTone } from "../workspace-appearance";
 import { openTargetDetail } from "../target-detail-state";
 import { TargetSidebarContext } from "../target-sidebar-context";
+import type { ShellNavigationModel } from "../../../lib/target-shell-views";
 
 // R3-FE-4a: loaded only when the server page enabled target scopes with the project index.
 const TargetSidebarProjects = dynamic(() => import("../target-sidebar-projects"), { ssr: false });
 
-export function Sidebar({ app, targetPlan = false, onTargetCapture }: {
-  app: LumiApp; targetPlan?: boolean; onTargetCapture?:()=>void;
+export function Sidebar({ app, navigation, targetPlan = false, onTargetCapture }: {
+  app: LumiApp; navigation?: ShellNavigationModel; targetPlan?: boolean; onTargetCapture?:()=>void;
 }) {
   const targetSidebar = useContext(TargetSidebarContext);
   const {
@@ -50,7 +51,8 @@ export function Sidebar({ app, targetPlan = false, onTargetCapture }: {
   const latestViewRef = useRef(view);
   latestViewRef.current = view;
 
-  const navViews = mobileDesignV1Preview ? desktopV1PrimaryViews : primaryViews;
+  const personalV1=Boolean(navigation?.personalV1);
+  const navViews = personalV1 ? navigation!.primary : mobileDesignV1Preview ? desktopV1PrimaryViews : primaryViews;
 
   function navigateToView(destination: string, opener: HTMLButtonElement, planPreview = false) {
     const routeChanged = destination !== view ||
@@ -184,10 +186,10 @@ export function Sidebar({ app, targetPlan = false, onTargetCapture }: {
               key={x}
             >
               <span className="navLabel"><span aria-hidden="true"><ViewIcon name={planPreview ? "MyPlanPreview" : mobileDesignV1Preview && x === "Today" ? "TodayV1" : mobileDesignV1Preview && x === "Projects" ? "ProjectsV1" : x} /></span>{planPreview ? (language === "cs" ? "Můj plán" : "My Plan") : tr(x)}</span>
-              {x === "Inbox" || x === "Today" ? (
+              {!personalV1 && (x === "Inbox" || x === "Today") ? (
                 <span className="navCount">{sidebarCounts[x]}</span>
               ) : null}
-              {x === "Projects" && projectsAttention ? (
+              {x === "Projects" && projectsAttention && !personalV1 ? (
                 <><span className="navDot" data-nav-attention="Projects" aria-hidden="true" /><span className="srOnly">{tr("projectsNeedAttention")}</span></>
               ) : null}
             </button>
@@ -198,7 +200,25 @@ export function Sidebar({ app, targetPlan = false, onTargetCapture }: {
             Areas/Notes/filters remain reachable without crossing 25+ project
             rows. Legacy keeps its old order and collapsed More control. */}
         <div className="sidebarScroll">
-        {mobileDesignV1Preview && (
+        {personalV1 && navigation && (
+          <section className="targetArchiveSection" data-testid="target-archive-sidebar"
+            aria-labelledby="target-archive-sidebar-heading">
+            <h2 id="target-archive-sidebar-heading">
+              {language==="cs"?"Archiv (stará data, jen pro čtení)":"Archive (old data, read-only)"}
+            </h2>
+            <p>{language==="cs"
+              ?"Původní položky nejsou součástí aktuálního plánu. Zde je můžete pouze zobrazit."
+              :"Historical items are not part of your current plan. They can only be viewed here."}</p>
+            <div className="secondaryNav" role="navigation"
+              aria-label={language==="cs"?"Archivní pohledy":"Archived views"}>
+              {navigation.archive.map(x=><button key={x} type="button"
+                className={view===x?"active":""} data-nav-view={x}
+                data-nav-archive="true" aria-current={view===x?"page":undefined}
+                onClick={event=>navigateToView(x,event.currentTarget)}>{tr(x)}</button>)}
+            </div>
+          </section>
+        )}
+        {!personalV1 && mobileDesignV1Preview && (
           <div className="secondaryNav" id="sidebar-secondary-views" role="navigation"
             aria-label={tr("moreViews")} data-desktop-v1-direct-views>
             {secondaryViews.map((x) => <button key={x} type="button" className={view === x ? "active" : ""}
