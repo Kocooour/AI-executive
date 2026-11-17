@@ -5,6 +5,7 @@
  * Synthetic data, default-off: only LUMI_TARGET_PERSONAL_ACCEPTANCE_E2E=true runs it. */
 import {test,expect} from "./fixtures";
 import { DatabaseSync } from "node:sqlite";
+import { createServer, request as upstreamRequest } from "node:http";
 import path from "node:path";
 import { readFile } from "node:fs/promises";
 import type {Page,Response} from "@playwright/test";
@@ -704,3 +705,61 @@ for (const width of [390, 1280]) {
     expect(legacyDbRows()).toBe(originalDb);
   });
 }
+
+
+test("C34: browser creates a task through reverse proxy with public Origin distinct from Next listener",async({page})=>{
+  test.setTimeout(120_000);
+  if(!store)throw new Error("Requires the isolated target store");
+  const innerPort=Number(process.env.E2E_PORT||3100);
+  const publicPort=innerPort+1;
+  const publicOrigin=`http://localhost:${publicPort}`;
+  const forwardedHosts:string[]=[];
+  // Match Tailscale Serve: preserve the browser Host and Origin as received,
+  // do not manufacture X-Forwarded-Host/Proto/Port, and forward to loopback.
+  const proxy=createServer((incoming,outgoing)=>{
+    forwardedHosts.push(String(incoming.headers.host||""));
+    const headers={...incoming.headers};
+    for(const key of Object.keys(headers)){
+      if(key.startsWith("x-forwarded-"))delete headers[key];
+    }
+    const upstream=upstreamRequest({
+      hostname:"127.0.0.1",port:innerPort,method:incoming.method,
+      path:incoming.url||"/",headers,
+    },backend=>{
+      outgoing.writeHead(backend.statusCode||502,backend.headers);
+      backend.pipe(outgoing);
+    });
+    upstream.on("error",()=>{
+      if(!outgoing.headersSent)outgoing.writeHead(502);
+      outgoing.end();
+    });
+    incoming.pipe(upstream);
+  });
+  await new Promise<void>((resolve,reject)=>{
+    proxy.once("error",reject);
+    proxy.listen(publicPort,"127.0.0.1",()=>resolve());
+  });
+  try{
+    await page.setViewportSize({width:1280,height:844});
+    await page.goto(publicOrigin+"/?view=MyPlanPreview&scope=personal");
+    await expect(page.getByTestId("target-my-plan")).toBeVisible();
+    const fab=page.locator('[data-target-private-capture-fab="desktop"]');
+    await fab.click();
+    await page.getByTestId("target-capture-task-kind").click();
+    await page.getByTestId("target-private-task-area").selectOption({label:store.seed.areaTitle});
+    const title="Proxy task "+Date.now();
+    await page.getByTestId("target-private-task-form")
+      .getByRole("textbox",{name:"Název úkolu"}).fill(title);
+    const responsePromise=page.waitForResponse(isPost("/api/target-staging/tasks"));
+    await page.getByTestId("target-private-task-save").click();
+    const reply=await responsePromise;
+    expect(reply.status(),"public-origin write behind proxy must not be rejected as cross-origin").toBe(201);
+    await expect(page.getByTestId("target-private-task-created")).toBeVisible();
+    expect(forwardedHosts.length).toBeGreaterThan(0);
+    expect(forwardedHosts.every(host=>host===`localhost:${publicPort}`)).toBe(true);
+  }finally{
+    await new Promise<void>((resolve,reject)=>{
+      proxy.close(error=>error?reject(error):resolve());
+    });
+  }
+});
