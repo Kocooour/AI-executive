@@ -74,6 +74,58 @@ async function openAndFill(page:Page,width:number,title="Citlivý nový úkol"){
   await page.getByTestId("target-private-task-form").getByRole("textbox",{name:"Název úkolu"}).fill(title);
   return modal;
 }
+/** C31: a live wake must never keep an old private Area or draft, even
+ * when the first fresh Area GET after reauthorization is interrupted. */
+for(const width of [390,1280]){
+  test("C31 retries one interrupted post-wake Area GET at "+width+"px",async({page})=>{
+    await page.setViewportSize({width,height:844});
+    const writes=await setup(page,(route,cmd)=>
+      reply(route,{ok:true,taskId:cmd.taskId},201));
+    const calls:string[]=[];
+    let areaRequests=0;
+    await page.route("**/api/target-staging/session",route=>{
+      calls.push("session");
+      return reply(route,{generation});
+    });
+    await page.route("**/api/target-staging/notes/create-targets",route=>{
+      const attempt=++areaRequests;
+      calls.push("area:"+attempt);
+      // 1: initial catalog; 2: first read after wake fails on transport;
+      // 3: only after another successful, direct session verification.
+      if(attempt===2)return route.abort("failed");
+      return reply(route,{areas:[attempt===1
+        ?{id:"private-a",title:"Rodina"}
+        :{id:"private-b",title:"Nová Oblast"}]});
+    });
+    await page.goto("/?view=Calendar&scope=personal");
+    await openAndFill(page,width,"Abandoned private task title");
+    await page.evaluate(()=>{
+      Object.defineProperty(document,"visibilityState",{
+        configurable:true,value:"hidden",
+      });
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
+    // The hide must synchronously clear both the selected Area and draft.
+    await expect(page.getByTestId("target-private-task-form")).toHaveCount(0);
+    await page.evaluate(()=>{
+      Reflect.deleteProperty(document,"visibilityState");
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
+    await expect.poll(()=>areaRequests).toBe(3);
+    const area=page.getByTestId("target-private-task-area");
+    await expect(area.locator('option[value="private-b"]')).toHaveCount(1);
+    await expect(area.locator('option[value="private-a"]')).toHaveCount(0);
+    await expect(area).toHaveValue("");
+    const aborted=calls.indexOf("area:2"),retried=calls.indexOf("area:3");
+    expect(aborted).toBeGreaterThan(-1);
+    expect(retried).toBeGreaterThan(aborted);
+    expect(calls.slice(aborted+1,retried)).toContain("session");
+    await area.selectOption("private-b");
+    await expect(page.getByTestId("target-private-task-form")
+      .getByRole("textbox",{name:"Název úkolu"})).toHaveValue("");
+    expect(writes).toHaveLength(0);
+  });
+}
 for(const width of [390,1280]){
   test("exact single POST, server confirmation, and authorized detail at "+width+"px",async({page})=>{
     await page.setViewportSize({width,height:844});
