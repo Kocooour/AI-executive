@@ -209,7 +209,7 @@ export function CalendarView({ app, eventsOnly = false }: { app: LumiApp; events
         <section className="calendarOverview" aria-labelledby="calendar-near-term-title"><h3 id="calendar-near-term-title">{tr("calendarNearTerm")}</h3>{nearbyCalendarEventsAll.length === 0 ? <p className="attentionEmpty">{calendarSources.length === 0 ? tr("calendarDisconnected") : tr("noEventsInThe")}</p> : <div className="calendarAgenda">{nearbyCalendarEventsAll.map((event) => eventCard(event, true))}</div>}</section>
       </>
     )}
-    <button type="button" className="textAction" onClick={() => setView("Today")}>{tr("openTodaySWork")} →</button><button type="button" className="textAction" onClick={() => { setSettingsSection("calendar"); setView("Settings"); }}>{tr("manageCalendars")} →</button>{!previewCalendar && calendarStatus && <p role="status">{calendarStatus}</p>}
+    <button type="button" className="textAction" onClick={() => setView("Today", eventsOnly ? { previewMyPlan: true } : undefined)}>{tr("openTodaySWork")} →</button><button type="button" className="textAction" onClick={() => { setSettingsSection("calendar"); setView("Settings"); }}>{tr("manageCalendars")} →</button>{!previewCalendar && calendarStatus && <p role="status">{calendarStatus}</p>}
     {previewCalendar && showPreviewRefreshFailure && <p role="alert" data-calendar-v1-refresh-failed>
       {language === "cs" ? "Obnovení kalendáře se nepodařilo. Zkuste to znovu." : "Calendar refresh failed. Try again."}
     </p>}
