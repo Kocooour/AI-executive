@@ -375,8 +375,8 @@ const legacyDbRows = () => {
 // C13: the real target profile must expose legacy Home/Inbox/Today for reading
 // without ever turning the historical local-first store into a migration source.
 for (const width of [390, 1280]) {
-  test("target mode leaves legacy Home, Inbox and Today read-only at " + width + "px", async ({ page }) => {
-    test.setTimeout(90_000);
+  test("C-1 current navigation isolates synthetic legacy records; archive stays read-only at " + width + "px", async ({ page }) => {
+    test.setTimeout(180_000);
     if (!store) throw new Error("Requires the real isolated target store");
     await page.setViewportSize({ width, height: 844 });
     const unexpectedWrites: string[] = [];
@@ -405,10 +405,11 @@ for (const width of [390, 1280]) {
     const homeTitle = token + "-home";
     const inboxTitle = token + "-inbox";
     const overdueTitle = token + "-overdue";
+    const noteTitle = token + "-note";
     const now = Date.now();
     seeding = true;
     try {
-      const seedStatus = await page.evaluate(async ({ homeTitle, inboxTitle, overdueTitle, now }) => {
+      const seedStatus = await page.evaluate(async ({ homeTitle, inboxTitle, overdueTitle, noteTitle, now }) => {
         const current = await fetch("/api/store", { cache: "no-store" }).then(response => response.json());
         const task = (id: string, title: string, properties: Record<string, unknown>) => ({
           id, title, type: "task", status: "open", workspaceId: "personal",
@@ -423,16 +424,63 @@ for (const width of [390, 1280]) {
               // task exercises Attention without being deduplicated out of that list.
               task("c13:" + homeTitle, homeTitle, { today: true }),
               task("c13:" + inboxTitle, inboxTitle, { inbox: true }),
-              task("c13:" + overdueTitle, overdueTitle, { deadline: "2020-01-01" })],
+              task("c13:" + overdueTitle, overdueTitle, { deadline: "2020-01-01" }),
+              { id: "c13:" + noteTitle, title: noteTitle, type: "note",
+                status: "open", workspaceId: "personal", properties: { body: "historical note" },
+                createdAt: now, updatedAt: now }],
             relations: current.relations, deletedIds: [], revivedIds: [],
           }),
         });
         return response.status;
-      }, { homeTitle, inboxTitle, overdueTitle, now });
+      }, { homeTitle, inboxTitle, overdueTitle, noteTitle, now });
       expect(seedStatus).toBe(200);
     } finally {
       seeding = false;
     }
+
+    // C-1: verify the actual navigation controls, not only deep links. The
+    // target SQLite does not know any of these four uniquely named old items.
+    // The same real owner/browser and isolated legacy store are used at both widths.
+    const legacyTitles = [homeTitle, inboxTitle, overdueTitle, noteTitle];
+    const assertNoLegacyInCurrentView = async () => {
+      for (const oldTitle of legacyTitles)
+        await expect(page.locator(".appPane"), "current pane must not render " + oldTitle)
+          .not.toContainText(oldTitle);
+      await expect(page.getByTestId("target-archive-heading")).toHaveCount(0);
+    };
+    const currentViews = ["MyPlanPreview", "Projects", "Notes", "Calendar", "Search"] as const;
+    if (width === 1280) {
+      const primary = page.locator(".appShell > aside > nav [data-nav-view]");
+      await expect(primary).toHaveCount(currentViews.length);
+      await expect(page.locator(".appShell > aside > nav .navCount")).toHaveCount(0);
+      await expect(page.getByTestId("target-archive-sidebar")).toContainText(
+        "Archiv (stará data, jen pro čtení)");
+      for (const destination of currentViews) {
+        await page.locator('.appShell > aside > nav [data-nav-view="' + destination + '"]').click();
+        await assertNoLegacyInCurrentView();
+      }
+    } else {
+      await expect(page.locator(".mobileNav [data-nav-tab]")).toHaveCount(4);
+      await page.locator('.mobileNav [data-nav-tab="my-plan-preview"]').click();
+      await assertNoLegacyInCurrentView();
+      for (const destination of ["Calendar", "Projects"]) {
+        await page.locator('.mobileNav [data-nav-tab="' + destination + '"]').click();
+        await assertNoLegacyInCurrentView();
+      }
+      for (const destination of ["Notes", "Search"]) {
+        await page.locator('.mobileNav [data-nav-tab="More"]').click();
+        await expect(page.getByTestId("target-archive-mobile")).toContainText(
+          "Archiv (stará data, jen pro čtení)");
+        await page.getByTestId("target-more-primary")
+          .locator('[data-nav-view="' + destination + '"]').click();
+        await assertNoLegacyInCurrentView();
+      }
+      await page.locator('.mobileNav [data-nav-tab="More"]').click();
+      await page.getByTestId("target-archive-mobile").locator('[data-nav-view="Inbox"]').click();
+      await expect(page.getByTestId("target-archive-heading")).toBeVisible();
+      await expect(page.getByTestId("legacy-read-only-notice")).toBeVisible();
+    }
+    // Direct old links are still readable but never promoted to current views.
     const before = await (await page.request.get("/api/store")).body();
     const beforeDb = legacyDbRows();
 
