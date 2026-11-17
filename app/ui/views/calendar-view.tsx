@@ -12,7 +12,7 @@ import { DayTimeline } from "./day-timeline";
 
 const fill = (text: string, values: Record<string, string>) => text.replace(/\{(\w+)\}/g, (match, name: string) => values[name] ?? match);
 
-export function CalendarView({ app }: { app: LumiApp }) {
+export function CalendarView({ app, eventsOnly = false }: { app: LumiApp; eventsOnly?:boolean }) {
   const { calendarEventTasks, calendarFresh, createCalendarEventTask, isCalendarEventHidden, nearbyCalendarEventsAll, unhideCalendarEvent, calendarSources, calendarStatus, calendarTimezone, dayPlanStatus, freeHours, freeWindows,
     activeWorkspaceId, writeWorkspaceId, authState, calendarToday, calendarLoadSucceededVersion, getCalendarLoadGeneration,
     calendarWorkspaceSelection, language, loadCalendar, setCalendarStatus, setSettingsSection, setView, tr, view } = app;
@@ -117,7 +117,7 @@ export function CalendarView({ app }: { app: LumiApp }) {
     const continuation = [display.continuesFromPreviousDay && tr("calendarContinuesFromPreviousDay"), display.continuesIntoNextDay && tr("calendarContinuesIntoNextDay")].filter(Boolean).join(" · ");
     const minutes = event.allDay ? 0 : Math.round((Date.parse(event.end) - Date.parse(event.start)) / 60_000);
     const durationText = minutes > 0 ? ` · ${fill(tr("timelineMinutes"), { n: String(minutes) })}` : "";
-    const linkedTask = calendarEventTasks.get(event.id);
+    const linkedTask = eventsOnly ? null : calendarEventTasks.get(event.id);
     // Hidden: only in the calendar, faded, until the owner shows it again. It does not occupy time.
     if (isCalendarEventHidden(event)) {
       return <article key={event.id} className="calendarAgendaItem hiddenEvent" data-event-state="hidden">
@@ -138,7 +138,7 @@ export function CalendarView({ app }: { app: LumiApp }) {
         <span>{timing}</span><strong>{event.title}</strong><small>{event.busy ? tr("busy") : tr("freeTime")}{continuation ? ` · ${continuation}` : ""}{durationText}</small>
       </button>
       {isOpen && <section className="calendarEventInspector" aria-label={`${tr("calendarEventDetails")}: ${event.title}`}>
-        <strong>{tr("calendarEvent")}</strong><p>{event.allDay ? `${tr("allDay")} · ${display.detail}` : display.detail}</p>{continuation && <p>{continuation}</p>}<p>{tr("calendarReadOnlyEvent")}</p><button type="button" data-event-create-task={event.id} onClick={() => void createCalendarEventTask(event)}>{tr("calEventCreateTask")}</button><button type="button" onClick={() => setOpenEventId(null)}>{tr("calendarCloseEvent")}</button>
+        <strong>{tr("calendarEvent")}</strong><p>{event.allDay ? `${tr("allDay")} · ${display.detail}` : display.detail}</p>{continuation && <p>{continuation}</p>}<p>{tr("calendarReadOnlyEvent")}</p><button type="button" data-event-create-task={event.id} disabled={app.legacyWritesDisabled} title={app.legacyReadOnlyHint} onClick={() => void createCalendarEventTask(event)}>{tr("calEventCreateTask")}</button><button type="button" onClick={() => setOpenEventId(null)}>{tr("calendarCloseEvent")}</button>
       </section>}
       <CalendarEventActions app={app} event={event} />
     </article>;
@@ -189,7 +189,7 @@ export function CalendarView({ app }: { app: LumiApp }) {
             {language === "cs" ? "Načítám události vybraného dne…" : "Loading selected day's events…"}
           </p>
         ) : (
-          <DayTimeline key={`${workspaceId}:${shownDay}`} app={app} mode="calendar" day={shownDay}
+          <DayTimeline key={`${workspaceId}:${shownDay}`} app={app} mode="calendar" day={shownDay} eventsOnly={eventsOnly}
             dayEvents={remoteDay ? selectedDayRead?.events : undefined}
             empty={<p className="attentionEmpty">{calendarSources.length === 0 ? tr("calendarDisconnected") :
               shownDay !== calendarToday ? (language === "cs" ? "Žádné události v dostupných datech pro vybraný den; úplnost není zaručena." : "No events in available data for this day; completeness is not guaranteed.") :
@@ -198,14 +198,14 @@ export function CalendarView({ app }: { app: LumiApp }) {
         {shownDay === calendarToday && calendarFresh && freeWindows.length > 0 &&
           <p>{tr("nearestFree")} {freeWindows.slice(0, 3).map((window) =>
             `${new Date(window[0]).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", timeZone: calendarTimezone })}–${new Date(window[1]).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", timeZone: calendarTimezone })}`).join(", ")}</p>}
-        {shownDay === calendarToday && dayPlanStatus && <p role="status">{dayPlanStatus}</p>}
+        {!eventsOnly && shownDay === calendarToday && dayPlanStatus && <p role="status">{dayPlanStatus}</p>}
       </section>
     ) : (
       <>
         <section className="calendarOverview" aria-labelledby="calendar-today-title"><h3 id="calendar-today-title">{tr("calendarTodayOverview")}</h3>
-          <DayTimeline app={app} mode="calendar" empty={<p className="attentionEmpty">{calendarSources.length === 0 ? tr("calendarDisconnected") : calendarFresh ? tr("noBlockingEvent") : tr("calendarStale")}</p>} />
+          <DayTimeline app={app} mode="calendar" eventsOnly={eventsOnly} empty={<p className="attentionEmpty">{calendarSources.length === 0 ? tr("calendarDisconnected") : calendarFresh ? tr("noBlockingEvent") : tr("calendarStale")}</p>} />
           {calendarFresh && freeWindows.length > 0 && <p>{tr("nearestFree")} {freeWindows.slice(0, 3).map((window) => `${new Date(window[0]).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", timeZone: calendarTimezone })}–${new Date(window[1]).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", timeZone: calendarTimezone })}`).join(", ")}</p>}
-          {dayPlanStatus && <p role="status">{dayPlanStatus}</p>}</section>
+          {!eventsOnly && dayPlanStatus && <p role="status">{dayPlanStatus}</p>}</section>
         <section className="calendarOverview" aria-labelledby="calendar-near-term-title"><h3 id="calendar-near-term-title">{tr("calendarNearTerm")}</h3>{nearbyCalendarEventsAll.length === 0 ? <p className="attentionEmpty">{calendarSources.length === 0 ? tr("calendarDisconnected") : tr("noEventsInThe")}</p> : <div className="calendarAgenda">{nearbyCalendarEventsAll.map((event) => eventCard(event, true))}</div>}</section>
       </>
     )}
