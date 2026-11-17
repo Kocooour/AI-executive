@@ -182,14 +182,14 @@ export function DayTimeline({ app, mode, empty, day, dayEvents, eventsOnly = fal
           <>
             <p className="dayTimelineNote">{event.allDay ? `${tr("allDay")} · ${display?.detail}` : display?.detail} · {tr("calendarReadOnlyEvent")}</p>
             <CalendarEventActions app={app} event={event}
-              linkedTask={fetchedLinkedTasks ? dayLinkedTasks.get(event.id) ?? null : undefined} />
+              linkedTask={eventsOnly ? null : fetchedLinkedTasks ? dayLinkedTasks.get(event.id) ?? null : undefined} />
             {!calendarEventNeedsQuestion(event) && (
               <button type="button" data-event-create-task={event.id} disabled={app.legacyWritesDisabled} title={app.legacyReadOnlyHint} onClick={() => void createCalendarEventTask(event)}>{tr("calEventCreateTask")}</button>
             )}
           </>
         ))}
         {entry.kind === "task" && event && <CalendarEventActions app={app} event={event}
-          linkedTask={fetchedLinkedTasks ? dayLinkedTasks.get(event.id) ?? null : undefined} />}
+          linkedTask={eventsOnly ? null : fetchedLinkedTasks ? dayLinkedTasks.get(event.id) ?? null : undefined} />}
         {entry.kind === "task" && entry.task?.status === "open" && app.activeWorkspaceId !== "all" && <DeferChip app={app} task={entry.task} />}
         {entry.kind === "plan" && (
           <div className="timeMenuActions">
