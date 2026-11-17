@@ -11,6 +11,7 @@ const vars=["NODE_ENV","AI_EXECUTIVE_DATA_DIR","AI_EXECUTIVE_AUTH_ENABLED",
   "AI_EXECUTIVE_TARGET_STAGING_HTTP_ENABLED",
   "AI_EXECUTIVE_TARGET_STAGING_HTTP_WRITE_ENABLED",
   "AI_EXECUTIVE_TARGET_STAGING_HTTP_TASKS_CREATE_ENABLED",
+  "AI_EXECUTIVE_ALLOWED_ORIGINS",
   "AI_EXECUTIVE_TARGET_STAGING_DIRECTORY",
   "AI_EXECUTIVE_TARGET_STAGING_RESTORE_GENERATION",
   "AI_EXECUTIVE_TARGET_STAGING_OWNER_USER_ID"];
@@ -379,4 +380,25 @@ test("deleted CREATE: signed actor gets terminal no-future-write proof without t
     {ok:true,taskId:next.taskId},"a new command UUID may create");
   assert.equal((await cancelOpaque(cmd,null)).status,401,
     "a missing authenticated session cannot query the original receipt");
+});
+
+test("reverse proxy: allowlisted public Origin creates a task against loopback Next URL",async()=>{
+  const fx=fixture(),publicOrigin="https://vm13861.tail412944.ts.net";
+  const before=process.env.AI_EXECUTIVE_ALLOWED_ORIGINS;
+  process.env.AI_EXECUTIVE_ALLOWED_ORIGINS=publicOrigin;
+  const proxied=(origin,cmd)=>request("http://127.0.0.1:3000/api/target-staging/tasks",
+    cmd,owner(),{origin,"sec-fetch-site":"same-origin"});
+  try{
+    const cmd=command(fx);
+    assert.deepEqual(await checked(await POST(proxied(publicOrigin,cmd)),201),
+      {ok:true,taskId:cmd.taskId});
+    assert.equal(persistence(fx,cmd.taskId).task?.title,cmd.title);
+    const refused=command(fx);
+    assert.equal((await checked(await POST(proxied("https://unlisted.invalid",refused)),403)).error,
+      "Cross-origin request rejected");
+    assert.equal(persistence(fx,refused.taskId).task,undefined);
+  }finally{
+    if(before===undefined)delete process.env.AI_EXECUTIVE_ALLOWED_ORIGINS;
+    else process.env.AI_EXECUTIVE_ALLOWED_ORIGINS=before;
+  }
 });

@@ -15,6 +15,7 @@ const envNames = [
   "AI_EXECUTIVE_TARGET_STAGING_HTTP_NOTES_WRITE_ENABLED",
   "AI_EXECUTIVE_TARGET_STAGING_HTTP_NOTES_CREATE_ENABLED",
   "AI_EXECUTIVE_TARGET_STAGING_HTTP_PRIVATE_NOTE_AREAS_ENABLED",
+  "AI_EXECUTIVE_ALLOWED_ORIGINS",
   "AI_EXECUTIVE_TARGET_STAGING_DIRECTORY",
   "AI_EXECUTIVE_TARGET_STAGING_RESTORE_GENERATION",
   "AI_EXECUTIVE_TARGET_STAGING_OWNER_USER_ID",
@@ -349,4 +350,29 @@ test("create-recovery child DTO is exact and content-free",()=>{
     {ok:true,status:"not_recorded",noteId:randomUUID()},
     {ok:false,reason:"access_denied"},
   ])assert.equal(parseNoteCreateRecoveryReply(obj),null);
+});
+
+test("reverse proxy: public allowlisted Origin can preview notes with loopback request URL",async()=>{
+  const fx=fixture();
+  const publicOrigin="https://vm13861.tail412944.ts.net";
+  const before=process.env.AI_EXECUTIVE_ALLOWED_ORIGINS;
+  process.env.AI_EXECUTIVE_ALLOWED_ORIGINS=publicOrigin;
+  const proxied=(origin)=>new Request(
+    "http://127.0.0.1:3000/api/target-staging/notes/create-preview",{
+      method:"POST",
+      headers:{
+        cookie:owner(),origin,"sec-fetch-site":"same-origin",
+        "x-lumi-target-protocol":"1","content-type":"application/json",
+      },
+      body:JSON.stringify({areaId:fx.stage.unassignedAreaId}),
+    });
+  try{
+    assert.deepEqual(await checked(await PREVIEW_CREATE(proxied(publicOrigin)),200),
+      {restoreGeneration:fx.stage.restoreGeneration});
+    assert.equal((await checked(await PREVIEW_CREATE(proxied("https://unlisted.invalid")),403)).error,
+      "Cross-origin request rejected");
+  }finally{
+    if(before===undefined)delete process.env.AI_EXECUTIVE_ALLOWED_ORIGINS;
+    else process.env.AI_EXECUTIVE_ALLOWED_ORIGINS=before;
+  }
 });
