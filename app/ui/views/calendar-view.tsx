@@ -130,7 +130,7 @@ export function CalendarView({ app, eventsOnly = false }: { app: LumiApp; events
       const finished = linkedTask.status !== "open";
       return <article key={event.id} className={`calendarAgendaItem taskEvent ${finished ? "isDone" : ""}`.trim()} data-event-state="task">
         <div className="calendarAgendaOpen"><span>{timing}</span><strong>{linkedTask.title}</strong><small>{tr("calEventTask")}{finished ? ` · ${tr("Completed")}` : ""}</small></div>
-        <CalendarEventActions app={app} event={event} />
+        <CalendarEventActions app={app} event={event} linkedTask={eventsOnly?null:undefined} />
       </article>;
     }
     return <article key={event.id} className={`calendarAgendaItem ${event.busy ? "busy" : "free"}`.trim()}>
@@ -140,7 +140,7 @@ export function CalendarView({ app, eventsOnly = false }: { app: LumiApp; events
       {isOpen && <section className="calendarEventInspector" aria-label={`${tr("calendarEventDetails")}: ${event.title}`}>
         <strong>{tr("calendarEvent")}</strong><p>{event.allDay ? `${tr("allDay")} · ${display.detail}` : display.detail}</p>{continuation && <p>{continuation}</p>}<p>{tr("calendarReadOnlyEvent")}</p><button type="button" data-event-create-task={event.id} disabled={app.legacyWritesDisabled} title={app.legacyReadOnlyHint} onClick={() => void createCalendarEventTask(event)}>{tr("calEventCreateTask")}</button><button type="button" onClick={() => setOpenEventId(null)}>{tr("calendarCloseEvent")}</button>
       </section>}
-      <CalendarEventActions app={app} event={event} />
+      <CalendarEventActions app={app} event={event} linkedTask={eventsOnly?null:undefined} />
     </article>;
   };
   return view === "Calendar" ? <section className="calendarView homeSection" aria-labelledby="calendar-view-title">
@@ -162,7 +162,7 @@ export function CalendarView({ app, eventsOnly = false }: { app: LumiApp; events
         {calendarSources.map((source) => <p className="attentionMeta" key={source.id}>{source.label} · {source.lastSuccessAt ? `${tr("lastSync")} ${new Date(source.lastSuccessAt).toLocaleString(language === "cs" ? "cs-CZ" : "en-GB")}` : tr("capacityUnknown")}</p>)}
       </>
     )}
-    <CalendarEventNotice app={app} />
+    {!eventsOnly&&<CalendarEventNotice app={app} />}
     {mobileDayMode ? (
       <section className="mobileCalendarDay" aria-labelledby="mobile-calendar-day-heading">
         <MobileCalendarDateStrip selectedDay={shownDay} today={calendarToday} language={language}
