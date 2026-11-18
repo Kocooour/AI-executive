@@ -146,7 +146,15 @@ test("shell switches exactly the Search view to server titles; no new bottom nav
   assert.match(topbar,/setView\("Search"\)/);
   assert.match(topbar,/TARGET_MAIN_SEARCH_SUBMIT_EVENT/);
   assert.match(ui,/addEventListener\(TARGET_MAIN_SEARCH_SUBMIT_EVENT/);
-  assert.doesNotMatch(nav,/\bSearch\b/);
+  // Search must not become a fifth bottom tab. C-1 intentionally offers it
+  // under More as an authorized target view instead of a legacy search.
+  const navigation=readFileSync("app/ui/navigation.ts","utf8");
+  const bottomTabs=navigation.match(/export const mobileV1Tabs = \[([^\]]+)\]/)?.[1];
+  assert.ok(bottomTabs,"v1 bottom navigation remains explicit");
+  assert.doesNotMatch(bottomTabs,/\bSearch\b/);
+  assert.match(nav,/const tabs: readonly string\[\] = mobileDesignV1Preview \? mobileV1Tabs : mobileViews;/);
+  assert.match(nav,/data-testid="target-more-primary"/);
+  assert.match(nav,/navigation\.primary\.filter\(item=>item==="Notes"\|\|item==="Search"\)/);
   assert.match(ui,/useTargetScope\(\)/);
   assert.match(ui,/useTargetSession\(/);
   assert.match(ui,/subscribeMainTitleSearchAclInvalidation\(runtime/);
