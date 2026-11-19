@@ -61,7 +61,7 @@ jobs:
           unset NEXT_PUBLIC_LUMI_DESIGN_V1_PREVIEW
           pnpm build
       - name: Install browser
-        run: pnpm exec playwright install --with-deps chromium
+        run: bash scripts/ci-install-chromium.sh
       - name: Entire backup and restore spec, three consecutive clean runs
         shell: bash
         run: |

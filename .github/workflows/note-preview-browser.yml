@@ -44,7 +44,7 @@ jobs:
       - name: Build isolated preview
         run: pnpm build
       - name: Install Chromium
-        run: pnpm exec playwright install --with-deps chromium
+        run: bash scripts/ci-install-chromium.sh
       - name: Assert default-off 404 without note permission flags
         env:
           LUMI_NOTE_PREVIEW_E2E: "false"

@@ -53,7 +53,7 @@ jobs:
       - name: Build explicit v1 preview
         run: pnpm build
       - name: Install Chromium and Linux dependencies
-        run: pnpm exec playwright install --with-deps chromium
+        run: bash scripts/ci-install-chromium.sh
       - name: Run focused More-navigation browser tests only
         run: pnpm exec playwright test e2e/mobile-navigation-v1.spec.ts
       - name: Upload traces on failure

@@ -57,7 +57,7 @@ jobs:
       - name: Build default-off staging preview against synthetic server
         run: pnpm build
       - name: Install focused Chromium browser
-        run: pnpm exec playwright install --with-deps chromium
+        run: bash scripts/ci-install-chromium.sh
       - name: Run only global index privacy DOM race scenarios
         run: pnpm exec playwright test e2e/global-index-preview-ui09a.spec.ts --project=desktop
       - name: Default-off detail links and targets stay inaccessible
