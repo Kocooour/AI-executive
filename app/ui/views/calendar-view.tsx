@@ -143,7 +143,7 @@ export function CalendarView({ app, eventsOnly = false }: { app: LumiApp; events
       const finished = linkedTask.status !== "open";
       return <article key={event.id} className={`calendarAgendaItem taskEvent ${finished ? "isDone" : ""}`.trim()} data-event-state="task">
         <div className="calendarAgendaOpen"><span>{timing}</span><strong>{linkedTask.title}</strong><small>{tr("calEventTask")}{finished ? ` · ${tr("Completed")}` : ""}</small></div>
-        <CalendarEventActions app={app} event={event} linkedTask={eventsOnly?null:undefined} />
+        {!eventsOnly && <CalendarEventActions app={app} event={event} />}
       </article>;
     }
     return <article key={event.id} className={`calendarAgendaItem ${event.busy ? "busy" : "free"}`.trim()}>
@@ -151,9 +151,9 @@ export function CalendarView({ app, eventsOnly = false }: { app: LumiApp; events
         <span>{timing}</span><strong>{event.title}</strong><small>{event.busy ? tr("busy") : tr("freeTime")}{continuation ? ` · ${continuation}` : ""}{durationText}</small>
       </button>
       {isOpen && <section className="calendarEventInspector" aria-label={`${tr("calendarEventDetails")}: ${event.title}`}>
-        <strong>{tr("calendarEvent")}</strong><p>{event.allDay ? `${tr("allDay")} · ${display.detail}` : display.detail}</p>{continuation && <p>{continuation}</p>}<p>{tr("calendarReadOnlyEvent")}</p><button type="button" data-event-create-task={event.id} disabled={app.legacyWritesDisabled} title={app.legacyReadOnlyHint} onClick={() => void createCalendarEventTask(event)}>{tr("calEventCreateTask")}</button><button type="button" onClick={() => setOpenEventId(null)}>{tr("calendarCloseEvent")}</button>
+        <strong>{tr("calendarEvent")}</strong><p>{event.allDay ? `${tr("allDay")} · ${display.detail}` : display.detail}</p>{continuation && <p>{continuation}</p>}<p>{tr("calendarReadOnlyEvent")}</p>{!eventsOnly && <button type="button" data-event-create-task={event.id} disabled={app.legacyWritesDisabled} title={app.legacyReadOnlyHint} onClick={() => void createCalendarEventTask(event)}>{tr("calEventCreateTask")}</button>}<button type="button" onClick={() => setOpenEventId(null)}>{tr("calendarCloseEvent")}</button>
       </section>}
-      <CalendarEventActions app={app} event={event} linkedTask={eventsOnly?null:undefined} />
+      {!eventsOnly && <CalendarEventActions app={app} event={event} />}
     </article>;
   };
   return view === "Calendar" ? <section className="calendarView homeSection" aria-labelledby="calendar-view-title">

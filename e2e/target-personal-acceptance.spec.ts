@@ -459,12 +459,20 @@ for (const width of [390, 1280]) {
         await expect(row).toBeVisible();
         await expect(row).not.toHaveClass(/isHidden|isUnderlay/);
         await expect(row).not.toContainText("Skryto");
+        await row.locator("button").first().click();
+        const panel = page.locator('[data-timeline-panel="event:' + id + '"]');
+        await expect(panel).toBeVisible();
+        await expect(panel).toContainText(title);
+        await expect(panel.locator('[data-event-actions], [data-event-answer], [data-event-hide], [data-event-create-task]')).toHaveCount(0);
       } else {
         const row = page.locator(".calendarAgendaItem", { hasText: title });
         await expect(row).toBeVisible();
         await expect(row).not.toHaveClass(/hiddenEvent/);
         await expect(row).not.toContainText("Skryto");
         await expect(row.locator(".calendarAgendaOpen")).toContainText(title);
+        await row.locator(".calendarAgendaOpen").click();
+        await expect(row.locator(".calendarEventInspector")).toBeVisible();
+        await expect(row.locator('[data-event-actions], [data-event-answer], [data-event-hide], [data-event-create-task]')).toHaveCount(0);
       }
       await expect(page.locator('[data-event-state="hidden"]', { hasText: title })).toHaveCount(0);
       await expect(page.locator('[data-event-unhide="' + id + '"]')).toHaveCount(0);

@@ -68,10 +68,18 @@ test("C-1: archived hide decisions never hide source events in target Calendar",
     "target agenda must render the source event normally; legacy branch stays unchanged");
   assert.match(timeline, /const hidden = !eventsOnly && isCalendarEventHidden\(event\)/,
     "target timeline must not underlay, label or disable a historical hidden event");
-  assert.match(ui, /<DayTimeline[^>]*eventsOnly=\{eventsOnly\}/,
-    "both mobile and desktop timelines receive the target-only flag");
+  assert.equal((ui.match(/<DayTimeline[^>]*eventsOnly=\{eventsOnly\}/g) || []).length, 2,
+    "both mobile and desktop timelines must independently forward the target-only flag");
   assert.match(timeline, /underlay: hidden/,
     "the existing legacy underlay still uses the original hide decision when eventsOnly is off");
+  assert.equal((ui.match(/\{!eventsOnly && <CalendarEventActions app=\{app\} event=\{event\} \/>\}/g) || []).length, 2,
+    "the target agenda never mounts legacy triage actions");
+  assert.match(ui, /\{!eventsOnly && <button type="button" data-event-create-task=/,
+    "the target agenda inspector has no legacy create-task control");
+  assert.match(timeline, /\{!eventsOnly && <CalendarEventActions app=\{app\} event=\{event\}/,
+    "the target timeline event panel has no legacy triage actions");
+  assert.match(timeline, /\{!eventsOnly && !calendarEventNeedsQuestion\(event\)/,
+    "the target timeline does not read archived notTask decisions to show prompts");
 });
 
 test("C-1: hidden event Unhide is disabled in read-only target Calendar", () => {
