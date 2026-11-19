@@ -16,6 +16,8 @@ test("project, task and note routes round-trip through the address, keeping the 
     {kind:"project",id:"p1",view:"Projects"},
     {kind:"task",id:"t1",view:"Projects",projectId:"p1"},
     {kind:"task",id:"t2",view:"MyPlanPreview"},
+    {kind:"task",id:"th",view:"Home"},
+    {kind:"task",id:"tu",view:"Upcoming"},
     {kind:"note",id:"n1",view:"Notes"},
   ];
   for(const route of routes)for(const scope of ["all","personal","shared"]){
@@ -86,6 +88,9 @@ test("close leads to the parent of the current scope: project for a project task
   assert.equal(parentSearchForDetail({kind:"note",id:"n",view:"Notes"},"all"),"?view=Notes");
   assert.equal(parentSearchForDetail({kind:"task",id:"t",view:"MyPlanPreview"},"personal"),
     "?view=MyPlanPreview&scope=personal");
+  assert.equal(parentSearchForDetail({kind:"task",id:"th",view:"Home"},"all"),"");
+  assert.equal(parentSearchForDetail({kind:"task",id:"tu",view:"Upcoming"},"personal"),
+    "?view=Upcoming&scope=personal");
   assert.equal(parentSearchForDetail(null,"all"),"?view=Projects");
   assert.equal(isParentOf({kind:"project",id:"p",view:"Projects"},{kind:"task",id:"t",view:"Projects",projectId:"p"}),true);
   assert.equal(isParentOf({kind:"project",id:"q",view:"Projects"},{kind:"task",id:"t",view:"Projects",projectId:"p"}),false);
