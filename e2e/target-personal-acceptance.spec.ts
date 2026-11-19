@@ -1160,10 +1160,20 @@ for (const width of [390, 1280]) {
       });
     } finally {
       const current = await (await page.request.get("/api/store")).json();
+      // The server can attach new tasks to the fallback Area. Remove their
+      // relations together with their entities: the snapshot validator must
+      // never receive a dangling relation, and tombstone both kinds of ID.
+      const syntheticRelations = current.relations.filter(
+        (relation: { sourceEntityId: string; targetEntityId: string }) =>
+          ids.includes(relation.sourceEntityId) || ids.includes(relation.targetEntityId));
       const cleanup = await page.request.put("/api/store", { headers: { origin }, data: {
         baseRevision: current.revision, restoreGeneration: current.restoreGeneration,
         entities: current.entities.filter((row: { id: string }) => !ids.includes(row.id)),
-        relations: current.relations, deletedIds: ids, revivedIds: [],
+        relations: current.relations.filter(
+          (relation: { id: string }) => !syntheticRelations.some(
+            (removed: { id: string }) => removed.id === relation.id)),
+        deletedIds: [...ids, ...syntheticRelations.map((relation: { id: string }) => relation.id)],
+        revivedIds: [],
       } });
       expect(cleanup.status(), "remove synthetic archived ranks: " + await cleanup.text()).toBe(200);
     }
