@@ -128,7 +128,7 @@ const LEGACY_INSTALL = "pnpm:exec playwright install --with-deps chromium";
 test("pre-#476 exact-SHA checkout without helper installs the original Chromium", () => {
   const result = runReleaseInstall({ helperPresent: false });
   assert.equal(result.status, 0, result.stderr);
-  assert.deepEqual(result.calls, [INTRO_LOOKUP, INTRO_ANCESTRY, LEGACY_INSTALL]);
+  assert.deepEqual(result.calls, [INTRO_LOOKUP, INTRO_LOOKUP, INTRO_ANCESTRY, LEGACY_INSTALL]);
 });
 
 test("modern exact-SHA checkout uses shared Chromium bootstrap, not apt fallback", () => {
@@ -146,13 +146,13 @@ test("broken helper fails closed instead of hiding an installation regression", 
 test("historical Chromium dependency-install failure still blocks release E2E", () => {
   const result = runReleaseInstall({ helperPresent: false, pnpmExit: 18 });
   assert.notEqual(result.status, 0);
-  assert.deepEqual(result.calls, [INTRO_LOOKUP, INTRO_ANCESTRY, LEGACY_INSTALL]);
+  assert.deepEqual(result.calls, [INTRO_LOOKUP, INTRO_LOOKUP, INTRO_ANCESTRY, LEGACY_INSTALL]);
 });
 
 test("post-#476 checkout missing the helper fails without downgrading to apt", () => {
   const result = runReleaseInstall({ helperPresent: false, ancestryStatus: 0 });
   assert.notEqual(result.status, 0);
-  assert.deepEqual(result.calls, [INTRO_LOOKUP, INTRO_ANCESTRY]);
+  assert.deepEqual(result.calls, [INTRO_LOOKUP, INTRO_LOOKUP, INTRO_ANCESTRY]);
 });
 
 test("historical owner exception fetches introduction commit before checking ancestry", () => {
@@ -172,7 +172,7 @@ test("missing introduction commit after fetch fails closed", () => {
 test("indeterminate git ancestry check fails closed", () => {
   const result = runReleaseInstall({ helperPresent: false, ancestryStatus: 128 });
   assert.notEqual(result.status, 0);
-  assert.deepEqual(result.calls, [INTRO_LOOKUP, INTRO_ANCESTRY]);
+  assert.deepEqual(result.calls, [INTRO_LOOKUP, INTRO_LOOKUP, INTRO_ANCESTRY]);
 });
 
 test("introduction commit fetch failure fails without downgrading Chromium", () => {
