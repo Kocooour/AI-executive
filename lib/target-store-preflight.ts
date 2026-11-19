@@ -6,8 +6,8 @@ import { createHash } from "node:crypto";
 import { isReadableStagingProjectId } from "./target-project-id";
 import { DatabaseSync } from "node:sqlite";
 import {
-  TARGET_SCHEMA_SQL, TARGET_SCHEMA_V25_SQL, TARGET_STORE_FILENAME, TARGET_STORE_SCHEMA_VERSION,
-  TARGET_STORE_LEGACY_SCHEMA_VERSION, isSupportedTargetSchemaVersion,
+  TARGET_SCHEMA_SQL, TARGET_SCHEMA_V25_SQL, TARGET_SCHEMA_V26_SQL, TARGET_STORE_FILENAME, TARGET_STORE_SCHEMA_VERSION,
+  TARGET_STORE_LEGACY_SCHEMA_VERSION, TARGET_STORE_PREVIOUS_SCHEMA_VERSION, isSupportedTargetSchemaVersion,
   TARGET_STAGING_AUDIT_MAX_EVENTS, TARGET_STAGING_MAX_RECEIPTS, TARGET_STAGING_SESSION_MAX_ROWS,
   TARGET_STAGING_RECEIPT_PREFIX, TARGET_STAGING_DELETE_RECEIPT_PREFIX,
   TARGET_STAGING_PRIVATE_TASK_CREATE_RECEIPT_PREFIX,
@@ -43,7 +43,7 @@ export type TargetPreflightCode =
   | "restore_history_invalid" | "note_invalid" | "note_sync_journal_invalid"
   | "personal_plan_invalid"
   | "personal_attention_invalid"
-  | "personal_notification_invalid";
+  | "personal_notification_invalid" | "triage_invalid";
 
 export interface TargetPreflightOptions {
   stagingDirectory: string;
@@ -72,7 +72,10 @@ function matchesCanonicalSchema(actual: DatabaseSync): boolean {
   try {
     const version = (actual.prepare("SELECT value FROM metadata WHERE key='schema_version'").get() as {value: string} | undefined)?.value;
     if (!isSupportedTargetSchemaVersion(version)) return false;
-    expected.exec(version === String(TARGET_STORE_LEGACY_SCHEMA_VERSION) ? TARGET_SCHEMA_V25_SQL : TARGET_SCHEMA_SQL);
+    expected.exec(version === String(TARGET_STORE_LEGACY_SCHEMA_VERSION)
+      ? TARGET_SCHEMA_V25_SQL
+      : version === String(TARGET_STORE_PREVIOUS_SCHEMA_VERSION)
+        ? TARGET_SCHEMA_V26_SQL : TARGET_SCHEMA_SQL);
     const schema = (db: DatabaseSync) => db.prepare(
       "SELECT type, name, tbl_name, sql FROM sqlite_schema ORDER BY type, name, tbl_name",
     ).all();
@@ -457,7 +460,7 @@ export function inspectIsolatedTargetStore(
             typeof row.expected_revision !== "string" || !sha256Hex.test(row.expected_revision) ||
             !allowedGenerations.has(row.restore_generation) ||
             !meta.has(row.receipt_key))) fail("audit_invalid");
-      if (meta.get("schema_version") === String(TARGET_STORE_SCHEMA_VERSION)) {
+      if (meta.get("schema_version") !== String(TARGET_STORE_LEGACY_SCHEMA_VERSION)) {
         const projectAudit = all("SELECT receipt_key, request_digest, expected_revision, restore_generation FROM project_title_audit") as
           { receipt_key: unknown; request_digest: unknown; expected_revision: unknown; restore_generation: unknown }[];
         if (projectAudit.length > TARGET_STAGING_AUDIT_MAX_EVENTS || projectAudit.some(row =>
@@ -767,6 +770,27 @@ export function inspectIsolatedTargetStore(
                   AND COALESCE(m.role,'') IN ('editor','admin')))`) !== 0)
         fail("personal_plan_invalid");
     } catch { fail("personal_plan_invalid"); }
+
+    // C-3a: no task may silently disappear from the Inbox through a missing
+    // triage row, including completed tasks. Deleted tasks cascade their row.
+    // The migration's processed+NULL timestamp is valid without a user action.
+    try {
+      const version=(db.prepare("SELECT value FROM metadata WHERE key='schema_version'")
+        .get() as {value:string}|undefined)?.value;
+      if(version===String(TARGET_STORE_SCHEMA_VERSION)){
+        if(count(`SELECT COUNT(*) AS n FROM tasks t LEFT JOIN task_triage r ON r.task_id=t.id
+           WHERE r.task_id IS NULL`)!==0 ||
+          count(`SELECT COUNT(*) AS n FROM task_triage r LEFT JOIN tasks t ON t.id=r.task_id
+           WHERE t.id IS NULL OR r.triage_state NOT IN ('unprocessed','processed')
+              OR typeof(r.triage_revision)<>'integer' OR r.triage_revision<0
+              OR r.triage_revision>=9007199254740991
+              OR (r.triage_state='unprocessed' AND r.triaged_at_ms IS NOT NULL)
+              OR (r.triaged_at_ms IS NOT NULL AND
+                  (typeof(r.triaged_at_ms)<>'integer' OR r.triaged_at_ms<=0
+                   OR r.triaged_at_ms>=9007199254740991))`)!==0)
+          fail("triage_invalid");
+      }
+    }catch{fail("triage_invalid");}
 
     // v22: Attention lifecycle rows must be ACL-valid, occurrence-consistent
     // and column-consistent; every identity owns an independent epoch row.
