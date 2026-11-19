@@ -209,9 +209,20 @@ async function captureAreaWakeHttp(page:Page){
         read.requestOrder>mark&&read.status===200&&
         read.finishedOrder!==undefined&&read.finishedOrder<area.requestOrder&&
         read.failedOrder===undefined);
+      // Keep the strict transport invariant; print the CDP timeline if it
+      // fails so a missing session can be distinguished from delayed CDP
+      // loadingFinished, a pre-wake request or a missing route altogether.
+      const timeline=reads.map(read=>[
+        read.path===sessionPath?"session":"area",
+        "start="+read.requestOrder,"status="+(read.status??"-"),
+        "finish="+(read.finishedOrder??"-"),
+        "failed="+(read.failedOrder??"-"),
+        "cancelled="+(read.cancelled??"-"),
+        "id="+read.requestId,
+      ].join(" ")).join(" | ");
       expect(authorized.length,
-        "completed direct session GET 200 must precede replacement Area GET")
-        .toBeGreaterThan(0);
+        "completed direct session GET 200 must precede replacement Area GET; "+
+        "mark="+mark+"; "+timeline).toBeGreaterThan(0);
     },
     close:()=>cdp.detach(),
   };
@@ -255,6 +266,66 @@ for(const width of [390,1280]){
     expect(writes,"suspend/resume must not create a task").toHaveLength(0);
     await http.close();
   });
+}
+
+/** Opening while already offline/hidden must arm the wake hook even
+ * though the first reader effect cannot register a runtime disposable.
+ * Neither condition may allow a stale catalog or an unverified Area GET. */
+for(const width of [390,1280]){
+  for(const state of ["offline","hidden"] as const){
+    test("C31 revalidates Area editor mounted "+state+" at "+width+"px",async({page})=>{
+      await page.setViewportSize({width,height:844});
+      const writes=await setup(page,(route,cmd)=>
+        reply(route,{ok:true,taskId:cmd.taskId},201));
+      const http=await captureAreaWakeHttp(page);
+      let areaReads=0;
+      await page.route("**/api/target-staging/notes/create-targets",route=>{
+        areaReads++;
+        return reply(route,{areas:[{id:"private-b",title:"Reverified private Area"}]});
+      });
+      await page.goto("/?view=Calendar&scope=personal");
+      await expect(fab(page,width)).toBeVisible();
+      await page.evaluate(state=>{
+        if(state==="offline"){
+          Object.defineProperty(navigator,"onLine",{
+            configurable:true,value:false,
+          });
+          window.dispatchEvent(new Event("offline"));
+        }else{
+          Object.defineProperty(document,"visibilityState",{
+            configurable:true,value:"hidden",
+          });
+          document.dispatchEvent(new Event("visibilitychange"));
+        }
+      },state);
+      await fab(page,width).click();
+      await page.getByTestId("target-capture-task-kind").click();
+      await expect(page.getByTestId("target-private-task-capture")).toBeVisible();
+      await expect(page.getByTestId("target-private-task-form")).toHaveCount(0);
+      expect(areaReads,"initially offline/hidden editor must not read Areas").toBe(0);
+      const from=http.mark();
+      await page.evaluate(state=>{
+        if(state==="offline"){
+          Reflect.deleteProperty(navigator,"onLine");
+          window.dispatchEvent(new Event("online"));
+        }else{
+          Reflect.deleteProperty(document,"visibilityState");
+          document.dispatchEvent(new Event("visibilitychange"));
+        }
+      },state);
+      const area=page.getByTestId("target-private-task-area");
+      await expect(area.locator('option[value="private-b"]')).toHaveCount(1);
+      await http.assertOneAuthorizedReplacement(from);
+      await page.waitForTimeout(250);
+      expect(areaReads,"the wake may read the new private catalog only once").toBe(1);
+      await expect(area).toHaveValue("");
+      await area.selectOption("private-b");
+      await expect(page.getByTestId("target-private-task-form")
+        .getByRole("textbox",{name:"Název úkolu"})).toHaveValue("");
+      expect(writes,"visibility/network resume must never CREATE").toHaveLength(0);
+      await http.close();
+    });
+  }
 }
 
 /** A held read is aborted during a real runtime suspend; revalidation must
