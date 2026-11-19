@@ -21,9 +21,9 @@ import "./target-overview.css";
 type Language="cs"|"en";
 type Kind="home"|"upcoming";
 type Ready={
-  status:"ready";today:C2DayPage|null;future:C2DayPage;summary:C2Summary|null;
+  status:"ready";key:string;today:C2DayPage|null;future:C2DayPage;summary:C2Summary|null;
 };
-type ViewState={status:"loading"}|{status:"error";reason:C2Failure}|Ready;
+type ViewState={status:"loading";key?:string}|{status:"error";key:string;reason:C2Failure}|Ready;
 const local=(language:Language)=>language==="cs"?"cs-CZ":"en-GB";
 const dayLabel=(day:string,language:Language)=>new Intl.DateTimeFormat(local(language),{
   weekday:"long",day:"numeric",month:"long",
@@ -67,6 +67,9 @@ function TargetOverviewRead({kind,language,generation,onRefusal,openable}:{
   const summaryScope:C2Summary["scope"]=scope==="all"?"my-plan":scope;
   const [today,setToday]=useState(localMyPlanDate);
   const [refresh,setRefresh]=useState(0);
+  // A scope, actor generation, date or refresh change hides old rows DURING render,
+  // before the effect cancels/reissues its bound server request.
+  const viewKey=[generation,kind,filter,today,refresh].join(":");
   const [state,setState]=useState<ViewState>({status:"loading"});
   const [moreBusy,setMoreBusy]=useState(false);
   const readAbort=useRef<AbortController|null>(null);
@@ -84,11 +87,11 @@ function TargetOverviewRead({kind,language,generation,onRefusal,openable}:{
   useEffect(()=>subscribeTargetChange(reload),[reload]);
   useEffect(()=>{
     const end=c2AddDays(today,7);
-    if(!end){setState({status:"error",reason:"invalid-response"});return;}
+    if(!end){setState({status:"error",key:viewKey,reason:"invalid-response"});return;}
     const controller=new AbortController();
     readAbort.current?.abort();moreAbort.current?.abort();
     readAbort.current=controller;
-    setState({status:"loading"});
+    setState({status:"loading",key:viewKey});
     setMoreBusy(false);
     const future=fetchC2Day({window:"upcoming",evaluationDate:today,
       throughDate:end,areaFilter:filter,limit:kind==="home"?5:100,signal:controller.signal});
@@ -101,25 +104,25 @@ function TargetOverviewRead({kind,language,generation,onRefusal,openable}:{
       if(controller.signal.aborted)return;
       const failure=results.find(result=>!result.ok);
       if(failure&&!failure.ok){
-        setState({status:"error",reason:failure.reason});
+        setState({status:"error",key:viewKey,reason:failure.reason});
         if(isSignedOut(failure.reason))onRefusal();
         return;
       }
       const upcoming=results[0];
-      if(!upcoming?.ok){setState({status:"error",reason:"invalid-response"});return;}
+      if(!upcoming?.ok){setState({status:"error",key:viewKey,reason:"invalid-response"});return;}
       const current=kind==="home"?results[1]:null;
       const totals=kind==="home"?results[2]:null;
       if((current&&!current.ok)||(totals&&!totals.ok)){
-        setState({status:"error",reason:"invalid-response"});return;
+        setState({status:"error",key:viewKey,reason:"invalid-response"});return;
       }
-      setState({status:"ready",future:upcoming.value as C2DayPage,
+      setState({status:"ready",key:viewKey,future:upcoming.value as C2DayPage,
         today:current&&current.ok?current.value as C2DayPage:null,
         summary:totals&&totals.ok?totals.value as C2Summary:null});
-    }).catch(()=>{if(!controller.signal.aborted)setState({status:"error",reason:"unavailable"});});
+    }).catch(()=>{if(!controller.signal.aborted)setState({status:"error",key:viewKey,reason:"unavailable"});});
     return ()=>{controller.abort();moreAbort.current?.abort();};
   },[today,filter,summaryScope,kind,refresh,generation,onRefusal]);
   async function loadMore(){
-    if(state.status!=="ready"||!state.future.hasMore||!state.future.nextCursor||moreBusy)return;
+    if(state.status!=="ready"||state.key!==viewKey||!state.future.hasMore||!state.future.nextCursor||moreBusy)return;
     const cursor=state.future.nextCursor;
     const end=c2AddDays(today,7);
     if(!end)return;
@@ -131,7 +134,7 @@ function TargetOverviewRead({kind,language,generation,onRefusal,openable}:{
     if(controller.signal.aborted)return;
     setMoreBusy(false);
     if(result.ok===false){
-      setState({status:"error",reason:result.reason});
+      setState({status:"error",key:viewKey,reason:result.reason});
       if(isSignedOut(result.reason))onRefusal();
       return;
     }
@@ -140,7 +143,7 @@ function TargetOverviewRead({kind,language,generation,onRefusal,openable}:{
       (result.value.tasks[0]&&state.future.tasks.length>0&&
         result.value.tasks[0].attentionOn<state.future.tasks[state.future.tasks.length-1].attentionOn)||
       result.value.nextCursor===cursor){
-      setState({status:"error",reason:"stale"});return;
+      setState({status:"error",key:viewKey,reason:"stale"});return;
     }
     setState({...state,future:{...result.value,tasks:[...state.future.tasks,...result.value.tasks]}});
   }
@@ -152,7 +155,7 @@ function TargetOverviewRead({kind,language,generation,onRefusal,openable}:{
     :{loading:"Loading current records…",empty:"Nothing planned for the next seven days.",
       noToday:"No tasks for today or earlier.",error:"Current records could not be loaded safely.",
       retry:"Retry",more:"Load more tasks",moreBusy:"Loading…"});
-  if(state.status==="loading")return <div data-testid="target-overview-loading" role="status">{message.loading}</div>;
+  if(state.key!==viewKey||state.status==="loading")return <div data-testid="target-overview-loading" role="status">{message.loading}</div>;
   if(state.status==="error")return <div data-testid="target-overview-error" role="status">
     <p>{message.error}</p><TargetDataStatus failure={state.reason==="signed-out"?"signed-out":"unavailable"}
       language={language} onAction={reload}/>
