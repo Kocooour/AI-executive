@@ -9,7 +9,7 @@ import {detailIdOk} from "../../lib/target-detail-route";
 import {targetMyPlanGate} from "../../lib/target-my-plan-embed";
 import {refusalBudgetFor} from "../../lib/target-refusal-budget";
 import {subscribePrivateTaskCreate} from "../../lib/target-private-task-create-coordinator";
-import {subscribeTargetChange} from "../../lib/target-data-invalidation";
+import {emitTargetChange,subscribeTargetChange} from "../../lib/target-data-invalidation";
 import {localMyPlanDate,type MyPlanSliceFilter} from "../../lib/target-staging-my-plan-client";
 import {
   c2AddDays,c2SevenDayGroups,fetchC2Day,fetchC2HomeSummary,
@@ -112,7 +112,7 @@ function TargetOverviewRead({kind,language,generation,onRefusal,openable}:{
       if((current&&!current.ok)||(totals&&!totals.ok)){
         setState({status:"error",reason:"invalid-response"});return;
       }
-      setState({status:"ready",future:upcoming.value,
+      setState({status:"ready",future:upcoming.value as C2DayPage,
         today:current&&current.ok?current.value as C2DayPage:null,
         summary:totals&&totals.ok?totals.value as C2Summary:null});
     }).catch(()=>{if(!controller.signal.aborted)setState({status:"error",reason:"unavailable"});});
@@ -223,8 +223,9 @@ export default function TargetOverview({kind,language="cs",taskDetail=false}:{
   },[runtime]);
   useEffect(()=>{
     if(!runtime?.known()||runtime.generation()!==generation)return;
-    return subscribePrivateTaskCreate(runtime,generation,()=>{ // Revalidation without copying the created record.
-      window.dispatchEvent(new Event("lumi-c2-private-capture"));
+    return subscribePrivateTaskCreate(runtime,generation,change=>{
+      if(change.confirmedTaskId)
+        emitTargetChange({kind:"task",id:change.confirmedTaskId,change:"updated"});
     });
   },[runtime,generation]);
   const gate=targetMyPlanGate(runtime,generation,outcome,blocked);
