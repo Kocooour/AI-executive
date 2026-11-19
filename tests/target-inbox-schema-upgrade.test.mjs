@@ -24,7 +24,7 @@ function v26Fixture(name){
   const db=new DatabaseSync(stage.databasePath);
   // Derive exact canonical v26 from the freshly bootstrapped v27 fixture.
   // All new triage SQL is removed BEFORE setting the previous schema version.
-  db.exec("PRAGMA foreign_keys=ON; DROP TRIGGER task_triage_create_guard; DROP TRIGGER task_triage_revision_guard; DROP TRIGGER task_triage_task_revision; DROP INDEX tasks_unprocessed_by_id; ALTER TABLE tasks DROP COLUMN triage_revision; ALTER TABLE tasks DROP COLUMN triaged_at; ALTER TABLE tasks DROP COLUMN triage_state;");
+  db.exec("PRAGMA foreign_keys=ON; DROP TABLE task_triage_receipts; DROP TRIGGER task_triage_create_guard; DROP TRIGGER task_triage_revision_guard; DROP TRIGGER task_triage_task_revision; DROP INDEX tasks_unprocessed_by_id; ALTER TABLE tasks DROP COLUMN triage_revision; ALTER TABLE tasks DROP COLUMN triaged_at; ALTER TABLE tasks DROP COLUMN triage_state;");
   db.prepare("UPDATE metadata SET value='26' WHERE key='schema_version'").run();
   db.prepare("INSERT INTO tasks(id,area_id,title) VALUES ('existing',?,'Historical target task')")
     .run(stage.unassignedAreaId);
