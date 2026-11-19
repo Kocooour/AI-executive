@@ -131,7 +131,8 @@ for(const width of [390,1280]){
  * same exact HTTP completion/ordering proof in the focused regression. */
 async function captureAreaWakeHttp(page:Page){
   type Read={requestId:string;path:string;requestOrder:number;
-    status?:number;finishedOrder?:number;failed?:boolean};
+    status?:number;finishedOrder?:number;failedOrder?:number;
+    errorText?:string;cancelled?:boolean};
   const cdp=await page.context().newCDPSession(page);
   await cdp.send("Network.enable");
   const reads:Read[]=[];
@@ -157,11 +158,40 @@ async function captureAreaWakeHttp(page:Page){
   });
   cdp.on("Network.loadingFailed",event=>{
     const read=pending.get(event.requestId);
-    if(read){read.failed=true;order++;pending.delete(event.requestId);}
+    if(read){
+      read.failedOrder=++order;
+      read.errorText=event.errorText;
+      read.cancelled=event.canceled===true;
+      pending.delete(event.requestId);
+    }
   });
   return {
     mark:()=>order,
-    async assertOneAuthorizedReplacement(mark:number){
+    async firstPendingAreaRequest(){
+      // Wait for CDP to record the same held GET that Playwright intercepted.
+      // Do not classify a later request as the original.
+      await expect.poll(()=>reads.filter(read=>read.path===areaPath).length)
+        .toBe(1);
+      const original=reads.find(read=>read.path===areaPath)!;
+      expect(original.finishedOrder).toBeUndefined();
+      expect(original.failedOrder).toBeUndefined();
+      return original.requestId;
+    },
+    async assertClientCancelledBeforeWake(originalId:string){
+      const original=reads.find(read=>read.requestId===originalId);
+      expect(original?.path).toBe(areaPath);
+      await expect.poll(()=>original?.failedOrder,{timeout:10000})
+        .not.toBeUndefined();
+      // Only a browser-initiated cancellation proves that suspend() aborted
+      // its own request; a test-issued route.abort("failed") is not evidence.
+      expect(original?.cancelled,"AbortController must cancel the original GET")
+        .toBe(true);
+      expect(original?.errorText,"Chromium must report the client abort")
+        .toBe("net::ERR_ABORTED");
+      expect(original?.finishedOrder).toBeUndefined();
+      return original!.failedOrder!;
+    },
+    async assertOneAuthorizedReplacement(mark:number,priorCancelOrder?:number){
       await expect.poll(()=>reads.filter(read=>read.path===areaPath&&
         read.requestOrder>mark&&read.finishedOrder!==undefined).length,
       {timeout:10000}).toBe(1);
@@ -169,12 +199,16 @@ async function captureAreaWakeHttp(page:Page){
       expect(areas,"exactly one new direct private Area GET").toHaveLength(1);
       const area=areas[0];
       expect(area.status).toBe(200);
-      expect(area.failed).not.toBe(true);
+      expect(area.failedOrder).toBeUndefined();
       expect(area.finishedOrder).toBeDefined();
+      if(priorCancelOrder!==undefined){
+        expect(priorCancelOrder,"the original request must be cancelled first")
+          .toBeLessThan(area.requestOrder);
+      }
       const authorized=reads.filter(read=>read.path===sessionPath&&
         read.requestOrder>mark&&read.status===200&&
         read.finishedOrder!==undefined&&read.finishedOrder<area.requestOrder&&
-        read.failed!==true);
+        read.failedOrder===undefined);
       expect(authorized.length,
         "completed direct session GET 200 must precede replacement Area GET")
         .toBeGreaterThan(0);
@@ -231,25 +265,32 @@ for(const width of [390,1280]){
     const writes=await setup(page,(route,cmd)=>
       reply(route,{ok:true,taskId:cmd.taskId},201));
     const http=await captureAreaWakeHttp(page);
-    let requests=0,held:Route|null=null;
+    let requests=0;
     await page.route("**/api/target-staging/notes/create-targets",route=>{
       requests++;
-      if(requests===1){held=route;return;}
+      // Leave the first transport pending: only the actual client-side
+      // AbortController can cancel it, never an artificial test route.abort().
+      if(requests===1)return;
       return reply(route,{areas:[{id:"private-b",title:"Fresh private Area"}]});
     });
     await page.goto("/?view=Calendar&scope=personal");
     await fab(page,width).click();
     await page.getByTestId("target-capture-task-kind").click();
     await expect.poll(()=>requests).toBe(1);
+    const firstAreaRequestId=await http.firstPendingAreaRequest();
     const from=http.mark();
     await page.evaluate(()=>window.dispatchEvent(
       new PageTransitionEvent("pagehide",{persisted:false})));
     await expect(page.getByTestId("target-private-task-form")).toHaveCount(0);
+    // Assert the original GET was cancelled by the browser BEFORE waking or
+    // allowing any replacement request. This is the missing C31 P2 witness.
+    const cancelledAt=await http.assertClientCancelledBeforeWake(firstAreaRequestId);
+    expect(requests).toBe(1);
     await page.evaluate(()=>window.dispatchEvent(
       new PageTransitionEvent("pageshow",{persisted:false})));
     const area=page.getByTestId("target-private-task-area");
     await expect(area.locator('option[value="private-b"]')).toHaveCount(1);
-    await http.assertOneAuthorizedReplacement(from);
+    await http.assertOneAuthorizedReplacement(from,cancelledAt);
     await page.waitForTimeout(250); // late duplicate nonce must not create GET 3
     expect(requests).toBe(2);
     await expect(area).toHaveValue("");
@@ -257,7 +298,6 @@ for(const width of [390,1280]){
     await expect(page.getByTestId("target-private-task-form")
       .getByRole("textbox",{name:"Název úkolu"})).toHaveValue("");
     expect(writes).toHaveLength(0);
-    if(held)await (held as Route).abort("failed").catch(()=>{});
     await http.close();
   });
 }
