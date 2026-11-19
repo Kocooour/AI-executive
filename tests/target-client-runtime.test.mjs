@@ -416,6 +416,68 @@ test("a timed-out old verification cannot publish failure over a newer sign-out"
   }
 });
 
+test("timeout retires a hung fetch/body and Retry revalidates without waiting for it",async()=>{
+  for(const mode of ["fetch","body","late-rejection"]){
+    const pendingTimers=new Map();
+    let timerId=0,releaseOld;
+    const timers={
+      setInterval(){return "poll";},clearInterval(){},
+      setTimeout(fn,ms){
+        assert.equal(ms,8000);
+        const id=++timerId;pendingTimers.set(id,fn);return id;
+      },
+      clearTimeout(id){pendingTimers.delete(id);},
+    };
+    const stall=mode==="body"
+      ?()=>new Response(new ReadableStream({
+        start(stream){
+          stream.enqueue(new TextEncoder().encode(JSON.stringify({generation:G2})));
+          releaseOld=()=>stream.close();
+        },
+      }),{headers:{"content-type":"application/json","cache-control":"no-store"}})
+      :()=>new Promise((resolve,reject)=>{
+        releaseOld=mode==="late-rejection"
+          ?()=>reject(new TypeError("late network failure"))
+          :()=>resolve(json({generation:G2}));
+      });
+    const {runtime,calls}=setup([json({generation:G1}),stall,json({generation:G1})],
+      {config:{timers}});
+    try{
+      await settle();
+      assert.equal(runtime.lastOutcome(),"ok");
+      const outcomes=[];
+      runtime.subscribeOutcome(()=>outcomes.push(runtime.lastOutcome()));
+      const hung=runtime.refresh();
+      await settle();
+      assert.equal(typeof releaseOld,"function",mode+" old adapter still pending");
+      assert.equal(calls.length,2);
+      const [timeout]=[...pendingTimers.values()];
+      assert.equal(typeof timeout,"function");
+      timeout();
+      assert.equal(runtime.lastOutcome(),"unavailable",mode);
+      assert.equal(targetOverviewGate(runtime,G1,runtime.lastOutcome()).kind,"unavailable");
+      // Crucially, the old Promise/stream has NOT been released here. A retry
+      // must not be chained to the indefinitely hung verification.
+      assert.equal(await hung,"unavailable",mode+" public flight settles at deadline");
+      assert.equal(pendingTimers.size,0);
+      assert.equal(await runtime.refresh(),"ok",mode+" Retry starts a fresh request");
+      assert.equal(calls.length,3);
+      assert.equal(runtime.generation(),G1);
+      assert.equal(targetOverviewGate(runtime,G1,runtime.lastOutcome()).kind,"ready");
+
+      // Even a very late G2 success or transport rejection must never change
+      // the generation or overwrite the newer successful outcome.
+      releaseOld();
+      await settle();
+      assert.equal(runtime.generation(),G1,mode);
+      assert.equal(runtime.lastOutcome(),"ok",mode);
+      assert.deepEqual(outcomes,["unavailable","ok"],mode);
+    }finally{
+      runtime.dispose();
+    }
+  }
+});
+
 test("the generation DTO is strict",async()=>{
   const bad=[
     json({generation:G1,extra:1}),json({generation:"short"}),json({generation:5}),
