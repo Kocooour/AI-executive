@@ -214,7 +214,7 @@ export function Sidebar({ app, navigation, targetPlan = false, onTargetCapture }
               {navigation.archive.map(x=><button key={x} type="button"
                 className={view===x&&!(x==="Today"&&app.mobilePlanPreviewActive)?"active":""} data-nav-view={x}
                 data-nav-archive="true" aria-current={view===x&&!(x==="Today"&&app.mobilePlanPreviewActive)?"page":undefined}
-                onClick={event=>navigateToView(x,event.currentTarget)}>{tr(x==="LegacyHome"?"Home":x==="LegacyUpcoming"?"Upcoming":x)}</button>)}
+                onClick={event=>navigateToView(x,event.currentTarget)}>{tr(x==="LegacyHome"?"Home":x==="LegacyUpcoming"?"Upcoming":x==="LegacyInbox"?"Inbox":x)}</button>)}
             </div>
           </section>
         )}
