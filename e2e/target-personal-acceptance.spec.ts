@@ -787,11 +787,13 @@ test.describe("C34 HTTPS reverse-proxy acceptance",()=>{
     // isolated E2E configuration; a successful POST alone would not prove the
     // old strict-origin comparison would have failed under the same proxy.
     const nextOrigin=reply.headers()["x-lumi-e2e-next-request-origin"];
+    const nextBrowserOrigin=reply.headers()["x-lumi-e2e-next-browser-origin"];
     expect(nextOrigin,"Next must see HTTP after TLS termination").toMatch(/^http:\/\//);
-    expect(nextOrigin).not.toBe(publicOrigin);
-    // Negative control: the removed strict equality would reject this exact
-    // browser request despite the public Origin being explicitly allowlisted.
-    expect(proxiedTaskWrites[0]?.origin!==nextOrigin,
+    expect(nextBrowserOrigin,"Next must see the original browser Origin").toBe(publicOrigin);
+    expect(nextBrowserOrigin).toBe(proxiedTaskWrites[0]?.origin);
+    // Negative control using both values observed by the actual Next handler:
+    // the former strict equality would reject this request with 403.
+    expect(nextBrowserOrigin!==nextOrigin,
       "the original Origin !== request.url.origin guard must reject this request").toBe(true);
     expect(proxiedTaskWrites).toEqual([{
       host:`localhost:${publicPort}`,
