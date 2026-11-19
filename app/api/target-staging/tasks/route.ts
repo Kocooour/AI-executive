@@ -195,5 +195,12 @@ export async function GET(request: Request): Promise<Response> {
 import {postPrivateTaskCreate} from "../../../../lib/target-private-task-create-http";
 
 export async function POST(request: Request): Promise<Response> {
-  return postPrivateTaskCreate(request);
+  const response=await postPrivateTaskCreate(request);
+  // C34: only the isolated browser acceptance can inspect the URL Next saw.
+  // Never expose the internal listener URL in ordinary or production responses.
+  if(process.env.AI_EXECUTIVE_E2E==="true"&&
+      process.env.LUMI_TARGET_PERSONAL_ACCEPTANCE_E2E==="true"){
+    response.headers.set("x-lumi-e2e-next-request-origin",new URL(request.url).origin);
+  }
+  return response;
 }
