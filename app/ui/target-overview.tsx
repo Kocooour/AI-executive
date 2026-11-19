@@ -7,7 +7,7 @@ import {useTargetScope} from "./target-scope-state";
 import {TargetDataStatus} from "./target-data-status";
 import {openTargetDetail} from "./target-detail-state";
 import {detailIdOk} from "../../lib/target-detail-route";
-import {targetMyPlanGate} from "../../lib/target-my-plan-embed";
+import {targetOverviewGate} from "../../lib/target-my-plan-embed";
 import {refusalBudgetFor} from "../../lib/target-refusal-budget";
 import {subscribePrivateTaskCreate} from "../../lib/target-private-task-create-coordinator";
 import {emitTargetChange,subscribeTargetChange} from "../../lib/target-data-invalidation";
