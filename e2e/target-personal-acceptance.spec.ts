@@ -1,7 +1,9 @@
 /** R3 personal acceptance: ONE browser journey through the REAL target stack.
  * Browser -> real Next route handlers -> real isolated target SQLite, every flag of
  * TARGET_PERSONAL_V1_PROFILE on together (playwright.config.ts creates the store in the run dir).
- * No /api/target-staging request is intercepted or fulfilled here; page.on("request") only observes.
+ * All task and authorization data reads use the real isolated store.
+ * The C-2 session failure regression alone injects a synthetic 503 for the
+ * session witness; it never substitutes task/summary data or ACL decisions.
  * Synthetic data, default-off: only LUMI_TARGET_PERSONAL_ACCEPTANCE_E2E=true runs it. */
 import {test,expect} from "./fixtures";
 import { DatabaseSync } from "node:sqlite";
@@ -12,7 +14,7 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { readFile } from "node:fs/promises";
-import type {Page,Response} from "@playwright/test";
+import type {Page,Response,Route} from "@playwright/test";
 import {isTargetReadRequest} from "../lib/target-edit-fetch";
 import { addCalendarDays } from "../lib/calendar-event-display";
 import { zonedDateTimeToIso } from "../lib/local-dates";
@@ -203,6 +205,63 @@ for(const width of [390,1280]){
     await expect(page.getByTestId("target-home")).toContainText("úkolů celkem");
     await page.reload();
     await expect(page.getByTestId("target-home")).toContainText(taskTitle);
+
+    // #477: a same-generation session 503 must erase titles already mounted
+    // in Home and Upcoming. The server-authorized task reads stay real.
+    const checkFailedSessionPoll=async(view:"target-home"|"target-upcoming")=>{
+      let rejected=0;
+      const rejectSession=async(route:Route)=>{
+        rejected++;
+        await route.fulfill({status:503,contentType:"application/json",
+          headers:{"cache-control":"no-store"},body:'{"error":"temporary_unavailable"}'});
+      };
+      const sessionRoute="**/api/target-staging/session";
+      await page.route(sessionRoute,rejectSession);
+      try{
+        // The runtime's unthrottled sign-in signal triggers the exact same
+        // session refresh as a passive poll; it does not rotate actor identity.
+        await page.evaluate(()=>window.dispatchEvent(new Event("lumi:auth-signed-in")));
+        await expect.poll(()=>rejected).toBeGreaterThan(0);
+        await expect(page.getByTestId("target-overview-gate")).toBeVisible();
+        await expect(page.getByTestId(view)).toHaveCount(0);
+        await expect(page.locator('[data-detail-row="task:'+taskId+'"]')).toHaveCount(0);
+      }finally{
+        await page.unroute(sessionRoute,rejectSession);
+      }
+
+      // Once the session succeeds, hold the *real* newly authorized day read.
+      // Neither old DOM rows nor their prior response may reappear while the
+      // fresh request is pending. Release only after checking the blank state.
+      let pendingReads=0,releaseRead=()=>{};
+      const barrier=new Promise<void>(resolve=>{releaseRead=resolve;});
+      const dayRoute="**/api/target-staging/task-temporal/my-plan-day?*";
+      const holdFreshRead=async(route:Route)=>{
+        pendingReads++;
+        await barrier;
+        await route.continue();
+      };
+      await page.route(dayRoute,holdFreshRead);
+      try{
+        await page.evaluate(()=>window.dispatchEvent(new Event("lumi:auth-signed-in")));
+        await expect.poll(()=>pendingReads).toBeGreaterThan(0);
+        await expect(page.getByTestId("target-overview-loading")).toBeVisible();
+        await expect(page.getByTestId(view)).toHaveCount(0);
+        await expect(page.locator('[data-detail-row="task:'+taskId+'"]')).toHaveCount(0);
+        releaseRead();
+        await expect(page.getByTestId(view)).toContainText(taskTitle);
+        await expect(page.locator('[data-detail-row="task:'+taskId+'"]')).toHaveCount(1);
+      }finally{
+        releaseRead();
+        await page.unroute(dayRoute,holdFreshRead);
+      }
+    };
+    await checkFailedSessionPoll("target-home");
+    await page.goto("/?view=Upcoming&scope=personal");
+    await expect(page.getByTestId("target-upcoming")).toContainText(taskTitle);
+    await checkFailedSessionPoll("target-upcoming");
+    await page.goto("/?view=Home&scope=personal");
+    await expect(page.getByTestId("target-home")).toContainText(taskTitle);
+
     // C-2 privacy: hidden documents must not retain rendered target titles.
     // Shadow the DOM visibility getter (no real browser backgrounding needed).
     await page.evaluate(()=>{
