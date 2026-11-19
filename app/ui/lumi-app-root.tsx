@@ -321,7 +321,7 @@ export function LumiAppRoot({ targetHomeSummary = false, targetMyPlan, targetSco
             )}
             <div className="pageTitleRow">
               <h1 tabIndex={mobileDesignV1Preview ? -1 : undefined}>{mobileDesignV1Preview && app.mobilePlanPreviewActive && view === "Today"
-                ? (language === "cs" ? "Můj plán" : "My Plan") : tr(view==="LegacyHome"?"Home":view==="LegacyUpcoming"?"Upcoming":view)}</h1>
+                ? (language === "cs" ? "Můj plán" : "My Plan") : tr(view==="LegacyHome"?"Home":view==="LegacyUpcoming"?"Upcoming":view==="LegacyInbox"?"Inbox":view)}</h1>
               {(view === "Today" || view === "Home") && <time>{new Intl.DateTimeFormat(language === "cs" ? "cs-CZ" : "en-GB", { weekday: "short", day: "numeric", month: "short" }).format(new Date())}</time>}
               {view === "Today" && !targetPlan && <TodayHeaderMeta app={app} />}
             </div>
