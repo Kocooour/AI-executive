@@ -5,6 +5,8 @@ import { mobileCalendarDateParts, mobileCalendarReadWindow } from "../../../lib/
 import { calendarV1RefreshFailureVisible, calendarV1SurfaceState, type CalendarV1RefreshFailure } from "../../../lib/calendar-ui04d";
 import { MobileCalendarDateStrip } from "./mobile-calendar-date-strip";
 import { calendarEventDisplay } from "../../../lib/calendar-event-display";
+import { calendarSourceCapacity } from "../../../lib/calendar-source-capacity";
+import { zonedDateTimeToIso } from "../../../lib/local-dates";
 import type { CalendarEvent } from "../types";
 import { CalendarEventActions, CalendarEventNotice } from "./calendar-event-actions";
 import type { LumiApp } from "../use-lumi-app";
@@ -13,7 +15,7 @@ import { DayTimeline } from "./day-timeline";
 const fill = (text: string, values: Record<string, string>) => text.replace(/\{(\w+)\}/g, (match, name: string) => values[name] ?? match);
 
 export function CalendarView({ app, eventsOnly = false }: { app: LumiApp; eventsOnly?:boolean }) {
-  const { calendarEventTasks, calendarFresh, createCalendarEventTask, isCalendarEventHidden, nearbyCalendarEventsAll, unhideCalendarEvent, calendarSources, calendarStatus, calendarTimezone, dayPlanStatus, freeHours, freeWindows,
+  const { calendarEventTasks, calendarFresh, createCalendarEventTask, isCalendarEventHidden, nearbyCalendarEventsAll, unhideCalendarEvent, calendarSources, calendarEvents, calendarStatus, calendarTimezone, dayPlanStatus, freeHours, freeWindows, notificationState,
     activeWorkspaceId, writeWorkspaceId, authState, calendarToday, calendarLoadSucceededVersion, getCalendarLoadGeneration,
     calendarWorkspaceSelection, language, loadCalendar, setCalendarStatus, setSettingsSection, setView, tr, view } = app;
   const [openEventId, setOpenEventId] = useState<string | null>(null);
@@ -34,6 +36,16 @@ export function CalendarView({ app, eventsOnly = false }: { app: LumiApp; events
   const shownDay = selectedCalendarDay ?? calendarToday;
   const [dayReload, setDayReload] = useState(0);
   const workspaceId = activeWorkspaceId === "all" ? writeWorkspaceId : activeWorkspaceId;
+  // C-1: source events determine capacity in the target-only Calendar. Archived
+  // task conversions and hidden-event decisions must not make a busy slot free.
+  // The legacy calendar keeps its existing calculation when eventsOnly is off.
+  const sourceCapacity = eventsOnly ? calendarSourceCapacity(
+    calendarEvents.filter((event) => event.workspaceId === workspaceId),
+    Date.parse(zonedDateTimeToIso(calendarToday, notificationState?.preferences.workdayStart || "08:00", calendarTimezone)),
+    Date.parse(zonedDateTimeToIso(calendarToday, notificationState?.preferences.workdayEnd || "18:00", calendarTimezone)),
+  ) : null;
+  const shownFreeHours = sourceCapacity?.freeHours ?? freeHours;
+  const shownFreeWindows = sourceCapacity?.freeWindows ?? freeWindows;
   // CalendarView remains mounted after navigation. End the previous request's
   // right to show an error on any workspace, auth or screen change.
   useEffect(() => {
@@ -118,11 +130,11 @@ export function CalendarView({ app, eventsOnly = false }: { app: LumiApp; events
     const minutes = event.allDay ? 0 : Math.round((Date.parse(event.end) - Date.parse(event.start)) / 60_000);
     const durationText = minutes > 0 ? ` · ${fill(tr("timelineMinutes"), { n: String(minutes) })}` : "";
     const linkedTask = eventsOnly ? null : calendarEventTasks.get(event.id);
-    // Hidden: only in the calendar, faded, until the owner shows it again. It does not occupy time.
+    // Historical hide decisions remain visible, but target capacity uses the source event as busy.
     if (isCalendarEventHidden(event)) {
       return <article key={event.id} className="calendarAgendaItem hiddenEvent" data-event-state="hidden">
         <div className="calendarAgendaOpen"><span>{timing}</span><strong>{event.title}</strong><small>{tr("calEventHiddenLabel")}</small></div>
-        <div className="calendarEventActions"><div className="calendarEventRow"><button type="button" className="calendarEventHide" data-event-unhide={event.id} aria-label={fill(tr("calEventUnhideLabel"), { title: event.title })} onClick={() => void unhideCalendarEvent(event)}>{tr("calEventUnhide")}</button></div></div>
+        <div className="calendarEventActions"><div className="calendarEventRow"><button type="button" className="calendarEventHide" data-event-unhide={event.id} disabled={app.legacyWritesDisabled} title={app.legacyReadOnlyHint} aria-label={fill(tr("calEventUnhideLabel"), { title: event.title })} onClick={() => void unhideCalendarEvent(event)}>{tr("calEventUnhide")}</button></div></div>
       </article>;
     }
     // Became a task: listed once, as that task, at the event's time (no plain copy of the event).
@@ -151,13 +163,13 @@ export function CalendarView({ app, eventsOnly = false }: { app: LumiApp; events
           className={`calendarFreshness ${v1Status === "fresh" ? "fresh" : v1Status}`}>
           {v1Status === "disconnected" ? tr("calendarDisconnected")
             : v1Status === "stale" ? `${tr("calendarStale")} ${tr("freeWindowsAreHidden")}`
-              : `${freeHours.toFixed(1)} ${tr("freeHours")}`}
+              : `${shownFreeHours.toFixed(1)} ${tr("freeHours")}`}
         </p>
       )
     ) : (
       <>
         <p className="attentionMeta">{tr("sourceConnectedReadOnly")} · {calendarTimezone}</p>
-        <p role="status" className={`calendarFreshness ${calendarSources.length === 0 ? "disconnected" : calendarFresh && (!mobileDayMode || shownDay === calendarToday) ? "fresh" : "stale"}`}>{calendarSources.length === 0 ? tr("calendarDisconnected") : calendarFresh && (!mobileDayMode || shownDay === calendarToday) ? `${freeHours.toFixed(1)} ${tr("freeHours")}` : tr("capacityUnknown")}</p>
+        <p role="status" className={`calendarFreshness ${calendarSources.length === 0 ? "disconnected" : calendarFresh && (!mobileDayMode || shownDay === calendarToday) ? "fresh" : "stale"}`}>{calendarSources.length === 0 ? tr("calendarDisconnected") : calendarFresh && (!mobileDayMode || shownDay === calendarToday) ? `${shownFreeHours.toFixed(1)} ${tr("freeHours")}` : tr("capacityUnknown")}</p>
         {!calendarFresh && calendarSources.length > 0 && <p className="attentionEmpty" role="status">{tr("calendarStale")} {tr("freeWindowsAreHidden")}</p>}
         {calendarSources.map((source) => <p className="attentionMeta" key={source.id}>{source.label} · {source.lastSuccessAt ? `${tr("lastSync")} ${new Date(source.lastSuccessAt).toLocaleString(language === "cs" ? "cs-CZ" : "en-GB")}` : tr("capacityUnknown")}</p>)}
       </>
@@ -195,8 +207,8 @@ export function CalendarView({ app, eventsOnly = false }: { app: LumiApp; events
               shownDay !== calendarToday ? (language === "cs" ? "Žádné události v dostupných datech pro vybraný den; úplnost není zaručena." : "No events in available data for this day; completeness is not guaranteed.") :
               calendarFresh ? tr("noBlockingEvent") : tr("calendarStale")}</p>} />
         )}
-        {shownDay === calendarToday && calendarFresh && freeWindows.length > 0 &&
-          <p>{tr("nearestFree")} {freeWindows.slice(0, 3).map((window) =>
+        {shownDay === calendarToday && calendarFresh && shownFreeWindows.length > 0 &&
+          <p>{tr("nearestFree")} {shownFreeWindows.slice(0, 3).map((window) =>
             `${new Date(window[0]).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", timeZone: calendarTimezone })}–${new Date(window[1]).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", timeZone: calendarTimezone })}`).join(", ")}</p>}
         {!eventsOnly && shownDay === calendarToday && dayPlanStatus && <p role="status">{dayPlanStatus}</p>}
       </section>
@@ -204,7 +216,7 @@ export function CalendarView({ app, eventsOnly = false }: { app: LumiApp; events
       <>
         <section className="calendarOverview" aria-labelledby="calendar-today-title"><h3 id="calendar-today-title">{tr("calendarTodayOverview")}</h3>
           <DayTimeline app={app} mode="calendar" eventsOnly={eventsOnly} empty={<p className="attentionEmpty">{calendarSources.length === 0 ? tr("calendarDisconnected") : calendarFresh ? tr("noBlockingEvent") : tr("calendarStale")}</p>} />
-          {calendarFresh && freeWindows.length > 0 && <p>{tr("nearestFree")} {freeWindows.slice(0, 3).map((window) => `${new Date(window[0]).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", timeZone: calendarTimezone })}–${new Date(window[1]).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", timeZone: calendarTimezone })}`).join(", ")}</p>}
+          {calendarFresh && shownFreeWindows.length > 0 && <p>{tr("nearestFree")} {shownFreeWindows.slice(0, 3).map((window) => `${new Date(window[0]).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", timeZone: calendarTimezone })}–${new Date(window[1]).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", timeZone: calendarTimezone })}`).join(", ")}</p>}
           {!eventsOnly && dayPlanStatus && <p role="status">{dayPlanStatus}</p>}</section>
         <section className="calendarOverview" aria-labelledby="calendar-near-term-title"><h3 id="calendar-near-term-title">{tr("calendarNearTerm")}</h3>{nearbyCalendarEventsAll.length === 0 ? <p className="attentionEmpty">{calendarSources.length === 0 ? tr("calendarDisconnected") : tr("noEventsInThe")}</p> : <div className="calendarAgenda">{nearbyCalendarEventsAll.map((event) => eventCard(event, true))}</div>}</section>
       </>
