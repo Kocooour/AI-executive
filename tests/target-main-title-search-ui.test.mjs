@@ -154,7 +154,7 @@ test("shell switches exactly the Search view to server titles; no new bottom nav
   assert.doesNotMatch(bottomTabs,/\bSearch\b/);
   assert.match(nav,/const tabs: readonly string\[\] = mobileDesignV1Preview \? mobileV1Tabs : mobileViews;/);
   assert.match(nav,/data-testid="target-more-primary"/);
-  assert.match(nav,/navigation\.primary\.filter\(item=>item==="Notes"\|\|item==="Search"\)/);
+  assert.match(nav,/navigation\.primary\.filter\(item=>\["Home","Upcoming","Notes","Search"\]\.includes\(item\)\)/);
   assert.match(ui,/useTargetScope\(\)/);
   assert.match(ui,/useTargetSession\(/);
   assert.match(ui,/subscribeMainTitleSearchAclInvalidation\(runtime/);
@@ -172,8 +172,8 @@ test("authorized Search never mounts legacy task or held-back titles, including 
   // authorized Search screen regardless of the remote response lifecycle.
   const root=readFileSync("app/ui/lumi-app-root.tsx","utf8");
   assert.match(root,/const legacySearchSurfaces = mainTitleSearchLegacySurfaces\(targetSearch,view\);/);
-  assert.match(root,/\{legacySearchSurfaces\.heldBack && <HeldBack app=\{app\} \/>\}/);
-  assert.match(root,/: legacySearchSurfaces\.entityList\s*\? <EntityList app=\{app\} \/>\s*: null\}/);
+  assert.match(root,/\{legacySearchSurfaces\.heldBack && !targetOverview && <HeldBack app=\{app\} \/>\}/);
+  assert.match(root,/: !targetOverview && legacySearchSurfaces\.entityList\s*\? <EntityList app=\{app\} \/>\s*: null\}/);
   const legacyTask="PRIVATE LEGACY TASK NOT AUTHORIZED BY TARGET";
   const heldBack="PRIVATE HELD-BACK TITLE NOT AUTHORIZED BY TARGET";
   const presentTitles=(enabled,view)=>{
