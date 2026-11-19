@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import {readFileSync} from "node:fs";
 import {test} from "node:test";
+import {createTargetClientRuntime,TARGET_POLL_MS} from "../lib/target-client-runtime.ts";
+import {targetOverviewGate,targetMyPlanGate} from "../lib/target-my-plan-embed.ts";
 import {
   c2AddDays,c2SevenDayGroups,parseC2Day,parseC2Summary,
   fetchC2Day,fetchC2HomeSummary,
@@ -168,4 +170,112 @@ test("C-2 overview subscribes to verified ACL ticks and fail-closed wake lifecyc
   assert.match(dayReader,/m\.role IN \('editor','admin'\) AND t\.assignee_user_id=actor\.id/,
     "each verified tick re-reads the server-authorized actor assignment");
   assert.doesNotMatch(ui,/localStorage|sessionStorage|indexedDB|legacyTasks/);
+});
+
+test("C-2 Home and Upcoming hide previously loaded actor titles on failed same-generation session polls",async()=>{
+  const generation="A".repeat(43);
+  const jsonSession=(body,status=200)=>new Response(JSON.stringify(body),{
+    status,headers:{"content-type":"application/json","cache-control":"no-store"},
+  });
+  const steps=[
+    ()=>jsonSession({generation}),
+    ()=>jsonSession({error:"unavailable"},503),
+    ()=>{throw new TypeError("network failure");},
+    ()=>jsonSession({generation}),
+    ()=>jsonSession({error:"disabled"},404),
+  ];
+  let requests=0,poll=null,ticks=0,outcomeEvents=0;
+  const events={addEventListener(){},removeEventListener(){}};
+  const fakeWindow={...events,document:{...events,visibilityState:"visible"},
+    navigator:{onLine:true}};
+  const runtime=createTargetClientRuntime({
+    window:fakeWindow,broadcastChannelFactory:null,
+    timers:{
+      setInterval(fn,ms){assert.equal(ms,TARGET_POLL_MS);poll=fn;return 1;},
+      clearInterval(){poll=null;},
+    },
+    fetch:async()=>{
+      const next=steps[requests++];
+      assert.ok(next,"unexpected session revalidation loop");
+      return next();
+    },
+  });
+  const waitOutcome=expected=>new Promise(resolve=>{
+    if(runtime.lastOutcome()===expected){resolve();return;}
+    const stop=runtime.subscribeOutcome(()=>{
+      if(runtime.lastOutcome()===expected){stop();resolve();}
+    });
+  });
+  const previouslyLoaded={
+    home:["Actor A private Home task"],
+    upcoming:["Actor A shared Upcoming task"],
+  };
+  const visibleTitles=kind=>targetOverviewGate(runtime,generation,runtime.lastOutcome()).kind==="ready"
+    ?previouslyLoaded[kind]:[];
+  try{
+    runtime.subscribeTick(()=>ticks++);
+    runtime.subscribeOutcome(()=>outcomeEvents++);
+    await waitOutcome("ok");
+    assert.equal(runtime.generation(),generation);
+    assert.deepEqual(visibleTitles("home"),previouslyLoaded.home);
+    assert.deepEqual(visibleTitles("upcoming"),previouslyLoaded.upcoming);
+
+    // A passive 503 emits no ACL tick and preserves the generation; the new
+    // outcome-aware gate must still hide BOTH previously rendered title sets.
+    const failed=waitOutcome("unavailable");
+    assert.equal(typeof poll,"function");
+    poll();
+    await failed;
+    assert.equal(runtime.generation(),generation);
+    assert.equal(runtime.known(),true);
+    assert.equal(targetMyPlanGate(runtime,generation,runtime.lastOutcome()).kind,"ready",
+      "the general My Plan gate alone does not protect C-2");
+    assert.equal(targetOverviewGate(runtime,generation,runtime.lastOutcome()).kind,"unavailable");
+    assert.deepEqual(visibleTitles("home"),[]);
+    assert.deepEqual(visibleTitles("upcoming"),[]);
+    assert.equal(ticks,0);
+    await new Promise(resolve=>setImmediate(resolve));
+    assert.equal(requests,2,"failure must not trigger automatic revalidation loops");
+
+    // Consecutive transport failures remain hidden even without a second
+    // outcome event (the runtime only publishes changes in outcome value).
+    assert.equal(await runtime.refresh(),"unavailable");
+    assert.equal(runtime.generation(),generation);
+    assert.deepEqual(visibleTitles("home"),[]);
+    assert.deepEqual(visibleTitles("upcoming"),[]);
+    assert.equal(requests,3);
+
+    // Retry may reopen the gate only after a fresh successful session witness.
+    assert.equal(await runtime.refresh(),"ok");
+    assert.equal(runtime.generation(),generation);
+    assert.equal(targetOverviewGate(runtime,generation,runtime.lastOutcome()).kind,"ready");
+    assert.ok(outcomeEvents>=3);
+
+    const off=waitOutcome("feature_off");
+    poll();
+    await off;
+    assert.equal(targetOverviewGate(runtime,generation,runtime.lastOutcome()).kind,"feature_off");
+    assert.deepEqual(visibleTitles("home"),[]);
+    assert.deepEqual(visibleTitles("upcoming"),[]);
+    assert.equal(runtime.known(),false);
+  }finally{
+    runtime.dispose();
+  }
+});
+
+test("C-2 overview JSX unmounts cached rows on bad outcome and remounts only a fresh reader",()=>{
+  const ui=readFileSync(new URL("../app/ui/target-overview.tsx",import.meta.url),"utf8");
+  // The parent subscribes to every runtime outcome, not only verified ticks.
+  assert.match(ui,/runtime\?runtime\.subscribeOutcome\(notify\)/);
+  assert.match(ui,/const outcome=useSyncExternalStore\(/);
+  assert.match(ui,/const gate=targetOverviewGate\(runtime,generation,outcome,blocked\)/);
+  assert.match(ui,/if\(gate\.kind!=="ready"\)return/);
+  assert.match(ui,/return <TargetOverviewRead key=\{kind\+":"\+gate\.generation\}/);
+  assert.match(ui,/return \(\)=>\{controller\.abort\(\);moreAbort\.current\?\.abort\(\);\};/,
+    "unmount cancels both first page and pagination requests");
+  // Failed and disabled outcomes cannot bypass an explicit refusal lock.
+  const generation="A".repeat(43),known={known:()=>true,generation:()=>generation};
+  assert.equal(targetOverviewGate(known,generation,"unavailable",true).kind,"refused");
+  assert.equal(targetOverviewGate(known,generation,"feature_off").kind,"feature_off");
+  assert.equal(targetOverviewGate(known,generation,"signed_out").kind,"signed_out");
 });
