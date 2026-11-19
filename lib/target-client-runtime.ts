@@ -206,14 +206,18 @@ export function createTargetClientRuntime(config:TargetClientRuntimeConfig={}){
     const bumps=localBumps;
     const own=new AbortController();
     controller=own;
-    const timer=timeoutSet(()=>{
-      own.abort();
-      // A fetch or body reader may ignore AbortSignal indefinitely. Publish
-      // this verification failure NOW: Home/Upcoming must not retain actor
-      // titles merely because the request has yet to reject or settle.
-      // Never overwrite a newer explicit sign-out/refusal or a disposed runtime.
-      if(!disposed&&bumps===localBumps&&controller===own)outcome("unavailable");
-    },TIMEOUT_MS);
+    let timer:unknown;
+    const timeout=new Promise<TargetRuntimeRefreshResult>(resolve=>{
+      timer=timeoutSet(()=>{
+        own.abort();
+        // A fetch or body reader may ignore AbortSignal indefinitely. Hide
+        // actor titles immediately AND retire this flight so Retry can start
+        // a fresh session witness without waiting on the hung adapter.
+        if(!disposed&&bumps===localBumps&&controller===own)outcome("unavailable");
+        resolve("unavailable");
+      },TIMEOUT_MS);
+    });
+    const verification=(async():Promise<TargetRuntimeRefreshResult>=>{
     try{
       const response=await fetchImpl(TARGET_SESSION_ENDPOINT,{
         method:"GET",credentials:"same-origin",cache:"no-store",redirect:"error",
@@ -248,8 +252,17 @@ export function createTargetClientRuntime(config:TargetClientRuntimeConfig={}){
       outcome("ok");
       return "ok";
     }catch{
-      if(!disposed&&bumps===localBumps)outcome("unavailable"); // incl. timeout
+      // A timed-out verification can settle after a newer Retry succeeded.
+      // Never let that old rejection revoke the newer successful outcome.
+      if(!disposed&&bumps===localBumps&&!own.signal.aborted&&controller===own)
+        outcome("unavailable");
       return "unavailable";
+    }
+    })();
+    try{
+      // Aborting a fetch is advisory: a hung fetch/ReadableStream may never
+      // settle. This race bounds the *public* refresh promise independently.
+      return await Promise.race([verification,timeout]);
     }finally{
       timeoutClear(timer);
       if(controller===own)controller=null;
