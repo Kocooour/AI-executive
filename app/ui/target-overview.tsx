@@ -130,7 +130,7 @@ function TargetOverviewRead({kind,language,generation,onRefusal,openable}:{
       throughDate:end,areaFilter:filter,limit:100,cursor,signal:controller.signal});
     if(controller.signal.aborted)return;
     setMoreBusy(false);
-    if(!result.ok){
+    if(result.ok===false){
       setState({status:"error",reason:result.reason});
       if(isSignedOut(result.reason))onRefusal();
       return;
