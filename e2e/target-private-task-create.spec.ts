@@ -126,6 +126,98 @@ for(const width of [390,1280]){
     expect(writes).toHaveLength(0);
   });
 }
+/** The runtime may have been suspended before the private task modal
+ * mounted. In that case its register({suspend}) immediately aborts the new
+ * reader, while useTargetWake never saw the matching hide. A later pageshow
+ * must independently reauthorize and start a replacement GET. This used to
+ * strand the editor with "Areas cannot be verified" indefinitely. */
+for(const width of [390,1280]){
+  test("C31 recovers suspended-on-register Area reader at "+width+"px",async({page})=>{
+    await page.setViewportSize({width,height:844});
+    const writes=await setup(page,(route,cmd)=>
+      reply(route,{ok:true,taskId:cmd.taskId},201));
+    const events:string[]=[];
+    let areaReads=0;
+    page.on("request",request=>{
+      if(new URL(request.url()).pathname==="/api/target-staging/notes/create-targets")
+        events.push("area:start");
+    });
+    page.on("requestfinished",request=>{
+      if(new URL(request.url()).pathname==="/api/target-staging/session")
+        events.push("session:finished");
+    });
+    await page.route("**/api/target-staging/notes/create-targets",route=>{
+      areaReads++;
+      return reply(route,{areas:[{id:"private-b",title:"Fresh private Area"}]});
+    });
+    await page.goto("/?view=Calendar&scope=personal");
+    await expect(fab(page,width)).toBeVisible();
+    // The page was already suspended before the chooser's wake hook existed.
+    await page.evaluate(()=>window.dispatchEvent(
+      new PageTransitionEvent("pagehide",{persisted:false})));
+    await fab(page,width).click();
+    await page.getByTestId("target-capture-task-kind").click();
+    const modal=page.getByTestId("target-private-task-capture");
+    await expect(modal).toBeVisible();
+    await expect(page.getByTestId("target-private-task-form")).toHaveCount(0);
+    expect(areaReads,"suspended runtime cannot authorize an Area read").toBe(0);
+    const from=events.length;
+    // Non-persisted pageshow is intentionally not a wake for this newly
+    // mounted hook. Only the runtime's resume callback can restart the read.
+    await page.evaluate(()=>window.dispatchEvent(
+      new PageTransitionEvent("pageshow",{persisted:false})));
+    const area=page.getByTestId("target-private-task-area");
+    await expect(area.locator('option[value="private-b"]')).toHaveCount(1);
+    expect(areaReads).toBe(1);
+    const resumed=events.slice(from);
+    expect(resumed).toContain("session:finished");
+    expect(resumed).toContain("area:start");
+    expect(resumed.indexOf("session:finished"),
+      "fresh completed session must precede the replacement Area GET")
+      .toBeLessThan(resumed.indexOf("area:start"));
+    await expect(area).toHaveValue("");
+    await area.selectOption("private-b");
+    await expect(page.getByTestId("target-private-task-form")
+      .getByRole("textbox",{name:"Název úkolu"})).toHaveValue("");
+    expect(writes,"suspend/resume must not create a task").toHaveLength(0);
+  });
+}
+
+/** A real in-flight read may be cancelled during suspend. The old request
+ * must never authorize a catalog after resume; a newly authorized request
+ * wins, and no previous draft/selection is restored. */
+for(const width of [390,1280]){
+  test("C31 replaces a suspended in-flight Area read at "+width+"px",async({page})=>{
+    await page.setViewportSize({width,height:844});
+    const writes=await setup(page,(route,cmd)=>
+      reply(route,{ok:true,taskId:cmd.taskId},201));
+    let requests=0,held:Route|null=null;
+    await page.route("**/api/target-staging/notes/create-targets",route=>{
+      requests++;
+      if(requests===1){held=route;return;}
+      return reply(route,{areas:[{id:"private-b",title:"Fresh private Area"}]});
+    });
+    await page.goto("/?view=Calendar&scope=personal");
+    await fab(page,width).click();
+    await page.getByTestId("target-capture-task-kind").click();
+    await expect.poll(()=>requests).toBe(1);
+    await page.evaluate(()=>window.dispatchEvent(
+      new PageTransitionEvent("pagehide",{persisted:false})));
+    await expect(page.getByTestId("target-private-task-form")).toHaveCount(0);
+    await page.evaluate(()=>window.dispatchEvent(
+      new PageTransitionEvent("pageshow",{persisted:false})));
+    const area=page.getByTestId("target-private-task-area");
+    await expect(area.locator('option[value="private-b"]')).toHaveCount(1);
+    expect(requests).toBeGreaterThanOrEqual(2);
+    await expect(area).toHaveValue("");
+    await area.selectOption("private-b");
+    await expect(page.getByTestId("target-private-task-form")
+      .getByRole("textbox",{name:"Název úkolu"})).toHaveValue("");
+    expect(writes).toHaveLength(0);
+    if(held)await (held as Route).abort("failed").catch(()=>{});
+  });
+}
+
 /** The original C31 failure happened AFTER HTTP 200 response headers,
  * while reader.read() consumed the body. Synthetic Fetch Response 200 below
  * provides one partial JSON chunk then errors the stream (not the fetch).
