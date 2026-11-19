@@ -87,3 +87,65 @@ test("C-2 clients request only server-authorized target endpoints and fail close
   const abort=new AbortController();abort.abort();
   assert.deepEqual(await fetchC2Day({...params,signal:abort.signal},fetchImpl),{ok:false,reason:"aborted"});
 });
+
+
+test("C-2 response budget rejects oversized Content-Length without decoding",async()=>{
+  const response=await fetchC2Day(params,async()=>respond(page([task("a",tomorrow)]),200,
+    {"content-length":"350001"}));
+  assert.deepEqual(response,{ok:false,reason:"invalid-response"});
+  const invalidLength=await fetchC2HomeSummary("my-plan",undefined,async()=>respond({
+    scope:"my-plan",counts:{tasks:1,projects:0},truncated:{tasks:false,projects:false}
+  },200,{"content-length":"3.5e5"}));
+  assert.deepEqual(invalidLength,{ok:false,reason:"invalid-response"});
+});
+
+test("C-2 streaming reader cancels oversized unannounced chunks before accumulation",async()=>{
+  let canceled=false,pulls=0;
+  const body=new ReadableStream({
+    pull(controller){
+      pulls++;
+      controller.enqueue(new Uint8Array(180_000));
+    },
+    cancel(){canceled=true;},
+  });
+  const response=await fetchC2Day(params,async()=>new Response(body,{headers}));
+  assert.deepEqual(response,{ok:false,reason:"invalid-response"});
+  assert.equal(canceled,true,"stream is canceled on the second over-budget chunk");
+  assert.ok(pulls<=4,"reader stops requesting further chunks");
+});
+
+test("C-2 rejects malformed UTF-8 and fake no-store while failing closed",async()=>{
+  const malformed=await fetchC2Day(params,async()=>new Response(
+    new Uint8Array([0xc3,0x28]),{headers}));
+  assert.deepEqual(malformed,{ok:false,reason:"invalid-response"});
+  const quoted=await fetchC2Day(params,async()=>respond(page([task("a",tomorrow)]),
+    200,{"cache-control":'private, "no-store"'}));
+  assert.deepEqual(quoted,{ok:false,reason:"invalid-response"});
+});
+
+test("C-2 abort cancels a stalled streaming body and returns no record",async()=>{
+  let canceled=false;
+  const controller=new AbortController();
+  const body=new ReadableStream({
+    start(stream){stream.enqueue(new TextEncoder().encode('{"tasks":'));},
+    cancel(){canceled=true;},
+  });
+  const pending=fetchC2Day({...params,signal:controller.signal},
+    async()=>new Response(body,{headers}));
+  await new Promise(resolve=>setImmediate(resolve));
+  controller.abort();
+  assert.deepEqual(await pending,{ok:false,reason:"aborted"});
+  assert.equal(canceled,true);
+});
+
+test("C-2 abort settles even if the fetch adapter ignores its signal",async()=>{
+  const controller=new AbortController();
+  let release;
+  const deferred=new Promise(resolve=>{release=resolve;});
+  const pending=fetchC2Day({...params,signal:controller.signal},()=>deferred);
+  await new Promise(resolve=>setImmediate(resolve));
+  controller.abort();
+  assert.deepEqual(await pending,{ok:false,reason:"aborted"});
+  release(respond(page([task("a",tomorrow)])));
+  await new Promise(resolve=>setImmediate(resolve));
+});
