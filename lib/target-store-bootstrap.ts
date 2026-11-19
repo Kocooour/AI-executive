@@ -6,6 +6,7 @@
  * R2 must provide authenticated, per-item server commands before this store is used.
  */
 import { randomUUID } from "node:crypto";
+import { TARGET_INBOX_TRIAGE_SQL } from "./target-inbox-triage";
 import {
   closeSync, constants, existsSync, fchmodSync, fsyncSync, lstatSync, mkdirSync, openSync, realpathSync, statSync, writeSync,
 } from "node:fs";
@@ -55,10 +56,15 @@ import { bootstrapTargetStagingWitness } from "./target-staging-anchor-witness";
 // crash. An explicit in-flight marker is committed BEFORE calling the sender;
 // only an interrupted in-flight send becomes unknown (never retried).
 // As with other schema revisions, old staging stores are intentionally rejected.
-export const TARGET_STORE_SCHEMA_VERSION = 26;
+// C-3a v27 installs per-task Inbox state. v26 remains readable until the
+// operator explicitly performs the pinned upgrade; no startup migration.
+export const TARGET_STORE_SCHEMA_VERSION = 27;
+export const TARGET_STORE_PREVIOUS_SCHEMA_VERSION = 26;
 export const TARGET_STORE_LEGACY_SCHEMA_VERSION = 25;
 export const isSupportedTargetSchemaVersion = (value: unknown): boolean =>
-  value === String(TARGET_STORE_SCHEMA_VERSION) || value === String(TARGET_STORE_LEGACY_SCHEMA_VERSION);
+  value === String(TARGET_STORE_SCHEMA_VERSION) ||
+  value === String(TARGET_STORE_PREVIOUS_SCHEMA_VERSION) ||
+  value === String(TARGET_STORE_LEGACY_SCHEMA_VERSION);
 /** Capacities of the v23 push foundation in a fresh isolated store. */
 export const TARGET_STAGING_MAX_PUSH_TARGETS = 4096;
 export const TARGET_STAGING_MAX_PUSH_TARGETS_PER_USER = 64;
@@ -1940,7 +1946,8 @@ CREATE TRIGGER project_title_audit_capacity BEFORE INSERT ON project_title_audit
 WHEN (SELECT COUNT(*) FROM project_title_audit) >= ${TARGET_STAGING_AUDIT_MAX_EVENTS}
 BEGIN SELECT RAISE(ABORT, 'audit capacity reached'); END;
 `;
-export const TARGET_SCHEMA_SQL = TARGET_SCHEMA_V25_SQL + TARGET_PROJECT_TITLE_SCHEMA_SQL;
+export const TARGET_SCHEMA_V26_SQL = TARGET_SCHEMA_V25_SQL + TARGET_PROJECT_TITLE_SCHEMA_SQL;
+export const TARGET_SCHEMA_SQL = TARGET_SCHEMA_V26_SQL + TARGET_INBOX_TRIAGE_SQL;
 
 /**
  * Create a stage-only schema and initial private 'Nezařazeno' Area. Explicit caller
