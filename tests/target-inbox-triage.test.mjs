@@ -24,9 +24,9 @@ function fixture(schema, version){
   const insert=(id)=>db.prepare("INSERT INTO tasks(id,area_id,title) VALUES(?,'a','Test task')").run(id);
   return {db,insert};
 }
-const triage=(db,id)=>db.prepare(
+const triage=(db,id)=>({...db.prepare(
   "SELECT triage_state,triaged_at_ms,triage_revision FROM task_triage WHERE task_id=?"
-).get(id);
+).get(id)});
 
 test("C-3a: v27 fresh tasks are unprocessed regardless of their completion",()=>{
   assert.equal(TARGET_STORE_SCHEMA_VERSION,TARGET_INBOX_TRIAGE_SCHEMA_VERSION);
