@@ -129,7 +129,7 @@ export async function fetchC2Day(input:{
   if(input.throughDate)q.set("throughDate",input.throughDate);
   if(input.cursor)q.set("cursor",input.cursor);
   const data=await getJson("/api/target-staging/task-temporal/my-plan-day?"+q,input.signal,fetchImpl);
-  if(!data.ok)return data;
+  if(data.ok===false)return {ok:false,reason:data.reason};
   const page=parseC2Day(data.value,{window:input.window,evaluationDate:input.evaluationDate,
     throughDate:input.throughDate,areaFilter:input.areaFilter,limit});
   return page?{ok:true,value:page}:{ok:false,reason:"invalid-response"};
@@ -137,7 +137,7 @@ export async function fetchC2Day(input:{
 export async function fetchC2HomeSummary(scope:C2Summary["scope"],signal?:AbortSignal,
   fetchImpl:typeof fetch=targetAppFetch):Promise<C2Result<C2Summary>>{
   const data=await getJson("/api/target-staging/home/summary?scope="+scope,signal,fetchImpl);
-  if(!data.ok)return data;
+  if(data.ok===false)return {ok:false,reason:data.reason};
   const summary=parseC2Summary(data.value,scope);
   return summary?{ok:true,value:summary}:{ok:false,reason:"invalid-response"};
 }
