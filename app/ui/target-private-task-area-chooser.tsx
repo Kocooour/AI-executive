@@ -81,6 +81,7 @@ export default function TargetPrivateTaskAreaChooser({
   // A pending wake belongs to the generation which observed the hide.
   // Never replay its ticket against a newly authorized generation.
   const wakeReadGeneration=useRef(generation);
+  const areaReadGeneration=useRef(generation);
   const wakeEpoch=useRef(0);
   const mounted=useRef(true);
   const serial=useRef(0);
@@ -195,6 +196,11 @@ export default function TargetPrivateTaskAreaChooser({
       }
       return ()=>{active=false;stop();};
     }
+    // Rotation updates the generation as soon as the session body is parsed;
+    // Chrome may report its loadingFinished on the next task. Do not start
+    // the first B Area GET before that transport completion boundary.
+    const newGeneration=areaReadGeneration.current!==generation;
+    areaReadGeneration.current=generation;
     // The runtime can already be suspended when this editor registers (e.g.
     // a native Back/pagehide completed before the modal mounted). A suspend
     // permanently invalidates this effect's private response; resume MUST
@@ -232,6 +238,7 @@ export default function TargetPrivateTaskAreaChooser({
       }
     }
     void (async()=>{
+      if(newGeneration)await new Promise<void>(resolve=>setTimeout(resolve,16));
       if(!stillLive())return;
       let {result,timedOut}=await read();
       if(!stillLive())return;
