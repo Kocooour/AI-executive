@@ -1991,7 +1991,11 @@ export function useLumiApp(options: { targetDetails?: boolean; targetUnified?: b
       navigationView, targetViews: targetViewsRef.current })) { addressedView.current = navigationView; return; }
     // Even if the preview uses Today as its local initial data view,
     // explicit ?view=Today must remain distinct and reloadable.
-    const navigationStart = mobileDesignV1Preview && view === "Today" ? "Home" : startupView;
+    // In personal-v1 the empty address belongs to My Plan. A selected target
+    // Home must retain its explicit ?view=Home URL through refresh (including
+    // scope-only addresses); otherwise reload silently falls back to My Plan.
+    const navigationStart = preferTargetPlan && view === "Home" ? "MyPlanPreview"
+      : mobileDesignV1Preview && view === "Today" ? "Home" : startupView;
     const update = addressUpdate({ currentSearch: window.location.search,
       view: navigationView, startView: navigationStart,
       navigated: addressedView.current !== null && addressedView.current !== navigationView });
