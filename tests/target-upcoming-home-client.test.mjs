@@ -164,7 +164,7 @@ test("C-2 overview subscribes to verified ACL ticks and fail-closed wake lifecyc
   assert.match(ui,/setPrivacyHidden\(false\)/);
   assert.match(ui,/markHidden\(\)/,"initial hidden or offline mount must require a fresh wake");
   assert.match(ui,/privacyHidden\|\|document\.visibilityState==="hidden"\|\|!navigator\.onLine/);
-  assert.match(ui,/!privacyHidden&&\(state\.key!==viewKey/);
+  assert.match(ui,/state\.status==="loading"\|\|\(!privacyHidden&&state\.key!==viewKey\)/);
   assert.match(dayReader,/m\.role IN \('editor','admin'\) AND t\.assignee_user_id=actor\.id/,
     "each verified tick re-reads the server-authorized actor assignment");
   assert.doesNotMatch(ui,/localStorage|sessionStorage|indexedDB|legacyTasks/);
