@@ -130,8 +130,9 @@ export function CalendarView({ app, eventsOnly = false }: { app: LumiApp; events
     const minutes = event.allDay ? 0 : Math.round((Date.parse(event.end) - Date.parse(event.start)) / 60_000);
     const durationText = minutes > 0 ? ` · ${fill(tr("timelineMinutes"), { n: String(minutes) })}` : "";
     const linkedTask = eventsOnly ? null : calendarEventTasks.get(event.id);
-    // Historical hide decisions remain visible, but target capacity uses the source event as busy.
-    if (isCalendarEventHidden(event)) {
+    // Historical hide decisions belong to the read-only Archive. The current
+    // target Calendar shows the source event normally, with no stranded Unhide.
+    if (!eventsOnly && isCalendarEventHidden(event)) {
       return <article key={event.id} className="calendarAgendaItem hiddenEvent" data-event-state="hidden">
         <div className="calendarAgendaOpen"><span>{timing}</span><strong>{event.title}</strong><small>{tr("calEventHiddenLabel")}</small></div>
         <div className="calendarEventActions"><div className="calendarEventRow"><button type="button" className="calendarEventHide" data-event-unhide={event.id} disabled={app.legacyWritesDisabled} title={app.legacyReadOnlyHint} aria-label={fill(tr("calEventUnhideLabel"), { title: event.title })} onClick={() => void unhideCalendarEvent(event)}>{tr("calEventUnhide")}</button></div></div>
