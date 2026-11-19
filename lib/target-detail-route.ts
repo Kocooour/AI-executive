@@ -110,7 +110,8 @@ export function parentSearchForDetail(route:TargetDetailRoute|null,scope:UrlScop
     return searchForDetail({kind:"project",id:route.projectId,view:"Projects"},scope);
   const named=viewOfSearch(currentSearch);
   const view=(route?.view??(named!==null&&(DETAIL_VIEWS as readonly string[]).includes(named)?named:"Projects")) as TargetDetailView;
-  return searchWithScope(view==="MyPlanPreview"?"?view=MyPlanPreview":searchForView(view,START_VIEW),scope);
+  return searchWithScope(view==="MyPlanPreview"?"?view=MyPlanPreview":
+    view==="Home"?"?view=Home":searchForView(view,START_VIEW),scope);
 }
 
 export const detailRouteKey=(route:TargetDetailRoute):string=>
