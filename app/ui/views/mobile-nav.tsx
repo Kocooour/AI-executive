@@ -129,7 +129,7 @@ export function MobileNav({ app, navigation, targetPlan = false, onTargetCapture
                     onClick={()=>{markMobileMoreNavigation(item);setView(item);closeDetail();setMoreOpen(false);}}>
                     <span className="mobileMoreItemIcon" aria-hidden="true">
                       <ViewIcon name={item==="Today"?"TodayV1":item} />
-                    </span><span>{tr(item==="LegacyHome"?"Home":item==="LegacyUpcoming"?"Upcoming":item)}</span>
+                    </span><span>{tr(item==="LegacyHome"?"Home":item==="LegacyUpcoming"?"Upcoming":item==="LegacyInbox"?"Inbox":item)}</span>
                   </button>)}
               </section>
               <section className="mobileMoreGroup" aria-labelledby="target-more-system-heading">
