@@ -206,3 +206,14 @@ Nezavádíme PostgreSQL, pgvector ani paralelní nasazení HumanAgentWiki. Tato 
 - **UX:** Kontext přes Více a hledání; na desktopu přes sidebar/inspektor. Články mají souhrn, „Co platí“, vztahy, časové změny a „Proč to vím?“ s dostupnou citací. **Můj plán** a čtyři spodní mobilní položky zůstávají beze změny.
 
 **Status 2026-11-08:** schválená specifikace a plán, **nikoli implementovaný import, HumanWiki UI, e-mailová obsahová synchronizace nebo autonomní učení**. Syntetický H1-synthetic smí vznikat paralelně s R2d/R3 bez osobních dat; H1-real s osobními exporty vyžaduje autorizované R2d/R3 rozhraní a vědomý souhlas. Produkční aktivace nad cílovými daty podléhá samostatné R4 bráně. Přesné akceptační scénáře v rozhodnutí jsou součástí LUMI-FR-014.
+
+
+### Milník C-3a — cílový Inbox, triage a Undo (#483)
+
+- Cílový Inbox je seznam serverových úkolů s `triage_state=unprocessed`; **není** alternativní filtr podle `when_on`, termínu, dokončení ani priority. Úkol zmizí teprve po explicitním `Zpracovat` (samostatná triage revize).
+- Při jednorázové, operátorem spuštěné migraci v26 → v27 se **již existující cílové** úkoly označí jako `processed` a `triaged_at=NULL` (bez uživatelského auditního Process). Nové úkoly výchozí hodnotou vstupují jako `unprocessed`. Původní lokální/legacy data se nemigrují.
+- `Zpracovat` mění jen triage; nemění `Kdy`, termín, zařazení, přiřazení ani dokončení. `Vrátit do Inboxu` je explicitní Undo konkrétního Process, chráněné revizí, oprávněními a neměnným potvrzením. Replay stejného UUID je idempotentní, druhý Undo nesmí přepsat jinou úpravu.
+- Seznam i počet čte pouze aktuálně oprávněný aktér; samotné načtení z backendu nestačí k vydání dat po změně session nebo ACL. Viewer může číst povolený obsah, nikoli provádět triage. Chyba načtení nesmí odhalit staré titulky ani stale počty.
+- `LegacyInbox` zůstává v archivu jen pro čtení. Pravidlové/AI návrhy, přijetí návrhu a AI souhlas patří až do C-3b.
+
+**Implementační stav:** draft [PR #485](https://github.com/Kocooour/AI-executive/pull/485); backend schéma/read/writer a základ navigace jsou rozpracované, produkční HTTP/UI a release akceptace nejsou dokončeny. Neslučovat před produkčním C-1+C-2.
