@@ -91,26 +91,97 @@ export function parseC2Summary(value:unknown,scope:C2Summary["scope"]):C2Summary
     projects:value.counts.projects as number},truncated:{
       tasks:value.truncated.tasks as boolean,projects:value.truncated.projects as boolean}};
 }
-/** A failed/refused/changed-scope read cannot keep previous records on screen. */
+/** Byte budget applies during streaming, never after buffering an entire response. */
+const MAX_C2_RESPONSE_BYTES=350_000;
+class InvalidC2Body extends Error {}
+function discardC2Body(response:Response):void{
+  try{if(response.body)void response.body.cancel().catch(()=>{});}
+  catch{/* A consumed body cannot be canceled twice. */}
+}
+/** A fetch adapter might ignore AbortSignal until after it returns a response.
+ * Settle promptly and discard late responses without parsing them. */
+async function fetchC2UntilAbort(request:()=>Promise<Response>,
+  signal?:AbortSignal):Promise<Response|null>{
+  if(!signal)return request();
+  if(signal.aborted)return null;
+  let onAbort=()=>{};
+  const aborted=new Promise<null>(resolve=>{
+    onAbort=()=>resolve(null);
+    signal.addEventListener("abort",onAbort,{once:true});
+  });
+  try{
+    if(signal.aborted)return null;
+    const pending=Promise.resolve().then(request);
+    const response=await Promise.race([pending,aborted]);
+    if(response===null)
+      void pending.then(discardC2Body,()=>{});
+    return response;
+  }finally{signal.removeEventListener("abort",onAbort);}
+}
+function c2NoStore(header:string|null):boolean{
+  return header!==null&&header.split(",").some(part=>part.trim().toLowerCase()==="no-store");
+}
+function c2JsonType(header:string|null):boolean{
+  return header?.split(";")[0].trim().toLowerCase()==="application/json";
+}
+async function readC2BoundedJson(response:Response,signal?:AbortSignal):Promise<unknown>{
+  const length=response.headers.get("content-length");
+  if(length!==null&&(!/^(?:0|[1-9][0-9]*)$/.test(length)||
+    !Number.isSafeInteger(Number(length))||Number(length)>MAX_C2_RESPONSE_BYTES)){
+    discardC2Body(response);
+    throw new InvalidC2Body();
+  }
+  if(!response.body)throw new InvalidC2Body();
+  const reader=response.body.getReader();
+  const decoder=new TextDecoder("utf-8",{fatal:true});
+  let received=0,body="",complete=false;
+  const cancel=()=>{void reader.cancel().catch(()=>{});};
+  signal?.addEventListener("abort",cancel,{once:true});
+  try{
+    for(;;){
+      if(signal?.aborted)throw new InvalidC2Body();
+      const chunk=await reader.read();
+      if(signal?.aborted)throw new InvalidC2Body();
+      if(chunk.done){complete=true;break;}
+      if(!(chunk.value instanceof Uint8Array))throw new InvalidC2Body();
+      received+=chunk.value.byteLength;
+      if(received>MAX_C2_RESPONSE_BYTES)throw new InvalidC2Body();
+      body+=decoder.decode(chunk.value,{stream:true});
+    }
+    body+=decoder.decode();
+    return JSON.parse(body) as unknown;
+  }finally{
+    signal?.removeEventListener("abort",cancel);
+    if(!complete)cancel();
+    reader.releaseLock();
+  }
+}
+/** A failed, refused or changed-scope read cannot keep previous records on screen. */
 async function getJson(url:string,signal?:AbortSignal,
   fetchImpl:typeof fetch=targetAppFetch):Promise<C2Result<unknown>>{
   if(signal?.aborted)return {ok:false,reason:"aborted"};
+  let response:Response|null;
   try{
-    const response=await fetchImpl(url,{credentials:"same-origin",cache:"no-store",
-      redirect:"error",headers:{accept:"application/json"},signal});
-    if(signal?.aborted){void response.body?.cancel().catch(()=>{});return {ok:false,reason:"aborted"};}
-    if(response.status===401||response.status===403)return {ok:false,reason:"signed-out"};
-    if(response.status===409)return {ok:false,reason:"stale"};
-    if(!response.ok)return {ok:false,reason:"unavailable"};
-    if(response.redirected||!response.headers.get("cache-control")?.toLowerCase().includes("no-store")||
-      !response.headers.get("content-type")?.toLowerCase().includes("application/json"))
-      return {ok:false,reason:"invalid-response"};
-    // This endpoint's 100-row page and two counters fit within this budget.
-    const raw=await response.text();
-    if(signal?.aborted)return {ok:false,reason:"aborted"};
-    if(raw.length>350_000)return {ok:false,reason:"invalid-response"};
-    return {ok:true,value:JSON.parse(raw) as unknown};
+    response=await fetchC2UntilAbort(()=>fetchImpl(url,{
+      method:"GET",credentials:"same-origin",cache:"no-store",redirect:"error",
+      headers:{accept:"application/json"},signal,
+    }),signal);
   }catch{return {ok:false,reason:signal?.aborted?"aborted":"offline"};}
+  if(response===null)return {ok:false,reason:"aborted"};
+  if(signal?.aborted){discardC2Body(response);return {ok:false,reason:"aborted"};}
+  if(response.status===401||response.status===403){
+    discardC2Body(response);return {ok:false,reason:"signed-out"};
+  }
+  if(response.status===409){discardC2Body(response);return {ok:false,reason:"stale"};}
+  if(!response.ok){discardC2Body(response);return {ok:false,reason:"unavailable"};}
+  if(response.redirected||!c2NoStore(response.headers.get("cache-control"))||
+    !c2JsonType(response.headers.get("content-type"))){
+    discardC2Body(response);return {ok:false,reason:"invalid-response"};
+  }
+  try{
+    const data=await readC2BoundedJson(response,signal);
+    return signal?.aborted?{ok:false,reason:"aborted"}:{ok:true,value:data};
+  }catch{return {ok:false,reason:signal?.aborted?"aborted":"invalid-response"};}
 }
 export async function fetchC2Day(input:{
   window:"today"|"upcoming";evaluationDate:string;throughDate:string|null;
