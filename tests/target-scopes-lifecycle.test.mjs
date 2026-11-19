@@ -218,14 +218,14 @@ test("wiring: flags off -> legacy tree, lazy chunks only, no eager import, no re
   assert.doesNotMatch(root_,/^import .*target-scope/m);
   assert.match(root_,/const scopesOn = Boolean\(targetScopes\?\.enabled\)/);
   // The per-view decision lives in a pure helper (lib/target-shell-views.ts).
-  assert.match(root_,/activeTargetViewFor\(\{ \.\.\.shellInput, view, planActive \}\)/);
+  assert.match(root_,/activeTargetViewFor\(\{ \.\.\.shellInput, view, planActive, personalV1:shellNavigation\.personalV1 \}\)/);
   const helper=read("lib/target-shell-views.ts");
   assert.match(helper,/input\.scopesOn&&input\.view==="Projects"&&input\.projectsList\?"project"/);
   assert.match(helper,/input\.scopesOn&&input\.view==="Notes"&&input\.notesList\?"note":null/);
   assert.match(root_,/\{scopeSwitcher && <TargetScopeSwitcher language=\{language\} variant=/);
   // Legacy lists stay the fallback for every other case.
-  assert.match(root_,/: legacySearchSurfaces\.entityList\s*\? <EntityList app=\{app\} \/>/);
-  assert.match(root_,/\{legacySearchSurfaces\.heldBack && <HeldBack app=\{app\} \/>\}/);
+  assert.match(root_,/: !targetOverview && legacySearchSurfaces\.entityList\s*\? <EntityList app=\{app\} \/>/);
+  assert.match(root_,/\{legacySearchSurfaces\.heldBack && !targetOverview && <HeldBack app=\{app\} \/>\}/);
   const page=read("app/page.tsx");
   assert.match(page,/targetScopes=\{config\?\.scopes\}/);
   assert.match(page,/: <LumiAppRoot humanWikiSourceStatusEnabled=\{humanWikiSourceStatusEnabled\} \/>/);
@@ -375,7 +375,7 @@ test("wiring: lists keyed by kind in the root; legacy unresolved-link notice sup
   // In Search, the global switcher uses the same list scope semantics; only
   // an active target My Plan gets the plan variant.
   assert.match(root_,/variant=\{targetPlan \? "plan" : "lists"\}/);
-  assert.match(root_,/scopeList !== null \|\| \(scopesOn && \(targetPlan \|\| \(targetSearch && view==="Search"\)\)\)/);
+  assert.match(root_,/scopeList !== null \|\| \(scopesOn && \(targetPlan \|\| targetOverview \|\| \(targetSearch && view==="Search"\)\)\)/);
   const lists=read("app/ui/target-scope-lists.tsx");
   assert.match(lists,/state\.rowKind===kind&&state\.page\.scope===scope/);
   // Phone start ignores the scope key.
