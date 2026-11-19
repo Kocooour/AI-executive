@@ -1122,14 +1122,17 @@ for (const width of [390, 1280]) {
       id, title, type: "task", status: "open", workspaceId: "personal",
       properties: { when: "2099-10-20", manualOrders }, createdAt, updatedAt: Math.max(stamp, createdAt),
     });
-    const seed = await page.request.put("/api/store", { data: {
+    // The legacy PUT rejects requests without Origin (403). Playwright APIRequestContext
+    // does not add a browser Origin automatically, unlike the other seeded browser scenarios.
+    const origin = new URL(page.url()).origin;
+    const seed = await page.request.put("/api/store", { headers: { origin }, data: {
       baseRevision: snapshot.revision, restoreGeneration: snapshot.restoreGeneration,
       entities: [...snapshot.entities,
         make(ids[0], titles[0], stamp + 5000, { "personal:task:Upcoming": 1 }),
         make(ids[1], titles[1], stamp - 5000, { "task:Upcoming": 2 })],
       relations: snapshot.relations, deletedIds: [], revivedIds: [],
     } });
-    expect(seed.ok(), "seed synthetic pre-split ranks").toBe(true);
+    expect(seed.status(), "seed synthetic pre-split ranks: " + await seed.text()).toBe(200);
     try {
       // Exercise Home with actual rows, not only an empty archive.
       await page.goto("/?view=LegacyHome");
@@ -1157,12 +1160,12 @@ for (const width of [390, 1280]) {
       });
     } finally {
       const current = await (await page.request.get("/api/store")).json();
-      const cleanup = await page.request.put("/api/store", { data: {
+      const cleanup = await page.request.put("/api/store", { headers: { origin }, data: {
         baseRevision: current.revision, restoreGeneration: current.restoreGeneration,
         entities: current.entities.filter((row: { id: string }) => !ids.includes(row.id)),
         relations: current.relations, deletedIds: ids, revivedIds: [],
       } });
-      expect(cleanup.ok(), "remove synthetic archived ranks").toBe(true);
+      expect(cleanup.status(), "remove synthetic archived ranks: " + await cleanup.text()).toBe(200);
     }
   });
 }
