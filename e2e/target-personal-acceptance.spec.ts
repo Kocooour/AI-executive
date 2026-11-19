@@ -459,7 +459,8 @@ for (const width of [390, 1280]) {
         await expect(row).toBeVisible();
         await expect(row).not.toHaveClass(/isHidden|isUnderlay/);
         await expect(row).not.toContainText("Skryto");
-        await row.locator("button").first().click();
+        // data-timeline-item is the PopoverMenu trigger button itself, not a wrapper.
+        await row.click();
         const panel = page.locator('[data-timeline-panel="event:' + id + '"]');
         await expect(panel).toBeVisible();
         await expect(panel).toContainText(title);
