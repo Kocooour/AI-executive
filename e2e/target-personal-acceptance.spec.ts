@@ -5,7 +5,11 @@
  * Synthetic data, default-off: only LUMI_TARGET_PERSONAL_ACCEPTANCE_E2E=true runs it. */
 import {test,expect} from "./fixtures";
 import { DatabaseSync } from "node:sqlite";
-import { createServer, request as upstreamRequest } from "node:http";
+import { request as upstreamRequest } from "node:http";
+import { createServer as createHttpsServer } from "node:https";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { readFile } from "node:fs/promises";
 import type {Page,Response} from "@playwright/test";
@@ -707,17 +711,32 @@ for (const width of [390, 1280]) {
 }
 
 
-test("C34: browser creates a task through reverse proxy with public Origin distinct from Next listener",async({page})=>{
+test.describe("C34 HTTPS reverse-proxy acceptance",()=>{
+  // Trust only the ephemeral self-signed proxy certificate in this scenario.
+  test.use({ignoreHTTPSErrors:true});
+  test("C34: browser creates a task through reverse proxy with public Origin distinct from Next listener",async({page})=>{
   test.setTimeout(120_000);
   if(!store)throw new Error("Requires the isolated target store");
   const innerPort=Number(process.env.E2E_PORT||3100);
   const publicPort=innerPort+1;
-  const publicOrigin=`http://localhost:${publicPort}`;
+  // HTTPS at the browser, plain HTTP to Next, with Host preserved: the precise
+  // Tailscale Serve scheme mismatch that the old strict equality rejected.
+  const publicOrigin=`https://localhost:${publicPort}`;
   const forwardedHosts:string[]=[];
   const proxiedTaskWrites:{host:string;origin:string;fetchSite:string;forwardedHeaders:string[]}[]=[];
   // Match Tailscale Serve: preserve the browser Host and Origin as received,
   // do not manufacture X-Forwarded-Host/Proto/Port, and forward to loopback.
-  const proxy=createServer((incoming,outgoing)=>{
+  const tlsDir=mkdtempSync(path.join(tmpdir(),"lumi-c34-https-proxy-"));
+  try{
+    const keyPath=path.join(tlsDir,"proxy.key");
+    const certPath=path.join(tlsDir,"proxy.crt");
+    execFileSync("openssl",[
+      "req","-x509","-nodes","-newkey","rsa:2048",
+      "-keyout",keyPath,"-out",certPath,"-days","1","-subj","/CN=localhost",
+    ],{stdio:"ignore"});
+    const proxy=createHttpsServer({
+      key:readFileSync(keyPath),cert:readFileSync(certPath),
+    },(incoming,outgoing)=>{
     forwardedHosts.push(String(incoming.headers.host||""));
     const headers={...incoming.headers};
     for(const key of Object.keys(headers)){
@@ -768,9 +787,12 @@ test("C34: browser creates a task through reverse proxy with public Origin disti
     // isolated E2E configuration; a successful POST alone would not prove the
     // old strict-origin comparison would have failed under the same proxy.
     const nextOrigin=reply.headers()["x-lumi-e2e-next-request-origin"];
-    expect(nextOrigin,"Next must receive the loopback URL rather than the public Origin")
-      .toBe(`http://127.0.0.1:${innerPort}`);
+    expect(nextOrigin,"Next must see HTTP after TLS termination").toMatch(/^http:\/\//);
     expect(nextOrigin).not.toBe(publicOrigin);
+    // Negative control: the removed strict equality would reject this exact
+    // browser request despite the public Origin being explicitly allowlisted.
+    expect(proxiedTaskWrites[0]?.origin!==nextOrigin,
+      "the original Origin !== request.url.origin guard must reject this request").toBe(true);
     expect(proxiedTaskWrites).toEqual([{
       host:`localhost:${publicPort}`,
       origin:publicOrigin,
@@ -785,4 +807,8 @@ test("C34: browser creates a task through reverse proxy with public Origin disti
       proxy.close(error=>error?reject(error):resolve());
     });
   }
+  }finally{
+    rmSync(tlsDir,{recursive:true,force:true});
+  }
+  });
 });
