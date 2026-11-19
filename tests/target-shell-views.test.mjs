@@ -130,3 +130,19 @@ test("C-2: only complete personal-v1 promotes authorized Home and Upcoming",()=>
   assert.equal(activeTargetViewFor({...without,view:"Upcoming",planActive:false}).active,null);
   assert.equal(targetViewsFor(without).includes("Upcoming"),false);
 });
+
+test("C-3a gated Inbox is current, LegacyInbox read-only Archive, no fifth mobile tab",()=>{
+  const staged=targetShellNavigationFor({...personalV1,personalV1:true,homeRead:true,inboxRead:true});
+  assert.deepEqual(staged.primary,["MyPlanPreview","Home","Inbox","Upcoming","Projects","Notes","Calendar","Search"]);
+  assert.deepEqual(staged.archive,["LegacyHome","LegacyInbox","Today","LegacyUpcoming",
+    "Overdue","Anytime","Someday","Completed","Areas","Context"]);
+  assert.equal(staged.byView.Inbox,"primary");
+  assert.equal(staged.byView.LegacyInbox,"archive");
+  assert.equal(staged.byView.Inbox===staged.byView.LegacyInbox,false);
+  const before=targetShellNavigationFor({...personalV1,personalV1:true,homeRead:true});
+  assert.equal(before.byView.Inbox,"archive","without C-3a gate the existing view stays archival");
+  assert.equal(before.byView.LegacyInbox,"hidden");
+  const unready=targetShellNavigationFor({...personalV1,personalV1:true,inboxRead:true,homeRead:false});
+  assert.equal(unready.byView.Inbox,"archive","C-3a cannot promote a view without C-2");
+  assert.equal(targetShellNavigationFor({...off,inboxRead:true}).personalV1,false);
+});
