@@ -1109,8 +1109,10 @@ for (const width of [390, 1280]) {
     // task-management view with priority/sort controls or an empty-state banner.
     await expect(page.locator(".pageIntro .eyebrow")).toHaveCount(0);
     await expect(page.locator(".pageTitleRow time")).toBeVisible();
-    // The empty list has zero height: assert its presentation class, then test visibility with seeded rows below.
-    await expect(page.locator(".list.taskRowList.secondary")).toHaveCount(1);
+    // The original Home deliberately hides its duplicate entity list with
+    // .secondary { display: none }. The real Home summary stays visible.
+    await expect(page.locator(".list.taskRowList.secondary")).toBeHidden();
+    await expect(page.locator(".homeSection.attentionSection")).toBeVisible();
     await expect(page.locator(".listControls")).toHaveCount(0);
     await expect(page.locator(".appPane .capture")).toHaveCount(0);
 
@@ -1134,10 +1136,11 @@ for (const width of [390, 1280]) {
     } });
     expect(seed.status(), "seed synthetic pre-split ranks: " + await seed.text()).toBe(200);
     try {
-      // Exercise Home with actual rows, not only an empty archive.
+      // Home keeps the original summary and hides its duplicate entity list;
+      // reading the historical Upcoming list below exercises the seeded rows.
       await page.goto("/?view=LegacyHome");
-      await expect(page.locator(".list.taskRowList.secondary")).toBeVisible();
-      await expect(page.locator(".list.taskRowList .taskRowOpen").filter({ hasText: titles[0] })).toBeVisible();
+      await expect(page.locator(".homeSection.attentionSection")).toBeVisible();
+      await expect(page.locator(".list.taskRowList.secondary")).toBeHidden();
       await expect(page.locator(".list.taskRowList .dragHandle")).toHaveCount(0);
       await page.goto("/?view=LegacyUpcoming");
       await expect(page.getByTestId("legacy-read-only-notice")).toBeVisible();
