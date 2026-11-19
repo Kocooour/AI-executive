@@ -71,7 +71,6 @@ export const anyTargetUiEdit=(edits:TargetUiEdits|undefined):boolean=>
   edits!==undefined&&Object.values(edits).some(Boolean);
 export type TargetUiConfig={
   myPlan:{enabled:boolean;statusWrite:boolean;whenWrite:boolean};
-  homeSummary:boolean;
   scopes:{enabled:boolean;projects:boolean;notes:boolean};
   details:{task:boolean;project:boolean;note:boolean};
   creates:{projects:boolean;projectTasks:boolean};
@@ -96,7 +95,7 @@ export function targetUiConfig(env:TargetUiEnv):TargetUiConfig|null {
   const edits=all(TARGET_UI_EDITS_FLAGS);
   const taskContext=edits&&detailTask&&all(TARGET_UI_EDIT_TASK_CONTEXT_FLAGS);
   const noteWrite=edits&&detailNote&&all(TARGET_UI_EDIT_NOTE_FLAGS);
-  return {homeSummary:enabled&&env["AI_EXECUTIVE_TARGET_STAGING_HTTP_HOME_ENABLED"]==="true",creates:{
+  return {creates:{
     projects:targetPrivateProjectCreateUiEnabled(env),
     projectTasks:targetProjectTaskCreateUiEnabled(env),
   },details:{
