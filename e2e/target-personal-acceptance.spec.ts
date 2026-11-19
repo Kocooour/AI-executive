@@ -190,11 +190,32 @@ for(const width of [390,1280]){
     await page.goForward();
     await expect(detail).toContainText(taskTitle);
     await closeDetail();
+    // C-2 privacy: offline hides previously authorized task titles, and coming
+    // back online must re-verify and re-read (not resurrect a stored page).
+    await page.context().setOffline(true);
+    await expect(page.getByTestId("target-overview-error")).toBeVisible();
+    await expect(page.getByTestId("target-upcoming")).toHaveCount(0);
+    await page.context().setOffline(false);
+    await expect(page.getByTestId("target-upcoming")).toContainText(taskTitle);
     await page.goto("/?view=Home&scope=personal");
     await expect(page.getByTestId("target-home")).toBeVisible();
     await expect(page.getByTestId("target-home")).toContainText(taskTitle);
     await expect(page.getByTestId("target-home")).toContainText("úkolů celkem");
     await page.reload();
+    await expect(page.getByTestId("target-home")).toContainText(taskTitle);
+    // C-2 privacy: hidden documents must not retain rendered target titles.
+    // Shadow the DOM visibility getter (no real browser backgrounding needed).
+    await page.evaluate(()=>{
+      Object.defineProperty(document,"visibilityState",
+        {configurable:true,get:()=>"hidden"});
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
+    await expect(page.getByTestId("target-overview-error")).toBeVisible();
+    await expect(page.getByTestId("target-home")).toHaveCount(0);
+    await page.evaluate(()=>{
+      Reflect.deleteProperty(document,"visibilityState");
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
     await expect(page.getByTestId("target-home")).toContainText(taskTitle);
     await openMyPlan();
 
