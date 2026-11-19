@@ -128,7 +128,8 @@ test("unification: target mode shows the target project index, never the legacy 
 test("unification: the legacy inspector is never rendered or opened in target views",()=>{
   // Authorized target Search must suppress the legacy inspector in addition
   // to the existing scoped lists and My Plan, without enabling legacy data.
-  assert.match(rootSource,/const targetView = scopeList !== null \|\| targetPlan \|\| \(targetSearch && view==="Search"\);/);
+  assert.match(rootSource,/const targetView = scopeList !== null \|\| targetPlan \|\| targetOverview \|\| \(targetSearch && view==="Search"\);/);
+  assert.match(rootSource,/const targetOverview=shellNavigation\.personalV1&&targetHomeSummary&&\(view==="Home"\|\|view==="Upcoming"\);/);
   assert.match(rootSource,/\{view==="Search" && targetSearch\s*\? <TargetMainTitleSearch query=\{app\.query\}/);
   assert.match(rootSource,/: <SearchResults app=\{app\} \/>\}/);
   assert.match(rootSource,/\{!\(scopesOn && targetView\) && <DetailPanel app=\{app\} \/>\}/);
@@ -136,7 +137,7 @@ test("unification: the legacy inspector is never rendered or opened in target vi
   assert.match(rootSource,/legacyInspector \|\| detailPanel \? " inspectorOpen" : ""/);
   // Target lists and the plan never call the legacy inspect().
   for(const file of ["app/ui/target-scope-lists.tsx","app/ui/target-my-plan.tsx","app/ui/target-detail-panel.tsx",
-    "app/ui/target-sidebar-projects.tsx"])
+    "app/ui/target-sidebar-projects.tsx","app/ui/target-overview.tsx"])
     assert.doesNotMatch(read(file),/\binspect\(|useLumiApp|openCapture/,file);
 });
 
