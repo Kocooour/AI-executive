@@ -269,7 +269,9 @@ export default function TargetOverview({kind,language="cs",taskDetail=false}:{
         emitTargetChange({kind:"task",id:change.confirmedTaskId,change:"updated"});
     });
   },[runtime,generation]);
-  const gate=targetMyPlanGate(runtime,generation,outcome,blocked);
+  // A failed same-generation poll must unmount the reader, abort pending
+  // reads and erase cached titles until a successful verification remounts it.
+  const gate=targetOverviewGate(runtime,generation,outcome,blocked);
   if(gate.kind!=="ready")return <div data-testid="target-overview-gate">
     {gate.kind==="checking"
       ?<p role="status">{language==="cs"?"Ověřuji přístup…":"Checking access…"}</p>
