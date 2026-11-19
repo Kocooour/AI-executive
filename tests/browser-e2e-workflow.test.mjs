@@ -174,3 +174,9 @@ test("indeterminate git ancestry check fails closed", () => {
   assert.notEqual(result.status, 0);
   assert.deepEqual(result.calls, [INTRO_LOOKUP, INTRO_ANCESTRY]);
 });
+
+test("introduction commit fetch failure fails without downgrading Chromium", () => {
+  const result = runReleaseInstall({ helperPresent: false, introPresent: false, fetchExit: 128 });
+  assert.notEqual(result.status, 0);
+  assert.deepEqual(result.calls, [INTRO_LOOKUP, "git:fetch --no-tags origin main"]);
+});
