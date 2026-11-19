@@ -212,6 +212,11 @@ test("BFCache lifecycle and real back navigation never revive private draft or A
   // BFCache restore when the browser actually admits this page to its cache.
   await page.goto("/robots.txt");
   await page.goBack({waitUntil:"domcontentloaded"});
+  // DOMContentLoaded on the history response may precede the settled app
+  // document. Wait for a hydrated, reachable UI before collecting BFCache
+  // evidence, otherwise evaluate can race a subsequent navigation.
+  await expect(page).toHaveURL(/\/?\?view=Calendar(?:&|$)/);
+  await expect(fab).toBeVisible();
   const restored=await page.evaluate(()=>
     (window as Window & {__lumiBfcacheRestored?:boolean}).__lumiBfcacheRestored);
   // This fixture-only Playwright test exercises synthetic lifecycle and reload.
