@@ -33,10 +33,12 @@ export type TargetClientRuntimeConfig={
   window?:TargetRuntimeWindow|null;
   broadcastChannelFactory?:((name:string)=>TargetRuntimeChannel)|null;
   now?:()=>number;
-  /** Injectable timers for the passive revalidation poll (tests). */
+  /** Injectable poll and verification-timeout timers (tests). */
   timers?:{
     setInterval(fn:()=>void,ms:number):unknown;
     clearInterval(handle:unknown):void;
+    setTimeout?(fn:()=>void,ms:number):unknown;
+    clearTimeout?(handle:unknown):void;
   };
 };
 export const TARGET_SESSION_ENDPOINT="/api/target-staging/session";
@@ -66,6 +68,9 @@ export function createTargetClientRuntime(config:TargetClientRuntimeConfig={}){
     },
     clearInterval:(handle:unknown)=>clearInterval(handle as ReturnType<typeof setInterval>),
   };
+  const timeoutSet=config.timers?.setTimeout??((fn:()=>void,ms:number)=>setTimeout(fn,ms));
+  const timeoutClear=config.timers?.clearTimeout??((handle:unknown)=>
+    clearTimeout(handle as ReturnType<typeof setTimeout>));
   let counter=0;
   const unknownToken=()=>{
     let random="";
@@ -201,7 +206,14 @@ export function createTargetClientRuntime(config:TargetClientRuntimeConfig={}){
     const bumps=localBumps;
     const own=new AbortController();
     controller=own;
-    const timer=setTimeout(()=>own.abort(),TIMEOUT_MS);
+    const timer=timeoutSet(()=>{
+      own.abort();
+      // A fetch or body reader may ignore AbortSignal indefinitely. Publish
+      // this verification failure NOW: Home/Upcoming must not retain actor
+      // titles merely because the request has yet to reject or settle.
+      // Never overwrite a newer explicit sign-out/refusal or a disposed runtime.
+      if(!disposed&&bumps===localBumps&&controller===own)outcome("unavailable");
+    },TIMEOUT_MS);
     try{
       const response=await fetchImpl(TARGET_SESSION_ENDPOINT,{
         method:"GET",credentials:"same-origin",cache:"no-store",redirect:"error",
@@ -239,7 +251,7 @@ export function createTargetClientRuntime(config:TargetClientRuntimeConfig={}){
       if(!disposed&&bumps===localBumps)outcome("unavailable"); // incl. timeout
       return "unavailable";
     }finally{
-      clearTimeout(timer);
+      timeoutClear(timer);
       if(controller===own)controller=null;
     }
   }
