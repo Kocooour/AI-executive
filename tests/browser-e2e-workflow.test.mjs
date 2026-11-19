@@ -34,7 +34,6 @@ test("Browser E2E workflow records the exact checked-out SHA as literal Markdown
   }
 });
 
-
 // Execute the *actual* release workflow installer body against simulated exact-SHA
 // checkouts, rather than testing a separately copied shell implementation.
 // 447f216... predates the helper added in PR #476 and remains a valid main ancestor.
@@ -44,7 +43,7 @@ function releaseChromiumInstallScript() {
   const step = workflow.split("      - name: Install and verify Playwright Chromium\n")[1]
     ?.split("\n      - name: ")[0];
   assert.ok(step, "release Chromium install step must exist");
-  assert.match(step, /\n        shell: bash\n/);
+  assert.match(step, /^        shell: bash\n/);
   const body = step.split("\n        run: |\n")[1];
   assert.ok(body, "release installer must use a shell block");
   const lines = body.trimEnd().split("\n");
