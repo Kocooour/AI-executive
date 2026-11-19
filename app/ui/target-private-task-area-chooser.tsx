@@ -78,6 +78,9 @@ export default function TargetPrivateTaskAreaChooser({
   // A hide/suspend requires exactly one replacement Area read after a fresh
   // successful session. Both the runtime resume and wake hook can signal it.
   const wakeReadPending=useRef(false);
+  // A pending wake belongs to the generation which observed the hide.
+  // Never replay its ticket against a newly authorized generation.
+  const wakeReadGeneration=useRef(generation);
   const wakeEpoch=useRef(0);
   const mounted=useRef(true);
   const serial=useRef(0);
@@ -100,6 +103,12 @@ export default function TargetPrivateTaskAreaChooser({
     });
   },[runtime,generation,language]);
   useEffect(()=>{
+    // A runtime.refresh() may rotate A → B while an old wake callback is
+    // pending. B's effect independently starts a fresh catalog read, so
+    // invalidating A's ticket prevents a delayed callback aborting that read.
+    wakeEpoch.current++;
+    wakeReadPending.current=false;
+    wakeReadGeneration.current=generation;
     setName("");setDraftGeneration(generation);setChosen("");
     setMessage("");setPhase("idle");
   },[generation]);
@@ -108,7 +117,8 @@ export default function TargetPrivateTaskAreaChooser({
       document.visibilityState==="visible"&&navigator.onLine;
   }
   function restartAfterWake(stillActive:()=>boolean=()=>true){
-    if(!runtime||!wakeReadPending.current||!live())return;
+    if(!runtime||!wakeReadPending.current||!live()||
+      wakeReadGeneration.current!==generation)return;
     const epoch=wakeEpoch.current;
     // Never infer authorization from known() or an earlier lastOutcome().
     // Each replacement must follow an actually completed fresh session.
@@ -119,6 +129,7 @@ export default function TargetPrivateTaskAreaChooser({
       // on the next task; do not overlap that transport boundary with Area.
       await new Promise<void>(resolve=>setTimeout(resolve,16));
       if(!stillActive()||!mounted.current||!wakeReadPending.current||
+        wakeReadGeneration.current!==generation||
         epoch!==wakeEpoch.current||!live())return;
       // Consume the wake before triggering a new read: the other callback
       // can finish its own verification later without aborting this GET.
@@ -128,6 +139,7 @@ export default function TargetPrivateTaskAreaChooser({
   }
   function hide(){
     wakeEpoch.current++;
+    wakeReadGeneration.current=generation;
     wakeReadPending.current=true;
     serial.current++;
     previewRef.current?.abort();
@@ -175,6 +187,7 @@ export default function TargetPrivateTaskAreaChooser({
       if(runtime?.known()&&runtime.generation()===generation&&
         (document.visibilityState!=="visible"||!navigator.onLine)){
         wakeEpoch.current++;
+        wakeReadGeneration.current=generation;
         wakeReadPending.current=true;
         markHidden();
       }
@@ -187,6 +200,7 @@ export default function TargetPrivateTaskAreaChooser({
     const suspend=()=>{
       suspended=true;
       wakeEpoch.current++;
+      wakeReadGeneration.current=generation;
       wakeReadPending.current=true;
       stop();
       setChosen("");setName("");setDraftGeneration(generation);
