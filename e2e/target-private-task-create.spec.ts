@@ -192,9 +192,21 @@ async function captureAreaWakeHttp(page:Page){
       return original!.failedOrder!;
     },
     async assertOneAuthorizedReplacement(mark:number,priorCancelOrder?:number){
-      await expect.poll(()=>reads.filter(read=>read.path===areaPath&&
-        read.requestOrder>mark&&read.finishedOrder!==undefined).length,
-      {timeout:10000}).toBe(1);
+      try{
+        await expect.poll(()=>reads.filter(read=>read.path===areaPath&&
+          read.requestOrder>mark&&read.finishedOrder!==undefined).length,
+        {timeout:10000}).toBe(1);
+      }catch(error){
+        const timeline=reads.map(read=>[
+          read.path===sessionPath?"session":"area",
+          "start="+read.requestOrder,"status="+(read.status??"-"),
+          "finish="+(read.finishedOrder??"-"),
+          "failed="+(read.failedOrder??"-"),
+          "id="+read.requestId,
+        ].join(" ")).join(" | ");
+        throw new Error("No completed replacement Area GET: mark="+mark+
+          "; "+timeline,{cause:error});
+      }
       const areas=reads.filter(read=>read.path===areaPath&&read.requestOrder>mark);
       expect(areas,"exactly one new direct private Area GET").toHaveLength(1);
       const area=areas[0];
@@ -285,21 +297,27 @@ for(const width of [390,1280]){
       });
       await page.goto("/?view=Calendar&scope=personal");
       await expect(fab(page,width)).toBeVisible();
-      await page.evaluate(state=>{
-        if(state==="offline"){
-          Object.defineProperty(navigator,"onLine",{
-            configurable:true,value:false,
-          });
-          window.dispatchEvent(new Event("offline"));
-        }else{
-          Object.defineProperty(document,"visibilityState",{
-            configurable:true,value:"hidden",
-          });
-          document.dispatchEvent(new Event("visibilitychange"));
-        }
-      },state);
       await fab(page,width).click();
-      await page.getByTestId("target-capture-task-kind").click();
+      const taskKind=page.getByTestId("target-capture-task-kind");
+      await expect(taskKind).toBeVisible();
+      // The real global Quick Capture shell closes on offline/visibility
+      // events. Enter the offline/hidden state during the task-kind click,
+      // before React mounts the chooser, without first closing the shell.
+      // This tests the chooser's initially-unavailable mount, not the shell.
+      await taskKind.evaluate((node,state)=>{
+        node.addEventListener("click",()=>{
+          if(state==="offline"){
+            Object.defineProperty(navigator,"onLine",{
+              configurable:true,value:false,
+            });
+          }else{
+            Object.defineProperty(document,"visibilityState",{
+              configurable:true,value:"hidden",
+            });
+          }
+        },{capture:true,once:true});
+      },state);
+      await taskKind.click();
       await expect(page.getByTestId("target-private-task-capture")).toBeVisible();
       await expect(page.getByTestId("target-private-task-form")).toHaveCount(0);
       expect(areaReads,"initially offline/hidden editor must not read Areas").toBe(0);
