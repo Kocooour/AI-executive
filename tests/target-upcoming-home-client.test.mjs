@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import {readFileSync} from "node:fs";
 import {test} from "node:test";
 import {
   c2AddDays,c2SevenDayGroups,parseC2Day,parseC2Summary,
@@ -148,4 +149,23 @@ test("C-2 abort settles even if the fetch adapter ignores its signal",async()=>{
   assert.deepEqual(await pending,{ok:false,reason:"aborted"});
   release(respond(page([task("a",tomorrow)])));
   await new Promise(resolve=>setImmediate(resolve));
+});
+
+
+test("C-2 overview subscribes to verified ACL ticks and fail-closed wake lifecycle",()=>{
+  const ui=readFileSync(new URL("../app/ui/target-overview.tsx",import.meta.url),"utf8");
+  const dayReader=readFileSync(new URL("../lib/target-my-plan-day-task-read-model.ts",import.meta.url),"utf8");
+  assert.match(ui,/useTargetTick\(reload\)/,"membership can change while the generation remains valid");
+  assert.match(ui,/useTargetWake\(\{/);
+  assert.match(ui,/hide\(reason\)\{/);
+  assert.match(ui,/readAbort\.current\?\.abort\(\);moreAbort\.current\?\.abort\(\)/);
+  assert.match(ui,/setPrivacyHidden\(true\)/);
+  assert.match(ui,/signedOut\(\)\{/);
+  assert.match(ui,/setPrivacyHidden\(false\)/);
+  assert.match(ui,/markHidden\(\)/,"initial hidden or offline mount must require a fresh wake");
+  assert.match(ui,/privacyHidden\|\|document\.visibilityState==="hidden"\|\|!navigator\.onLine/);
+  assert.match(ui,/!privacyHidden&&\(state\.key!==viewKey/);
+  assert.match(dayReader,/m\.role IN \('editor','admin'\) AND t\.assignee_user_id=actor\.id/,
+    "each verified tick re-reads the server-authorized actor assignment");
+  assert.doesNotMatch(ui,/localStorage|sessionStorage|indexedDB|legacyTasks/);
 });
