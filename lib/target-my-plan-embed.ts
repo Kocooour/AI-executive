@@ -30,6 +30,20 @@ export function targetMyPlanGate(
   return {kind:"ready",generation};
 }
 
+/** C-2 Home/Upcoming displays actor-sensitive titles and must fail closed even
+ * when a failed session poll leaves the prior login generation known. The
+ * general My Plan gate intentionally does not consider transient outcomes;
+ * do not change its behavior for unrelated views. */
+export function targetOverviewGate(
+  runtime:TargetMyPlanRuntimeView|null,generation:string,
+  outcome:TargetMyPlanOutcome|null=null,blocked=false,
+):TargetMyPlanGate {
+  const gate=targetMyPlanGate(runtime,generation,outcome,blocked);
+  if(gate.kind==="ready"&&outcome!==null&&outcome!=="ok")
+    return {kind:outcome};
+  return gate;
+}
+
 /** Bounds refusal → re-verify → remount cycles. A refusal is admitted (the
  * runtime may re-verify) at most `limit` times per `windowMs`; beyond that the
  * screen stays refused until reset (user action or a new generation). */
