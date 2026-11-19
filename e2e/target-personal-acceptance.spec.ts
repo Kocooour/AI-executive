@@ -714,6 +714,7 @@ test("C34: browser creates a task through reverse proxy with public Origin disti
   const publicPort=innerPort+1;
   const publicOrigin=`http://localhost:${publicPort}`;
   const forwardedHosts:string[]=[];
+  const proxiedTaskWrites:{host:string;origin:string;fetchSite:string;forwardedHeaders:string[]}[]=[];
   // Match Tailscale Serve: preserve the browser Host and Origin as received,
   // do not manufacture X-Forwarded-Host/Proto/Port, and forward to loopback.
   const proxy=createServer((incoming,outgoing)=>{
@@ -721,6 +722,15 @@ test("C34: browser creates a task through reverse proxy with public Origin disti
     const headers={...incoming.headers};
     for(const key of Object.keys(headers)){
       if(key.startsWith("x-forwarded-"))delete headers[key];
+    }
+    if(incoming.method==="POST"&&new URL(incoming.url||"/",publicOrigin).pathname==="/api/target-staging/tasks"){
+      // Capture what the proxy actually forwards, not just the browser URL.
+      proxiedTaskWrites.push({
+        host:String(headers.host||""),
+        origin:String(headers.origin||""),
+        fetchSite:String(headers["sec-fetch-site"]||""),
+        forwardedHeaders:Object.keys(headers).filter(key=>key.startsWith("x-forwarded-")),
+      });
     }
     const upstream=upstreamRequest({
       hostname:"127.0.0.1",port:innerPort,method:incoming.method,
@@ -754,6 +764,19 @@ test("C34: browser creates a task through reverse proxy with public Origin disti
     await page.getByTestId("target-private-task-save").click();
     const reply=await responsePromise;
     expect(reply.status(),"public-origin write behind proxy must not be rejected as cross-origin").toBe(201);
+    // The actual task handler reports its request.url origin only in this
+    // isolated E2E configuration; a successful POST alone would not prove the
+    // old strict-origin comparison would have failed under the same proxy.
+    const nextOrigin=reply.headers()["x-lumi-e2e-next-request-origin"];
+    expect(nextOrigin,"Next must receive the loopback URL rather than the public Origin")
+      .toBe(`http://127.0.0.1:${innerPort}`);
+    expect(nextOrigin).not.toBe(publicOrigin);
+    expect(proxiedTaskWrites).toEqual([{
+      host:`localhost:${publicPort}`,
+      origin:publicOrigin,
+      fetchSite:"same-origin",
+      forwardedHeaders:[],
+    }]);
     await expect(page.getByTestId("target-private-task-created")).toBeVisible();
     expect(forwardedHosts.length).toBeGreaterThan(0);
     expect(forwardedHosts.every(host=>host===`localhost:${publicPort}`)).toBe(true);
