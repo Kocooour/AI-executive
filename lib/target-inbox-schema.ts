@@ -17,4 +17,4 @@ export const TARGET_INBOX_SCHEMA_SQL = [
 ].join("\n");
 
 export const TARGET_INBOX_BACKFILL_SQL =
-  "UPDATE tasks SET triage_state='processed',triaged_at=NULL,triage_revision=triage_revision+1 WHERE triage_state='unprocessed'";
+  "UPDATE tasks SET triage_state='processed',triaged_at=NULL,triage_revision=triage_revision+1 WHERE triage_state='unprocessed' AND EXISTS (SELECT 1 FROM metadata WHERE key='schema_version' AND value='26')";
