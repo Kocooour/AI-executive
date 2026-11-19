@@ -1,9 +1,11 @@
 import { searchWithoutScope } from "../../lib/view-url";
 export const views = [
     "Home",
+    "LegacyHome",
     "Inbox",
     "Today",
     "Upcoming",
+    "LegacyUpcoming",
     "Projects",
     "Areas",
     "Notes",
@@ -33,6 +35,8 @@ export const mobileMoreGroups: { title: string; views: string[] }[] = [
 export const moreViews = mobileMoreGroups.flatMap((group) => group.views);
 export const viewIcons: Record<string, string> = {
   Home: "⌂",
+  LegacyHome: "⌂",
+  LegacyUpcoming: "→",
   Inbox: "↓",
   Today: "○",
   Overdue: "!",
