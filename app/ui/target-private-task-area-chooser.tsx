@@ -106,9 +106,11 @@ export default function TargetPrivateTaskAreaChooser({
     // A runtime.refresh() may rotate A → B while an old wake callback is
     // pending. B's effect independently starts a fresh catalog read, so
     // invalidating A's ticket prevents a delayed callback aborting that read.
-    wakeEpoch.current++;
-    wakeReadPending.current=false;
-    wakeReadGeneration.current=generation;
+    if(wakeReadGeneration.current!==generation){
+      wakeEpoch.current++;
+      wakeReadPending.current=false;
+      wakeReadGeneration.current=generation;
+    }
     setName("");setDraftGeneration(generation);setChosen("");
     setMessage("");setPhase("idle");
   },[generation]);
