@@ -1119,7 +1119,7 @@ for (const width of [390, 1280]) {
     const snapshot = await (await page.request.get("/api/store")).json();
     const make = (id: string, title: string, createdAt: number, manualOrders: Record<string, number>) => ({
       id, title, type: "task", status: "open", workspaceId: "personal",
-      properties: { when: "2099-10-20", manualOrders }, createdAt, updatedAt: stamp,
+      properties: { when: "2099-10-20", manualOrders }, createdAt, updatedAt: Math.max(stamp, createdAt),
     });
     const seed = await page.request.put("/api/store", { data: {
       baseRevision: snapshot.revision, restoreGeneration: snapshot.restoreGeneration,
@@ -1140,9 +1140,14 @@ for (const width of [390, 1280]) {
       expect(orderedTitles.filter(title => titles.includes(title))).toEqual(titles);
       // Merely visiting either archive surface must not mutate the stored entities.
       const afterNavigation = await (await page.request.get("/api/store")).json();
-      expect(afterNavigation.entities.filter((row: { id: string }) => ids.includes(row.id))
-        .map((row: { properties: { manualOrders: Record<string, number> } }) => row.properties.manualOrders))
-        .toEqual([{ "personal:task:Upcoming": 1 }, { "task:Upcoming": 2 }]);
+      const preservedRanks = Object.fromEntries(afterNavigation.entities
+        .filter((row: { id: string }) => ids.includes(row.id))
+        .map((row: { id: string; properties: { manualOrders: Record<string, number> } }) =>
+          [row.id, row.properties.manualOrders]));
+      expect(preservedRanks).toEqual({
+        [ids[0]]: { "personal:task:Upcoming": 1 },
+        [ids[1]]: { "task:Upcoming": 2 },
+      });
     } finally {
       const current = await (await page.request.get("/api/store")).json();
       const cleanup = await page.request.put("/api/store", { data: {
