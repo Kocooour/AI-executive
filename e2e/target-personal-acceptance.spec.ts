@@ -232,8 +232,9 @@ for(const width of [390,1280]){
       // Once the session succeeds, hold the *real* newly authorized day read.
       // Neither old DOM rows nor their prior response may reappear while the
       // fresh request is pending. Release only after checking the blank state.
-      let pendingReads=0,releaseRead=()=>{};
-      const barrier=new Promise<void>(resolve=>{releaseRead=resolve;});
+      let pendingReads=0;
+      let releaseRead:()=>void=()=>{};
+      const barrier=new Promise<void>(resolve=>{releaseRead=()=>resolve();});
       const dayRoute="**/api/target-staging/task-temporal/my-plan-day?*";
       const holdFreshRead=async(route:Route)=>{
         pendingReads++;
