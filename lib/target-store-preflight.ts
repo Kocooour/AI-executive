@@ -451,6 +451,44 @@ export function inspectIsolatedTargetStore(
           count(`SELECT COUNT(*) AS n FROM restore_superseded_sessions s LEFT JOIN restore_generations g
             ON g.generation=s.restore_generation WHERE g.generation IS NULL`) !== 0) fail("restore_history_invalid");
       const allowedGenerations = new Set<unknown>([current, ...history.map(row => row.previous_generation)]);
+
+      // C-3a immutable Process/Undo receipts are content-free and actor-bound.
+      // Validate historical generations and source process references even if
+      // CHECK or foreign keys were disabled by a different SQLite client.
+      if(meta.get("schema_version")===String(TARGET_STORE_SCHEMA_VERSION)){
+        try {
+          const commands=all(`SELECT receipt_key,request_digest,actor_user_id,task_id,
+            action,undo_of_key,revision_before,revision_after,triaged_at_ms,
+            restore_generation,committed_at_ms FROM task_triage_commands`) as
+            Array<Record<string,unknown>>;
+          const byKey=new Map(commands.map(row=>[row.receipt_key,row]));
+          const invalid=commands.length>4096||commands.some(row=>{
+            const undo=row.action==="undo";
+            if(typeof row.receipt_key!=="string"||!sha256Hex.test(row.receipt_key)||
+              typeof row.request_digest!=="string"||!sha256Hex.test(row.request_digest)||
+              typeof row.actor_user_id!=="string"||typeof row.task_id!=="string"||
+              !["process","undo"].includes(String(row.action))||
+              !Number.isSafeInteger(row.revision_before)||!Number.isSafeInteger(row.revision_after)||
+              (row.revision_before as number)<0||
+              row.revision_after!==(row.revision_before as number)+1||
+              !allowedGenerations.has(row.restore_generation)||
+              !Number.isSafeInteger(row.committed_at_ms)||(row.committed_at_ms as number)<=0)
+              return true;
+            if(!undo)return row.undo_of_key!==null||
+              !Number.isSafeInteger(row.triaged_at_ms)||
+              (row.triaged_at_ms as number)<=0;
+            const origin=byKey.get(row.undo_of_key);
+            return typeof row.undo_of_key!=="string"||!origin||
+              origin.action!=="process"||origin.actor_user_id!==row.actor_user_id||
+              origin.task_id!==row.task_id||
+              origin.revision_after!==row.revision_before||
+              origin.restore_generation!==row.restore_generation||
+              row.triaged_at_ms!==null;
+          });
+          if(invalid)fail("triage_invalid");
+        }catch{fail("triage_invalid");}
+      }
+
       const audit = all("SELECT receipt_key, expected_revision, restore_generation FROM task_title_audit") as
         { receipt_key: unknown; expected_revision: unknown; restore_generation: unknown }[];
       if (audit.length > TARGET_STAGING_AUDIT_MAX_EVENTS ||
