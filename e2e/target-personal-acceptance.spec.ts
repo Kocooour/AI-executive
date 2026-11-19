@@ -14,6 +14,8 @@ import path from "node:path";
 import { readFile } from "node:fs/promises";
 import type {Page,Response} from "@playwright/test";
 import {isTargetReadRequest} from "../lib/target-edit-fetch";
+import { addCalendarDays } from "../lib/calendar-event-display";
+import { zonedDateTimeToIso } from "../lib/local-dates";
 
 test.skip(process.env.LUMI_TARGET_PERSONAL_ACCEPTANCE_E2E!=="true",
   "personal acceptance needs the real isolated target store; it is opt-in");
@@ -376,6 +378,129 @@ const legacyDbRows = () => {
     db.close();
   }
 };
+
+// C-1: a historically hidden source event is still a normal event in the
+// target-only Calendar. Exercise both renderers with a real persisted legacy
+// workspace decision and a deterministic mocked *integration* feed; no target
+// API, ACL or SQLite read/write is intercepted.
+for (const width of [390, 1280]) {
+  test("C-1 archived hidden decision is ignored in current Calendar at " + width + "px", async ({ page }) => {
+    test.setTimeout(90_000);
+    if (!store) throw new Error("Requires the real isolated target store");
+    await page.setViewportSize({ width, height: 844 });
+    const parts = Object.fromEntries(new Intl.DateTimeFormat("en-CA", {
+      timeZone: "Europe/Prague", year: "numeric", month: "2-digit", day: "2-digit",
+    }).formatToParts(new Date()).map(part => [part.type, part.value]));
+    const tomorrow = addCalendarDays(parts.year + "-" + parts.month + "-" + parts.day, 1);
+    const token = "c1-archived-hide-" + width + "-" + Date.now();
+    const sourceId = "c1-archived-source", uid = token + "-uid", id = token + "-event";
+    const title = token + "-integration-event";
+    const start = zonedDateTimeToIso(tomorrow, "10:00", "Europe/Prague");
+    const end = zonedDateTimeToIso(tomorrow, "11:00", "Europe/Prague");
+    const decisionKey = "series:" + sourceId + ":" + uid;
+    const event = {
+      id, uid, sourceId, title, workspaceId: "personal", occurrenceKey: uid + ":" + start,
+      start, end, allDay: false, recurring: false, timezone: "Europe/Prague",
+      status: "confirmed", transparency: "OPAQUE", busy: true, private: false,
+    };
+    const now = Date.now();
+    await page.route("**/api/calendar?**", async route => {
+      if (route.request().method() !== "GET") { await route.continue(); return; }
+      const params = new URL(route.request().url()).searchParams;
+      const from = Number(params.get("from")), to = Number(params.get("to"));
+      const inWindow = params.get("workspaceId") === "personal" &&
+        Date.parse(end) > from && Date.parse(start) < to;
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({
+        sources: [{
+          id: sourceId, workspaceId: "personal", provider: "ics", accountId: null,
+          label: "C-1 isolated source", status: "ready", configured: true,
+          lastSyncAt: now, lastSuccessAt: now, lastError: "", eventCount: 1, revision: 1,
+        }],
+        events: inWindow ? [event] : [],
+      }) });
+    });
+
+    // Seed the real legacy workspace via its ordinary HTTP store *before*
+    // navigating to Calendar. The new Calendar must not depend on this decision.
+    await page.goto("/?view=Home");
+    await expect(page.getByTestId("legacy-read-only-notice")).toBeVisible();
+    let seeded = false;
+    try {
+      const status = await page.evaluate(async ({ decisionKey }) => {
+        const snapshot = await fetch("/api/store", { cache: "no-store" }).then(r => r.json());
+        const workspace = snapshot.entities.find((row: { id: string }) => row.id === "workspace:personal");
+        if (!workspace) throw new Error("Legacy personal workspace missing");
+        const existing = workspace.properties?.calendarDecisions || {};
+        if (Object.prototype.hasOwnProperty.call(existing, decisionKey))
+          throw new Error("Unexpected pre-existing historical decision");
+        const entities = snapshot.entities.map((row: { id: string; updatedAt: number; properties: Record<string, unknown> }) =>
+          row.id !== "workspace:personal" ? row : {
+            ...row, updatedAt: Math.max(Date.now(), row.updatedAt + 1),
+            properties: { ...row.properties, calendarDecisions: { ...existing, [decisionKey]: "hidden" } },
+          });
+        const response = await fetch("/api/store", {
+          method: "PUT", headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            baseRevision: snapshot.revision, restoreGeneration: snapshot.restoreGeneration,
+            entities, relations: snapshot.relations, deletedIds: [], revivedIds: [],
+          }),
+        });
+        return response.status;
+      }, { decisionKey });
+      expect(status, "historical hide decision must be persisted in isolated legacy store").toBe(200);
+      seeded = true;
+      await page.goto("/?view=Calendar");
+
+      if (width === 390) {
+        const picker = page.locator(".mobileCalendarPicker");
+        await expect(picker).toBeVisible();
+        await picker.locator('[data-date="' + tomorrow + '"]').click();
+        const row = page.locator('[data-timeline-item="event:' + id + '"]');
+        await expect(row).toBeVisible();
+        await expect(row).not.toHaveClass(/isHidden|isUnderlay/);
+        await expect(row).not.toContainText("Skryto");
+      } else {
+        const row = page.locator(".calendarAgendaItem", { hasText: title });
+        await expect(row).toBeVisible();
+        await expect(row).not.toHaveClass(/hiddenEvent/);
+        await expect(row).not.toContainText("Skryto");
+        await expect(row.locator(".calendarAgendaOpen")).toContainText(title);
+      }
+      await expect(page.locator('[data-event-state="hidden"]', { hasText: title })).toHaveCount(0);
+      await expect(page.locator('[data-event-unhide="' + id + '"]')).toHaveCount(0);
+      const saved = await page.evaluate(async ({ decisionKey }) => {
+        const snapshot = await fetch("/api/store", { cache: "no-store" }).then(r => r.json());
+        return snapshot.entities.find((row: { id: string }) => row.id === "workspace:personal")
+          ?.properties?.calendarDecisions?.[decisionKey];
+      }, { decisionKey });
+      expect(saved, "target Calendar must leave the archived hide decision unchanged").toBe("hidden");
+    } finally {
+      if (seeded) {
+        const cleanup = await page.evaluate(async ({ decisionKey }) => {
+          const snapshot = await fetch("/api/store", { cache: "no-store" }).then(r => r.json());
+          const entities = snapshot.entities.map((row: { id: string; updatedAt: number; properties: Record<string, unknown> }) => {
+            if (row.id !== "workspace:personal") return row;
+            const decisions = { ...((row.properties.calendarDecisions || {}) as Record<string, unknown>) };
+            delete decisions[decisionKey];
+            const properties = { ...row.properties };
+            if (Object.keys(decisions).length) properties.calendarDecisions = decisions;
+            else delete properties.calendarDecisions;
+            return { ...row, updatedAt: Math.max(Date.now(), row.updatedAt + 1), properties };
+          });
+          const response = await fetch("/api/store", {
+            method: "PUT", headers: { "content-type": "application/json" },
+            body: JSON.stringify({
+              baseRevision: snapshot.revision, restoreGeneration: snapshot.restoreGeneration,
+              entities, relations: snapshot.relations, deletedIds: [], revivedIds: [],
+            }),
+          });
+          return response.status;
+        }, { decisionKey });
+        expect(cleanup, "clean up only this test's legacy decision").toBe(200);
+      }
+    }
+  });
+}
 
 // C13: the real target profile must expose legacy Home/Inbox/Today for reading
 // without ever turning the historical local-first store into a migration source.
