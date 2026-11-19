@@ -193,7 +193,7 @@ function TargetOverviewRead({kind,language,generation,onRefusal,openable}:{
     :{loading:"Loading current records…",empty:"Nothing planned for the next seven days.",
       noToday:"No tasks for today or earlier.",error:"Current records could not be loaded safely.",
       retry:"Retry",more:"Load more tasks",moreBusy:"Loading…"});
-  if(!privacyHidden&&(state.key!==viewKey||state.status==="loading"))return <div data-testid="target-overview-loading" role="status">{message.loading}</div>;
+  if(state.status==="loading"||(!privacyHidden&&state.key!==viewKey))return <div data-testid="target-overview-loading" role="status">{message.loading}</div>;
   if(privacyHidden||state.status==="error")return <div data-testid="target-overview-error" role="status">
     <p>{message.error}</p><TargetDataStatus failure={state.status==="error"&&state.reason==="signed-out"?"signed-out":"unavailable"}
       language={language} onAction={reload}/>
