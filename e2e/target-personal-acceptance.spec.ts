@@ -1130,10 +1130,15 @@ for (const width of [390, 1280]) {
     } });
     expect(seed.ok(), "seed synthetic pre-split ranks").toBe(true);
     try {
+      // Exercise Home with actual rows, not only an empty archive.
+      await page.goto("/?view=LegacyHome");
+      await expect(page.locator(".list.taskRowList .taskRowOpen").filter({ hasText: titles[0] })).toBeVisible();
+      await expect(page.locator(".list.taskRowList .dragHandle")).toHaveCount(0);
       await page.goto("/?view=LegacyUpcoming");
       await expect(page.getByTestId("legacy-read-only-notice")).toBeVisible();
       await expect(page.locator(".listControls")).toBeVisible();
       await expect(page.locator(".listControls select").nth(1)).toHaveValue("manual");
+      await expect(page.locator(".list.taskRowList .dragHandle")).toHaveCount(0);
       await expect(page.locator(".list.taskRowList article.taskRow").filter({ hasText: titles[0] })).toBeVisible();
       await expect(page.locator(".list.taskRowList article.taskRow").filter({ hasText: titles[1] })).toBeVisible();
       const orderedTitles = await page.locator(".list.taskRowList article.taskRow .taskRowOpen").allTextContents();
