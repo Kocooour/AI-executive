@@ -201,6 +201,7 @@ export async function POST(request: Request): Promise<Response> {
     const response=await postPrivateTaskCreate(request);
     // Synthetic C34 witness: never expose the internal listener URL ordinarily.
     response.headers.set("x-lumi-e2e-next-request-origin",new URL(request.url).origin);
+    response.headers.set("x-lumi-e2e-next-browser-origin",request.headers.get("origin")||"");
     return response;
   }
   return postPrivateTaskCreate(request);
