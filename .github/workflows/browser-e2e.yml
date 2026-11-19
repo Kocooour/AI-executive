@@ -117,6 +117,27 @@ jobs:
           if [[ -f scripts/ci-install-chromium.sh ]]; then
             bash scripts/ci-install-chromium.sh
           else
+            # Missing helper must not silently downgrade a post-#476 release
+            # target back to the apt-dependent Chromium installer.
+            chromium_installer_introduced=c770c3a0adce3d503648b394418ca1cf49af9b60
+            if ! git cat-file -e "${chromium_installer_introduced}^{commit}" 2>/dev/null; then
+              # Owner-approved exception branches may predate this commit.
+              git fetch --no-tags origin main
+            fi
+            git cat-file -e "${chromium_installer_introduced}^{commit}" || {
+              echo "::error::Cannot verify Chromium installer introduction commit."
+              exit 1
+            }
+            if git merge-base --is-ancestor "$chromium_installer_introduced" HEAD; then
+              echo "::error::Chromium installer missing from post-#476 release target."
+              exit 1
+            else
+              ancestry_status=$?
+              if (( ancestry_status != 1 )); then
+                echo "::error::Cannot verify release target ancestry against Chromium installer introduction."
+                exit 1
+              fi
+            fi
             echo "::notice::Target SHA predates Chromium installer helper; using the original installation command."
             pnpm exec playwright install --with-deps chromium
           fi
