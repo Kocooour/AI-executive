@@ -75,6 +75,10 @@ export default function TargetPrivateTaskAreaChooser({
   const [message,setMessage]=useState("");
   const [revision,setRevision]=useState(0);
   const previewRef=useRef<AbortController|null>(null);
+  // A hide/suspend requires exactly one replacement Area read after a fresh
+  // successful session. Both the runtime resume and wake hook can signal it.
+  const wakeReadPending=useRef(false);
+  const wakeEpoch=useRef(0);
   const mounted=useRef(true);
   const serial=useRef(0);
    const closeRef=useRef<HTMLButtonElement>(null);
@@ -103,7 +107,23 @@ export default function TargetPrivateTaskAreaChooser({
     return runtime?.known()===true&&runtime.generation()===generation&&
       document.visibilityState==="visible"&&navigator.onLine;
   }
+  function restartAfterWake(stillActive:()=>boolean=()=>true){
+    if(!runtime||!wakeReadPending.current||!live())return;
+    const epoch=wakeEpoch.current;
+    // Never infer authorization from known() or an earlier lastOutcome().
+    // Each replacement must follow an actually completed fresh session.
+    void runtime.refresh().then(verified=>{
+      if(verified!=="ok"||!stillActive()||!mounted.current||
+        !wakeReadPending.current||epoch!==wakeEpoch.current||!live())return;
+      // Consume the wake before triggering a new read: the other callback
+      // can finish its own verification later without aborting this GET.
+      wakeReadPending.current=false;
+      setNonce(v=>v+1);
+    }).catch(()=>{});
+  }
   function hide(){
+    wakeEpoch.current++;
+    wakeReadPending.current=true;
     serial.current++;
     previewRef.current?.abort();
     setChosen("");setName("");setDraftGeneration(generation);
@@ -123,9 +143,8 @@ export default function TargetPrivateTaskAreaChooser({
   useTargetWake({
     hide:()=>flushSync(hide),
     ready:()=>{
-      if(live()){
-        setNonce(v=>v+1);
-       }else hide();
+      if(live())restartAfterWake();
+      else hide();
     },
     signedOut:()=>{hide();setAreas({kind:"signed-out",generation});},
   });
@@ -139,7 +158,6 @@ export default function TargetPrivateTaskAreaChooser({
     let active=true;
     let inFlight:AbortController|null=null;
     let suspended=false;
-    let suspensionEpoch=0;
     const stop=()=>{lifetime.abort();inFlight?.abort();};
     setAreas({kind:"loading",generation});setChosen("");
     if(!runtime?.known()||runtime.generation()!==generation||
@@ -153,7 +171,8 @@ export default function TargetPrivateTaskAreaChooser({
     // authorize a replacement effect even if useTargetWake missed the hide.
     const suspend=()=>{
       suspended=true;
-      suspensionEpoch++;
+      wakeEpoch.current++;
+      wakeReadPending.current=true;
       stop();
       setChosen("");setName("");setDraftGeneration(generation);
       setAreas({kind:"unavailable",generation});
@@ -161,11 +180,7 @@ export default function TargetPrivateTaskAreaChooser({
     const resume=()=>{
       if(!suspended)return;
       suspended=false;
-      const epoch=suspensionEpoch;
-      void runtime.refresh().then(verified=>{
-        if(active&&epoch===suspensionEpoch&&verified==="ok"&&live())
-          setNonce(v=>v+1);
-      }).catch(()=>{});
+      restartAfterWake(()=>active);
     };
     const unregister=runtime.register({dispose:stop,suspend,resume});
     const stillLive=()=>active&&!lifetime.signal.aborted&&live();
@@ -343,8 +358,10 @@ export default function TargetPrivateTaskAreaChooser({
         {!ready&&<button type="button" onClick={()=>{
           if(!runtime)return;
           void runtime.refresh().then(result=>{
-            if(result==="ok"&&live())setNonce(v=>v+1);
-            else hide();
+            if(result==="ok"&&live()){
+              wakeReadPending.current=false;
+              setNonce(v=>v+1);
+            }else hide();
           });
         }}>{c.retry}</button>}
         <button type="button" ref={closeRef} onClick={onClose}>{c.close}</button>
