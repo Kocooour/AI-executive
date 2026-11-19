@@ -173,3 +173,13 @@ Akceptace: český online dotaz s odlišnou formulací lze ověřit otevřením 
 - **Přístupnost a offline:** souhrny a linky ovladatelné klávesnicí i čtečkou, české popisky, bez technických ID v běžném UI. Mobilní detail používá stávající full-page navigaci. Offline lze číst jen dříve autorizovaná uložená kanonická data; live provenance/semantic search a import jsou nedostupné a stav je označen jako neúplný.
 
 **UX akceptace:** z opakovaného importu vznikne jediný viditelný návrh s původními speaker roles a více korektně označenými zdroji; hypotéza napsaná AI se nesmí objevit jako potvrzené osobní tvrzení; samostatné review/freshness/conflict štítky neztrácejí kombinace; protichůdný termín se neupraví bez potvrzení; člověk může opravit fakt na stránce a novou odpověď Lumi lze dohledat ke stejné revizi; změna Vše/Osobní/Sdílené nebo identity nepropustí text, počty ani odkazy cizí Oblasti; chybějící export či odpojený Gmail je pravdivě označen a nevyvolá falešný pocit úplné znalosti.
+
+
+### C-3a — Inbox vs. archivní LegacyInbox (#483)
+
+- Po výslovném zapnutí kompletního osobního v1 profilu je primární položkou **Inbox** nad cílovými úkoly, s oprávněným počtem nezpracovaných. **Archiv → Inbox** vede samostatnou adresou `?view=LegacyInbox` na stará read-only data; běžná navigace mimo v1 profil zůstává nezměněna.
+- Na desktopu i na mobilu je v cílovém Inboxu jeden čitelný řádek/název, primární klávesnicí dostupné **Zpracovat**, po potvrzení krátkodobé **Vrátit do Inboxu**. A11y: stav odesílání v živém regionu, jasný focus, nikdy ikona jako jediný název akce.
+- Optimistické skrytí není autoritativní: 409 drží položku jako nevyřešenou a vyžaduje nové čtení; 401/403/503 a offline skryjí dřívější chráněné titulky i počty a ukáží neutrální stav. Při nejasném výsledku zůstává `uncertain` až do ověření receiptu, nikoli falešné „hotovo“.
+- Deep linky, reload a Back/Forward rozlišují `Inbox` a `LegacyInbox`. Testovat šířky 390 a 1280 px i odmítnutou/odvolanou session.
+
+**Stav:** kontrakt pro draft PR #485; cílová HTTP/UI integrace a přístupnost čekají na dokončení a regresní prohlížečové ověření.
