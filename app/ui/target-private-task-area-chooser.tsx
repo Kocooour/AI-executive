@@ -140,7 +140,7 @@ export default function TargetPrivateTaskAreaChooser({
       setMessage(pending?c.cancelFailed:"");
     }
   }
-  useTargetWake({
+  const {markHidden}=useTargetWake({
     hide:()=>flushSync(hide),
     ready:()=>{
       if(live())restartAfterWake();
@@ -163,6 +163,16 @@ export default function TargetPrivateTaskAreaChooser({
     if(!runtime?.known()||runtime.generation()!==generation||
       document.visibilityState!=="visible"||!navigator.onLine){
       setAreas({kind:"unavailable",generation});
+      // When the editor mounts while already offline/hidden, this effect
+      // cannot register a reader, and the new wake hook missed that hide.
+      // Arm its wake machine now; only a fresh verified session after the
+      // return to visible+online may create the replacement effect.
+      if(runtime?.known()&&runtime.generation()===generation&&
+        (document.visibilityState!=="visible"||!navigator.onLine)){
+        wakeEpoch.current++;
+        wakeReadPending.current=true;
+        markHidden();
+      }
       return ()=>{active=false;stop();};
     }
     // The runtime can already be suspended when this editor registers (e.g.
