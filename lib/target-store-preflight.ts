@@ -470,6 +470,31 @@ export function inspectIsolatedTargetStore(
             WHERE (p.id IS NULL AND t.id IS NULL) OR (p.id IS NOT NULL AND a.revision_after>p.revision)
               OR (t.id IS NOT NULL AND a.revision_after>=t.revision)`) !== 0) fail("audit_invalid");
       }
+      // C-3a: bounded immutable triage receipt ledger. Both the original
+      // Process and its Undo survive later task deletion; no task titles,
+      // Areas or other actors' data are ever stored in a receipt.
+      if (meta.get("schema_version") === String(TARGET_STORE_SCHEMA_VERSION)) {
+        const triage = all("SELECT receipt_key,request_digest,restore_generation,action,undo_of_receipt_key,triage_revision_before,triage_revision_after,task_revision_before,task_revision_after,committed_at_ms FROM task_triage_receipts") as
+          {receipt_key:unknown;request_digest:unknown;restore_generation:unknown;action:unknown;undo_of_receipt_key:unknown;
+           triage_revision_before:number;triage_revision_after:number;task_revision_before:number;task_revision_after:number;committed_at_ms:number}[];
+        if (triage.length > TARGET_STAGING_MAX_RECEIPTS || triage.some(row =>
+          typeof row.receipt_key !== "string" || !sha256Hex.test(row.receipt_key) ||
+          typeof row.request_digest !== "string" || !sha256Hex.test(row.request_digest) ||
+          !allowedGenerations.has(row.restore_generation) ||
+          (row.action !== "process" && row.action !== "undo") ||
+          !Number.isSafeInteger(row.triage_revision_before) || row.triage_revision_before < 0 ||
+          row.triage_revision_after !== row.triage_revision_before+1 ||
+          !Number.isSafeInteger(row.task_revision_before) || row.task_revision_before < 0 ||
+          row.task_revision_after !== row.task_revision_before+1 ||
+          !Number.isSafeInteger(row.committed_at_ms) || row.committed_at_ms <= 0
+        ) || count(`SELECT COUNT(*) AS n FROM task_triage_receipts u
+          JOIN task_triage_receipts p ON p.receipt_key=u.undo_of_receipt_key
+          WHERE u.action='undo' AND (p.action<>'process' OR u.task_id<>p.task_id OR
+            u.actor_user_id<>p.actor_user_id OR u.restore_generation<>p.restore_generation OR
+            u.triage_revision_before<>p.triage_revision_after OR
+            u.task_revision_before<>p.task_revision_after OR
+            u.committed_at_ms<p.committed_at_ms)`) !== 0) fail("audit_invalid");
+      }
       // R2c.1 delete audit: bounded, content-free, backed by a delete receipt and
       // by the tombstone (same Area, revision and change sequence) it describes.
       const deleteAudit = all("SELECT receipt_key, expected_revision, restore_generation FROM task_delete_audit") as
