@@ -4,7 +4,7 @@
  * that a concurrent original create will not commit later.
  */
 import path from "node:path";
-import {HttpInputError,enforceRateLimit,readJsonBody,requireSameOrigin}
+import {HttpInputError,enforceRateLimit,readJsonBody,requireTargetSameOrigin}
   from "./http-security";
 import {logStagingFailure} from "./target-staging-failure-log";
 import {resolveStagingHttpIdentity,stagingAnchorRefusal,stagingUnauthenticatedRefusal,
@@ -107,9 +107,7 @@ async function handle(
   const store={stagingDirectory:base.stagingDirectory,
     expectedRestoreGeneration:base.expectedRestoreGeneration};
   try{
-    requireSameOrigin(request);
-    if(request.headers.get("origin")!==new URL(request.url).origin)
-      return answer(403,"Cross-origin request rejected");
+    requireTargetSameOrigin(request);
     const admitted=admitStagingIdentity(request,identity,store);
     if(admitted)return admitted;
     if(new URL(request.url).search!=="")return answer(400,"Invalid request");

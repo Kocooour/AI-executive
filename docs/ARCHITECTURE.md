@@ -944,3 +944,31 @@ R2c.5 se dodává ve dvou PR. **R2c.5a** (tento krok) je knihovna `lib/target-sy
 ### R3-FE-4 — stagingový zápis názvu projektu (v26)
 
 Autorizovaný projektový detail poskytuje samostatný náhled CAS a příkaz názvu projektu. Transakční kontrola zahrnuje aktéra, aktuální Area ACL, cílovou Oblast, restore generation, revizi a actor/project-scoped idempotenci; aktualizace projektu, záznam synchronizace a content-free neměnný audit/receipt se commitují společně. Ověření aktuální session před sdělením výsledku platí i pro replay. Při souběžných příkazech se stejnou revizí uspěje nejvýše jeden. Vše zůstává default-off stagingem, nikoli produkčním cutoverem. Detailní HTTP kontrakt, limity, obnova zálohy a explicitní nedestruktivní upgrade přesného v25 na v26 jsou v [R3-PROJECT-TITLE-BE.md](R3-PROJECT-TITLE-BE.md).
+
+
+## C34 — Target write Origin behind Tailscale Serve / reverse proxies
+
+Target-staging write and POST-shaped preflight/receipt handlers use
+`requireTargetSameOrigin(request)` from `lib/http-security.ts`.
+This validates the browser-supplied `Origin` as an exact canonical HTTP(S)
+origin equal to the internal `request.url` origin **or** to one of the exact
+comma-separated entries in `AI_EXECUTIVE_ALLOWED_ORIGINS`. In production,
+the browser may use `https://vm13861.tail412944.ts.net` while Next sees a
+loopback `http://127.0.0.1:3000` URL. This is expected; **target writes
+respect the same configured public-origin allowlist as legacy**.
+
+This strict target helper rejects absent or opaque `Origin` (`null`),
+wildcards, malformed origins, origin prefixes, and any mismatched scheme,
+hostname or port. When `Sec-Fetch-Site` is present it must be
+`same-origin`. It does not consult client-controlled `X-Forwarded-*`
+headers and it does not modify legacy `requireSameOrigin` behavior.
+Authentication, live store identity checks, protocol fencing and write
+rate limits remain unchanged.
+
+Regression coverage: `tests/target-origin-allowlist.test.mjs` scans every
+target write route and the shared HTTP handlers for the obsolete strict
+comparison. Real-handler tests create a task and preview a note using a
+loopback request URL plus an allowed public `Origin`. The opt-in
+`Personal acceptance on the real isolated store` browser job exercises a
+real task CREATE through a loopback reverse proxy preserving Host/Origin
+while adding no forwarded-host metadata.

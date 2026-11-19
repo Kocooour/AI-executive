@@ -3,7 +3,7 @@
  */
 import path from "node:path";
 import {
-  HttpInputError, enforceRateLimit, readJsonBody, requireSameOrigin,
+  HttpInputError, enforceRateLimit, readJsonBody, requireTargetSameOrigin,
 } from "../../../../lib/http-security";
 import { logStagingFailure } from "../../../../lib/target-staging-failure-log";
 import {
@@ -51,9 +51,7 @@ export async function POST(request: Request): Promise<Response> {
     process.env.AI_EXECUTIVE_TARGET_STAGING_RESTORE_GENERATION === expectedRestoreGeneration &&
     process.env.AI_EXECUTIVE_TARGET_STAGING_OWNER_USER_ID === ownerUserId;
   try {
-    requireSameOrigin(request);
-    if (request.headers.get("origin") !== new URL(request.url).origin)
-      return answer(403, "Cross-origin request rejected");
+    requireTargetSameOrigin(request);
     const admitted = admitStagingIdentity(request, identity, store);
     if (admitted) return admitted;
     if (new URL(request.url).search !== "") return answer(400, "Invalid request");

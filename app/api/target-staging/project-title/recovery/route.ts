@@ -1,6 +1,6 @@
 /** Read-only project rename receipt recovery. Never returns a title or receipt key. */
 import path from "node:path";
-import {HttpInputError,enforceRateLimit,readJsonBody,requireSameOrigin} from "../../../../../lib/http-security";
+import {HttpInputError,enforceRateLimit,readJsonBody,requireTargetSameOrigin} from "../../../../../lib/http-security";
 import {logStagingFailure} from "../../../../../lib/target-staging-failure-log";
 import {resolveStagingHttpIdentity,stagingAnchorRefusal,stagingUnauthenticatedRefusal,
   stagingChildSessionConfig,admitStagingIdentity,stagingIdentityRefusal,
@@ -39,8 +39,7 @@ export async function POST(request:Request):Promise<Response>{
   const base=config();if(!base)return answer(503,"Staging unavailable");
   const bound={...base,...stagingChildSessionConfig(identity)};
   try{
-    requireSameOrigin(request);
-    if(request.headers.get("origin")!==new URL(request.url).origin)return answer(403,"Cross-origin request rejected");
+    requireTargetSameOrigin(request);
     const admitted=admitStagingIdentity(request,identity,bound);if(admitted)return admitted;
     if(request.url.includes("?"))return answer(400,"Invalid request");
     const protocol=targetProtocolRefusal(request);if(protocol)return protocol;

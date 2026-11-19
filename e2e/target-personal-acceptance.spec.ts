@@ -5,6 +5,11 @@
  * Synthetic data, default-off: only LUMI_TARGET_PERSONAL_ACCEPTANCE_E2E=true runs it. */
 import {test,expect} from "./fixtures";
 import { DatabaseSync } from "node:sqlite";
+import { request as upstreamRequest } from "node:http";
+import { createServer as createHttpsServer } from "node:https";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { readFile } from "node:fs/promises";
 import type {Page,Response} from "@playwright/test";
@@ -772,3 +777,108 @@ for (const width of [390, 1280]) {
     expect(legacyDbRows()).toBe(originalDb);
   });
 }
+
+
+test.describe("C34 HTTPS reverse-proxy acceptance",()=>{
+  // Trust only the ephemeral self-signed proxy certificate in this scenario.
+  test.use({ignoreHTTPSErrors:true});
+  test("C34: browser creates a task through reverse proxy with public Origin distinct from Next listener",async({page})=>{
+  test.setTimeout(120_000);
+  if(!store)throw new Error("Requires the isolated target store");
+  const innerPort=Number(process.env.E2E_PORT||3100);
+  const publicPort=innerPort+1;
+  // HTTPS at the browser, plain HTTP to Next, with Host preserved: the precise
+  // Tailscale Serve scheme mismatch that the old strict equality rejected.
+  const publicOrigin=`https://localhost:${publicPort}`;
+  const forwardedHosts:string[]=[];
+  const proxiedTaskWrites:{host:string;origin:string;fetchSite:string;forwardedHeaders:string[]}[]=[];
+  // Match Tailscale Serve: preserve the browser Host and Origin as received,
+  // do not manufacture X-Forwarded-Host/Proto/Port, and forward to loopback.
+  const tlsDir=mkdtempSync(path.join(tmpdir(),"lumi-c34-https-proxy-"));
+  try{
+    const keyPath=path.join(tlsDir,"proxy.key");
+    const certPath=path.join(tlsDir,"proxy.crt");
+    execFileSync("openssl",[
+      "req","-x509","-nodes","-newkey","rsa:2048",
+      "-keyout",keyPath,"-out",certPath,"-days","1","-subj","/CN=localhost",
+    ],{stdio:"ignore"});
+    const proxy=createHttpsServer({
+      key:readFileSync(keyPath),cert:readFileSync(certPath),
+    },(incoming,outgoing)=>{
+    forwardedHosts.push(String(incoming.headers.host||""));
+    const headers={...incoming.headers};
+    for(const key of Object.keys(headers)){
+      if(key.startsWith("x-forwarded-"))delete headers[key];
+    }
+    if(incoming.method==="POST"&&new URL(incoming.url||"/",publicOrigin).pathname==="/api/target-staging/tasks"){
+      // Capture what the proxy actually forwards, not just the browser URL.
+      proxiedTaskWrites.push({
+        host:String(headers.host||""),
+        origin:String(headers.origin||""),
+        fetchSite:String(headers["sec-fetch-site"]||""),
+        forwardedHeaders:Object.keys(headers).filter(key=>key.startsWith("x-forwarded-")),
+      });
+    }
+    const upstream=upstreamRequest({
+      hostname:"127.0.0.1",port:innerPort,method:incoming.method,
+      path:incoming.url||"/",headers,
+    },backend=>{
+      outgoing.writeHead(backend.statusCode||502,backend.headers);
+      backend.pipe(outgoing);
+    });
+    upstream.on("error",()=>{
+      if(!outgoing.headersSent)outgoing.writeHead(502);
+      outgoing.end();
+    });
+    incoming.pipe(upstream);
+  });
+  await new Promise<void>((resolve,reject)=>{
+    proxy.once("error",reject);
+    proxy.listen(publicPort,"127.0.0.1",()=>resolve());
+  });
+  try{
+    await page.setViewportSize({width:1280,height:844});
+    await page.goto(publicOrigin+"/?view=MyPlanPreview&scope=personal");
+    await expect(page.getByTestId("target-my-plan")).toBeVisible();
+    const fab=page.locator('[data-target-private-capture-fab="desktop"]');
+    await fab.click();
+    await page.getByTestId("target-capture-task-kind").click();
+    await page.getByTestId("target-private-task-area").selectOption({label:store.seed.areaTitle});
+    const title="Proxy task "+Date.now();
+    await page.getByTestId("target-private-task-form")
+      .getByRole("textbox",{name:"Název úkolu"}).fill(title);
+    const responsePromise=page.waitForResponse(isPost("/api/target-staging/tasks"));
+    await page.getByTestId("target-private-task-save").click();
+    const reply=await responsePromise;
+    expect(reply.status(),"public-origin write behind proxy must not be rejected as cross-origin").toBe(201);
+    // The actual task handler reports its request.url origin only in this
+    // isolated E2E configuration; a successful POST alone would not prove the
+    // old strict-origin comparison would have failed under the same proxy.
+    const nextOrigin=reply.headers()["x-lumi-e2e-next-request-origin"];
+    const nextBrowserOrigin=reply.headers()["x-lumi-e2e-next-browser-origin"];
+    expect(nextOrigin,"Next must see HTTP after TLS termination").toMatch(/^http:\/\//);
+    expect(nextBrowserOrigin,"Next must see the original browser Origin").toBe(publicOrigin);
+    expect(nextBrowserOrigin).toBe(proxiedTaskWrites[0]?.origin);
+    // Negative control using both values observed by the actual Next handler:
+    // the former strict equality would reject this request with 403.
+    expect(nextBrowserOrigin!==nextOrigin,
+      "the original Origin !== request.url.origin guard must reject this request").toBe(true);
+    expect(proxiedTaskWrites).toEqual([{
+      host:`localhost:${publicPort}`,
+      origin:publicOrigin,
+      fetchSite:"same-origin",
+      forwardedHeaders:[],
+    }]);
+    await expect(page.getByTestId("target-private-task-created")).toBeVisible();
+    expect(forwardedHosts.length).toBeGreaterThan(0);
+    expect(forwardedHosts.every(host=>host===`localhost:${publicPort}`)).toBe(true);
+  }finally{
+    await new Promise<void>((resolve,reject)=>{
+      proxy.close(error=>error?reject(error):resolve());
+    });
+  }
+  }finally{
+    rmSync(tlsDir,{recursive:true,force:true});
+  }
+  });
+});

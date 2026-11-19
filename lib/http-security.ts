@@ -152,3 +152,34 @@ export function requireSameOrigin(request: Request) {
     throw new HttpInputError("Cross-origin request rejected", 403);
   }
 }
+
+
+/**
+ * Target write endpoints must accept the browser's exact public Origin behind
+ * a loopback reverse proxy, without trusting X-Forwarded-* headers. Legacy
+ * requireSameOrigin remains unchanged for its existing callers.
+ */
+export function requireTargetSameOrigin(request: Request) {
+  const origin = request.headers.get("origin");
+  if (!origin) throw new HttpInputError("Origin header is required", 403);
+
+  // A configured wildcard, opaque "null" origin, URL with a path, or other
+  // malformed value is never a browser origin. Match canonical http(s)
+  // origins exactly, not by prefix or suffix.
+  let parsed: URL;
+  try {
+    parsed = new URL(origin);
+  } catch {
+    throw new HttpInputError("Cross-origin request rejected", 403);
+  }
+  if ((parsed.protocol !== "https:" && parsed.protocol !== "http:") ||
+      parsed.origin !== origin) {
+    throw new HttpInputError("Cross-origin request rejected", 403);
+  }
+
+  requireSameOrigin(request);
+  const fetchSite = request.headers.get("sec-fetch-site");
+  if (fetchSite !== null && fetchSite !== "same-origin") {
+    throw new HttpInputError("Cross-origin request rejected", 403);
+  }
+}

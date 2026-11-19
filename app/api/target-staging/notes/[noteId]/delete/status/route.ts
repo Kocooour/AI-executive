@@ -1,6 +1,6 @@
 /** R2d.2c.2f.4: opt-in read-only reconciliation of an exact note delete command. */
 import path from "node:path";
-import { HttpInputError, enforceRateLimit, readJsonBody, requireSameOrigin } from "../../../../../../../lib/http-security";
+import { HttpInputError, enforceRateLimit, readJsonBody, requireTargetSameOrigin } from "../../../../../../../lib/http-security";
 import { logStagingFailure } from "../../../../../../../lib/target-staging-failure-log";
 import {
   resolveStagingHttpIdentity, stagingAnchorRefusal, stagingUnauthenticatedRefusal,
@@ -62,9 +62,7 @@ export async function POST(
   const base = config();
   if (!base) return answer(503, "Staging unavailable");
   try {
-    requireSameOrigin(request);
-    if (request.headers.get("origin") !== new URL(request.url).origin)
-      return answer(403, "Cross-origin request rejected");
+    requireTargetSameOrigin(request);
     const admitted = admitStagingIdentity(request, identity, base);
     if (admitted) return admitted;
     const params = await context.params;

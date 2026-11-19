@@ -24,7 +24,7 @@ permissions:
 jobs:
   main-title-search:
     name: Main Search ${{ matrix.mode }} (Chromium, 390/1280px)
-    # Playwright 1.56 cannot install Chromium dependencies on Ubuntu 26.04.
+    # Playwright 1.56 does not support ubuntu-26.04; pin supported runner.
     runs-on: ubuntu-24.04
     timeout-minutes: 25
     strategy:

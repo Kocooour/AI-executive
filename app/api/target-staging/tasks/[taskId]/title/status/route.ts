@@ -4,7 +4,7 @@ import {
   resolveStagingHttpIdentity, stagingAnchorRefusal, stagingUnauthenticatedRefusal, stagingChildSessionConfig,
   admitStagingIdentity, stagingIdentityRefusal, verifyStagingIdentityBeforeRelease,
 } from "../../../../../../../lib/target-staging-http-identity";
-import { HttpInputError, enforceRateLimit, readJsonBody, requireSameOrigin } from "../../../../../../../lib/http-security";
+import { HttpInputError, enforceRateLimit, readJsonBody, requireTargetSameOrigin } from "../../../../../../../lib/http-security";
 import { readPrivateTaskTitleCommandStatusInChild } from "../../../../../../../lib/target-staging-title-http-process";
 import { targetProtocolRefusal, legacySnapshotRefusal, resyncRequiredResponse, writeAreaMismatchResponse } from "../../../../../../../lib/target-staging-write-contract";
 import { validTargetStagingTaskTitleWriteRequest } from "../../../../../../../lib/target-task-staging-writer";
@@ -55,10 +55,7 @@ export async function POST(request: Request,
   const invalidInput = !params || Object.keys(params).sort().join(",") !== "taskId" ||
     !validTaskId(params.taskId) || new URL(request.url).search !== "";
   try {
-    requireSameOrigin(request);
-    if (request.headers.get("origin") !== new URL(request.url).origin) {
-      return answer(403, "Cross-origin request rejected");
-    }
+    requireTargetSameOrigin(request);
     // Admission (and its own session-check bucket) comes BEFORE the per-route
     // limiter and the body read: a forged or revoked cookie must not drain
     // bucket budget that legitimate writers or reconciliations need.
