@@ -112,9 +112,14 @@ export default function TargetPrivateTaskAreaChooser({
     const epoch=wakeEpoch.current;
     // Never infer authorization from known() or an earlier lastOutcome().
     // Each replacement must follow an actually completed fresh session.
-    void runtime.refresh().then(verified=>{
-      if(verified!=="ok"||!stillActive()||!mounted.current||
-        !wakeReadPending.current||epoch!==wakeEpoch.current||!live())return;
+    void runtime.refresh().then(async verified=>{
+      if(verified!=="ok")return;
+      // Complete the network response before starting the dependent private
+      // GET. Even after JSON EOF, the browser can deliver Network.loadingFinished
+      // on the next task; do not overlap that transport boundary with Area.
+      await new Promise<void>(resolve=>setTimeout(resolve,16));
+      if(!stillActive()||!mounted.current||!wakeReadPending.current||
+        epoch!==wakeEpoch.current||!live())return;
       // Consume the wake before triggering a new read: the other callback
       // can finish its own verification later without aborting this GET.
       wakeReadPending.current=false;
