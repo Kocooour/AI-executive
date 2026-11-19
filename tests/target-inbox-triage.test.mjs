@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import {test} from "node:test";
 import {DatabaseSync} from "node:sqlite";
+import {readTargetInboxPage} from "../lib/target-inbox-read-model.ts";
+import {transitionTargetInboxTriageInTransaction} from "../lib/target-inbox-triage-writer.ts";
 import {
   TARGET_SCHEMA_V26_SQL,TARGET_SCHEMA_SQL,TARGET_STORE_SCHEMA_VERSION,
 } from "../lib/target-store-bootstrap.ts";
@@ -14,6 +16,8 @@ function fixture(schema, version){
   db.exec("PRAGMA foreign_keys=ON");
   db.exec(schema);
   db.prepare("INSERT INTO metadata(key,value) VALUES('schema_version',?)").run(String(version));
+  db.prepare("INSERT INTO metadata(key,value) VALUES('restore_generation',?)")
+    .run("11111111-1111-4111-8111-111111111111");
   db.prepare("INSERT INTO identities(id) VALUES('owner')").run();
   db.prepare("INSERT INTO workspaces(id,kind,owner_user_id) VALUES('personal','personal','owner')").run();
   db.prepare("INSERT INTO areas(id,title,kind,workspace_id,owner_user_id) VALUES('a','Private','private','personal','owner')").run();
@@ -74,4 +78,62 @@ test("C-3a: membership is independent of completion but requires ACL and a live 
   assert.equal(inboxMembership({...base,authorized:false}),false);
   assert.equal(inboxMembership({...base,tombstoned:true}),false);
   assert.equal(inboxMembership({...base,exists:false}),false);
+});
+
+test("C-3a: private Inbox read model counts completed tasks but never other owners",()=>{
+  const {db,insert}=fixture(TARGET_SCHEMA_SQL,27);
+  try{
+    insert("unprocessed");
+    insert("completed");
+    db.prepare("UPDATE tasks SET status='completed',completed_at_ms=123 WHERE id='completed'").run();
+    const page=readTargetInboxPage(db,"owner",1);
+    assert.equal(page.count,2);
+    assert.equal(page.tasks.length,1);
+    assert.equal(page.hasMore,true);
+    const second=readTargetInboxPage(db,"owner",1,page.afterTaskId);
+    assert.equal(second.count,2);
+    assert.equal(second.tasks.length,1);
+    assert.equal(second.hasMore,false);
+    assert.deepEqual([...page.tasks,...second.tasks].map(t=>t.completion),["completed","open"]);
+    assert.deepEqual(readTargetInboxPage(db,"outsider"),{
+      tasks:[],count:0,hasMore:false,afterTaskId:null,
+    });
+  }finally{db.close();}
+});
+
+test("C-3a: Process/Undo is actor-scoped, CAS and idempotent with no completion side effect",()=>{
+  const {db,insert}=fixture(TARGET_SCHEMA_SQL,27);
+  const generation="11111111-1111-4111-8111-111111111111";
+  const c1="22222222-2222-4222-8222-222222222222";
+  const c2="33333333-3333-4333-8333-333333333333";
+  try{
+    insert("item");
+    const process={action:"process",taskId:"item",commandId:c1,expectedRevision:0,restoreGeneration:generation};
+    db.exec("BEGIN IMMEDIATE");
+    const first=transitionTargetInboxTriageInTransaction(db,"owner",process,12345);
+    assert.deepEqual(first,{ok:true,replayed:false,revision:1,state:"processed"});
+    db.exec("COMMIT");
+    assert.equal(readTargetInboxPage(db,"owner").count,0);
+    db.exec("BEGIN IMMEDIATE");
+    const replay=transitionTargetInboxTriageInTransaction(db,"owner",process,12346);
+    assert.deepEqual(replay,{ok:true,replayed:true,revision:1,state:"processed"});
+    assert.equal(transitionTargetInboxTriageInTransaction(db,"owner",{...process,expectedRevision:1},12346).ok,false);
+    db.exec("COMMIT");
+    const undo={action:"undo",taskId:"item",commandId:c2,expectedRevision:1,
+      restoreGeneration:generation,undoOfCommandId:c1};
+    db.exec("BEGIN IMMEDIATE");
+    const result=transitionTargetInboxTriageInTransaction(db,"owner",undo,12347);
+    assert.deepEqual(result,{ok:true,replayed:false,revision:2,state:"unprocessed"});
+    db.exec("COMMIT");
+    assert.deepEqual(triage(db,"item"),
+      {triage_state:"unprocessed",triaged_at_ms:null,triage_revision:2});
+    assert.equal(readTargetInboxPage(db,"owner").count,1);
+    db.exec("BEGIN IMMEDIATE");
+    assert.deepEqual(transitionTargetInboxTriageInTransaction(db,"owner",undo,12347),
+      {ok:true,replayed:true,revision:2,state:"unprocessed"});
+    assert.equal(transitionTargetInboxTriageInTransaction(db,"outsider",process,12347).ok,false);
+    assert.equal(transitionTargetInboxTriageInTransaction(db,"owner",process,12347).ok,true,
+      "same receipt is idempotent, not a second mutation");
+    db.exec("COMMIT");
+  }finally{db.close();}
 });
