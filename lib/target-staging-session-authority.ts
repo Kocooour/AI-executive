@@ -112,6 +112,9 @@ import {
   writePreflightedTemporalDueOn, validTargetStagingTemporalDueOnCommand,
   type TargetStagingTemporalDueOnCommand, type TargetStagingTemporalDueOnResult,
 } from "./target-task-temporal-due-on-writer";
+import {writePreflightedTargetInboxTriage,validTargetInboxTriageCommand,
+  type TargetInboxTriageCommand,type TargetInboxTriageResult,
+} from "./target-inbox-triage-writer";
 import {writePreflightedPersonalWhen,validTargetStagingPersonalWhenCommand,
   type TargetStagingPersonalWhenCommand,type TargetStagingPersonalWhenResult,
 } from "./target-personal-when-writer";
@@ -1125,6 +1128,19 @@ export class TargetStagingSessionAuthority {
     if(!validTargetStagingPersonalWhenCommand(command))
       return {ok:false,reason:"invalid_request"};
     return writePreflightedPersonalWhen(
+      this.#store,credential,command,durableSessionTokenHash);
+  }
+
+  /** C-3a: per-task Process/Undo, with pinned actor/Area/CAS receipt checks. */
+  changeInboxTriage(
+    sessionToken:string,command:TargetInboxTriageCommand,
+    durableSessionTokenHash?:string,
+  ):TargetInboxTriageResult {
+    const credential=this.#credential(sessionToken,true);
+    if(!credential)return {ok:false,reason:"unavailable"};
+    if(!validTargetInboxTriageCommand(command))
+      return {ok:false,reason:"invalid_request"};
+    return writePreflightedTargetInboxTriage(
       this.#store,credential,command,durableSessionTokenHash);
   }
 
