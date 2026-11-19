@@ -47,7 +47,7 @@ jobs:
       - name: Build with isolated synthetic-preview flags
         run: pnpm build
       - name: Install Chromium
-        run: pnpm exec playwright install --with-deps chromium
+        run: bash scripts/ci-install-chromium.sh
       - name: Check HTTP 404 with preview OFF
         env:
           AI_EXECUTIVE_TARGET_STAGING_PROJECT_TASKS_CLIENT_PREVIEW_ENABLED: "false"

@@ -57,7 +57,7 @@ jobs:
       - name: Build isolated Next.js test server
         run: pnpm build
       - name: Install targeted Chromium
-        run: pnpm exec playwright install --with-deps chromium
+        run: bash scripts/ci-install-chromium.sh
       - name: Run ONLY R3 detail edit race regressions
         run: pnpm exec playwright test e2e/target-detail-edit-races.spec.ts --project=desktop
       - name: Upload failure traces

@@ -109,8 +109,8 @@ jobs:
       - name: Production build
         run: pnpm build
 
-      - name: Install Playwright Chromium and Linux dependencies
-        run: pnpm exec playwright install --with-deps chromium
+      - name: Install and verify Playwright Chromium
+        run: bash scripts/ci-install-chromium.sh
 
       - name: Run all browser E2E tests
         run: pnpm test:e2e

@@ -74,7 +74,7 @@ jobs:
       - name: Build isolated UI
         run: pnpm build
       - name: Chromium
-        run: pnpm exec playwright install --with-deps chromium
+        run: bash scripts/ci-install-chromium.sh
       - name: Scoped global capture acceptance
         run: pnpm exec playwright test e2e/target-global-private-capture.spec.ts --project=desktop
       - name: Upload BFCache evidence and failure traces
@@ -130,7 +130,7 @@ jobs:
       - name: Build real-store isolated application
         run: pnpm build
       - name: Install Chromium
-        run: pnpm exec playwright install --with-deps chromium
+        run: bash scripts/ci-install-chromium.sh
       - name: Observe native pageshow.persisted (390/1280)
         run: pnpm exec playwright test e2e/target-personal-native-bfcache.spec.ts --project=desktop
       - name: Upload native BFCache evidence
