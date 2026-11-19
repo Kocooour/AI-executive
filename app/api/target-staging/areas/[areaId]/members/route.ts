@@ -4,7 +4,7 @@ import {
   resolveStagingHttpIdentity, stagingAnchorRefusal, stagingUnauthenticatedRefusal, stagingUnauthorizedRefusal, stagingChildSessionConfig,
   admitStagingIdentity, stagingIdentityRefusal, verifyStagingIdentityBeforeRelease,
 } from "../../../../../../lib/target-staging-http-identity";
-import { HttpInputError, enforceRateLimit, readJsonBody, requireSameOrigin } from "../../../../../../lib/http-security";
+import { HttpInputError, enforceRateLimit, readJsonBody, requireTargetSameOrigin } from "../../../../../../lib/http-security";
 import { applyMembershipCommandInChild } from "../../../../../../lib/target-staging-membership-http-process";
 import { targetProtocolRefusal, legacySnapshotRefusal, resyncRequiredResponse } from "../../../../../../lib/target-staging-write-contract";
 import { validTargetStagingMembershipCommand } from "../../../../../../lib/target-staging-membership-command";
@@ -56,10 +56,7 @@ export async function POST(request: Request,
     typeof params.areaId === "string" && safeId.test(params.areaId) ? params.areaId : null;
   const invalidInput = !areaId || new URL(request.url).search !== "";
   try {
-    requireSameOrigin(request);
-    if (request.headers.get("origin") !== new URL(request.url).origin) {
-      return answer(403, "Cross-origin request rejected");
-    }
+    requireTargetSameOrigin(request);
     // Admission before limiter and body: forged cookies must not drain budgets.
     const admitted = admitStagingIdentity(request, identity, bound);
     if (admitted) return admitted;

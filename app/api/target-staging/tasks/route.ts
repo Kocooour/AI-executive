@@ -195,5 +195,14 @@ export async function GET(request: Request): Promise<Response> {
 import {postPrivateTaskCreate} from "../../../../lib/target-private-task-create-http";
 
 export async function POST(request: Request): Promise<Response> {
+  // Keep the default-off delegate unchanged outside the isolated acceptance.
+  if(process.env.AI_EXECUTIVE_E2E==="true"&&
+      process.env.LUMI_TARGET_PERSONAL_ACCEPTANCE_E2E==="true"){
+    const response=await postPrivateTaskCreate(request);
+    // Synthetic C34 witness: never expose the internal listener URL ordinarily.
+    response.headers.set("x-lumi-e2e-next-request-origin",new URL(request.url).origin);
+    response.headers.set("x-lumi-e2e-next-browser-origin",request.headers.get("origin")||"");
+    return response;
+  }
   return postPrivateTaskCreate(request);
 }

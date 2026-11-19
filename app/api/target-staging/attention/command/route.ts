@@ -1,5 +1,5 @@
 /** R2d.5c.2: default-off staging-only Attention lifecycle CAS preview and snooze/dismiss/restore. */
-import {HttpInputError,enforceRateLimit,readJsonBody,requireSameOrigin}
+import {HttpInputError,enforceRateLimit,readJsonBody,requireTargetSameOrigin}
   from "../../../../../lib/http-security";
 import {logStagingFailure} from "../../../../../lib/target-staging-failure-log";
 import {
@@ -89,9 +89,7 @@ export async function PATCH(request:Request):Promise<Response> {
   const base=attentionCommandHttpConfig();
   if(!base)return refuse(503,"Staging unavailable");
   try {
-    requireSameOrigin(request);
-    if(request.headers.get("origin")!==new URL(request.url).origin)
-      return refuse(403,"Cross-origin request rejected");
+    requireTargetSameOrigin(request);
     const admitted=admitStagingIdentity(request,identity,base);
     if(admitted)return admitted;
     if(new URL(request.url).search!=="")return refuse(400,"Invalid request");

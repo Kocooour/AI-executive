@@ -227,3 +227,31 @@ These tests are synthetic service mocks, not proof of a real deployment:
 tests/reviewed-target-deploy.test.mjs\`. The exact release-SHA Browser E2E,
 backup/restore rehearsal, systemd sandbox verification and explicit operator
 approval are still production gates.
+
+
+## C34 — Verify allowed public Origin before target write release
+
+Tailscale Serve terminates HTTPS externally and forwards the request to
+Next on loopback. Target write endpoints **must** recognize the exact browser
+origin through `AI_EXECUTIVE_ALLOWED_ORIGINS`, just like legacy endpoints.
+Without that setting writes can fail as `403 Cross-origin request rejected`
+even while target reads return 200.
+
+Before approving a release, inspect the effective **root-owned service
+environment** (locate its EnvironmentFile via `sudo systemctl cat ai-executive`).
+Confirm that `AI_EXECUTIVE_ALLOWED_ORIGINS` contains the exact public
+scheme, host and optional port used by the browser, e.g.
+`https://vm13861.tail412944.ts.net`, comma-separated if multiple origins
+are intentionally supported. Do not use `*`, URL prefixes or paths, and
+do not base the decision on `X-Forwarded-Host` or other forwarded headers.
+Check the setting without printing unrelated secrets from the environment.
+
+The PR/release gate must include the unit tests, real-handler task CREATE
+and note preview tests, and the isolated-store browser proxy variant in
+`r3-personal-acceptance-browser.yml`. The proxy variant is synthetic: it
+does not modify production. After owner-approved deployment, verify target
+preflight and normal browser task creation via public HTTPS with an
+authenticated owner session; a refused, unlisted `Origin` must still yield
+403. Do not use a production write as an automated CI probe. Perform the
+normal exact-SHA release gate and owner-controlled deployment procedure
+above; this fix does not authorize a direct production change.
