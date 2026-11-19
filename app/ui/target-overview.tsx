@@ -7,7 +7,7 @@ import {useTargetScope} from "./target-scope-state";
 import {TargetDataStatus} from "./target-data-status";
 import {openTargetDetail} from "./target-detail-state";
 import {detailIdOk} from "../../lib/target-detail-route";
-import {targetMyPlanGate} from "../../lib/target-my-plan-embed";
+import {targetOverviewGate} from "../../lib/target-my-plan-embed";
 import {refusalBudgetFor} from "../../lib/target-refusal-budget";
 import {subscribePrivateTaskCreate} from "../../lib/target-private-task-create-coordinator";
 import {emitTargetChange,subscribeTargetChange} from "../../lib/target-data-invalidation";
@@ -269,7 +269,9 @@ export default function TargetOverview({kind,language="cs",taskDetail=false}:{
         emitTargetChange({kind:"task",id:change.confirmedTaskId,change:"updated"});
     });
   },[runtime,generation]);
-  const gate=targetMyPlanGate(runtime,generation,outcome,blocked);
+  // A failed same-generation poll must unmount the reader, abort pending
+  // reads and erase cached titles until a successful verification remounts it.
+  const gate=targetOverviewGate(runtime,generation,outcome,blocked);
   if(gate.kind!=="ready")return <div data-testid="target-overview-gate">
     {gate.kind==="checking"
       ?<p role="status">{language==="cs"?"Ověřuji přístup…":"Checking access…"}</p>
