@@ -130,3 +130,24 @@ test("C-2: only complete personal-v1 promotes authorized Home and Upcoming",()=>
   assert.equal(activeTargetViewFor({...without,view:"Upcoming",planActive:false}).active,null);
   assert.equal(targetViewsFor(without).includes("Upcoming"),false);
 });
+
+
+test("C-3a: target Inbox and LegacyInbox have distinct primary/archive addresses only behind the complete gate",()=>{
+  const ready={...personalV1,personalV1:true,homeRead:true,inboxRead:true};
+  const nav=targetShellNavigationFor(ready);
+  assert.deepEqual(nav.primary,["MyPlanPreview","Home","Inbox","Upcoming","Projects","Notes","Calendar","Search"]);
+  assert.deepEqual(nav.archive,["LegacyHome","LegacyInbox","Today","LegacyUpcoming",
+    "Overdue","Anytime","Someday","Completed","Areas","Context"]);
+  assert.equal(nav.byView.Inbox,"primary");
+  assert.equal(nav.byView.LegacyInbox,"archive");
+  assert.equal(nav.byView.LegacyHome,"archive");
+  assert.equal(new Set([...nav.primary,...nav.archive,...nav.hidden]).size,SHELL_NAVIGATION_VIEWS.length);
+  for(const key of ["homeRead","inboxRead"]){
+    const withheld=targetShellNavigationFor({...ready,[key]:false});
+    assert.equal(withheld.byView.Inbox,"archive");
+    assert.equal(withheld.byView.LegacyInbox,"hidden");
+  }
+  const offNav=targetShellNavigationFor({...ready,quickCapture:false});
+  assert.equal(offNav.personalV1,false);
+  assert.equal(offNav.byView.LegacyInbox,"hidden");
+});
