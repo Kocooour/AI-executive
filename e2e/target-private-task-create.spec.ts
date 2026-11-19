@@ -286,6 +286,67 @@ for(const width of [390,1280]){
   });
 }
 
+/** C31: an A-session wake that authorizes generation B must invalidate
+ * its old replacement ticket. Hold the B catalog while both wake callbacks
+ * settle, so a delayed stale nonce would cancel/duplicate the new B GET. */
+for(const width of [390,1280]){
+  test("C31 rotating A to B on wake loads one new Area at "+width+"px",async({page})=>{
+    await page.setViewportSize({width,height:844});
+    const writes=await setup(page,(route,cmd)=>
+      reply(route,{ok:true,taskId:cmd.taskId},201));
+    let verifiedGeneration=generation;
+    await page.route("**/api/target-staging/session",route=>
+      reply(route,{generation:verifiedGeneration}));
+    const http=await captureAreaWakeHttp(page);
+    let areaReads=0;
+    let releaseNewArea!:()=>void;
+    const newAreaHeld=new Promise<void>(resolve=>{releaseNewArea=resolve;});
+    await page.route("**/api/target-staging/notes/create-targets",async route=>{
+      const attempt=++areaReads;
+      if(attempt===1)return reply(route,{areas:[
+        {id:"private-a",title:"Old A Area"}]});
+      if(attempt===2){
+        await newAreaHeld;
+        return reply(route,{areas:[{id:"private-b",title:"New B Area"}]});
+      }
+      // A duplicate is never a valid replacement; detect it with areaReads.
+      return reply(route,{areas:[{id:"private-c",title:"Unexpected duplicate"}]});
+    });
+    await page.goto("/?view=Calendar&scope=personal");
+    await openAndFill(page,width,"Old A draft must disappear");
+    expect(areaReads).toBe(1);
+    await page.evaluate(()=>window.dispatchEvent(
+      new PageTransitionEvent("pagehide",{persisted:false})));
+    await expect(page.getByTestId("target-private-task-form")).toHaveCount(0);
+    verifiedGeneration="B".repeat(43);
+    const from=http.mark();
+    await page.evaluate(()=>window.dispatchEvent(
+      new PageTransitionEvent("pageshow",{persisted:false})));
+    try{
+      await expect.poll(()=>areaReads).toBe(2);
+      // B's response is intentionally held. An A wake callback that later
+      // consumes its stale ticket would abort B and issue Area GET number 3.
+      await page.waitForTimeout(400);
+      expect(areaReads,"a stale A wake must not restart B's in-flight read").toBe(2);
+    }finally{
+      releaseNewArea();
+    }
+    const area=page.getByTestId("target-private-task-area");
+    await expect(area.locator('option[value="private-b"]')).toHaveCount(1);
+    await expect(area.locator('option[value="private-a"]')).toHaveCount(0);
+    await expect(area.locator('option[value="private-c"]')).toHaveCount(0);
+    await http.assertOneAuthorizedReplacement(from);
+    await page.waitForTimeout(250);
+    expect(areaReads,"exactly one successful B Area GET, no duplicate").toBe(2);
+    await expect(area).toHaveValue("");
+    await area.selectOption("private-b");
+    await expect(page.getByTestId("target-private-task-form")
+      .getByRole("textbox",{name:"Název úkolu"})).toHaveValue("");
+    expect(writes,"generation rotation and wake must never CREATE").toHaveLength(0);
+    await http.close();
+  });
+}
+
 /** Opening while already offline/hidden must arm the wake hook even
  * though the first reader effect cannot register a runtime disposable.
  * Neither condition may allow a stale catalog or an unverified Area GET. */
