@@ -2761,7 +2761,7 @@ export function useLumiApp(options: { targetDetails?: boolean; targetUnified?: b
       const priorityRank: Record<string, number> = { high: 0, medium: 1, low: 2, none: 3 };
       return tasks.filter((t) => {
         if (priorityFilter !== "all" && String(t.properties.priority || "none") !== priorityFilter) return false;
-        return taskMatchesView(t, view, today);
+        return taskMatchesView(t, view === "LegacyUpcoming" ? "Upcoming" : view, today);
       }).sort((a, b) => {
         if (sortBy === "manual") return byManualOrder(`task:${view}`)(a, b);
         if (sortBy === "created") return b.createdAt - a.createdAt;
@@ -2769,7 +2769,8 @@ export function useLumiApp(options: { targetDetails?: boolean; targetUnified?: b
           return (priorityRank[String(a.properties.priority || "none")] ?? 3) -
             (priorityRank[String(b.properties.priority || "none")] ?? 3);
         }
-        return taskDateSortKey(a, view).localeCompare(taskDateSortKey(b, view));
+        return taskDateSortKey(a, view === "LegacyUpcoming" ? "Upcoming" : view).localeCompare(
+          taskDateSortKey(b, view === "LegacyUpcoming" ? "Upcoming" : view));
       });
     },
     [tasks, view, today, sortBy, priorityFilter],
