@@ -88,7 +88,7 @@ test("close leads to the parent of the current scope: project for a project task
   assert.equal(parentSearchForDetail({kind:"note",id:"n",view:"Notes"},"all"),"?view=Notes");
   assert.equal(parentSearchForDetail({kind:"task",id:"t",view:"MyPlanPreview"},"personal"),
     "?view=MyPlanPreview&scope=personal");
-  assert.equal(parentSearchForDetail({kind:"task",id:"th",view:"Home"},"all"),"");
+  assert.equal(parentSearchForDetail({kind:"task",id:"th",view:"Home"},"all"),"?view=Home");
   assert.equal(parentSearchForDetail({kind:"task",id:"tu",view:"Upcoming"},"personal"),
     "?view=Upcoming&scope=personal");
   assert.equal(parentSearchForDetail(null,"all"),"?view=Projects");
