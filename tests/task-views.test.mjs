@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-const { byManualOrder, manualOrder, newTaskPlacement, parseCaptureText, taskDueTone, taskMatchesView } = await import("../lib/task-views.ts");
+const { archiveReadView, byManualOrder, manualOrder, newTaskPlacement, parseCaptureText, taskDueTone, taskMatchesView } = await import("../lib/task-views.ts");
 
 // Local-time constructor: these helpers work on the device's local calendar day.
 const NOW = new Date(2026, 9, 7, 10, 0, 0);
@@ -48,6 +48,26 @@ test("manual order prefers the workspace-scoped value, then the scope, then crea
   assert.equal(manualOrder(task({ properties: { manualOrder: 4 } })), 4);
   assert.equal(manualOrder(task()), 1000);
   assert.equal(manualOrder(task({ properties: { manualOrders: { "personal:task:all": 2 } } })), 2);
+});
+
+test("C-2 archive aliases preserve original read scopes and existing manual ranks", () => {
+  assert.equal(archiveReadView("LegacyHome"), "Home");
+  assert.equal(archiveReadView("LegacyUpcoming"), "Upcoming");
+  for (const view of ["Home", "Upcoming", "Inbox", "Today", "Search"]) {
+    assert.equal(archiveReadView(view), view, view);
+  }
+
+  // Stored pre-split ranks, including the workspace key, must win over createdAt.
+  const highRank = task({ id: "rank-first", createdAt: 9000,
+    properties: { when: "2026-10-20", manualOrders: { "personal:task:Upcoming": 1 } } });
+  const lowRank = task({ id: "rank-second", createdAt: 1000,
+    properties: { when: "2026-10-21", manualOrders: { "task:Upcoming": 2 } } });
+  const scope = "task:" + archiveReadView("LegacyUpcoming");
+  assert.deepEqual([lowRank, highRank]
+    .filter((entity) => taskMatchesView(entity, archiveReadView("LegacyUpcoming"), TODAY))
+    .sort(byManualOrder(scope)).map((entity) => entity.id), ["rank-first", "rank-second"]);
+  assert.equal(manualOrder(highRank, "task:LegacyUpcoming"), 9000,
+    "the regression was caused by reading a new archive-specific rank key");
 });
 
 test("manual sort is stable across equal positions", () => {
