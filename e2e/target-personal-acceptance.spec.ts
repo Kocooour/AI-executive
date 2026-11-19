@@ -1096,3 +1096,61 @@ test.describe("C34 HTTPS reverse-proxy acceptance",()=>{
   }
   });
 });
+
+/** #478 / C-2: real archive DOM and pre-split manual ranks on both screen sizes.
+ * The release acceptance profile provides a throwaway owner and legacy store. */
+for (const width of [390, 1280]) {
+  test("C-2 LegacyHome appearance and LegacyUpcoming persisted order at " + width + "px", async ({ page }) => {
+    test.setTimeout(90_000);
+    await page.setViewportSize({ width, height: 844 });
+    await page.goto("/?view=LegacyHome");
+    await expect(page.getByTestId("legacy-read-only-notice")).toBeVisible();
+    // Historical Home is a secondary list under the Home summary, not a new
+    // task-management view with priority/sort controls or an empty-state banner.
+    await expect(page.locator(".pageIntro .eyebrow")).toHaveCount(0);
+    await expect(page.locator(".pageTitleRow time")).toBeVisible();
+    await expect(page.locator(".list.taskRowList.secondary")).toBeVisible();
+    await expect(page.locator(".listControls")).toHaveCount(0);
+    await expect(page.locator(".appPane .capture")).toHaveCount(0);
+
+    const stamp = Date.now();
+    const ids = [`c2-archive-first-${width}-${stamp}`, `c2-archive-second-${width}-${stamp}`];
+    const titles = [`C2 archived first ${width}-${stamp}`, `C2 archived second ${width}-${stamp}`];
+    const snapshot = await (await page.request.get("/api/store")).json();
+    const make = (id: string, title: string, createdAt: number, manualOrders: Record<string, number>) => ({
+      id, title, type: "task", status: "open", workspaceId: "personal",
+      properties: { when: "2099-10-20", manualOrders }, createdAt, updatedAt: stamp,
+    });
+    const seed = await page.request.put("/api/store", { data: {
+      baseRevision: snapshot.revision, restoreGeneration: snapshot.restoreGeneration,
+      entities: [...snapshot.entities,
+        make(ids[0], titles[0], stamp + 5000, { "personal:task:Upcoming": 1 }),
+        make(ids[1], titles[1], stamp - 5000, { "task:Upcoming": 2 })],
+      relations: snapshot.relations, deletedIds: [], revivedIds: [],
+    } });
+    expect(seed.ok(), "seed synthetic pre-split ranks").toBe(true);
+    try {
+      await page.goto("/?view=LegacyUpcoming");
+      await expect(page.getByTestId("legacy-read-only-notice")).toBeVisible();
+      await expect(page.locator(".listControls")).toBeVisible();
+      await expect(page.locator(".listControls select").nth(1)).toHaveValue("manual");
+      await expect(page.locator(".list.taskRowList article.taskRow").filter({ hasText: titles[0] })).toBeVisible();
+      await expect(page.locator(".list.taskRowList article.taskRow").filter({ hasText: titles[1] })).toBeVisible();
+      const orderedTitles = await page.locator(".list.taskRowList article.taskRow .taskRowOpen").allTextContents();
+      expect(orderedTitles.filter(title => titles.includes(title))).toEqual(titles);
+      // Merely visiting either archive surface must not mutate the stored entities.
+      const afterNavigation = await (await page.request.get("/api/store")).json();
+      expect(afterNavigation.entities.filter((row: { id: string }) => ids.includes(row.id))
+        .map((row: { properties: { manualOrders: Record<string, number> } }) => row.properties.manualOrders))
+        .toEqual([{ "personal:task:Upcoming": 1 }, { "task:Upcoming": 2 }]);
+    } finally {
+      const current = await (await page.request.get("/api/store")).json();
+      const cleanup = await page.request.put("/api/store", { data: {
+        baseRevision: current.revision, restoreGeneration: current.restoreGeneration,
+        entities: current.entities.filter((row: { id: string }) => !ids.includes(row.id)),
+        relations: current.relations, deletedIds: ids, revivedIds: [],
+      } });
+      expect(cleanup.ok(), "remove synthetic archived ranks").toBe(true);
+    }
+  });
+}
