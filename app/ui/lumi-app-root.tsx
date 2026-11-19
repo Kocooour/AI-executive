@@ -61,7 +61,7 @@ export type TargetEditsProps = TargetUiEdits;
 export type TargetCreatesProps = { projects:boolean; projectTasks:boolean };
 export type TargetMyPlanProps = { enabled: boolean; statusWrite: boolean; whenWrite: boolean };
 
-export function LumiAppRoot({ targetMyPlan, targetScopes, targetDetails, targetEdits, targetCreates, targetNoteEdit = false, targetProjectEdit = false, targetPrivateNoteAreas = false, targetPrivateNoteCreate = false, targetPrivateTaskCreate = false, targetSearch = false, humanWikiSourceStatusEnabled = false }: { targetMyPlan?: TargetMyPlanProps; targetScopes?: TargetScopesProps; targetDetails?: TargetDetailsProps; targetEdits?: TargetEditsProps; targetCreates?: TargetCreatesProps; targetNoteEdit?: boolean; targetProjectEdit?: boolean; targetPrivateNoteAreas?: boolean; targetPrivateNoteCreate?: boolean; targetPrivateTaskCreate?: boolean; targetSearch?: boolean; humanWikiSourceStatusEnabled?: boolean } = {}) {
+export function LumiAppRoot({ targetHomeSummary = false, targetMyPlan, targetScopes, targetDetails, targetEdits, targetCreates, targetNoteEdit = false, targetProjectEdit = false, targetPrivateNoteAreas = false, targetPrivateNoteCreate = false, targetPrivateTaskCreate = false, targetSearch = false, humanWikiSourceStatusEnabled = false }: { targetHomeSummary?:boolean; targetMyPlan?: TargetMyPlanProps; targetScopes?: TargetScopesProps; targetDetails?: TargetDetailsProps; targetEdits?: TargetEditsProps; targetCreates?: TargetCreatesProps; targetNoteEdit?: boolean; targetProjectEdit?: boolean; targetPrivateNoteAreas?: boolean; targetPrivateNoteCreate?: boolean; targetPrivateTaskCreate?: boolean; targetSearch?: boolean; humanWikiSourceStatusEnabled?: boolean } = {}) {
   // Owner decision 2026-11-09: with target scopes on, the single global scope governs the
   // sidebar projects, the inspector and quick capture (see docs/R3-FE-04A-DETAILS.md).
   const scopesOn = Boolean(targetScopes?.enabled);
@@ -80,7 +80,7 @@ export function LumiAppRoot({ targetMyPlan, targetScopes, targetDetails, targetE
   const taskCaptureReady=Boolean(targetPrivateTaskCreate&&targetCapture&&
     targetMyPlan?.enabled&&detailGates.task);
   const shellInput = { scopesOn, projectsList: Boolean(targetScopes?.projects), notesList: Boolean(targetScopes?.notes),
-    myPlan: Boolean(targetMyPlan?.enabled), v1Shell: mobileDesignV1Preview };
+    myPlan: Boolean(targetMyPlan?.enabled), v1Shell: mobileDesignV1Preview, homeRead:targetHomeSummary };
   // C-1: the fully enabled personal-v1 profile has a target-only primary
   // navigation and a separate archive. Partial/off profiles keep old UI.
   const shellNavigation=targetShellNavigationFor({...shellInput,targetSearch,quickCapture:targetCapture});
@@ -207,7 +207,7 @@ export function LumiAppRoot({ targetMyPlan, targetScopes, targetDetails, targetE
       <AuthScreen app={app} />
     );
   }
-  const targetOverview=shellNavigation.personalV1&&(view==="Home"||view==="Upcoming");
+  const targetOverview=shellNavigation.personalV1&&targetHomeSummary&&(view==="Home"||view==="Upcoming");
   const scopeSwitcher = scopeList !== null || (scopesOn && (targetPlan || targetOverview || (targetSearch && view==="Search")));
   // The legacy inspector is never fed legacy records in a target view.
   const targetView = scopeList !== null || targetPlan || targetOverview || (targetSearch && view==="Search");
