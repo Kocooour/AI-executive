@@ -6,7 +6,7 @@ import type {TargetDetailGates,TargetDetailView} from "./target-detail-route";
 export type TargetShellInput={
   scopesOn:boolean;projectsList:boolean;notesList:boolean;
   /** Target My Plan is enabled (flags) - it only exists in the v1 shell. */
-  myPlan:boolean;v1Shell:boolean;personalV1?:boolean;homeRead?:boolean;
+  myPlan:boolean;v1Shell:boolean;personalV1?:boolean;homeRead?:boolean;inboxRead?:boolean;
 };
 /** Views that can show target data with the given flags (independent of the current view). */
 export function targetViewsFor(input:TargetShellInput):TargetDetailView[]{
@@ -43,7 +43,7 @@ export function activeTargetViewFor(input:TargetShellInput&{view:string;planActi
  * keep their existing navigation rather than advertising legacy data as live.
  * Quick Capture is a target action, not a view/address. */
 export const SHELL_NAVIGATION_VIEWS=[
-  "MyPlanPreview","Home","LegacyHome","Inbox","Today","Upcoming","LegacyUpcoming","Projects","Areas","Notes",
+  "MyPlanPreview","Home","LegacyHome","Inbox","LegacyInbox","Today","Upcoming","LegacyUpcoming","Projects","Areas","Notes",
   "Calendar","Search","Overdue","Anytime","Someday","Completed","Context",
   "Agents","Settings",
 ] as const;
@@ -77,12 +77,24 @@ const PERSONAL_V1_ARCHIVE:readonly ShellNavigationView[]=[
   "LegacyHome","Inbox","Today","LegacyUpcoming","Overdue","Anytime","Someday",
   "Completed","Areas","Context",
 ];
+// C-3a promotes the authorized target Inbox but preserves historical tasks
+// under a separate deep-linkable archival destination. No legacy count is reused.
+const PERSONAL_V1_INBOX_PRIMARY:readonly ShellNavigationView[]=[
+  "MyPlanPreview","Home","Inbox","Upcoming","Projects","Notes","Calendar","Search",
+];
+const PERSONAL_V1_INBOX_ARCHIVE:readonly ShellNavigationView[]=[
+  "LegacyHome","LegacyInbox","Today","LegacyUpcoming","Overdue","Anytime","Someday",
+  "Completed","Areas","Context",
+];
 /** System views (Agents, Settings) remain accessible outside primary/archive. */
 export function targetShellNavigationFor(input:ShellNavigationInput):ShellNavigationModel{
   const personalV1=input.v1Shell&&input.scopesOn&&input.projectsList&&
     input.notesList&&input.myPlan&&input.targetSearch&&input.quickCapture;
-  const primary=personalV1?(input.homeRead?PERSONAL_V1_PRIMARY:PERSONAL_V1_C1_PRIMARY):[];
-  const archive=personalV1?(input.homeRead?PERSONAL_V1_ARCHIVE:PERSONAL_V1_C1_ARCHIVE):[];
+  const inboxReady=personalV1&&Boolean(input.homeRead&&input.inboxRead);
+  const primary=personalV1?(inboxReady?PERSONAL_V1_INBOX_PRIMARY:
+    input.homeRead?PERSONAL_V1_PRIMARY:PERSONAL_V1_C1_PRIMARY):[];
+  const archive=personalV1?(inboxReady?PERSONAL_V1_INBOX_ARCHIVE:
+    input.homeRead?PERSONAL_V1_ARCHIVE:PERSONAL_V1_C1_ARCHIVE):[];
   const primarySet=new Set<string>(primary);
   const archiveSet=new Set<string>(archive);
   const byView=Object.fromEntries(SHELL_NAVIGATION_VIEWS.map(view=>
