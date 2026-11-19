@@ -1109,7 +1109,8 @@ for (const width of [390, 1280]) {
     // task-management view with priority/sort controls or an empty-state banner.
     await expect(page.locator(".pageIntro .eyebrow")).toHaveCount(0);
     await expect(page.locator(".pageTitleRow time")).toBeVisible();
-    await expect(page.locator(".list.taskRowList.secondary")).toBeVisible();
+    // The empty list has zero height: assert its presentation class, then test visibility with seeded rows below.
+    await expect(page.locator(".list.taskRowList.secondary")).toHaveCount(1);
     await expect(page.locator(".listControls")).toHaveCount(0);
     await expect(page.locator(".appPane .capture")).toHaveCount(0);
 
@@ -1132,6 +1133,7 @@ for (const width of [390, 1280]) {
     try {
       // Exercise Home with actual rows, not only an empty archive.
       await page.goto("/?view=LegacyHome");
+      await expect(page.locator(".list.taskRowList.secondary")).toBeVisible();
       await expect(page.locator(".list.taskRowList .taskRowOpen").filter({ hasText: titles[0] })).toBeVisible();
       await expect(page.locator(".list.taskRowList .dragHandle")).toHaveCount(0);
       await page.goto("/?view=LegacyUpcoming");
