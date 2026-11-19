@@ -290,7 +290,7 @@ export default defineConfig({
       AI_EXECUTIVE_INTEGRATION_TOKEN: integrationToken,
       // The real-store proxy acceptance uses a second public port while Next runs
       // on its own loopback listener. Legacy suites retain the empty allowlist.
-      AI_EXECUTIVE_ALLOWED_ORIGINS: personalAcceptanceTest ? `http://localhost:${port + 1}` : "",
+      AI_EXECUTIVE_ALLOWED_ORIGINS: personalAcceptanceTest ? `https://localhost:${port + 1}` : "",
       // Passkeys are tested with a virtual authenticator on the test address only.
       AI_EXECUTIVE_PASSKEY_ORIGINS: `http://localhost:${port}`,
       OPENAI_API_KEY: "",
