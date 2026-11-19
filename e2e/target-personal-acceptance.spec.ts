@@ -173,6 +173,52 @@ for(const width of [390,1280]){
     await expect(tomorrow.locator('[data-detail-row="task:'+taskId+'"]')).toHaveCount(1);
     await expect(today.locator('[data-detail-row="task:'+taskId+'"]')).toHaveCount(0);
 
+    // C-2: a tomorrow When is visible in the authorized seven-day view and Home,
+    // never in legacy/archive data. Back/Forward and reload keep the target route.
+    const nextDay=await page.evaluate(()=>{
+      const d=new Date();d.setDate(d.getDate()+1);
+      return [d.getFullYear(),String(d.getMonth()+1).padStart(2,"0"),
+        String(d.getDate()).padStart(2,"0")].join("-");
+    });
+    await page.goto("/?view=Upcoming&scope=personal");
+    await expect(page.getByTestId("target-upcoming")).toBeVisible();
+    await expect(page.locator('[data-target-day="'+nextDay+'"] [data-detail-row="task:'+taskId+'"]')).toHaveCount(1);
+    await page.locator('[data-target-day="'+nextDay+'"] [data-detail-row="task:'+taskId+'"]').click();
+    await expect(detail).toContainText(taskTitle);
+    await page.goBack();
+    await expect(page.getByTestId("target-upcoming")).toBeVisible();
+    await page.goForward();
+    await expect(detail).toContainText(taskTitle);
+    await closeDetail();
+    // C-2 privacy: offline hides previously authorized task titles, and coming
+    // back online must re-verify and re-read (not resurrect a stored page).
+    await page.context().setOffline(true);
+    await expect(page.getByTestId("target-overview-error")).toBeVisible();
+    await expect(page.getByTestId("target-upcoming")).toHaveCount(0);
+    await page.context().setOffline(false);
+    await expect(page.getByTestId("target-upcoming")).toContainText(taskTitle);
+    await page.goto("/?view=Home&scope=personal");
+    await expect(page.getByTestId("target-home")).toBeVisible();
+    await expect(page.getByTestId("target-home")).toContainText(taskTitle);
+    await expect(page.getByTestId("target-home")).toContainText("úkolů celkem");
+    await page.reload();
+    await expect(page.getByTestId("target-home")).toContainText(taskTitle);
+    // C-2 privacy: hidden documents must not retain rendered target titles.
+    // Shadow the DOM visibility getter (no real browser backgrounding needed).
+    await page.evaluate(()=>{
+      Object.defineProperty(document,"visibilityState",
+        {configurable:true,get:()=>"hidden"});
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
+    await expect(page.getByTestId("target-overview-error")).toBeVisible();
+    await expect(page.getByTestId("target-home")).toHaveCount(0);
+    await page.evaluate(()=>{
+      Reflect.deleteProperty(document,"visibilityState");
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
+    await expect(page.getByTestId("target-home")).toContainText(taskTitle);
+    await openMyPlan();
+
     // 5. Open the task detail and rename it.
     await planRow(taskTitle).click();
     await expect(detail).toContainText(taskTitle);
@@ -422,7 +468,7 @@ for (const width of [390, 1280]) {
 
     // Seed the real legacy workspace via its ordinary HTTP store *before*
     // navigating to Calendar. The new Calendar must not depend on this decision.
-    await page.goto("/?view=Home");
+    await page.goto("/?view=LegacyHome");
     await expect(page.getByTestId("legacy-read-only-notice")).toBeVisible();
     // Capture an authenticated request identity while the browser page is open.
     // Cleanup uses Node fetch so it still works if Playwright closes the page
@@ -568,7 +614,7 @@ for (const width of [390, 1280]) {
     });
     // Even a brand-new browser in target mode may read the old server copy,
     // but it may not seed IndexedDB or upload a synthesized baseline.
-    await page.goto("/?view=Home");
+    await page.goto("/?view=LegacyHome");
     await expect(page.getByTestId("legacy-read-only-notice")).toBeVisible();
     expect(unexpectedWrites, "target startup must not write to any legacy API").toEqual([]);
 
@@ -621,7 +667,7 @@ for (const width of [390, 1280]) {
           .not.toContainText(oldTitle);
       await expect(page.getByTestId("target-archive-heading")).toHaveCount(0);
     };
-    const currentViews = ["MyPlanPreview", "Projects", "Notes", "Calendar", "Search"] as const;
+    const currentViews = ["MyPlanPreview", "Home", "Upcoming", "Projects", "Notes", "Calendar", "Search"] as const;
     await expect(page.locator('[data-target-private-capture-fab="' +
       (width === 390 ? "mobile" : "desktop") + '"]')).toBeVisible();
     if (width === 1280) {
@@ -642,7 +688,7 @@ for (const width of [390, 1280]) {
         await page.locator('.mobileNav [data-nav-tab="' + destination + '"]').click();
         await assertNoLegacyInCurrentView();
       }
-      for (const destination of ["Notes", "Search"]) {
+      for (const destination of ["Home", "Upcoming", "Notes", "Search"]) {
         await page.locator('.mobileNav [data-nav-tab="More"]').click();
         await expect(page.getByTestId("target-archive-mobile")).toContainText(
           "Archiv (stará data, jen pro čtení)");
@@ -677,19 +723,19 @@ for (const width of [390, 1280]) {
     const before = await (await page.request.get("/api/store")).body();
     const beforeDb = legacyDbRows();
 
-    for (const [view, title] of [["Home", homeTitle], ["Inbox", inboxTitle], ["Today", homeTitle]] as const) {
+    for (const [view, title] of [["LegacyHome", homeTitle], ["Inbox", inboxTitle], ["Today", homeTitle]] as const) {
       await page.goto("/?view=" + view);
       const banner = page.getByTestId("legacy-read-only-notice");
       await expect(banner).toBeVisible();
       await expect(banner).toContainText("jen pro čtení");
       await expect(banner.getByRole("button", { name: "Otevřít Můj plán" })).toBeVisible();
 
-      const row = view === "Home"
+      const row = view === "LegacyHome"
         ? page.locator(".homeTaskList article").filter({ hasText: title }).first()
         : page.locator(".taskRow").filter({ hasText: title }).first();
       await expect(row).toBeVisible();
       await expect(row.locator("button.check")).toBeDisabled();
-      if (view === "Home") {
+      if (view === "LegacyHome") {
         // A separate overdue task must appear in Attention: it previously caused
         // GET /api/attention to INSERT lifecycle rows as a side effect.
         await expect(page.locator(".attentionItem").filter({ hasText: overdueTitle })).toBeVisible();
@@ -700,7 +746,7 @@ for (const width of [390, 1280]) {
         // snapshot. This tab must continue showing the server's historical data.
         const sibling = await page.context().newPage();
         try {
-          await sibling.goto("/?view=Home");
+          await sibling.goto("/?view=LegacyHome");
           await expect(sibling.locator(".homeTaskList article").filter({ hasText: title })).toBeVisible();
           await sibling.evaluate(() => {
             const channel = new BroadcastChannel("ai-executive-tabs");
@@ -753,7 +799,7 @@ for (const width of [390, 1280]) {
           pathname.startsWith("/api/") && !pathname.startsWith("/api/target-staging/"))
         writes.push(request.method() + " " + pathname);
     });
-    await page.goto("/?view=Home");
+    await page.goto("/?view=LegacyHome");
     await expect(page.getByTestId("legacy-read-only-notice")).toBeVisible();
     const original = await (await page.request.get("/api/store")).body();
     const originalDb = legacyDbRows();
@@ -784,7 +830,7 @@ for (const width of [390, 1280]) {
     // The 390px v1 shell restores My Plan from the canonical bare URL after
     // reload. The device-copy warning belongs on historical views only; use
     // an explicit Home deep link instead of asserting against My Plan.
-    await page.goto("/?view=Home");
+    await page.goto("/?view=LegacyHome");
     await expect(page.getByTestId("legacy-read-only-notice")).toBeVisible();
     const notice = page.getByTestId("legacy-pending-rescue");
     await expect(notice).toBeVisible();

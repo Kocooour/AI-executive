@@ -38,6 +38,7 @@ import { OfflineRecoveryDialog } from "./views/offline-recovery-dialog";
 
 // R3-FE-2: loaded (with its CSS) only when the server page enabled the target My Plan.
 const TargetMyPlan = dynamic(() => import("./target-my-plan"), { ssr: false });
+const TargetOverview = dynamic(() => import("./target-overview"), { ssr: false });
 
 // R3-FE-3: the scope switcher and the server-backed Projects / Notes lists load only
 // when the server page enabled target scopes; otherwise they are never fetched.
@@ -60,7 +61,7 @@ export type TargetEditsProps = TargetUiEdits;
 export type TargetCreatesProps = { projects:boolean; projectTasks:boolean };
 export type TargetMyPlanProps = { enabled: boolean; statusWrite: boolean; whenWrite: boolean };
 
-export function LumiAppRoot({ targetMyPlan, targetScopes, targetDetails, targetEdits, targetCreates, targetNoteEdit = false, targetProjectEdit = false, targetPrivateNoteAreas = false, targetPrivateNoteCreate = false, targetPrivateTaskCreate = false, targetSearch = false, humanWikiSourceStatusEnabled = false }: { targetMyPlan?: TargetMyPlanProps; targetScopes?: TargetScopesProps; targetDetails?: TargetDetailsProps; targetEdits?: TargetEditsProps; targetCreates?: TargetCreatesProps; targetNoteEdit?: boolean; targetProjectEdit?: boolean; targetPrivateNoteAreas?: boolean; targetPrivateNoteCreate?: boolean; targetPrivateTaskCreate?: boolean; targetSearch?: boolean; humanWikiSourceStatusEnabled?: boolean } = {}) {
+export function LumiAppRoot({ targetHomeSummary = false, targetMyPlan, targetScopes, targetDetails, targetEdits, targetCreates, targetNoteEdit = false, targetProjectEdit = false, targetPrivateNoteAreas = false, targetPrivateNoteCreate = false, targetPrivateTaskCreate = false, targetSearch = false, humanWikiSourceStatusEnabled = false }: { targetHomeSummary?:boolean; targetMyPlan?: TargetMyPlanProps; targetScopes?: TargetScopesProps; targetDetails?: TargetDetailsProps; targetEdits?: TargetEditsProps; targetCreates?: TargetCreatesProps; targetNoteEdit?: boolean; targetProjectEdit?: boolean; targetPrivateNoteAreas?: boolean; targetPrivateNoteCreate?: boolean; targetPrivateTaskCreate?: boolean; targetSearch?: boolean; humanWikiSourceStatusEnabled?: boolean } = {}) {
   // Owner decision 2026-11-09: with target scopes on, the single global scope governs the
   // sidebar projects, the inspector and quick capture (see docs/R3-FE-04A-DETAILS.md).
   const scopesOn = Boolean(targetScopes?.enabled);
@@ -79,12 +80,12 @@ export function LumiAppRoot({ targetMyPlan, targetScopes, targetDetails, targetE
   const taskCaptureReady=Boolean(targetPrivateTaskCreate&&targetCapture&&
     targetMyPlan?.enabled&&detailGates.task);
   const shellInput = { scopesOn, projectsList: Boolean(targetScopes?.projects), notesList: Boolean(targetScopes?.notes),
-    myPlan: Boolean(targetMyPlan?.enabled), v1Shell: mobileDesignV1Preview };
+    myPlan: Boolean(targetMyPlan?.enabled), v1Shell: mobileDesignV1Preview, homeRead:targetHomeSummary };
   // C-1: the fully enabled personal-v1 profile has a target-only primary
   // navigation and a separate archive. Partial/off profiles keep old UI.
   const shellNavigation=targetShellNavigationFor({...shellInput,targetSearch,quickCapture:targetCapture});
   // Details act only on views that really render target data (never on legacy views).
-  const targetViews = targetViewsFor(shellInput);
+  const targetViews = targetViewsFor({...shellInput,personalV1:shellNavigation.personalV1});
   const detailsOn = detailsActive(detailGates, targetViews);
   const app = useLumiApp({ targetDetails: detailsOn, targetUnified: scopesOn, targetViews: detailsOn ? targetViews : [], preferTargetPlan: shellNavigation.personalV1 });
   const {
@@ -99,7 +100,7 @@ export function LumiAppRoot({ targetMyPlan, targetScopes, targetDetails, targetE
     workspaceName,
   } = app;
   const planActive = mobileDesignV1Preview && app.mobilePlanPreviewActive && view === "Today";
-  const { scopeList, targetPlan, active: activeTargetView } = activeTargetViewFor({ ...shellInput, view, planActive });
+  const { scopeList, targetPlan, active: activeTargetView } = activeTargetViewFor({ ...shellInput, view, planActive, personalV1:shellNavigation.personalV1 });
   // Read-only Notes chooser remains view-scoped; a gated global capture does not.
   useEffect(()=>{
     if(!targetCapture)setAreaChooserOpen(false);
@@ -206,9 +207,10 @@ export function LumiAppRoot({ targetMyPlan, targetScopes, targetDetails, targetE
       <AuthScreen app={app} />
     );
   }
-  const scopeSwitcher = scopeList !== null || (scopesOn && (targetPlan || (targetSearch && view==="Search")));
+  const targetOverview=shellNavigation.personalV1&&targetHomeSummary&&(view==="Home"||view==="Upcoming");
+  const scopeSwitcher = scopeList !== null || (scopesOn && (targetPlan || targetOverview || (targetSearch && view==="Search")));
   // The legacy inspector is never fed legacy records in a target view.
-  const targetView = scopeList !== null || targetPlan || (targetSearch && view==="Search");
+  const targetView = scopeList !== null || targetPlan || targetOverview || (targetSearch && view==="Search");
   const legacyInspector = Boolean(app.selected) && !(scopesOn && targetView);
   // Unified target mode: views that still show legacy data are read-only (no target create/edit API yet).
   // The router internally represents target My Plan as Today; it is *not* archival.
@@ -312,14 +314,14 @@ export function LumiAppRoot({ targetMyPlan, targetScopes, targetDetails, targetE
             </div>
           )}
           <div className="pageIntro">
-            {view !== "Home" && (
+            {view !== "Home" && !targetOverview && (
               <p className="eyebrow">
                 {workspaceName.toUpperCase()} · {activeWorkspaceId === "all" ? "AGGREGATE" : String(activeWorkspace?.properties.kind || "PERSONAL").toUpperCase()}
               </p>
             )}
             <div className="pageTitleRow">
               <h1 tabIndex={mobileDesignV1Preview ? -1 : undefined}>{mobileDesignV1Preview && app.mobilePlanPreviewActive && view === "Today"
-                ? (language === "cs" ? "Můj plán" : "My Plan") : tr(view)}</h1>
+                ? (language === "cs" ? "Můj plán" : "My Plan") : tr(view==="LegacyHome"?"Home":view==="LegacyUpcoming"?"Upcoming":view)}</h1>
               {(view === "Today" || view === "Home") && <time>{new Intl.DateTimeFormat(language === "cs" ? "cs-CZ" : "en-GB", { weekday: "short", day: "numeric", month: "short" }).format(new Date())}</time>}
               {view === "Today" && !targetPlan && <TodayHeaderMeta app={app} />}
             </div>
@@ -330,11 +332,13 @@ export function LumiAppRoot({ targetMyPlan, targetScopes, targetDetails, targetE
             onClick={()=>openAreaChooser(false,"note")}>{targetPrivateNoteCreate
               ?(language==="cs"?"Nová soukromá poznámka":"New private note")
               :(language==="cs"?"Oblasti pro novou poznámku":"Areas for a new note")}</button>}
-          {legacySearchSurfaces.heldBack && <HeldBack app={app} />}
+          {legacySearchSurfaces.heldBack && !targetOverview && <HeldBack app={app} />}
           {taskCaptureReady&&<TargetPrivateTaskCreatedNotice language={language}
             onCreated={closeAreaChooser} />}
           <CalendarView app={app} eventsOnly={shellNavigation.personalV1} />
-          <HomeView app={app} />
+          {!targetOverview && <HomeView app={app} />}
+          {targetOverview && <TargetOverview kind={view==="Home"?"home":"upcoming"}
+            language={language} taskDetail={detailGates.task} />}
           {view === "Today" && !targetPlan && <TodayTop app={app} />}
           {view==="Search" && targetSearch
             ? <TargetMainTitleSearch query={app.query} language={language} details={detailGates} detailViews={targetViews} />
@@ -348,7 +352,7 @@ export function LumiAppRoot({ targetMyPlan, targetScopes, targetDetails, targetE
               ? <TargetScopeLists key={scopeList==="note"?scopeList+":"+noteListRevision:scopeList} kind={scopeList} language={language}
                 detail={scopeList === "project" ? detailGates.project : detailGates.note}
                 createProject={Boolean(targetCreates?.projects&&scopeList==="project")} />
-              : legacySearchSurfaces.entityList
+              : !targetOverview && legacySearchSurfaces.entityList
                 ? <EntityList app={app} />
                 : null}
           {view === "Today" && !targetPlan && <TodayFooter app={app} />}

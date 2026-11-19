@@ -16,6 +16,8 @@ test("project, task and note routes round-trip through the address, keeping the 
     {kind:"project",id:"p1",view:"Projects"},
     {kind:"task",id:"t1",view:"Projects",projectId:"p1"},
     {kind:"task",id:"t2",view:"MyPlanPreview"},
+    {kind:"task",id:"th",view:"Home"},
+    {kind:"task",id:"tu",view:"Upcoming"},
     {kind:"note",id:"n1",view:"Notes"},
   ];
   for(const route of routes)for(const scope of ["all","personal","shared"]){
@@ -28,7 +30,9 @@ test("project, task and note routes round-trip through the address, keeping the 
   assert.equal(searchForDetail(routes[0],"all"),"?view=Projects&projectId=p1");
   assert.equal(searchForDetail(routes[1],"shared"),"?view=Projects&projectId=p1&taskId=t1&scope=shared");
   assert.equal(searchForDetail(routes[2],"all"),"?view=MyPlanPreview&taskId=t2");
-  assert.equal(searchForDetail(routes[3],"personal"),"?view=Notes&noteId=n1&scope=personal");
+  assert.equal(searchForDetail(routes[3],"personal"),"?view=Home&taskId=th&scope=personal");
+  assert.equal(searchForDetail(routes[4],"personal"),"?view=Upcoming&taskId=tu&scope=personal");
+  assert.equal(searchForDetail(routes[5],"personal"),"?view=Notes&noteId=n1&scope=personal");
 });
 
 test("opaque ids are encoded, never interpreted",()=>{
@@ -86,6 +90,9 @@ test("close leads to the parent of the current scope: project for a project task
   assert.equal(parentSearchForDetail({kind:"note",id:"n",view:"Notes"},"all"),"?view=Notes");
   assert.equal(parentSearchForDetail({kind:"task",id:"t",view:"MyPlanPreview"},"personal"),
     "?view=MyPlanPreview&scope=personal");
+  assert.equal(parentSearchForDetail({kind:"task",id:"th",view:"Home"},"all"),"?view=Home");
+  assert.equal(parentSearchForDetail({kind:"task",id:"tu",view:"Upcoming"},"personal"),
+    "?view=Upcoming&scope=personal");
   assert.equal(parentSearchForDetail(null,"all"),"?view=Projects");
   assert.equal(isParentOf({kind:"project",id:"p",view:"Projects"},{kind:"task",id:"t",view:"Projects",projectId:"p"}),true);
   assert.equal(isParentOf({kind:"project",id:"q",view:"Projects"},{kind:"task",id:"t",view:"Projects",projectId:"p"}),false);

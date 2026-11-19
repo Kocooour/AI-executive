@@ -13,6 +13,7 @@ export const TARGET_PERSONAL_V1_PROFILE=[
   "AI_EXECUTIVE_TARGET_STAGING_HTTP_ENABLED",
   "AI_EXECUTIVE_TARGET_STAGING_HTTP_GLOBAL_NOTES_ENABLED",
   "AI_EXECUTIVE_TARGET_STAGING_HTTP_GLOBAL_PROJECTS_ENABLED",
+  "AI_EXECUTIVE_TARGET_STAGING_HTTP_HOME_ENABLED",
   "AI_EXECUTIVE_TARGET_STAGING_HTTP_MY_PLAN_DAY_ENABLED",
   "AI_EXECUTIVE_TARGET_STAGING_HTTP_MY_PLAN_SLICE_ENABLED",
   "AI_EXECUTIVE_TARGET_STAGING_HTTP_NOTES_CREATE_ENABLED",
@@ -54,7 +55,7 @@ export const TARGET_PERSONAL_V1_EXCLUDED:readonly {readonly flag:string;readonly
   {flag:"AI_EXECUTIVE_TARGET_STAGING_HTTP_ATTENTION_WRITE_ENABLED",reason:"Attention lifecycle writes are out of scope."},
   {flag:"AI_EXECUTIVE_TARGET_STAGING_HTTP_GLOBAL_COMBINED_ENABLED",reason:"Combined index feeds only the preview page; the main app uses per-kind indexes."},
   {flag:"AI_EXECUTIVE_TARGET_STAGING_HTTP_GLOBAL_TASKS_ENABLED",reason:"Task index is not consumed by the main app UI; tasks come from My Plan."},
-  {flag:"AI_EXECUTIVE_TARGET_STAGING_HTTP_HOME_ENABLED",reason:"Target Home summary replaces legacy Home, which is out of scope."},
+
   {flag:"AI_EXECUTIVE_TARGET_STAGING_HTTP_NOTE_SYNC_ENABLED",reason:"Offline note sync is not part of the server-rendered daily loop."},
   {flag:"AI_EXECUTIVE_TARGET_STAGING_HTTP_NOTIFICATIONS_ENABLED",reason:"Notifications/push are out of scope."},
   {flag:"AI_EXECUTIVE_TARGET_STAGING_HTTP_NOTIFICATIONS_WRITE_ENABLED",reason:"Notification settings writes are out of scope."},

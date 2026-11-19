@@ -94,8 +94,6 @@ const disabledRoutes = new Map([
   ["PATCH attention/command", "AI_EXECUTIVE_TARGET_STAGING_HTTP_ATTENTION_ENABLED"],
   ["POST attention/command/receipt", "AI_EXECUTIVE_TARGET_STAGING_HTTP_ATTENTION_ENABLED"],
   ["GET global-index", "AI_EXECUTIVE_TARGET_STAGING_HTTP_GLOBAL_COMBINED_ENABLED"],
-  ["GET home/my-plan", "AI_EXECUTIVE_TARGET_STAGING_HTTP_HOME_ENABLED"],
-  ["GET home/summary", "AI_EXECUTIVE_TARGET_STAGING_HTTP_HOME_ENABLED"],
   ["GET note-sync", "AI_EXECUTIVE_TARGET_STAGING_HTTP_NOTE_SYNC_ENABLED"],
   ["GET note-sync-session", "AI_EXECUTIVE_TARGET_STAGING_HTTP_NOTE_SYNC_ENABLED"],
   ["GET notifications/settings", "AI_EXECUTIVE_TARGET_STAGING_HTTP_NOTIFICATIONS_ENABLED"],
@@ -176,6 +174,9 @@ async function runHandler(handler, context, method, route, phase, cookie, origin
 }
 
 test("every discovered target-staging handler respects the exact first-release session/origin boundary", async () => {
+  // C-2: existing actor-scoped Home routes are now included in personal-v1.
+  // They must require a session (401); a missing flag must not be confused with ACL.
+  assert.equal(process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_HOME_ENABLED,"true");
   const entries = routes();
   assert.ok(entries.length >= 45, "recursive route discovery must cover the complete target API");
   let enabled = 0, excluded = 0, writes = 0;
