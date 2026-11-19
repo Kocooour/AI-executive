@@ -56,7 +56,7 @@ test("UI-03b: shared desktop/mobile inspector wires preview-only guarded Escape 
 test("UI-03b: current secondary view receives aria-current without changing legacy menu semantics", () => {
   const sidebar = read("../app/ui/views/sidebar.tsx");
   const css = read("../app/lumi-desktop-v1.css");
-  const previewStart = sidebar.indexOf("{mobileDesignV1Preview && (");
+  const previewStart = sidebar.indexOf("{!personalV1 && mobileDesignV1Preview && (");
   const previewEnd = sidebar.indexOf("{sidebarProjects.length > 0 && (", previewStart);
   const legacyStart = sidebar.indexOf("{!mobileDesignV1Preview && secondaryOpen && (");
   const legacyEnd = sidebar.indexOf("</div>", legacyStart);
@@ -66,6 +66,10 @@ test("UI-03b: current secondary view receives aria-current without changing lega
   assert.match(preview, /role="navigation"/);
   assert.match(preview, /aria-current=\{view === x \? "page" : undefined\}/);
   assert.match(preview, /data-nav-view=\{x\}/);
+  // The target-only Archive uses its own selected-state and must not identify
+  // archival Today as current while the server-backed My Plan is active.
+  assert.match(sidebar, /\{personalV1 && navigation && \(/);
+  assert.match(sidebar, /data-nav-archive="true" aria-current=\{view===x&&\!\(x==="Today"&&app\.mobilePlanPreviewActive\)\?"page":undefined\}/);
   assert.doesNotMatch(legacy, /aria-current/, "preview only: no changed legacy More contract");
   assert.match(css, /\.secondaryNav button\[aria-current="page"\]/);
   assert.match(css, /background: var\(--workspace-soft\)/);
@@ -93,7 +97,8 @@ test("UI-03b: inspector and sidebar active styles remain preview-only and do not
   const nav = read("../app/ui/navigation.ts");
   assert.match(nav, /NEXT_PUBLIC_LUMI_DESIGN_V1_PREVIEW === "1"/);
   assert.match(detail, /if \(!mobileDesignV1Preview\) return;/);
-  assert.match(sidebar, /\{mobileDesignV1Preview && \(/);
+  assert.match(sidebar, /\{!personalV1 && mobileDesignV1Preview && \(/);
+  assert.match(sidebar, /\{personalV1 && navigation && \(/);
   assert.match(css, /@media \(min-width: 701px\)/);
   assert.match(css, /\.appShell\[data-design-system="lumi-v1"\] > aside/);
   assert.doesNotMatch(css, /\[data-current-project\].*\{[^}]*!important/s);

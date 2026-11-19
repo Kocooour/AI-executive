@@ -61,7 +61,7 @@ import { workspaceTone } from "./workspace-tone";
 
 // All client state, effects and handlers of the Lumi app shell, moved verbatim from app/page.tsx.
 // Views receive the returned object as `app` and destructure what they render.
-export function useLumiApp(options: { targetDetails?: boolean; targetUnified?: boolean; targetViews?: readonly string[] } = {}) {
+export function useLumiApp(options: { targetDetails?: boolean; targetUnified?: boolean; targetViews?: readonly string[]; preferTargetPlan?: boolean } = {}) {
   // R3-FE-4a: both default to false, and then none of the branches below run (legacy
   // behaviour is untouched). targetDetails: a typed project/task/note address is an
   // authorized target detail, resolved by the server, never by legacy local records.
@@ -75,6 +75,7 @@ export function useLumiApp(options: { targetDetails?: boolean; targetUnified?: b
   targetViewsRef.current = options.targetViews ?? [];
   const targetTypedNow = () => targetDetailsRef.current && isTargetAddress(window.location.search, targetViewsRef.current);
   const captureDisabled = Boolean(options.targetUnified);
+  const preferTargetPlan = Boolean(options.preferTargetPlan);
   const captureDisabledRef = useRef(captureDisabled);
   captureDisabledRef.current = captureDisabled;
   // A user tried to change legacy data in unified mode: nothing is written, nothing reports success,
@@ -1525,12 +1526,13 @@ export function useLumiApp(options: { targetDetails?: boolean; targetUnified?: b
     );
     const isPreviewPhone = mobileDesignV1Preview && window.matchMedia("(max-width: 700px)").matches;
     // The shared reading scope (?scope=) is not a navigation choice: it must not defeat the phone start.
+    const targetPlanStart=preferTargetPlan&&searchWithoutScope(window.location.search)==="";
     const previewMobileStart = isPreviewPhone && searchWithoutScope(window.location.search) === "";
     const previewDirectLink = mobileDesignV1Preview && (mobileV1IsPlanPreviewRoute(window.location.search) ||
       (targetDetailsRef.current && targetViewsRef.current.includes("MyPlanPreview") && isPlanDetailSearch(window.location.search)));
-    if (previewMobileStart || previewDirectLink) {
+    if (targetPlanStart || previewMobileStart || previewDirectLink) {
       setMobilePlanPreviewActive(true);
-      if (previewMobileStart) setStartupView("Today");
+      if (targetPlanStart || previewMobileStart) setStartupView("Today");
       setViewState("Today");
     } else if (savedView && views.includes(savedView)) {
       setStartupView(savedView);
@@ -2014,7 +2016,8 @@ export function useLumiApp(options: { targetDetails?: boolean; targetUnified?: b
         activeProjectFocusEntryRef.current = destinationFocusId;
       }
       const previewRoute = mobileDesignV1Preview &&
-        (mobileV1IsPlanPreviewRoute(window.location.search) ||
+        ((preferTargetPlan && searchWithoutScope(window.location.search)==="") ||
+          mobileV1IsPlanPreviewRoute(window.location.search) ||
           (targetDetailsRef.current && targetViewsRef.current.includes("MyPlanPreview") && isPlanDetailSearch(window.location.search)));
       const next = previewRoute ? "Today" :
         viewFromSearch(window.location.search, addressableViews) || localStorage.getItem("ai-executive-startup-view") || "Home";

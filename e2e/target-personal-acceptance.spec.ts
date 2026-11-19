@@ -14,6 +14,8 @@ import path from "node:path";
 import { readFile } from "node:fs/promises";
 import type {Page,Response} from "@playwright/test";
 import {isTargetReadRequest} from "../lib/target-edit-fetch";
+import { addCalendarDays } from "../lib/calendar-event-display";
+import { zonedDateTimeToIso } from "../lib/local-dates";
 
 test.skip(process.env.LUMI_TARGET_PERSONAL_ACCEPTANCE_E2E!=="true",
   "personal acceptance needs the real isolated target store; it is opt-in");
@@ -377,11 +379,177 @@ const legacyDbRows = () => {
   }
 };
 
+// C-1: a historically hidden source event is still a normal event in the
+// target-only Calendar. Exercise both renderers with a real persisted legacy
+// workspace decision and a deterministic mocked *integration* feed; no target
+// API, ACL or SQLite read/write is intercepted.
+for (const width of [390, 1280]) {
+  test("C-1 archived hidden decision is ignored in current Calendar at " + width + "px", async ({ page }) => {
+    test.setTimeout(90_000);
+    if (!store) throw new Error("Requires the real isolated target store");
+    await page.setViewportSize({ width, height: 844 });
+    const parts = Object.fromEntries(new Intl.DateTimeFormat("en-CA", {
+      timeZone: "Europe/Prague", year: "numeric", month: "2-digit", day: "2-digit",
+    }).formatToParts(new Date()).map(part => [part.type, part.value]));
+    const tomorrow = addCalendarDays(parts.year + "-" + parts.month + "-" + parts.day, 1);
+    const token = "c1-archived-hide-" + width + "-" + Date.now();
+    const sourceId = "c1-archived-source", uid = token + "-uid", id = token + "-event";
+    const title = token + "-integration-event";
+    const start = zonedDateTimeToIso(tomorrow, "10:00", "Europe/Prague");
+    const end = zonedDateTimeToIso(tomorrow, "11:00", "Europe/Prague");
+    const decisionKey = "series:" + sourceId + ":" + uid;
+    const event = {
+      id, uid, sourceId, title, workspaceId: "personal", occurrenceKey: uid + ":" + start,
+      start, end, allDay: false, recurring: false, timezone: "Europe/Prague",
+      status: "confirmed", transparency: "OPAQUE", busy: true, private: false,
+    };
+    const now = Date.now();
+    await page.route("**/api/calendar?**", async route => {
+      if (route.request().method() !== "GET") { await route.continue(); return; }
+      const params = new URL(route.request().url()).searchParams;
+      const from = Number(params.get("from")), to = Number(params.get("to"));
+      const inWindow = params.get("workspaceId") === "personal" &&
+        Date.parse(end) > from && Date.parse(start) < to;
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({
+        sources: [{
+          id: sourceId, workspaceId: "personal", provider: "ics", accountId: null,
+          label: "C-1 isolated source", status: "ready", configured: true,
+          lastSyncAt: now, lastSuccessAt: now, lastError: "", eventCount: 1, revision: 1,
+        }],
+        events: inWindow ? [event] : [],
+      }) });
+    });
+
+    // Seed the real legacy workspace via its ordinary HTTP store *before*
+    // navigating to Calendar. The new Calendar must not depend on this decision.
+    await page.goto("/?view=Home");
+    await expect(page.getByTestId("legacy-read-only-notice")).toBeVisible();
+    // Capture an authenticated request identity while the browser page is open.
+    // Cleanup uses Node fetch so it still works if Playwright closes the page
+    // during a failed assertion or test timeout.
+    const storeUrl = new URL("/api/store", page.url()).toString();
+    const ownerCookie = (await page.context().cookies(storeUrl))
+      .map(cookie => cookie.name + "=" + cookie.value).join("; ");
+    expect(ownerCookie, "cleanup requires an owner session").toContain("ai_executive_session=");
+    let seeded = false;
+    let primaryFailure: unknown = null;
+    try {
+      const status = await page.evaluate(async ({ decisionKey }) => {
+        const snapshot = await fetch("/api/store", { cache: "no-store" }).then(r => r.json());
+        const workspace = snapshot.entities.find((row: { id: string }) => row.id === "workspace:personal");
+        if (!workspace) throw new Error("Legacy personal workspace missing");
+        const existing = workspace.properties?.calendarDecisions || {};
+        if (Object.prototype.hasOwnProperty.call(existing, decisionKey))
+          throw new Error("Unexpected pre-existing historical decision");
+        const entities = snapshot.entities.map((row: { id: string; updatedAt: number; properties: Record<string, unknown> }) =>
+          row.id !== "workspace:personal" ? row : {
+            ...row, updatedAt: Math.max(Date.now(), row.updatedAt + 1),
+            properties: { ...row.properties, calendarDecisions: { ...existing, [decisionKey]: "hidden" } },
+          });
+        const response = await fetch("/api/store", {
+          method: "PUT", headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            baseRevision: snapshot.revision, restoreGeneration: snapshot.restoreGeneration,
+            entities, relations: snapshot.relations, deletedIds: [], revivedIds: [],
+          }),
+        });
+        return response.status;
+      }, { decisionKey });
+      expect(status, "historical hide decision must be persisted in isolated legacy store").toBe(200);
+      seeded = true;
+      await page.goto("/?view=Calendar");
+
+      if (width === 390) {
+        const picker = page.locator(".mobileCalendarPicker");
+        await expect(picker).toBeVisible();
+        await picker.locator('[data-date="' + tomorrow + '"]').click();
+        const row = page.locator('[data-timeline-item="event:' + id + '"]');
+        await expect(row).toBeVisible();
+        await expect(row).not.toHaveClass(/isHidden|isUnderlay/);
+        await expect(row).not.toContainText("Skryto");
+        // data-timeline-item is the PopoverMenu trigger button itself, not a wrapper.
+        await row.click({ timeout: 10_000 });
+        const panel = page.locator('[data-timeline-panel="event:' + id + '"]');
+        await expect(panel).toBeVisible();
+        await expect(panel).toContainText(title);
+        await expect(panel.locator('[data-event-actions], [data-event-answer], [data-event-hide], [data-event-create-task]')).toHaveCount(0);
+      } else {
+        const row = page.locator(".calendarAgendaItem", { hasText: title });
+        await expect(row).toBeVisible();
+        await expect(row).not.toHaveClass(/hiddenEvent/);
+        await expect(row).not.toContainText("Skryto");
+        await expect(row.locator(".calendarAgendaOpen")).toContainText(title);
+        await row.locator(".calendarAgendaOpen").click();
+        await expect(row.locator(".calendarEventInspector")).toBeVisible();
+        await expect(row.locator('[data-event-actions], [data-event-answer], [data-event-hide], [data-event-create-task]')).toHaveCount(0);
+      }
+      await expect(page.locator('[data-event-state="hidden"]', { hasText: title })).toHaveCount(0);
+      await expect(page.locator('[data-event-unhide="' + id + '"]')).toHaveCount(0);
+      const saved = await page.evaluate(async ({ decisionKey }) => {
+        const snapshot = await fetch("/api/store", { cache: "no-store" }).then(r => r.json());
+        return snapshot.entities.find((row: { id: string }) => row.id === "workspace:personal")
+          ?.properties?.calendarDecisions?.[decisionKey];
+      }, { decisionKey });
+      expect(saved, "target Calendar must leave the archived hide decision unchanged").toBe("hidden");
+    } catch (error) {
+      primaryFailure = error;
+      throw error;
+    } finally {
+      if (seeded) {
+        try {
+          // This is an isolated synthetic store. Native HTTP cleanup does not
+          // require the (possibly closed) browser page or Playwright context.
+          // Fetch a fresh revision each time; never overwrite other test data.
+          let cleaned = false;
+          for (let attempt = 0; attempt < 3 && !cleaned; attempt++) {
+            const read = await fetch(storeUrl, {
+              headers: { cookie: ownerCookie },
+              signal: AbortSignal.timeout(8_000),
+            });
+            if (!read.ok) throw new Error("Legacy cleanup read HTTP " + read.status);
+            const snapshot = await read.json();
+            const entities = snapshot.entities.map((row: { id: string; updatedAt: number; properties: Record<string, unknown> }) => {
+              if (row.id !== "workspace:personal") return row;
+              const decisions = { ...((row.properties.calendarDecisions || {}) as Record<string, unknown>) };
+              delete decisions[decisionKey];
+              const properties = { ...row.properties };
+              if (Object.keys(decisions).length) properties.calendarDecisions = decisions;
+              else delete properties.calendarDecisions;
+              return { ...row, updatedAt: Math.max(Date.now(), row.updatedAt + 1), properties };
+            });
+            const write = await fetch(storeUrl, {
+              method: "PUT",
+              headers: {
+                "content-type": "application/json",
+                origin: new URL(storeUrl).origin,
+                cookie: ownerCookie,
+              },
+              body: JSON.stringify({
+                baseRevision: snapshot.revision, restoreGeneration: snapshot.restoreGeneration,
+                entities, relations: snapshot.relations, deletedIds: [], revivedIds: [],
+              }),
+              signal: AbortSignal.timeout(8_000),
+            });
+            if (write.status === 409) continue;
+            if (write.status !== 200) throw new Error("Legacy cleanup write HTTP " + write.status);
+            cleaned = true;
+          }
+          if (!cleaned) throw new Error("Legacy cleanup could not resolve revision conflicts");
+        } catch (cleanupError) {
+          // Preserve the first failure; still report any cleanup failure in CI.
+          if (primaryFailure !== null) console.error("C-1 fixture cleanup also failed:", cleanupError);
+          else throw cleanupError;
+        }
+      }
+    }
+  });
+}
+
 // C13: the real target profile must expose legacy Home/Inbox/Today for reading
 // without ever turning the historical local-first store into a migration source.
 for (const width of [390, 1280]) {
-  test("target mode leaves legacy Home, Inbox and Today read-only at " + width + "px", async ({ page }) => {
-    test.setTimeout(90_000);
+  test("C-1 current navigation isolates synthetic legacy records; archive stays read-only at " + width + "px", async ({ page }) => {
+    test.setTimeout(180_000);
     if (!store) throw new Error("Requires the real isolated target store");
     await page.setViewportSize({ width, height: 844 });
     const unexpectedWrites: string[] = [];
@@ -410,10 +578,11 @@ for (const width of [390, 1280]) {
     const homeTitle = token + "-home";
     const inboxTitle = token + "-inbox";
     const overdueTitle = token + "-overdue";
+    const noteTitle = token + "-note";
     const now = Date.now();
     seeding = true;
     try {
-      const seedStatus = await page.evaluate(async ({ homeTitle, inboxTitle, overdueTitle, now }) => {
+      const seedStatus = await page.evaluate(async ({ homeTitle, inboxTitle, overdueTitle, noteTitle, now }) => {
         const current = await fetch("/api/store", { cache: "no-store" }).then(response => response.json());
         const task = (id: string, title: string, properties: Record<string, unknown>) => ({
           id, title, type: "task", status: "open", workspaceId: "personal",
@@ -428,16 +597,83 @@ for (const width of [390, 1280]) {
               // task exercises Attention without being deduplicated out of that list.
               task("c13:" + homeTitle, homeTitle, { today: true }),
               task("c13:" + inboxTitle, inboxTitle, { inbox: true }),
-              task("c13:" + overdueTitle, overdueTitle, { deadline: "2020-01-01" })],
+              task("c13:" + overdueTitle, overdueTitle, { deadline: "2020-01-01" }),
+              { id: "c13:" + noteTitle, title: noteTitle, type: "note",
+                status: "open", workspaceId: "personal", properties: { body: "historical note" },
+                createdAt: now, updatedAt: now }],
             relations: current.relations, deletedIds: [], revivedIds: [],
           }),
         });
         return response.status;
-      }, { homeTitle, inboxTitle, overdueTitle, now });
+      }, { homeTitle, inboxTitle, overdueTitle, noteTitle, now });
       expect(seedStatus).toBe(200);
     } finally {
       seeding = false;
     }
+
+    // C-1: verify the actual navigation controls, not only deep links. The
+    // target SQLite does not know any of these four uniquely named old items.
+    // The same real owner/browser and isolated legacy store are used at both widths.
+    const legacyTitles = [homeTitle, inboxTitle, overdueTitle, noteTitle];
+    const assertNoLegacyInCurrentView = async () => {
+      for (const oldTitle of legacyTitles)
+        await expect(page.locator(".appPane"), "current pane must not render " + oldTitle)
+          .not.toContainText(oldTitle);
+      await expect(page.getByTestId("target-archive-heading")).toHaveCount(0);
+    };
+    const currentViews = ["MyPlanPreview", "Projects", "Notes", "Calendar", "Search"] as const;
+    await expect(page.locator('[data-target-private-capture-fab="' +
+      (width === 390 ? "mobile" : "desktop") + '"]')).toBeVisible();
+    if (width === 1280) {
+      const primary = page.locator(".appShell > aside > nav [data-nav-view]");
+      await expect(primary).toHaveCount(currentViews.length);
+      await expect(page.locator(".appShell > aside > nav .navCount")).toHaveCount(0);
+      await expect(page.getByTestId("target-archive-sidebar")).toContainText(
+        "Archiv (stará data, jen pro čtení)");
+      for (const destination of currentViews) {
+        await page.locator('.appShell > aside > nav [data-nav-view="' + destination + '"]').click();
+        await assertNoLegacyInCurrentView();
+      }
+    } else {
+      await expect(page.locator(".mobileNav [data-nav-tab]")).toHaveCount(4);
+      await page.locator('.mobileNav [data-nav-tab="my-plan-preview"]').click();
+      await assertNoLegacyInCurrentView();
+      for (const destination of ["Calendar", "Projects"]) {
+        await page.locator('.mobileNav [data-nav-tab="' + destination + '"]').click();
+        await assertNoLegacyInCurrentView();
+      }
+      for (const destination of ["Notes", "Search"]) {
+        await page.locator('.mobileNav [data-nav-tab="More"]').click();
+        await expect(page.getByTestId("target-archive-mobile")).toContainText(
+          "Archiv (stará data, jen pro čtení)");
+        await page.getByTestId("target-more-primary")
+          .locator('[data-nav-view="' + destination + '"]').click();
+        await assertNoLegacyInCurrentView();
+      }
+      await page.locator('.mobileNav [data-nav-tab="More"]').click();
+      await page.getByTestId("target-archive-mobile").locator('[data-nav-view="Inbox"]').click();
+      await expect(page.getByTestId("target-archive-heading")).toBeVisible();
+      await expect(page.getByTestId("legacy-read-only-notice")).toBeVisible();
+    }
+    // C-1: desktop system views stay reachable without appearing among target lists.
+    if (width === 1280) {
+      const agents = page.locator('.sidebarActions [data-nav-system="Agents"]');
+      await expect(agents).toBeVisible();
+      await agents.click();
+      await expect(page.locator(".agentsPanel")).toBeVisible();
+      await assertNoLegacyInCurrentView();
+    }
+    // In the target Calendar, the shortcut must open authorized My Plan, never archival Today.
+    await page.locator(width === 1280
+      ? '.appShell > aside > nav [data-nav-view="Calendar"]'
+      : '.mobileNav [data-nav-tab="Calendar"]').click();
+    const openTodaysWork = page.locator(".calendarView button.textAction").first();
+    await expect(openTodaysWork).toBeVisible();
+    await openTodaysWork.click();
+    await expect(page.getByTestId("target-my-plan")).toBeVisible();
+    await assertNoLegacyInCurrentView();
+
+    // Direct old links are still readable but never promoted to current views.
     const before = await (await page.request.get("/api/store")).body();
     const beforeDb = legacyDbRows();
 

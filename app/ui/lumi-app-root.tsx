@@ -8,7 +8,7 @@ import { closeTargetDetail, expectFocusReturn, focusPendingRow, useTargetSearch 
 import { writeTargetReadingScope } from "../../lib/target-reading-scope-nav";
 import { scopeFromSearch } from "../../lib/view-url";
 import { detailActivation, detailRouteKey, isParentOf, isTargetAddress, viewOfSearch, type DetailActivation } from "../../lib/target-detail-route";
-import { activeTargetViewFor, detailsActive, targetViewsFor } from "../../lib/target-shell-views";
+import { activeTargetViewFor, detailsActive, targetViewsFor, targetShellNavigationFor } from "../../lib/target-shell-views";
 import { detailCopy } from "../../lib/target-detail-copy";
 import type { TargetUiEdits } from "../../lib/target-ui-config";
 import { mobileDesignV1Preview } from "./navigation";
@@ -80,10 +80,13 @@ export function LumiAppRoot({ targetMyPlan, targetScopes, targetDetails, targetE
     targetMyPlan?.enabled&&detailGates.task);
   const shellInput = { scopesOn, projectsList: Boolean(targetScopes?.projects), notesList: Boolean(targetScopes?.notes),
     myPlan: Boolean(targetMyPlan?.enabled), v1Shell: mobileDesignV1Preview };
+  // C-1: the fully enabled personal-v1 profile has a target-only primary
+  // navigation and a separate archive. Partial/off profiles keep old UI.
+  const shellNavigation=targetShellNavigationFor({...shellInput,targetSearch,quickCapture:targetCapture});
   // Details act only on views that really render target data (never on legacy views).
   const targetViews = targetViewsFor(shellInput);
   const detailsOn = detailsActive(detailGates, targetViews);
-  const app = useLumiApp({ targetDetails: detailsOn, targetUnified: scopesOn, targetViews: detailsOn ? targetViews : [] });
+  const app = useLumiApp({ targetDetails: detailsOn, targetUnified: scopesOn, targetViews: detailsOn ? targetViews : [], preferTargetPlan: shellNavigation.personalV1 });
   const {
     activeWorkspace,
     activeWorkspaceId,
@@ -208,7 +211,11 @@ export function LumiAppRoot({ targetMyPlan, targetScopes, targetDetails, targetE
   const targetView = scopeList !== null || targetPlan || (targetSearch && view==="Search");
   const legacyInspector = Boolean(app.selected) && !(scopesOn && targetView);
   // Unified target mode: views that still show legacy data are read-only (no target create/edit API yet).
-  const legacyReadOnly = app.legacyWritesDisabled && !targetView && ["Home", "Inbox", "Today"].includes(view);
+  // The router internally represents target My Plan as Today; it is *not* archival.
+  const archiveView=shellNavigation.personalV1&&!targetPlan&&
+    shellNavigation.byView[view as keyof typeof shellNavigation.byView]==="archive";
+  const legacyReadOnly = app.legacyWritesDisabled &&
+    (archiveView||(!targetView&&["Home","Inbox","Today"].includes(view)));
   // A navigable My Plan requires both its target feature gate and the v1 shell.
   const legacyMyPlanAvailable = Boolean(targetMyPlan?.enabled && mobileDesignV1Preview);
   // Do not mount legacy task rows or local held-back titles underneath
@@ -219,7 +226,7 @@ export function LumiAppRoot({ targetMyPlan, targetScopes, targetDetails, targetE
     <main className={`appShell view-${view.toLowerCase()}${legacyInspector || detailPanel ? " inspectorOpen" : ""}${view === "Projects" && app.openProject ? " projectPageOpen" : ""}`} data-design-system={mobileDesignV1Preview ? "lumi-v1" : undefined} data-workspace-tone={app.activeWorkspaceTone}
       data-my-plan-preview={mobileDesignV1Preview && app.mobilePlanPreviewActive && view === "Today" ? "true" : undefined}>
       <TargetSidebarContext.Provider value={scopesOn && targetScopes?.projects ? { projects: true, openable: detailsOn && detailGates.project } : undefined}>
-        <Sidebar app={app} targetPlan={Boolean(targetMyPlan?.enabled)}
+        <Sidebar app={app} navigation={shellNavigation} targetPlan={Boolean(targetMyPlan?.enabled)}
           onTargetCapture={targetCapture?()=>openAreaChooser():undefined} />
       </TargetSidebarContext.Provider>
       <section className="appPane">
@@ -280,6 +287,9 @@ export function LumiAppRoot({ targetMyPlan, targetScopes, targetDetails, targetE
           </p>
         )}
         <div className="content">
+          {archiveView && <h2 className="targetArchivePageHeading" data-testid="target-archive-heading">
+            {language==="cs"?"Archiv (stará data, jen pro čtení)":"Archive (old data, read-only)"}
+          </h2>}
           {legacyReadOnly && (
             <p className="navigationUnavailableNotice legacyReadOnlyNotice" role="status" data-testid="legacy-read-only-notice">
               {legacyMyPlanAvailable ? detailCopy[language].legacyReadOnlyNotice
@@ -323,7 +333,7 @@ export function LumiAppRoot({ targetMyPlan, targetScopes, targetDetails, targetE
           {legacySearchSurfaces.heldBack && <HeldBack app={app} />}
           {taskCaptureReady&&<TargetPrivateTaskCreatedNotice language={language}
             onCreated={closeAreaChooser} />}
-          <CalendarView app={app} />
+          <CalendarView app={app} eventsOnly={shellNavigation.personalV1} />
           <HomeView app={app} />
           {view === "Today" && !targetPlan && <TodayTop app={app} />}
           {view==="Search" && targetSearch
@@ -344,7 +354,7 @@ export function LumiAppRoot({ targetMyPlan, targetScopes, targetDetails, targetE
           {view === "Today" && !targetPlan && <TodayFooter app={app} />}
         </div>
       </section>
-      <MobileNav app={app} targetPlan={Boolean(targetMyPlan?.enabled)}
+      <MobileNav app={app} navigation={shellNavigation} targetPlan={Boolean(targetMyPlan?.enabled)}
         onTargetCapture={targetCapture?()=>openAreaChooser():undefined} targetIncludesTasks={taskCaptureReady} />
       <DesktopCaptureFab app={app} onTargetCapture={targetCapture?()=>openAreaChooser():undefined}
         targetCaptureOpen={areaChooserOpen} targetIncludesTasks={taskCaptureReady} />

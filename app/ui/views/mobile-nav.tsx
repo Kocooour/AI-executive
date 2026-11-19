@@ -3,9 +3,10 @@ import { handleOverlayKeys } from "../focus";
 import { mobileDesignV1Preview, mobileMoreGroups, mobileV1MoreGroups, mobileV1MoreViews, mobileV1Tabs, mobileViews, moreViews } from "../navigation";
 import type { LumiApp } from "../use-lumi-app";
 import { ViewIcon } from "./project-icon";
+import type { ShellNavigationModel } from "../../../lib/target-shell-views";
 
-export function MobileNav({ app, targetPlan = false, onTargetCapture, targetIncludesTasks = false }: {
-  app: LumiApp; targetPlan?: boolean; onTargetCapture?:()=>void; targetIncludesTasks?:boolean;
+export function MobileNav({ app, navigation, targetPlan = false, onTargetCapture, targetIncludesTasks = false }: {
+  app: LumiApp; navigation?:ShellNavigationModel; targetPlan?: boolean; onTargetCapture?:()=>void; targetIncludesTasks?:boolean;
 }) {
   const {
     closeDetail,
@@ -22,9 +23,12 @@ export function MobileNav({ app, targetPlan = false, onTargetCapture, targetIncl
     tr,
     view,
   } = app;
+  const personalV1=Boolean(navigation?.personalV1);
   const tabs: readonly string[] = mobileDesignV1Preview ? mobileV1Tabs : mobileViews;
   const groups = mobileDesignV1Preview ? mobileV1MoreGroups : mobileMoreGroups;
-  const secondary = mobileDesignV1Preview ? mobileV1MoreViews : moreViews;
+  const secondary = personalV1 && navigation
+    ? [...navigation.archive,"Notes","Search","Agents","Settings"]
+    : mobileDesignV1Preview ? mobileV1MoreViews : moreViews;
   return (
     <>
       <nav className="mobileNav" data-design-preview={mobileDesignV1Preview ? "lumi-v1" : undefined}>
@@ -75,7 +79,7 @@ export function MobileNav({ app, targetPlan = false, onTargetCapture, targetIncl
               <h2 id="mobile-more-title">{tr("More")}</h2>
               <button type="button" className="mobileMoreClose" aria-label={tr("closeMenu")} title={tr("closeMenu")} onClick={() => setMoreOpen(false)}><span aria-hidden="true">×</span></button>
             </div>
-            {groups.map((group) => (
+            {!personalV1 && groups.map((group) => (
               <section className="mobileMoreGroup" key={group.title} aria-labelledby={`mobile-more-${group.title}`}>
                 <h3 id={`mobile-more-${group.title}`}>{tr(group.title)}</h3>
                 {group.views.map((item) => (
@@ -98,6 +102,47 @@ export function MobileNav({ app, targetPlan = false, onTargetCapture, targetIncl
                 ))}
               </section>
             ))}
+            {personalV1 && navigation && <>
+              <section className="mobileMoreGroup" data-testid="target-more-primary"
+                aria-labelledby="target-more-current-heading">
+                <h3 id="target-more-current-heading">{language==="cs"?"Aktuální pohledy":"Current views"}</h3>
+                {navigation.primary.filter(item=>item==="Notes"||item==="Search").map(item=>
+                  <button key={item} type="button" className="mobileMoreItem"
+                    data-nav-view={item} aria-current={view===item?"page":undefined}
+                    onClick={()=>{markMobileMoreNavigation(item);setView(item);closeDetail();setMoreOpen(false);}}>
+                    <span className="mobileMoreItemIcon" aria-hidden="true"><ViewIcon name={item} /></span>
+                    <span>{tr(item)}</span>
+                  </button>)}
+              </section>
+              <section className="mobileMoreGroup targetArchiveSection"
+                data-testid="target-archive-mobile" aria-labelledby="target-more-archive-heading">
+                <h3 id="target-more-archive-heading">
+                  {language==="cs"?"Archiv (stará data, jen pro čtení)":"Archive (old data, read-only)"}
+                </h3>
+                <p>{language==="cs"
+                  ?"Staré položky jsou oddělené od aktuálních dat a nelze je upravovat."
+                  :"Historical items are separate from current data and cannot be edited."}</p>
+                {navigation.archive.map(item=>
+                  <button key={item} type="button" className="mobileMoreItem"
+                    data-nav-view={item} data-nav-archive="true"
+                    aria-current={view===item&&!(item==="Today"&&mobilePlanPreviewActive)?"page":undefined}
+                    onClick={()=>{markMobileMoreNavigation(item);setView(item);closeDetail();setMoreOpen(false);}}>
+                    <span className="mobileMoreItemIcon" aria-hidden="true">
+                      <ViewIcon name={item==="Today"?"TodayV1":item} />
+                    </span><span>{tr(item)}</span>
+                  </button>)}
+              </section>
+              <section className="mobileMoreGroup" aria-labelledby="target-more-system-heading">
+                <h3 id="target-more-system-heading">{tr("mobileMoreSystem")}</h3>
+                {["Agents","Settings"].map(item=>
+                  <button key={item} type="button" className="mobileMoreItem"
+                    data-nav-view={item} aria-current={view===item?"page":undefined}
+                    onClick={()=>{markMobileMoreNavigation(item);setView(item);closeDetail();setMoreOpen(false);}}>
+                    <span className="mobileMoreItemIcon" aria-hidden="true"><ViewIcon name={item} /></span>
+                    <span>{tr(item)}</span>
+                  </button>)}
+              </section>
+            </>}
           </div>
         </div>
       )}

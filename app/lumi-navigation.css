@@ -491,3 +491,30 @@
   outline: 2px solid var(--focus-ring);
   outline-offset: 2px;
 }
+
+/* C-1: archival destinations are visually and semantically separate from the
+   target-model primary navigation. Both sections remain keyboard reachable. */
+.appShell > aside .targetArchiveSection {
+  margin: 12px 0;
+  padding: 12px 8px;
+  border-top: 1px solid var(--line);
+}
+.appShell > aside .targetArchiveSection h2 {
+  margin: 0 0 4px;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.4;
+}
+.appShell .targetArchiveSection p {
+  margin: 0 0 10px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.appShell .targetArchivePageHeading {
+  margin: 0 0 8px;
+  color: var(--text);
+  font-size: 15px;
+  font-weight: 700;
+}

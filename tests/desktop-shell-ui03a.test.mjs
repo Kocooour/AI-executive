@@ -63,11 +63,14 @@ test("UI-03a: desktop FAB preserves legacy private-first capture and separately 
 test("UI-03a: direct desktop views and untruncated workspace-scoped projects remain independent of legacy", () => {
   const sidebar = read("../app/ui/views/sidebar.tsx");
   const app = read("../app/ui/use-lumi-app.tsx");
-  assert.match(sidebar, /\{mobileDesignV1Preview && \(\s*<div className="secondaryNav"/);
+  assert.match(sidebar, /\{!personalV1 && mobileDesignV1Preview && \(\s*<div className="secondaryNav"/);
   assert.match(sidebar, /\{!mobileDesignV1Preview && secondaryOpen && \(/);
   assert.match(sidebar, /\{!mobileDesignV1Preview && \(\s*<>/);
   assert.match(sidebar, /className="secondaryNav"/);
   assert.match(sidebar, /data-desktop-v1-direct-views/);
+  // C-1 retains Agents as a system destination, not a current target list or an archive.
+  assert.match(sidebar, /\{personalV1 && \(\s*<button type="button" data-nav-system="Agents"/);
+  assert.match(sidebar, /onClick=\{\(event\) => navigateToView\("Agents", event\.currentTarget\)\}/);
   assert.match(sidebar, /role="navigation"/);
   const directNav = sidebar.indexOf("data-desktop-v1-direct-views");
   const projects = sidebar.indexOf("{sidebarProjects.length > 0 && (");

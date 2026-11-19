@@ -33,14 +33,16 @@ test("flags off: the shell is the legacy tree - heavy target modules are only dy
 });
 
 test("flags off: no listener, no panel and no request without a detail flag",()=>{
-  assert.match(rootSource,/useLumiApp\(\{ targetDetails: detailsOn, targetUnified: scopesOn, targetViews: detailsOn \? targetViews : \[\] \}\)/);
+  assert.match(rootSource,/useLumiApp\(\{ targetDetails: detailsOn, targetUnified: scopesOn, targetViews: detailsOn \? targetViews : \[\], preferTargetPlan: shellNavigation\.personalV1 \}\)/);
+  assert.match(rootSource,/const shellNavigation=targetShellNavigationFor\(\{\.\.\.shellInput,targetSearch,quickCapture:targetCapture\}\)/);
+  assert.match(hookSource,/const preferTargetPlan = Boolean\(options\.preferTargetPlan\)/);
   // Details are inert unless a target list / plan exists to open them from.
   assert.match(rootSource,/const detailsOn = detailsActive\(detailGates, targetViews\)/);
   assert.match(rootSource,/useTargetSearch\(detailsOn\)/);
   assert.match(read("app/ui/target-detail-state.ts"),/useSyncExternalStore\(enabled\?subscribe:noopSubscribe/);
   assert.match(rootSource,/detailsOn\s*\? detailActivation\(\{ search: detailSearch, gates: detailGates, activeTargetView \}\) : \{ state: "none" \}/);
   assert.match(rootSource,/\{detailPanel && <TargetDetailPanel/);
-  assert.match(hookSource,/export function useLumiApp\(options: \{ targetDetails\?: boolean; targetUnified\?: boolean; targetViews\?: readonly string\[\] \} = \{\}\)/);
+  assert.match(hookSource,/export function useLumiApp\(options: \{ targetDetails\?: boolean; targetUnified\?: boolean; targetViews\?: readonly string\[\]; preferTargetPlan\?: boolean \} = \{\}\)/);
 });
 
 test("every legacy-address deviation in use-lumi-app is guarded by the target-details ref",()=>{
@@ -330,7 +332,8 @@ test("a typed link to another active target view switches to it and opens (addre
 });
 
 test("unified mode: legacy views stay visible read-only with a calm cs/en notice (owner decision 2026-11-09, option 1)",()=>{
-  assert.match(rootSource,/const legacyReadOnly = app\.legacyWritesDisabled && !targetView && \["Home", "Inbox", "Today"\]\.includes\(view\);/);
+  assert.match(rootSource,/const archiveView=shellNavigation\.personalV1&&!targetPlan&&\s*shellNavigation\.byView\[view as keyof typeof shellNavigation\.byView\]==="archive";/);
+  assert.match(rootSource,/const legacyReadOnly = app\.legacyWritesDisabled &&\s*\(archiveView\|\|\(!targetView&&\["Home",\s*"Inbox",\s*"Today"\]\.includes\(view\)\)\);/);
   assert.match(rootSource,/\{legacyReadOnly && \(\s*<p className="navigationUnavailableNotice legacyReadOnlyNotice" role="status"/);
   const copy=read("lib/target-detail-copy.ts");
   assert.match(copy,/Tady vidíte dřívější data jen pro čtení\. S aktuálními úkoly pracujte v Mém plánu\./);
