@@ -447,7 +447,7 @@ for (const width of [390, 1280]) {
 
     // Seed the real legacy workspace via its ordinary HTTP store *before*
     // navigating to Calendar. The new Calendar must not depend on this decision.
-    await page.goto("/?view=Home");
+    await page.goto("/?view=LegacyHome");
     await expect(page.getByTestId("legacy-read-only-notice")).toBeVisible();
     // Capture an authenticated request identity while the browser page is open.
     // Cleanup uses Node fetch so it still works if Playwright closes the page
@@ -593,7 +593,7 @@ for (const width of [390, 1280]) {
     });
     // Even a brand-new browser in target mode may read the old server copy,
     // but it may not seed IndexedDB or upload a synthesized baseline.
-    await page.goto("/?view=Home");
+    await page.goto("/?view=LegacyHome");
     await expect(page.getByTestId("legacy-read-only-notice")).toBeVisible();
     expect(unexpectedWrites, "target startup must not write to any legacy API").toEqual([]);
 
@@ -778,7 +778,7 @@ for (const width of [390, 1280]) {
           pathname.startsWith("/api/") && !pathname.startsWith("/api/target-staging/"))
         writes.push(request.method() + " " + pathname);
     });
-    await page.goto("/?view=Home");
+    await page.goto("/?view=LegacyHome");
     await expect(page.getByTestId("legacy-read-only-notice")).toBeVisible();
     const original = await (await page.request.get("/api/store")).body();
     const originalDb = legacyDbRows();
@@ -809,7 +809,7 @@ for (const width of [390, 1280]) {
     // The 390px v1 shell restores My Plan from the canonical bare URL after
     // reload. The device-copy warning belongs on historical views only; use
     // an explicit Home deep link instead of asserting against My Plan.
-    await page.goto("/?view=Home");
+    await page.goto("/?view=LegacyHome");
     await expect(page.getByTestId("legacy-read-only-notice")).toBeVisible();
     const notice = page.getByTestId("legacy-pending-rescue");
     await expect(notice).toBeVisible();
