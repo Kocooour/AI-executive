@@ -3,7 +3,7 @@
  * disposable E2E credentials and never writes real personal task data.
  * Real SQLite/HTTP ACL and idempotency are covered by separate backend tests. */
 import {test,expect} from "./fixtures";
-import type {Page,Request,Route} from "@playwright/test";
+import type {Page,Route} from "@playwright/test";
 
 test.skip(process.env.LUMI_PRIVATE_TASK_CREATE_E2E!=="true",
   "private task Quick Capture is default-off, only isolated browser QA opts in");
@@ -126,46 +126,60 @@ for(const width of [390,1280]){
     expect(writes).toHaveLength(0);
   });
 }
-/** Capture HTTP completion, not merely a fetch start or response headers.
- * A stale session, rejected stream or an aborted Area must not authorize a
- * post-suspend private catalog. */
-function captureAreaWakeHttp(page:Page){
-  type Event={kind:"area:start"|"area:finished"|"session:finished";request:Request};
-  const events:Event[]=[];
-  const isArea=(request:Request)=>
-    new URL(request.url()).pathname==="/api/target-staging/notes/create-targets";
-  const isSession=(request:Request)=>
-    new URL(request.url()).pathname==="/api/target-staging/session";
-  page.on("request",request=>{
-    if(isArea(request))events.push({kind:"area:start",request});
+/** The release gate uses native CDP Network.loadingFinished, not the
+ * asynchronously forwarded Playwright requestfinished event. Preserve the
+ * same exact HTTP completion/ordering proof in the focused regression. */
+async function captureAreaWakeHttp(page:Page){
+  type Read={requestId:string;path:string;requestOrder:number;
+    status?:number;finishedOrder?:number;failed?:boolean};
+  const cdp=await page.context().newCDPSession(page);
+  await cdp.send("Network.enable");
+  const reads:Read[]=[];
+  const pending=new Map<string,Read>();
+  let order=0;
+  const sessionPath="/api/target-staging/session";
+  const areaPath="/api/target-staging/notes/create-targets";
+  cdp.on("Network.requestWillBeSent",event=>{
+    if(event.request.method!=="GET")return;
+    const url=new URL(event.request.url);
+    if(url.pathname!==sessionPath&&url.pathname!==areaPath)return;
+    const read={requestId:event.requestId,path:url.pathname,requestOrder:++order};
+    reads.push(read);
+    pending.set(event.requestId,read);
   });
-  page.on("requestfinished",request=>{
-    if(isArea(request))events.push({kind:"area:finished",request});
-    if(isSession(request))events.push({kind:"session:finished",request});
+  cdp.on("Network.responseReceived",event=>{
+    const read=pending.get(event.requestId);
+    if(read){read.status=event.response.status;order++;}
+  });
+  cdp.on("Network.loadingFinished",event=>{
+    const read=pending.get(event.requestId);
+    if(read){read.finishedOrder=++order;pending.delete(event.requestId);}
+  });
+  cdp.on("Network.loadingFailed",event=>{
+    const read=pending.get(event.requestId);
+    if(read){read.failed=true;order++;pending.delete(event.requestId);}
   });
   return {
-    events,
-    async assertOneAuthorizedReplacement(from:number){
-      // Wait for browser transport completion; seeing the option alone is not
-      // sufficient to certify a direct successful network GET.
-      await expect.poll(()=>events.slice(from)
-        .filter(event=>event.kind==="area:finished").length).toBe(1);
-      const resumed=events.slice(from);
-      const starts=resumed.filter(event=>event.kind==="area:start");
-      const finished=resumed.filter(event=>event.kind==="area:finished");
-      expect(starts,"exactly one replacement private Area GET").toHaveLength(1);
-      expect(finished,"exactly one completed private Area GET").toHaveLength(1);
-      expect(finished[0].request).toBe(starts[0].request);
-      expect((await finished[0].request.response())?.status()).toBe(200);
-      const startIndex=resumed.indexOf(starts[0]);
-      const authorized=resumed.slice(0,startIndex)
-        .filter(event=>event.kind==="session:finished");
+    mark:()=>order,
+    async assertOneAuthorizedReplacement(mark:number){
+      await expect.poll(()=>reads.filter(read=>read.path===areaPath&&
+        read.requestOrder>mark&&read.finishedOrder!==undefined).length,
+      {timeout:10000}).toBe(1);
+      const areas=reads.filter(read=>read.path===areaPath&&read.requestOrder>mark);
+      expect(areas,"exactly one new direct private Area GET").toHaveLength(1);
+      const area=areas[0];
+      expect(area.status).toBe(200);
+      expect(area.failed).not.toBe(true);
+      expect(area.finishedOrder).toBeDefined();
+      const authorized=reads.filter(read=>read.path===sessionPath&&
+        read.requestOrder>mark&&read.status===200&&
+        read.finishedOrder!==undefined&&read.finishedOrder<area.requestOrder&&
+        read.failed!==true);
       expect(authorized.length,
-        "completed session must precede the replacement Area GET").toBeGreaterThan(0);
-      const outcomes=await Promise.all(authorized.map(event=>event.request.response()));
-      expect(outcomes.some(response=>response?.status()===200),
-        "a fully completed successful session GET is required before Area").toBe(true);
+        "completed direct session GET 200 must precede replacement Area GET")
+        .toBeGreaterThan(0);
     },
+    close:()=>cdp.detach(),
   };
 }
 
@@ -176,7 +190,7 @@ for(const width of [390,1280]){
     await page.setViewportSize({width,height:844});
     const writes=await setup(page,(route,cmd)=>
       reply(route,{ok:true,taskId:cmd.taskId},201));
-    const http=captureAreaWakeHttp(page);
+    const http=await captureAreaWakeHttp(page);
     let areaReads=0;
     await page.route("**/api/target-staging/notes/create-targets",route=>{
       areaReads++;
@@ -191,7 +205,7 @@ for(const width of [390,1280]){
     await expect(page.getByTestId("target-private-task-capture")).toBeVisible();
     await expect(page.getByTestId("target-private-task-form")).toHaveCount(0);
     expect(areaReads,"suspended runtime cannot authorize an Area read").toBe(0);
-    const from=http.events.length;
+    const from=http.mark();
     // Non-persisted pageshow is not a wake for the newly mounted hook.
     await page.evaluate(()=>window.dispatchEvent(
       new PageTransitionEvent("pageshow",{persisted:false})));
@@ -205,6 +219,7 @@ for(const width of [390,1280]){
     await expect(page.getByTestId("target-private-task-form")
       .getByRole("textbox",{name:"Název úkolu"})).toHaveValue("");
     expect(writes,"suspend/resume must not create a task").toHaveLength(0);
+    await http.close();
   });
 }
 
@@ -215,7 +230,7 @@ for(const width of [390,1280]){
     await page.setViewportSize({width,height:844});
     const writes=await setup(page,(route,cmd)=>
       reply(route,{ok:true,taskId:cmd.taskId},201));
-    const http=captureAreaWakeHttp(page);
+    const http=await captureAreaWakeHttp(page);
     let requests=0,held:Route|null=null;
     await page.route("**/api/target-staging/notes/create-targets",route=>{
       requests++;
@@ -226,7 +241,7 @@ for(const width of [390,1280]){
     await fab(page,width).click();
     await page.getByTestId("target-capture-task-kind").click();
     await expect.poll(()=>requests).toBe(1);
-    const from=http.events.length;
+    const from=http.mark();
     await page.evaluate(()=>window.dispatchEvent(
       new PageTransitionEvent("pagehide",{persisted:false})));
     await expect(page.getByTestId("target-private-task-form")).toHaveCount(0);
@@ -243,6 +258,7 @@ for(const width of [390,1280]){
       .getByRole("textbox",{name:"Název úkolu"})).toHaveValue("");
     expect(writes).toHaveLength(0);
     if(held)await (held as Route).abort("failed").catch(()=>{});
+    await http.close();
   });
 }
 
