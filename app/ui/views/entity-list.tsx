@@ -146,7 +146,7 @@ export function EntityList({ app }: { app: LumiApp }) {
                   ? [...batchIds, x.id] : batchIds.filter(id => id !== x.id))}/>
             </label>
           )}
-          {v1DragHandleVisible(view, mobileDesignV1Preview, reorderPreview) &&
+          {v1DragHandleVisible(readView, mobileDesignV1Preview, reorderPreview) &&
             (!myPlanPreview || sortBy === "manual") &&
             dragHandle(x, dragScope ?? (x.type === "task" ? `task:${view}` : `${x.type}:all`))}
           {x.type === "task" ? (
