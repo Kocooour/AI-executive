@@ -61,6 +61,19 @@ test("C-1: only target Calendar uses raw source capacity; legacy and partial pro
     "both mobile and desktop free-window lines use the gated capacity");
 });
 
+test("C-1: archived hide decisions never hide source events in target Calendar", () => {
+  const ui = readFileSync(new URL("../app/ui/views/calendar-view.tsx", import.meta.url), "utf8");
+  const timeline = readFileSync(new URL("../app/ui/views/day-timeline.tsx", import.meta.url), "utf8");
+  assert.match(ui, /if \(!eventsOnly && isCalendarEventHidden\(event\)\)/,
+    "target agenda must render the source event normally; legacy branch stays unchanged");
+  assert.match(timeline, /const hidden = !eventsOnly && isCalendarEventHidden\(event\)/,
+    "target timeline must not underlay, label or disable a historical hidden event");
+  assert.match(ui, /<DayTimeline[^>]*eventsOnly=\{eventsOnly\}/,
+    "both mobile and desktop timelines receive the target-only flag");
+  assert.match(timeline, /underlay: hidden/,
+    "the existing legacy underlay still uses the original hide decision when eventsOnly is off");
+});
+
 test("C-1: hidden event Unhide is disabled in read-only target Calendar", () => {
   const ui = readFileSync(new URL("../app/ui/views/calendar-view.tsx", import.meta.url), "utf8");
   const button = ui.match(/<button type="button" className="calendarEventHide" data-event-unhide=\{event\.id\}[^>]*>/)?.[0];
