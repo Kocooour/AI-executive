@@ -105,7 +105,9 @@ export function DayTimeline({ app, mode, empty, day, dayEvents, eventsOnly = fal
           event, task, done: task.status !== "open", allDay: event.allDay, minutes: estimate || undefined });
         continue;
       }
-      const hidden = isCalendarEventHidden(event);
+      // The current target Calendar must not inherit an irreversible legacy hide.
+      // Legacy Today and the off-profile Calendar keep their original decisions.
+      const hidden = !eventsOnly && isCalendarEventHidden(event);
       if (mode === "today" ? !agendaIds.has(event.id) : false) continue;
       result.push({ id: `event:${event.id}`, kind: "event", title: event.title, start: event.start, end: event.end, event, hidden, busy: event.busy, allDay: event.allDay, underlay: hidden });
     }
