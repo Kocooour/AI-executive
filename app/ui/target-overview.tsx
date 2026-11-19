@@ -2,6 +2,7 @@
 /** C-2: target-only Home and Upcoming; no legacy task store or cached rows. */
 import {useCallback,useEffect,useMemo,useRef,useState,useSyncExternalStore} from "react";
 import {useTargetGeneration,useTargetRuntime} from "./target-data-provider";
+import {useTargetTick,useTargetWake} from "./use-target-revalidation";
 import {useTargetScope} from "./target-scope-state";
 import {TargetDataStatus} from "./target-data-status";
 import {openTargetDetail} from "./target-detail-state";
@@ -67,6 +68,7 @@ function TargetOverviewRead({kind,language,generation,onRefusal,openable}:{
   const summaryScope:C2Summary["scope"]=scope==="all"?"my-plan":scope;
   const [today,setToday]=useState(localMyPlanDate);
   const [refresh,setRefresh]=useState(0);
+  const [privacyHidden,setPrivacyHidden]=useState(false);
   // A scope, actor generation, date or refresh change hides old rows DURING render,
   // before the effect cancels/reissues its bound server request.
   const viewKey=[generation,kind,filter,today,refresh].join(":");
@@ -75,6 +77,32 @@ function TargetOverviewRead({kind,language,generation,onRefusal,openable}:{
   const readAbort=useRef<AbortController|null>(null);
   const moreAbort=useRef<AbortController|null>(null);
   const reload=useCallback(()=>setRefresh(n=>n+1),[]);
+  // A session poll is also an ACL witness: membership revocation does not
+  // necessarily rotate the authenticated actor generation.
+  useTargetTick(reload);
+  // This overview owns its request controllers instead of a feature session.
+  // Cancel them and remove titles on hide/offline/pagehide; wake only after
+  // the runtime has freshly verified the authenticated session.
+  const {markHidden}=useTargetWake({
+    hide(reason){
+      readAbort.current?.abort();moreAbort.current?.abort();
+      setPrivacyHidden(true);
+      setMoreBusy(false);
+      setState({status:"error",key:viewKey,
+        reason:reason==="offline"?"offline":"stale"});
+    },
+    ready(){
+      setToday(localMyPlanDate());
+      setPrivacyHidden(false);
+      reload();
+    },
+    signedOut(){
+      readAbort.current?.abort();moreAbort.current?.abort();
+      setPrivacyHidden(true);
+      setMoreBusy(false);
+      setState({status:"error",key:viewKey,reason:"signed-out"});
+    },
+  });
   useEffect(()=>{
     const update=()=>{const now=localMyPlanDate();setToday(d=>d===now?d:now);};
     const interval=window.setInterval(update,60_000);
@@ -86,6 +114,15 @@ function TargetOverviewRead({kind,language,generation,onRefusal,openable}:{
   },[]);
   useEffect(()=>subscribeTargetChange(reload),[reload]);
   useEffect(()=>{
+    // Initial mount may already be hidden/offline without a transition event.
+    // Mark the wake machine so online/visible triggers fresh verification.
+    if(privacyHidden||document.visibilityState==="hidden"||!navigator.onLine){
+      if(document.visibilityState==="hidden"||!navigator.onLine)markHidden();
+      readAbort.current?.abort();moreAbort.current?.abort();
+      setState({status:"error",key:viewKey,
+        reason:!navigator.onLine?"offline":"stale"});
+      return;
+    }
     const end=c2AddDays(today,7);
     if(!end){setState({status:"error",key:viewKey,reason:"invalid-response"});return;}
     const controller=new AbortController();
@@ -120,9 +157,10 @@ function TargetOverviewRead({kind,language,generation,onRefusal,openable}:{
         summary:totals&&totals.ok?totals.value as C2Summary:null});
     }).catch(()=>{if(!controller.signal.aborted)setState({status:"error",key:viewKey,reason:"unavailable"});});
     return ()=>{controller.abort();moreAbort.current?.abort();};
-  },[today,filter,summaryScope,kind,refresh,generation,onRefusal]);
+  },[today,filter,summaryScope,kind,refresh,generation,onRefusal,privacyHidden,markHidden]);
   async function loadMore(){
-    if(state.status!=="ready"||state.key!==viewKey||!state.future.hasMore||!state.future.nextCursor||moreBusy)return;
+    if(privacyHidden||document.visibilityState==="hidden"||!navigator.onLine||
+      state.status!=="ready"||state.key!==viewKey||!state.future.hasMore||!state.future.nextCursor||moreBusy)return;
     const cursor=state.future.nextCursor;
     const end=c2AddDays(today,7);
     if(!end)return;
@@ -155,9 +193,9 @@ function TargetOverviewRead({kind,language,generation,onRefusal,openable}:{
     :{loading:"Loading current records…",empty:"Nothing planned for the next seven days.",
       noToday:"No tasks for today or earlier.",error:"Current records could not be loaded safely.",
       retry:"Retry",more:"Load more tasks",moreBusy:"Loading…"});
-  if(state.key!==viewKey||state.status==="loading")return <div data-testid="target-overview-loading" role="status">{message.loading}</div>;
-  if(state.status==="error")return <div data-testid="target-overview-error" role="status">
-    <p>{message.error}</p><TargetDataStatus failure={state.reason==="signed-out"?"signed-out":"unavailable"}
+  if(!privacyHidden&&(state.key!==viewKey||state.status==="loading"))return <div data-testid="target-overview-loading" role="status">{message.loading}</div>;
+  if(privacyHidden||state.status==="error")return <div data-testid="target-overview-error" role="status">
+    <p>{message.error}</p><TargetDataStatus failure={state.status==="error"&&state.reason==="signed-out"?"signed-out":"unavailable"}
       language={language} onAction={reload}/>
     <button type="button" onClick={reload}>{message.retry}</button>
   </div>;
