@@ -110,7 +110,16 @@ jobs:
         run: pnpm build
 
       - name: Install and verify Playwright Chromium
-        run: bash scripts/ci-install-chromium.sh
+        shell: bash
+        run: |
+          # The release workflow definition may be newer than its exact checked-out
+          # target SHA. Old main commits predate the shared installer from #476.
+          if [[ -f scripts/ci-install-chromium.sh ]]; then
+            bash scripts/ci-install-chromium.sh
+          else
+            echo "::notice::Target SHA predates Chromium installer helper; using the original installation command."
+            pnpm exec playwright install --with-deps chromium
+          fi
 
       - name: Run all browser E2E tests
         run: pnpm test:e2e
