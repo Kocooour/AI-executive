@@ -81,16 +81,16 @@ const personalV1={scopesOn:true,projectsList:true,notesList:true,myPlan:true,
 test("C-1: personal-v1 never puts a legacy-data view in primary navigation",()=>{
   const model=targetShellNavigationFor(personalV1);
   assert.equal(model.personalV1,true);
-  assert.deepEqual(model.primary,["MyPlanPreview","Home","Upcoming","Projects","Notes","Calendar","Search"]);
-  assert.deepEqual(model.archive,["LegacyHome","Inbox","Today","LegacyUpcoming","Overdue","Anytime",
+  assert.deepEqual(model.primary,["MyPlanPreview","Projects","Notes","Calendar","Search"]);
+  assert.deepEqual(model.archive,["Home","Inbox","Today","Upcoming","Overdue","Anytime",
     "Someday","Completed","Areas","Context"]);
   assert.equal(model.quickCapture,true);
   assert.equal(model.byView.Today,"archive","legacy Today must not masquerade as My Plan");
   assert.equal(model.byView.MyPlanPreview,"primary");
-  assert.equal(model.byView.Home,"primary");
-  assert.equal(model.byView.Upcoming,"primary");
-  assert.equal(model.byView.LegacyHome,"archive");
-  assert.equal(model.byView.LegacyUpcoming,"archive");
+  assert.equal(model.byView.Home,"archive");
+  assert.equal(model.byView.Upcoming,"archive");
+  assert.equal(model.byView.LegacyHome,"hidden");
+  assert.equal(model.byView.LegacyUpcoming,"hidden");
   assert.equal(model.byView.Settings,"hidden");
   assert.equal(model.byView.Agents,"hidden");
   assert.deepEqual(Object.keys(model.byView).sort(),[...SHELL_NAVIGATION_VIEWS].sort(),
@@ -111,7 +111,11 @@ test("C-1: off and partial flags must not activate archive navigation",()=>{
 
 
 test("C-2: only complete personal-v1 promotes authorized Home and Upcoming",()=>{
-  const fields={...personalV1,personalV1:true};
+  const fields={...personalV1,personalV1:true,homeRead:true};
+  const targetNavigation=targetShellNavigationFor(fields);
+  assert.deepEqual(targetNavigation.primary,["MyPlanPreview","Home","Upcoming","Projects","Notes","Calendar","Search"]);
+  assert.deepEqual(targetNavigation.archive,["LegacyHome","Inbox","Today","LegacyUpcoming","Overdue","Anytime",
+    "Someday","Completed","Areas","Context"]);
   const views=targetViewsFor(fields);
   assert.deepEqual(views,["Projects","Notes","MyPlanPreview","Home","Upcoming"]);
   assert.equal(activeTargetViewFor({...fields,view:"Home",planActive:false}).active,"Home");
@@ -120,7 +124,9 @@ test("C-2: only complete personal-v1 promotes authorized Home and Upcoming",()=>
     assert.equal(activeTargetViewFor({...fields,view,planActive:false}).active,null);
   }
   assert.equal(detailsActive({task:true,project:false,note:false},["Upcoming"]),true);
-  const without={...personalV1,personalV1:false};
+  const without={...personalV1,personalV1:false,homeRead:true};
+  assert.deepEqual(targetShellNavigationFor({...personalV1,homeRead:false}).primary,
+    ["MyPlanPreview","Projects","Notes","Calendar","Search"]);
   assert.equal(activeTargetViewFor({...without,view:"Upcoming",planActive:false}).active,null);
   assert.equal(targetViewsFor(without).includes("Upcoming"),false);
 });
