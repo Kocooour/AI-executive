@@ -138,6 +138,8 @@ export default function TargetPrivateTaskAreaChooser({
     const lifetime=new AbortController();
     let active=true;
     let inFlight:AbortController|null=null;
+    let suspended=false;
+    let suspensionEpoch=0;
     const stop=()=>{lifetime.abort();inFlight?.abort();};
     setAreas({kind:"loading",generation});setChosen("");
     if(!runtime?.known()||runtime.generation()!==generation||
@@ -145,7 +147,27 @@ export default function TargetPrivateTaskAreaChooser({
       setAreas({kind:"unavailable",generation});
       return ()=>{active=false;stop();};
     }
-    const unregister=runtime.register({dispose:stop,suspend:stop});
+    // The runtime can already be suspended when this editor registers (e.g.
+    // a native Back/pagehide completed before the modal mounted). A suspend
+    // permanently invalidates this effect's private response; resume MUST
+    // authorize a replacement effect even if useTargetWake missed the hide.
+    const suspend=()=>{
+      suspended=true;
+      suspensionEpoch++;
+      stop();
+      setChosen("");
+      setAreas({kind:"unavailable",generation});
+    };
+    const resume=()=>{
+      if(!suspended)return;
+      suspended=false;
+      const epoch=suspensionEpoch;
+      void runtime.refresh().then(verified=>{
+        if(active&&epoch===suspensionEpoch&&verified==="ok"&&live())
+          setNonce(v=>v+1);
+      }).catch(()=>{});
+    };
+    const unregister=runtime.register({dispose:stop,suspend,resume});
     const stillLive=()=>active&&!lifetime.signal.aborted&&live();
     async function read(){
       const controller=new AbortController();
