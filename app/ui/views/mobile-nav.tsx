@@ -106,7 +106,7 @@ export function MobileNav({ app, navigation, targetPlan = false, onTargetCapture
               <section className="mobileMoreGroup" data-testid="target-more-primary"
                 aria-labelledby="target-more-current-heading">
                 <h3 id="target-more-current-heading">{language==="cs"?"Aktuální pohledy":"Current views"}</h3>
-                {navigation.primary.filter(item=>["Home","Upcoming","Notes","Search"].includes(item)).map(item=>
+                {navigation.primary.filter(item=>["Home","Inbox","Upcoming","Notes","Search"].includes(item)).map(item=>
                   <button key={item} type="button" className="mobileMoreItem"
                     data-nav-view={item} aria-current={view===item?"page":undefined}
                     onClick={()=>{markMobileMoreNavigation(item);setView(item);closeDetail();setMoreOpen(false);}}>
@@ -129,7 +129,7 @@ export function MobileNav({ app, navigation, targetPlan = false, onTargetCapture
                     onClick={()=>{markMobileMoreNavigation(item);setView(item);closeDetail();setMoreOpen(false);}}>
                     <span className="mobileMoreItemIcon" aria-hidden="true">
                       <ViewIcon name={item==="Today"?"TodayV1":item} />
-                    </span><span>{tr(item==="LegacyHome"?"Home":item==="LegacyUpcoming"?"Upcoming":item)}</span>
+                    </span><span>{tr(item==="LegacyHome"?"Home":item==="LegacyUpcoming"?"Upcoming":item==="LegacyInbox"?"Inbox":item)}</span>
                   </button>)}
               </section>
               <section className="mobileMoreGroup" aria-labelledby="target-more-system-heading">
