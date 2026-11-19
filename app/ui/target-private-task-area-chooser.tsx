@@ -155,7 +155,7 @@ export default function TargetPrivateTaskAreaChooser({
       suspended=true;
       suspensionEpoch++;
       stop();
-      setChosen("");
+      setChosen("");setName("");setDraftGeneration(generation);
       setAreas({kind:"unavailable",generation});
     };
     const resume=()=>{
