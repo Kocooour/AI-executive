@@ -49,6 +49,34 @@ BEGIN SELECT RAISE(ABORT,'triage replacement forbidden'); END;
 CREATE TRIGGER task_triage_delete_guard BEFORE DELETE ON task_triage
 WHEN EXISTS(SELECT 1 FROM tasks WHERE id=OLD.task_id)
 BEGIN SELECT RAISE(ABORT,'cannot delete triage for a live task'); END;
+
+-- Receipt is the immutable, actor-bound audit of an explicit Process or Undo.
+-- It deliberately does not reference tasks: tombstone deletion must preserve
+-- content-free command provenance. No titles, note content or prompt are stored.
+CREATE TABLE task_triage_commands (
+  receipt_key TEXT PRIMARY KEY CHECK(length(receipt_key)=64 AND receipt_key NOT GLOB '*[^0-9a-f]*'),
+  request_digest TEXT NOT NULL CHECK(length(request_digest)=64 AND request_digest NOT GLOB '*[^0-9a-f]*'),
+  actor_user_id TEXT NOT NULL REFERENCES identities(id),
+  task_id TEXT NOT NULL,
+  action TEXT NOT NULL CHECK(action IN ('process','undo')),
+  undo_of_key TEXT UNIQUE REFERENCES task_triage_commands(receipt_key),
+  revision_before INTEGER NOT NULL CHECK(revision_before>=0),
+  revision_after INTEGER NOT NULL CHECK(revision_after=revision_before+1),
+  triaged_at_ms INTEGER,
+  restore_generation TEXT NOT NULL,
+  committed_at_ms INTEGER NOT NULL CHECK(committed_at_ms>0),
+  CHECK ((action='process' AND undo_of_key IS NULL AND triaged_at_ms IS NOT NULL)
+    OR (action='undo' AND undo_of_key IS NOT NULL AND triaged_at_ms IS NULL))
+) WITHOUT ROWID;
+CREATE INDEX task_triage_commands_actor_task
+  ON task_triage_commands(actor_user_id,task_id);
+CREATE TRIGGER task_triage_commands_no_update BEFORE UPDATE ON task_triage_commands
+BEGIN SELECT RAISE(ABORT,'triage receipts immutable'); END;
+CREATE TRIGGER task_triage_commands_no_delete BEFORE DELETE ON task_triage_commands
+BEGIN SELECT RAISE(ABORT,'triage receipts immutable'); END;
+CREATE TRIGGER task_triage_commands_capacity BEFORE INSERT ON task_triage_commands
+WHEN (SELECT COUNT(*) FROM task_triage_commands)>=4096
+BEGIN SELECT RAISE(ABORT,'triage receipts capacity reached'); END;
 `;
 
 /** Pure canonical membership shared by row and count checks. Completed tasks
