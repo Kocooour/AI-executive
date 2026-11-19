@@ -424,7 +424,15 @@ for (const width of [390, 1280]) {
     // navigating to Calendar. The new Calendar must not depend on this decision.
     await page.goto("/?view=Home");
     await expect(page.getByTestId("legacy-read-only-notice")).toBeVisible();
+    // Capture an authenticated request identity while the browser page is open.
+    // Cleanup uses Node fetch so it still works if Playwright closes the page
+    // during a failed assertion or test timeout.
+    const storeUrl = new URL("/api/store", page.url()).toString();
+    const ownerCookie = (await page.context().cookies(storeUrl))
+      .map(cookie => cookie.name + "=" + cookie.value).join("; ");
+    expect(ownerCookie, "cleanup requires an owner session").toContain("ai_executive_session=");
     let seeded = false;
+    let primaryFailure: unknown = null;
     try {
       const status = await page.evaluate(async ({ decisionKey }) => {
         const snapshot = await fetch("/api/store", { cache: "no-store" }).then(r => r.json());
@@ -460,7 +468,7 @@ for (const width of [390, 1280]) {
         await expect(row).not.toHaveClass(/isHidden|isUnderlay/);
         await expect(row).not.toContainText("Skryto");
         // data-timeline-item is the PopoverMenu trigger button itself, not a wrapper.
-        await row.click();
+        await row.click({ timeout: 10_000 });
         const panel = page.locator('[data-timeline-panel="event:' + id + '"]');
         await expect(panel).toBeVisible();
         await expect(panel).toContainText(title);
@@ -483,29 +491,55 @@ for (const width of [390, 1280]) {
           ?.properties?.calendarDecisions?.[decisionKey];
       }, { decisionKey });
       expect(saved, "target Calendar must leave the archived hide decision unchanged").toBe("hidden");
+    } catch (error) {
+      primaryFailure = error;
+      throw error;
     } finally {
       if (seeded) {
-        const cleanup = await page.evaluate(async ({ decisionKey }) => {
-          const snapshot = await fetch("/api/store", { cache: "no-store" }).then(r => r.json());
-          const entities = snapshot.entities.map((row: { id: string; updatedAt: number; properties: Record<string, unknown> }) => {
-            if (row.id !== "workspace:personal") return row;
-            const decisions = { ...((row.properties.calendarDecisions || {}) as Record<string, unknown>) };
-            delete decisions[decisionKey];
-            const properties = { ...row.properties };
-            if (Object.keys(decisions).length) properties.calendarDecisions = decisions;
-            else delete properties.calendarDecisions;
-            return { ...row, updatedAt: Math.max(Date.now(), row.updatedAt + 1), properties };
-          });
-          const response = await fetch("/api/store", {
-            method: "PUT", headers: { "content-type": "application/json" },
-            body: JSON.stringify({
-              baseRevision: snapshot.revision, restoreGeneration: snapshot.restoreGeneration,
-              entities, relations: snapshot.relations, deletedIds: [], revivedIds: [],
-            }),
-          });
-          return response.status;
-        }, { decisionKey });
-        expect(cleanup, "clean up only this test's legacy decision").toBe(200);
+        try {
+          // This is an isolated synthetic store. Native HTTP cleanup does not
+          // require the (possibly closed) browser page or Playwright context.
+          // Fetch a fresh revision each time; never overwrite other test data.
+          let cleaned = false;
+          for (let attempt = 0; attempt < 3 && !cleaned; attempt++) {
+            const read = await fetch(storeUrl, {
+              headers: { cookie: ownerCookie },
+              signal: AbortSignal.timeout(8_000),
+            });
+            if (!read.ok) throw new Error("Legacy cleanup read HTTP " + read.status);
+            const snapshot = await read.json();
+            const entities = snapshot.entities.map((row: { id: string; updatedAt: number; properties: Record<string, unknown> }) => {
+              if (row.id !== "workspace:personal") return row;
+              const decisions = { ...((row.properties.calendarDecisions || {}) as Record<string, unknown>) };
+              delete decisions[decisionKey];
+              const properties = { ...row.properties };
+              if (Object.keys(decisions).length) properties.calendarDecisions = decisions;
+              else delete properties.calendarDecisions;
+              return { ...row, updatedAt: Math.max(Date.now(), row.updatedAt + 1), properties };
+            });
+            const write = await fetch(storeUrl, {
+              method: "PUT",
+              headers: {
+                "content-type": "application/json",
+                origin: new URL(storeUrl).origin,
+                cookie: ownerCookie,
+              },
+              body: JSON.stringify({
+                baseRevision: snapshot.revision, restoreGeneration: snapshot.restoreGeneration,
+                entities, relations: snapshot.relations, deletedIds: [], revivedIds: [],
+              }),
+              signal: AbortSignal.timeout(8_000),
+            });
+            if (write.status === 409) continue;
+            if (write.status !== 200) throw new Error("Legacy cleanup write HTTP " + write.status);
+            cleaned = true;
+          }
+          if (!cleaned) throw new Error("Legacy cleanup could not resolve revision conflicts");
+        } catch (cleanupError) {
+          // Preserve the first failure; still report any cleanup failure in CI.
+          if (primaryFailure !== null) console.error("C-1 fixture cleanup also failed:", cleanupError);
+          else throw cleanupError;
+        }
       }
     }
   });
