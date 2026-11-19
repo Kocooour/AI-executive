@@ -26,6 +26,7 @@ db.exec("BEGIN IMMEDIATE");
 try {
   db.exec(TARGET_INBOX_SCHEMA_SQL);
   db.exec(TARGET_INBOX_BACKFILL_SQL);
+  assert.equal(db.prepare("UPDATE metadata SET value='27' WHERE key='schema_version' AND value='26'").run().changes,1);
   db.exec("COMMIT");
 } catch (error) {db.exec("ROLLBACK");throw error;}
 for(const actor of ["bob","cara"]){
@@ -61,6 +62,9 @@ test("migration excludes historical target tasks and keeps every later task unpr
   const historical=db.prepare("SELECT triage_state,triaged_at,triage_revision FROM tasks WHERE id='old'").get();
   assert.deepEqual({...historical},{triage_state:"processed",triaged_at:null,triage_revision:1});
   assert.equal(db.prepare("SELECT COUNT(*) AS n FROM tasks WHERE triage_state='unprocessed'").get().n,4);
+  db.exec(TARGET_INBOX_BACKFILL_SQL);
+  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM tasks WHERE triage_state='unprocessed'").get().n,4,
+    "repeated backfill after version advance must not absorb later tasks");
   assert.deepEqual(ids(page("alice")),["a-private","shared-child","shared-visible"],
     "completed but unprocessed remains until explicit Process");
   assert.equal(page("alice").count,3);
