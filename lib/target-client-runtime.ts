@@ -135,19 +135,21 @@ export function createTargetClientRuntime(config:TargetClientRuntimeConfig={}){
     if(response.body){
       const reader=response.body.getReader();
       const decoder=new TextDecoder("utf-8",{fatal:true});
-      let bytes=0;
+      let bytes=0,complete=false;
       try{
         for(;;){
           if(signal.aborted)return null;
           const chunk=await reader.read();
-          if(chunk.done)break;
+          if(chunk.done){complete=true;break;}
           bytes+=chunk.value.byteLength;
           if(bytes>MAX_BODY_BYTES)return null;
           text+=decoder.decode(chunk.value,{stream:true});
         }
         text+=decoder.decode();
       }finally{
-        void reader.cancel().catch(()=>{});
+        // Never signal cancellation after EOF; doing so can make CDP
+        // report a completed successful verification as ERR_ABORTED.
+        if(!complete)void reader.cancel().catch(()=>{});
         try{reader.releaseLock();}catch{/* already released */}
       }
     }else{
@@ -174,12 +176,12 @@ export function createTargetClientRuntime(config:TargetClientRuntimeConfig={}){
       response.headers.get("cache-control")?.toLowerCase().split(",").some(x=>x.trim()==="no-store")!==true||
       !response.body)return false;
     const reader=response.body.getReader(),decoder=new TextDecoder("utf-8",{fatal:true});
-    let body="",bytes=0;
+    let body="",bytes=0,complete=false;
     try{
       for(;;){
         if(signal.aborted)return false;
         const part=await reader.read();
-        if(part.done)break;
+        if(part.done){complete=true;break;}
         bytes+=part.value.byteLength;
         if(bytes>512)return false;
         body+=decoder.decode(part.value,{stream:true});
@@ -192,7 +194,7 @@ export function createTargetClientRuntime(config:TargetClientRuntimeConfig={}){
         (value as {error?:unknown}).error==="Authentication required");
     }catch{return false;}
     finally{
-      void reader.cancel().catch(()=>{});
+      if(!complete)void reader.cancel().catch(()=>{});
       try{reader.releaseLock();}catch{/* already released */}
     }
   }
