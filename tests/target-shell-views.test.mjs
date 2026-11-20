@@ -19,6 +19,9 @@ test("target views exist only where a target list or the target plan really rend
   assert.deepEqual(targetViewsFor({...off,scopesOn:true,projectsList:true,notesList:true,myPlan:true,v1Shell:true}),
     ["Projects","Notes","MyPlanPreview"]);
   assert.deepEqual(targetViewsFor({...off,myPlan:true}),[],"the plan needs the v1 shell");
+  const inbox={...off,personalV1:true,homeRead:true,inboxRead:true};
+  assert.deepEqual(targetViewsFor(inbox),["Home","Upcoming","Inbox"]);
+  assert.deepEqual(targetViewsFor({...inbox,inboxRead:false}),["Home","Upcoming"]);
 });
 
 test("details without a list or plan to open them from are inert",()=>{
@@ -28,6 +31,7 @@ test("details without a list or plan to open them from are inert",()=>{
   assert.equal(detailsActive({task:false,project:false,note:true},["Projects"]),false);
   assert.equal(detailsActive({task:true,project:false,note:false},["MyPlanPreview"]),true);
   assert.equal(detailsActive({task:true,project:false,note:false},["Notes"]),false);
+  assert.equal(detailsActive({task:true,project:false,note:false},["Inbox"]),true);
   assert.equal(detailsActive({task:false,project:false,note:false},["Projects"]),false);
 });
 
@@ -42,6 +46,8 @@ test("the target view on screen: lists per flag, the plan only in the v1 'Můj p
   assert.equal(at("Projects",false,{projectsList:false}),null);
   assert.equal(at("Notes",false,{scopesOn:false}),null);
   assert.equal(at("Today",true,{v1Shell:false}),null);
+  assert.equal(at("Inbox",false,{personalV1:true,homeRead:true,inboxRead:true}),"Inbox");
+  assert.equal(at("Inbox",false,{personalV1:true,homeRead:true,inboxRead:false}),null);
 });
 
 test("one refusal budget per runtime, shared by every consumer",()=>{
