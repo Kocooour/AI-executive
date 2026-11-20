@@ -108,7 +108,9 @@ export default function TargetInbox({language="cs"}:{language?:Language;taskDeta
   const speak=(cs:string,en:string)=>language==="cs"?cs:en;
   // A new authenticated identity cannot inherit an old actor's Undo command.
   useEffect(()=>{setDecision(null);inFlight.current=false;},[generation]);
-  useEffect(()=>{if(gate!=="ready")setDecision(null);},[gate]);
+  // Preserve an uncertain command through transient 503/offline; never reuse its UUID
+  // for another action. Clear only if identity is lost or changes.
+  useEffect(()=>{if(gate==="signed_out"||gate==="refused")setDecision(null);},[gate]);
   const confirm=useCallback(async(command:InboxClientCommand,title:string,processId:string)=>{
     setDecision({command,title,processId,stage:"verifying",next:null});
     const check=await verifyInboxCommand(command);
@@ -173,6 +175,15 @@ export default function TargetInbox({language="cs"}:{language?:Language;taskDeta
     try{await confirm(decision.command,decision.title,decision.processId);}
     finally{inFlight.current=false;}
   }
+  if(gate==="ready"&&decision?.stage==="uncertain")return <section
+    className="targetInbox" data-testid="target-inbox-uncertain"
+    aria-label={speak("Cílový Inbox","Target Inbox")}>
+    <p role="alert">{speak(
+      "Výsledek posledního zápisu není potvrzen. Seznam a počet jsou skryté, dokud nelze získat aktuální stav.",
+      "The latest write is uncertain. Rows and count remain hidden pending fresh verification.")}</p>
+    <button type="button" onClick={()=>void recheck()}>
+      {speak("Ověřit původní příkaz","Verify original command")}</button>
+  </section>;
   if(!page)return <section aria-label={speak("Cílový Inbox","Target Inbox")}
     className="targetInbox" data-testid="target-inbox">
     <p role={loading?"status":"alert"}>{loading?speak("Ověřuji Inbox…","Checking Inbox…"):
