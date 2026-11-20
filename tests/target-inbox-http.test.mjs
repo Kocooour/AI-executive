@@ -187,7 +187,7 @@ test("C-3a: real pinned HTTP receipt survives Area move; no stale Undo or ACL le
   const process=cmd(first.items.find(x=>x.id==="shared-task"),fx.store);
   assert.deepEqual(await ok(post("triage",process)),{ok:true});
   assert.equal((await ok(post("receipt",process))).status,"committed");
-  fx.db.prepare("UPDATE tasks SET area_id=?,revision=revision+1 WHERE id='shared-task'")
+  fx.db.prepare("UPDATE tasks SET area_id=? WHERE id='shared-task'")
     .run(fx.stage.unassignedAreaId);
   const recovered=await ok(post("receipt",process));
   assert.equal(recovered.status,"committed");
