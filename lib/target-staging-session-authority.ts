@@ -31,6 +31,8 @@ import type {AttentionAreaFilter,AttentionView} from "./target-attention-read-mo
 import type {MyPlanDayTaskPage,MyPlanTaskDayWindow,MyPlanTaskAreaFilter} from "./target-my-plan-day-task-read-model";
 import type {TargetGlobalTaskPage,TargetGlobalTaskScope} from "./target-global-task-read-model";
 import type {TargetInboxPage} from "./target-inbox-read-model";
+import {eligibleGlobalTaskAreas} from "./target-global-task-read-model";
+import type {HomeSummaryAreaEpoch} from "./target-my-plan-home-summary";
 import type {TargetGlobalProjectPage} from "./target-global-project-read-model";
 import type {TargetGlobalNotePage} from "./target-global-note-read-model";
 import type {TargetGlobalCombinedPage,GlobalCombinedPositions} from "./target-global-combined-read-model";
@@ -104,7 +106,7 @@ import type { TargetStagingTaskTitleCommandStatusResult, TargetTemporalStatusRec
 import type {TargetNoteEditCommandStatus,TargetNoteEditRecovery} from "./target-note-command-status";
 import type {TargetNoteCreateRecovery} from "./target-note-create-status";
 import type { TargetNoteDeleteCommandStatus } from "./target-note-delete-command-status";
-import { validTargetTaskTitleEditPreviewRequest } from "./target-task-write-preflight";
+import { validTargetTaskTitleEditPreviewRequest,targetTaskWriteRevision } from "./target-task-write-preflight";
 import { writePreflightedTargetTaskTitle, validTargetStagingTaskTitleWriteRequest } from "./target-task-staging-writer";
 import {
   writePreflightedTemporalTaskStatus, validTargetStagingTemporalStatusCommand,
@@ -115,6 +117,7 @@ import {
   type TargetStagingTemporalDueOnCommand, type TargetStagingTemporalDueOnResult,
 } from "./target-task-temporal-due-on-writer";
 import {writePreflightedTargetInboxTriage,validTargetInboxTriageCommand,
+  readTargetInboxTriageReceipt,
   type TargetInboxTriageCommand,type TargetInboxTriageResult,
 } from "./target-inbox-triage-writer";
 import {writePreflightedPersonalWhen,validTargetStagingPersonalWhenCommand,
@@ -1155,6 +1158,48 @@ export class TargetStagingSessionAuthority {
       return {ok:false,reason:"invalid_request"};
     return writePreflightedTargetInboxTriage(
       this.#store,credential,command,durableSessionTokenHash);
+  }
+
+  /** C-3a: receipt and post-command CAS from the same actor-bound pinned snapshot.
+   * This only reports committed when the original receipt exactly matches. */
+  readInboxTriageReceiptSnapshot(actorUserId:string,command:TargetInboxTriageCommand):{
+    status:"committed"|"not_recorded"|"conflict";
+    next:{expectedRevision:string;triageRevision:number;writeAreaId:string}|null;
+    linearization:{actorUserId:string;areas:{
+      areaId:string;areaKind:"private"|"shared";
+      policyRevision:number;access:"private-owner"|"viewer"|"editor"|"admin";
+    }[]};
+    areaEpochs:HomeSummaryAreaEpoch[];
+  }|null{
+    if(this.#closed||!validTargetInboxTriageCommand(command))return null;
+    try{
+      const credential=this.#oneShotReadCredential(actorUserId);
+      if(!credential)return null;
+      return readPreflightedStoreSnapshot(this.#store,db=>{
+        const actor=verifiedActor(db,credential);
+        if(!actor||actor!==actorUserId)return null;
+        const status=readTargetInboxTriageReceipt(db,actor,command);
+        if(!status)return null;
+        const areaEpochs=eligibleGlobalTaskAreas(db,actor,"all");
+        if(!areaEpochs)return null;
+        let next:null|{expectedRevision:string;triageRevision:number;writeAreaId:string}=null;
+        if(status==="committed"){
+          const row=db.prepare(`SELECT t.triage_state AS state,
+            t.triage_revision AS revision,COALESCE(t.area_id,p.area_id) AS areaId
+            FROM tasks t LEFT JOIN projects p ON p.id=t.project_id WHERE t.id=?`)
+            .get(command.taskId) as {state:string;revision:number;areaId:string}|undefined;
+          const expectedRevision=targetTaskWriteRevision(db,command.taskId);
+          if(!row||!expectedRevision||!Number.isSafeInteger(row.revision)||
+              !row.areaId)return null;
+          if(row.state===(command.mode==="process"?"processed":"unprocessed"))
+            next={expectedRevision,triageRevision:row.revision,writeAreaId:row.areaId};
+        }
+        return {status,next,areaEpochs,
+          linearization:{actorUserId:actor,areas:areaEpochs.map(a=>({
+            areaId:a.areaId,areaKind:a.areaKind,policyRevision:a.policyRevision,access:a.access,
+          }))}};
+      });
+    }catch{return null;}
   }
 
   /** R2d.5b.2: actor-private Attention snooze/dismiss/restore, isolated staging only. */
