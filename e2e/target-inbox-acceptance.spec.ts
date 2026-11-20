@@ -100,9 +100,10 @@ for(const width of [390,1280]){
     expect(confirmation.status()).toBe(201);
     const taskId=(confirmation.request().postDataJSON() as {taskId:string}).taskId;
     expect(taskId).toMatch(/^[0-9a-f-]{36}$/);
-    await openInbox(page);
+    // Keep the same Inbox component mounted: a confirmed CREATE must
+    // invalidate it without navigation, while the count remains actor-scoped.
+    await expect.poll(()=>opaqueCount(page),{timeout:15000}).toBe(before+1);
     await expect(await findInboxRow(page,taskId)).toContainText(title);
-    await expect.poll(()=>opaqueCount(page)).toBe(before+1);
   });
 }
 
@@ -130,9 +131,79 @@ async({page})=>{
   await expect(page.getByTestId("target-inbox-sidebar-count")).toHaveCount(0);
   await page.getByRole("button",{name:"Ověřit původní příkaz"}).click();
   await expect(page.getByTestId("target-inbox-uncertain")).toBeVisible();
+
+  // Switching shell views unmounts TargetInbox. Its original UUID must
+  // survive this route remount, without offering a fresh Process.
+  await page.locator('[data-nav-view="More"]').first().click();
+  await page.locator('[data-testid="target-more-primary"] [data-nav-view="Home"]').click();
+  await expect(page.getByTestId("target-inbox-uncertain")).toHaveCount(0);
+  await page.locator('[data-nav-view="More"]').first().click();
+  await page.locator('[data-testid="target-more-primary"] [data-nav-view="Inbox"]').click();
+  await expect(page.getByTestId("target-inbox-uncertain")).toBeVisible();
+  await expect(processAction(page,title)).toHaveCount(0);
+  await expect(count(page)).toHaveCount(0);
+  await page.getByRole("button",{name:"Ověřit původní příkaz"}).click();
+  await expect(page.getByTestId("target-inbox-uncertain")).toBeVisible();
   expect(commands).toBe(1);
-  expect(receipts).toBeGreaterThanOrEqual(2);
+  expect(receipts).toBeGreaterThanOrEqual(3);
   await page.unroute("**/api/target-staging/inbox/triage",abortWrite);
   await page.reload();
   await expect(processAction(page,title)).toBeVisible();
 });
+
+for(const width of [390,1280]){
+  test("C-3a: passive session 503 hides Inbox and navigation badge at same generation ("+width+"px)",
+  async({page})=>{
+    test.setTimeout(90_000);
+    if(!store)throw Error("Missing isolated C-3a SQLite store");
+    await page.setViewportSize({width,height:844});
+    await openInbox(page);
+    await expect(count(page)).toBeVisible();
+    await expect(page.locator(".targetInboxRow").first()).toBeVisible();
+    const knownCount=await opaqueCount(page);
+
+    // The runtime keeps the same known generation after a passive 503.
+    // UI readers must nevertheless fail closed; a late GET must not restore data.
+    let releaseLateGet:()=>void=()=>{};
+    let startedLateGet:()=>void=()=>{};
+    const lateGetStarted=new Promise<void>(resolve=>{startedLateGet=resolve;});
+    let held=false;
+    const delayedGet=async(route:Route)=>{
+      if(held){await route.continue();return;}
+      held=true;
+      await new Promise<void>(resolve=>{releaseLateGet=resolve;startedLateGet();});
+      try{await route.continue();}catch{/* request may be aborted after a refusal */}
+    };
+    await page.route("**/api/target-staging/inbox?*",delayedGet);
+    // Focus revalidates the session then starts an authenticated Inbox reread.
+    await page.evaluate(()=>window.dispatchEvent(new Event("focus")));
+    await lateGetStarted;
+
+    let failures=0;
+    const failSession=async(route:Route)=>{
+      failures++;
+      await route.fulfill({status:503,contentType:"application/json",
+        headers:{"cache-control":"no-store"},body:'{"error":"unavailable"}'});
+    };
+    await page.route("**/api/target-staging/session",failSession);
+    await page.evaluate(()=>window.dispatchEvent(new Event("online")));
+    await expect.poll(()=>failures,{timeout:15000}).toBeGreaterThan(0);
+    await expect(count(page)).toHaveCount(0);
+    await expect(page.locator(".targetInboxRow")).toHaveCount(0);
+    await expect(page.getByTestId("target-inbox-sidebar-count")).toHaveCount(0);
+    if(width===390){
+      await page.locator('[data-nav-view="More"]').first().click();
+      await expect(page.locator('[data-testid="target-more-primary"] [data-nav-view="Inbox"]'))
+        .toBeVisible();
+      await expect(page.getByTestId("target-inbox-sidebar-count")).toHaveCount(0);
+      await page.locator('[data-nav-view="More"]').first().click();
+    }
+    releaseLateGet();
+    await expect(count(page)).toHaveCount(0);
+    await page.unroute("**/api/target-staging/session",failSession);
+    await page.unroute("**/api/target-staging/inbox?*",delayedGet);
+    await page.evaluate(()=>window.dispatchEvent(new Event("online")));
+    await expect.poll(()=>opaqueCount(page),{timeout:15000}).toBe(knownCount);
+    await expect(page.locator(".targetInboxRow").first()).toBeVisible();
+  });
+}
