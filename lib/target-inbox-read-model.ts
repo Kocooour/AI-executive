@@ -5,6 +5,10 @@
  * titles or counts. There is no legacy Inbox fallback.
  */
 import type { DatabaseSync } from "node:sqlite";
+import { eligibleGlobalTaskAreas } from "./target-global-task-read-model";
+import { targetTaskWriteRevision } from "./target-task-write-preflight";
+import type { HomeSummaryAreaEpoch } from "./target-my-plan-home-summary";
+import type { TargetReadLinearization } from "./target-task-read-model";
 
 export type TargetInboxItem = {
   id: string;
@@ -15,11 +19,16 @@ export type TargetInboxItem = {
   taskRevision: number;
   effectiveAreaId: string;
   canProcess: boolean;
+  /** Actor-authorized CAS witness, never a capability. Viewers receive null. */
+  expectedRevision: string | null;
 };
 export type TargetInboxPage = {
   items: TargetInboxItem[];
   count: number;
   nextCursor: string | null;
+  /** INTERNAL: complete eligible Area set (including empty), checked before HTTP release. */
+  linearization: TargetReadLinearization;
+  areaEpochs: HomeSummaryAreaEpoch[];
 };
 export type TargetInboxPageRequest = {
   actorUserId: string;
@@ -74,6 +83,13 @@ export function readAuthorizedTargetInboxPage(
       (request.afterTaskId != null && !cursorOk(request.afterTaskId))) return null;
   const limit = request.limit ?? 50;
   try {
+    const areaEpochs = eligibleGlobalTaskAreas(db, request.actorUserId, "all");
+    if (!areaEpochs) return null;
+    const linearization: TargetReadLinearization = {
+      actorUserId: request.actorUserId,
+      areas: areaEpochs.map(a => ({areaId:a.areaId,areaKind:a.areaKind,
+        access:a.access,policyRevision:a.policyRevision})),
+    };
     const count = db.prepare(
       "SELECT COUNT(*) AS n " + AUTHORIZED_INBOX_FROM,
     ).get(request.actorUserId) as {n: number} | undefined;
@@ -94,15 +110,19 @@ export function readAuthorizedTargetInboxPage(
           typeof row.effectiveAreaId !== "string" ||
           !Number.isSafeInteger(row.triageRevision) || row.triageRevision < 0 ||
           !Number.isSafeInteger(row.taskRevision) || row.taskRevision < 0) return null;
+      const canProcess = row.areaKind === "private" ||
+        row.memberRole === "editor" || row.memberRole === "admin";
+      const expectedRevision = canProcess ? targetTaskWriteRevision(db, row.id) : null;
+      if (canProcess && !expectedRevision) return null;
       items.push({
         id: row.id, title: row.title, status: row.status,
         triageRevision: row.triageRevision, taskRevision: row.taskRevision,
         effectiveAreaId: row.effectiveAreaId,
-        canProcess: row.areaKind === "private" ||
-          row.memberRole === "editor" || row.memberRole === "admin",
+        canProcess, expectedRevision,
       });
     }
     return {items, count: count.n,
-      nextCursor: rows.length > limit ? items[items.length - 1]?.id ?? null : null};
+      nextCursor: rows.length > limit ? items[items.length - 1]?.id ?? null : null,
+      linearization, areaEpochs};
   } catch { return null; }
 }
