@@ -515,7 +515,7 @@ test("C-3a: committed Process receipt recovers after Area move, with no stale Un
     await expect(page.getByRole("button",{name:"Vrátit do Inboxu (Undo)"}))
       .toHaveCount(0);
     await expect(page.getByRole("button",{name:"Zavřít a obnovit"})).toBeVisible();
-    expect(commands).toBe(1,"reconciliation must never resend the original UUID");
+    expect(commands).toBe(1); // reconciliation never resends the original UUID
 
     // Resolve the original receipt and prove that a new unrelated command
     // is possible in the SAME actor generation, with a genuine Undo.
