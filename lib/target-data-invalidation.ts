@@ -53,6 +53,69 @@ const decisionListeners=new Set<()=>void>();
 let scopedDecision:ScopedDecision|null=null;
 const pending=(stage:InboxDecision["stage"])=>
   stage==="sending"||stage==="verifying"||stage==="uncertain";
+/** A tab-only, content-free recovery witness is written BEFORE dispatch.
+ * The original UUID/CAS must survive a reload while a write is ambiguous.
+ * Never persist task titles, session tokens, or an authorization decision. */
+const INBOX_RECOVERY_KEY="lumi:target-inbox-command:v1";
+type InboxRecovery={version:1;generation:string;command:InboxClientCommand;processId:string};
+const recoveryUuid=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const recoverySha=/^[a-f0-9]{64}$/;
+function validRecovery(x:unknown):x is InboxRecovery{
+  if(!x||typeof x!=="object"||Array.isArray(x))return false;
+  const r=x as Record<string,unknown>;
+  if(r.version!==1||typeof r.generation!=="string"||
+      !r.generation||typeof r.processId!=="string"||
+      !recoveryUuid.test(r.processId)||!r.command||
+      typeof r.command!=="object"||Array.isArray(r.command))return false;
+  const c=r.command as Record<string,unknown>;
+  return typeof c.commandId==="string"&&recoveryUuid.test(c.commandId)&&
+    typeof c.taskId==="string"&&c.taskId.length>0&&c.taskId.length<=512&&
+    typeof c.expectedRevision==="string"&&recoverySha.test(c.expectedRevision)&&
+    typeof c.expectedTriageRevision==="number"&&
+    Number.isSafeInteger(c.expectedTriageRevision)&&c.expectedTriageRevision>=0&&
+    typeof c.writeAreaId==="string"&&c.writeAreaId.length>0&&c.writeAreaId.length<=120&&
+    typeof c.restoreGeneration==="string"&&recoveryUuid.test(c.restoreGeneration)&&
+    (c.mode==="process"&&c.undoOfCommandId===null&&r.processId===c.commandId||
+      c.mode==="undo"&&typeof c.undoOfCommandId==="string"&&
+      recoveryUuid.test(c.undoOfCommandId)&&r.processId===c.undoOfCommandId);
+}
+function persistInboxRecovery(generation:string,decision:InboxDecision):boolean{
+  if(typeof window==="undefined")return true;
+  try{
+    if(pending(decision.stage)){
+      const record:InboxRecovery={version:1,generation,
+        command:decision.command,processId:decision.processId};
+      window.sessionStorage.setItem(INBOX_RECOVERY_KEY,JSON.stringify(record));
+    }else window.sessionStorage.removeItem(INBOX_RECOVERY_KEY);
+    return true;
+  }catch{return false;} // Do NOT dispatch a write without a recovery witness.
+}
+function forgetInboxRecovery():void{
+  if(typeof window==="undefined")return;
+  try{window.sessionStorage.removeItem(INBOX_RECOVERY_KEY);}catch{/* fail closed on next restore */}
+}
+/** Called after a fresh authenticated generation is known, before displaying
+ * any Inbox rows or badges. A persisted command is NEVER resubmitted: the user
+ * can only reconcile its original read-only receipt. */
+export function restoreInboxDecision(
+  runtime:TargetClientRuntime,generation:string,
+):boolean{
+  if(!runtime.known()||runtime.generation()!==generation)return false;
+  if(inboxDecisionSnapshot(runtime,generation))return true;
+  if(typeof window==="undefined")return true;
+  try{
+    const raw=window.sessionStorage.getItem(INBOX_RECOVERY_KEY);
+    if(raw===null)return true;
+    if(raw.length>4096)return false;
+    const value:unknown=JSON.parse(raw);
+    if(!validRecovery(value))return false;
+    if(value.generation!==generation){forgetInboxRecovery();return true;}
+    return setInboxDecision(runtime,generation,{
+      command:value.command,processId:value.processId,
+      title:"",stage:"uncertain",next:null,
+    });
+  }catch{return false;}
+}
 const notifyDecision=()=>{
   for(const fn of [...decisionListeners]){try{fn();}catch{/* independent views */}}
 };
@@ -71,6 +134,7 @@ function retireDecision(runtime:TargetClientRuntime,generation:string):void{
   if(!old||old.runtime!==runtime||old.generation!==generation)return;
   scopedDecision=null;
   old.unbind();
+  forgetInboxRecovery();
   if(inboxUncertainSnapshot()===generation)setInboxUncertain(null);
   notifyDecision();
 }
@@ -89,6 +153,7 @@ export function setInboxDecision(
   // unresolved DIFFERENT UUID (including the original Undo command).
   if(current&&current.decision.command.commandId!==decision.command.commandId&&
     pending(current.decision.stage))return false;
+  if(!persistInboxRecovery(generation,decision))return false;
   if(!current){
     const stopGeneration=runtime.subscribe(()=>{
       if(!runtime.known()||runtime.generation()!==generation)
