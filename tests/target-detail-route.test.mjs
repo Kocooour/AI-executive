@@ -18,6 +18,7 @@ test("project, task and note routes round-trip through the address, keeping the 
     {kind:"task",id:"t2",view:"MyPlanPreview"},
     {kind:"task",id:"th",view:"Home"},
     {kind:"task",id:"tu",view:"Upcoming"},
+    {kind:"task",id:"ti",view:"Inbox"},
     {kind:"note",id:"n1",view:"Notes"},
   ];
   for(const route of routes)for(const scope of ["all","personal","shared"]){
@@ -32,7 +33,8 @@ test("project, task and note routes round-trip through the address, keeping the 
   assert.equal(searchForDetail(routes[2],"all"),"?view=MyPlanPreview&taskId=t2");
   assert.equal(searchForDetail(routes[3],"personal"),"?view=Home&taskId=th&scope=personal");
   assert.equal(searchForDetail(routes[4],"personal"),"?view=Upcoming&taskId=tu&scope=personal");
-  assert.equal(searchForDetail(routes[5],"personal"),"?view=Notes&noteId=n1&scope=personal");
+  assert.equal(searchForDetail(routes[5],"personal"),"?view=Inbox&taskId=ti&scope=personal");
+  assert.equal(searchForDetail(routes[6],"personal"),"?view=Notes&noteId=n1&scope=personal");
 });
 
 test("opaque ids are encoded, never interpreted",()=>{
