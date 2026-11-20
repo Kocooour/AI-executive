@@ -408,6 +408,6 @@ test("C-3a: exhausted refusal budget never releases a late nav count GET",async(
   releaseBadge();
   await expect(page.getByTestId("target-inbox-sidebar-count")).toHaveCount(0);
   await page.waitForTimeout(800);
-  await expect(page.getByTestId("target-inbox-sidebar-count")).toHaveCount(0,
-    "pre-refusal GET can never clear the security fence even if session recheck is budgeted out");
+  await expect(page.getByTestId("target-inbox-sidebar-count")).toHaveCount(0);
+  expect(refusals).toBe(3); // A pre-refusal GET must not lift the fence.
 });
