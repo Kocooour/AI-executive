@@ -4,6 +4,8 @@ import {randomUUID} from "node:crypto";
 import {
   inboxDecisionSnapshot,inboxUncertainSnapshot,setInboxDecision,
   clearInboxDecision,subscribeInboxDecision,restoreInboxDecision,
+  markInboxRefused,inboxRefused,clearInboxRefusedAfterSession,
+  inboxSecurityVersion,subscribeInboxSecurity,
 } from "../lib/target-data-invalidation.ts";
 
 function runtimeFixture(){
@@ -132,4 +134,46 @@ test("unavailable tab storage refuses to dispatch an unrecoverable Process",()=>
     if(previous===undefined)delete globalThis.window;
     else globalThis.window=previous;
   }
+});
+
+test("paginated refusal blocks late count GET until freshly verified session",()=>{
+  const f=runtimeFixture(),runtime=f.runtime,g="actor-one";
+  let notices=0;
+  const off=subscribeInboxSecurity(()=>{notices++;});
+  try{
+    const original=inboxSecurityVersion();
+    assert.equal(inboxRefused(runtime,g),false);
+    // Two actions may exhaust the UI's refusal/reverify budget. The security
+    // fence MUST be independent of that rate-limited background attempt.
+    markInboxRefused(runtime,g);
+    const blocked=inboxSecurityVersion();
+    assert.ok(blocked>original);
+    assert.equal(inboxRefused(runtime,g),true);
+    markInboxRefused(runtime,g);
+    assert.equal(inboxSecurityVersion(),blocked,"repeat revocation keeps the same fence");
+    // A stale nav GET resolving now has no authority to clear the barrier.
+    assert.equal(inboxRefused(runtime,g),true);
+    // Nor can a session which is no longer known restore it.
+    f.revoke();
+    clearInboxRefusedAfterSession(runtime,g);
+    assert.equal(inboxRefused(runtime,g),true);
+    // The next verified generation is not the old actor's credentials.
+    f.rotate("actor-two");
+    assert.equal(inboxRefused(runtime,"actor-two"),false);
+    assert.ok(notices>=1);
+  }finally{
+    off();
+  }
+});
+
+test("fresh same-generation verification advances page epoch before badge can reappear",()=>{
+  const f=runtimeFixture(),runtime=f.runtime,g="actor-one";
+  markInboxRefused(runtime,g);
+  const oldEpoch=inboxSecurityVersion();
+  assert.equal(inboxRefused(runtime,g),true);
+  // Only runtime.refresh()==ok (or a confirmed passive tick) may call this.
+  clearInboxRefusedAfterSession(runtime,g);
+  assert.equal(inboxRefused(runtime,g),false);
+  assert.ok(inboxSecurityVersion()>oldEpoch,
+    "pre-refusal page keys must not match the new authorized epoch");
 });
