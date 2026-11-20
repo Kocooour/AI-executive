@@ -1196,19 +1196,24 @@ export class TargetStagingSessionAuthority {
             .get(command.taskId) as {
               state:string;revision:number;taskRevision:number;areaId:string;
             }|undefined;
-          const expectedRevision=targetTaskWriteRevision(db,command.taskId);
-          if(!row||!receipt||!expectedRevision||!Number.isSafeInteger(row.revision)||
-              !Number.isSafeInteger(row.taskRevision)||!row.areaId)return null;
-          // Confirm the original Process regardless of a later Area/task edit,
-          // but NEVER offer a stale Undo: it needs the exact post-Process
-          // revisions, original Area and an as-yet-unconsumed Process receipt.
-          if(receipt.action==="process"&&row.state==="processed"&&
-              row.revision===receipt.triage_revision_after&&
-              row.taskRevision===receipt.task_revision_after&&
-              row.areaId===command.writeAreaId&&
-              !db.prepare("SELECT 1 FROM task_triage_receipts WHERE undo_of_receipt_key=? LIMIT 1")
-                .get(receiptKey))
-            next={expectedRevision,triageRevision:row.revision,writeAreaId:row.areaId};
+          // A committed actor-owned receipt is conclusive even if a later
+          // authorized delete removed the live task: the preceding receipt
+          // check already verified current write access to its tombstone.
+          // Deleted tasks have NO Undo witness and are never recreated here.
+          if(row){
+            const expectedRevision=targetTaskWriteRevision(db,command.taskId);
+            if(!receipt||!expectedRevision||!Number.isSafeInteger(row.revision)||
+                !Number.isSafeInteger(row.taskRevision)||!row.areaId)return null;
+            // Undo is offered only against the exact post-Process CAS and
+            // original Area, with no already-committed Undo child.
+            if(receipt.action==="process"&&row.state==="processed"&&
+                row.revision===receipt.triage_revision_after&&
+                row.taskRevision===receipt.task_revision_after&&
+                row.areaId===command.writeAreaId&&
+                !db.prepare("SELECT 1 FROM task_triage_receipts WHERE undo_of_receipt_key=? LIMIT 1")
+                  .get(receiptKey))
+              next={expectedRevision,triageRevision:row.revision,writeAreaId:row.areaId};
+          }
         }
         return {status,next,areaEpochs,
           linearization:{actorUserId:actor,areas:areaEpochs.map(a=>({
