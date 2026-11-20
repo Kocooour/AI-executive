@@ -230,6 +230,8 @@ test("C-3a: opaque pagination witness changes on same-count task and ACL mutatio
   const afterEdit=await ok(read(owner(),"?limit=1"));
   assert.equal(afterEdit.count,first.count);
   assert.notEqual(afterEdit.snapshotRevision,first.snapshotRevision);
+  // Preserve the invariant that a shared Area always has at least one admin.
+  fx.db.prepare("UPDATE area_members SET role='admin' WHERE area_id='area-shared' AND user_id='bob'").run();
   fx.db.prepare("UPDATE area_members SET role='viewer' WHERE area_id='area-shared' AND user_id='alice'").run();
   const afterRole=await ok(read(owner(),"?limit=1"));
   assert.equal(afterRole.count,first.count);

@@ -5,6 +5,9 @@ import {useTargetGeneration,useTargetRuntime} from "./target-data-provider";
 import {useTargetTick,useTargetWake} from "./use-target-revalidation";
 import {targetOverviewGate} from "../../lib/target-my-plan-embed";
 import {emitTargetChange,subscribeTargetChange} from "../../lib/target-data-invalidation";
+import {detailIdOk} from "../../lib/target-detail-route";
+import {detailRowKey,openTargetDetail} from "./target-detail-state";
+import {inboxUncertainSnapshot,setInboxUncertain,subscribeInboxUncertain} from "../../lib/target-data-invalidation";
 import {refusalBudgetFor} from "../../lib/target-refusal-budget";
 import {
   fetchTargetInbox,sendInboxCommand,verifyInboxCommand,
@@ -118,7 +121,7 @@ type Decision={
   stage:"sending"|"verifying"|"uncertain"|"undo-ready"|"conflict"|"denied"|"undone";
   next:{expectedRevision:string;triageRevision:number;writeAreaId:string}|null;
 };
-export default function TargetInbox({language="cs"}:{language?:Language;taskDetail?:boolean}){
+export default function TargetInbox({language="cs",taskDetail=false}:{language?:Language;taskDetail?:boolean}){
   const {page,loading,signedOut,gate,reload,loadMore,revoke,retry}=useInbox(50);
   const [decision,setDecision]=useState<Decision|null>(null);
   const inFlight=useRef(false);
@@ -142,18 +145,22 @@ export default function TargetInbox({language="cs"}:{language?:Language;taskDeta
       revoke();setDecision(null);return;
     }
     if(check.ok===true&&check.status==="committed"){
+      setInboxUncertain(null);
       emitTargetChange({kind:"task",id:command.taskId,change:"updated"});
       setDecision({command,title,processId,
         stage:command.mode==="undo"?"undone":"undo-ready",next:check.next});
     }else if(check.ok===true&&check.status==="not_recorded"){
       // Not-recorded is not proof that the old write has quiesced.
+      setInboxUncertain(generation);
       setDecision({command,title,processId,stage:"uncertain",next:null});
     }else{
+      if(check.ok===false&&check.reason==="stale")setInboxUncertain(null);
+      else setInboxUncertain(generation);
       setDecision({command,title,processId,
         stage:check.ok===false&&check.reason==="stale"?"conflict":"uncertain",next:null});
       if(check.ok===false&&check.reason==="stale")reload();
     }
-  },[reload,revoke]);
+  },[reload,revoke,generation]);
   async function submit(command:InboxClientCommand,title:string,processId:string){
     if(inFlight.current)return;
     const epoch=commandEpoch.current;
@@ -165,10 +172,12 @@ export default function TargetInbox({language="cs"}:{language?:Language;taskDeta
       if(sent.ok===false&&sent.reason==="signed-out"){
         revoke();setDecision(null);return;
       }
+      if(sent.ok===false&&sent.reason==="uncertain")setInboxUncertain(generation);
       if(sent.ok===true||(sent.ok===false&&sent.reason==="uncertain")){
         // Never replace commandId or blind-retry an ambiguous Process/Undo.
         await confirm(command,title,processId,epoch);
       }else{
+        setInboxUncertain(null);
         setDecision({command,title,processId,stage:"conflict",next:null});
         reload();
       }
@@ -247,7 +256,12 @@ export default function TargetInbox({language="cs"}:{language?:Language;taskDeta
       {speak("Žádné úkoly nečekají na zpracování.","No tasks await processing.")}</p>}
     <ul className="targetInboxList">
       {page.items.map(item=><li key={item.id} className="targetInboxRow">
-        <div className="targetInboxRowText"><strong>{item.title}</strong>
+        <div className="targetInboxRowText">{taskDetail&&detailIdOk(item.id)
+          ?<button type="button" className="targetInboxDetailLink"
+            data-detail-row={detailRowKey("task",item.id)}
+            onClick={event=>openTargetDetail({kind:"task",id:item.id,view:"Inbox"},event.currentTarget)}
+            aria-label={speak("Otevřít úkol: ","Open task: ")+item.title}>{item.title}</button>
+          :<strong>{item.title}</strong>}
           {item.status==="completed"&&<span className="targetInboxCompleted">
             {speak("Dokončeno, čeká na zpracování","Completed, awaiting processing")}</span>}
         </div>
@@ -268,6 +282,8 @@ export default function TargetInbox({language="cs"}:{language?:Language;taskDeta
 /** Actor-scoped target badge; never reuse the legacy sidebarCounts. */
 export function TargetInboxCount(){
   const {page}=useInbox(1);
-  return page?<span className="navCount" data-testid="target-inbox-sidebar-count"
+  const generation=useTargetGeneration();
+  const uncertain=useSyncExternalStore(subscribeInboxUncertain,inboxUncertainSnapshot,()=>"");
+  return page&&uncertain!==generation?<span className="navCount" data-testid="target-inbox-sidebar-count"
     aria-label={"Unprocessed: "+page.count}>{page.count}</span>:null;
 }

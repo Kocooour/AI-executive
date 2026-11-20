@@ -16,3 +16,20 @@ export function emitTargetChange(change:TargetChange):void{
 }
 /** Test only. */
 export const targetChangeListenerCount=():number=>listeners.size;
+
+/** In-memory only: a write with unknown outcome suppresses all actor-scoped
+ * Inbox badges until its ORIGINAL command receipt has been reconciled.
+ * Generation scopes the suppression; a new signed-in actor cannot inherit it. */
+const inboxUncertainListeners=new Set<()=>void>();
+let inboxUncertainGeneration="";
+export function subscribeInboxUncertain(listener:()=>void):()=>void{
+  inboxUncertainListeners.add(listener);
+  return ()=>inboxUncertainListeners.delete(listener);
+}
+export const inboxUncertainSnapshot=():string=>inboxUncertainGeneration;
+export function setInboxUncertain(generation:string|null):void{
+  const next=generation??"";
+  if(inboxUncertainGeneration===next)return;
+  inboxUncertainGeneration=next;
+  for(const fn of [...inboxUncertainListeners]){try{fn();}catch{/*no blocked peers*/}}
+}

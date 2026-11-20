@@ -15,6 +15,7 @@ export function targetViewsFor(input:TargetShellInput):TargetDetailView[]{
   if(input.scopesOn&&input.notesList)views.push("Notes");
   if(input.myPlan&&input.v1Shell)views.push("MyPlanPreview");
   if(input.personalV1&&input.homeRead)views.push("Home","Upcoming");
+  if(input.personalV1&&input.homeRead&&input.inboxRead)views.push("Inbox");
   return views;
 }
 /** Details exist only where a target list / plan exists to open them from. */
@@ -23,7 +24,7 @@ export function detailsActive(gates:TargetDetailGates,targetViews:readonly strin
     (gates.project&&targetViews.includes("Projects"))||
     (gates.note&&targetViews.includes("Notes"))||
     (gates.task&&(targetViews.includes("Projects")||targetViews.includes("MyPlanPreview")||
-      targetViews.includes("Home")||targetViews.includes("Upcoming"))));
+      targetViews.includes("Home")||targetViews.includes("Upcoming")||targetViews.includes("Inbox"))));
 }
 /** The target view currently on screen, else null. */
 export function activeTargetViewFor(input:TargetShellInput&{view:string;planActive:boolean}):
@@ -33,6 +34,7 @@ export function activeTargetViewFor(input:TargetShellInput&{view:string;planActi
     :input.scopesOn&&input.view==="Notes"&&input.notesList?"note":null;
   const active:TargetDetailView|null=input.personalV1&&input.homeRead&&
     (input.view==="Home"||input.view==="Upcoming")?input.view
+    :input.personalV1&&input.homeRead&&input.inboxRead&&input.view==="Inbox"?"Inbox"
     :targetPlan?"MyPlanPreview"
     :scopeList==="project"?"Projects":scopeList==="note"?"Notes":null;
   return {scopeList,targetPlan,active};

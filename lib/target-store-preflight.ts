@@ -477,6 +477,27 @@ export function inspectIsolatedTargetStore(
             WHERE (p.id IS NULL AND t.id IS NULL) OR (p.id IS NOT NULL AND a.revision_after>p.revision)
               OR (t.id IS NOT NULL AND a.revision_after>=t.revision)`) !== 0) fail("audit_invalid");
       }
+      // v27 canonical task-state audit: CHECK/triggers are not a substitute
+      // for read-only preflight of a database modified with guard bypasses.
+      // Migrated preexisting rows are the only valid processed + NULL state
+      // (revision 1 and no user Process); all other Process states have a time.
+      if (meta.get("schema_version") === String(TARGET_STORE_SCHEMA_VERSION)) {
+        const invalidTriage=count(`SELECT COUNT(*) AS n FROM tasks t
+          WHERE typeof(t.triage_revision)<>'integer' OR t.triage_revision<0
+            OR t.triage_revision>t.revision
+            OR typeof(t.revision)<>'integer' OR t.revision<0
+            OR (t.triage_state='unprocessed'
+              AND (t.triaged_at IS NOT NULL OR (t.triage_revision % 2)<>0))
+            OR (t.triage_state='processed'
+              AND (t.triage_revision=0 OR (t.triage_revision % 2)<>1
+                OR (t.triaged_at IS NULL AND t.triage_revision<>1)
+                OR (t.triaged_at IS NOT NULL AND
+                  (typeof(t.triaged_at)<>'integer' OR t.triaged_at<=0
+                  OR t.triaged_at>=9007199254740991))))
+            OR t.triage_state NOT IN ('unprocessed','processed')
+            OR t.triage_state IS NULL`);
+        if(invalidTriage!==0)fail("schema_invalid");
+      }
       // C-3a: bounded immutable triage receipt ledger. Both the original
       // Process and its Undo survive later task deletion; no task titles,
       // Areas or other actors' data are ever stored in a receipt.

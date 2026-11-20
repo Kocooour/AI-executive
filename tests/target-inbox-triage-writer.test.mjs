@@ -108,8 +108,9 @@ test("stale task/triage revisions, invalid shape and replay with another ID do n
     denied("stale_revision"));
   assert.equal(count(fx),0);
   assert.deepEqual(fx.authority.changeInboxTriage(token,cmd),{ok:true});
+  const shared=command(fx,token,"shared");
   assert.deepEqual(fx.authority.changeInboxTriage(token,
-    {...cmd,taskId:"shared"}),denied("idempotency_conflict"),
+    {...shared,commandId:cmd.commandId}),denied("idempotency_conflict"),
     "same actor+UUID cannot be reused for a different task");
   assert.equal(count(fx),1);
   assert.deepEqual(fx.authority.changeInboxTriage(token,
