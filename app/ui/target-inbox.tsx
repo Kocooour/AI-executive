@@ -5,7 +5,7 @@ import {useTargetGeneration,useTargetRuntime} from "./target-data-provider";
 import {useTargetTick,useTargetWake} from "./use-target-revalidation";
 import {targetOverviewGate} from "../../lib/target-my-plan-embed";
 import {emitTargetChange,subscribeTargetChange,subscribeInboxDecision,inboxDecisionSnapshot,
-  setInboxDecision,clearInboxDecision,type InboxDecision} from "../../lib/target-data-invalidation";
+  setInboxDecision,clearInboxDecision,restoreInboxDecision,setInboxUncertain,type InboxDecision} from "../../lib/target-data-invalidation";
 import {detailIdOk} from "../../lib/target-detail-route";
 import {detailRowKey,openTargetDetail} from "./target-detail-state";
 import {inboxUncertainSnapshot,subscribeInboxUncertain} from "../../lib/target-data-invalidation";
@@ -45,10 +45,11 @@ function useInbox(limit:number){
   const revoke=useCallback(()=>{
     abort.current?.abort();more.current?.abort();
     setHidden(true);
+    setInboxUncertain(generation);
     setState({kind:"error",key:"",reason:"signed-out"});
     if(runtime&&refusalBudgetFor(runtime).admit())
       void runtime.reportRefusal("session_revoked");
-  },[runtime]);
+  },[runtime,generation]);
   const gate=targetOverviewGate(runtime,generation,outcome);
   const key=generation+":"+limit+":"+refresh;
   useTargetTick(reload);
@@ -75,6 +76,9 @@ function useInbox(limit:number){
     void fetchTargetInbox(limit,null,controller.signal).then(result=>{
       if(controller.signal.aborted)return;
       if(result.ok===true){
+        const command=inboxDecisionSnapshot(runtime,generation);
+        if(!command||!["sending","verifying","uncertain"].includes(command.stage))
+          setInboxUncertain(null);
         setState({kind:"ready",key,page:result.value});
       }else{
         setState({kind:"error",key,reason:result.reason});
@@ -106,7 +110,12 @@ function useInbox(limit:number){
         result.value.snapshotRevision!==first.snapshotRevision||
         result.value.nextCursor===first.nextCursor||
         result.value.items.some(item=>first.items.some(old=>old.id===item.id))){
-      setState({kind:"error",key,reason:result.ok===true?"stale":result.reason});
+      // The failure may mean an ACL revocation. A separate Inbox badge
+      // must not keep showing the previously authorized count.
+      const command=inboxDecisionSnapshot(runtime,generation);
+      if(command&&["sending","verifying","uncertain"].includes(command.stage))
+        setState({kind:"error",key,reason:"stale"});
+      else revoke();
       return;
     }
     setState(before=>before.kind==="ready"&&before.key===key?{
@@ -114,12 +123,20 @@ function useInbox(limit:number){
         items:[...before.page.items,...result.value.items],
         nextCursor:result.value.nextCursor},
     }:before);
-  },[page,key,limit]);
+  },[page,key,limit,revoke,runtime,generation]);
   return {page,loading,signedOut,gate:gate.kind,reload,loadMore,revoke,retry};
 }
 export default function TargetInbox({language="cs",taskDetail=false}:{language?:Language;taskDetail?:boolean}){
   const {page,loading,signedOut,gate,reload,loadMore,revoke,retry}=useInbox(50);
   const runtime=useTargetRuntime(),generation=useTargetGeneration();
+  const [recoveredGeneration,setRecoveredGeneration]=useState("");
+  const [recoveryFailed,setRecoveryFailed]=useState(false);
+  useEffect(()=>{
+    if(!runtime?.known()||runtime.generation()!==generation)return;
+    const ok=restoreInboxDecision(runtime,generation);
+    setRecoveryFailed(!ok);
+    if(ok)setRecoveredGeneration(generation);
+  },[runtime,generation]);
   const decision=useSyncExternalStore(subscribeInboxDecision,
     ()=>inboxDecisionSnapshot(runtime,generation),()=>null);
   const inFlight=useRef(false);
@@ -167,7 +184,7 @@ export default function TargetInbox({language="cs",taskDetail=false}:{language?:
     if(inFlight.current||!runtime?.known()||runtime.generation()!==generation)return;
     inFlight.current=true;
     if(!setDecision({command,title,processId,stage:"sending",next:null})){
-      inFlight.current=false;return;
+      inFlight.current=false;setRecoveryFailed(true);return;
     }
     try{
       const sent=await sendInboxCommand(command);
@@ -217,6 +234,15 @@ export default function TargetInbox({language="cs",taskDetail=false}:{language?:
   // An unresolved command survives navigating away and back. In every phase,
   // hide rows/count and block fresh UUIDs until the original receipt is settled.
   const unresolved=decision&&["sending","verifying","uncertain"].includes(decision.stage);
+  if(recoveryFailed)return <section className="targetInbox" data-testid="target-inbox-recovery-error">
+    <p role="alert">{speak(
+      "Nelze bezpečně obnovit původní příkaz. Zápisy jsou zablokované, aby nedošlo k duplicitě.",
+      "Original command recovery is unavailable. Writes are blocked to prevent duplication.")}</p>
+  </section>;
+  if(gate==="ready"&&recoveredGeneration!==generation)return <section
+    className="targetInbox" data-testid="target-inbox-recovering">
+    <p role="status">{speak("Ověřuji předchozí příkaz…","Checking prior command…")}</p>
+  </section>;
   if(gate==="ready"&&unresolved)return <section
     className="targetInbox" data-testid="target-inbox-uncertain"
     aria-label={speak("Cílový Inbox","Target Inbox")}>
@@ -288,8 +314,13 @@ export default function TargetInbox({language="cs",taskDetail=false}:{language?:
 /** Actor-scoped target badge; never reuse the legacy sidebarCounts. */
 export function TargetInboxCount(){
   const {page}=useInbox(1);
-  const generation=useTargetGeneration();
+  const runtime=useTargetRuntime(),generation=useTargetGeneration();
+  const [recoveredGeneration,setRecoveredGeneration]=useState("");
+  useEffect(()=>{
+    if(runtime?.known()&&runtime.generation()===generation&&
+        restoreInboxDecision(runtime,generation))setRecoveredGeneration(generation);
+  },[runtime,generation]);
   const uncertain=useSyncExternalStore(subscribeInboxUncertain,inboxUncertainSnapshot,()=>"");
-  return page&&uncertain!==generation?<span className="navCount" data-testid="target-inbox-sidebar-count"
+  return page&&recoveredGeneration===generation&&uncertain!==generation?<span className="navCount" data-testid="target-inbox-sidebar-count"
     aria-label={"Unprocessed: "+page.count}>{page.count}</span>:null;
 }
