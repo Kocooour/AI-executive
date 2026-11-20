@@ -145,3 +145,35 @@ test("read audience cannot issue triage and another restore generation fails clo
     {...cmd,restoreGeneration:randomUUID()}),denied("resync_required"));
   assert.equal(count(fx),0);
 });
+
+test("bounded triage ledger prunes only expired history and preserves active Process for Undo",()=>{
+  const fx=fixture(),token=fx.authority.issueWritable("alice").sessionToken;
+  const process=command(fx,token,"private");
+  assert.deepEqual(fx.authority.changeInboxTriage(token,process),{ok:true});
+  const undo=command(fx,token,"private","undo",process.commandId);
+  const seed=fx.db.prepare(
+    "INSERT INTO task_triage_receipts(receipt_key,request_digest,actor_user_id,task_id,action,"+
+    "undo_of_receipt_key,restore_generation,triage_revision_before,triage_revision_after,"+
+    "task_revision_before,task_revision_after,committed_at_ms) VALUES (?,?,?,'gone','process',NULL,?,0,1,0,1,?)");
+  const age95Days=Date.now()-95*86_400_000;
+  fx.db.exec("BEGIN IMMEDIATE");
+  try{
+    for(let i=0;i<4095;i++){
+      const key=i.toString(16).padStart(64,"0");
+      seed.run(key,key,"alice",fx.stage.restoreGeneration,age95Days);
+    }
+    fx.db.exec("COMMIT");
+  }catch(e){fx.db.exec("ROLLBACK");throw e;}
+  assert.equal(count(fx),4096);
+  // New receipts, including the active Process proof, cannot be deleted.
+  assert.throws(()=>fx.db.prepare(
+    "DELETE FROM task_triage_receipts WHERE receipt_key=?").run(
+      (fx.db.prepare("SELECT receipt_key FROM task_triage_receipts WHERE task_id='private'")
+        .get()).receipt_key));
+  // Undo is allowed after bounded cleanup; it does not lose its parent Process.
+  assert.deepEqual(fx.authority.changeInboxTriage(token,undo),{ok:true});
+  assert.equal(count(fx),2);
+  assert.equal(read(fx,"private").triage_state,"unprocessed");
+  assert.deepEqual(inspectIsolatedTargetStore({...fx.store,mode:"r2-model"}),
+    {ok:true,mode:"r2-model",issues:[]});
+});
