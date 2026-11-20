@@ -9,7 +9,7 @@
  *    racing the runtime refresh with an immediate read. */
 import {useEffect,useMemo,useRef} from "react";
 import {useTargetRuntime} from "./target-data-provider";
-import {createWakeMachine} from "../../lib/target-wake";
+import {createWakeMachine,type WakeRefreshResult} from "../../lib/target-wake";
 
 export function useTargetTick(tick:()=>void):void{
   const runtime=useTargetRuntime();
@@ -27,7 +27,7 @@ export function useTargetTick(tick:()=>void):void{
 export function useTargetWake(handlers:{
   hide:(reason:"hidden"|"offline")=>void;
   /** The runtime re-verified (or could not): the screen may read again. */
-  ready:()=>void;
+  ready:(result:Exclude<WakeRefreshResult,"signed_out">)=>void;
   /** The session ended: show the signed-out state instead of staying hidden. */
   signedOut:()=>void;
 }):{markHidden:()=>void}{
