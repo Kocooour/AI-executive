@@ -175,8 +175,12 @@ for(const width of [390,1280]){
       try{await route.continue();}catch{/* request may be aborted after a refusal */}
     };
     await page.route("**/api/target-staging/inbox?*",delayedGet);
-    // Focus revalidates the session then starts an authenticated Inbox reread.
-    await page.evaluate(()=>window.dispatchEvent(new Event("focus")));
+    // Simulate a connectivity wake: its session verification must precede
+    // the next Inbox GET. A plain focus does not force a non-hidden wake.
+    await page.evaluate(()=>{
+      window.dispatchEvent(new Event("offline"));
+      window.dispatchEvent(new Event("online"));
+    });
     await lateGetStarted;
 
     let failures=0;
