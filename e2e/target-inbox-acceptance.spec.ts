@@ -303,3 +303,111 @@ test("C-3a: hung Process request times out without losing UUID after reload",asy
   release();
   await page.unroute("**/api/target-staging/inbox/triage",intercepted);
 });
+
+
+test("C-3a: receipt 409 after real Process retains original UUID across reload",async({page})=>{
+  test.setTimeout(100_000);
+  if(!store)throw Error("Missing isolated C-3a SQLite store");
+  await page.setViewportSize({width:390,height:844});
+  const seeded=store.seed.projects["390"],title=seeded.taskTitle;
+  await openInbox(page);
+  await findInboxRow(page,seeded.taskId);
+  let writes=0,checks=0;
+  const countWrite=async(route:Route)=>{writes++;await route.continue();};
+  const staleReceipt=async(route:Route)=>{
+    checks++;
+    await route.fulfill({status:409,contentType:"application/json",
+      headers:{"cache-control":"no-store"},
+      body:'{"error":"read_stale_reload"}'});
+  };
+  await page.route("**/api/target-staging/inbox/triage",countWrite);
+  await page.route("**/api/target-staging/inbox/receipt",staleReceipt);
+  await processAction(page,title).click();
+  await expect(page.getByTestId("target-inbox-uncertain")).toBeVisible();
+  expect(writes).toBe(1);
+  expect(checks).toBeGreaterThan(0);
+  await expect(count(page)).toHaveCount(0);
+  await expect(page.getByTestId("target-inbox-sidebar-count")).toHaveCount(0);
+  const witness=await page.evaluate(()=>
+    sessionStorage.getItem("lumi:target-inbox-command:v1"));
+  expect(witness).toContain("commandId");
+  expect(witness).not.toContain(title);
+  const originalId=(JSON.parse(witness!) as {command:{commandId:string}})
+    .command.commandId;
+
+  await page.reload();
+  await expect(page.getByTestId("target-inbox-uncertain")).toBeVisible();
+  await expect(processAction(page,title)).toHaveCount(0);
+  await page.getByRole("button",{name:"Ověřit původní příkaz"}).click();
+  await expect(page.getByTestId("target-inbox-uncertain")).toBeVisible();
+  expect(writes).toBe(1);
+  expect((JSON.parse((await page.evaluate(()=>
+    sessionStorage.getItem("lumi:target-inbox-command:v1")))!) as
+      {command:{commandId:string}}).command.commandId).toBe(originalId);
+
+  // The worker DID commit Process. Only a real matching read-only receipt
+  // may now unlock Undo. The 409 must never have allowed a second Process.
+  await page.unroute("**/api/target-staging/inbox/receipt",staleReceipt);
+  await page.getByRole("button",{name:"Ověřit původní příkaz"}).click();
+  await expect(page.getByRole("button",{name:"Vrátit do Inboxu (Undo)"})).toBeVisible();
+  expect(writes).toBe(1);
+  await page.getByRole("button",{name:"Vrátit do Inboxu (Undo)"}).click();
+  await findInboxRow(page,seeded.taskId);
+  expect(writes).toBe(2); // The second unique write is the authorized Undo.
+});
+
+test("C-3a: exhausted refusal budget never releases a late nav count GET",async({page})=>{
+  test.setTimeout(120_000);
+  if(!store)throw Error("Missing isolated C-3a SQLite store");
+  await page.setViewportSize({width:1280,height:844});
+  await openInbox(page);
+  await expect(count(page)).toBeVisible();
+  await expect(page.getByTestId("target-inbox-sidebar-count")).toBeVisible();
+
+  let refusals=0,holdBadge=false,releaseBadge:()=>void=()=>{};
+  let startedBadge:()=>void=()=>{};
+  const badgeStarted=new Promise<void>(resolve=>{startedBadge=resolve;});
+  const routeInbox=async(route:Route)=>{
+    const params=new URL(route.request().url()).searchParams;
+    if(params.has("cursor")){
+      refusals++;
+      await route.fulfill({status:409,contentType:"application/json",
+        headers:{"cache-control":"no-store"},
+        body:'{"error":"read_stale_reload"}'});
+    }else if(holdBadge&&params.get("limit")==="1"){
+      holdBadge=false;startedBadge();
+      await new Promise<void>(resolve=>{releaseBadge=resolve;});
+      try{await route.continue();}catch{/* the stale GET may have been aborted */}
+    }else await route.continue();
+  };
+  await page.route("**/api/target-staging/inbox?*",routeInbox);
+  // First two refusals use up the shared 2/60s refusal/reverification
+  // budget without reloading the browser (which would reset the budget).
+  for(let i=0;i<2;i++){
+    await inbox(page).getByRole("button",{name:"Načíst další"}).click();
+    await expect(count(page)).toHaveCount(0);
+    await page.getByRole("button",{name:"Zkusit znovu"}).click();
+    await expect(count(page)).toBeVisible({timeout:20000});
+  }
+  holdBadge=true;
+  // Force a fresh verified session/Inbox read, but stall the badge request
+  // while the first page is available for its third Load more action.
+  await page.evaluate(()=>{
+    window.dispatchEvent(new Event("offline"));
+    window.dispatchEvent(new Event("online"));
+  });
+  await Promise.race([
+    badgeStarted,
+    new Promise<never>((_,reject)=>setTimeout(()=>
+      reject(Error("Expected a held badge GET")),10000)),
+  ]);
+  await expect(count(page)).toBeVisible();
+  await inbox(page).getByRole("button",{name:"Načíst další"}).click();
+  await expect.poll(()=>refusals).toBe(3);
+  await expect(count(page)).toHaveCount(0);
+  releaseBadge();
+  await expect(page.getByTestId("target-inbox-sidebar-count")).toHaveCount(0);
+  await page.waitForTimeout(800);
+  await expect(page.getByTestId("target-inbox-sidebar-count")).toHaveCount(0,
+    "pre-refusal GET can never clear the security fence even if session recheck is budgeted out");
+});
