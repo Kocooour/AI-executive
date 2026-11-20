@@ -74,7 +74,7 @@ jobs:
       - name: Build production app, preview flags off
         run: pnpm build
       - name: Install Chromium
-        run: pnpm exec playwright install --with-deps chromium
+        run: bash scripts/ci-install-chromium.sh
       - name: Prove global revocation and next-test repair
         run: pnpm exec playwright test e2e/session-recovery.spec.ts --project=desktop --workers=1 --trace=on
       - name: C20 B2 project cleanup before project and note deep links

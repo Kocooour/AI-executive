@@ -47,7 +47,7 @@ jobs:
       - name: Build isolated staging preview
         run: pnpm build
       - name: Install browser
-        run: pnpm exec playwright install --with-deps chromium
+        run: bash scripts/ci-install-chromium.sh
       # An isolated server with all preview flags OFF must return HTTP 404.
       - name: Assert default-off preview returns 404
         env:

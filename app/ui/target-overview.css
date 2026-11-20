@@ -1,0 +1,26 @@
+
+.targetOverview{max-width:900px;width:100%;display:grid;gap:1.4rem}
+.targetOverviewSubtle{color:var(--muted,#6b7280);font-size:.94rem;line-height:1.5}
+.targetOverviewTotals{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:.7rem}
+.targetOverviewTotals>div{border:1px solid var(--line,#d1d5db);border-radius:13px;padding:1rem;display:flex;flex-direction:column;gap:.35rem}
+.targetOverviewTotals strong{font-size:clamp(1.5rem,4vw,2.15rem);font-variant-numeric:tabular-nums;font-weight:650}
+.targetOverviewTotals span{font-size:.85rem;color:var(--muted,#6b7280)}
+.targetOverviewSection{min-width:0}
+.targetOverviewSection>h2{font-size:1.12rem;margin:0 0 .8rem}
+.targetOverviewDay{margin:0 0 1.25rem;min-width:0}
+.targetOverviewDay>h3{font-size:1rem;margin:0 0 .45rem;font-weight:600}
+.targetOverviewSection ul{list-style:none;padding:0;margin:0;display:grid;gap:.35rem}
+.targetOverviewRow{display:flex;align-items:flex-start;gap:.75rem;padding:.7rem .8rem;border:1px solid var(--line,#d1d5db);border-radius:12px;min-width:0}
+.targetOverviewRow>.stagingMyPlanSquare{flex-shrink:0;margin-top:.2rem}
+.targetOverviewRowBody{flex:1;min-width:0}
+.targetOverviewRowBody .stagingMyPlanOpen{text-align:left;min-height:24px;max-width:100%;white-space:normal;overflow-wrap:anywhere}
+.targetOverviewRowBody>strong{overflow-wrap:anywhere}
+.targetOverviewWhy{font-size:.84rem;color:var(--muted,#6b7280);margin-top:.25rem}
+.targetOverviewWhy summary{cursor:pointer;width:max-content;max-width:100%;text-decoration:underline;text-underline-offset:3px}
+.targetOverviewWhy p{margin:.3rem 0;line-height:1.45}
+.targetOverviewWhy summary:focus-visible,.targetOverviewRowBody button:focus-visible{outline:2px solid var(--v1-accent,#6051ac);outline-offset:3px}
+@media(max-width:700px){
+ .targetOverview{gap:1rem}
+ .targetOverviewTotals>div{padding:.8rem}
+ .targetOverviewRow{padding:.7rem .55rem}
+}

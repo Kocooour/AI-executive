@@ -8,7 +8,7 @@ import {
 } from "./view-url";
 
 export type TargetDetailKind="task"|"project"|"note";
-export type TargetDetailView="Projects"|"Notes"|"MyPlanPreview";
+export type TargetDetailView="Projects"|"Notes"|"MyPlanPreview"|"Home"|"Upcoming";
 export type TargetDetailRoute={
   kind:TargetDetailKind;id:string;view:TargetDetailView;projectId?:string;
 };
@@ -22,8 +22,8 @@ export type TargetDetailRequest=
 /** In-memory address change notification (pushState does not emit one). */
 export const TARGET_ADDRESS_EVENT="lumi-target-address-changed";
 const START_VIEW="Home";
-const KNOWN_VIEWS:readonly string[]=[START_VIEW,"Projects","Notes","MyPlanPreview"];
-const DETAIL_VIEWS:readonly TargetDetailView[]=["Projects","Notes","MyPlanPreview"];
+const KNOWN_VIEWS:readonly string[]=[START_VIEW,"Upcoming","Projects","Notes","MyPlanPreview"];
+const DETAIL_VIEWS:readonly TargetDetailView[]=["Home","Upcoming","Projects","Notes","MyPlanPreview"];
 const typedKeys=["projectId","taskId","noteId"] as const;
 
 /** True when the address asks for a typed record at all (valid or not). */
@@ -68,8 +68,9 @@ export function detailRouteFromSearch(search:string):TargetDetailRoute|null{
   if(target.kind==="task"){
     if(target.view==="Projects"&&target.projectId!==undefined)
       return {kind:"task",id:target.id,view:"Projects",projectId:target.projectId};
-    if(target.view==="MyPlanPreview"&&target.projectId===undefined)
-      return {kind:"task",id:target.id,view:"MyPlanPreview"};
+    if((target.view==="MyPlanPreview"||target.view==="Home"||target.view==="Upcoming")&&
+      target.projectId===undefined)
+      return {kind:"task",id:target.id,view:target.view};
     return null;
   }
   if(target.view==="Notes"&&target.projectId===undefined)
@@ -109,7 +110,8 @@ export function parentSearchForDetail(route:TargetDetailRoute|null,scope:UrlScop
     return searchForDetail({kind:"project",id:route.projectId,view:"Projects"},scope);
   const named=viewOfSearch(currentSearch);
   const view=(route?.view??(named!==null&&(DETAIL_VIEWS as readonly string[]).includes(named)?named:"Projects")) as TargetDetailView;
-  return searchWithScope(view==="MyPlanPreview"?"?view=MyPlanPreview":searchForView(view,START_VIEW),scope);
+  return searchWithScope(view==="MyPlanPreview"?"?view=MyPlanPreview":
+    view==="Home"?"?view=Home":searchForView(view,START_VIEW),scope);
 }
 
 export const detailRouteKey=(route:TargetDetailRoute):string=>

@@ -89,7 +89,7 @@ jobs:
       - name: Build isolated UI
         run: pnpm build
       - name: Chromium
-        run: pnpm exec playwright install --with-deps chromium
+        run: bash scripts/ci-install-chromium.sh
       - name: 390px and desktop acceptance incl. My Plan, Search and ACL (real SQLite)
         # Each filename is explicit: Playwright CLI filters even with testMatch.
         run: pnpm exec playwright test e2e/target-personal-acceptance.spec.ts e2e/target-personal-my-plan.spec.ts e2e/target-personal-search-open.spec.ts e2e/target-personal-create.spec.ts --project=desktop

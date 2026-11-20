@@ -47,7 +47,7 @@ jobs:
       - name: Build isolated UI
         run: pnpm build
       - name: Chromium
-        run: pnpm exec playwright install --with-deps chromium
+        run: bash scripts/ci-install-chromium.sh
       - name: 390px and desktop private task Quick Capture acceptance
         run: pnpm exec playwright test e2e/target-private-task-create.spec.ts --project=desktop
       - name: Upload failure traces

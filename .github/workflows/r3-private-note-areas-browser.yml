@@ -55,7 +55,7 @@ jobs:
       - name: Build isolated Next.js UI
         run: pnpm build
       - name: Install Chromium
-        run: pnpm exec playwright install --with-deps chromium
+        run: bash scripts/ci-install-chromium.sh
       - name: Run ONLY private Area chooser UI scenarios
         run: pnpm exec playwright test e2e/target-private-note-areas.spec.ts --project=desktop
       - name: Upload traces on failure

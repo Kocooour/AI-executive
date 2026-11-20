@@ -60,7 +60,7 @@ jobs:
       - name: Build isolated synthetic Next.js instance
         run: pnpm build
       - name: Install focused Chromium
-        run: pnpm exec playwright install --with-deps chromium
+        run: bash scripts/ci-install-chromium.sh
       - name: Run ONLY HumanWiki Context mounted interactions
         run: pnpm exec playwright test e2e/humanwiki-context-source-status.spec.ts --project=desktop
       - name: Upload failure traces

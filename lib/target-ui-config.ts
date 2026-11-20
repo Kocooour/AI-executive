@@ -18,6 +18,12 @@ export const TARGET_UI_MY_PLAN_FLAGS=[
 /** R3-FE-3: the global Vše / Osobní / Sdílené switcher. Each list view
  * additionally needs its own dedicated global index route (default-off on the
  * server); a view without its flag keeps the legacy list. */
+/** C-2 uses the existing server Home read flag, never a new preview toggle.
+ * It is intentionally separate from the serializable R3 UI config shape. */
+export const targetHomeSummaryEnabled=(env:TargetUiEnv):boolean=>
+  TARGET_UI_MY_PLAN_FLAGS.every(name=>env[name]==="true")&&
+  env["AI_EXECUTIVE_TARGET_STAGING_HTTP_HOME_ENABLED"]==="true";
+
 export const TARGET_UI_SCOPES_FLAGS=[
   ...TARGET_UI_FLAGS,
   "AI_EXECUTIVE_TARGET_UI_SCOPES_ENABLED",

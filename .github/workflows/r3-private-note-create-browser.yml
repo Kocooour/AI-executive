@@ -55,7 +55,7 @@ jobs:
       - name: Build isolated UI
         run: pnpm build
       - name: Chromium
-        run: pnpm exec playwright install --with-deps chromium
+        run: bash scripts/ci-install-chromium.sh
       - name: Scoped private note create flows
         run: pnpm exec playwright test e2e/target-private-note-create.spec.ts --project=desktop
       - name: Upload failure traces

@@ -82,7 +82,10 @@ test("UI-04b review P1: reorder remains reachable in every working list, includi
   const list=readFileSync(new URL("../app/ui/views/entity-list.tsx",import.meta.url),"utf8");
   const detail=readFileSync(new URL("../app/ui/views/project-page.tsx",import.meta.url),"utf8");
   assert.match(list,/v1ReorderAvailable\(view\)/);
-  assert.match(list,/v1DragHandleVisible\(view, mobileDesignV1Preview, reorderPreview\)/);
+  assert.match(list,/const readView = archiveReadView\(view\)/,
+    "archival aliases must use original list presentation without changing edit permissions");
+  assert.match(list,/v1DragHandleVisible\(readView, mobileDesignV1Preview, reorderPreview\)/,
+    "normal working lists still expose handles after their edit toggle, archives do not");
   assert.match(list,/onToggleReorder=\{\(\) => setReorderPreview/);
   assert.match(detail,/data-v1-project-reorder-toggle/);
   assert.match(detail,/aria-pressed=\{reorderPreview\}/);

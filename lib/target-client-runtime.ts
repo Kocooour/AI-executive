@@ -33,10 +33,12 @@ export type TargetClientRuntimeConfig={
   window?:TargetRuntimeWindow|null;
   broadcastChannelFactory?:((name:string)=>TargetRuntimeChannel)|null;
   now?:()=>number;
-  /** Injectable timers for the passive revalidation poll (tests). */
+  /** Injectable poll and verification-timeout timers (tests). */
   timers?:{
     setInterval(fn:()=>void,ms:number):unknown;
     clearInterval(handle:unknown):void;
+    setTimeout?(fn:()=>void,ms:number):unknown;
+    clearTimeout?(handle:unknown):void;
   };
 };
 export const TARGET_SESSION_ENDPOINT="/api/target-staging/session";
@@ -66,6 +68,9 @@ export function createTargetClientRuntime(config:TargetClientRuntimeConfig={}){
     },
     clearInterval:(handle:unknown)=>clearInterval(handle as ReturnType<typeof setInterval>),
   };
+  const timeoutSet=config.timers?.setTimeout??((fn:()=>void,ms:number)=>setTimeout(fn,ms));
+  const timeoutClear=config.timers?.clearTimeout??((handle:unknown)=>
+    clearTimeout(handle as ReturnType<typeof setTimeout>));
   let counter=0;
   const unknownToken=()=>{
     let random="";
@@ -203,7 +208,18 @@ export function createTargetClientRuntime(config:TargetClientRuntimeConfig={}){
     const bumps=localBumps;
     const own=new AbortController();
     controller=own;
-    const timer=setTimeout(()=>own.abort(),TIMEOUT_MS);
+    let timer:unknown;
+    const timeout=new Promise<TargetRuntimeRefreshResult>(resolve=>{
+      timer=timeoutSet(()=>{
+        own.abort();
+        // A fetch or body reader may ignore AbortSignal indefinitely. Hide
+        // actor titles immediately AND retire this flight so Retry can start
+        // a fresh session witness without waiting on the hung adapter.
+        if(!disposed&&bumps===localBumps&&controller===own)outcome("unavailable");
+        resolve("unavailable");
+      },TIMEOUT_MS);
+    });
+    const verification=(async():Promise<TargetRuntimeRefreshResult>=>{
     try{
       const response=await fetchImpl(TARGET_SESSION_ENDPOINT,{
         method:"GET",credentials:"same-origin",cache:"no-store",redirect:"error",
@@ -238,10 +254,19 @@ export function createTargetClientRuntime(config:TargetClientRuntimeConfig={}){
       outcome("ok");
       return "ok";
     }catch{
-      if(!disposed&&bumps===localBumps)outcome("unavailable"); // incl. timeout
+      // A timed-out verification can settle after a newer Retry succeeded.
+      // Never let that old rejection revoke the newer successful outcome.
+      if(!disposed&&bumps===localBumps&&!own.signal.aborted&&controller===own)
+        outcome("unavailable");
       return "unavailable";
+    }
+    })();
+    try{
+      // Aborting a fetch is advisory: a hung fetch/ReadableStream may never
+      // settle. This race bounds the *public* refresh promise independently.
+      return await Promise.race([verification,timeout]);
     }finally{
-      clearTimeout(timer);
+      timeoutClear(timer);
       if(controller===own)controller=null;
     }
   }

@@ -64,7 +64,7 @@ export function HomeView({ app }: { app: LumiApp }) {
     const timer = setTimeout(() => setSlowSync(true), 2000);
     return () => clearTimeout(timer);
   }, [syncStatus]);
-  if (view !== "Home") return null;
+  if (view !== "Home" && view !== "LegacyHome") return null;
 
   const locale = language === "cs" ? "cs-CZ" : "en-GB";
   const fill = (key: string, values: Record<string, string | number>) =>

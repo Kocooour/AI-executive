@@ -37,7 +37,7 @@ test("the server page mounts the provider only behind the flag and reads it per 
   // flags. Neither details-only nor scopes-only activates a runtime.
   assert.match(page,/const targetSearch=Boolean\(config\)&&targetMainTitleSearchEnabled\(process\.env\);/);
   assert.match(page,/const targetData = targetDataNeeded\(config\)\|\|targetSearch;/);
-  assert.match(page,/targetData\s*\n?\s*\?\s*<TargetDataProvider><LumiAppRoot targetMyPlan=\{config\?\.myPlan\} targetScopes=\{config\?\.scopes\} targetDetails=\{config\?\.details\} targetEdits=\{config\?\.edits\}/);
+  assert.match(page,/targetData\s*\n?\s*\?\s*<TargetDataProvider><LumiAppRoot targetHomeSummary=\{Boolean\(config\)&&targetHomeSummaryEnabled\(process\.env\)\} targetMyPlan=\{config\?\.myPlan\} targetScopes=\{config\?\.scopes\} targetDetails=\{config\?\.details\} targetEdits=\{config\?\.edits\}/);
   assert.match(page,/targetNoteEdit=\{Boolean\(config\?\.details\.note\) && targetNoteEditUiEnabled\(process\.env\)\}/);
   assert.match(page,/targetProjectEdit=\{Boolean\(config\?\.details\.project\) && targetProjectTitleEditUiEnabled\(process\.env\)\}/);
   assert.match(page,/targetPrivateNoteAreas=\{Boolean\(config\?\.scopes\.notes\)&&targetPrivateNoteAreaUiEnabled\(process\.env\)\}/);
@@ -96,6 +96,8 @@ test("only the runtime (and its server route) reference the session endpoint; no
   scan("app");
   assert.deepEqual(users.sort(),[
     "app/ui/target-data-provider.tsx","app/ui/target-data-status.tsx","app/ui/target-my-plan.tsx",
+    // C-2: lazily loaded Home and Upcoming share the runtime, never legacy storage.
+    "app/ui/target-overview.tsx",
     // R3-FE-3: the lazily loaded scope lists and the gate hook.
     "app/ui/target-scope-lists.tsx","app/ui/use-target-gate.ts",
     // R3-FE-4a: the lazily loaded authorized detail panel and the compact sidebar project list.

@@ -7,7 +7,7 @@ import { buildMyPlanPreview } from "../../../lib/my-plan-preview";
 import { LumiCompletionControl } from "./lumi-completion-control";
 import { projectAreaPreviewTone } from "../../../lib/project-list-preview";
 import { MobileProjectRowV1 } from "./mobile-project-row-v1";
-import { byManualOrder, isEveningTask, taskDueTone } from "../../../lib/task-views";
+import { archiveReadView, byManualOrder, isEveningTask, taskDueTone } from "../../../lib/task-views";
 import { taskRowValue } from "../task-row-value";
 import { summarizeProject, type ProjectSummary } from "../../../lib/project-summary";
 import { firstSentence, readProjectContext } from "../../../lib/project-context";
@@ -68,6 +68,7 @@ export function EntityList({ app }: { app: LumiApp }) {
     view,
     workspaces,
   } = app;
+  const readView = archiveReadView(view);
   const [reorderPreview, setReorderPreview] = useState(false);
   // The same edit state also controls both task and note handles on ProjectPage.
   const reorderableView = v1ReorderAvailable(view);
@@ -145,7 +146,7 @@ export function EntityList({ app }: { app: LumiApp }) {
                   ? [...batchIds, x.id] : batchIds.filter(id => id !== x.id))}/>
             </label>
           )}
-          {v1DragHandleVisible(view, mobileDesignV1Preview, reorderPreview) &&
+          {v1DragHandleVisible(readView, mobileDesignV1Preview, reorderPreview) &&
             (!myPlanPreview || sortBy === "manual") &&
             dragHandle(x, dragScope ?? (x.type === "task" ? `task:${view}` : `${x.type}:all`))}
           {x.type === "task" ? (
@@ -237,7 +238,7 @@ export function EntityList({ app }: { app: LumiApp }) {
               )}
               {view === "Inbox" && inboxTab === "mail" ? <GmailReader key={`${activeWorkspaceId}:${app.offlineView}`} app={app} /> : (
               <>
-              {!["Home", "Today", "Calendar", "Search", "Projects", "Areas", "Notes"].includes(view) && (
+              {!["Home", "Today", "Calendar", "Search", "Projects", "Areas", "Notes"].includes(readView) && (
                 <div className="listControls">
                   <label>
                     {tr("priority")}
@@ -333,7 +334,7 @@ export function EntityList({ app }: { app: LumiApp }) {
               <div
                 className={
                   "list taskRowList " +
-                  (view === "Home" || view === "Search" ? "secondary" : "")
+                  (readView === "Home" || readView === "Search" ? "secondary" : "")
                 }
               >
                 {myPlanPreview ? (
@@ -395,11 +396,11 @@ export function EntityList({ app }: { app: LumiApp }) {
                     ))}
                   </div>
                 )}
-                {!myPlanPreview && collection.length === 0 && view !== "Home" && view !== "Search" && (
+                {!myPlanPreview && collection.length === 0 && readView !== "Home" && readView !== "Search" && (
                   <div className="empty">{tr("nothingHere")}</div>
                 )}
               </div>
-              {!['Home', 'Search'].includes(view) && !app.legacyWritesDisabled && (
+              {!['Home', 'Search'].includes(readView) && !app.legacyWritesDisabled && (
                 <div className="capture">
                   <input
                     value={text}

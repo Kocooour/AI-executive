@@ -71,7 +71,7 @@ jobs:
       - name: Build isolated Next.js test server
         run: pnpm build
       - name: Install targeted Chromium
-        run: pnpm exec playwright install --with-deps chromium
+        run: bash scripts/ci-install-chromium.sh
       - name: Run ONLY R3 note editor recovery scenarios
         run: pnpm exec playwright test e2e/target-note-edit-recovery.spec.ts --project=desktop
       - name: Upload failure traces
