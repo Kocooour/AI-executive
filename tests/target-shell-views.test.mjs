@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import {test} from "node:test";
-import {activeTargetViewFor,detailsActive,targetViewsFor,targetShellNavigationFor,SHELL_NAVIGATION_VIEWS} from "../lib/target-shell-views.ts";
+import {activeTargetViewFor,detailsActive,targetViewsFor,targetShellNavigationFor,targetMobileMoreCurrentViews,SHELL_NAVIGATION_VIEWS} from "../lib/target-shell-views.ts";
 import {refusalBudgetFor} from "../lib/target-refusal-budget.ts";
 import {detailIdOk} from "../lib/target-detail-route.ts";
 import {validTaskPreviewId} from "../lib/target-staging-task-preview-client.ts";
@@ -150,4 +150,17 @@ test("C-3a: target Inbox and LegacyInbox have distinct primary/archive addresses
   const offNav=targetShellNavigationFor({...ready,quickCapture:false});
   assert.equal(offNav.personalV1,false);
   assert.equal(offNav.byView.LegacyInbox,"hidden");
+});
+
+test("C-3a: mobile More shows current Inbox exactly once, and LegacyInbox only in archive",()=>{
+  const ready={...personalV1,personalV1:true,homeRead:true,inboxRead:true};
+  const nav=targetShellNavigationFor(ready);
+  const current=targetMobileMoreCurrentViews(nav);
+  assert.deepEqual(current,["Home","Inbox","Upcoming","Notes","Search"]);
+  assert.deepEqual(nav.archive.filter(v=>v==="LegacyInbox"),["LegacyInbox"]);
+  assert.equal(current.filter(v=>v==="Inbox").length,1);
+  assert.ok(!current.includes("LegacyInbox"));
+  assert.equal(new Set([...current,...nav.archive]).size,current.length+nav.archive.length);
+  const noTarget=targetShellNavigationFor({...ready,inboxRead:false});
+  assert.equal(targetMobileMoreCurrentViews(noTarget).includes("Inbox"),false);
 });
