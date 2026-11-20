@@ -217,3 +217,21 @@ test("C-3a: late same-generation ACL revoke invalidates pinned title and count b
   assert.deepEqual(ids(updated),["bob-only"]);
   assert.equal(updated.count,1);
 });
+
+test("C-3a: opaque pagination witness changes on same-count task and ACL mutations",async()=>{
+  const fx=fixture();
+  const first=await ok(read(owner(),"?limit=1"));
+  assert.equal(first.count,2);
+  assert.ok(first.nextCursor);
+  const nextBefore=await ok(read(owner(),"?limit=1&cursor="+
+    encodeURIComponent(first.nextCursor)));
+  assert.equal(nextBefore.snapshotRevision,first.snapshotRevision);
+  fx.db.prepare("UPDATE tasks SET title='Changed without a membership count change' WHERE id='shared-task'").run();
+  const afterEdit=await ok(read(owner(),"?limit=1"));
+  assert.equal(afterEdit.count,first.count);
+  assert.notEqual(afterEdit.snapshotRevision,first.snapshotRevision);
+  fx.db.prepare("UPDATE area_members SET role='viewer' WHERE area_id='area-shared' AND user_id='alice'").run();
+  const afterRole=await ok(read(owner(),"?limit=1"));
+  assert.equal(afterRole.count,first.count);
+  assert.notEqual(afterRole.snapshotRevision,afterEdit.snapshotRevision);
+});
