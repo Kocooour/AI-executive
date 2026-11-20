@@ -14,7 +14,8 @@ import { isTargetStagingSessionTokenHash,lookupLiveTargetStagingSession }
 import { verifiedActor,type TargetStagingReadCredential } from "./target-task-authenticated-read";
 import { fingerprint } from "./target-task-staging-writer";
 import {
-  checkTargetTaskWriteContract,targetTaskWriteRevision,
+  canEditIsolatedTargetTaskTitle,checkTargetTaskWriteContract,
+  targetStoreRestoreGeneration,targetTaskWriteRevision,
   validTargetTaskTitleEditPreviewRequest,
 } from "./target-task-write-preflight";
 import type { TargetStagingReadStore } from "./target-task-staging-reader";
@@ -92,12 +93,25 @@ export function readTargetInboxTriageReceipt(
   db:DatabaseSync,actor:string,command:TargetInboxTriageCommand,
 ):"committed"|"not_recorded"|"conflict"|null{
   if(!validTargetInboxTriageCommand(command)||!area.test(actor))return null;
-  const contract=checkTargetTaskWriteContract(db,actor,command);
-  if(contract.ok===false)return null;
+  // A receipt is historical proof, not a new write. The task may have moved
+  // since the command committed; its original writeAreaId is signed by the
+  // stored digest but MUST NOT be compared to the task's present Area.
+  // Require the same restore generation and current write access to the task
+  // before looking up any actor+UUID receipt (including a digest conflict).
+  if(targetStoreRestoreGeneration(db)!==command.restoreGeneration.toLowerCase()||
+      !canEditIsolatedTargetTaskTitle(db,actor,command.taskId))return null;
   try {
-    const row=db.prepare("SELECT request_digest FROM task_triage_receipts WHERE receipt_key=?")
-      .get(targetInboxTriageReceiptKey(actor,command.commandId)) as {request_digest:string}|undefined;
-    if(!row)return "not_recorded";
+    const row=db.prepare(
+      "SELECT request_digest,actor_user_id,task_id FROM task_triage_receipts WHERE receipt_key=?",
+    ).get(targetInboxTriageReceiptKey(actor,command.commandId)) as {
+      request_digest:string;actor_user_id:string;task_id:string;
+    }|undefined;
+    if(!row){
+      // An absent receipt is disclosed only under the original write contract:
+      // a fabricated historical Area cannot be probed for not_recorded.
+      return checkTargetTaskWriteContract(db,actor,command).ok?"not_recorded":null;
+    }
+    if(row.actor_user_id!==actor||row.task_id!==command.taskId)return null;
     return row.request_digest===targetInboxTriageDigest(command)?"committed":"conflict";
   }catch{return null;}
 }
