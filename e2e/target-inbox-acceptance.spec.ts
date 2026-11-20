@@ -11,9 +11,10 @@ import type {Page,Route} from "@playwright/test";
 test.skip(process.env.LUMI_TARGET_INBOX_E2E!=="true",
   "C-3a real-store Inbox acceptance is opt-in");
 const store=JSON.parse(process.env.LUMI_E2E_TARGET_STORE||"null") as {
-  directory:string;restoreGeneration:string;
+  directory:string;restoreGeneration:string;ownerUserId:string;
   seed:{areaId:string;createAreaId:string;areaTitle:string;
-    projects:Record<string,{projectId:string;taskId:string;taskTitle:string}>};
+    projects:Record<string,{projectId:string;taskId:string;taskTitle:string}>;
+    searchProjects:Record<string,{projectId:string;taskId:string;taskTitle:string}>};
 }|null;
 const inbox=(page:Page)=>page.getByTestId("target-inbox");
 const count=(page:Page)=>page.getByTestId("target-inbox-count");
@@ -534,4 +535,77 @@ test("C-3a: committed Process receipt recovers after Area move, with no stale Un
       .run(movedTask.projectId,movedTask.taskId);
     db.close();
   }
+});
+
+
+test("C-3a: real Process receipt unlocks after authorized tombstone; never Undo deleted task",async({page})=>{
+  test.setTimeout(110_000);
+  if(!store)throw Error("Missing isolated C-3a SQLite store");
+  await page.setViewportSize({width:1280,height:844});
+  const deletedTask=store.seed.searchProjects["1280"];
+  const nextTask=store.seed.searchProjects["390"];
+  await openInbox(page);
+  await findInboxRow(page,deletedTask.taskId);
+
+  let commands=0,receipts=0;
+  const ambiguousProcess=async(route:Route)=>{
+    commands++;
+    const response=await route.fetch();
+    expect(response.status()).toBe(200); // the original Process did commit
+    await route.fulfill({status:503,contentType:"application/json",
+      headers:{"cache-control":"no-store"},body:'{"error":"uncertain"}'});
+  };
+  const blockedReceipt=async(route:Route)=>{
+    receipts++;
+    await route.fulfill({status:503,contentType:"application/json",
+      headers:{"cache-control":"no-store"},body:'{"error":"unavailable"}'});
+  };
+  await page.route("**/api/target-staging/inbox/triage",ambiguousProcess);
+  await page.route("**/api/target-staging/inbox/receipt",blockedReceipt);
+  await processAction(page,deletedTask.taskTitle).click();
+  await expect(page.getByTestId("target-inbox-uncertain")).toBeVisible({timeout:15000});
+  await expect.poll(()=>receipts,{timeout:15000}).toBeGreaterThan(0);
+  expect(commands).toBe(1);
+
+  // Delete through the genuine, pinned R2 task-delete writer, not an SQL
+  // shortcut that bypasses tombstone/audit/revision invariants.
+  const {TargetStagingSessionAuthority}=await import("../lib/target-staging-session-authority.ts");
+  const authority=new TargetStagingSessionAuthority({
+    stagingDirectory:store.directory,expectedRestoreGeneration:store.restoreGeneration,
+  });
+  try{
+    const session=authority.issueWritable(store.ownerUserId).sessionToken;
+    const preview=authority.previewTaskTitleEdit(session,{taskId:deletedTask.taskId});
+    if(preview.ok!==true)throw Error("Delete preview was unavailable");
+    const deletion=authority.deleteTask(session,{
+      commandId:randomUUID(),taskId:deletedTask.taskId,
+      expectedRevision:preview.snapshotRevision,writeAreaId:store.seed.areaId,
+      restoreGeneration:store.restoreGeneration,
+    });
+    expect(deletion).toEqual({ok:true});
+  }finally{authority.close();}
+  const db=new DatabaseSync(path.join(store.directory,"lumi-target.sqlite"));
+  try{
+    expect(db.prepare("SELECT 1 FROM tasks WHERE id=?").get(deletedTask.taskId))
+      .toBeUndefined();
+    expect(db.prepare("SELECT 1 FROM task_tombstones WHERE id=?").get(deletedTask.taskId))
+      .toBeDefined();
+  }finally{db.close();}
+
+  await page.unroute("**/api/target-staging/inbox/receipt",blockedReceipt);
+  await page.unroute("**/api/target-staging/inbox/triage",ambiguousProcess);
+  await page.getByRole("button",{name:"Ověřit původní příkaz"}).click();
+  await expect(page.getByTestId("target-inbox-uncertain")).toHaveCount(0);
+  await expect(page.getByText("Zpracování bylo potvrzeno.")).toBeVisible();
+  await expect(page.getByRole("button",{name:"Vrátit do Inboxu (Undo)"})).toHaveCount(0);
+  await expect(page.getByRole("button",{name:"Zavřít a obnovit"})).toBeVisible();
+  expect(commands).toBe(1); // original UUID is never resent
+
+  await page.getByRole("button",{name:"Zavřít a obnovit"}).click();
+  await findInboxRow(page,nextTask.taskId);
+  await processAction(page,nextTask.taskTitle).click();
+  await expect(page.getByRole("button",{name:"Vrátit do Inboxu (Undo)"}))
+    .toBeVisible({timeout:15000});
+  await page.getByRole("button",{name:"Vrátit do Inboxu (Undo)"}).click();
+  await findInboxRow(page,nextTask.taskId);
 });
