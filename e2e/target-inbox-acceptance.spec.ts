@@ -4,6 +4,7 @@
  * All page fixtures come from the canonical personal-store bootstrap. */
 import {test,expect} from "./fixtures";
 import {randomUUID} from "node:crypto";
+import {execFileSync} from "node:child_process";
 import {DatabaseSync} from "node:sqlite";
 import path from "node:path";
 import type {Page,Route} from "@playwright/test";
@@ -567,23 +568,16 @@ test("C-3a: real Process receipt unlocks after authorized tombstone; never Undo 
   await expect.poll(()=>receipts,{timeout:15000}).toBeGreaterThan(0);
   expect(commands).toBe(1);
 
-  // Delete through the genuine, pinned R2 task-delete writer, not an SQL
-  // shortcut that bypasses tombstone/audit/revision invariants.
-  const {TargetStagingSessionAuthority}=await import("../lib/target-staging-session-authority");
-  const authority=new TargetStagingSessionAuthority({
-    stagingDirectory:store.directory,expectedRestoreGeneration:store.restoreGeneration,
-  });
-  try{
-    const session=authority.issueWritable(store.ownerUserId).sessionToken;
-    const preview=authority.previewTaskTitleEdit(session,{taskId:deletedTask.taskId});
-    if(preview.ok!==true)throw Error("Delete preview was unavailable");
-    const deletion=authority.deleteTask(session,{
-      commandId:randomUUID(),taskId:deletedTask.taskId,
-      expectedRevision:preview.snapshotRevision,writeAreaId:store.seed.areaId,
-      restoreGeneration:store.restoreGeneration,
-    });
-    expect(deletion).toEqual({ok:true});
-  }finally{authority.close();}
+  // Run the genuine, pinned delete writer in the same isolated child-process
+  // harness as the target-store bootstrap. The Playwright TS project must not
+  // import all server-side modules under its unrelated strict compiler config.
+  const deletion=JSON.parse(execFileSync(process.execPath,[
+    "--experimental-loader",
+    path.join(process.cwd(),"scripts","target-staging-ts-loader.mjs"),
+    path.join(process.cwd(),"e2e","target-inbox-delete-child.mjs"),
+    deletedTask.taskId,
+  ],{cwd:process.cwd(),stdio:["ignore","pipe","inherit"]}).toString());
+  expect(deletion).toEqual({ok:true});
   const db=new DatabaseSync(path.join(store.directory,"lumi-target.sqlite"));
   try{
     expect(db.prepare("SELECT 1 FROM tasks WHERE id=?").get(deletedTask.taskId))
