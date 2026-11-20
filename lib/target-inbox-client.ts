@@ -80,12 +80,27 @@ async function postCommand(route:string,command:InboxClientCommand,signal?:Abort
     headers:{"content-type":"application/json","x-lumi-target-protocol":"1"},
     body:JSON.stringify(command),signal});
 }
+/** Bound the entire write/receipt response, including a stalled JSON body.
+ * Abort is advisory; Promise.race also settles when a fetch ignores abort. */
+export const INBOX_COMMAND_DEADLINE_MS=12_000;
+async function commandDeadline<T>(work:(signal:AbortSignal)=>Promise<T>):Promise<T>{
+  const controller=new AbortController();
+  let timer:ReturnType<typeof setTimeout>|undefined;
+  const timeout=new Promise<never>((_,reject)=>{
+    timer=setTimeout(()=>{
+      controller.abort();reject(new Error("Inbox command deadline exceeded"));
+    },INBOX_COMMAND_DEADLINE_MS);
+  });
+  try{return await Promise.race([work(controller.signal),timeout]);}
+  finally{if(timer!==undefined)clearTimeout(timer);}
+}
 export async function sendInboxCommand(
   command:InboxClientCommand,
 ):Promise<InboxClientWrite>{
   if(!validCommand(command))return {ok:false,reason:"conflict"};
   try{
-    const response=await postCommand("/api/target-staging/inbox/triage",command);
+    return await commandDeadline(async signal=>{
+    const response=await postCommand("/api/target-staging/inbox/triage",command,signal);
     if(!response.ok){
       if(response.status===401||response.status===403)return {ok:false,reason:"signed-out"};
       if(response.status===409||response.status===400||response.status===404)
@@ -98,6 +113,7 @@ export async function sendInboxCommand(
     if(x.ok!==true||!["ok","ok,replayed"].includes(Object.keys(x).sort().join(","))||
         (x.replayed!==undefined&&x.replayed!==true))return {ok:false,reason:"uncertain"};
     return {ok:true};
+    });
   }catch{return {ok:false,reason:"uncertain"};}
 }
 export async function verifyInboxCommand(
@@ -105,7 +121,8 @@ export async function verifyInboxCommand(
 ):Promise<InboxClientReceipt>{
   if(!validCommand(command))return {ok:false,reason:"unavailable"};
   try{
-    const response=await postCommand("/api/target-staging/inbox/receipt",command);
+    return await commandDeadline(async signal=>{
+    const response=await postCommand("/api/target-staging/inbox/receipt",command,signal);
     if(!response.ok)return {ok:false,reason:failure(response.status)};
     const body:unknown=await response.json();
     if(!body||typeof body!=="object"||Array.isArray(body))return {ok:false,reason:"unavailable"};
@@ -124,5 +141,6 @@ export async function verifyInboxCommand(
         writeAreaId:n.writeAreaId as string};
     }
     return {ok:true,status:x.status,next};
+    });
   }catch{return {ok:false,reason:"unavailable"};}
 }
