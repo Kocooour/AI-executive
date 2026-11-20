@@ -28,6 +28,13 @@ function useInbox(limit:number){
   const abort=useRef<AbortController|null>(null);
   const more=useRef<AbortController|null>(null);
   const reload=useCallback(()=>setRefresh(n=>n+1),[]);
+  const revoke=useCallback(()=>{
+    abort.current?.abort();more.current?.abort();
+    setHidden(true);
+    setState({kind:"error",key:"",reason:"signed-out"});
+    if(runtime&&refusalBudgetFor(runtime).admit())
+      void runtime.reportRefusal("session_revoked");
+  },[runtime]);
   const gate=targetOverviewGate(runtime,generation,outcome);
   const key=generation+":"+limit+":"+refresh;
   useTargetTick(reload);
@@ -93,7 +100,7 @@ function useInbox(limit:number){
         nextCursor:result.value.nextCursor},
     }:before);
   },[page,key,limit]);
-  return {page,loading,signedOut,gate:gate.kind,reload,loadMore};
+  return {page,loading,signedOut,gate:gate.kind,reload,loadMore,revoke};
 }
 type Decision={
   command:InboxClientCommand;title:string;processId:string;
@@ -101,50 +108,60 @@ type Decision={
   next:{expectedRevision:string;triageRevision:number;writeAreaId:string}|null;
 };
 export default function TargetInbox({language="cs"}:{language?:Language;taskDetail?:boolean}){
-  const {page,loading,signedOut,gate,reload,loadMore}=useInbox(50);
+  const {page,loading,signedOut,gate,reload,loadMore,revoke}=useInbox(50);
   const [decision,setDecision]=useState<Decision|null>(null);
   const inFlight=useRef(false);
+  const commandEpoch=useRef(0);
   const generation=useTargetGeneration();
   const speak=(cs:string,en:string)=>language==="cs"?cs:en;
   // A new authenticated identity cannot inherit an old actor's Undo command.
-  useEffect(()=>{setDecision(null);inFlight.current=false;},[generation]);
+  useEffect(()=>{commandEpoch.current++;setDecision(null);inFlight.current=false;},[generation]);
   // Preserve an uncertain command through transient 503/offline; never reuse its UUID
   // for another action. Clear only if identity is lost or changes.
   useEffect(()=>{if(gate==="signed_out"||gate==="refused")setDecision(null);},[gate]);
-  const confirm=useCallback(async(command:InboxClientCommand,title:string,processId:string)=>{
+  const confirm=useCallback(async(
+    command:InboxClientCommand,title:string,processId:string,epoch:number,
+  )=>{
+    if(commandEpoch.current!==epoch)return;
     setDecision({command,title,processId,stage:"verifying",next:null});
     const check=await verifyInboxCommand(command);
+    // Never accept a response for a prior auth generation or signed-out actor.
+    if(commandEpoch.current!==epoch)return;
+    if(!check.ok&&check.reason==="signed-out"){
+      revoke();setDecision(null);return;
+    }
     if(check.ok&&check.status==="committed"){
-      // Invalidation refreshes the Inbox list and its separate sidebar badge once.
       emitTargetChange({kind:"task",id:command.taskId,change:"updated"});
       setDecision({command,title,processId,
         stage:command.mode==="undo"?"undone":"undo-ready",next:check.next});
     }else if(check.ok&&check.status==="not_recorded"){
+      // Not-recorded is not proof that the old write has quiesced.
       setDecision({command,title,processId,stage:"uncertain",next:null});
     }else{
       setDecision({command,title,processId,
-        stage:!check.ok&&(check.reason==="stale"||check.reason==="signed-out")
-          ?"conflict":"uncertain",next:null});
+        stage:!check.ok&&check.reason==="stale"?"conflict":"uncertain",next:null});
       if(!check.ok&&check.reason==="stale")reload();
     }
-  },[reload]);
+  },[reload,revoke]);
   async function submit(command:InboxClientCommand,title:string,processId:string){
     if(inFlight.current)return;
+    const epoch=commandEpoch.current;
     inFlight.current=true;
     setDecision({command,title,processId,stage:"sending",next:null});
     try{
       const sent=await sendInboxCommand(command);
-      if(sent.ok){
-        await confirm(command,title,processId);
-      }else if(sent.reason==="uncertain"){
-        // Never replace commandId or blind-retry after an ambiguous response.
-        await confirm(command,title,processId);
+      if(commandEpoch.current!==epoch)return;
+      if(!sent.ok&&sent.reason==="signed-out"){
+        revoke();setDecision(null);return;
+      }
+      if(sent.ok||sent.reason==="uncertain"){
+        // Never replace commandId or blind-retry an ambiguous Process/Undo.
+        await confirm(command,title,processId,epoch);
       }else{
-        setDecision({command,title,processId,
-          stage:sent.reason==="signed-out"?"denied":"conflict",next:null});
+        setDecision({command,title,processId,stage:"conflict",next:null});
         reload();
       }
-    }finally{inFlight.current=false;}
+    }finally{if(commandEpoch.current===epoch)inFlight.current=false;}
   }
   function process(item:TargetInboxItem){
     if(inFlight.current||!page||!item.canProcess||!item.expectedRevision)return;
@@ -171,9 +188,10 @@ export default function TargetInbox({language="cs"}:{language?:Language;taskDeta
   }
   async function recheck(){
     if(inFlight.current||!decision||decision.stage!=="uncertain")return;
+    const epoch=commandEpoch.current;
     inFlight.current=true;
-    try{await confirm(decision.command,decision.title,decision.processId);}
-    finally{inFlight.current=false;}
+    try{await confirm(decision.command,decision.title,decision.processId,epoch);}
+    finally{if(commandEpoch.current===epoch)inFlight.current=false;}
   }
   if(gate==="ready"&&decision?.stage==="uncertain")return <section
     className="targetInbox" data-testid="target-inbox-uncertain"
