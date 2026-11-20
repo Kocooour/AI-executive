@@ -57,6 +57,7 @@ import { useNotifications } from "./hooks/use-notifications";
 import { useAppBadge } from "./hooks/use-app-badge";
 import { useSync } from "./hooks/use-sync";
 import { localizeServerError } from "../../lib/server-errors";
+import { legacyInboxMailViewFor } from "../../lib/target-shell-views";
 import { workspaceTone } from "./workspace-tone";
 
 // All client state, effects and handlers of the Lumi app shell, moved verbatim from app/page.tsx.
@@ -78,7 +79,7 @@ export function useLumiApp(options: { targetDetails?: boolean; targetUnified?: b
   const preferTargetPlan = Boolean(options.preferTargetPlan);
   // Until the *new target* Inbox is fully activated, C-2 archival Inbox retains
   // legacy Gmail reading. Once activated, only LegacyInbox owns this panel.
-  const legacyMailInboxView = preferTargetPlan && options.targetInboxEnabled ? "LegacyInbox" : "Inbox";
+  const legacyMailInboxView = legacyInboxMailViewFor(preferTargetPlan,Boolean(options.targetInboxEnabled));
   const captureDisabledRef = useRef(captureDisabled);
   captureDisabledRef.current = captureDisabled;
   // A user tried to change legacy data in unified mode: nothing is written, nothing reports success,
@@ -2614,7 +2615,7 @@ export function useLumiApp(options: { targetDetails?: boolean; targetUnified?: b
   useEffect(() => { if (view !== legacyMailInboxView) setInboxTab("tasks"); }, [view, legacyMailInboxView]);
   useEffect(() => { setLegacyWriteAttempt(false); }, [view]);
   // A message to open belongs to the mail tab only; it is dropped when that tab is not shown.
-  useEffect(() => { if (view !== legacyMailInboxView || inboxTab !== "mail") setMailSourceToOpen(null); }, [view, inboxTab, legacyMailInboxView, authState]);
+  useEffect(() => { if (authState !== "ready" || view !== legacyMailInboxView || inboxTab !== "mail") setMailSourceToOpen(null); }, [view, inboxTab, legacyMailInboxView, authState]);
   const projectGroups = view === "Projects" ? groupProjectsByArea(projects, areas, scopedRelations) : [];
   const { notificationState, setNotificationState, notificationStatus, enableNotifications, disableNotifications,
     testNotification, saveNotificationSettings } = useNotifications({ tr, language, writesBlocked: blockLegacyWrite });
