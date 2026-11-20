@@ -31,6 +31,7 @@ Object.assign(process.env,{
   AI_EXECUTIVE_TARGET_STAGING_HTTP_INBOX_WRITE_ENABLED:"true",
 });
 const {bootstrapIsolatedTargetStore}=await import("../lib/target-store-bootstrap.ts");
+const {TargetStagingSessionAuthority}=await import("../lib/target-staging-session-authority.ts");
 const durable=await import("../lib/target-staging-durable-session.ts");
 const {createSessionToken,sessionCookieName}=await import("./support/owner-session-test-cookie.mjs");
 const {GET}=await import("../app/api/target-staging/inbox/route.ts");
@@ -199,6 +200,77 @@ test("C-3a: real pinned HTTP receipt survives Area move; no stale Undo or ACL le
   // An old shared editor must not read the receipt after it moves private.
   const bob=session(fx,"bob");
   assert.notEqual((await post("receipt",process,bob)).status,200);
+});
+
+test("C-3a: real HTTP confirms tombstoned Process without Undo or ACL leakage",async()=>{
+  const fx=fixture();
+  const first=await ok(read());
+  const process=cmd(first.items.find(x=>x.id==="shared-task"),fx.store);
+  assert.deepEqual(await ok(post("triage",process)),{ok:true});
+  const validUndo=await ok(post("receipt",process));
+  assert.equal(validUndo.status,"committed");
+  assert.ok(validUndo.next,"Process initially permits Undo before deletion");
+  const authority=new TargetStagingSessionAuthority(fx.store);
+  try{
+    const token=authority.issueWritable("alice").sessionToken;
+    const preview=authority.previewTaskTitleEdit(token,{taskId:"shared-task"});
+    assert.equal(preview.ok,true);
+    assert.deepEqual(authority.deleteTask(token,{
+      commandId:randomUUID(),taskId:"shared-task",
+      expectedRevision:preview.snapshotRevision,writeAreaId:"area-shared",
+      restoreGeneration:fx.stage.restoreGeneration,
+    }),{ok:true},"real pinned delete creates tombstone");
+    assert.equal(fx.db.prepare("SELECT 1 FROM tasks WHERE id='shared-task'").get(),
+      undefined);
+    assert.ok(fx.db.prepare("SELECT 1 FROM task_tombstones WHERE id='shared-task'").get());
+    const confirmed=await ok(post("receipt",process));
+    assert.deepEqual(confirmed,{ok:true,status:"committed",next:null},
+      "deleted task's original receipt must resolve without stale Undo");
+    const noReceipt=await post("receipt",{...process,commandId:randomUUID()});
+    assert.notEqual(noReceipt.status,200,"tombstone cannot disclose a missing UUID");
+    const bob=session(fx,"bob");
+    const cara=session(fx,"cara");
+    assert.notEqual((await post("receipt",process,bob)).status,200,
+      "another actor's UUID cannot confirm a shared tombstone");
+    assert.notEqual((await post("receipt",process,cara)).status,200,
+      "a shared viewer cannot read the tombstone receipt");
+    const staleUndo=cmd({
+      id:"shared-task",expectedRevision:validUndo.next.expectedRevision,
+      triageRevision:validUndo.next.triageRevision,
+      effectiveAreaId:validUndo.next.writeAreaId,
+    },fx.store,"undo",process.commandId);
+    assert.notEqual((await post("triage",staleUndo)).status,200,
+      "Undo cannot resurrect a tombstoned task");
+    const current=await ok(read());
+    assert.ok(!ids(current).includes("shared-task"));
+    const fresh=cmd(current.items.find(x=>x.id==="alice-only"),fx.store);
+    assert.deepEqual(await ok(post("triage",fresh)),{ok:true},
+      "new commands proceed after the tombstone receipt is reconciled");
+  }finally{authority.close();}
+});
+
+test("C-3a: own tombstone receipt fails closed immediately on ACL revocation",async()=>{
+  const fx=fixture();
+  const bob=session(fx,"bob");
+  const row=(await ok(read(bob))).items.find(x=>x.id==="shared-task");
+  const process=cmd(row,fx.store);
+  assert.deepEqual(await ok(post("triage",process,bob)),{ok:true});
+  const authority=new TargetStagingSessionAuthority(fx.store);
+  try{
+    const token=authority.issueWritable("alice").sessionToken;
+    const preview=authority.previewTaskTitleEdit(token,{taskId:"shared-task"});
+    assert.equal(preview.ok,true);
+    assert.deepEqual(authority.deleteTask(token,{
+      commandId:randomUUID(),taskId:"shared-task",
+      expectedRevision:preview.snapshotRevision,writeAreaId:"area-shared",
+      restoreGeneration:fx.stage.restoreGeneration,
+    }),{ok:true});
+  }finally{authority.close();}
+  const before=await ok(post("receipt",process,bob));
+  assert.deepEqual(before,{ok:true,status:"committed",next:null});
+  fx.db.prepare("DELETE FROM area_members WHERE area_id='area-shared' AND user_id='bob'").run();
+  assert.notEqual((await post("receipt",process,bob)).status,200,
+    "revoked editor must not see its historical receipt");
 });
 
 test("C-3a: CSRF/protocol/CAS and stale Area checks cannot commit",async()=>{
