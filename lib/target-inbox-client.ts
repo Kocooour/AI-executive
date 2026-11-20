@@ -99,7 +99,7 @@ export async function sendInboxCommand(
 ):Promise<InboxClientWrite>{
   if(!validCommand(command))return {ok:false,reason:"conflict"};
   try{
-    return await commandDeadline(async signal=>{
+    return await commandDeadline<InboxClientWrite>(async signal=>{
     const response=await postCommand("/api/target-staging/inbox/triage",command,signal);
     if(!response.ok){
       if(response.status===401||response.status===403)return {ok:false,reason:"signed-out"};
@@ -121,7 +121,7 @@ export async function verifyInboxCommand(
 ):Promise<InboxClientReceipt>{
   if(!validCommand(command))return {ok:false,reason:"unavailable"};
   try{
-    return await commandDeadline(async signal=>{
+    return await commandDeadline<InboxClientReceipt>(async signal=>{
     const response=await postCommand("/api/target-staging/inbox/receipt",command,signal);
     if(!response.ok)return {ok:false,reason:failure(response.status)};
     const body:unknown=await response.json();
