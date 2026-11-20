@@ -8,6 +8,7 @@
  */
 import { createHash } from "node:crypto";
 import { TARGET_STAGING_MAX_RECEIPTS } from "./target-store-bootstrap";
+import { TARGET_INBOX_RECEIPT_RETENTION_DAYS } from "./target-inbox-schema";
 import { withPinnedTargetStagingWrite } from "./target-staging-pinned-write";
 import { isTargetStagingSessionTokenHash,lookupLiveTargetStagingSession }
   from "./target-staging-durable-session";
@@ -158,12 +159,33 @@ export function writePreflightedTargetInboxTriage(
         return {ok:false,reason:"stale_revision"};
     }
     if(!context.stillPinned()||!context.noSidecars())return denied();
-    const rows=(db.prepare("SELECT COUNT(*) AS n FROM task_triage_receipts")
-      .get() as {n:number}).n;
-    if(!Number.isSafeInteger(rows)||rows>=TARGET_STAGING_MAX_RECEIPTS)return failed();
     const now=Date.now();
     if(!Number.isSafeInteger(now)||now<=0||
         (original&&now<original.committed_at_ms))return failed();
+    let rows=(db.prepare("SELECT COUNT(*) AS n FROM task_triage_receipts")
+      .get() as {n:number}).n;
+    if(!Number.isSafeInteger(rows))return failed();
+    if(rows>=TARGET_STAGING_MAX_RECEIPTS){
+      // Bounded, pinned maintenance in the *same transaction*. Newer receipts
+      // (90-day minimum) stay immutable, and an active Process retains its
+      // original proof so Undo remains possible even long afterwards.
+      // Prune Undo children before their parents (FK is RESTRICT by default).
+      const cutoff=now-TARGET_INBOX_RECEIPT_RETENTION_DAYS*86_400_000-60_000;
+      if(cutoff<=0)return failed();
+      db.prepare("DELETE FROM task_triage_receipts WHERE action='undo' AND committed_at_ms<=?")
+        .run(cutoff);
+      db.prepare(`DELETE FROM task_triage_receipts
+        WHERE action='process' AND committed_at_ms<=?
+        AND NOT EXISTS (SELECT 1 FROM task_triage_receipts u
+          WHERE u.undo_of_receipt_key=task_triage_receipts.receipt_key)
+        AND NOT EXISTS (SELECT 1 FROM tasks t
+          WHERE t.id=task_triage_receipts.task_id AND t.triage_state='processed'
+            AND t.triage_revision=task_triage_receipts.triage_revision_after
+            AND t.revision=task_triage_receipts.task_revision_after)`).run(cutoff);
+      rows=(db.prepare("SELECT COUNT(*) AS n FROM task_triage_receipts")
+        .get() as {n:number}).n;
+    }
+    if(!Number.isSafeInteger(rows)||rows>=TARGET_STAGING_MAX_RECEIPTS)return failed();
     const nextState=command.mode==="process"?"processed":"unprocessed";
     const nextAt=command.mode==="process"?now:null;
     const updated=db.prepare(
