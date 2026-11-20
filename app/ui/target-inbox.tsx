@@ -115,8 +115,8 @@ export default function TargetInbox({language="cs"}:{language?:Language;taskDeta
     setDecision({command,title,processId,stage:"verifying",next:null});
     const check=await verifyInboxCommand(command);
     if(check.ok&&check.status==="committed"){
+      // Invalidation refreshes the Inbox list and its separate sidebar badge once.
       emitTargetChange({kind:"task",id:command.taskId,change:"updated"});
-      reload();
       setDecision({command,title,processId,
         stage:command.mode==="undo"?"undone":"undo-ready",next:check.next});
     }else if(check.ok&&check.status==="not_recorded"){
