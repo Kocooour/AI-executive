@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import {test} from "node:test";
-import {activeTargetViewFor,detailsActive,targetViewsFor,targetShellNavigationFor,targetMobileMoreCurrentViews,SHELL_NAVIGATION_VIEWS} from "../lib/target-shell-views.ts";
+import {activeTargetViewFor,detailsActive,targetViewsFor,targetShellNavigationFor,targetMobileMoreCurrentViews,legacyInboxMailViewFor,SHELL_NAVIGATION_VIEWS} from "../lib/target-shell-views.ts";
 import {refusalBudgetFor} from "../lib/target-refusal-budget.ts";
 import {detailIdOk} from "../lib/target-detail-route.ts";
 import {validTaskPreviewId} from "../lib/target-staging-task-preview-client.ts";
@@ -163,4 +163,11 @@ test("C-3a: mobile More shows current Inbox exactly once, and LegacyInbox only i
   assert.equal(new Set([...current,...nav.archive]).size,current.length+nav.archive.length);
   const noTarget=targetShellNavigationFor({...ready,inboxRead:false});
   assert.equal(targetMobileMoreCurrentViews(noTarget).includes("Inbox"),false);
+});
+
+test("C-3a: historical Gmail source follows archive alias only after complete target cutover",()=>{
+  assert.equal(legacyInboxMailViewFor(false,false),"Inbox");
+  assert.equal(legacyInboxMailViewFor(false,true),"Inbox","off mode stays unchanged");
+  assert.equal(legacyInboxMailViewFor(true,false),"Inbox","C-2 archive remains readable");
+  assert.equal(legacyInboxMailViewFor(true,true),"LegacyInbox");
 });
