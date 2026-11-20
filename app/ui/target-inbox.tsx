@@ -4,10 +4,11 @@ import {useCallback,useEffect,useMemo,useRef,useState,useSyncExternalStore} from
 import {useTargetGeneration,useTargetRuntime} from "./target-data-provider";
 import {useTargetTick,useTargetWake} from "./use-target-revalidation";
 import {targetOverviewGate} from "../../lib/target-my-plan-embed";
-import {emitTargetChange,subscribeTargetChange} from "../../lib/target-data-invalidation";
+import {emitTargetChange,subscribeTargetChange,subscribeInboxDecision,inboxDecisionSnapshot,
+  setInboxDecision,clearInboxDecision,type InboxDecision} from "../../lib/target-data-invalidation";
 import {detailIdOk} from "../../lib/target-detail-route";
 import {detailRowKey,openTargetDetail} from "./target-detail-state";
-import {inboxUncertainSnapshot,setInboxUncertain,subscribeInboxUncertain} from "../../lib/target-data-invalidation";
+import {inboxUncertainSnapshot,subscribeInboxUncertain} from "../../lib/target-data-invalidation";
 import {refusalBudgetFor} from "../../lib/target-refusal-budget";
 import {
   fetchTargetInbox,sendInboxCommand,verifyInboxCommand,
@@ -116,75 +117,76 @@ function useInbox(limit:number){
   },[page,key,limit]);
   return {page,loading,signedOut,gate:gate.kind,reload,loadMore,revoke,retry};
 }
-type Decision={
-  command:InboxClientCommand;title:string;processId:string;
-  stage:"sending"|"verifying"|"uncertain"|"undo-ready"|"conflict"|"denied"|"undone";
-  next:{expectedRevision:string;triageRevision:number;writeAreaId:string}|null;
-};
 export default function TargetInbox({language="cs",taskDetail=false}:{language?:Language;taskDetail?:boolean}){
   const {page,loading,signedOut,gate,reload,loadMore,revoke,retry}=useInbox(50);
-  const [decision,setDecision]=useState<Decision|null>(null);
+  const runtime=useTargetRuntime(),generation=useTargetGeneration();
+  const decision=useSyncExternalStore(subscribeInboxDecision,
+    ()=>inboxDecisionSnapshot(runtime,generation),()=>null);
   const inFlight=useRef(false);
-  const commandEpoch=useRef(0);
-  const generation=useTargetGeneration();
+  const setDecision=useCallback((next:InboxDecision|null):boolean=>{
+    if(!runtime)return false;
+    if(next===null){clearInboxDecision(runtime,generation);return true;}
+    return setInboxDecision(runtime,generation,next);
+  },[runtime,generation]);
+  const commandCurrent=useCallback((command:InboxClientCommand):boolean=>
+    Boolean(runtime?.known()&&runtime.generation()===generation&&
+      inboxDecisionSnapshot(runtime,generation)?.command.commandId===command.commandId),
+    [runtime,generation]);
   const speak=(cs:string,en:string)=>language==="cs"?cs:en;
-  // A new authenticated identity cannot inherit an old actor's Undo command.
-  useEffect(()=>{commandEpoch.current++;setDecision(null);inFlight.current=false;},[generation]);
-  // Preserve an uncertain command through transient 503/offline; never reuse its UUID
-  // for another action. Clear only if identity is lost or changes.
-  useEffect(()=>{if(gate==="signed_out"||gate==="refused")setDecision(null);},[gate]);
+  // Runtime generation rotation and explicit security clear retire the
+  // tab-scoped command even while this view is unmounted.
+  useEffect(()=>{
+    if(runtime&&(gate==="signed_out"||gate==="refused"))
+      clearInboxDecision(runtime,generation);
+  },[runtime,generation,gate]);
   const confirm=useCallback(async(
-    command:InboxClientCommand,title:string,processId:string,epoch:number,
+    command:InboxClientCommand,title:string,processId:string,
   )=>{
-    if(commandEpoch.current!==epoch)return;
+    if(!commandCurrent(command))return;
     setDecision({command,title,processId,stage:"verifying",next:null});
     const check=await verifyInboxCommand(command);
-    // Never accept a response for a prior auth generation or signed-out actor.
-    if(commandEpoch.current!==epoch)return;
+    // A response from an old actor or superseded UUID can never resolve this command.
+    if(!commandCurrent(command))return;
     if(check.ok===false&&check.reason==="signed-out"){
       revoke();setDecision(null);return;
     }
     if(check.ok===true&&check.status==="committed"){
-      setInboxUncertain(null);
-      emitTargetChange({kind:"task",id:command.taskId,change:"updated"});
       setDecision({command,title,processId,
         stage:command.mode==="undo"?"undone":"undo-ready",next:check.next});
+      emitTargetChange({kind:"task",id:command.taskId,change:"updated"});
     }else if(check.ok===true&&check.status==="not_recorded"){
       // Not-recorded is not proof that the old write has quiesced.
-      setInboxUncertain(generation);
       setDecision({command,title,processId,stage:"uncertain",next:null});
     }else{
-      if(check.ok===false&&check.reason==="stale")setInboxUncertain(null);
-      else setInboxUncertain(generation);
       setDecision({command,title,processId,
         stage:check.ok===false&&check.reason==="stale"?"conflict":"uncertain",next:null});
       if(check.ok===false&&check.reason==="stale")reload();
     }
-  },[reload,revoke,generation]);
+  },[reload,revoke,commandCurrent,setDecision]);
   async function submit(command:InboxClientCommand,title:string,processId:string){
-    if(inFlight.current)return;
-    const epoch=commandEpoch.current;
+    if(inFlight.current||!runtime?.known()||runtime.generation()!==generation)return;
     inFlight.current=true;
-    setDecision({command,title,processId,stage:"sending",next:null});
+    if(!setDecision({command,title,processId,stage:"sending",next:null})){
+      inFlight.current=false;return;
+    }
     try{
       const sent=await sendInboxCommand(command);
-      if(commandEpoch.current!==epoch)return;
+      if(!commandCurrent(command))return;
       if(sent.ok===false&&sent.reason==="signed-out"){
         revoke();setDecision(null);return;
       }
-      if(sent.ok===false&&sent.reason==="uncertain")setInboxUncertain(generation);
       if(sent.ok===true||(sent.ok===false&&sent.reason==="uncertain")){
         // Never replace commandId or blind-retry an ambiguous Process/Undo.
-        await confirm(command,title,processId,epoch);
+        await confirm(command,title,processId);
       }else{
-        setInboxUncertain(null);
         setDecision({command,title,processId,stage:"conflict",next:null});
         reload();
       }
-    }finally{if(commandEpoch.current===epoch)inFlight.current=false;}
+    }finally{inFlight.current=false;}
   }
   function process(item:TargetInboxItem){
-    if(inFlight.current||!page||!item.canProcess||!item.expectedRevision)return;
+    if(inFlight.current||decision&&["sending","verifying","uncertain"].includes(decision.stage)||
+        !page||!item.canProcess||!item.expectedRevision)return;
     const command:InboxClientCommand={
       commandId:crypto.randomUUID(),taskId:item.id,mode:"process",
       undoOfCommandId:null,expectedRevision:item.expectedRevision,
@@ -208,19 +210,23 @@ export default function TargetInbox({language="cs",taskDetail=false}:{language?:
   }
   async function recheck(){
     if(inFlight.current||!decision||decision.stage!=="uncertain")return;
-    const epoch=commandEpoch.current;
     inFlight.current=true;
-    try{await confirm(decision.command,decision.title,decision.processId,epoch);}
-    finally{if(commandEpoch.current===epoch)inFlight.current=false;}
+    try{await confirm(decision.command,decision.title,decision.processId);}
+    finally{inFlight.current=false;}
   }
-  if(gate==="ready"&&decision?.stage==="uncertain")return <section
+  // An unresolved command survives navigating away and back. In every phase,
+  // hide rows/count and block fresh UUIDs until the original receipt is settled.
+  const unresolved=decision&&["sending","verifying","uncertain"].includes(decision.stage);
+  if(gate==="ready"&&unresolved)return <section
     className="targetInbox" data-testid="target-inbox-uncertain"
     aria-label={speak("Cílový Inbox","Target Inbox")}>
-    <p role="alert">{speak(
-      "Výsledek posledního zápisu není potvrzen. Seznam a počet jsou skryté, dokud nelze získat aktuální stav.",
-      "The latest write is uncertain. Rows and count remain hidden pending fresh verification.")}</p>
-    <button type="button" onClick={()=>void recheck()}>
-      {speak("Ověřit původní příkaz","Verify original command")}</button>
+    <p role={decision?.stage==="uncertain"?"alert":"status"}>{decision?.stage==="uncertain"
+      ?speak("Výsledek posledního zápisu není potvrzen. Seznam a počet jsou skryté, dokud nelze získat aktuální stav.",
+        "The latest write is uncertain. Rows and count remain hidden pending fresh verification.")
+      :speak("Ověřuji původní příkaz. Seznam a počet jsou dočasně skryté.",
+        "The original command is pending. Rows and count remain temporarily hidden.")}</p>
+    {decision?.stage==="uncertain"&&<button type="button" onClick={()=>void recheck()}>
+      {speak("Ověřit původní příkaz","Verify original command")}</button>}
   </section>;
   if(!page)return <section aria-label={speak("Cílový Inbox","Target Inbox")}
     className="targetInbox" data-testid="target-inbox">
@@ -266,9 +272,9 @@ export default function TargetInbox({language="cs",taskDetail=false}:{language?:
             {speak("Dokončeno, čeká na zpracování","Completed, awaiting processing")}</span>}
         </div>
         {item.canProcess&&<button type="button"
-          disabled={inFlight.current||
+          disabled={inFlight.current||Boolean(unresolved)||
             (decision!==null&&decision.command.taskId===item.id&&
-              ["sending","verifying","uncertain","undo-ready"].includes(decision.stage))}
+              decision.stage==="undo-ready")}
           aria-label={speak("Zpracovat úkol: ","Process task: ")+item.title}
           onClick={()=>process(item)}>{speak("Zpracovat","Process")}</button>}
         {!item.canProcess&&<span className="targetInboxReadOnly">
