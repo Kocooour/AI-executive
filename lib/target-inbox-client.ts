@@ -1,5 +1,6 @@
 /** C-3a browser protocol: exact DTOs, no persistence, no legacy fallback. */
 import type {TargetInboxItem,TargetInboxTriageMode} from "./target-inbox-client-types";
+import {targetAppFetch} from "./target-app-fetch";
 
 export type InboxClientFailure="signed-out"|"stale"|"unavailable"|"feature-off";
 export type InboxClientPage={
@@ -60,7 +61,7 @@ export async function fetchTargetInbox(
   try{
     const query=new URLSearchParams({limit:String(limit)});
     if(cursor!==null)query.set("cursor",cursor);
-    const response=await fetch("/api/target-staging/inbox?"+query,{
+    const response=await targetAppFetch("/api/target-staging/inbox?"+query,{
       credentials:"same-origin",cache:"no-store",signal,
     });
     if(!response.ok)return {ok:false,reason:failure(response.status)};
@@ -75,7 +76,7 @@ function validCommand(c:InboxClientCommand):boolean{
       c.mode==="undo"&&typeof c.undoOfCommandId==="string"&&uuid.test(c.undoOfCommandId));
 }
 async function postCommand(route:string,command:InboxClientCommand,signal?:AbortSignal){
-  return fetch(route,{method:"POST",credentials:"same-origin",cache:"no-store",
+  return targetAppFetch(route,{method:"POST",credentials:"same-origin",cache:"no-store",
     headers:{"content-type":"application/json","x-lumi-target-protocol":"1"},
     body:JSON.stringify(command),signal});
 }
