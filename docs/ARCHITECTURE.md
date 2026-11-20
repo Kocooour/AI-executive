@@ -330,6 +330,12 @@ Specification revision: 2026-10-02. This section is a product and implementation
 - Keep the data contract and core portable across operating systems. There is no mandatory third-party synchronization service, model provider or separate graph database.
 - Existing task/project/area/note IDs, workspaces, recurrence, calendar scheduling, notification behavior, tombstones and task-action approval policies remain intact.
 
+### HumanWiki: osobní a rodinné znalosti (target, 2026-11-20)
+
+[Schválený produktový kontrakt a akceptace](decisions/2026-11-20-humanwiki-personal-family-memory.md) rozšiřuje existující Context Graph v2, neimplementuje další databázi ani novou autorizační vrstvu. Při znalostním claimu uchovávat odděleně **subjekt (osoba/skupina/objekt)**, provenance/role mluvčího, vlastníka/autora, jednu efektivní **Oblast**, zdrojové omezení, citlivost, revizi a nezávislé osy review/freshness/conflict. Pro odvozené wiki stránky a odpovědi neslučovat individuální preference do „rodinné“ jen podle jediné osoby, společného projektu nebo modelového souhrnu.
+
+Autorizace je stále serverová **identity + aktuální Area ACL**, omezená source-specific souhlasem, citlivostí a účelem; žádné per-claim pravidlo nesmí **rozšířit** Area ACL. Podkladové osobní údaje nebo historie zůstávají v soukromé Oblasti, pokud nebyla explicitně schválena konkrétní publikace s příjemci a aktuální policy revizí. `Vše` je čtecí sjednocení jen pro aktéra. Zákaz úniků platí i pro embeddingy, relation/backlink, counts, historické revize, AI context, cache a exporty. Jednosměrný Obsidian Markdown export má nejprve oddělené soukromé vaulty po uživateli a sdílené vaulty podle shodného skutečného členství/ACL; není kanonickým store a není důkazem možnosti revokovat offline kopie. Reálná ingestace, rodinné sdílení, obousměrný sync a externí egress zůstávají za současnými H1-real/R3/R4 a samostatnými consent/owner gate.
+
 ### Current foundation versus planned work
 
 | Area | Existing application foundation | Graph v2 requirement |
