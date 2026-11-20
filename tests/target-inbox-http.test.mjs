@@ -36,6 +36,9 @@ const {createSessionToken,sessionCookieName}=await import("./support/owner-sessi
 const {GET}=await import("../app/api/target-staging/inbox/route.ts");
 const {POST:TRIAGE}=await import("../app/api/target-staging/inbox/triage/route.ts");
 const {POST:RECEIPT}=await import("../app/api/target-staging/inbox/receipt/route.ts");
+const {readStagingTargetInboxInChild}=await import("../lib/target-staging-read-process.ts");
+const {resolveStagingHttpIdentity,stagingChildSessionConfig,verifyStagingReadBeforeRelease}=
+  await import("../lib/target-staging-http-identity.ts");
 let counter=0;const all=[];
 after(()=>{
   for(const fx of all)fx.db.close();
@@ -190,4 +193,26 @@ test("C-3a: CSRF/protocol/CAS and stale Area checks cannot commit",async()=>{
   assert.equal((await post("triage",command)).status,404);
   process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_INBOX_WRITE_ENABLED="true";
   assert.equal((await ok(post("receipt",command))).status,"not_recorded");
+});
+
+test("C-3a: late same-generation ACL revoke invalidates pinned title and count before HTTP release",async()=>{
+  const fx=fixture(),cookie=session(fx,"bob");
+  const request=new Request(base,{headers:{cookie,"x-forwarded-for":"10.61.3.7"}});
+  const identity=resolveStagingHttpIdentity(request);
+  assert.equal(identity.kind,"session");
+  const page=await readStagingTargetInboxInChild({
+    ...fx.store,ownerUserId:"alice",...stagingChildSessionConfig(identity),
+  },50,null);
+  assert.ok(page);
+  assert.ok(page.items.some(row=>row.title==="Shared Task"));
+  assert.ok(page.count>0);
+  fx.db.prepare("DELETE FROM area_members WHERE area_id='area-shared' AND user_id='bob'").run();
+  const release=verifyStagingReadBeforeRelease(
+    request,identity,fx.store,"alice",page.linearization,
+    undefined,undefined,undefined,undefined,undefined,
+    {scope:"global-all",areas:page.areaEpochs});
+  assert.equal(release,"stale","no stale titles or count can be emitted");
+  const updated=await ok(read(cookie));
+  assert.deepEqual(ids(updated),["bob-only"]);
+  assert.equal(updated.count,1);
 });
