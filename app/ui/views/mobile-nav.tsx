@@ -3,7 +3,7 @@ import { handleOverlayKeys } from "../focus";
 import { mobileDesignV1Preview, mobileMoreGroups, mobileV1MoreGroups, mobileV1MoreViews, mobileV1Tabs, mobileViews, moreViews } from "../navigation";
 import type { LumiApp } from "../use-lumi-app";
 import { ViewIcon } from "./project-icon";
-import type { ShellNavigationModel } from "../../../lib/target-shell-views";
+import { targetMobileMoreCurrentViews, type ShellNavigationModel } from "../../../lib/target-shell-views";
 
 export function MobileNav({ app, navigation, targetPlan = false, onTargetCapture, targetIncludesTasks = false }: {
   app: LumiApp; navigation?:ShellNavigationModel; targetPlan?: boolean; onTargetCapture?:()=>void; targetIncludesTasks?:boolean;
@@ -27,7 +27,7 @@ export function MobileNav({ app, navigation, targetPlan = false, onTargetCapture
   const tabs: readonly string[] = mobileDesignV1Preview ? mobileV1Tabs : mobileViews;
   const groups = mobileDesignV1Preview ? mobileV1MoreGroups : mobileMoreGroups;
   const secondary = personalV1 && navigation
-    ? [...navigation.archive,"Home","Upcoming","Notes","Search","Agents","Settings"]
+    ? [...navigation.archive,...targetMobileMoreCurrentViews(navigation),"Agents","Settings"]
     : mobileDesignV1Preview ? mobileV1MoreViews : moreViews;
   return (
     <>
@@ -106,7 +106,7 @@ export function MobileNav({ app, navigation, targetPlan = false, onTargetCapture
               <section className="mobileMoreGroup" data-testid="target-more-primary"
                 aria-labelledby="target-more-current-heading">
                 <h3 id="target-more-current-heading">{language==="cs"?"Aktuální pohledy":"Current views"}</h3>
-                {navigation.primary.filter(item=>["Home","Inbox","Upcoming","Notes","Search"].includes(item)).map(item=>
+                {targetMobileMoreCurrentViews(navigation).map(item=>
                   <button key={item} type="button" className="mobileMoreItem"
                     data-nav-view={item} aria-current={view===item?"page":undefined}
                     onClick={()=>{markMobileMoreNavigation(item);setView(item);closeDetail();setMoreOpen(false);}}>
