@@ -37,6 +37,43 @@ export function setInboxUncertain(generation:string|null):void{
   for(const fn of [...inboxUncertainListeners]){try{fn();}catch{/*no blocked peers*/}}
 }
 
+/** A paginated ACL refusal is distinct from an unresolved write. It must
+ * suppress every Inbox surface until a NEW verified session and a NEW GET.
+ * A late GET from before the refusal is never allowed to clear this fence.
+ * securityEpoch invalidates every old useInbox page key when the fence changes. */
+const inboxSecurityListeners=new Set<()=>void>();
+let inboxSecurityEpoch=0;
+let inboxRefusal:{runtime:TargetClientRuntime;generation:string}|null=null;
+export function subscribeInboxSecurity(fn:()=>void):()=>void{
+  inboxSecurityListeners.add(fn);
+  return ()=>{inboxSecurityListeners.delete(fn);};
+}
+export const inboxSecurityVersion=():number=>inboxSecurityEpoch;
+function notifyInboxSecurity():void{
+  inboxSecurityEpoch++;
+  for(const fn of [...inboxSecurityListeners]){try{fn();}catch{/* independent views */}}
+}
+export function inboxRefused(runtime:TargetClientRuntime|null,generation:string):boolean{
+  return runtime!==null&&inboxRefusal?.runtime===runtime&&
+    inboxRefusal.generation===generation;
+}
+export function markInboxRefused(runtime:TargetClientRuntime,generation:string):void{
+  if(inboxRefused(runtime,generation))return;
+  inboxRefusal={runtime,generation};
+  notifyInboxSecurity();
+}
+/** Only call after runtime.refresh()==="ok" (or a confirmed passive tick).
+ * Changing the epoch before requesting a fresh page makes a prior in-flight
+ * GET's old key unusable, even if it resolves after this session check. */
+export function clearInboxRefusedAfterSession(
+  runtime:TargetClientRuntime,generation:string,
+):void{
+  if(!runtime.known()||runtime.generation()!==generation||
+      !inboxRefused(runtime,generation))return;
+  inboxRefusal=null;
+  notifyInboxSecurity();
+}
+
 /** C-3a command handoff belongs to the tab's authenticated runtime, not a
  * transient Inbox component. Route changes must never discard an in-flight
  * UUID or make a second Process/Undo available before receipt reconciliation.
