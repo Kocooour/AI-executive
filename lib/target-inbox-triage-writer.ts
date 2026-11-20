@@ -176,7 +176,10 @@ export function writePreflightedTargetInboxTriage(
     let rows=countReceipts(),active=countActive();
     if(!Number.isSafeInteger(rows)||!Number.isSafeInteger(active))return failed();
     const reserved=()=>rows+active+(command.mode==="process"?2:0);
-    if(reserved()>TARGET_INBOX_MAX_RECEIPTS){
+    if(rows>=TARGET_INBOX_MAX_RECEIPTS/2||
+        reserved()>TARGET_INBOX_MAX_RECEIPTS){
+      // Keep previous 4096-row maintenance cadence even though we now reserve
+      // additional hard-bounded slots for an active Process's future Undo.
       // Bounded, pinned maintenance in the *same transaction*. Newer receipts
       // (90-day minimum) stay immutable, and an active Process retains its
       // original proof so Undo remains possible even long afterwards.
