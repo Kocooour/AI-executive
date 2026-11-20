@@ -9,6 +9,8 @@ import type { DatabaseSync } from "node:sqlite";
 export type TargetInboxItem = {
   id: string;
   title: string;
+  /** Completion does not change membership of the unprocessed Inbox. */
+  status: "open" | "completed";
   triageRevision: number;
   taskRevision: number;
   effectiveAreaId: string;
@@ -25,7 +27,7 @@ export type TargetInboxPageRequest = {
   afterTaskId?: string | null;
 };
 type Row = {
-  id: string; title: string; triageRevision: number; taskRevision: number;
+  id: string; title: string; status: "open" | "completed"; triageRevision: number; taskRevision: number;
   effectiveAreaId: string; areaKind: "private" | "shared";
   ownerUserId: string; memberRole: string | null;
 };
@@ -58,7 +60,7 @@ const AUTHORIZED_INBOX_FROM = [
 ].join(" ");
 
 const ROW_COLUMNS = [
-  "SELECT t.id AS id,t.title AS title,t.triage_revision AS triageRevision,",
+  "SELECT t.id AS id,t.title AS title,t.status AS status,t.triage_revision AS triageRevision,",
   "t.revision AS taskRevision,a.id AS effectiveAreaId,a.kind AS areaKind,",
   "a.owner_user_id AS ownerUserId,m.role AS memberRole",
 ].join(" ");
@@ -88,11 +90,12 @@ export function readAuthorizedTargetInboxPage(
     const items: TargetInboxItem[] = [];
     for (const row of rows.slice(0, limit)) {
       if (!row || typeof row.id !== "string" || typeof row.title !== "string" ||
+          (row.status !== "open" && row.status !== "completed") ||
           typeof row.effectiveAreaId !== "string" ||
           !Number.isSafeInteger(row.triageRevision) || row.triageRevision < 0 ||
           !Number.isSafeInteger(row.taskRevision) || row.taskRevision < 0) return null;
       items.push({
-        id: row.id, title: row.title,
+        id: row.id, title: row.title, status: row.status,
         triageRevision: row.triageRevision, taskRevision: row.taskRevision,
         effectiveAreaId: row.effectiveAreaId,
         canProcess: row.areaKind === "private" ||
