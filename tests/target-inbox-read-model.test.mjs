@@ -10,8 +10,7 @@ const legacy=path.join(root,"legacy");mkdirSync(legacy);
 const previous=process.env.AI_EXECUTIVE_DATA_DIR;
 process.env.AI_EXECUTIVE_DATA_DIR=legacy;
 const {bootstrapIsolatedTargetStore}=await import("../lib/target-store-bootstrap.ts");
-const {TARGET_INBOX_SCHEMA_SQL,TARGET_INBOX_BACKFILL_SQL}=
-  await import("../lib/target-inbox-schema.ts");
+const {TARGET_INBOX_BACKFILL_SQL}=await import("../lib/target-inbox-schema.ts");
 const {readAuthorizedTargetInboxPage}=
   await import("../lib/target-inbox-read-model.ts");
 const stage=bootstrapIsolatedTargetStore({
@@ -21,14 +20,10 @@ const db=new DatabaseSync(stage.databasePath);
 db.exec("PRAGMA foreign_keys=ON");
 const insert=db.prepare("INSERT INTO tasks(id,area_id,title) VALUES (?,?,?)");
 insert.run("old",stage.unassignedAreaId,"Preexisting target task");
-// Simulated v26 → v27 migration and backfill in one SQLite transaction.
-db.exec("BEGIN IMMEDIATE");
-try {
-  db.exec(TARGET_INBOX_SCHEMA_SQL);
-  db.exec(TARGET_INBOX_BACKFILL_SQL);
-  assert.equal(db.prepare("UPDATE metadata SET value='27' WHERE key='schema_version' AND value='26'").run().changes,1);
-  db.exec("COMMIT");
-} catch (error) {db.exec("ROLLBACK");throw error;}
+// The fresh bootstrap already creates canonical v27. Model a migrated
+// preexisting target row with its legal processed + NULL timestamp provenance.
+// The real pinned v26→v27 DDL/transaction is covered by schema-upgrade tests.
+db.prepare("UPDATE tasks SET triage_state='processed',triaged_at=NULL,triage_revision=triage_revision+1 WHERE id='old'").run();
 for(const actor of ["bob","cara"]){
   db.prepare("INSERT INTO identities(id) VALUES (?)").run(actor);
   db.prepare("INSERT INTO workspaces(id,kind,owner_user_id) VALUES (?,'personal',?)").run(actor,actor);
