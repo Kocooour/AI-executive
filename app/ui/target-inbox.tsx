@@ -70,7 +70,7 @@ function useInbox(limit:number){
     setState({kind:"loading",key});
     void fetchTargetInbox(limit,null,controller.signal).then(result=>{
       if(controller.signal.aborted)return;
-      if(result.ok){
+      if(result.ok===true){
         setState({kind:"ready",key,page:result.value});
       }else{
         setState({kind:"error",key,reason:result.reason});
@@ -97,12 +97,12 @@ function useInbox(limit:number){
     const result=await fetchTargetInbox(limit,first.nextCursor,ctrl.signal);
     if(more.current===ctrl)more.current=null;
     if(ctrl.signal.aborted)return;
-    if(!result.ok||result.value.count!==first.count||
+    if(result.ok===false||result.value.count!==first.count||
         result.value.restoreGeneration!==first.restoreGeneration||
         result.value.snapshotRevision!==first.snapshotRevision||
         result.value.nextCursor===first.nextCursor||
         result.value.items.some(item=>first.items.some(old=>old.id===item.id))){
-      setState({kind:"error",key,reason:result.ok?"stale":result.reason});
+      setState({kind:"error",key,reason:result.ok===true?"stale":result.reason});
       return;
     }
     setState(before=>before.kind==="ready"&&before.key===key?{
@@ -138,20 +138,20 @@ export default function TargetInbox({language="cs"}:{language?:Language;taskDeta
     const check=await verifyInboxCommand(command);
     // Never accept a response for a prior auth generation or signed-out actor.
     if(commandEpoch.current!==epoch)return;
-    if(!check.ok&&check.reason==="signed-out"){
+    if(check.ok===false&&check.reason==="signed-out"){
       revoke();setDecision(null);return;
     }
-    if(check.ok&&check.status==="committed"){
+    if(check.ok===true&&check.status==="committed"){
       emitTargetChange({kind:"task",id:command.taskId,change:"updated"});
       setDecision({command,title,processId,
         stage:command.mode==="undo"?"undone":"undo-ready",next:check.next});
-    }else if(check.ok&&check.status==="not_recorded"){
+    }else if(check.ok===true&&check.status==="not_recorded"){
       // Not-recorded is not proof that the old write has quiesced.
       setDecision({command,title,processId,stage:"uncertain",next:null});
     }else{
       setDecision({command,title,processId,
-        stage:!check.ok&&check.reason==="stale"?"conflict":"uncertain",next:null});
-      if(!check.ok&&check.reason==="stale")reload();
+        stage:check.ok===false&&check.reason==="stale"?"conflict":"uncertain",next:null});
+      if(check.ok===false&&check.reason==="stale")reload();
     }
   },[reload,revoke]);
   async function submit(command:InboxClientCommand,title:string,processId:string){
@@ -162,10 +162,10 @@ export default function TargetInbox({language="cs"}:{language?:Language;taskDeta
     try{
       const sent=await sendInboxCommand(command);
       if(commandEpoch.current!==epoch)return;
-      if(!sent.ok&&sent.reason==="signed-out"){
+      if(sent.ok===false&&sent.reason==="signed-out"){
         revoke();setDecision(null);return;
       }
-      if(sent.ok||sent.reason==="uncertain"){
+      if(sent.ok===true||(sent.ok===false&&sent.reason==="uncertain")){
         // Never replace commandId or blind-retry an ambiguous Process/Undo.
         await confirm(command,title,processId,epoch);
       }else{
