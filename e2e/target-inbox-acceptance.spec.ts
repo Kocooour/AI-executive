@@ -504,8 +504,10 @@ test("C-3a: committed Process receipt recovers after Area move, with no stale Un
   let moved=false;
   try{
     db.exec("PRAGMA foreign_keys=ON; PRAGMA busy_timeout=3000");
-    db.prepare("UPDATE projects SET area_id=? WHERE id=?")
-      .run(store.seed.createAreaId,movedTask.projectId);
+    // Project Area moves require a separate R2 confirmation, so move the
+    // individual task out of its project into another owned private Area.
+    db.prepare("UPDATE tasks SET project_id=NULL,area_id=?,revision=revision+1 WHERE id=?")
+      .run(store.seed.createAreaId,movedTask.taskId);
     moved=true; // same actor remains private owner of both Areas
     await page.unroute("**/api/target-staging/inbox/receipt",unavailableReceipt);
     await page.unroute("**/api/target-staging/inbox/triage",ambiguousPost);
@@ -527,8 +529,8 @@ test("C-3a: committed Process receipt recovers after Area move, with no stale Un
     await page.getByRole("button",{name:"Vrátit do Inboxu (Undo)"}).click();
     await findInboxRow(page,secondTask.taskId);
   }finally{
-    if(moved)db.prepare("UPDATE projects SET area_id=? WHERE id=?")
-      .run(store.seed.areaId,movedTask.projectId);
+    if(moved)db.prepare("UPDATE tasks SET project_id=?,area_id=NULL,revision=revision+1 WHERE id=?")
+      .run(movedTask.projectId,movedTask.taskId);
     db.close();
   }
 });
