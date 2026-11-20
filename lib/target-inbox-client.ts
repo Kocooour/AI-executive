@@ -88,7 +88,7 @@ async function commandDeadline<T>(work:(signal:AbortSignal)=>Promise<T>):Promise
   let timer:ReturnType<typeof setTimeout>|undefined;
   const timeout=new Promise<never>((_,reject)=>{
     timer=setTimeout(()=>{
-      controller.abort();reject(new Error("Inbox command deadline exceeded"));
+      controller.abort();reject(new Error()); // internal deadline; never exposed as UI text
     },INBOX_COMMAND_DEADLINE_MS);
   });
   try{return await Promise.race([work(controller.signal),timeout]);}
