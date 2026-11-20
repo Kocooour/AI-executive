@@ -161,10 +161,22 @@ export function writePreflightedTargetInboxTriage(
     const now=Date.now();
     if(!Number.isSafeInteger(now)||now<=0||
         (original&&now<original.committed_at_ms))return failed();
-    let rows=(db.prepare("SELECT COUNT(*) AS n FROM task_triage_receipts")
-      .get() as {n:number}).n;
-    if(!Number.isSafeInteger(rows))return failed();
-    if(rows>=TARGET_INBOX_MAX_RECEIPTS){
+    const countReceipts=():number=>
+      (db.prepare("SELECT COUNT(*) AS n FROM task_triage_receipts")
+        .get() as {n:number}).n;
+    const countActive=():number=>
+      (db.prepare(`SELECT COUNT(*) AS n FROM task_triage_receipts r
+        WHERE r.action='process'
+          AND NOT EXISTS (SELECT 1 FROM task_triage_receipts u
+            WHERE u.undo_of_receipt_key=r.receipt_key)
+          AND EXISTS (SELECT 1 FROM tasks t WHERE t.id=r.task_id
+            AND t.triage_state='processed'
+            AND t.triage_revision=r.triage_revision_after
+            AND t.revision=r.task_revision_after)`).get() as {n:number}).n;
+    let rows=countReceipts(),active=countActive();
+    if(!Number.isSafeInteger(rows)||!Number.isSafeInteger(active))return failed();
+    const reserved=()=>rows+active+(command.mode==="process"?2:0);
+    if(reserved()>TARGET_INBOX_MAX_RECEIPTS){
       // Bounded, pinned maintenance in the *same transaction*. Newer receipts
       // (90-day minimum) stay immutable, and an active Process retains its
       // original proof so Undo remains possible even long afterwards.
@@ -181,25 +193,15 @@ export function writePreflightedTargetInboxTriage(
           WHERE t.id=task_triage_receipts.task_id AND t.triage_state='processed'
             AND t.triage_revision=task_triage_receipts.triage_revision_after
             AND t.revision=task_triage_receipts.task_revision_after)`).run(cutoff);
-      rows=(db.prepare("SELECT COUNT(*) AS n FROM task_triage_receipts")
-        .get() as {n:number}).n;
+      rows=countReceipts();
+      active=countActive();
     }
-    // Reserve a receipt slot for Undo of EVERY currently live Process.
-    // A new Process consumes two slots of capacity: its own receipt and
-    // the reserve for its eventual Undo. Undo consumes its own reserve.
-    // This holds even if the ledger is near its hard bound; it is not safe
-    // to reclaim a live Process receipt before Undo commits.
-    const active=(db.prepare(`SELECT COUNT(*) AS n FROM task_triage_receipts r
-      WHERE r.action='process'
-        AND NOT EXISTS (SELECT 1 FROM task_triage_receipts u
-          WHERE u.undo_of_receipt_key=r.receipt_key)
-        AND EXISTS (SELECT 1 FROM tasks t WHERE t.id=r.task_id
-          AND t.triage_state='processed'
-          AND t.triage_revision=r.triage_revision_after
-          AND t.revision=r.task_revision_after)`).get() as {n:number}).n;
+    // One reserved slot for every live Process guarantees its Undo can
+    // commit, even when all other receipt history is still within 90 days.
+    // A new Process consumes two units (receipt + future Undo reserve);
+    // Undo exchanges its reserve for a receipt.
     if(!Number.isSafeInteger(rows)||!Number.isSafeInteger(active)||
-        rows>=TARGET_INBOX_MAX_RECEIPTS||
-        rows+active+(command.mode==="process"?2:0)>TARGET_INBOX_MAX_RECEIPTS)
+        rows>=TARGET_INBOX_MAX_RECEIPTS||reserved()>TARGET_INBOX_MAX_RECEIPTS)
       return failed();
     const nextState=command.mode==="process"?"processed":"unprocessed";
     const nextAt=command.mode==="process"?now:null;
