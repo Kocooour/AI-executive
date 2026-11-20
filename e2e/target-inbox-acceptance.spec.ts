@@ -4,13 +4,16 @@
  * All page fixtures come from the canonical personal-store bootstrap. */
 import {test,expect} from "./fixtures";
 import {randomUUID} from "node:crypto";
+import {DatabaseSync} from "node:sqlite";
+import path from "node:path";
 import type {Page,Route} from "@playwright/test";
 
 test.skip(process.env.LUMI_TARGET_INBOX_E2E!=="true",
   "C-3a real-store Inbox acceptance is opt-in");
 const store=JSON.parse(process.env.LUMI_E2E_TARGET_STORE||"null") as {
   directory:string;restoreGeneration:string;
-  seed:{areaTitle:string;projects:Record<string,{taskId:string;taskTitle:string}>};
+  seed:{areaId:string;createAreaId:string;areaTitle:string;
+    projects:Record<string,{projectId:string;taskId:string;taskTitle:string}>};
 }|null;
 const inbox=(page:Page)=>page.getByTestId("target-inbox");
 const count=(page:Page)=>page.getByTestId("target-inbox-count");
@@ -465,4 +468,67 @@ test("C-3a: exhausted refusal budget keeps sidebar hidden after third 409",async
   await page.waitForTimeout(800);
   await expect(count(page)).toHaveCount(0);
   await expect(page.getByTestId("target-inbox-sidebar-count")).toHaveCount(0);
+});
+
+
+test("C-3a: committed Process receipt recovers after Area move, with no stale Undo",async({page})=>{
+  test.setTimeout(110_000);
+  if(!store)throw Error("Missing isolated C-3a SQLite store");
+  await page.setViewportSize({width:1280,height:844});
+  const movedTask=store.seed.projects["1280"];
+  const secondTask=store.seed.projects["390"];
+  await openInbox(page);
+  await findInboxRow(page,movedTask.taskId);
+
+  let commands=0,receipts=0;
+  const ambiguousPost=async(route:Route)=>{
+    commands++;
+    const response=await route.fetch();
+    expect(response.status()).toBe(200); // the original Process REALLY committed
+    await route.fulfill({status:503,contentType:"application/json",
+      headers:{"cache-control":"no-store"},body:'{"error":"uncertain"}'});
+  };
+  const unavailableReceipt=async(route:Route)=>{
+    receipts++;
+    await route.fulfill({status:503,contentType:"application/json",
+      headers:{"cache-control":"no-store"},body:'{"error":"unavailable"}'});
+  };
+  await page.route("**/api/target-staging/inbox/triage",ambiguousPost);
+  await page.route("**/api/target-staging/inbox/receipt",unavailableReceipt);
+  await processAction(page,movedTask.taskTitle).click();
+  await expect(page.getByTestId("target-inbox-uncertain")).toBeVisible({timeout:15000});
+  expect(commands).toBe(1);
+  await expect.poll(()=>receipts,{timeout:15000}).toBeGreaterThan(0);
+
+  const db=new DatabaseSync(path.join(store.directory,"lumi-target.sqlite"));
+  let moved=false;
+  try{
+    db.exec("PRAGMA foreign_keys=ON; PRAGMA busy_timeout=3000");
+    db.prepare("UPDATE projects SET area_id=? WHERE id=?")
+      .run(store.seed.createAreaId,movedTask.projectId);
+    moved=true; // same actor remains private owner of both Areas
+    await page.unroute("**/api/target-staging/inbox/receipt",unavailableReceipt);
+    await page.unroute("**/api/target-staging/inbox/triage",ambiguousPost);
+    await page.getByRole("button",{name:"Ověřit původní příkaz"}).click();
+    await expect(page.getByTestId("target-inbox-uncertain")).toHaveCount(0);
+    await expect(page.getByText("Zpracování bylo potvrzeno.")).toBeVisible();
+    await expect(page.getByRole("button",{name:"Vrátit do Inboxu (Undo)"}))
+      .toHaveCount(0);
+    await expect(page.getByRole("button",{name:"Zavřít a obnovit"})).toBeVisible();
+    expect(commands).toBe(1,"reconciliation must never resend the original UUID");
+
+    // Resolve the original receipt and prove that a new unrelated command
+    // is possible in the SAME actor generation, with a genuine Undo.
+    await page.getByRole("button",{name:"Zavřít a obnovit"}).click();
+    await findInboxRow(page,secondTask.taskId);
+    await processAction(page,secondTask.taskTitle).click();
+    await expect(page.getByRole("button",{name:"Vrátit do Inboxu (Undo)"}))
+      .toBeVisible({timeout:15000});
+    await page.getByRole("button",{name:"Vrátit do Inboxu (Undo)"}).click();
+    await findInboxRow(page,secondTask.taskId);
+  }finally{
+    if(moved)db.prepare("UPDATE projects SET area_id=? WHERE id=?")
+      .run(store.seed.areaId,movedTask.projectId);
+    db.close();
+  }
 });
