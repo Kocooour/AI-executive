@@ -10,7 +10,7 @@ import { isTargetStagingSessionTokenHash, lookupLiveTargetStagingSession } from 
 import { withPinnedTargetStagingWrite } from "./target-staging-pinned-write";
 import {projectTitleWasCancelled} from "./target-project-title-cancel";
 import type { TargetStagingReadStore } from "./target-task-staging-reader";
-import { TARGET_STORE_SCHEMA_VERSION } from "./target-store-bootstrap";
+import { TARGET_STORE_SCHEMA_VERSION, TARGET_STORE_PREVIOUS_SCHEMA_VERSION } from "./target-store-bootstrap";
 
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const hash = /^[0-9a-f]{64}$/;
@@ -62,7 +62,7 @@ export function writeTargetProjectTitle(store: TargetStagingReadStore, access: T
     const pinnedBinding = projectTitlePrincipalBinding(actor,command.projectId,command.restoreGeneration);
     if (!pinnedBinding || pinnedBinding !== command.principalBinding) return denied();
     const version = db.prepare("SELECT value FROM metadata WHERE key='schema_version'").get() as {value: string} | undefined;
-    if (version?.value !== String(TARGET_STORE_SCHEMA_VERSION)) return {ok:false,reason:"write_failed"};
+    if (version?.value !== String(TARGET_STORE_SCHEMA_VERSION) && version?.value !== String(TARGET_STORE_PREVIOUS_SCHEMA_VERSION)) return {ok:false,reason:"write_failed"};
     const digest = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
     const key = digest(["lumi:project-title", actor, command.projectId, command.commandId.toLowerCase()]);
     const payload = digest([command.projectId, command.title, command.expectedRevision]);
