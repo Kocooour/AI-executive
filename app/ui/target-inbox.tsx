@@ -304,12 +304,16 @@ export default function TargetInbox({language="cs",taskDetail=false}:{language?:
         decision.stage==="conflict"?speak("Konflikt revize nebo oprávnění. Načtěte aktuální stav.","Revision or access conflict. Refresh the current state."):
         decision.stage==="denied"?speak("Přístup byl odebrán. Změna není potvrzena.","Access revoked. Change not confirmed."):
         decision.stage==="undone"?speak("Úkol byl vrácen do Inboxu.","Task returned to Inbox."):
+        decision.stage==="undo-ready"&&!decision.next?speak(
+          "Zpracování bylo potvrzeno. Po novější změně úkolu už Undo není dostupné.",
+          "Processing was confirmed. Undo is unavailable after a newer task change."):
         speak("Úkol byl zpracován.","Task processed.")}</span>
       {decision.stage==="uncertain"&&<button type="button" onClick={()=>void recheck()}>
         {speak("Ověřit potvrzení","Check receipt")}</button>}
       {decision.stage==="undo-ready"&&decision.next&&<button type="button"
         onClick={undo}>{speak("Vrátit do Inboxu (Undo)","Return to Inbox (Undo)")}</button>}
-      {(decision.stage==="conflict"||decision.stage==="undone")&&
+      {(decision.stage==="conflict"||decision.stage==="undone"||
+        (decision.stage==="undo-ready"&&!decision.next))&&
         <button type="button" onClick={()=>{setDecision(null);reload();}}>
           {speak("Zavřít a obnovit","Close and refresh")}</button>}
     </div>}
