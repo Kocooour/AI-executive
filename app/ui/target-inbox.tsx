@@ -68,7 +68,11 @@ function useInbox(limit:number){
   const {markHidden}=useTargetWake({
     hide(){abort.current?.abort();more.current?.abort();setHidden(true);
       setState({kind:"error",key,reason:"unavailable"});},
-    ready(){setHidden(false);reload();},
+    ready(result){
+      if(result==="ok"&&runtime?.known()&&runtime.generation()===generation)
+        clearInboxRefusedAfterSession(runtime,generation);
+      setHidden(false);reload();
+    },
     signedOut(){abort.current?.abort();more.current?.abort();setHidden(true);
       setState({kind:"error",key,reason:"signed-out"});},
   });
