@@ -112,8 +112,9 @@ async({page})=>{
   test.setTimeout(90_000);
   if(!store)throw Error("Missing isolated C-3a SQLite store");
   await page.setViewportSize({width:390,height:844});
-  const title=store.seed.projects["390"].taskTitle;
+  const seeded=store.seed.projects["390"],title=seeded.taskTitle;
   await openInbox(page);
+  await findInboxRow(page,seeded.taskId);
   await expect(processAction(page,title)).toBeVisible();
   let commands=0,receipts=0;
   const abortWrite=async(route:Route)=>{
@@ -272,8 +273,9 @@ test("C-3a: hung Process request times out without losing UUID after reload",asy
   test.setTimeout(100_000);
   if(!store)throw Error("Missing isolated C-3a SQLite store");
   await page.setViewportSize({width:1280,height:844});
-  const title=store.seed.projects["1280"].taskTitle;
+  const seeded=store.seed.projects["1280"],title=seeded.taskTitle;
   await openInbox(page);
+  await findInboxRow(page,seeded.taskId);
   await expect(processAction(page,title)).toBeVisible();
   let commands=0,release:()=>void=()=>{};
   const intercepted=async(route:Route)=>{
