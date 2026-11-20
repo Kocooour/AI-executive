@@ -9,6 +9,7 @@ import {openTargetDetail} from "./target-detail-state";
 import {writeTargetReadingScope} from "../../lib/target-reading-scope-nav";
 import {scopeFromSearch} from "../../lib/view-url";
 import {detailIdOk} from "../../lib/target-detail-route";
+import {emitTargetChange} from "../../lib/target-data-invalidation";
 import {lastConfirmedPrivateTask,subscribePrivateTaskCreate} from
   "../../lib/target-private-task-create-coordinator";
 
@@ -27,6 +28,9 @@ export default function TargetPrivateTaskCreatedNotice({
     const show=(taskId:string)=>{
       if(!detailIdOk(taskId))return;
       setNotice({generation,taskId});
+      // Only a confirmed target CREATE may invalidate an already-open Inbox.
+      // Each subscriber must re-read through its own current actor/ACL gate.
+      emitTargetChange({kind:"task",id:taskId,change:"updated"});
       onCreatedRef.current();
     };
     const unsubscribe=subscribePrivateTaskCreate(runtime,generation,change=>{
