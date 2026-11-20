@@ -122,7 +122,8 @@ test("C-3a: GET is default-off and no identity returns no titles or count",async
   const b=await ok(read());
   assert.deepEqual(ids(b),["alice-only","shared-task"]);
   assert.equal(b.count,2);
-  assert.deepEqual(Object.keys(b).sort(),["count","items","nextCursor","restoreGeneration"]);
+  assert.deepEqual(Object.keys(b).sort(),["count","items","nextCursor","restoreGeneration","snapshotRevision"]);
+  assert.match(b.snapshotRevision,/^[a-f0-9]{64}$/);
   assert.equal("linearization" in b,false);
   assert.equal("areaEpochs" in b,false);
   assert.equal(b.items.find(x=>x.id==="shared-task").status,"completed");
