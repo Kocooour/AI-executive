@@ -178,3 +178,45 @@ test("bounded triage ledger prunes only expired history and preserves active Pro
   assert.deepEqual(inspectIsolatedTargetStore({...fx.store,mode:"r2-model"}),
     {ok:true,mode:"r2-model",issues:[]});
 });
+
+
+test("4096 live Process receipts cannot starve Undo; new Process preserves the Undo reserve",()=>{
+  const fx=fixture(),token=fx.authority.issueWritable("alice").sessionToken;
+  const process=command(fx,token,"private");
+  assert.deepEqual(fx.authority.changeInboxTriage(token,process),{ok:true});
+  const undo=command(fx,token,"private","undo",process.commandId);
+  const other=command(fx,token,"shared");
+  const addTask=fx.db.prepare("INSERT INTO tasks(id,area_id,title) VALUES (?,?,?)");
+  const complete=fx.db.prepare("UPDATE tasks SET triage_state='processed',triaged_at=?,"+
+    "triage_revision=triage_revision+1 WHERE id=?");
+  const seed=fx.db.prepare(
+    "INSERT INTO task_triage_receipts(receipt_key,request_digest,actor_user_id,task_id,action,"+
+    "undo_of_receipt_key,restore_generation,triage_revision_before,triage_revision_after,"+
+    "task_revision_before,task_revision_after,committed_at_ms)"+
+    " VALUES (?,?,'alice',?,'process',NULL,?,0,1,0,1,?)");
+  const at=Date.now()-2*86_400_000; // active and inside the retention window
+  fx.db.exec("BEGIN IMMEDIATE");
+  try{
+    for(let i=0;i<4095;i++){
+      const id="reserved-"+i,key=(i+1).toString(16).padStart(64,"0");
+      addTask.run(id,fx.stage.unassignedAreaId,"Protected Process "+i);
+      complete.run(at,id);
+      seed.run(key,key,id,fx.stage.restoreGeneration,at);
+    }
+    fx.db.exec("COMMIT");
+  }catch(error){fx.db.exec("ROLLBACK");throw error;}
+  assert.equal(count(fx),4096);
+  assert.equal(fx.db.prepare("SELECT COUNT(*) AS n FROM tasks WHERE triage_state='processed'")
+    .get().n,4096);
+
+  // Hard cap has additional bounded headroom, but new Processes cannot use
+  // the slots reserved for the Undo of all 4096 live Processes.
+  assert.deepEqual(fx.authority.changeInboxTriage(token,other),denied("write_failed"));
+  assert.equal(read(fx,"shared").triage_state,"unprocessed");
+  assert.equal(count(fx),4096);
+  // This exact case deadlocked permanently under the old 4096-row cap.
+  assert.deepEqual(fx.authority.changeInboxTriage(token,undo),{ok:true});
+  assert.equal(read(fx,"private").triage_state,"unprocessed");
+  assert.equal(count(fx),4097);
+  assert.deepEqual(fx.authority.changeInboxTriage(token,undo),{ok:true,replayed:true});
+});
