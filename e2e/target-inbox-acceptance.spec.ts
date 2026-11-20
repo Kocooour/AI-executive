@@ -569,7 +569,7 @@ test("C-3a: real Process receipt unlocks after authorized tombstone; never Undo 
 
   // Delete through the genuine, pinned R2 task-delete writer, not an SQL
   // shortcut that bypasses tombstone/audit/revision invariants.
-  const {TargetStagingSessionAuthority}=await import("../lib/target-staging-session-authority.ts");
+  const {TargetStagingSessionAuthority}=await import("../lib/target-staging-session-authority");
   const authority=new TargetStagingSessionAuthority({
     stagingDirectory:store.directory,expectedRestoreGeneration:store.restoreGeneration,
   });
