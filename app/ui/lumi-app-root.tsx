@@ -87,7 +87,8 @@ export function LumiAppRoot({ targetHomeSummary = false, targetMyPlan, targetSco
   // Details act only on views that really render target data (never on legacy views).
   const targetViews = targetViewsFor({...shellInput,personalV1:shellNavigation.personalV1});
   const detailsOn = detailsActive(detailGates, targetViews);
-  const app = useLumiApp({ targetDetails: detailsOn, targetUnified: scopesOn, targetViews: detailsOn ? targetViews : [], preferTargetPlan: shellNavigation.personalV1 });
+  const targetInboxEnabled=shellNavigation.personalV1&&shellNavigation.byView.Inbox==="primary";
+  const app = useLumiApp({ targetDetails: detailsOn, targetUnified: scopesOn, targetViews: detailsOn ? targetViews : [], preferTargetPlan: shellNavigation.personalV1, targetInboxEnabled });
   const {
     activeWorkspace,
     activeWorkspaceId,
@@ -208,9 +209,12 @@ export function LumiAppRoot({ targetHomeSummary = false, targetMyPlan, targetSco
     );
   }
   const targetOverview=shellNavigation.personalV1&&targetHomeSummary&&(view==="Home"||view==="Upcoming");
+  // A target Inbox address may never fall through to EntityList (legacy tasks/mail).
+  // Keep fail-closed until its authorized HTTP reader and UI are connected.
+  const targetInboxActive=targetInboxEnabled&&view==="Inbox";
   const scopeSwitcher = scopeList !== null || (scopesOn && (targetPlan || targetOverview || (targetSearch && view==="Search")));
   // The legacy inspector is never fed legacy records in a target view.
-  const targetView = scopeList !== null || targetPlan || targetOverview || (targetSearch && view==="Search");
+  const targetView = scopeList !== null || targetPlan || targetOverview || targetInboxActive || (targetSearch && view==="Search");
   const legacyInspector = Boolean(app.selected) && !(scopesOn && targetView);
   // Unified target mode: views that still show legacy data are read-only (no target create/edit API yet).
   // The router internally represents target My Plan as Today; it is *not* archival.
@@ -337,6 +341,10 @@ export function LumiAppRoot({ targetHomeSummary = false, targetMyPlan, targetSco
             onCreated={closeAreaChooser} />}
           <CalendarView app={app} eventsOnly={shellNavigation.personalV1} />
           {!targetOverview && <HomeView app={app} />}
+          {targetInboxActive && <p role="status" data-testid="target-inbox-unavailable">
+            {language==="cs"?"Cílový Inbox zatím není dostupný. Staré úkoly se zde nezobrazují.":
+              "Target Inbox is not yet available. Legacy tasks are not shown here."}
+          </p>}
           {targetOverview && <TargetOverview kind={view==="Home"?"home":"upcoming"}
             language={language} taskDetail={detailGates.task} />}
           {view === "Today" && !targetPlan && <TodayTop app={app} />}
@@ -352,7 +360,7 @@ export function LumiAppRoot({ targetHomeSummary = false, targetMyPlan, targetSco
               ? <TargetScopeLists key={scopeList==="note"?scopeList+":"+noteListRevision:scopeList} kind={scopeList} language={language}
                 detail={scopeList === "project" ? detailGates.project : detailGates.note}
                 createProject={Boolean(targetCreates?.projects&&scopeList==="project")} />
-              : !targetOverview && legacySearchSurfaces.entityList
+              : !targetOverview && !targetInboxActive && legacySearchSurfaces.entityList
                 ? <EntityList app={app} />
                 : null}
           {view === "Today" && !targetPlan && <TodayFooter app={app} />}
