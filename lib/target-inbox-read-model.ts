@@ -44,7 +44,7 @@ const actorIdOk = (value: unknown): value is string =>
   typeof value === "string" && value.length >= 1 && value.length <= 120 &&
   value.trim() === value && /^[A-Za-z0-9_.:@-]+$/.test(value);
 const cursorOk = (value: unknown): value is string =>
-  typeof value === "string" && value.length >= 1 && value.length <= 256 &&
+  typeof value === "string" && value.length >= 1 && Buffer.byteLength(value,"utf8") <= 512 &&
   value.trim() === value && !/[\u0000-\u001f\u007f]/u.test(value);
 
 /**
