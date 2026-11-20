@@ -33,7 +33,7 @@ test("flags off: the shell is the legacy tree - heavy target modules are only dy
 });
 
 test("flags off: no listener, no panel and no request without a detail flag",()=>{
-  assert.match(rootSource,/useLumiApp\(\{ targetDetails: detailsOn, targetUnified: scopesOn, targetViews: detailsOn \? targetViews : \[\], preferTargetPlan: shellNavigation\.personalV1 \}\)/);
+  assert.match(rootSource,/useLumiApp\(\{ targetDetails: detailsOn, targetUnified: scopesOn, targetViews: detailsOn \? targetViews : \[\], preferTargetPlan: shellNavigation\.personalV1, targetInboxEnabled \}\)/);
   assert.match(rootSource,/const shellNavigation=targetShellNavigationFor\(\{\.\.\.shellInput,targetSearch,quickCapture:targetCapture\}\)/);
   assert.match(hookSource,/const preferTargetPlan = Boolean\(options\.preferTargetPlan\)/);
   // Details are inert unless a target list / plan exists to open them from.
@@ -42,7 +42,7 @@ test("flags off: no listener, no panel and no request without a detail flag",()=
   assert.match(read("app/ui/target-detail-state.ts"),/useSyncExternalStore\(enabled\?subscribe:noopSubscribe/);
   assert.match(rootSource,/detailsOn\s*\? detailActivation\(\{ search: detailSearch, gates: detailGates, activeTargetView \}\) : \{ state: "none" \}/);
   assert.match(rootSource,/\{detailPanel && <TargetDetailPanel/);
-  assert.match(hookSource,/export function useLumiApp\(options: \{ targetDetails\?: boolean; targetUnified\?: boolean; targetViews\?: readonly string\[\]; preferTargetPlan\?: boolean \} = \{\}\)/);
+  assert.match(hookSource,/export function useLumiApp\(options: \{ targetDetails\?: boolean; targetUnified\?: boolean; targetViews\?: readonly string\[\]; preferTargetPlan\?: boolean; targetInboxEnabled\?: boolean \} = \{\}\)/);
 });
 
 test("every legacy-address deviation in use-lumi-app is guarded by the target-details ref",()=>{
@@ -128,8 +128,12 @@ test("unification: target mode shows the target project index, never the legacy 
 test("unification: the legacy inspector is never rendered or opened in target views",()=>{
   // Authorized target Search must suppress the legacy inspector in addition
   // to the existing scoped lists and My Plan, without enabling legacy data.
-  assert.match(rootSource,/const targetView = scopeList !== null \|\| targetPlan \|\| targetOverview \|\| \(targetSearch && view==="Search"\);/);
+  assert.match(rootSource,/const targetView = scopeList !== null \|\| targetPlan \|\| targetOverview \|\| targetInboxActive \|\| \(targetSearch && view==="Search"\);/);
   assert.match(rootSource,/const targetOverview=shellNavigation\.personalV1&&targetHomeSummary&&\(view==="Home"\|\|view==="Upcoming"\);/);
+  assert.match(rootSource,/const targetInboxActive=targetInboxEnabled&&view==="Inbox";/);
+  assert.match(rootSource,/\{targetInboxActive && <TargetInbox/);
+  assert.match(rootSource,/: !targetOverview && !targetInboxActive && legacySearchSurfaces\.entityList/);
+
   assert.match(rootSource,/\{view==="Search" && targetSearch\s*\? <TargetMainTitleSearch query=\{app\.query\}/);
   assert.match(rootSource,/: <SearchResults app=\{app\} \/>\}/);
   assert.match(rootSource,/\{!\(scopesOn && targetView\) && <DetailPanel app=\{app\} \/>\}/);
