@@ -30,6 +30,7 @@ import {
   TARGET_STAGING_MAX_PUSH_TARGETS, TARGET_STAGING_MAX_PUSH_TARGETS_PER_USER,
   TARGET_STAGING_MAX_ATTENTION_DELIVERIES, TARGET_STAGING_MAX_DEVICE_DELIVERIES,
 } from "./target-store-bootstrap";
+import { TARGET_INBOX_MAX_RECEIPTS } from "./target-inbox-schema";
 
 export type TargetPreflightMode = "stage" | "r2-model";
 export type TargetPreflightCode =
@@ -505,7 +506,7 @@ export function inspectIsolatedTargetStore(
         const triage = all("SELECT receipt_key,request_digest,restore_generation,action,undo_of_receipt_key,triage_revision_before,triage_revision_after,task_revision_before,task_revision_after,committed_at_ms FROM task_triage_receipts") as
           {receipt_key:unknown;request_digest:unknown;restore_generation:unknown;action:unknown;undo_of_receipt_key:unknown;
            triage_revision_before:number;triage_revision_after:number;task_revision_before:number;task_revision_after:number;committed_at_ms:number}[];
-        if (triage.length > TARGET_STAGING_MAX_RECEIPTS || triage.some(row =>
+        if (triage.length > TARGET_INBOX_MAX_RECEIPTS || triage.some(row =>
           typeof row.receipt_key !== "string" || !sha256Hex.test(row.receipt_key) ||
           typeof row.request_digest !== "string" || !sha256Hex.test(row.request_digest) ||
           !allowedGenerations.has(row.restore_generation) ||
