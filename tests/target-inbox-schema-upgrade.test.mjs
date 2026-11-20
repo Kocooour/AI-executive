@@ -109,3 +109,52 @@ test("failed SQLite commit rolls back schema/version/backfill; explicit retry ca
   assert.equal(inspectIsolatedTargetStore({...store,mode:"r2-model"}).ok,true);
   db.close();
 });
+
+test("v27 --check detects task triage corruption even if canonical trigger DDL was restored",()=>{
+  const stage=bootstrapIsolatedTargetStore({
+    stagingDirectory:path.join(root,"corrupt-task-state"),ownerUserId:"alice",
+  });
+  const store={stagingDirectory:stage.directory,
+    expectedRestoreGeneration:stage.restoreGeneration};
+  const db=new DatabaseSync(stage.databasePath);
+  try{
+    db.prepare("INSERT INTO tasks(id,area_id,title) VALUES ('candidate',?,'Candidate')")
+      .run(stage.unassignedAreaId);
+    assert.equal(inspectIsolatedTargetStore({...store,mode:"r2-model",requiredSchemaVersion:27}).ok,true);
+    const original=db.prepare("SELECT sql FROM sqlite_schema WHERE type='trigger' AND name='task_triage_revision_guard'").get().sql;
+    assert.ok(original.includes("invalid triage transition"));
+    db.exec("DROP TRIGGER task_triage_revision_guard");
+    // Simulates an operator who bypassed a transition guard and then put
+    // canonical SQL back. DDL-only preflight would miss this invalid row.
+    db.prepare("UPDATE tasks SET triage_revision=1 WHERE id='candidate'").run();
+    db.exec(original);
+    assert.deepEqual(inspectIsolatedTargetStore({
+      ...store,mode:"r2-model",requiredSchemaVersion:27,
+    }).issues,["schema_invalid"]);
+  }finally{db.close();}
+});
+
+test("v27 preflight rejects forged processed+NULL with a non-migration triage revision",()=>{
+  const stage=bootstrapIsolatedTargetStore({
+    stagingDirectory:path.join(root,"corrupt-migration-state"),ownerUserId:"alice",
+  });
+  const store={stagingDirectory:stage.directory,
+    expectedRestoreGeneration:stage.restoreGeneration};
+  const db=new DatabaseSync(stage.databasePath);
+  try{
+    db.prepare("INSERT INTO tasks(id,area_id,title) VALUES ('candidate',?,'Candidate')")
+      .run(stage.unassignedAreaId);
+    db.prepare("UPDATE tasks SET triage_state='processed',triaged_at=100,triage_revision=1 WHERE id='candidate'").run();
+    db.prepare("UPDATE tasks SET triage_state='unprocessed',triaged_at=NULL,triage_revision=2 WHERE id='candidate'").run();
+    db.prepare("UPDATE tasks SET triage_state='processed',triaged_at=200,triage_revision=3 WHERE id='candidate'").run();
+    const original=db.prepare("SELECT sql FROM sqlite_schema WHERE type='trigger' AND name='task_triage_revision_guard'").get().sql;
+    db.exec("DROP TRIGGER task_triage_revision_guard");
+    db.prepare("UPDATE tasks SET triaged_at=NULL WHERE id='candidate'").run();
+    db.exec(original);
+    const check=inspectIsolatedTargetStore({
+      ...store,mode:"r2-model",requiredSchemaVersion:27,
+    });
+    assert.equal(check.ok,false);
+    assert.ok(check.issues.includes("schema_invalid"),JSON.stringify(check));
+  }finally{db.close();}
+});
