@@ -24,6 +24,16 @@ export const targetHomeSummaryEnabled=(env:TargetUiEnv):boolean=>
   TARGET_UI_MY_PLAN_FLAGS.every(name=>env[name]==="true")&&
   env["AI_EXECUTIVE_TARGET_STAGING_HTTP_HOME_ENABLED"]==="true";
 
+/** C-3a is enabled only after BOTH live read and pinned write/receipt
+ * endpoints opt in, in addition to C-2's complete target Home profile. */
+export const targetInboxUiEnabled=(env:TargetUiEnv):boolean=>
+  targetHomeSummaryEnabled(env)&&[
+    "AI_EXECUTIVE_TARGET_UI_INBOX_ENABLED",
+    "AI_EXECUTIVE_TARGET_STAGING_HTTP_INBOX_ENABLED",
+    "AI_EXECUTIVE_TARGET_STAGING_HTTP_WRITE_ENABLED",
+    "AI_EXECUTIVE_TARGET_STAGING_HTTP_INBOX_WRITE_ENABLED",
+  ].every(flag=>env[flag]==="true");
+
 export const TARGET_UI_SCOPES_FLAGS=[
   ...TARGET_UI_FLAGS,
   "AI_EXECUTIVE_TARGET_UI_SCOPES_ENABLED",
