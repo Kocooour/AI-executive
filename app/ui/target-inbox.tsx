@@ -115,7 +115,11 @@ function useInbox(limit:number){
       const command=inboxDecisionSnapshot(runtime,generation);
       if(command&&["sending","verifying","uncertain"].includes(command.stage))
         setState({kind:"error",key,reason:"stale"});
-      else revoke();
+      else{
+        // The next online/visible wake must reverify the session before
+        // restoring any Inbox count. A refusal is a security hide event.
+        markHidden();revoke();
+      }
       return;
     }
     setState(before=>before.kind==="ready"&&before.key===key?{
@@ -123,7 +127,7 @@ function useInbox(limit:number){
         items:[...before.page.items,...result.value.items],
         nextCursor:result.value.nextCursor},
     }:before);
-  },[page,key,limit,revoke,runtime,generation]);
+  },[page,key,limit,revoke,runtime,generation,markHidden]);
   return {page,loading,signedOut,gate:gate.kind,reload,loadMore,revoke,retry};
 }
 export default function TargetInbox({language="cs",taskDetail=false}:{language?:Language;taskDetail?:boolean}){
