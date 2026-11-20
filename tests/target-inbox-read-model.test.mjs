@@ -20,10 +20,9 @@ const db=new DatabaseSync(stage.databasePath);
 db.exec("PRAGMA foreign_keys=ON");
 const insert=db.prepare("INSERT INTO tasks(id,area_id,title) VALUES (?,?,?)");
 insert.run("old",stage.unassignedAreaId,"Preexisting target task");
-// The fresh bootstrap already creates canonical v27. Model a migrated
-// preexisting target row with its legal processed + NULL timestamp provenance.
-// The real pinned v26→v27 DDL/transaction is covered by schema-upgrade tests.
-db.prepare("UPDATE tasks SET triage_state='processed',triaged_at=NULL,triage_revision=triage_revision+1 WHERE id='old'").run();
+// This fixture is fresh v27. Only a genuine v26→v27 migration may produce
+// processed + NULL timestamp (covered separately by schema-upgrade tests).
+db.prepare("UPDATE tasks SET triage_state='processed',triaged_at=200,triage_revision=triage_revision+1 WHERE id='old'").run();
 for(const actor of ["bob","cara"]){
   db.prepare("INSERT INTO identities(id) VALUES (?)").run(actor);
   db.prepare("INSERT INTO workspaces(id,kind,owner_user_id) VALUES (?,'personal',?)").run(actor,actor);
@@ -53,9 +52,9 @@ after(()=>{
   rmSync(root,{recursive:true,force:true});
 });
 
-test("migration excludes historical target tasks and keeps every later task unprocessed",()=>{
+test("previously processed target tasks stay excluded while later tasks enter Inbox",()=>{
   const historical=db.prepare("SELECT triage_state,triaged_at,triage_revision FROM tasks WHERE id='old'").get();
-  assert.deepEqual({...historical},{triage_state:"processed",triaged_at:null,triage_revision:1});
+  assert.deepEqual({...historical},{triage_state:"processed",triaged_at:200,triage_revision:1});
   assert.equal(db.prepare("SELECT COUNT(*) AS n FROM tasks WHERE triage_state='unprocessed'").get().n,4);
   db.exec(TARGET_INBOX_BACKFILL_SQL);
   assert.equal(db.prepare("SELECT COUNT(*) AS n FROM tasks WHERE triage_state='unprocessed'").get().n,4,
@@ -122,6 +121,8 @@ test("triage trigger prevents bypassing independent state and revision",()=>{
   assert.throws(()=>db.prepare("INSERT INTO tasks(id,area_id,title,triage_state) VALUES ('bad',?,'bad','processed')")
     .run(stage.unassignedAreaId));
   assert.throws(()=>db.prepare("UPDATE tasks SET triage_state='processed' WHERE id='a-private'").run());
+  assert.throws(()=>db.prepare("UPDATE tasks SET triage_state='processed',triaged_at=NULL,triage_revision=triage_revision+1 WHERE id='a-private'").run(),
+    "post-upgrade writes cannot forge a processed-without-timestamp migration");
   db.prepare("UPDATE tasks SET triage_state='processed',triage_revision=triage_revision+1,triaged_at=200 WHERE id='a-private'").run();
   assert.equal(page("alice").count,2);
   assert.throws(()=>db.prepare("UPDATE tasks SET triage_state='unprocessed',triage_revision=triage_revision+1 WHERE id='a-private'").run(),
