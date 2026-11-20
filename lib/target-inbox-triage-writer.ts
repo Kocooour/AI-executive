@@ -7,8 +7,7 @@
  * not directly callable from HTTP without the same-origin identity boundary.
  */
 import { createHash } from "node:crypto";
-import { TARGET_STAGING_MAX_RECEIPTS } from "./target-store-bootstrap";
-import { TARGET_INBOX_RECEIPT_RETENTION_DAYS } from "./target-inbox-schema";
+import { TARGET_INBOX_RECEIPT_RETENTION_DAYS, TARGET_INBOX_MAX_RECEIPTS } from "./target-inbox-schema";
 import { withPinnedTargetStagingWrite } from "./target-staging-pinned-write";
 import { isTargetStagingSessionTokenHash,lookupLiveTargetStagingSession }
   from "./target-staging-durable-session";
@@ -165,7 +164,7 @@ export function writePreflightedTargetInboxTriage(
     let rows=(db.prepare("SELECT COUNT(*) AS n FROM task_triage_receipts")
       .get() as {n:number}).n;
     if(!Number.isSafeInteger(rows))return failed();
-    if(rows>=TARGET_STAGING_MAX_RECEIPTS){
+    if(rows>=TARGET_INBOX_MAX_RECEIPTS){
       // Bounded, pinned maintenance in the *same transaction*. Newer receipts
       // (90-day minimum) stay immutable, and an active Process retains its
       // original proof so Undo remains possible even long afterwards.
@@ -185,7 +184,23 @@ export function writePreflightedTargetInboxTriage(
       rows=(db.prepare("SELECT COUNT(*) AS n FROM task_triage_receipts")
         .get() as {n:number}).n;
     }
-    if(!Number.isSafeInteger(rows)||rows>=TARGET_STAGING_MAX_RECEIPTS)return failed();
+    // Reserve a receipt slot for Undo of EVERY currently live Process.
+    // A new Process consumes two slots of capacity: its own receipt and
+    // the reserve for its eventual Undo. Undo consumes its own reserve.
+    // This holds even if the ledger is near its hard bound; it is not safe
+    // to reclaim a live Process receipt before Undo commits.
+    const active=(db.prepare(`SELECT COUNT(*) AS n FROM task_triage_receipts r
+      WHERE r.action='process'
+        AND NOT EXISTS (SELECT 1 FROM task_triage_receipts u
+          WHERE u.undo_of_receipt_key=r.receipt_key)
+        AND EXISTS (SELECT 1 FROM tasks t WHERE t.id=r.task_id
+          AND t.triage_state='processed'
+          AND t.triage_revision=r.triage_revision_after
+          AND t.revision=r.task_revision_after)`).get() as {n:number}).n;
+    if(!Number.isSafeInteger(rows)||!Number.isSafeInteger(active)||
+        rows>=TARGET_INBOX_MAX_RECEIPTS||
+        rows+active+(command.mode==="process"?2:0)>TARGET_INBOX_MAX_RECEIPTS)
+      return failed();
     const nextState=command.mode==="process"?"processed":"unprocessed";
     const nextAt=command.mode==="process"?now:null;
     const updated=db.prepare(
