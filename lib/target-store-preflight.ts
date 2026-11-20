@@ -52,6 +52,8 @@ export interface TargetPreflightOptions {
   expectedRestoreGeneration?: string;
   /** Additional model checks for R2 planning; still NOT activation readiness. */
   mode?: TargetPreflightMode;
+  /** Optional exact-current schema requirement; upgrade preflight otherwise accepts older canonical versions. */
+  requiredSchemaVersion?: number;
 }
 
 export interface TargetPreflightResult {
@@ -185,6 +187,11 @@ export function inspectIsolatedTargetStore(
     const count = (sql: string, ...args: (string | number)[]) => Number((db.prepare(sql).get(...args) as { n: number }).n);
     try {
       if (!matchesCanonicalSchema(db)) fail("schema_invalid");
+      if (options.requiredSchemaVersion !== undefined &&
+          ((db.prepare("SELECT value FROM metadata WHERE key='schema_version'").get() as
+            {value:string}|undefined)?.value !== String(options.requiredSchemaVersion) ||
+           options.requiredSchemaVersion !== TARGET_STORE_SCHEMA_VERSION))
+        fail("schema_invalid");
     } catch { fail("schema_invalid"); }
     try {
       const quick = all("PRAGMA quick_check");
