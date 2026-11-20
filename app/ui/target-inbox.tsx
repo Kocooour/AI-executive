@@ -89,6 +89,7 @@ function useInbox(limit:number){
     if(ctrl.signal.aborted)return;
     if(!result.ok||result.value.count!==first.count||
         result.value.restoreGeneration!==first.restoreGeneration||
+        result.value.snapshotRevision!==first.snapshotRevision||
         result.value.nextCursor===first.nextCursor||
         result.value.items.some(item=>first.items.some(old=>old.id===item.id))){
       setState({kind:"error",key,reason:result.ok?"stale":result.reason});
