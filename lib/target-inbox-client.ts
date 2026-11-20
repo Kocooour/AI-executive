@@ -4,6 +4,7 @@ import type {TargetInboxItem,TargetInboxTriageMode} from "./target-inbox-client-
 export type InboxClientFailure="signed-out"|"stale"|"unavailable"|"feature-off";
 export type InboxClientPage={
   items:TargetInboxItem[];count:number;nextCursor:string|null;restoreGeneration:string;
+  snapshotRevision:string;
 };
 export type InboxClientRead={ok:true;value:InboxClientPage}|{ok:false;reason:InboxClientFailure};
 export type InboxClientWrite={ok:true}|{ok:false;reason:"conflict"|"signed-out"|"uncertain"|"feature-off"};
@@ -27,9 +28,10 @@ const failure=(status:number):InboxClientFailure=>
 export function parseInboxClientPage(raw:unknown,limit:number):InboxClientPage|null{
   if(!raw||typeof raw!=="object"||Array.isArray(raw))return null;
   const v=raw as Record<string,unknown>;
-  if(Object.keys(v).sort().join(",")!=="count,items,nextCursor,restoreGeneration"||
+  if(Object.keys(v).sort().join(",")!=="count,items,nextCursor,restoreGeneration,snapshotRevision"||
       !safe(v.count)||!Array.isArray(v.items)||v.items.length>limit||
       typeof v.restoreGeneration!=="string"||!uuid.test(v.restoreGeneration)||
+      typeof v.snapshotRevision!=="string"||!cas.test(v.snapshotRevision)||
       (v.nextCursor!==null&&!id(v.nextCursor)))return null;
   const items:TargetInboxItem[]=[];
   for(const x of v.items){
@@ -48,7 +50,7 @@ export function parseInboxClientPage(raw:unknown,limit:number):InboxClientPage|n
   if(v.nextCursor!==null&&
       (!items.length||items[items.length-1].id!==v.nextCursor||items.length!==limit))return null;
   return {items,count:v.count as number,nextCursor:v.nextCursor as string|null,
-    restoreGeneration:v.restoreGeneration};
+    restoreGeneration:v.restoreGeneration,snapshotRevision:v.snapshotRevision as string};
 }
 export async function fetchTargetInbox(
   limit=50,cursor:string|null=null,signal?:AbortSignal,
