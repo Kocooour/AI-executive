@@ -9,6 +9,8 @@
 // Minimum 90-day retention matches the other staging audit ledgers.
 // Older receipts may be compacted only if Undo lineage and live CAS stay safe.
 export const TARGET_INBOX_RECEIPT_RETENTION_DAYS = 90;
+/** Bounded ledger with headroom for Undo of every live Process. */
+export const TARGET_INBOX_MAX_RECEIPTS = 8192;
 
 export const TARGET_INBOX_SCHEMA_SQL = [
   "ALTER TABLE tasks ADD COLUMN triage_state TEXT NOT NULL DEFAULT 'unprocessed' CHECK(triage_state IN ('unprocessed','processed'));",
@@ -23,7 +25,7 @@ export const TARGET_INBOX_SCHEMA_SQL = [
   "CREATE TRIGGER task_triage_receipts_immutable_update BEFORE UPDATE ON task_triage_receipts BEGIN SELECT RAISE(ABORT,'triage receipts are immutable'); END;",
   "CREATE TRIGGER task_triage_receipts_guarded_delete BEFORE DELETE ON task_triage_receipts WHEN strftime('%s','now') IS NULL OR OLD.committed_at_ms > (CAST(strftime('%s','now') AS INTEGER)*1000 - " + TARGET_INBOX_RECEIPT_RETENTION_DAYS + "*86400000) OR EXISTS (SELECT 1 FROM task_triage_receipts child WHERE child.undo_of_receipt_key=OLD.receipt_key) OR (OLD.action='process' AND EXISTS (SELECT 1 FROM tasks t WHERE t.id=OLD.task_id AND t.triage_state='processed' AND t.triage_revision=OLD.triage_revision_after AND t.revision=OLD.task_revision_after)) BEGIN SELECT RAISE(ABORT,'triage receipt retained for Undo or active window'); END;",
   "CREATE TRIGGER task_triage_receipts_no_replace BEFORE INSERT ON task_triage_receipts WHEN EXISTS(SELECT 1 FROM task_triage_receipts WHERE receipt_key=NEW.receipt_key OR (NEW.undo_of_receipt_key IS NOT NULL AND undo_of_receipt_key=NEW.undo_of_receipt_key)) BEGIN SELECT RAISE(ABORT,'triage receipt replacement forbidden'); END;",
-  "CREATE TRIGGER task_triage_receipts_capacity BEFORE INSERT ON task_triage_receipts WHEN (SELECT COUNT(*) FROM task_triage_receipts)>=4096 BEGIN SELECT RAISE(ABORT,'triage receipt capacity reached'); END;",
+  "CREATE TRIGGER task_triage_receipts_capacity BEFORE INSERT ON task_triage_receipts WHEN (SELECT COUNT(*) FROM task_triage_receipts)>=8192 BEGIN SELECT RAISE(ABORT,'triage receipt capacity reached'); END;", 
 ].join("\n");
 
 export const TARGET_INBOX_BACKFILL_SQL =
