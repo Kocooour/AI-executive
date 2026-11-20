@@ -61,7 +61,7 @@ import { workspaceTone } from "./workspace-tone";
 
 // All client state, effects and handlers of the Lumi app shell, moved verbatim from app/page.tsx.
 // Views receive the returned object as `app` and destructure what they render.
-export function useLumiApp(options: { targetDetails?: boolean; targetUnified?: boolean; targetViews?: readonly string[]; preferTargetPlan?: boolean } = {}) {
+export function useLumiApp(options: { targetDetails?: boolean; targetUnified?: boolean; targetViews?: readonly string[]; preferTargetPlan?: boolean; targetInboxEnabled?: boolean } = {}) {
   // R3-FE-4a: both default to false, and then none of the branches below run (legacy
   // behaviour is untouched). targetDetails: a typed project/task/note address is an
   // authorized target detail, resolved by the server, never by legacy local records.
@@ -76,6 +76,9 @@ export function useLumiApp(options: { targetDetails?: boolean; targetUnified?: b
   const targetTypedNow = () => targetDetailsRef.current && isTargetAddress(window.location.search, targetViewsRef.current);
   const captureDisabled = Boolean(options.targetUnified);
   const preferTargetPlan = Boolean(options.preferTargetPlan);
+  // Until the *new target* Inbox is fully activated, C-2 archival Inbox retains
+  // legacy Gmail reading. Once activated, only LegacyInbox owns this panel.
+  const legacyMailInboxView = preferTargetPlan && options.targetInboxEnabled ? "LegacyInbox" : "Inbox";
   const captureDisabledRef = useRef(captureDisabled);
   captureDisabledRef.current = captureDisabled;
   // A user tried to change legacy data in unified mode: nothing is written, nothing reports success,
@@ -2608,10 +2611,10 @@ export function useLumiApp(options: { targetDetails?: boolean; targetUnified?: b
     projects, activeWorkspaceId, mobileDesignV1Preview ? Number.POSITIVE_INFINITY : undefined,
   );
   // Leaving the Inbox returns it to its tasks, so the sidebar entry always opens the task list.
-  useEffect(() => { if (view !== "Inbox") setInboxTab("tasks"); }, [view]);
+  useEffect(() => { if (view !== legacyMailInboxView) setInboxTab("tasks"); }, [view, legacyMailInboxView]);
   useEffect(() => { setLegacyWriteAttempt(false); }, [view]);
   // A message to open belongs to the mail tab only; it is dropped when that tab is not shown.
-  useEffect(() => { if (view !== "Inbox" || inboxTab !== "mail") setMailSourceToOpen(null); }, [view, inboxTab]);
+  useEffect(() => { if (view !== legacyMailInboxView || inboxTab !== "mail") setMailSourceToOpen(null); }, [view, inboxTab, legacyMailInboxView, authState]);
   const projectGroups = view === "Projects" ? groupProjectsByArea(projects, areas, scopedRelations) : [];
   const { notificationState, setNotificationState, notificationStatus, enableNotifications, disableNotifications,
     testNotification, saveNotificationSettings } = useNotifications({ tr, language, writesBlocked: blockLegacyWrite });
@@ -4778,6 +4781,7 @@ export function useLumiApp(options: { targetDetails?: boolean; targetUnified?: b
   );
   return {
     mailSourceToOpen,
+    legacyMailInboxView,
     inboxTab,
     setInboxTab,
     projectsAttention,
