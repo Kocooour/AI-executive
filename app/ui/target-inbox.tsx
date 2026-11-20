@@ -95,9 +95,17 @@ function useInbox(limit:number){
         setState({kind:"ready",key,page:result.value});
       }else{
         setState({kind:"error",key,reason:result.reason});
-        if(result.reason==="signed-out"&&runtime){
+        // A first-page 409 (changed ACL/policy snapshot) or 404 (Inbox
+        // disabled) revokes the authorization behind ALL Inbox surfaces.
+        // The sidebar/mobile badge is a separate useInbox(1) consumer: it
+        // must not continue showing an earlier count while this list fails.
+        // A fresh verified session + a NEW authorized GET is needed to lift
+        // this shared refusal fence; an old or late GET cannot lift it.
+        if(runtime&&(
+            result.reason==="signed-out"||result.reason==="stale"||
+            result.reason==="feature-off")){
           markInboxRefused(runtime,generation);
-          if(refusalBudgetFor(runtime).admit())
+          if(result.reason==="signed-out"&&refusalBudgetFor(runtime).admit())
             void runtime.reportRefusal("session_revoked");
         }
       }
