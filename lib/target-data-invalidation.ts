@@ -1,3 +1,6 @@
+import type {InboxClientCommand} from "./target-inbox-client";
+import type {TargetClientRuntime} from "./target-client-runtime";
+
 /** R3-FE-4b: in-memory change notice. After a committed edit/delete in the detail panel the
  * screens that show this item (scope lists, sidebar projects, My Plan rows) re-read through
  * the shared read queue. The notice carries only the kind and opaque ID; it is never
@@ -34,13 +37,10 @@ export function setInboxUncertain(generation:string|null):void{
   for(const fn of [...inboxUncertainListeners]){try{fn();}catch{/*no blocked peers*/}}
 }
 
-
 /** C-3a command handoff belongs to the tab's authenticated runtime, not a
  * transient Inbox component. Route changes must never discard an in-flight
  * UUID or make a second Process/Undo available before receipt reconciliation.
  * Memory only: no task content, commands or IDs enter browser storage. */
-import type {InboxClientCommand} from "./target-inbox-client";
-import type {TargetClientRuntime} from "./target-client-runtime";
 
 export type InboxDecision={
   command:InboxClientCommand;title:string;processId:string;
