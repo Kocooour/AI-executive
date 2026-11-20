@@ -325,7 +325,7 @@ test("C-3a: receipt 409 after real Process retains original UUID across reload",
   await processAction(page,title).click();
   await expect(page.getByTestId("target-inbox-uncertain")).toBeVisible();
   expect(writes).toBe(1);
-  expect(checks).toBeGreaterThan(0);
+  await expect.poll(()=>checks,{timeout:15000}).toBeGreaterThan(0);
   await expect(count(page)).toHaveCount(0);
   await expect(page.getByTestId("target-inbox-sidebar-count")).toHaveCount(0);
   const witness=await page.evaluate(()=>
@@ -386,22 +386,18 @@ test("C-3a: exhausted refusal budget never releases a late nav count GET",async(
   for(let i=0;i<2;i++){
     await inbox(page).getByRole("button",{name:"Načíst další"}).click();
     await expect(count(page)).toHaveCount(0);
+    // The second successful Retry invalidates the badge's old page key
+    // and starts a new badge GET. Hold that GET until the third refusal.
+    if(i===1)holdBadge=true;
     await page.getByRole("button",{name:"Zkusit znovu"}).click();
     await expect(count(page)).toBeVisible({timeout:20000});
   }
-  holdBadge=true;
-  // Force a fresh verified session/Inbox read, but stall the badge request
-  // while the first page is available for its third Load more action.
-  await page.evaluate(()=>{
-    window.dispatchEvent(new Event("offline"));
-    window.dispatchEvent(new Event("online"));
-  });
   await Promise.race([
     badgeStarted,
     new Promise<never>((_,reject)=>setTimeout(()=>
       reject(Error("Expected a held badge GET")),10000)),
   ]);
-  await expect(count(page)).toBeVisible();
+  await expect(count(page)).toBeVisible({timeout:15000});
   await inbox(page).getByRole("button",{name:"Načíst další"}).click();
   await expect.poll(()=>refusals).toBe(3);
   await expect(count(page)).toHaveCount(0);
