@@ -15,7 +15,7 @@ const headers={"cache-control":"no-store"};
 const uuid=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const actor=/^[A-Za-z0-9_.:@-]{1,120}$/;
 const refuse=(status:number,error:string)=>Response.json({error},{status,headers});
-export const targetInboxReadEnabled=()=>
+const targetInboxReadEnabled=()=>
   process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_ENABLED==="true"&&
   process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_INBOX_ENABLED==="true";
 
