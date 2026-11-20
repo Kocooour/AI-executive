@@ -225,7 +225,7 @@ export function EntityList({ app }: { app: LumiApp }) {
     <>
           {view !== "Settings" && view !== "Agents" && view !== "Context" && (
             <>
-              {view === "Inbox" && (
+              {view === app.legacyMailInboxView && (
                 <div className="inboxTabs" role="group" aria-label={tr("inboxSource")}>
                   {(["tasks", "mail"] as const).map((tab) => (
                     <button key={tab} type="button" data-inbox-tab={tab} aria-pressed={inboxTab === tab}
@@ -235,7 +235,7 @@ export function EntityList({ app }: { app: LumiApp }) {
                   ))}
                 </div>
               )}
-              {view === "Inbox" && inboxTab === "mail" ? <GmailReader key={`${activeWorkspaceId}:${app.offlineView}`} app={app} /> : (
+              {view === app.legacyMailInboxView && inboxTab === "mail" ? <GmailReader key={`${activeWorkspaceId}:${app.offlineView}:${app.authState}:${view}`} app={app} readOnly={view === "LegacyInbox" || app.legacyWritesDisabled} /> : (
               <>
               {!["Home", "Today", "Calendar", "Search", "Projects", "Areas", "Notes"].includes(view) && (
                 <div className="listControls">
