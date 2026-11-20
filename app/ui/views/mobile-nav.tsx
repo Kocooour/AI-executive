@@ -115,6 +115,7 @@ export function MobileNav({ app, navigation, targetPlan = false, onTargetCapture
                     onClick={()=>{markMobileMoreNavigation(item);setView(item);closeDetail();setMoreOpen(false);}}>
                     <span className="mobileMoreItemIcon" aria-hidden="true"><ViewIcon name={item} /></span>
                     <span>{tr(item)}</span>
+                    {item==="Inbox"&&navigation.byView.Inbox==="primary"&&<TargetInboxCount />}
                   </button>)}
               </section>
               <section className="mobileMoreGroup targetArchiveSection"
