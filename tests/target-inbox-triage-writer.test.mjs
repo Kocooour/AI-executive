@@ -136,6 +136,81 @@ test("receipt cannot leak after task moves out of the original editor's access",
     "committed");
 });
 
+test("committed Process and Undo receipts survive authorized tombstone, never revive deleted task",()=>{
+  for(const originallyUndone of [false,true]){
+    const fx=fixture(),token=fx.authority.issueWritable("alice").sessionToken;
+    const process=command(fx,token,"private");
+    assert.deepEqual(fx.authority.changeInboxTriage(token,process),{ok:true});
+    const undoPreview=fx.authority.readInboxTriageReceiptSnapshot("alice",process);
+    assert.equal(undoPreview?.status,"committed");
+    assert.ok(undoPreview?.next);
+    let last=process;
+    if(originallyUndone){
+      const undo=command(fx,token,"private","undo",process.commandId);
+      assert.deepEqual(fx.authority.changeInboxTriage(token,undo),{ok:true});
+      last=undo;
+    }
+    const latest=command(fx,token,"private");
+    const deletion={commandId:randomUUID(),taskId:"private",
+      expectedRevision:latest.expectedRevision,writeAreaId:latest.writeAreaId,
+      restoreGeneration:fx.stage.restoreGeneration};
+    assert.deepEqual(fx.authority.deleteTask(token,deletion),{ok:true},
+      "real pinned task delete must create a valid tombstone");
+    assert.equal(read(fx,"private"),undefined);
+    assert.equal(fx.db.prepare("SELECT area_id FROM task_tombstones WHERE id='private'")
+      .get()?.area_id,fx.stage.unassignedAreaId);
+    assert.equal(readTargetInboxTriageReceipt(fx.db,"alice",last),"committed");
+    const after=fx.authority.readInboxTriageReceiptSnapshot("alice",last);
+    assert.equal(after?.status,"committed");
+    assert.equal(after?.next,null,"Undo must never resurrect a deleted task");
+    assert.equal(readTargetInboxTriageReceipt(fx.db,"alice",process),"committed",
+      "the earlier Process proof is retained even after its Undo");
+    assert.equal(readTargetInboxTriageReceipt(fx.db,"alice",
+      {...last,commandId:randomUUID()}),null,
+      "a missing receipt must reveal nothing about a tombstoned task");
+    assert.equal(readTargetInboxTriageReceipt(fx.db,"bob",last),null,
+      "foreign user cannot read actor's receipt");
+    assert.equal(fx.authority.readInboxTriageReceiptSnapshot("bob",last),null);
+    assert.equal(fx.authority.changeInboxTriage(token,
+      {commandId:randomUUID(),taskId:"private",mode:"undo",
+        undoOfCommandId:process.commandId,expectedRevision:undoPreview.next.expectedRevision,
+        expectedTriageRevision:undoPreview.next.triageRevision,
+        writeAreaId:undoPreview.next.writeAreaId,restoreGeneration:fx.stage.restoreGeneration}
+    ).ok,false,"triage writer cannot Undo a tombstone");
+    assert.deepEqual(fx.authority.changeInboxTriage(token,
+      command(fx,token,"shared")),{ok:true},
+      "other Inbox commands are available after tombstone receipt recovery");
+    assert.equal(read(fx,"private"),undefined);
+  }
+});
+
+test("tombstoned Process receipt is only visible to its actor with current write ACL",()=>{
+  const fx=fixture();
+  const alice=fx.authority.issueWritable("alice").sessionToken;
+  const bob=fx.authority.issueWritable("bob").sessionToken;
+  const process=command(fx,bob,"shared");
+  assert.deepEqual(fx.authority.changeInboxTriage(bob,process),{ok:true});
+  const latest=command(fx,alice,"shared");
+  assert.deepEqual(fx.authority.deleteTask(alice,{
+    commandId:randomUUID(),taskId:"shared",expectedRevision:latest.expectedRevision,
+    writeAreaId:latest.writeAreaId,restoreGeneration:fx.stage.restoreGeneration,
+  }),{ok:true});
+  assert.equal(readTargetInboxTriageReceipt(fx.db,"bob",process),"committed");
+  const confirmed=fx.authority.readInboxTriageReceiptSnapshot("bob",process);
+  assert.equal(confirmed?.status,"committed");
+  assert.equal(confirmed?.next,null);
+  assert.equal(readTargetInboxTriageReceipt(fx.db,"alice",process),null,
+    "another shared Area admin cannot borrow Bob's UUID");
+  assert.equal(readTargetInboxTriageReceipt(fx.db,"cara",process),null,
+    "shared viewer must not receive a tombstone receipt");
+  assert.equal(readTargetInboxTriageReceipt(fx.db,"bob",
+    {...process,restoreGeneration:randomUUID()}),null);
+  fx.db.prepare("DELETE FROM area_members WHERE area_id='team-area' AND user_id='bob'").run();
+  assert.equal(readTargetInboxTriageReceipt(fx.db,"bob",process),null,
+    "tombstone receipt is denied as soon as actor loses write access");
+  assert.equal(fx.authority.readInboxTriageReceiptSnapshot("bob",process),null);
+});
+
 test("stale task/triage revisions, invalid shape and replay with another ID do not write",()=>{
   const fx=fixture(),token=fx.authority.issueWritable("alice").sessionToken;
   const cmd=command(fx,token,"private");
