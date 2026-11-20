@@ -21,6 +21,25 @@ const processAction=(page:Page,title:string)=>
   page.getByRole("button",{name:"Zpracovat úkol: "+title});
 const openInbox=(page:Page)=>page.goto("/?view=Inbox&scope=personal");
 const opaqueCount=async(page:Page)=>Number((await count(page).textContent())?.trim());
+/** Inbox keyset paging may put any ID beyond the first 50 rows.
+ * Never weaken the assertion by assuming a record is on page one. */
+async function findInboxRow(page:Page,id:string){
+  const target=row(page,id);
+  await expect(count(page)).toBeVisible();
+  for(let step=0;step<25;step++){
+    if(await target.count()){
+      await expect(target).toBeVisible();return target;
+    }
+    const more=inbox(page).getByRole("button",{name:"Načíst další"});
+    if(await more.count()===0)break;
+    const before=await page.locator(".targetInboxRow").count();
+    await more.click();
+    await expect.poll(()=>page.locator(".targetInboxRow").count(),
+      {timeout:15000}).toBeGreaterThan(before);
+  }
+  await expect(target).toBeVisible();
+  return target;
+}
 
 for(const width of [390,1280]){
   test("C-3a: real Process/receipt/Undo + detail URL, Back/Forward, Quick Capture at "+width+"px",
@@ -31,7 +50,7 @@ for(const width of [390,1280]){
     const seeded=store.seed.projects[String(width)];
     await openInbox(page);
     await expect(count(page)).toBeVisible();
-    await expect(row(page,seeded.taskId)).toBeVisible();
+    await findInboxRow(page,seeded.taskId);
     const before=await opaqueCount(page);
     expect(before).toBeGreaterThan(0);
 
@@ -43,7 +62,7 @@ for(const width of [390,1280]){
     await expect(page).toHaveURL(new RegExp("view=Inbox&taskId="+encodeURIComponent(seeded.taskId)));
     await expect(page.getByTestId("target-detail")).toContainText(seeded.taskTitle);
     await page.goBack();
-    await expect(row(page,seeded.taskId)).toBeVisible();
+    await findInboxRow(page,seeded.taskId);
     await page.goForward();
     await expect(page.getByTestId("target-detail")).toContainText(seeded.taskTitle);
     await page.reload();
@@ -57,10 +76,10 @@ for(const width of [390,1280]){
     await expect(row(page,seeded.taskId)).toHaveCount(0);
     await expect.poll(()=>opaqueCount(page)).toBe(before-1);
     await page.getByRole("button",{name:"Vrátit do Inboxu (Undo)"}).click();
-    await expect(row(page,seeded.taskId)).toBeVisible();
+    await findInboxRow(page,seeded.taskId);
     await expect.poll(()=>opaqueCount(page)).toBe(before);
     await page.reload();
-    await expect(row(page,seeded.taskId)).toBeVisible();
+    await findInboxRow(page,seeded.taskId);
 
     // The global Quick Capture writes an actual target task, which enters
     // Inbox regardless of its plan/When. No legacy local-task fallback.
@@ -82,7 +101,7 @@ for(const width of [390,1280]){
     const taskId=(confirmation.request().postDataJSON() as {taskId:string}).taskId;
     expect(taskId).toMatch(/^[0-9a-f-]{36}$/);
     await openInbox(page);
-    await expect(row(page,taskId)).toContainText(title);
+    await expect(await findInboxRow(page,taskId)).toContainText(title);
     await expect.poll(()=>opaqueCount(page)).toBe(before+1);
   });
 }
