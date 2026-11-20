@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import {test} from "node:test";
+import {createRefusalBudget} from "../lib/target-my-plan-embed.ts";
 import {randomUUID} from "node:crypto";
 import {
   inboxDecisionSnapshot,inboxUncertainSnapshot,setInboxDecision,
@@ -176,4 +177,25 @@ test("fresh same-generation verification advances page epoch before badge can re
   assert.equal(inboxRefused(runtime,g),false);
   assert.ok(inboxSecurityVersion()>oldEpoch,
     "pre-refusal page keys must not match the new authorized epoch");
+});
+
+
+test("exhausted reverify budget cannot clear a refused count with an old response key",()=>{
+  const f=runtimeFixture(),runtime=f.runtime,g="actor-one";
+  const budget=createRefusalBudget({limit:2,windowMs:60_000,now:()=>1000});
+  assert.equal(budget.admit(),true);
+  assert.equal(budget.admit(),true);
+  assert.equal(budget.admit(),false,"third refusal cannot silently schedule reverify");
+  const oldGetEpoch=inboxSecurityVersion();
+  markInboxRefused(runtime,g);
+  assert.equal(inboxRefused(runtime,g),true);
+  assert.notEqual(inboxSecurityVersion(),oldGetEpoch,
+    "late GET captured under the previous key is not a displayable count");
+  // No successful refresh/tick occurred and there is no permissible API for
+  // a generic, late read response to lift the refusal gate.
+  assert.equal(inboxRefused(runtime,g),true);
+  clearInboxRefusedAfterSession(runtime,g);
+  assert.equal(inboxRefused(runtime,g),false);
+  assert.notEqual(inboxSecurityVersion(),oldGetEpoch,
+    "fresh session verification forces a new authorized GET key");
 });
