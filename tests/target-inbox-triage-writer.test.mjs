@@ -98,6 +98,44 @@ test("Process and exact Undo are atomic, idempotent, with no changes to dueOn or
   assert.equal(audit.includes("Secret"),false);
 });
 
+test("pinned receipt confirms original Process after Area move, without stale Undo CAS",()=>{
+  const fx=fixture(),token=fx.authority.issueWritable("alice").sessionToken;
+  const process=command(fx,token,"private");
+  assert.deepEqual(fx.authority.changeInboxTriage(token,process),{ok:true});
+  const before=fx.authority.readInboxTriageReceiptSnapshot("alice",process);
+  assert.equal(before?.status,"committed");
+  assert.ok(before?.next,"unchanged Process has a valid Undo witness");
+  // The original write succeeded. A later authorized edit changes the task's
+  // effective Area while the client still holds the ORIGINAL Process UUID.
+  fx.db.prepare("UPDATE tasks SET area_id='team-area' WHERE id='private'").run();
+  assert.equal(read(fx,"private").area_id,"team-area");
+  assert.equal(readTargetInboxTriageReceipt(fx.db,"alice",process),"committed");
+  const after=fx.authority.readInboxTriageReceiptSnapshot("alice",process);
+  assert.equal(after?.status,"committed");
+  assert.equal(after?.next,null,"the old Area/revision must not create a stale Undo");
+  assert.equal(count(fx),1,"read-only reconciliation never replays the writer");
+  // The actor may now continue with an unrelated authorized command.
+  assert.deepEqual(fx.authority.changeInboxTriage(
+    token,command(fx,token,"shared")),{ok:true});
+  assert.equal(count(fx),2);
+  // The original UUID is actor-bound, not transferable to another editor.
+  assert.equal(readTargetInboxTriageReceipt(fx.db,"bob",process),null);
+});
+
+test("receipt cannot leak after task moves out of the original editor's access",()=>{
+  const fx=fixture(),bob=fx.authority.issueWritable("bob").sessionToken;
+  const process=command(fx,bob,"shared");
+  assert.deepEqual(fx.authority.changeInboxTriage(bob,process),{ok:true});
+  assert.equal(readTargetInboxTriageReceipt(fx.db,"bob",process),"committed");
+  fx.db.prepare("UPDATE tasks SET area_id=? WHERE id='shared'")
+    .run(fx.stage.unassignedAreaId);
+  assert.equal(readTargetInboxTriageReceipt(fx.db,"bob",process),null);
+  assert.equal(fx.authority.readInboxTriageReceiptSnapshot("bob",process),null);
+  // Alice can write in the new Area, but does not own Bob's command UUID.
+  assert.notEqual(fx.authority.readInboxTriageReceiptSnapshot("alice",process)?.status,
+    "committed");
+});
+
 test("stale task/triage revisions, invalid shape and replay with another ID do not write",()=>{
   const fx=fixture(),token=fx.authority.issueWritable("alice").sessionToken;
   const cmd=command(fx,token,"private");
