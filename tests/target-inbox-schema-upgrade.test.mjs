@@ -30,6 +30,8 @@ function v26Fixture(name){
     .run(stage.unassignedAreaId);
   assert.equal(inspectIsolatedTargetStore({...store,mode:"r2-model"}).ok,true,
     "v26 fixture must pass canonical preflight before upgrading");
+  assert.deepEqual(inspectIsolatedTargetStore({...store,mode:"r2-model",requiredSchemaVersion:27}).issues,
+    ["schema_invalid"],"v26 is upgradable, but must never pass C-3a current-schema --check");
   return {stage,store,db};
 }
 after(()=>{
@@ -57,6 +59,7 @@ test("explicit v26→v27 migrates exactly once, preserves existing target task a
   assert.equal(db.prepare("SELECT value FROM metadata WHERE key='restore_generation'").get().value,generation);
   assert.equal(db.prepare("SELECT value FROM metadata WHERE key='schema_version'").get().value,"27");
   assert.equal(inspectIsolatedTargetStore({...store,mode:"r2-model"}).ok,true);
+  assert.equal(inspectIsolatedTargetStore({...store,mode:"r2-model",requiredSchemaVersion:27}).ok,true);
   db.prepare("INSERT INTO tasks(id,area_id,title) VALUES ('new',?,'Captured')")
     .run(stage.unassignedAreaId);
   assert.deepEqual({...db.prepare(
