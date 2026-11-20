@@ -22,7 +22,7 @@ export const TARGET_INBOX_SCHEMA_SQL = [
   "CREATE INDEX task_triage_receipts_by_task ON task_triage_receipts(task_id,committed_at_ms);",
   "CREATE TRIGGER task_triage_receipts_immutable_update BEFORE UPDATE ON task_triage_receipts BEGIN SELECT RAISE(ABORT,'triage receipts are immutable'); END;",
   "CREATE TRIGGER task_triage_receipts_guarded_delete BEFORE DELETE ON task_triage_receipts WHEN strftime('%s','now') IS NULL OR OLD.committed_at_ms > (CAST(strftime('%s','now') AS INTEGER)*1000 - " + TARGET_INBOX_RECEIPT_RETENTION_DAYS + "*86400000) BEGIN SELECT RAISE(ABORT,'triage receipt retention window active'); END;",
-  "CREATE TRIGGER task_triage_receipts_no_replace BEFORE INSERT ON task_triage_receipts WHEN EXISTS(SELECT 1 FROM task_triage_receipts WHERE receipt_key=NEW.receipt_key) BEGIN SELECT RAISE(ABORT,'triage receipt replacement forbidden'); END;",
+  "CREATE TRIGGER task_triage_receipts_no_replace BEFORE INSERT ON task_triage_receipts WHEN EXISTS(SELECT 1 FROM task_triage_receipts WHERE receipt_key=NEW.receipt_key OR (NEW.undo_of_receipt_key IS NOT NULL AND undo_of_receipt_key=NEW.undo_of_receipt_key)) BEGIN SELECT RAISE(ABORT,'triage receipt replacement forbidden'); END;",
   "CREATE TRIGGER task_triage_receipts_capacity BEFORE INSERT ON task_triage_receipts WHEN (SELECT COUNT(*) FROM task_triage_receipts)>=4096 BEGIN SELECT RAISE(ABORT,'triage receipt capacity reached'); END;",
 ].join("\n");
 
