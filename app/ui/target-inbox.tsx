@@ -5,7 +5,9 @@ import {useTargetGeneration,useTargetRuntime} from "./target-data-provider";
 import {useTargetTick,useTargetWake} from "./use-target-revalidation";
 import {targetOverviewGate} from "../../lib/target-my-plan-embed";
 import {emitTargetChange,subscribeTargetChange,subscribeInboxDecision,inboxDecisionSnapshot,
-  setInboxDecision,clearInboxDecision,restoreInboxDecision,setInboxUncertain,type InboxDecision} from "../../lib/target-data-invalidation";
+  setInboxDecision,clearInboxDecision,restoreInboxDecision,markInboxRefused,
+  clearInboxRefusedAfterSession,inboxRefused,subscribeInboxSecurity,
+  inboxSecurityVersion,type InboxDecision} from "../../lib/target-data-invalidation";
 import {detailIdOk} from "../../lib/target-detail-route";
 import {detailRowKey,openTargetDetail} from "./target-detail-state";
 import {inboxUncertainSnapshot,subscribeInboxUncertain} from "../../lib/target-data-invalidation";
@@ -26,6 +28,9 @@ function useInbox(limit:number){
     ()=>(fn:()=>void)=>runtime?runtime.subscribeOutcome(fn):()=>{},[runtime]);
   const outcome=useSyncExternalStore(subscribe,
     ()=>runtime?runtime.lastOutcome():null,()=>null);
+  const securityEpoch=useSyncExternalStore(subscribeInboxSecurity,
+    inboxSecurityVersion,()=>0);
+  const blocked=inboxRefused(runtime,generation);
   const [refresh,setRefresh]=useState(0);
   const [hidden,setHidden]=useState(false);
   const [state,setState]=useState<State>({kind:"loading",key:""});
@@ -37,22 +42,28 @@ function useInbox(limit:number){
     // Reload alone is insufficient when a prior 401/503 left hidden=true.
     if(!runtime)return;
     const result=await runtime.refresh();
-    if(result==="ok"&&runtime.known()){
+    if(result==="ok"&&runtime.known()&&runtime.generation()===generation){
+      clearInboxRefusedAfterSession(runtime,generation);
       setHidden(false);
       reload();
     }
-  },[runtime,reload]);
+  },[runtime,generation,reload]);
   const revoke=useCallback(()=>{
     abort.current?.abort();more.current?.abort();
     setHidden(true);
-    setInboxUncertain(generation);
+    if(runtime)markInboxRefused(runtime,generation);
     setState({kind:"error",key:"",reason:"signed-out"});
     if(runtime&&refusalBudgetFor(runtime).admit())
       void runtime.reportRefusal("session_revoked");
   },[runtime,generation]);
   const gate=targetOverviewGate(runtime,generation,outcome);
-  const key=generation+":"+limit+":"+refresh;
-  useTargetTick(reload);
+  const key=generation+":"+limit+":"+refresh+":"+securityEpoch;
+  useTargetTick(()=>{
+    // A passive tick follows a successful, fresh server session check.
+    if(runtime?.known()&&runtime.generation()===generation)
+      clearInboxRefusedAfterSession(runtime,generation);
+    reload();
+  });
   useEffect(()=>subscribeTargetChange(reload),[reload]);
   const {markHidden}=useTargetWake({
     hide(){abort.current?.abort();more.current?.abort();setHidden(true);
@@ -62,7 +73,7 @@ function useInbox(limit:number){
       setState({kind:"error",key,reason:"signed-out"});},
   });
   useEffect(()=>{
-    if(gate.kind!=="ready"||hidden){
+    if(gate.kind!=="ready"||hidden||blocked){
       abort.current?.abort();more.current?.abort();
       setState({kind:"error",key,reason:gate.kind==="signed_out"?"signed-out":"unavailable"});
       return;
@@ -76,25 +87,26 @@ function useInbox(limit:number){
     void fetchTargetInbox(limit,null,controller.signal).then(result=>{
       if(controller.signal.aborted)return;
       if(result.ok===true){
-        const command=inboxDecisionSnapshot(runtime,generation);
-        if(!command||!["sending","verifying","uncertain"].includes(command.stage))
-          setInboxUncertain(null);
+        // Never lift a write/revocation fence on an unrelated or old GET.
         setState({kind:"ready",key,page:result.value});
       }else{
         setState({kind:"error",key,reason:result.reason});
-        if(result.reason==="signed-out"&&runtime&&refusalBudgetFor(runtime).admit())
-          void runtime.reportRefusal("session_revoked");
+        if(result.reason==="signed-out"&&runtime){
+          markInboxRefused(runtime,generation);
+          if(refusalBudgetFor(runtime).admit())
+            void runtime.reportRefusal("session_revoked");
+        }
       }
     }).catch(()=>{if(!controller.signal.aborted)
       setState({kind:"error",key,reason:"unavailable"});});
     return ()=>{controller.abort();more.current?.abort();};
     // gate is a derived object, not a dependency: avoid unbounded request loops.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  },[gate.kind,generation,refresh,limit,hidden,runtime,markHidden]);
-  const page=gate.kind==="ready"&&!hidden&&state.kind==="ready"&&state.key===key
+  },[gate.kind,generation,refresh,limit,hidden,runtime,markHidden,securityEpoch,blocked]);
+  const page=gate.kind==="ready"&&!hidden&&!blocked&&state.kind==="ready"&&state.key===key
     ?state.page:null;
   const loading=gate.kind==="checking"||
-    (gate.kind==="ready"&&!hidden&&
+    (gate.kind==="ready"&&!hidden&&!blocked&&
       (state.kind==="loading"||state.key!==key));
   const signedOut=gate.kind==="signed_out"||gate.kind==="refused"||
     (state.kind==="error"&&state.key===key&&state.reason==="signed-out");
@@ -180,10 +192,11 @@ export default function TargetInbox({language="cs",taskDetail=false}:{language?:
       setDecision({command,title,processId,stage:"uncertain",next:null});
     }else{
       setDecision({command,title,processId,
-        stage:check.ok===false&&check.reason==="stale"?"conflict":"uncertain",next:null});
-      if(check.ok===false&&check.reason==="stale")reload();
+        stage:"uncertain",next:null});
+      // A 409 can be read_stale_reload AFTER the original write committed.
+      // It is not an authoritative negative receipt: never discard the UUID.
     }
-  },[reload,revoke,commandCurrent,setDecision]);
+  },[revoke,commandCurrent,setDecision]);
   async function submit(command:InboxClientCommand,title:string,processId:string){
     if(inFlight.current||!runtime?.known()||runtime.generation()!==generation)return;
     inFlight.current=true;
