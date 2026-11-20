@@ -30,6 +30,7 @@ import type { PersonalWhenWindow, PersonalWhenPage } from "./target-personal-whe
 import type {AttentionAreaFilter,AttentionView} from "./target-attention-read-model";
 import type {MyPlanDayTaskPage,MyPlanTaskDayWindow,MyPlanTaskAreaFilter} from "./target-my-plan-day-task-read-model";
 import type {TargetGlobalTaskPage,TargetGlobalTaskScope} from "./target-global-task-read-model";
+import type {TargetInboxPage} from "./target-inbox-read-model";
 import type {TargetGlobalProjectPage} from "./target-global-project-read-model";
 import type {TargetGlobalNotePage} from "./target-global-note-read-model";
 import type {TargetGlobalCombinedPage,GlobalCombinedPositions} from "./target-global-combined-read-model";
@@ -55,6 +56,7 @@ import {
   listPreflightedPrivateProjectsAtOffset, readPreflightedPrivateProjectDetail,
   readPreflightedPrivateTaskTitleAudit,
   readPreflightedScopedTaskPage, readPreflightedSharedTargetTask, readPreflightedChangeFeedPage,
+  readPreflightedTargetInboxPage,
   readPreflightedAuthorizedProjectTasks, readPreflightedProjectTitlePreview, readPreflightedAuthorizedProjectIndex,
   readPreflightedMyPlanHomeSummary,
   readPreflightedScopedHomeSummary,
@@ -452,6 +454,17 @@ export class TargetStagingSessionAuthority {
     } catch {
       return null;
     }
+  }
+
+  /** C-3a: one read-only pinned, actor-bound Inbox page and count. The caller
+   * MUST live-revalidate its complete Area witness before releasing content. */
+  readInboxPage(actorUserId:string,limit:number,afterTaskId?:string|null):TargetInboxPage|null{
+    if(this.#closed||!Number.isInteger(limit)||limit<1||limit>100)return null;
+    try{
+      const credential=this.#oneShotReadCredential(actorUserId);
+      return credential?readPreflightedTargetInboxPage(this.#store,credential,
+        {limit,afterTaskId}):null;
+    }catch{return null;}
   }
 
   /** R2d.3e: no HTTP route; caller must perform live-release Area guard. */
