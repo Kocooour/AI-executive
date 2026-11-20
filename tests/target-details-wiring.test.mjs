@@ -187,7 +187,7 @@ test("the panel reads only for a server-confirmed generation and routes 401 thro
   assert.match(hooks,/createWakeMachine\(\{/);
   assert.match(hooks,/refresh:\(\)=>runtime\?runtime\.refresh\(\)/);
   const machine=read("lib/target-wake.ts");
-  assert.match(machine,/if\(result==="signed_out"\)deps\.handlers\(\)\.signedOut\(\);\s*\n\s*else deps\.handlers\(\)\.ready\(\);/);
+  assert.match(machine,/if\(result==="signed_out"\)deps\.handlers\(\)\.signedOut\(\);\s*\n\s*else deps\.handlers\(\)\.ready\(result\);/);
   assert.match(panel,/signedOut:\(\)=>setState\(\{kind:"error",reason:"signed-out"\}\)/);
   assert.match(panel,/useTargetWake\(\{/);
   assert.match(panel,/sessionRef\.current\?\.suspend\(\)/);
