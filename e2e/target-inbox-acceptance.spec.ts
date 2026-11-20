@@ -69,6 +69,9 @@ for(const width of [390,1280]){
     await expect(page.getByTestId("target-detail")).toContainText(seeded.taskTitle);
     await page.getByTestId("target-detail").locator("button.inspectorClose").click();
     await expect(page.getByTestId("target-detail")).toHaveCount(0);
+    // Reload/Back/Forward return to the first 50-row page. Find the seeded
+    // task again before attempting Process on a later keyset page.
+    await findInboxRow(page,seeded.taskId);
 
     // Process changes triage only; the existing task disappears from the
     // authorized count, Undo is linked to the *receipt-confirmed* Process.
@@ -234,7 +237,8 @@ for(const width of [390,1280]){
     await expect(inbox(page).getByRole("button",{name:"Načíst další"})).toBeVisible();
     if(width===390){
       await page.locator('[data-nav-view="More"]').first().click();
-      await expect(page.getByTestId("target-inbox-sidebar-count")).toBeVisible();
+      await expect(page.locator('[data-testid="target-more-primary"] [data-testid="target-inbox-sidebar-count"]'))
+        .toBeVisible();
       await page.locator(".mobileMoreClose").click();
     }else await expect(page.getByTestId("target-inbox-sidebar-count")).toBeVisible();
 
