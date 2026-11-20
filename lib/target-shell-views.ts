@@ -111,3 +111,9 @@ export function targetMobileMoreCurrentViews(navigation:ShellNavigationModel):Sh
   return navigation.primary.filter(view=>
     view!=="MyPlanPreview"&&view!=="Calendar"&&view!=="Projects");
 }
+
+/** Historical Gmail belongs to the former Inbox until *target* Inbox is activated.
+ * Once active, new Inbox never has the old Gmail or legacy create action. */
+export function legacyInboxMailViewFor(personalV1:boolean,targetInboxEnabled:boolean):"Inbox"|"LegacyInbox"{
+  return personalV1&&targetInboxEnabled?"LegacyInbox":"Inbox";
+}
