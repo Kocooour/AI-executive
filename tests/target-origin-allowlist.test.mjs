@@ -87,7 +87,7 @@ test("all target write routes use the shared target Origin guard (direct or dele
   // C-3a adds the authenticated Inbox triage and receipt POST routes.
   for(const route of ["inbox/triage/route.ts","inbox/receipt/route.ts"]){
     assert.match(readFileSync(path.join(targetRoutes,route),"utf8"),
-      /requireTargetSameOrigin\\(request\\)/);
+      /requireTargetSameOrigin\(request\)/);
   }
   assert.equal(direct,28);
   assert.equal(delegated,12);
