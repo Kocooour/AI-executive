@@ -181,6 +181,26 @@ test("C-3a: Process, idempotence, receipt, atomic Undo, completion-independent",
   assert.equal((await post("triage",{...undo,commandId:randomUUID()})).status,409);
 });
 
+test("C-3a: real pinned HTTP receipt survives Area move; no stale Undo or ACL leak",async()=>{
+  const fx=fixture();
+  const first=await ok(read());
+  const process=cmd(first.items.find(x=>x.id==="shared-task"),fx.store);
+  assert.deepEqual(await ok(post("triage",process)),{ok:true});
+  assert.equal((await ok(post("receipt",process))).status,"committed");
+  fx.db.prepare("UPDATE tasks SET area_id=? WHERE id='shared-task'")
+    .run(fx.stage.unassignedAreaId);
+  const recovered=await ok(post("receipt",process));
+  assert.equal(recovered.status,"committed");
+  assert.equal(recovered.next,null,
+    "the original Process is proven, but the moved task cannot use stale Undo");
+  const newer=cmd((await ok(read())).items.find(x=>x.id==="alice-only"),fx.store);
+  assert.deepEqual(await ok(post("triage",newer)),{ok:true},
+    "reconciliation does not block fresh authorized commands");
+  // An old shared editor must not read the receipt after it moves private.
+  const bob=session(fx,"bob");
+  assert.notEqual((await post("receipt",process,bob)).status,200);
+});
+
 test("C-3a: CSRF/protocol/CAS and stale Area checks cannot commit",async()=>{
   const fx=fixture(),body=await ok(read());
   const row=body.items[0];
