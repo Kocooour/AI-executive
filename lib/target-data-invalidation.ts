@@ -40,7 +40,9 @@ export function setInboxUncertain(generation:string|null):void{
 /** C-3a command handoff belongs to the tab's authenticated runtime, not a
  * transient Inbox component. Route changes must never discard an in-flight
  * UUID or make a second Process/Undo available before receipt reconciliation.
- * Memory only: no task content, commands or IDs enter browser storage. */
+ * A minimal original-command recovery witness is stored in tab-scoped
+ * sessionStorage before dispatch so a reload cannot silently create a new UUID.
+ * No task titles, sessions, tokens or authorization data are persisted. */
 
 export type InboxDecision={
   command:InboxClientCommand;title:string;processId:string;
