@@ -130,8 +130,11 @@ test("closing the unavailable overlay returns to the current view's own parent a
   assert.equal(parentSearchForDetail(null,"all","?view=Notes&noteId=a&noteId=b"),"?view=Notes");
   assert.equal(parentSearchForDetail(null,"shared","?view=MyPlanPreview&taskId="),"?view=MyPlanPreview&scope=shared");
   assert.equal(parentSearchForDetail(null,"all","?view=Projects&projectId=x%00"),"?view=Projects");
-  // A view that is not a detail view falls back to Projects (never to a legacy view).
-  assert.equal(parentSearchForDetail(null,"all","?view=Inbox&taskId=x"),"?view=Projects");
+  // C-3a target Inbox is now a detail origin; closing an unavailable typed
+  // address returns to its Inbox list rather than an unrelated project.
+  assert.equal(parentSearchForDetail(null,"all","?view=Inbox&taskId=x"),"?view=Inbox");
+  // A view outside the typed target route set still falls back to Projects.
+  assert.equal(parentSearchForDetail(null,"all","?view=Today&taskId=x"),"?view=Projects");
   assert.equal(viewOfSearch("?view=Notes&noteId=1&scope=shared"),"Notes");
 });
 
