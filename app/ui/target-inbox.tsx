@@ -28,6 +28,16 @@ function useInbox(limit:number){
   const abort=useRef<AbortController|null>(null);
   const more=useRef<AbortController|null>(null);
   const reload=useCallback(()=>setRefresh(n=>n+1),[]);
+  const retry=useCallback(async()=>{
+    // Explicitly revalidate before showing a formerly hidden actor's data.
+    // Reload alone is insufficient when a prior 401/503 left hidden=true.
+    if(!runtime)return;
+    const result=await runtime.refresh();
+    if(result==="ok"&&runtime.known()){
+      setHidden(false);
+      reload();
+    }
+  },[runtime,reload]);
   const revoke=useCallback(()=>{
     abort.current?.abort();more.current?.abort();
     setHidden(true);
@@ -101,7 +111,7 @@ function useInbox(limit:number){
         nextCursor:result.value.nextCursor},
     }:before);
   },[page,key,limit]);
-  return {page,loading,signedOut,gate:gate.kind,reload,loadMore,revoke};
+  return {page,loading,signedOut,gate:gate.kind,reload,loadMore,revoke,retry};
 }
 type Decision={
   command:InboxClientCommand;title:string;processId:string;
@@ -109,7 +119,7 @@ type Decision={
   next:{expectedRevision:string;triageRevision:number;writeAreaId:string}|null;
 };
 export default function TargetInbox({language="cs"}:{language?:Language;taskDetail?:boolean}){
-  const {page,loading,signedOut,gate,reload,loadMore,revoke}=useInbox(50);
+  const {page,loading,signedOut,gate,reload,loadMore,revoke,retry}=useInbox(50);
   const [decision,setDecision]=useState<Decision|null>(null);
   const inFlight=useRef(false);
   const commandEpoch=useRef(0);
@@ -209,7 +219,7 @@ export default function TargetInbox({language="cs"}:{language?:Language;taskDeta
       signedOut?speak("Přístup k Inboxu je nutné znovu ověřit.","Inbox access needs re-verification."):
       speak("Inbox nelze bezpečně načíst. Staré položky nejsou zobrazeny.",
         "Inbox cannot be safely loaded. No old rows are displayed.")}</p>
-    {!loading&&<button type="button" onClick={reload}>{speak("Zkusit znovu","Retry")}</button>}
+    {!loading&&<button type="button" onClick={()=>void retry()}>{speak("Zkusit znovu","Retry")}</button>}
   </section>;
   return <section className="targetInbox" data-testid="target-inbox"
     aria-label={speak("Cílový Inbox","Target Inbox")}>
