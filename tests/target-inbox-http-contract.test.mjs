@@ -29,7 +29,7 @@ test("C-3a: worker parser binds actor/Area witness; browser never sees it",()=>{
   assert.equal(internal.items[0].status,"completed");
   assert.equal(internal.linearization.actorUserId,"alice");
   const client={items:internal.items,count:internal.count,nextCursor:null,
-    restoreGeneration:command.restoreGeneration};
+    restoreGeneration:command.restoreGeneration,snapshotRevision:"f".repeat(64)};
   assert.deepEqual(parseInboxClientPage(client,50),client);
   assert.equal(parseInboxClientPage({...client,linearization},50),null);
   assert.equal(parseInboxClientPage({...client,areaEpochs:[epoch]},50),null);
