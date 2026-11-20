@@ -147,8 +147,16 @@ async({page})=>{
   expect(commands).toBe(1);
   await expect.poll(()=>receipts,{timeout:15000}).toBeGreaterThanOrEqual(3);
   await page.unroute("**/api/target-staging/inbox/triage",abortWrite);
+  const saved=await page.evaluate(()=>sessionStorage.getItem("lumi:target-inbox-command:v1"));
+  expect(saved).toContain("commandId");
+  expect(saved).not.toContain(title);
   await page.reload();
-  await expect(processAction(page,title)).toBeVisible();
+  // A reload must NOT turn an ambiguous original command into a fresh UUID.
+  await expect(page.getByTestId("target-inbox-uncertain")).toBeVisible();
+  await expect(processAction(page,title)).toHaveCount(0);
+  await page.getByRole("button",{name:"Ověřit původní příkaz"}).click();
+  await expect(page.getByTestId("target-inbox-uncertain")).toBeVisible();
+  expect(commands).toBe(1);
 });
 
 for(const width of [390,1280]){
@@ -212,3 +220,80 @@ for(const width of [390,1280]){
     await expect(page.locator(".targetInboxRow").first()).toBeVisible();
   });
 }
+
+
+for(const width of [390,1280]){
+  test("C-3a: paging refusal hides both Inbox and navigation count ("+width+"px)",
+  async({page})=>{
+    test.setTimeout(90_000);
+    if(!store)throw Error("Missing isolated C-3a SQLite store");
+    await page.setViewportSize({width,height:844});
+    await openInbox(page);
+    await expect(count(page)).toBeVisible();
+    await expect(inbox(page).getByRole("button",{name:"Načíst další"})).toBeVisible();
+    if(width===390){
+      await page.locator('[data-nav-view="More"]').first().click();
+      await expect(page.getByTestId("target-inbox-sidebar-count")).toBeVisible();
+      await page.locator(".mobileMoreClose").click();
+    }else await expect(page.getByTestId("target-inbox-sidebar-count")).toBeVisible();
+
+    // Keep revalidation failing after a simulated revoked cursor response,
+    // proving an old sidebar/mobile badge does NOT survive this boundary.
+    const failSession=async(route:Route)=>{
+      await route.fulfill({status:503,contentType:"application/json",
+        headers:{"cache-control":"no-store"},body:'{"error":"unavailable"}'});
+    };
+    const status=width===390?403:409;
+    const failPage=async(route:Route)=>{
+      if(!new URL(route.request().url()).searchParams.has("cursor")){
+        await route.continue();return;
+      }
+      await route.fulfill({status,contentType:"application/json",
+        headers:{"cache-control":"no-store"},body:'{"error":"stale"}'});
+    };
+    await page.route("**/api/target-staging/session",failSession);
+    await page.route("**/api/target-staging/inbox?*",failPage);
+    await inbox(page).getByRole("button",{name:"Načíst další"}).click();
+    await expect(count(page)).toHaveCount(0);
+    await expect(page.locator(".targetInboxRow")).toHaveCount(0);
+    if(width===390){
+      await page.locator('[data-nav-view="More"]').first().click();
+      await expect(page.getByTestId("target-inbox-sidebar-count")).toHaveCount(0);
+      await page.locator(".mobileMoreClose").click();
+    }else await expect(page.getByTestId("target-inbox-sidebar-count")).toHaveCount(0);
+    await page.unroute("**/api/target-staging/session",failSession);
+    await page.unroute("**/api/target-staging/inbox?*",failPage);
+    await page.evaluate(()=>window.dispatchEvent(new Event("online")));
+    await expect(count(page)).toBeVisible({timeout:15000});
+  });
+}
+
+test("C-3a: hung Process request times out without losing UUID after reload",async({page})=>{
+  test.setTimeout(100_000);
+  if(!store)throw Error("Missing isolated C-3a SQLite store");
+  await page.setViewportSize({width:1280,height:844});
+  const title=store.seed.projects["1280"].taskTitle;
+  await openInbox(page);
+  await expect(processAction(page,title)).toBeVisible();
+  let commands=0,release:()=>void=()=>{};
+  const intercepted=async(route:Route)=>{
+    commands++;
+    await new Promise<void>(resolve=>{release=resolve;});
+    try{await route.fulfill({status:503,contentType:"application/json",
+      body:'{"error":"unavailable"}'});}catch{/* request has timed out */}
+  };
+  await page.route("**/api/target-staging/inbox/triage",intercepted);
+  await processAction(page,title).click();
+  // Transport deadline includes both fetch and an indefinitely stalled body.
+  await expect(page.getByTestId("target-inbox-uncertain"))
+    .toBeVisible({timeout:25_000});
+  expect(commands).toBe(1);
+  await page.reload();
+  await expect(page.getByTestId("target-inbox-uncertain")).toBeVisible();
+  await expect(processAction(page,title)).toHaveCount(0);
+  await page.getByRole("button",{name:"Ověřit původní příkaz"}).click();
+  await expect(page.getByTestId("target-inbox-uncertain")).toBeVisible();
+  expect(commands).toBe(1);
+  release();
+  await page.unroute("**/api/target-staging/inbox/triage",intercepted);
+});
