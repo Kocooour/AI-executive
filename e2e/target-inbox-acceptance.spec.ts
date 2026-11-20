@@ -237,6 +237,71 @@ for(const width of [390,1280]){
 }
 
 
+// A successful limit=1 GET may have already mounted the navigation badge
+// while the main Inbox (limit=50) has not been opened. The first-page response
+// must revoke that independently cached count on either an ACL/policy 409 or
+// a disabled Inbox 404, and never revive it from a late old GET.
+for(const width of [390,1280]){
+  for(const status of [409,404]){
+    test("C-3a: first-page "+status+" hides already-visible navigation count ("+
+      width+"px)",async({page})=>{
+      test.setTimeout(90_000);
+      if(!store)throw Error("Missing isolated C-3a SQLite store");
+      await page.setViewportSize({width,height:844});
+      await page.goto("/?view=Home&scope=personal");
+      if(width===390){
+        await page.locator('[data-nav-view="More"]').first().click();
+        await expect(page.locator(
+          '[data-testid="target-more-primary"] [data-testid="target-inbox-sidebar-count"]',
+        )).toBeVisible({timeout:15000});
+      }else await expect(page.locator(
+        'aside [data-testid="target-inbox-sidebar-count"]',
+      )).toBeVisible({timeout:15000});
+
+      let refused=0;
+      const firstPageRefusal=async(route:Route)=>{
+        const params=new URL(route.request().url()).searchParams;
+        if(params.get("limit")==="50"&&!params.has("cursor")){
+          refused++;
+          await route.fulfill({status,contentType:"application/json",
+            headers:{"cache-control":"no-store"},
+            body:JSON.stringify({error:status===409?"read_stale_reload":"Not found"})});
+        }else await route.continue(); // badge had a successful authorized GET
+      };
+      await page.route("**/api/target-staging/inbox?*",firstPageRefusal);
+      if(width===390){
+        await page.locator(
+          '[data-testid="target-more-primary"] [data-nav-view="Inbox"]',
+        ).click();
+      }else await page.locator('aside [data-nav-view="Inbox"]').click();
+      await expect.poll(()=>refused,{timeout:15000}).toBeGreaterThan(0);
+      await expect(count(page)).toHaveCount(0);
+      await expect(page.locator(".targetInboxRow")).toHaveCount(0);
+      await expect(page.getByRole("button",{name:"Zkusit znovu"})).toBeVisible();
+      if(width===390){
+        await page.locator('[data-nav-view="More"]').first().click();
+        await expect(page.getByTestId("target-inbox-sidebar-count")).toHaveCount(0);
+        await page.locator(".mobileMoreClose").click();
+      }else await expect(page.getByTestId("target-inbox-sidebar-count")).toHaveCount(0);
+
+      // A fresh session verification and a new authorized first-page GET
+      // restore both the list and badge, never the pre-refusal count cache.
+      await page.unroute("**/api/target-staging/inbox?*",firstPageRefusal);
+      await page.getByRole("button",{name:"Zkusit znovu"}).click();
+      await expect(count(page)).toBeVisible({timeout:15000});
+      if(width===390){
+        await page.locator('[data-nav-view="More"]').first().click();
+        await expect(page.locator(
+          '[data-testid="target-more-primary"] [data-testid="target-inbox-sidebar-count"]',
+        )).toBeVisible({timeout:15000});
+        await page.locator(".mobileMoreClose").click();
+      }else await expect(page.getByTestId(
+        "target-inbox-sidebar-count",
+      )).toBeVisible({timeout:15000});
+    });
+  }
+}
+
 for(const width of [390,1280]){
   test("C-3a: paging refusal hides both Inbox and navigation count ("+width+"px)",
   async({page})=>{
