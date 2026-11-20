@@ -75,6 +75,14 @@ export default function TargetPrivateTaskAreaChooser({
   const [message,setMessage]=useState("");
   const [revision,setRevision]=useState(0);
   const previewRef=useRef<AbortController|null>(null);
+  // A hide/suspend requires exactly one replacement Area read after a fresh
+  // successful session. Both the runtime resume and wake hook can signal it.
+  const wakeReadPending=useRef(false);
+  // A pending wake belongs to the generation which observed the hide.
+  // Never replay its ticket against a newly authorized generation.
+  const wakeReadGeneration=useRef(generation);
+  const areaReadGeneration=useRef(generation);
+  const wakeEpoch=useRef(0);
   const mounted=useRef(true);
   const serial=useRef(0);
    const closeRef=useRef<HTMLButtonElement>(null);
@@ -96,6 +104,14 @@ export default function TargetPrivateTaskAreaChooser({
     });
   },[runtime,generation,language]);
   useEffect(()=>{
+    // A runtime.refresh() may rotate A → B while an old wake callback is
+    // pending. B's effect independently starts a fresh catalog read, so
+    // invalidating A's ticket prevents a delayed callback aborting that read.
+    if(wakeReadGeneration.current!==generation){
+      wakeEpoch.current++;
+      wakeReadPending.current=false;
+      wakeReadGeneration.current=generation;
+    }
     setName("");setDraftGeneration(generation);setChosen("");
     setMessage("");setPhase("idle");
   },[generation]);
@@ -103,7 +119,31 @@ export default function TargetPrivateTaskAreaChooser({
     return runtime?.known()===true&&runtime.generation()===generation&&
       document.visibilityState==="visible"&&navigator.onLine;
   }
+  function restartAfterWake(stillActive:()=>boolean=()=>true){
+    if(!runtime||!wakeReadPending.current||!live()||
+      wakeReadGeneration.current!==generation)return;
+    const epoch=wakeEpoch.current;
+    // Never infer authorization from known() or an earlier lastOutcome().
+    // Each replacement must follow an actually completed fresh session.
+    void runtime.refresh().then(async verified=>{
+      if(verified!=="ok")return;
+      // Complete the network response before starting the dependent private
+      // GET. Even after JSON EOF, the browser can deliver Network.loadingFinished
+      // on the next task; do not overlap that transport boundary with Area.
+      await new Promise<void>(resolve=>setTimeout(resolve,16));
+      if(!stillActive()||!mounted.current||!wakeReadPending.current||
+        wakeReadGeneration.current!==generation||
+        epoch!==wakeEpoch.current||!live())return;
+      // Consume the wake before triggering a new read: the other callback
+      // can finish its own verification later without aborting this GET.
+      wakeReadPending.current=false;
+      setNonce(v=>v+1);
+    }).catch(()=>{});
+  }
   function hide(){
+    wakeEpoch.current++;
+    wakeReadGeneration.current=generation;
+    wakeReadPending.current=true;
     serial.current++;
     previewRef.current?.abort();
     setChosen("");setName("");setDraftGeneration(generation);
@@ -120,12 +160,11 @@ export default function TargetPrivateTaskAreaChooser({
       setMessage(pending?c.cancelFailed:"");
     }
   }
-  useTargetWake({
+  const {markHidden}=useTargetWake({
     hide:()=>flushSync(hide),
     ready:()=>{
-      if(live()){
-        setNonce(v=>v+1);
-       }else hide();
+      if(live())restartAfterWake();
+      else hide();
     },
     signedOut:()=>{hide();setAreas({kind:"signed-out",generation});},
   });
@@ -138,14 +177,49 @@ export default function TargetPrivateTaskAreaChooser({
     const lifetime=new AbortController();
     let active=true;
     let inFlight:AbortController|null=null;
+    let suspended=false;
     const stop=()=>{lifetime.abort();inFlight?.abort();};
     setAreas({kind:"loading",generation});setChosen("");
     if(!runtime?.known()||runtime.generation()!==generation||
       document.visibilityState!=="visible"||!navigator.onLine){
       setAreas({kind:"unavailable",generation});
+      // When the editor mounts while already offline/hidden, this effect
+      // cannot register a reader, and the new wake hook missed that hide.
+      // Arm its wake machine now; only a fresh verified session after the
+      // return to visible+online may create the replacement effect.
+      if(runtime?.known()&&runtime.generation()===generation&&
+        (document.visibilityState!=="visible"||!navigator.onLine)){
+        wakeEpoch.current++;
+        wakeReadGeneration.current=generation;
+        wakeReadPending.current=true;
+        markHidden();
+      }
       return ()=>{active=false;stop();};
     }
-    const unregister=runtime.register({dispose:stop,suspend:stop});
+    // Rotation updates the generation as soon as the session body is parsed;
+    // Chrome may report its loadingFinished on the next task. Do not start
+    // the first B Area GET before that transport completion boundary.
+    const newGeneration=areaReadGeneration.current!==generation;
+    areaReadGeneration.current=generation;
+    // The runtime can already be suspended when this editor registers (e.g.
+    // a native Back/pagehide completed before the modal mounted). A suspend
+    // permanently invalidates this effect's private response; resume MUST
+    // authorize a replacement effect even if useTargetWake missed the hide.
+    const suspend=()=>{
+      suspended=true;
+      wakeEpoch.current++;
+      wakeReadGeneration.current=generation;
+      wakeReadPending.current=true;
+      stop();
+      setChosen("");setName("");setDraftGeneration(generation);
+      setAreas({kind:"unavailable",generation});
+    };
+    const resume=()=>{
+      if(!suspended)return;
+      suspended=false;
+      restartAfterWake(()=>active);
+    };
+    const unregister=runtime.register({dispose:stop,suspend,resume});
     const stillLive=()=>active&&!lifetime.signal.aborted&&live();
     async function read(){
       const controller=new AbortController();
@@ -164,6 +238,7 @@ export default function TargetPrivateTaskAreaChooser({
       }
     }
     void (async()=>{
+      if(newGeneration)await new Promise<void>(resolve=>setTimeout(resolve,16));
       if(!stillLive())return;
       let {result,timedOut}=await read();
       if(!stillLive())return;
@@ -321,8 +396,10 @@ export default function TargetPrivateTaskAreaChooser({
         {!ready&&<button type="button" onClick={()=>{
           if(!runtime)return;
           void runtime.refresh().then(result=>{
-            if(result==="ok"&&live())setNonce(v=>v+1);
-            else hide();
+            if(result==="ok"&&live()){
+              wakeReadPending.current=false;
+              setNonce(v=>v+1);
+            }else hide();
           });
         }}>{c.retry}</button>}
         <button type="button" ref={closeRef} onClick={onClose}>{c.close}</button>

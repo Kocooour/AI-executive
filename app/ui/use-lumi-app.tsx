@@ -36,7 +36,7 @@ import { projectSyncNoticeResolved, projectSyncNoticesAfterUndo, withProjectSync
   withoutResolvedProjectSyncNotices, type ProjectSyncNotice, type ProjectSyncNotices } from "../../lib/project-sync-notice";
 import { knownProjectFocusPosition, projectFocusReturnForHistory, shouldRestoreProjectFocus,
   type ProjectFocusEntry } from "../../lib/project-return-focus";
-import { byManualOrder, isEveningTask, manualOrder, newTaskPlacement, parseCaptureText, taskDateSortKey, taskMatchesView } from "../../lib/task-views";
+import { archiveReadView, byManualOrder, isEveningTask, manualOrder, newTaskPlacement, parseCaptureText, taskDateSortKey, taskMatchesView } from "../../lib/task-views";
 import { buildMyPlanPreview, previewManualRankUpdates, previewRankNextRecords, previewRankWritesAllowed, previewReorderPeers } from "../../lib/my-plan-preview";
 import { inSentenceDate } from "./format";
 import { findActiveProjectWithTitle } from "../../lib/project-title";
@@ -2766,19 +2766,20 @@ export function useLumiApp(options: { targetDetails?: boolean; targetUnified?: b
   const homeTodayTasks = homeToday.shown;
   const visible = useMemo(
     () => {
+      const readView = archiveReadView(view);
       const priorityRank: Record<string, number> = { high: 0, medium: 1, low: 2, none: 3 };
       return tasks.filter((t) => {
         if (priorityFilter !== "all" && String(t.properties.priority || "none") !== priorityFilter) return false;
-        return taskMatchesView(t, view === "LegacyUpcoming" ? "Upcoming" : view === "LegacyInbox" ? "Inbox" : view, today);
+        return taskMatchesView(t, readView, today);
       }).sort((a, b) => {
-        if (sortBy === "manual") return byManualOrder(`task:${view}`)(a, b);
+        if (sortBy === "manual") return byManualOrder(`task:${readView}`)(a, b);
         if (sortBy === "created") return b.createdAt - a.createdAt;
         if (sortBy === "priority") {
           return (priorityRank[String(a.properties.priority || "none")] ?? 3) -
             (priorityRank[String(b.properties.priority || "none")] ?? 3);
         }
-        return taskDateSortKey(a, view === "LegacyUpcoming" ? "Upcoming" : view === "LegacyInbox" ? "Inbox" : view).localeCompare(
-          taskDateSortKey(b, view === "LegacyUpcoming" ? "Upcoming" : view === "LegacyInbox" ? "Inbox" : view));
+        return taskDateSortKey(a, readView).localeCompare(
+          taskDateSortKey(b, readView));
       });
     },
     [tasks, view, today, sortBy, priorityFilter],

@@ -126,6 +126,381 @@ for(const width of [390,1280]){
     expect(writes).toHaveLength(0);
   });
 }
+/** The native release gate checks direct HTTP session + Area completion in
+ * Chrome CDP. The focused Quick Capture test instead intercepts and fulfills
+ * the Area response with Playwright: CDP may report loadingFailed after HTTP
+ * 200 even when the component consumed the entire synthetic JSON body.
+ * For the synthetic Area, assert one HTTP 200 response AND the valid rendered
+ * catalog. Still require a fully finished direct CDP session GET 200 before
+ * the Area request; the real-network BFCache release gate stays unchanged. */
+async function captureAreaWakeHttp(page:Page){
+  type Read={requestId:string;path:string;requestOrder:number;
+    status?:number;finishedOrder?:number;failedOrder?:number;
+    errorText?:string;cancelled?:boolean};
+  const cdp=await page.context().newCDPSession(page);
+  await cdp.send("Network.enable");
+  const reads:Read[]=[];
+  const pending=new Map<string,Read>();
+  let order=0;
+  const sessionPath="/api/target-staging/session";
+  const areaPath="/api/target-staging/notes/create-targets";
+  cdp.on("Network.requestWillBeSent",event=>{
+    if(event.request.method!=="GET")return;
+    const url=new URL(event.request.url);
+    if(url.pathname!==sessionPath&&url.pathname!==areaPath)return;
+    const read={requestId:event.requestId,path:url.pathname,requestOrder:++order};
+    reads.push(read);
+    pending.set(event.requestId,read);
+  });
+  cdp.on("Network.responseReceived",event=>{
+    const read=pending.get(event.requestId);
+    if(read){read.status=event.response.status;order++;}
+  });
+  cdp.on("Network.loadingFinished",event=>{
+    const read=pending.get(event.requestId);
+    if(read){read.finishedOrder=++order;pending.delete(event.requestId);}
+  });
+  cdp.on("Network.loadingFailed",event=>{
+    const read=pending.get(event.requestId);
+    if(read){
+      read.failedOrder=++order;
+      read.errorText=event.errorText;
+      read.cancelled=event.canceled===true;
+      pending.delete(event.requestId);
+    }
+  });
+  return {
+    mark:()=>order,
+    async firstPendingAreaRequest(){
+      // Wait for CDP to record the same held GET that Playwright intercepted.
+      // Do not classify a later request as the original.
+      await expect.poll(()=>reads.filter(read=>read.path===areaPath).length)
+        .toBe(1);
+      const original=reads.find(read=>read.path===areaPath)!;
+      expect(original.finishedOrder).toBeUndefined();
+      expect(original.failedOrder).toBeUndefined();
+      return original.requestId;
+    },
+    async assertClientCancelledBeforeWake(originalId:string){
+      const original=reads.find(read=>read.requestId===originalId);
+      expect(original?.path).toBe(areaPath);
+      await expect.poll(()=>original?.failedOrder,{timeout:10000})
+        .not.toBeUndefined();
+      // Only a browser-initiated cancellation proves that suspend() aborted
+      // its own request; a test-issued route.abort("failed") is not evidence.
+      expect(original?.cancelled,"AbortController must cancel the original GET")
+        .toBe(true);
+      expect(original?.errorText,"Chromium must report the client abort")
+        .toBe("net::ERR_ABORTED");
+      expect(original?.finishedOrder).toBeUndefined();
+      return original!.failedOrder!;
+    },
+    async assertOneAuthorizedReplacement(mark:number,priorCancelOrder?:number){
+      try{
+        await expect.poll(()=>reads.filter(read=>read.path===areaPath&&
+          read.requestOrder>mark&&read.status===200).length,
+        {timeout:10000}).toBe(1);
+      }catch(error){
+        const timeline=reads.map(read=>[
+          read.path===sessionPath?"session":"area",
+          "start="+read.requestOrder,"status="+(read.status??"-"),
+          "finish="+(read.finishedOrder??"-"),
+          "failed="+(read.failedOrder??"-"),
+          "id="+read.requestId,
+        ].join(" ")).join(" | ");
+        throw new Error("No replacement synthetic Area HTTP 200: mark="+mark+
+          "; "+timeline,{cause:error});
+      }
+      const areas=reads.filter(read=>read.path===areaPath&&read.requestOrder>mark);
+      expect(areas,"exactly one new direct private Area GET").toHaveLength(1);
+      const area=areas[0];
+      // The option assertion in every caller proves the complete, validated
+      // synthetic JSON body was read; do not confuse a mock CDP cancellation
+      // after HTTP 200 with a real incomplete Area catalog. The native gate
+      // alone demands Network.loadingFinished for an unmocked Area GET.
+      expect(area.status).toBe(200);
+      if(priorCancelOrder!==undefined){
+        expect(priorCancelOrder,"the original request must be cancelled first")
+          .toBeLessThan(area.requestOrder);
+      }
+      const authorized=reads.filter(read=>read.path===sessionPath&&
+        read.requestOrder>mark&&read.status===200&&
+        read.finishedOrder!==undefined&&read.finishedOrder<area.requestOrder&&
+        read.failedOrder===undefined);
+      // Keep the strict transport invariant; print the CDP timeline if it
+      // fails so a missing session can be distinguished from delayed CDP
+      // loadingFinished, a pre-wake request or a missing route altogether.
+      const timeline=reads.map(read=>[
+        read.path===sessionPath?"session":"area",
+        "start="+read.requestOrder,"status="+(read.status??"-"),
+        "finish="+(read.finishedOrder??"-"),
+        "failed="+(read.failedOrder??"-"),
+        "cancelled="+(read.cancelled??"-"),
+        "id="+read.requestId,
+      ].join(" ")).join(" | ");
+      expect(authorized.length,
+        "completed direct session GET 200 must precede replacement Area GET; "+
+        "mark="+mark+"; "+timeline).toBeGreaterThan(0);
+    },
+    close:()=>cdp.detach(),
+  };
+}
+
+/** A modal mounted on a suspended runtime misses the matching wake hook
+ * hide event; runtime resume must still perform exactly one verified read. */
+for(const width of [390,1280]){
+  test("C31 recovers suspended-on-register Area reader at "+width+"px",async({page})=>{
+    await page.setViewportSize({width,height:844});
+    const writes=await setup(page,(route,cmd)=>
+      reply(route,{ok:true,taskId:cmd.taskId},201));
+    const http=await captureAreaWakeHttp(page);
+    let areaReads=0;
+    await page.route("**/api/target-staging/notes/create-targets",route=>{
+      areaReads++;
+      return reply(route,{areas:[{id:"private-b",title:"Fresh private Area"}]});
+    });
+    await page.goto("/?view=Calendar&scope=personal");
+    await expect(fab(page,width)).toBeVisible();
+    await page.evaluate(()=>window.dispatchEvent(
+      new PageTransitionEvent("pagehide",{persisted:false})));
+    await fab(page,width).click();
+    await page.getByTestId("target-capture-task-kind").click();
+    await expect(page.getByTestId("target-private-task-capture")).toBeVisible();
+    await expect(page.getByTestId("target-private-task-form")).toHaveCount(0);
+    expect(areaReads,"suspended runtime cannot authorize an Area read").toBe(0);
+    const from=http.mark();
+    // Non-persisted pageshow is not a wake for the newly mounted hook.
+    await page.evaluate(()=>window.dispatchEvent(
+      new PageTransitionEvent("pageshow",{persisted:false})));
+    const area=page.getByTestId("target-private-task-area");
+    await expect(area.locator('option[value="private-b"]')).toHaveCount(1);
+    await http.assertOneAuthorizedReplacement(from);
+    await page.waitForTimeout(250); // detect delayed second wake nonce
+    expect(areaReads).toBe(1);
+    await expect(area).toHaveValue("");
+    await area.selectOption("private-b");
+    await expect(page.getByTestId("target-private-task-form")
+      .getByRole("textbox",{name:"Název úkolu"})).toHaveValue("");
+    expect(writes,"suspend/resume must not create a task").toHaveLength(0);
+    await http.close();
+  });
+}
+
+/** C31: an A-session wake that authorizes generation B must invalidate
+ * its old replacement ticket. Hold the B catalog while both wake callbacks
+ * settle, so a delayed stale nonce would cancel/duplicate the new B GET. */
+for(const width of [390,1280]){
+  test("C31 rotating A to B on wake loads one new Area at "+width+"px",async({page})=>{
+    await page.setViewportSize({width,height:844});
+    const writes=await setup(page,(route,cmd)=>
+      reply(route,{ok:true,taskId:cmd.taskId},201));
+    let verifiedGeneration=generation;
+    await page.route("**/api/target-staging/session",route=>
+      reply(route,{generation:verifiedGeneration}));
+    const http=await captureAreaWakeHttp(page);
+    let areaReads=0;
+    let releaseNewArea!:()=>void;
+    const newAreaHeld=new Promise<void>(resolve=>{releaseNewArea=resolve;});
+    await page.route("**/api/target-staging/notes/create-targets",async route=>{
+      const attempt=++areaReads;
+      if(attempt===1)return reply(route,{areas:[
+        {id:"private-a",title:"Old A Area"}]});
+      if(attempt===2){
+        await newAreaHeld;
+        return reply(route,{areas:[{id:"private-b",title:"New B Area"}]});
+      }
+      // A duplicate is never a valid replacement; detect it with areaReads.
+      return reply(route,{areas:[{id:"private-c",title:"Unexpected duplicate"}]});
+    });
+    await page.goto("/?view=Calendar&scope=personal");
+    await openAndFill(page,width,"Old A draft must disappear");
+    expect(areaReads).toBe(1);
+    await page.evaluate(()=>window.dispatchEvent(
+      new PageTransitionEvent("pagehide",{persisted:false})));
+    await expect(page.getByTestId("target-private-task-form")).toHaveCount(0);
+    verifiedGeneration="B".repeat(43);
+    const from=http.mark();
+    await page.evaluate(()=>window.dispatchEvent(
+      new PageTransitionEvent("pageshow",{persisted:false})));
+    try{
+      await expect.poll(()=>areaReads).toBe(2);
+      // B's response is intentionally held. An A wake callback that later
+      // consumes its stale ticket would abort B and issue Area GET number 3.
+      await page.waitForTimeout(400);
+      expect(areaReads,"a stale A wake must not restart B's in-flight read").toBe(2);
+    }finally{
+      releaseNewArea();
+    }
+    const area=page.getByTestId("target-private-task-area");
+    await expect(area.locator('option[value="private-b"]')).toHaveCount(1);
+    await expect(area.locator('option[value="private-a"]')).toHaveCount(0);
+    await expect(area.locator('option[value="private-c"]')).toHaveCount(0);
+    await http.assertOneAuthorizedReplacement(from);
+    await page.waitForTimeout(250);
+    expect(areaReads,"exactly one successful B Area GET, no duplicate").toBe(2);
+    await expect(area).toHaveValue("");
+    await area.selectOption("private-b");
+    await expect(page.getByTestId("target-private-task-form")
+      .getByRole("textbox",{name:"Název úkolu"})).toHaveValue("");
+    expect(writes,"generation rotation and wake must never CREATE").toHaveLength(0);
+    await http.close();
+  });
+}
+
+/** Opening while already offline/hidden must arm the wake hook even
+ * though the first reader effect cannot register a runtime disposable.
+ * Neither condition may allow a stale catalog or an unverified Area GET. */
+for(const width of [390,1280]){
+  for(const state of ["offline","hidden"] as const){
+    test("C31 revalidates Area editor mounted "+state+" at "+width+"px",async({page})=>{
+      await page.setViewportSize({width,height:844});
+      const writes=await setup(page,(route,cmd)=>
+        reply(route,{ok:true,taskId:cmd.taskId},201));
+      const http=await captureAreaWakeHttp(page);
+      let areaReads=0;
+      await page.route("**/api/target-staging/notes/create-targets",route=>{
+        areaReads++;
+        return reply(route,{areas:[{id:"private-b",title:"Reverified private Area"}]});
+      });
+      await page.goto("/?view=Calendar&scope=personal");
+      await expect(fab(page,width)).toBeVisible();
+      await fab(page,width).click();
+      const taskKind=page.getByTestId("target-capture-task-kind");
+      await expect(taskKind).toBeVisible();
+      // The real global Quick Capture shell closes on offline/visibility
+      // events. Enter the offline/hidden state during the task-kind click,
+      // before React mounts the chooser, without first closing the shell.
+      // This tests the chooser's initially-unavailable mount, not the shell.
+      await taskKind.evaluate((node,state)=>{
+        node.addEventListener("click",()=>{
+          if(state==="offline"){
+            Object.defineProperty(navigator,"onLine",{
+              configurable:true,value:false,
+            });
+          }else{
+            Object.defineProperty(document,"visibilityState",{
+              configurable:true,value:"hidden",
+            });
+          }
+        },{capture:true,once:true});
+      },state);
+      await taskKind.click();
+      await expect(page.getByTestId("target-private-task-capture")).toBeVisible();
+      await expect(page.getByTestId("target-private-task-form")).toHaveCount(0);
+      expect(areaReads,"initially offline/hidden editor must not read Areas").toBe(0);
+      const from=http.mark();
+      await page.evaluate(state=>{
+        if(state==="offline"){
+          Reflect.deleteProperty(navigator,"onLine");
+          window.dispatchEvent(new Event("online"));
+        }else{
+          Reflect.deleteProperty(document,"visibilityState");
+          document.dispatchEvent(new Event("visibilitychange"));
+        }
+      },state);
+      const area=page.getByTestId("target-private-task-area");
+      await expect(area.locator('option[value="private-b"]')).toHaveCount(1);
+      await http.assertOneAuthorizedReplacement(from);
+      await page.waitForTimeout(250);
+      expect(areaReads,"the wake may read the new private catalog only once").toBe(1);
+      await expect(area).toHaveValue("");
+      await area.selectOption("private-b");
+      await expect(page.getByTestId("target-private-task-form")
+        .getByRole("textbox",{name:"Název úkolu"})).toHaveValue("");
+      expect(writes,"visibility/network resume must never CREATE").toHaveLength(0);
+      await http.close();
+    });
+  }
+}
+
+/** A held read is aborted during a real runtime suspend; revalidation must
+ * finish before exactly one replacement GET, with no stale catalog/draft. */
+for(const width of [390,1280]){
+  test("C31 replaces a suspended in-flight Area read at "+width+"px",async({page})=>{
+    await page.setViewportSize({width,height:844});
+    const writes=await setup(page,(route,cmd)=>
+      reply(route,{ok:true,taskId:cmd.taskId},201));
+    const http=await captureAreaWakeHttp(page);
+    let requests=0;
+    await page.route("**/api/target-staging/notes/create-targets",route=>{
+      requests++;
+      // Leave the first transport pending: only the actual client-side
+      // AbortController can cancel it, never an artificial test route.abort().
+      if(requests===1)return;
+      return reply(route,{areas:[{id:"private-b",title:"Fresh private Area"}]});
+    });
+    await page.goto("/?view=Calendar&scope=personal");
+    await fab(page,width).click();
+    await page.getByTestId("target-capture-task-kind").click();
+    await expect.poll(()=>requests).toBe(1);
+    const firstAreaRequestId=await http.firstPendingAreaRequest();
+    const from=http.mark();
+    await page.evaluate(()=>window.dispatchEvent(
+      new PageTransitionEvent("pagehide",{persisted:false})));
+    await expect(page.getByTestId("target-private-task-form")).toHaveCount(0);
+    // Assert the original GET was cancelled by the browser BEFORE waking or
+    // allowing any replacement request. This is the missing C31 P2 witness.
+    const cancelledAt=await http.assertClientCancelledBeforeWake(firstAreaRequestId);
+    expect(requests).toBe(1);
+    await page.evaluate(()=>window.dispatchEvent(
+      new PageTransitionEvent("pageshow",{persisted:false})));
+    const area=page.getByTestId("target-private-task-area");
+    await expect(area.locator('option[value="private-b"]')).toHaveCount(1);
+    await http.assertOneAuthorizedReplacement(from,cancelledAt);
+    await page.waitForTimeout(250); // late duplicate nonce must not create GET 3
+    expect(requests).toBe(2);
+    await expect(area).toHaveValue("");
+    await area.selectOption("private-b");
+    await expect(page.getByTestId("target-private-task-form")
+      .getByRole("textbox",{name:"Název úkolu"})).toHaveValue("");
+    expect(writes).toHaveLength(0);
+    await http.close();
+  });
+}
+
+/** A wake without a successful session cannot authorize a private Area just
+ * because a generation is still known from before the page was hidden. */
+test("C31 failed wake session stays closed until explicit successful reverify",async({page})=>{
+  await page.setViewportSize({width:390,height:844});
+  const writes=await setup(page,(route,cmd)=>
+    reply(route,{ok:true,taskId:cmd.taskId},201));
+  let sessionAllowed=true,areaReads=0,sessionDenied=0;
+  await page.route("**/api/target-staging/session",route=>{
+    if(!sessionAllowed){sessionDenied++;return reply(route,{error:"unavailable"},503);}
+    return reply(route,{generation});
+  });
+  await page.route("**/api/target-staging/notes/create-targets",route=>{
+    areaReads++;
+    return reply(route,{areas:[areaReads===1
+      ?{id:"private-a",title:"Old Area"}
+      :{id:"private-b",title:"Fresh Area"}]});
+  });
+  await page.goto("/?view=Calendar&scope=personal");
+  await openAndFill(page,390,"Abandoned draft");
+  expect(areaReads).toBe(1);
+  sessionAllowed=false;
+  await page.evaluate(()=>window.dispatchEvent(
+    new PageTransitionEvent("pagehide",{persisted:false})));
+  await expect(page.getByTestId("target-private-task-form")).toHaveCount(0);
+  await page.evaluate(()=>window.dispatchEvent(
+    new PageTransitionEvent("pageshow",{persisted:false})));
+  await expect.poll(()=>sessionDenied).toBeGreaterThan(0);
+  await page.waitForTimeout(300);
+  expect(areaReads,"no Area may read with only stale session evidence").toBe(1);
+  const modal=page.getByTestId("target-private-task-capture");
+  await expect(modal.getByText("Oblasti nelze ověřit.",{exact:false})).toBeVisible();
+  sessionAllowed=true;
+  await modal.getByRole("button",{name:"Zkusit znovu"}).click();
+  const area=page.getByTestId("target-private-task-area");
+  await expect(area.locator('option[value="private-b"]')).toHaveCount(1);
+  await expect(area).toHaveValue("");
+  await area.selectOption("private-b");
+  await expect(page.getByTestId("target-private-task-form")
+    .getByRole("textbox",{name:"Název úkolu"})).toHaveValue("");
+  expect(areaReads).toBe(2);
+  expect(writes).toHaveLength(0);
+});
+
 /** The original C31 failure happened AFTER HTTP 200 response headers,
  * while reader.read() consumed the body. Synthetic Fetch Response 200 below
  * provides one partial JSON chunk then errors the stream (not the fetch).

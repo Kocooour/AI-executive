@@ -13,6 +13,7 @@ import { detailCopy } from "../../lib/target-detail-copy";
 import type { TargetUiEdits } from "../../lib/target-ui-config";
 import { mobileDesignV1Preview } from "./navigation";
 import { mainTitleSearchLegacySurfaces } from "../../lib/target-main-title-search-ui";
+import { archiveReadView } from "../../lib/task-views";
 import { projectSyncNoticeLabel } from "../../lib/project-sync-notice";
 import { AuthScreen } from "./views/auth-screen";
 import { Sidebar } from "./views/sidebar";
@@ -228,6 +229,7 @@ export function LumiAppRoot({ targetHomeSummary = false, targetInboxRead = false
   // Do not mount legacy task rows or local held-back titles underneath
   // server-authorized Search, including before the first explicit query.
   const legacySearchSurfaces = mainTitleSearchLegacySurfaces(targetSearch,view);
+  const homeAppearance = archiveReadView(view) === "Home";
   return (
     <LegacyWritesContext.Provider value={{ disabled: app.legacyWritesDisabled, hint: app.legacyReadOnlyHint }}>
     <main className={`appShell view-${view.toLowerCase()}${legacyInspector || detailPanel ? " inspectorOpen" : ""}${view === "Projects" && app.openProject ? " projectPageOpen" : ""}`} data-design-system={mobileDesignV1Preview ? "lumi-v1" : undefined} data-workspace-tone={app.activeWorkspaceTone}
@@ -319,15 +321,15 @@ export function LumiAppRoot({ targetHomeSummary = false, targetInboxRead = false
             </div>
           )}
           <div className="pageIntro">
-            {view !== "Home" && !targetOverview && (
+            {!homeAppearance && !targetOverview && (
               <p className="eyebrow">
                 {workspaceName.toUpperCase()} · {activeWorkspaceId === "all" ? "AGGREGATE" : String(activeWorkspace?.properties.kind || "PERSONAL").toUpperCase()}
               </p>
             )}
             <div className="pageTitleRow">
               <h1 tabIndex={mobileDesignV1Preview ? -1 : undefined}>{mobileDesignV1Preview && app.mobilePlanPreviewActive && view === "Today"
-                ? (language === "cs" ? "Můj plán" : "My Plan") : tr(view==="LegacyHome"?"Home":view==="LegacyUpcoming"?"Upcoming":view==="LegacyInbox"?"Inbox":view)}</h1>
-              {(view === "Today" || view === "Home") && <time>{new Intl.DateTimeFormat(language === "cs" ? "cs-CZ" : "en-GB", { weekday: "short", day: "numeric", month: "short" }).format(new Date())}</time>}
+                ? (language === "cs" ? "Můj plán" : "My Plan") : tr(archiveReadView(view))}</h1>
+              {(view === "Today" || homeAppearance) && <time>{new Intl.DateTimeFormat(language === "cs" ? "cs-CZ" : "en-GB", { weekday: "short", day: "numeric", month: "short" }).format(new Date())}</time>}
               {view === "Today" && !targetPlan && <TodayHeaderMeta app={app} />}
             </div>
           </div>

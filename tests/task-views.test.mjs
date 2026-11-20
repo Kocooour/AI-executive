@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-const { byManualOrder, manualOrder, newTaskPlacement, parseCaptureText, taskDueTone, taskMatchesView } = await import("../lib/task-views.ts");
+const { archiveReadView, byManualOrder, manualOrder, newTaskPlacement, parseCaptureText, taskDueTone, taskMatchesView } = await import("../lib/task-views.ts");
+const { v1DragHandleVisible } = await import("../lib/lumi-reorder-preview.ts");
 
 // Local-time constructor: these helpers work on the device's local calendar day.
 const NOW = new Date(2026, 9, 7, 10, 0, 0);
@@ -48,6 +49,33 @@ test("manual order prefers the workspace-scoped value, then the scope, then crea
   assert.equal(manualOrder(task({ properties: { manualOrder: 4 } })), 4);
   assert.equal(manualOrder(task()), 1000);
   assert.equal(manualOrder(task({ properties: { manualOrders: { "personal:task:all": 2 } } })), 2);
+});
+
+test("C-2 archive aliases preserve original read scopes and existing manual ranks", () => {
+  assert.equal(archiveReadView("LegacyHome"), "Home");
+  assert.equal(archiveReadView("LegacyUpcoming"), "Upcoming");
+  for (const view of ["Home", "Upcoming", "Inbox", "Today", "Search"]) {
+    assert.equal(archiveReadView(view), view, view);
+  }
+
+  // Stored pre-split ranks, including the workspace key, must win over createdAt.
+  const highRank = task({ id: "rank-first", createdAt: 9000,
+    properties: { when: "2026-10-20", manualOrders: { "personal:task:Upcoming": 1 } } });
+  const lowRank = task({ id: "rank-second", createdAt: 1000,
+    properties: { when: "2026-10-21", manualOrders: { "task:Upcoming": 2 } } });
+  const scope = "task:" + archiveReadView("LegacyUpcoming");
+  assert.deepEqual([lowRank, highRank]
+    .filter((entity) => taskMatchesView(entity, archiveReadView("LegacyUpcoming"), TODAY))
+    .sort(byManualOrder(scope)).map((entity) => entity.id), ["rank-first", "rank-second"]);
+  assert.equal(manualOrder(highRank, "task:LegacyUpcoming"), 9000,
+    "the regression was caused by reading a new archive-specific rank key");
+  // The read-only archive must not expose disabled drag handles just because
+  // its alias is not in the v1 list of reorderable view names.
+  for (const [archive, original] of [["LegacyHome", "Home"], ["LegacyUpcoming", "Upcoming"]]) {
+    assert.equal(v1DragHandleVisible(archiveReadView(archive), true, false),
+      v1DragHandleVisible(original, true, false));
+    assert.equal(v1DragHandleVisible(archiveReadView(archive), true, false), false);
+  }
 });
 
 test("manual sort is stable across equal positions", () => {
@@ -199,4 +227,13 @@ test("the Overdue list sorts by deadline; other lists by planned day", async () 
   const sorted = (view) => [a, b, c].sort((x, y) => taskDateSortKey(x, view).localeCompare(taskDateSortKey(y, view)));
   assert.deepEqual(sorted("Overdue"), [b, a, c]);
   assert.deepEqual(sorted("Today"), [c, b, a]);
+});
+
+
+test("C-3a: LegacyInbox inherits Inbox membership and ordering without redirecting current Inbox", () => {
+  assert.equal(archiveReadView("LegacyInbox"),"Inbox");
+  assert.equal(archiveReadView("Inbox"),"Inbox");
+  assert.equal(archiveReadView("LegacyHome"),"Home");
+  assert.equal(archiveReadView("LegacyUpcoming"),"Upcoming");
+  assert.equal(archiveReadView("Home"),"Home");
 });

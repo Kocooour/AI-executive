@@ -1156,3 +1156,89 @@ test.describe("C34 HTTPS reverse-proxy acceptance",()=>{
   }
   });
 });
+
+/** #478 / C-2: real archive DOM and pre-split manual ranks on both screen sizes.
+ * The release acceptance profile provides a throwaway owner and legacy store. */
+for (const width of [390, 1280]) {
+  test("C-2 LegacyHome appearance and LegacyUpcoming persisted order at " + width + "px", async ({ page }) => {
+    test.setTimeout(90_000);
+    await page.setViewportSize({ width, height: 844 });
+    await page.goto("/?view=LegacyHome");
+    await expect(page.getByTestId("legacy-read-only-notice")).toBeVisible();
+    // Historical Home is a secondary list under the Home summary, not a new
+    // task-management view with priority/sort controls or an empty-state banner.
+    await expect(page.locator(".pageIntro .eyebrow")).toHaveCount(0);
+    await expect(page.locator(".pageTitleRow time")).toBeVisible();
+    // The original Home deliberately hides its duplicate entity list with
+    // .secondary { display: none }. The real Home summary stays visible.
+    await expect(page.locator(".list.taskRowList.secondary")).toBeHidden();
+    await expect(page.locator(".homeSection.attentionSection")).toBeVisible();
+    await expect(page.locator(".listControls")).toHaveCount(0);
+    await expect(page.locator(".appPane .capture")).toHaveCount(0);
+
+    const stamp = Date.now();
+    const ids = [`c2-archive-first-${width}-${stamp}`, `c2-archive-second-${width}-${stamp}`];
+    const titles = [`C2 archived first ${width}-${stamp}`, `C2 archived second ${width}-${stamp}`];
+    const snapshot = await (await page.request.get("/api/store")).json();
+    const make = (id: string, title: string, createdAt: number, manualOrders: Record<string, number>) => ({
+      id, title, type: "task", status: "open", workspaceId: "personal",
+      properties: { when: "2099-10-20", manualOrders }, createdAt, updatedAt: Math.max(stamp, createdAt),
+    });
+    // The legacy PUT rejects requests without Origin (403). Playwright APIRequestContext
+    // does not add a browser Origin automatically, unlike the other seeded browser scenarios.
+    const origin = new URL(page.url()).origin;
+    const seed = await page.request.put("/api/store", { headers: { origin }, data: {
+      baseRevision: snapshot.revision, restoreGeneration: snapshot.restoreGeneration,
+      entities: [...snapshot.entities,
+        make(ids[0], titles[0], stamp + 5000, { "personal:task:Upcoming": 1 }),
+        make(ids[1], titles[1], stamp - 5000, { "task:Upcoming": 2 })],
+      relations: snapshot.relations, deletedIds: [], revivedIds: [],
+    } });
+    expect(seed.status(), "seed synthetic pre-split ranks: " + await seed.text()).toBe(200);
+    try {
+      // Home keeps the original summary and hides its duplicate entity list;
+      // reading the historical Upcoming list below exercises the seeded rows.
+      await page.goto("/?view=LegacyHome");
+      await expect(page.locator(".homeSection.attentionSection")).toBeVisible();
+      await expect(page.locator(".list.taskRowList.secondary")).toBeHidden();
+      await expect(page.locator(".list.taskRowList .dragHandle")).toHaveCount(0);
+      await page.goto("/?view=LegacyUpcoming");
+      await expect(page.getByTestId("legacy-read-only-notice")).toBeVisible();
+      await expect(page.locator(".listControls")).toBeVisible();
+      await expect(page.locator(".listControls select").nth(1)).toHaveValue("manual");
+      await expect(page.locator(".list.taskRowList .dragHandle")).toHaveCount(0);
+      await expect(page.locator(".list.taskRowList article.taskRow").filter({ hasText: titles[0] })).toBeVisible();
+      await expect(page.locator(".list.taskRowList article.taskRow").filter({ hasText: titles[1] })).toBeVisible();
+      const orderedTitles = await page.locator(".list.taskRowList article.taskRow .taskRowOpen").allTextContents();
+      expect(orderedTitles.filter(title => titles.includes(title))).toEqual(titles);
+      // Merely visiting either archive surface must not mutate the stored entities.
+      const afterNavigation = await (await page.request.get("/api/store")).json();
+      const preservedRanks = Object.fromEntries(afterNavigation.entities
+        .filter((row: { id: string }) => ids.includes(row.id))
+        .map((row: { id: string; properties: { manualOrders: Record<string, number> } }) =>
+          [row.id, row.properties.manualOrders]));
+      expect(preservedRanks).toEqual({
+        [ids[0]]: { "personal:task:Upcoming": 1 },
+        [ids[1]]: { "task:Upcoming": 2 },
+      });
+    } finally {
+      const current = await (await page.request.get("/api/store")).json();
+      // The server can attach new tasks to the fallback Area. Remove their
+      // relations together with their entities: the snapshot validator must
+      // never receive a dangling relation, and tombstone both kinds of ID.
+      const syntheticRelations = current.relations.filter(
+        (relation: { sourceEntityId: string; targetEntityId: string }) =>
+          ids.includes(relation.sourceEntityId) || ids.includes(relation.targetEntityId));
+      const cleanup = await page.request.put("/api/store", { headers: { origin }, data: {
+        baseRevision: current.revision, restoreGeneration: current.restoreGeneration,
+        entities: current.entities.filter((row: { id: string }) => !ids.includes(row.id)),
+        relations: current.relations.filter(
+          (relation: { id: string }) => !syntheticRelations.some(
+            (removed: { id: string }) => removed.id === relation.id)),
+        deletedIds: [...ids, ...syntheticRelations.map((relation: { id: string }) => relation.id)],
+        revivedIds: [],
+      } });
+      expect(cleanup.status(), "remove synthetic archived ranks: " + await cleanup.text()).toBe(200);
+    }
+  });
+}
