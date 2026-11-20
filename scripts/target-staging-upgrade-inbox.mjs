@@ -2,6 +2,7 @@
 /** Manual C-3a target Inbox schema upgrade. NEVER run on app startup. */
 import path from "node:path";
 import { inspectIsolatedTargetStore } from "../lib/target-store-preflight.ts";
+import { TARGET_STORE_SCHEMA_VERSION } from "../lib/target-store-bootstrap.ts";
 import { upgradeTargetStagingInboxV26 } from "../lib/target-inbox-schema-upgrade.ts";
 
 const usage=[
@@ -28,8 +29,12 @@ try {
     const store={stagingDirectory:directory,expectedRestoreGeneration:generation};
     if(mode[0]==="--check"){
       // No writer, DDL, journal append or writable SQLite handle.
-      const check=inspectIsolatedTargetStore({...store,mode:"r2-model"});
-      process.stdout.write(JSON.stringify({ok:check.ok,mode:"check",issues:check.issues})+"\n");
+      // Check means *ready/current v27*, not merely "safe to upgrade from v26".
+      // Older canonical versions remain acceptable to the separate explicit --apply.
+      const check=inspectIsolatedTargetStore({...store,mode:"r2-model",
+        requiredSchemaVersion:TARGET_STORE_SCHEMA_VERSION});
+      process.stdout.write(JSON.stringify({ok:check.ok,mode:"check",
+        schemaVersionRequired:TARGET_STORE_SCHEMA_VERSION,issues:check.issues})+"\n");
       process.exitCode=check.ok?0:1;
     } else {
       const result=upgradeTargetStagingInboxV26(store);
