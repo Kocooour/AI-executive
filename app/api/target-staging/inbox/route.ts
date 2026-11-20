@@ -1,5 +1,6 @@
 /** C-3a: server-authorized Inbox read/count. Never emit legacy data or ACL proof. */
 import path from "node:path";
+import {createHash} from "node:crypto";
 import {enforceRateLimit} from "../../../../lib/http-security";
 import {logStagingFailure} from "../../../../lib/target-staging-failure-log";
 import {
@@ -65,9 +66,16 @@ export async function GET(request:Request):Promise<Response>{
       return refuse(503,"Staging unavailable");
     if(released==="stale")return refuse(409,"read_stale_reload");
     if(!page)return refuse(503,"Staging unavailable");
+    // The opaque read witness binds ALL readable Area epochs and full count.
+    // Keyset pages may only be concatenated by the browser while this is equal.
+    // No actor, Area memberships or raw epochs leave the server.
+    const snapshotRevision=createHash("sha256").update(JSON.stringify([
+      "lumi:c3a:inbox-page-snapshot:v1",page.linearization.actorUserId,
+      expectedRestoreGeneration,page.count,page.areaEpochs,
+    ])).digest("hex");
     return Response.json({
       items:page.items,count:page.count,nextCursor:page.nextCursor,
-      restoreGeneration:expectedRestoreGeneration,
+      restoreGeneration:expectedRestoreGeneration,snapshotRevision,
     },{headers});
   }catch(error){
     logStagingFailure("target-staging/inbox","route_exception",error);
