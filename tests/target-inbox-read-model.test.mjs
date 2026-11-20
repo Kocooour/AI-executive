@@ -68,6 +68,14 @@ test("migration excludes historical target tasks and keeps every later task unpr
   assert.deepEqual(ids(page("alice")),["a-private","shared-child","shared-visible"],
     "completed but unprocessed remains until explicit Process");
   assert.equal(page("alice").count,3);
+  assert.equal(page("alice").items.find(x=>x.id==="a-private").status,"completed",
+    "completion must remain visible and distinguishable for the Inbox UI");
+  assert.equal(page("alice").items.find(x=>x.id==="shared-child").status,"open");
+  db.prepare("UPDATE tasks SET status='open',completed_at_ms=NULL WHERE id='a-private'").run();
+  assert.equal(page("alice").items.find(x=>x.id==="a-private").status,"open");
+  assert.equal(page("alice").count,3,"reopening does not process the task");
+  db.prepare("UPDATE tasks SET status='completed',completed_at_ms=200 WHERE id='a-private'").run();
+  assert.equal(page("alice").count,3,"completing does not process the task");
 });
 
 test("actor scoped count, shared inherited Area and read-only viewer semantics",()=>{
