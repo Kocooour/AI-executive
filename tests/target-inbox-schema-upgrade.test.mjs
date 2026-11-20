@@ -158,3 +158,34 @@ test("v27 preflight rejects forged processed+NULL with a non-migration triage re
     assert.ok(check.issues.includes("schema_invalid"),JSON.stringify(check));
   }finally{db.close();}
 });
+
+
+test("pre-release v27 with superseded 4096-row trigger is rejected, never mutated",()=>{
+  // C-3a is still a DRAFT staging-only PR, not a shipped v27 data format.
+  // The stricter canonical-structure check intentionally rejects test stores
+  // produced by a superseded draft, rather than silently rewriting them.
+  const stage=bootstrapIsolatedTargetStore({
+    stagingDirectory:path.join(root,"superseded-v27"),ownerUserId:"alice",
+  });
+  const store={stagingDirectory:stage.directory,
+    expectedRestoreGeneration:stage.restoreGeneration};
+  const db=new DatabaseSync(stage.databasePath);
+  try{
+    assert.equal(inspectIsolatedTargetStore({...store,mode:"r2-model"}).ok,true);
+    db.exec("DROP TRIGGER task_triage_receipts_capacity");
+    db.exec("CREATE TRIGGER task_triage_receipts_capacity BEFORE INSERT ON task_triage_receipts "+
+      "WHEN (SELECT COUNT(*) FROM task_triage_receipts)>=4096 BEGIN "+
+      "SELECT RAISE(ABORT,'triage receipt capacity reached'); END;");
+    assert.equal(db.prepare("SELECT value FROM metadata WHERE key='schema_version'")
+      .get().value,"27");
+    const paths=[stage.databasePath,path.join(stage.directory,"lumi-target.journal")];
+    const before=paths.map(sha);
+    const preflight=inspectIsolatedTargetStore({...store,mode:"r2-model"});
+    assert.equal(preflight.ok,false);
+    assert.ok(preflight.issues.includes("schema_invalid"),JSON.stringify(preflight));
+    assert.equal(upgradeTargetStagingInboxV26(store).ok,false,
+      "v26→v27 must NEVER silently rewrite earlier-v27 staging data");
+    assert.deepEqual(paths.map(sha),before,
+      "refusing a superseded draft v27 format must leave data/journal unchanged");
+  }finally{db.close();}
+});
