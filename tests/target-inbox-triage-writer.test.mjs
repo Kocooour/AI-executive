@@ -107,7 +107,7 @@ test("pinned receipt confirms original Process after Area move, without stale Un
   assert.ok(before?.next,"unchanged Process has a valid Undo witness");
   // The original write succeeded. A later authorized edit changes the task's
   // effective Area while the client still holds the ORIGINAL Process UUID.
-  fx.db.prepare("UPDATE tasks SET area_id='team-area',revision=revision+1 WHERE id='private'").run();
+  fx.db.prepare("UPDATE tasks SET area_id='team-area' WHERE id='private'").run();
   assert.equal(read(fx,"private").area_id,"team-area");
   assert.equal(readTargetInboxTriageReceipt(fx.db,"alice",process),"committed");
   const after=fx.authority.readInboxTriageReceiptSnapshot("alice",process);
@@ -127,7 +127,7 @@ test("receipt cannot leak after task moves out of the original editor's access",
   const process=command(fx,bob,"shared");
   assert.deepEqual(fx.authority.changeInboxTriage(bob,process),{ok:true});
   assert.equal(readTargetInboxTriageReceipt(fx.db,"bob",process),"committed");
-  fx.db.prepare("UPDATE tasks SET area_id=?,revision=revision+1 WHERE id='shared'")
+  fx.db.prepare("UPDATE tasks SET area_id=? WHERE id='shared'")
     .run(fx.stage.unassignedAreaId);
   assert.equal(readTargetInboxTriageReceipt(fx.db,"bob",process),null);
   assert.equal(fx.authority.readInboxTriageReceiptSnapshot("bob",process),null);
