@@ -117,7 +117,7 @@ import {
   type TargetStagingTemporalDueOnCommand, type TargetStagingTemporalDueOnResult,
 } from "./target-task-temporal-due-on-writer";
 import {writePreflightedTargetInboxTriage,validTargetInboxTriageCommand,
-  readTargetInboxTriageReceipt,
+  readTargetInboxTriageReceipt,targetInboxTriageReceiptKey,
   type TargetInboxTriageCommand,type TargetInboxTriageResult,
 } from "./target-inbox-triage-writer";
 import {writePreflightedPersonalWhen,validTargetStagingPersonalWhenCommand,
@@ -1183,15 +1183,31 @@ export class TargetStagingSessionAuthority {
         const areaEpochs=eligibleGlobalTaskAreas(db,actor,"all");
         if(!areaEpochs)return null;
         let next:null|{expectedRevision:string;triageRevision:number;writeAreaId:string}=null;
-        if(status==="committed"){
+        if(status==="committed"&&command.mode==="process"){
+          const receiptKey=targetInboxTriageReceiptKey(actor,command.commandId);
+          const receipt=db.prepare(`SELECT action,triage_revision_after,task_revision_after
+            FROM task_triage_receipts WHERE receipt_key=?`).get(receiptKey) as {
+            action:string;triage_revision_after:number;task_revision_after:number;
+          }|undefined;
           const row=db.prepare(`SELECT t.triage_state AS state,
-            t.triage_revision AS revision,COALESCE(t.area_id,p.area_id) AS areaId
+            t.triage_revision AS revision,t.revision AS taskRevision,
+            COALESCE(t.area_id,p.area_id) AS areaId
             FROM tasks t LEFT JOIN projects p ON p.id=t.project_id WHERE t.id=?`)
-            .get(command.taskId) as {state:string;revision:number;areaId:string}|undefined;
+            .get(command.taskId) as {
+              state:string;revision:number;taskRevision:number;areaId:string;
+            }|undefined;
           const expectedRevision=targetTaskWriteRevision(db,command.taskId);
-          if(!row||!expectedRevision||!Number.isSafeInteger(row.revision)||
-              !row.areaId)return null;
-          if(row.state===(command.mode==="process"?"processed":"unprocessed"))
+          if(!row||!receipt||!expectedRevision||!Number.isSafeInteger(row.revision)||
+              !Number.isSafeInteger(row.taskRevision)||!row.areaId)return null;
+          // Confirm the original Process regardless of a later Area/task edit,
+          // but NEVER offer a stale Undo: it needs the exact post-Process
+          // revisions, original Area and an as-yet-unconsumed Process receipt.
+          if(receipt.action==="process"&&row.state==="processed"&&
+              row.revision===receipt.triage_revision_after&&
+              row.taskRevision===receipt.task_revision_after&&
+              row.areaId===command.writeAreaId&&
+              !db.prepare("SELECT 1 FROM task_triage_receipts WHERE undo_of_receipt_key=? LIMIT 1")
+                .get(receiptKey))
             next={expectedRevision,triageRevision:row.revision,writeAreaId:row.areaId};
         }
         return {status,next,areaEpochs,
