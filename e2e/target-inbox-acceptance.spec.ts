@@ -201,7 +201,7 @@ for(const width of [390,1280]){
         .toBeVisible();
       await expect(page.getByTestId("target-inbox-sidebar-count")).toHaveCount(0);
       // The backdrop covers the bottom tab while the menu is open.
-      await page.getByRole("button",{name:"Zavřít nabídku"}).click();
+      await page.locator(".mobileMoreClose").click();
     }
     releaseLateGet();
     await expect(count(page)).toHaveCount(0);
