@@ -145,7 +145,7 @@ async({page})=>{
   await page.getByRole("button",{name:"Ověřit původní příkaz"}).click();
   await expect(page.getByTestId("target-inbox-uncertain")).toBeVisible();
   expect(commands).toBe(1);
-  expect(receipts).toBeGreaterThanOrEqual(3);
+  await expect.poll(()=>receipts,{timeout:15000}).toBeGreaterThanOrEqual(3);
   await page.unroute("**/api/target-staging/inbox/triage",abortWrite);
   await page.reload();
   await expect(processAction(page,title)).toBeVisible();
@@ -200,7 +200,8 @@ for(const width of [390,1280]){
       await expect(page.locator('[data-testid="target-more-primary"] [data-nav-view="Inbox"]'))
         .toBeVisible();
       await expect(page.getByTestId("target-inbox-sidebar-count")).toHaveCount(0);
-      await page.locator('[data-nav-view="More"]').first().click();
+      // The backdrop covers the bottom tab while the menu is open.
+      await page.getByRole("button",{name:"Zavřít nabídku"}).click();
     }
     releaseLateGet();
     await expect(count(page)).toHaveCount(0);
