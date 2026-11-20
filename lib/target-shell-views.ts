@@ -104,3 +104,10 @@ export function targetShellNavigationFor(input:ShellNavigationInput):ShellNaviga
     hidden:SHELL_NAVIGATION_VIEWS.filter(view=>byView[view]==="hidden"),
     quickCapture:personalV1&&input.quickCapture};
 }
+// The four approved bottom tabs are MyPlanPreview / Calendar / Projects / More.
+// Everything else from the *typed* primary set belongs to More → Current.
+// In particular the target Inbox must not silently disappear from mobile.
+export function targetMobileMoreCurrentViews(navigation:ShellNavigationModel):ShellNavigationView[]{
+  return navigation.primary.filter(view=>
+    view!=="MyPlanPreview"&&view!=="Calendar"&&view!=="Projects");
+}
