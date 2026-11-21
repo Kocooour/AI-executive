@@ -15,7 +15,8 @@ process.env.AI_EXECUTIVE_SESSION_SECRET="test-c3a-authority-signing-secret-32-by
 const {bootstrapIsolatedTargetStore}=await import("../lib/target-store-bootstrap.ts");
 const {TargetStagingSessionAuthority}=await import("../lib/target-staging-session-authority.ts");
 const {inspectIsolatedTargetStore}=await import("../lib/target-store-preflight.ts");
-const {validTargetInboxTriageCommand,readTargetInboxTriageReceipt}=
+const {validTargetInboxTriageCommand,readTargetInboxTriageReceipt,
+  targetInboxTriageReceiptKey,targetInboxUndoRebaseKey}=
   await import("../lib/target-inbox-triage-writer.ts");
 const {issueTargetInboxRevision,issueTargetInboxCommandId}=
   await import("../lib/target-inbox-command-identity.ts");
@@ -283,6 +284,62 @@ test("read audience cannot issue triage and another restore generation fails clo
   assert.deepEqual(fx.authority.changeInboxTriage(writer,
     {...cmd,restoreGeneration:randomUUID()}),denied("resync_required"));
   assert.equal(count(fx),0);
+});
+
+test("95-day Process receipt keeps cancellation-only Undo proof under direct SQLite DELETE",()=>{
+  const fx=fixture(),token=fx.authority.issueWritable("alice").sessionToken;
+  const process=command(fx,token,"private");
+  assert.deepEqual(fx.authority.changeInboxTriage(token,process),{ok:true});
+  const processKey=targetInboxTriageReceiptKey("alice",process.commandId);
+  const rebaseKey=targetInboxUndoRebaseKey(processKey);
+  const del=fx.db.prepare("DELETE FROM task_triage_receipts WHERE receipt_key=?");
+
+  // Simulate a 95-day-old committed receipt while keeping the canonical
+  // immutable-update trigger installed outside this controlled test setup.
+  // The SQLite trigger uses the real clock, not the JavaScript Date.now mock.
+  const immutable=fx.db.prepare("SELECT sql FROM sqlite_schema "+
+    "WHERE type='trigger' AND name='task_triage_receipts_immutable_update'")
+    .get()?.sql;
+  assert.ok(immutable);
+  fx.db.exec("DROP TRIGGER task_triage_receipts_immutable_update");
+  try{
+    assert.equal(fx.db.prepare(
+      "UPDATE task_triage_receipts SET committed_at_ms=? WHERE receipt_key=?")
+      .run(Date.now()-95*86_400_000,processKey).changes,1);
+  }finally{fx.db.exec(immutable);}
+  assert.deepEqual(inspectIsolatedTargetStore({...fx.store,mode:"r2-model"}),
+    {ok:true,mode:"r2-model",issues:[]});
+
+  assert.throws(()=>del.run(processKey),/triage receipt retained for Undo or active window/,
+    "an old Process with the original active CAS is still protected");
+  const undo=command(fx,token,"private","undo",process.commandId);
+  assert.deepEqual(fx.authority.cancelInboxTriage(token,undo),{
+    ok:true,status:"cancelled",
+  });
+  const eligible=fx.authority.readInboxTriageReceiptSnapshot("alice",undo);
+  assert.equal(eligible?.status,"cancelled");
+  assert.ok(eligible?.next,"an old Process can still be Undone after cancellation-only rebase");
+  assert.equal(fx.db.prepare("SELECT value FROM metadata WHERE key=?")
+    .get(rebaseKey)?.value,String(read(fx,"private").revision));
+
+  assert.throws(()=>del.run(processKey),/triage receipt retained for Undo or active window/,
+    "a rebased active Process must also be protected by the SQLite trigger");
+  assert.equal(count(fx),1);
+  assert.ok(fx.db.prepare("SELECT 1 FROM metadata WHERE key=?").get(rebaseKey));
+  assert.deepEqual(inspectIsolatedTargetStore({...fx.store,mode:"r2-model"}),
+    {ok:true,mode:"r2-model",issues:[]});
+
+  // An unrelated edit invalidates Undo irreversibly. Direct operator SQL
+  // deletion is now permitted for the aged inactive Process, but the SQLite
+  // AFTER DELETE guard must clean its marker in the SAME statement.
+  fx.db.prepare("UPDATE tasks SET title='Edited after rebased Undo' WHERE id='private'").run();
+  assert.equal(fx.authority.readInboxTriageReceiptSnapshot("alice",undo)?.next,null);
+  assert.equal(del.run(processKey).changes,1);
+  assert.equal(count(fx),0);
+  assert.equal(fx.db.prepare("SELECT 1 FROM metadata WHERE key=?")
+    .get(rebaseKey),undefined,"no dangling rebase metadata after direct SQL deletion");
+  assert.deepEqual(inspectIsolatedTargetStore({...fx.store,mode:"r2-model"}),
+    {ok:true,mode:"r2-model",issues:[]});
 });
 
 test("bounded triage ledger prunes only expired history and preserves active Process for Undo",()=>{
