@@ -77,10 +77,18 @@ function validCommand(c:InboxClientCommand):boolean{
     (c.mode==="process"&&c.undoOfCommandId===null||
       c.mode==="undo"&&typeof c.undoOfCommandId==="string"&&uuid.test(c.undoOfCommandId));
 }
-async function postCommand(route:string,command:InboxClientCommand,signal?:AbortSignal){
-  return targetAppFetch(route,{method:"POST",credentials:"same-origin",cache:"no-store",
+async function postCommand(
+  route:string,command:InboxClientCommand,signal?:AbortSignal,directReceipt=false,
+){
+  const init:RequestInit={method:"POST",credentials:"same-origin",cache:"no-store",
     headers:{"content-type":"application/json","x-lumi-target-protocol":"1"},
-    body:JSON.stringify(command),signal});
+    body:JSON.stringify(command),signal};
+  // A read-only receipt must be able to reconcile an ambiguous POST even
+  // while a pagination GET occupies the single shared read-queue slot.
+  // The backend permits two read children: the ordinary queue uses one and
+  // this single coordinated command can use the second. If that slot is
+  // unavailable, reconciliation stays uncertain rather than reissuing a UUID.
+  return directReceipt?fetch(route,init):targetAppFetch(route,init);
 }
 /** Bound the entire write/receipt response, including a stalled JSON body.
  * Abort is advisory; Promise.race also settles when a fetch ignores abort. */
@@ -143,7 +151,7 @@ export async function verifyInboxCommand(
   if(!validCommand(command))return {ok:false,reason:"unavailable"};
   try{
     return await commandDeadline<InboxClientReceipt>(async signal=>{
-    const response=await postCommand("/api/target-staging/inbox/receipt",command,signal);
+    const response=await postCommand("/api/target-staging/inbox/receipt",command,signal,true);
     if(!response.ok)return {ok:false,reason:failure(response.status)};
     const body:unknown=await response.json();
     if(!body||typeof body!=="object"||Array.isArray(body))return {ok:false,reason:"unavailable"};
