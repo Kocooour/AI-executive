@@ -20,6 +20,26 @@ export type InboxClientCommand={
   writeAreaId:string;restoreGeneration:string;
 };
 const uuid=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+/** Client never invents a reusable UUID: each ID is a deterministic digest
+ * of the complete original payload, including the server-issued actor CAS.
+ * The Node writer independently enforces exactly the same UUID binding. */
+export async function issueInboxClientCommandId(
+  fields:Omit<InboxClientCommand,"commandId">,
+):Promise<string|null>{
+  try{
+    const data=JSON.stringify([
+      "lumi:c3a:self-bound-command:v1",fields.taskId,fields.mode,
+      fields.undoOfCommandId?.toLowerCase()??null,fields.expectedRevision,
+      fields.expectedTriageRevision,fields.writeAreaId,
+      fields.restoreGeneration.toLowerCase(),
+    ]);
+    const hash=await crypto.subtle.digest("SHA-256",new TextEncoder().encode(data));
+    const h=[...new Uint8Array(hash)].map(v=>v.toString(16).padStart(2,"0")).join("");
+    return h.slice(0,8)+"-"+h.slice(8,12)+"-5"+h.slice(13,16)+"-8"+
+      h.slice(17,20)+"-"+h.slice(20,32);
+  }catch{return null;}
+}
+
 const cas=/^[a-f0-9]{64}$/;
 const safe=(n:unknown)=>typeof n==="number"&&Number.isSafeInteger(n)&&n>=0;
 const id=(x:unknown)=>typeof x==="string"&&x.length>0&&x.trim()===x&&
