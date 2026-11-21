@@ -5,7 +5,6 @@ on:
     paths:
       - '.github/workflows/focused-r3-main-title-search-browser.yml'
       - 'e2e/target-main-title-search.spec.ts'
-      - 'playwright.config.ts'
       - 'app/page.tsx'
       - 'app/ui/lumi-app-root.tsx'
       - 'app/ui/target-main-title-search.tsx'

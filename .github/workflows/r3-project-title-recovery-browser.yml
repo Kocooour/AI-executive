@@ -24,7 +24,6 @@ on:
       - "e2e/target-project-title-session-recovery.spec.ts"
       - "e2e/fixtures.ts"
       - "e2e/auth.setup.ts"
-      - "playwright.config.ts"
   workflow_dispatch:
 
 permissions:

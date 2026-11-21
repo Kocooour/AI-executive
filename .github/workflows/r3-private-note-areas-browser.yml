@@ -20,7 +20,6 @@ on:
       - "e2e/target-private-note-areas.spec.ts"
       - "e2e/auth.setup.ts"
       - "e2e/fixtures.ts"
-      - "playwright.config.ts"
   workflow_dispatch:
 permissions:
   contents: read

@@ -15,7 +15,6 @@ on:
       - "e2e/mobile-navigation-v1.spec.ts"
       - "e2e/fixtures.ts"
       - "e2e/auth.setup.ts"
-      - "playwright.config.ts"
   workflow_dispatch:
 
 permissions:

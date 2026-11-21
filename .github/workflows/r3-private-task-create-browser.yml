@@ -12,7 +12,6 @@ on:
       - "lib/target-detail-route.ts"
       - "lib/target-ui-config.ts"
       - "e2e/target-private-task-create.spec.ts"
-      - "playwright.config.ts"
   workflow_dispatch:
 permissions:
   contents: read

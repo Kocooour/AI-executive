@@ -7,7 +7,6 @@ on:
       - "app/ui/target-staging-note-preview.tsx"
       - "lib/target-staging-note-preview-client.ts"
       - "e2e/note-preview-ui09d*.spec.ts"
-      - "playwright.config.ts"
       - ".github/workflows/note-preview-browser.yml"
 
 permissions:

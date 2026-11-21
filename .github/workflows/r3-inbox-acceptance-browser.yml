@@ -16,7 +16,6 @@ on:
       - "lib/target-data-invalidation.ts"
       - "e2e/target-inbox-acceptance.spec.ts"
       - "e2e/target-personal-store-setup.mjs"
-      - "playwright.config.ts"
       - "e2e/fixtures.ts"
       - "e2e/auth.setup.ts"
       - "lib/target-personal-profile.ts"

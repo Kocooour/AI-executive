@@ -9,7 +9,6 @@ on:
       - "lib/target-staging-title-search-session.ts"
       - "e2e/title-search-ui09b.spec.ts"
       - "e2e/title-search-ui09b-default-off.spec.ts"
-      - "playwright.config.ts"
       - ".github/workflows/title-search-preview-browser.yml"
 
 permissions:

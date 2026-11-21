@@ -16,7 +16,6 @@ on:
       - "e2e/humanwiki-context-source-status.spec.ts"
       - "e2e/fixtures.ts"
       - "e2e/auth.setup.ts"
-      - "playwright.config.ts"
   workflow_dispatch:
 
 permissions:

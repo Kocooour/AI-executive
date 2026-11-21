@@ -10,7 +10,6 @@ on:
       - "app/ui/target-staging-task-preview.tsx"
       - "lib/target-staging-task-preview-client.ts"
       - "e2e/task-preview-ui09f*.spec.ts"
-      - "playwright.config.ts"
       - ".github/workflows/task-preview-browser.yml"
 
 permissions:
