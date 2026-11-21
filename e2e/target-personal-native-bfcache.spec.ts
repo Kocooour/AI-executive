@@ -137,8 +137,11 @@ async function nativeBrowser(width:number){
     });
     console.log("NATIVE_BFCACHE_PHASE "+JSON.stringify({width,phase:"Chrome DevTools port ready"}));
     const pageSocket=await waitFor("Chrome page target",async()=>{
-      const pages=await fetch("http://127.0.0.1:"+port+"/json/list")
-        .then(r=>r.json()) as {type:string;webSocketDebuggerUrl?:string}[];
+      // A non-responsive DevTools JSON endpoint must not leave the outer
+      // waitFor() loop stuck beyond its own deadline (fetch includes body).
+      const pages=await fetch("http://127.0.0.1:"+port+"/json/list",{
+        signal:AbortSignal.timeout(5_000),
+      }).then(r=>r.json()) as {type:string;webSocketDebuggerUrl?:string}[];
       return pages.find(p=>p.type==="page")?.webSocketDebuggerUrl||null;
     });
     console.log("NATIVE_BFCACHE_PHASE "+JSON.stringify({width,phase:"attaching Chrome CDP"}));
