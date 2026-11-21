@@ -559,7 +559,7 @@ test("C-3a: lost Undo can be cancelled and safely replaced without replaying its
         body:JSON.stringify(command)});
       return response.status;
     },oldUndo);
-    expect(late).toBe(409,"old Undo UUID remains irrevocably retired");
+    expect(late).toBe(409); // Old Undo UUID remains irrevocably retired.
     await page.getByRole("button",{name:"Vrátit do Inboxu (Undo)"}).click();
     await findInboxRow(page,seeded.taskId);
     expect((db.prepare("SELECT triage_state FROM tasks WHERE id=?")
