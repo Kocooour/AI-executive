@@ -6,7 +6,8 @@
  */
 import type { DatabaseSync } from "node:sqlite";
 import { eligibleGlobalTaskAreas } from "./target-global-task-read-model";
-import { targetTaskWriteRevision } from "./target-task-write-preflight";
+import {targetStoreRestoreGeneration} from "./target-task-write-preflight";
+import {issueTargetInboxRevision} from "./target-inbox-command-identity";
 import type { HomeSummaryAreaEpoch } from "./target-my-plan-home-summary";
 import type { TargetReadLinearization } from "./target-task-read-model";
 
@@ -103,6 +104,8 @@ export function readAuthorizedTargetInboxPage(
       ...(request.afterTaskId ? [request.afterTaskId] : []),
       limit + 1,
     ) as Row[];
+    const generation=targetStoreRestoreGeneration(db);
+    if(!generation)return null;
     const items: TargetInboxItem[] = [];
     for (const row of rows.slice(0, limit)) {
       if (!row || typeof row.id !== "string" || typeof row.title !== "string" ||
@@ -112,7 +115,8 @@ export function readAuthorizedTargetInboxPage(
           !Number.isSafeInteger(row.taskRevision) || row.taskRevision < 0) return null;
       const canProcess = row.areaKind === "private" ||
         row.memberRole === "editor" || row.memberRole === "admin";
-      const expectedRevision = canProcess ? targetTaskWriteRevision(db, row.id) : null;
+      const expectedRevision=canProcess?issueTargetInboxRevision(db,
+        request.actorUserId,row.id,row.triageRevision,row.effectiveAreaId,generation):null;
       if (canProcess && !expectedRevision) return null;
       items.push({
         id: row.id, title: row.title, status: row.status,
