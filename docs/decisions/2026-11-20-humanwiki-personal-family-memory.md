@@ -1,6 +1,6 @@
 # Rozhodnutí 2026-11-20 — HumanWiki: osobní a rodinná paměť
 
-**Status:** schválený cílový produktový návrh; **nikoli** dodaná funkce, oprávnění k ingestaci reálných dat nebo aktivace rodinného sdílení. Doplňuje [HumanWiki bootstrap 2026-11-08](2026-11-08-humanwiki-knowledge-bootstrap.md), [Prostory/Oblasti 2026-10-23](2026-10-23-prostory-oblasti-muj-plan.md) a [LUMI-FR-014](../PRODUCT.md#lumi-fr-014). Dosavadní pravidla mailového soukromí, H1-real, R3/R4 a revokace zůstávají beze změny a mají přednost před jakýmkoli automatickým návrhem modelu.
+**Status:** **návrh k výslovnému rozhodnutí vlastníka o cílovém rozsahu**, vložený do draft [PR #488](https://github.com/Kocooour/AI-executive/pull/488) na žádost o připravení PR; bez doloženého samostatného schválení produkčního sdílení. **Není** dodanou funkcí, oprávněním k ingestaci reálných dat, změnou plánu R5 ani aktivací rodinného sdílení. Doplňuje [HumanWiki bootstrap 2026-11-08](2026-11-08-humanwiki-knowledge-bootstrap.md), [Prostory/Oblasti 2026-10-23](2026-10-23-prostory-oblasti-muj-plan.md) a [LUMI-FR-014](../PRODUCT.md#lumi-fr-014). Dosavadní pravidla mailového soukromí, H1-real včetně otevřeného [blokátoru #400](https://github.com/Kocooour/AI-executive/issues/400), R3/R4, R5 a revokace zůstávají beze změny a mají přednost před jakýmkoli automatickým návrhem modelu.
 
 ## 1. Účel a zásady
 
@@ -56,7 +56,7 @@ V existujícím **Více → Kontext / HumanWiki** a desktopovém kontextovém po
 
 Stránky je možné procházet podle **Oblastí** a **subjektů** (Já, rodina, konkrétní člen, domácnost) v rámci právě povoleného rozsahu. Detail tvrzení zřetelně rozliší „o kom“, „kdo to řekl“, „kde a komu je dostupné“, „z čeho vychází“, aktuálnost a možnost opravy. Skutečné oprávnění nelze zaměnit za pouhý vizuální štítek.
 
-Návrh ke sdílení je zřetelný a schvalovaný jako nová publikace; u citlivých tvrzení je možné nabídku vůbec nevytvořit. Přehled vždy ukazuje, že některé znalosti mohou být soukromé či nedostupné, **ale bez prozrazení jejich počtů nebo existence v cizím kontextu**.
+Návrh ke sdílení je zřetelný a schvalovaný jako nová publikace; **u citlivých nebo neautorizovatelných tvrzení se možnost publikace nenabízí (fail-closed)**. Případné budoucí výjimky vyžadují samostatně schválená ochranná pravidla a prokazatelné oprávnění, nikoliv volbu modelu nebo samotné potvrzení sdílení. Přehled vždy ukazuje, že některé znalosti mohou být soukromé či nedostupné, **ale bez prozrazení jejich počtů nebo existence v cizím kontextu**.
 
 ## 7. Obsidian a externí Markdown
 
@@ -74,13 +74,13 @@ Obsidian je **volitelným prohlížečem/exportem**, nikoli autoritativní datab
 | ID | Ověřitelný scénář |
 |---|---|
 | HW-FAM-01 | A uloží osobní preferenci ze svého soukromého chatu. Uživatel B ji nezíská dotazem, Context Resolvrem, hledáním, API ani exportem. |
-| HW-FAM-02 | B uvede svoji preferenci v oprávněném sdíleném kontextu. Tvrzení má subjekt B; profil A ani společná preference rodiny se nezmění. |
+| HW-FAM-02 | B uvede novou osobní preferenci i v oprávněném sdíleném kontextu. **Nový osobní claim se výchozím stavem uloží do B soukromé Oblasti Nezařazeno**, se subjektem B; není tím zpřístupněn dalším členům sdílené Oblasti přes HumanWiki, hledání ani AI. Do sdílené Oblasti smí být samostatně publikován až po B výslovném schválení konkrétního obsahu a platné Area/source autorizaci. Profil A ani rodinná preference se nezmění; původní sdílená zpráva zůstává samostatně viditelná podle svých již platných oprávnění. |
 | HW-FAM-03 | Sdílený projekt o dovolené navrhne Oblast; soukromá kalendářová poznámka nebo importovaný e-mail s ním související se **automaticky nesdílí**. |
 | HW-FAM-04 | Rodinná společná preference vznikne pouze z oprávněných výroků/důkazů a správného subjektu, nikoli z jedné neověřené zmínky nebo AI shrnutí. |
 | HW-FAM-05 | Citlivé informace o dítěti se bez samostatných ochranných pravidel nevydají a nejsou prozrazeny ani v souhrnu. |
 | HW-FAM-06 | Po odebrání člena sdílené Oblasti selžou všechna nová čtení, hledání a exporty včetně stale-response, backlinks a embeddingů. Offline kopii nelze prohlásit za odstraněnou. |
 | HW-FAM-07 | Publikace soukromé odvozeniny vyžaduje přesné preview obsahu/recipientů, zdrojové právo a potvrzení na platné policy revizi. Staré potvrzení neplatí po revokaci. |
-| HW-FAM-08 | Markdown export uživatele A obsahuje jeho Osobní a aktuálně oprávněné Sdílené bez odkazů/počtů cizích neveřejných znalostí. Rodinný vault nikdy neobsahuje A soukromé poznámky. |
+| HW-FAM-08 | **(a)** A osobní vault obsahuje pouze A autorizované soukromé znalosti. **(b)** Každý rodinný/sdílený vault obsahuje pouze znalosti povolené jeho konkrétním Area ACL a **nikdy** A soukromé poznámky. **(c)** Volitelný agregát `Vše` zahrne A soukromé a A autorizované sdílené znalosti **výhradně v A osobním lokálním náhledu**, nikoli v rodinném vaultu. Žádný export nesmí prozradit odkazy, názvy, počty ani metadata cizích neveřejných znalostí. |
 | HW-FAM-09 | Obě osobní preference A/B mohou být protichůdné; společné doporučení nepoužije soukromý údaj B, který B nezpřístupnil pro daný účel. |
 | HW-FAM-10 | Zastavení zdroje, odvolání AI souhlasu, smazání znalosti a odebrání člena mají oddělené účinky včetně invalidace souvisejících odvozenin podle H1-real. |
 
@@ -89,8 +89,8 @@ Všechny scénáře vyžadují alespoň syntetické víceidentitní / víceoblas
 ## 9. Zavádění a otevřená rozhodnutí
 
 1. **Model a autorizační kontrakt:** rozšířit Context Graph o explicitní subjekt + vztah k aktuální Area a provenance (bez paralelní DB), připravit výše uvedené akceptace.
-2. **Osobní HumanWiki (H1/H2):** pouze po existujících use-time ACL, source-specific consent, review, witness/revoke a R3/R4. Nejprve owner-private import a čtení.
-3. **Více identit a společná paměť:** až po ověřených multi-user Area, revokaci, oddělení preferencí a schválených publikacích. **Neobcházet pořadí současné H0–H4 roadmapy.**
+2. **Osobní HumanWiki (H1/H2):** pouze po existujících use-time ACL, source-specific consent, review, witness/revoke a R3/R4. **H1-real je aktuálně pozastaveno do uzavření otevřeného provozního bloku [#400](https://github.com/Kocooour/AI-executive/issues/400)**: nezávislý witness host, off-backup antirollback a durable source ACK. Produkční R4 pro `personal-v1` jednoho vlastníka tento blok neruší. Nejprve owner-private import a čtení až po samostatném souhlasu.
+3. **Více identit a společná paměť:** **až v R5** po produkčně ověřených víceuživatelských identitách, pozvánkách, Area ACL, bezpečném syncu a revokaci, oddělení preferencí a schválených publikacích. Navíc nesmí obejít pozastavené H1-real / [#400](https://github.com/Kocooour/AI-executive/issues/400), stávající H0–H4 pořadí, samostatné owner schválení ani negativní HW-FAM testy. R4 single-owner není akceptací R5.
 4. **Obsidian:** nejprve omezený bezpečný read-only Markdown export, pak případně samostatně navržená obousměrná editace.
 
 Otevřené pro budoucí samostatné rozhodnutí: účty dětí a oprávnění zákonných zástupců; kdo může souhlasit se sdílením údajů třetích osob; délka retence per-source; konkrétní API a synchronizační model pro Obsidian; sdílení souhrnných doporučení bez prozrazení chráněných vstupů. **Tento dokument sám žádnou z těchto výjimek neschvaluje.**
