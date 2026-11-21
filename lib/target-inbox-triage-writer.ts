@@ -15,6 +15,8 @@ import { isTargetStagingSessionTokenHash,lookupLiveTargetStagingSession }
   from "./target-staging-durable-session";
 import { verifiedActor,type TargetStagingReadCredential } from "./target-task-authenticated-read";
 import { fingerprint } from "./target-task-staging-writer";
+import {issueTargetInboxRevision,verifyIssuedTargetInboxRevision,
+  verifyTargetInboxCommandId} from "./target-inbox-command-identity";
 import {
   checkTargetTaskWriteContract,targetTaskWriteTarget,canWriteIsolatedTargetArea,
   targetStoreRestoreGeneration,targetTaskWriteRevision,
@@ -173,16 +175,15 @@ export function readTargetInboxTriageReceipt(
           canWriteIsolatedTargetArea(db,actor,command.writeAreaId)))
         return "cancelled";
       if(cancelled==="conflict")return "conflict";
-      // A monotonic task CAS mismatch is a durable negative proof: the
-      // original Process/Undo cannot ever pass the pinned writer's CAS again
-      // within this restore generation, even if its HTTP POST arrives late.
-      // A tombstoned ID likewise cannot be recreated (canonical DDL guard).
-      // These statuses do not claim that a Process happened or expose content;
-      // a matching committed receipt, if any, always wins above.
+      // Only a server-issued actor-specific command can receive a terminal
+      // negative answer; Bob cannot ask about Alice's old UUID after a move.
+      if(!verifyIssuedTargetInboxRevision(actor,command)||
+          !verifyTargetInboxCommandId(command))return null;
       if(target==="tombstone"&&
           targetInboxTombstoneCancelWitness(db,actor,command.taskId))return "cancelled";
-      if(target==="live"&&targetTaskWriteRevision(db,command.taskId)!==command.expectedRevision)
-        return "cancelled";
+      if(target==="live"&&issueTargetInboxRevision(db,actor,command.taskId,
+          command.expectedTriageRevision,command.writeAreaId,
+          command.restoreGeneration)!==command.expectedRevision)return "cancelled";
       return target==="live"&&checkTargetTaskWriteContract(db,actor,command).ok
         ?"not_recorded":null;
     }
@@ -220,8 +221,15 @@ export function writePreflightedTargetInboxTriage(
       .get(receiptKey) as {request_digest:string}|undefined;
     if(prior)return prior.request_digest===digest?{ok:true,replayed:true}:
       {ok:false,reason:"idempotency_conflict"};
+    // Only newly issued signed commands pass this gate. Legacy committed
+    // receipts and irreversible old negative fences were resolved above.
+    if(!verifyIssuedTargetInboxRevision(actor,command))return denied();
+    if(!verifyTargetInboxCommandId(command))
+      return {ok:false,reason:"idempotency_conflict"};
     fingerprint(databaseFd);
-    if(targetTaskWriteRevision(db,command.taskId)!==command.expectedRevision)
+    if(issueTargetInboxRevision(db,actor,command.taskId,
+        command.expectedTriageRevision,command.writeAreaId,
+        command.restoreGeneration)!==command.expectedRevision)
       return {ok:false,reason:"stale_revision"};
     const before=db.prepare(
       "SELECT triage_state,triaged_at,triage_revision,revision FROM tasks WHERE id=?",
