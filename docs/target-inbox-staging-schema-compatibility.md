@@ -42,7 +42,33 @@ journal unchanged. The existing v26→v27 migration tests prove the separate
 supported upgrade. `tests/target-inbox-triage-writer.test.mjs` protects
 4,096 simultaneously active Process receipts and their reserved Undo capacity.
 
-## C-3a cancellation: bounded monotonic CAS retirement
+## C-3a cancellation: issued command identity and bounded retirement
+
+The Inbox read endpoint issues an actor-specific, signed `expectedRevision`
+**only** for rows the actor can currently edit. This 64-hex CAS contains a
+128-bit fingerprint of the canonical task revision plus a 128-bit HMAC,
+bound to actor, task, Area, triage epoch and restore generation. The underlying
+HMAC key is domain-separated from `AI_EXECUTIVE_SESSION_SECRET`; only the
+Inbox-specific derived key enters isolated read/write workers. The signing
+secret itself is never sent to a child or to the browser.
+
+The client derives a UUIDv5-shaped command ID from the *entire* original
+Process/Undo payload, including its issued CAS and any Undo parent ID. The
+server independently checks BOTH the actor-issued HMAC and exact UUID binding
+under the pinned write lock. Consequently a retired UUID cannot be used with
+a new CAS, Area, actor, mode or Undo parent—even though new cancellations do
+not create unlimited UUID tombstones. No actor other than the original issuer
+can obtain `cancelled` for that original command from a stale read witness.
+An older draft committed receipt or exact permanent cancellation fence is
+still acknowledged by its existing actor-bound receipt/digest before the new
+issuance check; new unsigned commands are not accepted.
+
+**Deployment:** signed Inbox witnesses are specific to the currently
+configured application session secret and restore generation. Rotate either
+only with explicit migration and pending-command reconciliation. Older
+in-flight *uncommitted* unsigned draft commands cannot be silently treated
+as signed; keep the C-3a HTTP flags disabled until outstanding draft clients
+are drained or the isolated stage has been explicitly and safely rotated.
 
 An ambiguous Process/Undo POST is serialized under the pinned staging write
 lock against the cancellation operation. A task can never return to an older
@@ -64,11 +90,14 @@ any late original command from passing the *same* CAS again.
    write or metadata growth. The committed receipt always takes precedence.
 3. **Immutable deleted task:** Only an actor still allowed to write its
    tombstone may explicitly request cancellation. The first such request
-   stores ONE `r3:inbox-tombstone-cancel-v1:<sha256>` marker containing only
-   the actor and task IDs. Its key is derived from both; further requests
-   with arbitrarily many UUIDs re-use that exact marker. Subsequent receipt
-   reads may acknowledge this actor's reconciliation without revealing a
-   tombstone before the explicit request. Canonical preflight verifies the
+   stores ONE `r3:inbox-tombstone-cancel-v1:<sha256>` marker with an
+   opaque pair of actor/task SHA-256 digests (never plaintext IDs). Its key is
+   derived from both. Only a server-issued, actor-signed original command
+   with current ACL to its original Area may create this marker; guessed
+   tombstone IDs and fabricated UUIDs fail closed. Repeated cancellation of
+   the same issued command reuses the existing marker. Subsequent receipt
+   reads can acknowledge this actor's issued command without exposing any
+   deleted task to another editor. Canonical preflight verifies the
    registered identity, matching immutable task tombstone, key derivation and
    the per-actor bound of at most **4,096 markers** (the tombstone table's
    own hard bound). No task, no marker.
@@ -97,10 +126,12 @@ tombstones, reset task revisions or restore an old database under the
 unchanged generation.
 
 Regression coverage: `tests/target-inbox-http.test.mjs` verifies forged
-nonexistent tasks cannot write; four unrelated UUIDs aimed at one unchanged
-original snapshot produce only one monotonic revision advance; existing
-4,096-row legacy and draft-shard ledgers remain unchanged and do not block
-safe recovery; receipt/Process races and tombstone ACL still hold.
+nonexistent tasks and fabricated command IDs cannot write; a *valid signed*
+cancellation advances the original task CAS just once; a retired UUID cannot
+be rebound to a fresh issued CAS; existing 4,096-row legacy and draft-shard
+ledgers remain unchanged and do not block safe recovery. Cross-actor Area
+moves cannot reveal another user's uncommitted receipt; tombstone markers
+never contain plaintext actor/task IDs; receipt/Process races and ACL hold.
 `e2e/target-inbox-acceptance.spec.ts` exercises a lost POST followed by
 a concurrent title edit, and confirms zero new permanent UUID fences.
 
