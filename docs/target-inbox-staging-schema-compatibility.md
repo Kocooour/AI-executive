@@ -115,6 +115,37 @@ New cancellations create no additional actor+UUID fences. The one-per-tombstone
 marker is an additive, content-free metadata namespace in this still-unreleased
 v27 draft.
 
+**Cancelled Undo replacement:** If a pending *Undo* is explicitly cancelled
+before it commits, its original CAS is retired by the monotonic task revision,
+but the original Process receipt remains usable for a fresh, separately
+self-bound Undo **only when the intervening task revisions were caused solely
+by those Undo cancellations**. A single canonical
+`r3:inbox-undo-rebase-v1:<actor-scoped Process receipt SHA-256>` metadata
+record tracks the latest such revision; it contains only that revision number,
+never a name, actor or task ID. Repeated Undo cancellations update the same
+record. The record is checked with the exact Process receipt, actor, task,
+triage epoch, restore generation, current edit ACL and current CAS, plus the
+absence of a committed Undo child. A newer ordinary edit moves the task
+revision beyond the witness and **permanently disables that Process's Undo**;
+a prior cancelled Undo UUID can never be rebound to a new CAS.
+
+The receipt endpoint returns an authorized replacement Undo witness for a
+cancelled Undo while that lineage is still current. Browser UI makes the
+replacement available immediately and preserves the original cancelled command
+in tab-scoped recovery storage across reload, revalidating its receipt rather
+than automatically reissuing the old UUID. A missing/failed receipt leaves
+the recovery uncertain. Process cancellation behavior is unchanged.
+
+Canonical preflight validates each marker's retained Process receipt,
+strict revision bounds, live task or tombstone monotonicity and any committed
+Undo child. The metadata count is at most the 8,192 retained Process/Undo
+receipts; normal 90-day receipt maintenance cleans markers only after their
+Process receipt is safely pruned. Receipt capacity reserves future Undo even
+after cancellation-only revision advances. No extra table, schema DDL change,
+raw session secret in workers, permanent per-Undo fences or task-content
+persistence is introduced. A forged marker, dangling parent, inconsistent
+historical Undo revision, or unexpected metadata remains fail-closed.
+
 **Operational gates:** Monitor the isolated staging SQLite, canonical
 preflight and ordinary bounded `change_log` capacity. A 503 or an untrusted
 journal is NOT authority to retry under a new UUID; recover using the exact
