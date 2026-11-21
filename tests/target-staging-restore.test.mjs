@@ -732,7 +732,7 @@ test("a wrong configured generation refuses; a backup of another store refuses",
 
 test("v25 backup remains restorable after a v26 project title command", () => {
   const fx = makeFixture();
-  fx.db.exec("DROP TABLE project_title_audit; UPDATE metadata SET value='25' WHERE key='schema_version'");
+  fx.db.exec("DROP TABLE task_triage_receipts; DROP TRIGGER task_triage_create_guard; DROP TRIGGER task_triage_revision_guard; DROP TRIGGER task_triage_task_revision; DROP INDEX tasks_unprocessed_by_id; ALTER TABLE tasks DROP COLUMN triage_revision; ALTER TABLE tasks DROP COLUMN triaged_at; ALTER TABLE tasks DROP COLUMN triage_state; DROP TABLE project_title_audit; UPDATE metadata SET value='25' WHERE key='schema_version'");
   fx.db.prepare("INSERT INTO projects(id,area_id,title) VALUES ('project',?,'Before')").run(fx.stage.unassignedAreaId);
   assert.equal(preflight(fx).ok, true);
   const backup = backupOf(fx);
@@ -773,7 +773,7 @@ test("a backup of another schema version is refused with its own reason, nothing
   const backup = backupOf(fx);
   assert.equal(titleWrite(fx, "t2", "y").ok, true);
   copyBack(fx, backup);
-  fx.db.prepare("UPDATE metadata SET value=? WHERE key='schema_version'").run(String(TARGET_STORE_SCHEMA_VERSION - 2));
+  fx.db.prepare("UPDATE metadata SET value=? WHERE key='schema_version'").run(String(TARGET_STORE_SCHEMA_VERSION - 3));
   const before = worldHash(fx);
   assert.deepEqual(restoreLib.restoreTargetStagingFromBackup(fx.store), { ok: false, reason: "unsupported_backup" });
   assert.equal(worldHash(fx), before);

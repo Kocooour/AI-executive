@@ -13,6 +13,8 @@ import type { ShellNavigationModel } from "../../../lib/target-shell-views";
 
 // R3-FE-4a: loaded only when the server page enabled target scopes with the project index.
 const TargetSidebarProjects = dynamic(() => import("../target-sidebar-projects"), { ssr: false });
+// C-3a: this badge reads only actor-authorized target Inbox counts, never sidebarCounts.
+const TargetInboxCount = dynamic(() => import("../target-inbox").then(m=>m.TargetInboxCount), { ssr: false });
 
 export function Sidebar({ app, navigation, targetPlan = false, onTargetCapture }: {
   app: LumiApp; navigation?: ShellNavigationModel; targetPlan?: boolean; onTargetCapture?:()=>void;
@@ -186,6 +188,7 @@ export function Sidebar({ app, navigation, targetPlan = false, onTargetCapture }
               key={x}
             >
               <span className="navLabel"><span aria-hidden="true"><ViewIcon name={planPreview ? "MyPlanPreview" : mobileDesignV1Preview && x === "Today" ? "TodayV1" : mobileDesignV1Preview && x === "Projects" ? "ProjectsV1" : x} /></span>{planPreview ? (language === "cs" ? "Můj plán" : "My Plan") : tr(x)}</span>
+              {personalV1 && x === "Inbox" && navigation?.byView.Inbox === "primary" ? <TargetInboxCount /> : null}
               {!personalV1 && (x === "Inbox" || x === "Today") ? (
                 <span className="navCount">{sidebarCounts[x]}</span>
               ) : null}
@@ -214,7 +217,7 @@ export function Sidebar({ app, navigation, targetPlan = false, onTargetCapture }
               {navigation.archive.map(x=><button key={x} type="button"
                 className={view===x&&!(x==="Today"&&app.mobilePlanPreviewActive)?"active":""} data-nav-view={x}
                 data-nav-archive="true" aria-current={view===x&&!(x==="Today"&&app.mobilePlanPreviewActive)?"page":undefined}
-                onClick={event=>navigateToView(x,event.currentTarget)}>{tr(x==="LegacyHome"?"Home":x==="LegacyUpcoming"?"Upcoming":x)}</button>)}
+                onClick={event=>navigateToView(x,event.currentTarget)}>{tr(x==="LegacyHome"?"Home":x==="LegacyUpcoming"?"Upcoming":x==="LegacyInbox"?"Inbox":x)}</button>)}
             </div>
           </section>
         )}

@@ -40,6 +40,7 @@ import { OfflineRecoveryDialog } from "./views/offline-recovery-dialog";
 // R3-FE-2: loaded (with its CSS) only when the server page enabled the target My Plan.
 const TargetMyPlan = dynamic(() => import("./target-my-plan"), { ssr: false });
 const TargetOverview = dynamic(() => import("./target-overview"), { ssr: false });
+const TargetInbox = dynamic(() => import("./target-inbox"), { ssr: false });
 
 // R3-FE-3: the scope switcher and the server-backed Projects / Notes lists load only
 // when the server page enabled target scopes; otherwise they are never fetched.
@@ -62,7 +63,7 @@ export type TargetEditsProps = TargetUiEdits;
 export type TargetCreatesProps = { projects:boolean; projectTasks:boolean };
 export type TargetMyPlanProps = { enabled: boolean; statusWrite: boolean; whenWrite: boolean };
 
-export function LumiAppRoot({ targetHomeSummary = false, targetMyPlan, targetScopes, targetDetails, targetEdits, targetCreates, targetNoteEdit = false, targetProjectEdit = false, targetPrivateNoteAreas = false, targetPrivateNoteCreate = false, targetPrivateTaskCreate = false, targetSearch = false, humanWikiSourceStatusEnabled = false }: { targetHomeSummary?:boolean; targetMyPlan?: TargetMyPlanProps; targetScopes?: TargetScopesProps; targetDetails?: TargetDetailsProps; targetEdits?: TargetEditsProps; targetCreates?: TargetCreatesProps; targetNoteEdit?: boolean; targetProjectEdit?: boolean; targetPrivateNoteAreas?: boolean; targetPrivateNoteCreate?: boolean; targetPrivateTaskCreate?: boolean; targetSearch?: boolean; humanWikiSourceStatusEnabled?: boolean } = {}) {
+export function LumiAppRoot({ targetHomeSummary = false, targetInboxRead = false, targetMyPlan, targetScopes, targetDetails, targetEdits, targetCreates, targetNoteEdit = false, targetProjectEdit = false, targetPrivateNoteAreas = false, targetPrivateNoteCreate = false, targetPrivateTaskCreate = false, targetSearch = false, humanWikiSourceStatusEnabled = false }: { targetHomeSummary?:boolean; targetInboxRead?:boolean; targetMyPlan?: TargetMyPlanProps; targetScopes?: TargetScopesProps; targetDetails?: TargetDetailsProps; targetEdits?: TargetEditsProps; targetCreates?: TargetCreatesProps; targetNoteEdit?: boolean; targetProjectEdit?: boolean; targetPrivateNoteAreas?: boolean; targetPrivateNoteCreate?: boolean; targetPrivateTaskCreate?: boolean; targetSearch?: boolean; humanWikiSourceStatusEnabled?: boolean } = {}) {
   // Owner decision 2026-11-09: with target scopes on, the single global scope governs the
   // sidebar projects, the inspector and quick capture (see docs/R3-FE-04A-DETAILS.md).
   const scopesOn = Boolean(targetScopes?.enabled);
@@ -81,14 +82,15 @@ export function LumiAppRoot({ targetHomeSummary = false, targetMyPlan, targetSco
   const taskCaptureReady=Boolean(targetPrivateTaskCreate&&targetCapture&&
     targetMyPlan?.enabled&&detailGates.task);
   const shellInput = { scopesOn, projectsList: Boolean(targetScopes?.projects), notesList: Boolean(targetScopes?.notes),
-    myPlan: Boolean(targetMyPlan?.enabled), v1Shell: mobileDesignV1Preview, homeRead:targetHomeSummary };
+    myPlan: Boolean(targetMyPlan?.enabled), v1Shell: mobileDesignV1Preview, homeRead:targetHomeSummary, inboxRead:targetInboxRead };
   // C-1: the fully enabled personal-v1 profile has a target-only primary
   // navigation and a separate archive. Partial/off profiles keep old UI.
   const shellNavigation=targetShellNavigationFor({...shellInput,targetSearch,quickCapture:targetCapture});
   // Details act only on views that really render target data (never on legacy views).
   const targetViews = targetViewsFor({...shellInput,personalV1:shellNavigation.personalV1});
   const detailsOn = detailsActive(detailGates, targetViews);
-  const app = useLumiApp({ targetDetails: detailsOn, targetUnified: scopesOn, targetViews: detailsOn ? targetViews : [], preferTargetPlan: shellNavigation.personalV1 });
+  const targetInboxEnabled=shellNavigation.personalV1&&shellNavigation.byView.Inbox==="primary";
+  const app = useLumiApp({ targetDetails: detailsOn, targetUnified: scopesOn, targetViews: detailsOn ? targetViews : [], preferTargetPlan: shellNavigation.personalV1, targetInboxEnabled });
   const {
     activeWorkspace,
     activeWorkspaceId,
@@ -209,9 +211,12 @@ export function LumiAppRoot({ targetHomeSummary = false, targetMyPlan, targetSco
     );
   }
   const targetOverview=shellNavigation.personalV1&&targetHomeSummary&&(view==="Home"||view==="Upcoming");
+  // A target Inbox address may never fall through to EntityList (legacy tasks/mail).
+  // Keep fail-closed until its authorized HTTP reader and UI are connected.
+  const targetInboxActive=targetInboxEnabled&&view==="Inbox";
   const scopeSwitcher = scopeList !== null || (scopesOn && (targetPlan || targetOverview || (targetSearch && view==="Search")));
   // The legacy inspector is never fed legacy records in a target view.
-  const targetView = scopeList !== null || targetPlan || targetOverview || (targetSearch && view==="Search");
+  const targetView = scopeList !== null || targetPlan || targetOverview || targetInboxActive || (targetSearch && view==="Search");
   const legacyInspector = Boolean(app.selected) && !(scopesOn && targetView);
   // Unified target mode: views that still show legacy data are read-only (no target create/edit API yet).
   // The router internally represents target My Plan as Today; it is *not* archival.
@@ -339,6 +344,7 @@ export function LumiAppRoot({ targetHomeSummary = false, targetMyPlan, targetSco
             onCreated={closeAreaChooser} />}
           <CalendarView app={app} eventsOnly={shellNavigation.personalV1} />
           {!targetOverview && <HomeView app={app} />}
+          {targetInboxActive && <TargetInbox language={language} taskDetail={detailGates.task} />}
           {targetOverview && <TargetOverview kind={view==="Home"?"home":"upcoming"}
             language={language} taskDetail={detailGates.task} />}
           {view === "Today" && !targetPlan && <TodayTop app={app} />}
@@ -354,7 +360,7 @@ export function LumiAppRoot({ targetHomeSummary = false, targetMyPlan, targetSco
               ? <TargetScopeLists key={scopeList==="note"?scopeList+":"+noteListRevision:scopeList} kind={scopeList} language={language}
                 detail={scopeList === "project" ? detailGates.project : detailGates.note}
                 createProject={Boolean(targetCreates?.projects&&scopeList==="project")} />
-              : !targetOverview && legacySearchSurfaces.entityList
+              : !targetOverview && !targetInboxActive && legacySearchSurfaces.entityList
                 ? <EntityList app={app} />
                 : null}
           {view === "Today" && !targetPlan && <TodayFooter app={app} />}

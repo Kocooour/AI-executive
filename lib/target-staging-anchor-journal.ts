@@ -33,12 +33,12 @@ export type TargetStagingJournalKind =
   | "schema_upgrade" | "project_title" | "title" | "delete" | "membership" | "session_issue" | "session_revoke"
   | "session_revoke_all" | "compaction" | "restore" | "note_edit" | "note_delete"
   | "note_create" | "note_move" | "task_create" | "project_create" | "project_task_create" | "temporal_status" | "temporal_due_on" | "personal_when"
-  | "personal_attention" | "personal_notification";
+  | "personal_attention" | "personal_notification" | "task_triage";
 const KINDS = new Set<string>([
   "schema_upgrade", "project_title", "title", "delete", "membership", "session_issue", "session_revoke",
   "session_revoke_all", "compaction", "restore", "note_edit", "note_delete",
   "note_create", "note_move", "task_create", "project_create", "project_task_create", "temporal_status", "temporal_due_on", "personal_when",
-  "personal_attention","personal_notification",
+  "personal_attention","personal_notification","task_triage",
 ]);
 export type TargetStagingJournalValue = string | number | null | readonly number[] | readonly (readonly string[])[];
 export type TargetStagingJournalPayload = { readonly [key: string]: TargetStagingJournalValue };

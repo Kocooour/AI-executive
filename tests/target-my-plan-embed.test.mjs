@@ -125,7 +125,7 @@ test("flag off: the root loads the target screen lazily and only for target mode
   assert.match(rootSource,/: scopeList\s*\n\s*\? <TargetScopeLists key=\{scopeList==="note"\?scopeList\+":"\+noteListRevision:scopeList\}/);
   assert.match(rootSource,/detail=\{scopeList === "project" \? detailGates\.project : detailGates\.note\}/);
   assert.match(rootSource,/createProject=\{Boolean\(targetCreates\?\.projects&&scopeList==="project"\)\}/);
-  assert.match(rootSource,/: !targetOverview && legacySearchSurfaces\.entityList\s*\? <EntityList app=\{app\} \/>\s*: null\}/);
+  assert.match(rootSource,/: !targetOverview && !targetInboxActive && legacySearchSurfaces\.entityList\s*\? <EntityList app=\{app\} \/>\s*: null\}/);
   // Target Search must not mount any legacy row or held-back title either.
   assert.match(rootSource,/\{legacySearchSurfaces\.heldBack && !targetOverview && <HeldBack app=\{app\} \/>\}/);
   // Legacy pieces that would claim legacy data are suppressed in target mode.

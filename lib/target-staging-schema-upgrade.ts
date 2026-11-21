@@ -7,7 +7,7 @@
  */
 import {
   TARGET_PROJECT_TITLE_SCHEMA_SQL, TARGET_STORE_LEGACY_SCHEMA_VERSION,
-  TARGET_STORE_SCHEMA_VERSION,
+  TARGET_STORE_PREVIOUS_SCHEMA_VERSION,
 } from "./target-store-bootstrap";
 import { inspectIsolatedTargetStore } from "./target-store-preflight";
 import { withPinnedTargetStagingWrite } from "./target-staging-pinned-write";
@@ -22,14 +22,14 @@ export function upgradeTargetStagingV25(store: TargetStagingReadStore): TargetSc
     const {db} = context;
     const version = (db.prepare("SELECT value FROM metadata WHERE key='schema_version'").get() as
       {value:string} | undefined)?.value;
-    if (version === String(TARGET_STORE_SCHEMA_VERSION)) return {ok:true,status:"already_current"};
+    if (version === String(TARGET_STORE_PREVIOUS_SCHEMA_VERSION) || version === "27") return {ok:true,status:"already_current"};
     // The pinned writer already checked the complete v25 DDL, all data,
     // generation, anchor and witness. No guessed or partially migrated schema.
     if (version !== String(TARGET_STORE_LEGACY_SCHEMA_VERSION) ||
         !context.stillPinned() || !context.noSidecars()) return {ok:false,reason:"unavailable"};
     db.exec(TARGET_PROJECT_TITLE_SCHEMA_SQL);
     const updated = db.prepare("UPDATE metadata SET value=? WHERE key='schema_version' AND value=?")
-      .run(String(TARGET_STORE_SCHEMA_VERSION),String(TARGET_STORE_LEGACY_SCHEMA_VERSION));
+      .run(String(TARGET_STORE_PREVIOUS_SCHEMA_VERSION),String(TARGET_STORE_LEGACY_SCHEMA_VERSION));
     if (updated.changes !== 1 || !context.stillPinned()) return {ok:false,reason:"write_failed"};
     // Verify the complete v26 schema and every existing data invariant inside
     // the same transaction before the journal intent and commit.

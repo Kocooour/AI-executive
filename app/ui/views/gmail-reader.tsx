@@ -6,7 +6,7 @@ import { gmailJson, type Account, type Detail, type Folder, type Message, type T
 
 // Inbox -> From mail: previews of the connected Gmail accounts, one message or conversation on request
 // and an explicit "create task" from a message. Nothing is stored except the task the user confirms.
-export function GmailReader({ app }: { app: LumiApp }) {
+export function GmailReader({ app, readOnly = false }: { app: LumiApp; readOnly?: boolean }) {
   const { language, tr } = app;
   const workspaceId = app.activeWorkspaceId === "all" ? "" : app.activeWorkspaceId;
   const [accounts, setAccounts] = useState<Account[]>([]);
@@ -26,6 +26,7 @@ export function GmailReader({ app }: { app: LumiApp }) {
   const [taskTitle, setTaskTitle] = useState("");
   const [createdTaskId, setCreatedTaskId] = useState("");
   const detailVersion = useRef(0);
+  const folderVersion = useRef(0);
   const taskCreateInFlight = useRef(false);
   const label = (cs: string, en: string) => language === "cs" ? cs : en;
 
@@ -42,10 +43,11 @@ export function GmailReader({ app }: { app: LumiApp }) {
   }
 
   useEffect(() => {
+    folderVersion.current++;
     invalidateLookups();
     setBusy(false); // In-flight actions from the previous workspace no longer own this panel.
     setAccounts([]); setSelected(""); setMessages([]); setDetail(null); setThread(null); setThreadBusy(false); setError(""); setLoaded(false); setLoadFailed(false);
-    if (!workspaceId || app.offlineView) return;
+    if (!workspaceId || app.offlineView || app.authState !== "ready") return;
     let live = true;
     void json("/api/mail/gmail?workspaceId=" + encodeURIComponent(workspaceId))
       .then((data) => { if (live) { setAccounts(data.accounts as Account[]); setLoaded(true); } })
@@ -53,10 +55,11 @@ export function GmailReader({ app }: { app: LumiApp }) {
     return () => { live = false; };
     // app object changes every render; the workspace is the only API scoping dependency.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [workspaceId, app.offlineView]);
+  }, [workspaceId, app.offlineView, app.authState]);
 
   async function openFolder(account: Account, nextFolder: Folder) {
     if (busy || taskCreateInFlight.current || !workspaceId) return;
+    const version=++folderVersion.current;
     invalidateLookups();
     setBusy(true); setError(""); setMessages([]); setDetail(null); setThread(null); setThreadBusy(false); setCreatedTaskId("");
     setSelected(account.id); setFolder(nextFolder);
@@ -64,9 +67,9 @@ export function GmailReader({ app }: { app: LumiApp }) {
       const data = await json("/api/mail/gmail/messages", {
         workspaceId, accountId: account.id, folder: nextFolder, q: query.trim(),
       });
-      setMessages(data.messages as Message[]);
-    } catch { setError(tr("mailReadFailed")); }
-    finally { setBusy(false); }
+      if (folderVersion.current === version) setMessages(data.messages as Message[]);
+    } catch { if (folderVersion.current === version) setError(tr("mailReadFailed")); }
+    finally { if (folderVersion.current === version) setBusy(false); }
   }
 
   async function openDetail(account: Account, messageId: string, preserveThread = false) {
@@ -135,6 +138,7 @@ export function GmailReader({ app }: { app: LumiApp }) {
   }, [app.mailSourceToOpen, accounts, loaded, loadFailed, workspaceId]);
 
   async function createMailTask() {
+    if (readOnly || app.legacyWritesDisabled) return;
     if (!detail || !taskTitle.trim() || !selected || !workspaceId || taskCreateInFlight.current || createdTaskId) return;
     const account = accounts.find((item) => item.id === selected);
     if (!account) return;
@@ -160,6 +164,9 @@ export function GmailReader({ app }: { app: LumiApp }) {
   if (app.offlineView) return <section className="mailReader" aria-label={tr("inboxTabMail")}><p role="status">{tr("assistantOffline")}</p></section>;
   return (
     <section className="mailReader" aria-label={tr("inboxTabMail")}>
+      {readOnly && <p className="settingsHint" role="status">{label(
+        "Připojený e-mail — jen čtení. Zprávy se načítají aktuálně, nejde o archivovanou kopii.",
+        "Connected email — read only. Messages are fetched live, not from an archived snapshot.")}</p>}
       {loaded && accounts.length === 0 && !error && (
         <div className="empty mailTabEmpty">
           <p><strong>{tr("mailTabNoAccountTitle")}</strong></p>
@@ -249,7 +256,7 @@ export function GmailReader({ app }: { app: LumiApp }) {
               )}
               <pre style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere", maxHeight: "24rem", overflowY: "auto" }}>{detail.text || label("Textová část zprávy není dostupná.", "No readable text part is available.")}</pre>
               {detail.truncated && <p role="status">{label("Zobrazuje se pouze prvních 32 000 znaků zprávy.", "Only the first 32,000 characters are shown.")}</p>}
-              <div className="icloudForm">
+              {!readOnly && !app.legacyWritesDisabled && <div className="icloudForm">
                 <h3>{label("Vytvořit úkol z e-mailu", "Create a task from email")}</h3>
                 <p className="settingsHint">{label(
                   "Uprav název úkolu. Uloží se pouze název a odkaz na zdrojovou zprávu, nikoliv její obsah. Úkol vznikne až po potvrzení.",
@@ -268,7 +275,7 @@ export function GmailReader({ app }: { app: LumiApp }) {
                       {" "}
                       <button type="button" onClick={() => app.setInboxTab("tasks")}>{label("Zobrazit úkoly", "Show tasks")}</button>
                     </p>}
-              </div>
+              </div>}
             </section>
           )}
       {busy && <p role="status">{tr("syncing")}</p>}

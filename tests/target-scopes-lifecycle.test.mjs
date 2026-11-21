@@ -224,7 +224,7 @@ test("wiring: flags off -> legacy tree, lazy chunks only, no eager import, no re
   assert.match(helper,/input\.scopesOn&&input\.view==="Notes"&&input\.notesList\?"note":null/);
   assert.match(root_,/\{scopeSwitcher && <TargetScopeSwitcher language=\{language\} variant=/);
   // Legacy lists stay the fallback for every other case.
-  assert.match(root_,/: !targetOverview && legacySearchSurfaces\.entityList\s*\? <EntityList app=\{app\} \/>/);
+  assert.match(root_,/: !targetOverview && !targetInboxActive && legacySearchSurfaces\.entityList\s*\? <EntityList app=\{app\} \/>/);
   assert.match(root_,/\{legacySearchSurfaces\.heldBack && !targetOverview && <HeldBack app=\{app\} \/>\}/);
   const page=read("app/page.tsx");
   assert.match(page,/targetScopes=\{config\?\.scopes\}/);

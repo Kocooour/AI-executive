@@ -44,7 +44,7 @@ if (!process.env.LUMI_E2E_RUN_DIR) {
   });
   // Opt-in personal acceptance: a REAL isolated target SQLite store inside the run dir (never a legacy or
   // production path), created once per run; workers inherit the settings through the environment.
-  if (process.env.LUMI_TARGET_PERSONAL_ACCEPTANCE_E2E === "true") {
+  if (process.env.LUMI_TARGET_PERSONAL_ACCEPTANCE_E2E === "true" || process.env.LUMI_TARGET_INBOX_E2E === "true") {
     process.env.LUMI_E2E_TARGET_STORE = execFileSync(process.execPath, [
       "--experimental-loader", path.join(__dirname, "scripts", "target-staging-ts-loader.mjs"),
       path.join(__dirname, "e2e", "target-personal-store-setup.mjs"), process.env.LUMI_E2E_RUN_DIR, personalOwnerUserId, "1",
@@ -87,9 +87,10 @@ const privateTaskCreateTest = process.env.LUMI_PRIVATE_TASK_CREATE_E2E === "true
 const globalCaptureTest = process.env.LUMI_TARGET_GLOBAL_CAPTURE_E2E === "true";
 // Single end-to-end acceptance: browser -> real route handlers -> real isolated target SQLite, every personal flag on.
 const personalAcceptanceTest = process.env.LUMI_TARGET_PERSONAL_ACCEPTANCE_E2E === "true";
+const inboxAcceptanceTest = process.env.LUMI_TARGET_INBOX_E2E === "true";
 // Workers legitimately inherit LUMI_E2E_RUN_DIR and LUMI_E2E_TARGET_STORE from the first load; a caller-supplied pair is
 // still validated: the store must be exactly <run dir>/target-store with a UUID restore generation and the fixed owner.
-const personalStore = personalAcceptanceTest ? (() => {
+const personalStore = (personalAcceptanceTest || inboxAcceptanceTest) ? (() => {
   const value = JSON.parse(process.env.LUMI_E2E_TARGET_STORE || "null") as { directory?: unknown; restoreGeneration?: unknown; ownerUserId?: unknown } | null;
   const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
   if (!value || typeof value.directory !== "string" || typeof value.restoreGeneration !== "string" || value.ownerUserId !== personalOwnerUserId
@@ -121,7 +122,7 @@ export default defineConfig({
     // The webServer env below is run-wide: real-store opt-in must only run
     // these five isolated acceptance specs, never other tests.
     { name: "desktop", use: { ...devices["Desktop Chrome"], storageState: sessionFile }, dependencies: ["setup"],
-      ...(personalAcceptanceTest ? { testMatch: /target-personal-(?:acceptance|my-plan|search-open|create|bfcache|native-bfcache)\.spec\.ts/ } : {}) },
+      ...(personalAcceptanceTest || inboxAcceptanceTest ? { testMatch: /(?:target-personal-(?:acceptance|my-plan|search-open|create|bfcache|native-bfcache)|target-inbox-acceptance)\.spec\.ts/ } : {}) },
   ],
   webServer: {
     command: `${process.env.E2E_SKIP_BUILD ? "" : "pnpm build && "}pnpm start --port ${port} --hostname 127.0.0.1`,
@@ -280,6 +281,13 @@ export default defineConfig({
         AI_EXECUTIVE_TARGET_STAGING_DIRECTORY: personalStore.directory,
         AI_EXECUTIVE_TARGET_STAGING_RESTORE_GENERATION: personalStore.restoreGeneration,
         AI_EXECUTIVE_TARGET_STAGING_OWNER_USER_ID: personalStore.ownerUserId,
+      } : {}),
+      // Independent C-3a flags exist ONLY on this explicitly opted-in
+      // disposable SQLite browser run; the production C-2 profile stays off.
+      ...(inboxAcceptanceTest ? {
+        AI_EXECUTIVE_TARGET_UI_INBOX_ENABLED: "true",
+        AI_EXECUTIVE_TARGET_STAGING_HTTP_INBOX_ENABLED: "true",
+        AI_EXECUTIVE_TARGET_STAGING_HTTP_INBOX_WRITE_ENABLED: "true",
       } : {}),
       AI_EXECUTIVE_PASSWORD_HASH: passwordHash,
       AI_EXECUTIVE_SESSION_SECRET: sessionSecret,

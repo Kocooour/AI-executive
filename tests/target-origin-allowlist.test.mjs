@@ -84,7 +84,14 @@ test("all target write routes use the shared target Origin guard (direct or dele
     delegated++;
   }
   // Keep the guard inventory explicit; a new writer must be classified and protected.
-  assert.equal(direct,26);
+  // C-3a adds authenticated Inbox triage, receipt and irreversible
+  // cancellation POST routes. The audit must classify each new writer.
+  for(const route of ["inbox/triage/route.ts","inbox/receipt/route.ts",
+    "inbox/cancel/route.ts"]){
+    assert.match(readFileSync(path.join(targetRoutes,route),"utf8"),
+      /requireTargetSameOrigin\(request\)/);
+  }
+  assert.equal(direct,29);
   assert.equal(delegated,12);
   for(const file of ["target-private-task-create-http.ts","target-private-structure-create-http.ts"]){
     assert.match(readFileSync(path.join(libs,file),"utf8"),/requireTargetSameOrigin\(request\)/);

@@ -19,7 +19,7 @@ import {readPrivateStructureCreateStatus,readPrivateStructureCreateRecovery,
 import { readPrivateTaskCreateStatus,readPrivateTaskCreateRecovery,
   type PrivateTaskCreateCommand,type PrivateTaskCreateStatus,
   type PrivateTaskCreateRecovery } from "./target-private-task-create-writer";
-import { TARGET_STORE_FILENAME, TARGET_STORE_SCHEMA_VERSION, verifyExistingTargetStagingPath } from "./target-store-bootstrap";
+import { TARGET_STORE_FILENAME, TARGET_STORE_SCHEMA_VERSION, TARGET_STORE_PREVIOUS_SCHEMA_VERSION, verifyExistingTargetStagingPath } from "./target-store-bootstrap";
 import { inspectIsolatedTargetStore } from "./target-store-preflight";
 import { checkTargetStagingJournal, warmTargetStagingJournal } from "./target-staging-anchor-journal";
 import { withPinnedTargetSnapshot } from "./target-store-read-snapshot";
@@ -52,6 +52,7 @@ import {readAuthorizedAttentionCandidatePage} from "./target-attention-read-mode
 import {readTargetAttentionProfileZone} from "./target-attention-profile-zone";
 import type {AttentionCandidatePage,AttentionAreaFilter,AttentionView} from "./target-attention-read-model";
 import {eligibleGlobalTaskAreas,readAuthorizedGlobalTaskPage} from "./target-global-task-read-model";
+import {readAuthorizedTargetInboxPage,type TargetInboxPage} from "./target-inbox-read-model";
 import type {TargetGlobalTaskPage,TargetGlobalTaskScope} from "./target-global-task-read-model";
 import {readAuthorizedGlobalProjectPage} from "./target-global-project-read-model";
 import type {TargetGlobalProjectPage} from "./target-global-project-read-model";
@@ -584,6 +585,24 @@ export function readPreflightedAttentionCandidatePage(
         restoreGeneration:store.expectedRestoreGeneration,
       });
       return page?{...page,notificationEpoch:zone.notificationEpoch}:null;
+    },()=>null));
+}
+
+/** C-3a: every Inbox page, count and full Area witness share ONE pinned snapshot.
+ * The actor is resolved from the internal credential, never a caller-supplied ID. */
+export function readPreflightedTargetInboxPage(
+  store:TargetStagingReadStore,access:TargetStagingReadCredential,
+  request:{limit:number;afterTaskId?:string|null},
+):TargetInboxPage|null{
+  return withPreflightedStore<TargetInboxPage|null>(store,()=>null,(db,preflight)=>
+    inReadSnapshot<TargetInboxPage|null>(db,()=>{
+      if(!preflight(db))return null;
+      const v=(db.prepare("SELECT value FROM metadata WHERE key='schema_version'")
+        .get() as {value:string}|undefined)?.value;
+      if(v!==String(TARGET_STORE_SCHEMA_VERSION))return null;
+      const actorUserId=verifiedActor(db,access);
+      if(!actorUserId)return null;
+      return readAuthorizedTargetInboxPage(db,{actorUserId,...request});
     },()=>null));
 }
 
@@ -1400,7 +1419,7 @@ export function readPreflightedProjectTitlePreview(
       if (!preflight(db)) return null;
       const actorUserId = verifiedActor(db, access);
       const version = db.prepare("SELECT value FROM metadata WHERE key='schema_version'").get() as {value:string} | undefined;
-      if (!actorUserId || version?.value !== String(TARGET_STORE_SCHEMA_VERSION)) return null;
+      if (!actorUserId || (version?.value !== String(TARGET_STORE_SCHEMA_VERSION) && version?.value !== String(TARGET_STORE_PREVIOUS_SCHEMA_VERSION))) return null;
       return readAuthorizedProjectTasksPage(db, { actorUserId, projectId, limit:1, offset:0,
         restoreGeneration:store.expectedRestoreGeneration });
     }, () => null));

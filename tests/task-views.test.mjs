@@ -228,3 +228,12 @@ test("the Overdue list sorts by deadline; other lists by planned day", async () 
   assert.deepEqual(sorted("Overdue"), [b, a, c]);
   assert.deepEqual(sorted("Today"), [c, b, a]);
 });
+
+
+test("C-3a: LegacyInbox inherits Inbox membership and ordering without redirecting current Inbox", () => {
+  assert.equal(archiveReadView("LegacyInbox"),"Inbox");
+  assert.equal(archiveReadView("Inbox"),"Inbox");
+  assert.equal(archiveReadView("LegacyHome"),"Home");
+  assert.equal(archiveReadView("LegacyUpcoming"),"Upcoming");
+  assert.equal(archiveReadView("Home"),"Home");
+});

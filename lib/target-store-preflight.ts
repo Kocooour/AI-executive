@@ -6,10 +6,12 @@ import { createHash } from "node:crypto";
 import { isReadableStagingProjectId } from "./target-project-id";
 import { DatabaseSync } from "node:sqlite";
 import {
-  TARGET_SCHEMA_SQL, TARGET_SCHEMA_V25_SQL, TARGET_STORE_FILENAME, TARGET_STORE_SCHEMA_VERSION,
-  TARGET_STORE_LEGACY_SCHEMA_VERSION, isSupportedTargetSchemaVersion,
+  TARGET_SCHEMA_SQL, TARGET_SCHEMA_V25_SQL, TARGET_SCHEMA_V26_SQL, TARGET_STORE_FILENAME, TARGET_STORE_SCHEMA_VERSION,
+  TARGET_STORE_LEGACY_SCHEMA_VERSION, TARGET_STORE_PREVIOUS_SCHEMA_VERSION, isSupportedTargetSchemaVersion,
   TARGET_STAGING_AUDIT_MAX_EVENTS, TARGET_STAGING_MAX_RECEIPTS, TARGET_STAGING_SESSION_MAX_ROWS,
   TARGET_STAGING_RECEIPT_PREFIX, TARGET_STAGING_DELETE_RECEIPT_PREFIX,
+    TARGET_STAGING_INBOX_TRIAGE_CANCEL_PREFIX,
+    TARGET_STAGING_INBOX_TOMBSTONE_CANCEL_PREFIX,
   TARGET_STAGING_PRIVATE_TASK_CREATE_RECEIPT_PREFIX,
   TARGET_STAGING_PRIVATE_TASK_CREATE_RECOVERY_PREFIX,
   TARGET_STAGING_PRIVATE_TASK_CREATE_CANCEL_PREFIX,
@@ -30,6 +32,7 @@ import {
   TARGET_STAGING_MAX_PUSH_TARGETS, TARGET_STAGING_MAX_PUSH_TARGETS_PER_USER,
   TARGET_STAGING_MAX_ATTENTION_DELIVERIES, TARGET_STAGING_MAX_DEVICE_DELIVERIES,
 } from "./target-store-bootstrap";
+import { TARGET_INBOX_MAX_RECEIPTS, TARGET_INBOX_UNDO_REBASE_PREFIX } from "./target-inbox-schema";
 
 export type TargetPreflightMode = "stage" | "r2-model";
 export type TargetPreflightCode =
@@ -52,6 +55,8 @@ export interface TargetPreflightOptions {
   expectedRestoreGeneration?: string;
   /** Additional model checks for R2 planning; still NOT activation readiness. */
   mode?: TargetPreflightMode;
+  /** Optional exact-current schema requirement; upgrade preflight otherwise accepts older canonical versions. */
+  requiredSchemaVersion?: number;
 }
 
 export interface TargetPreflightResult {
@@ -72,7 +77,8 @@ function matchesCanonicalSchema(actual: DatabaseSync): boolean {
   try {
     const version = (actual.prepare("SELECT value FROM metadata WHERE key='schema_version'").get() as {value: string} | undefined)?.value;
     if (!isSupportedTargetSchemaVersion(version)) return false;
-    expected.exec(version === String(TARGET_STORE_LEGACY_SCHEMA_VERSION) ? TARGET_SCHEMA_V25_SQL : TARGET_SCHEMA_SQL);
+    expected.exec(version === String(TARGET_STORE_LEGACY_SCHEMA_VERSION) ? TARGET_SCHEMA_V25_SQL :
+      version === String(TARGET_STORE_PREVIOUS_SCHEMA_VERSION) ? TARGET_SCHEMA_V26_SQL : TARGET_SCHEMA_SQL);
     const schema = (db: DatabaseSync) => db.prepare(
       "SELECT type, name, tbl_name, sql FROM sqlite_schema ORDER BY type, name, tbl_name",
     ).all();
@@ -184,6 +190,11 @@ export function inspectIsolatedTargetStore(
     const count = (sql: string, ...args: (string | number)[]) => Number((db.prepare(sql).get(...args) as { n: number }).n);
     try {
       if (!matchesCanonicalSchema(db)) fail("schema_invalid");
+      if (options.requiredSchemaVersion !== undefined &&
+          ((db.prepare("SELECT value FROM metadata WHERE key='schema_version'").get() as
+            {value:string}|undefined)?.value !== String(options.requiredSchemaVersion) ||
+           options.requiredSchemaVersion !== TARGET_STORE_SCHEMA_VERSION))
+        fail("schema_invalid");
     } catch { fail("schema_invalid"); }
     try {
       const quick = all("PRAGMA quick_check");
@@ -285,6 +296,98 @@ export function inspectIsolatedTargetStore(
         row.key.startsWith(TARGET_STAGING_NOTE_LIFECYCLE_RECEIPT_PREFIX));
       const projectTitleCancels = rows.filter(row => typeof row.key === "string" &&
         row.key.startsWith(TARGET_STAGING_PROJECT_TITLE_CANCEL_PREFIX));
+      // Actor-hashed permanent cancellation fences, bound to exact original
+      // command digests. Preserve legacy actor:receipt keys and validate the
+      // progressive actor:hash-prefix:receipt shards used when a bucket fills.
+      // A 64-hex terminal prefix cannot fill: each hash names only one command.
+      // Never expire/delete an old fence: a delayed POST could still arrive.
+      const inboxCancels = rows.filter(row => typeof row.key === "string" &&
+        row.key.startsWith(TARGET_STAGING_INBOX_TRIAGE_CANCEL_PREFIX));
+      const inboxCancelBuckets = new Map<string,number>();
+      const inboxCancelCommands = new Set<string>();
+      const inboxCancelsValid = inboxCancels.every(row => {
+        if(typeof row.key!=="string"||typeof row.value!=="string"||
+            !sha256Hex.test(row.value))return false;
+        const m=/^([a-f0-9]{64}):(?:([a-f0-9]{4,64}):)?([a-f0-9]{64})$/.exec(
+          row.key.slice(TARGET_STAGING_INBOX_TRIAGE_CANCEL_PREFIX.length));
+        if(!m)return false;
+        const [actor,shard,receipt]=[m[1],m[2],m[3]];
+        if(shard!==undefined&&
+            (![4,8,16,32,64].includes(shard.length)||
+              shard!==receipt.slice(0,shard.length)))return false;
+        // Multiple formats for one actor+UUID must never bypass idempotency.
+        const command=actor+":"+receipt;
+        if(inboxCancelCommands.has(command))return false;
+        inboxCancelCommands.add(command);
+        const bucket=actor+":"+(shard??"legacy");
+        const n=(inboxCancelBuckets.get(bucket)??0)+1;
+        inboxCancelBuckets.set(bucket,n);
+        if(n>TARGET_STAGING_MAX_RECEIPTS)return false;
+        return db.prepare("SELECT 1 FROM task_triage_receipts WHERE receipt_key=?")
+          .get(receipt)===undefined;
+      });
+      // Actor+immutable-tombstone terminal markers: ONE per actor/task,
+      // never per arbitrary UUID. Verify each marker's full hash provenance,
+      // registered actor and irreversible tombstone; fail closed on forgery.
+      const tombstoneCancels=rows.filter(row=>typeof row.key==="string"&&
+        row.key.startsWith(TARGET_STAGING_INBOX_TOMBSTONE_CANCEL_PREFIX));
+      // The metadata value contains ONLY two opaque SHA-256 digests.
+      // Join them to canonical IDs held in the main indexed tables, then
+      // validate the actor+task key. Neither ID is duplicated in metadata.
+      const hashedId=(tag:string,id:string)=>createHash("sha256")
+        .update(JSON.stringify([tag,id])).digest("hex");
+      const actorByDigest=new Map((all("SELECT id FROM identities") as {id:string}[])
+        .map(row=>[hashedId("inbox-tombstone-actor-v1",row.id),row.id] as const));
+      const taskByDigest=new Map((all("SELECT id FROM task_tombstones") as {id:string}[])
+        .map(row=>[hashedId("inbox-tombstone-task-v1",row.id),row.id] as const));
+      const tombstoneCancelCounts=new Map<string,number>();
+      const tombstoneCancelsValid=tombstoneCancels.every(row=>{
+        if(typeof row.key!=="string"||typeof row.value!=="string"||
+            !sha256Hex.test(row.key.slice(TARGET_STAGING_INBOX_TOMBSTONE_CANCEL_PREFIX.length)))
+          return false;
+        const m=/^([a-f0-9]{64}):([a-f0-9]{64})$/.exec(row.value);
+        if(!m)return false;
+        const actor=actorByDigest.get(m[1]),taskId=taskByDigest.get(m[2]);
+        if(!actor||!taskId)return false;
+        // The key is derived with the established [tag,actor,task] tuple,
+        // not the two digests themselves.
+        const canonical=createHash("sha256").update(JSON.stringify([
+          "inbox-tombstone-cancel-v1",actor,taskId])).digest("hex");
+        if(row.key!==TARGET_STAGING_INBOX_TOMBSTONE_CANCEL_PREFIX+canonical)
+          return false;
+        const n=(tombstoneCancelCounts.get(actor)??0)+1;
+        tombstoneCancelCounts.set(actor,n);
+        return n<=TARGET_STAGING_MAX_TOMBSTONES;
+      });
+      // A cancelled, not-yet-committed Undo advances task.revision but does
+      // not change triage. Its one-per-Process opaque lineage witness enables
+      // a new Undo only at the exact cancellation-only revision. Old/replaced
+      // Process receipts cannot be pruned without also removing this marker.
+      const undoRebases=rows.filter(row=>typeof row.key==="string"&&
+        row.key.startsWith(TARGET_INBOX_UNDO_REBASE_PREFIX));
+      const undoRebasesValid=undoRebases.length<=TARGET_INBOX_MAX_RECEIPTS&&
+        undoRebases.every(row=>{
+          if(typeof row.key!=="string"||typeof row.value!=="string"||
+              !sha256Hex.test(row.key.slice(TARGET_INBOX_UNDO_REBASE_PREFIX.length))||
+              !/^[1-9][0-9]{0,15}$/.test(row.value))return false;
+          const after=Number(row.value);
+          if(!Number.isSafeInteger(after)||after>=9007199254740991)return false;
+          const processKey=row.key.slice(TARGET_INBOX_UNDO_REBASE_PREFIX.length);
+          const process=db.prepare("SELECT task_id,action,task_revision_after "+
+            "FROM task_triage_receipts WHERE receipt_key=?").get(processKey) as
+            {task_id:string;action:string;task_revision_after:number}|undefined;
+          if(!process||process.action!=="process"||
+              after<=process.task_revision_after)return false;
+          const state=db.prepare("SELECT revision FROM tasks WHERE id=?")
+            .get(process.task_id) as {revision:number}|undefined;
+          const tombstone=db.prepare("SELECT revision FROM task_tombstones WHERE id=?")
+            .get(process.task_id) as {revision:number}|undefined;
+          if((state?.revision??tombstone?.revision??-1)<after)return false;
+          const child=db.prepare("SELECT task_revision_before FROM task_triage_receipts "+
+            "WHERE undo_of_receipt_key=?").get(processKey) as
+            {task_revision_before:number}|undefined;
+          return !child||child.task_revision_before===after;
+        });
       // An irreversible fence is valid only as an opaque 64-hex key and a
       // literal '1'. Reject all other metadata rather than losing the fence.
       const projectTitleCancelsValid = projectTitleCancels.every(row =>
@@ -368,7 +471,7 @@ export function inspectIsolatedTargetStore(
         structureRecoveryValid;
       if (rows.length !== 6 + receipts.length + deleteReceipts.length + temporalReceipts.length + dueOnReceipts.length + privateWhenReceipts.length + attentionReceipts.length + noteReceipts.length +
             notificationReceipts.length + pushTargetReceipts.length + baselineMarkers.length +
-            noteDeleteReceipts.length + lifecycleReceipts.length + projectTitleCancels.length + privateTaskCreateReceipts.length + privateTaskCreateRecoveries.length + privateTaskCreateCancels.length + structureReceipts.length + structureRecoveries.length + structureCancels.length ||
+            noteDeleteReceipts.length + lifecycleReceipts.length + projectTitleCancels.length + inboxCancels.length + tombstoneCancels.length + undoRebases.length + privateTaskCreateReceipts.length + privateTaskCreateRecoveries.length + privateTaskCreateCancels.length + structureReceipts.length + structureRecoveries.length + structureCancels.length ||
           receipts.length > TARGET_STAGING_MAX_RECEIPTS ||
           deleteReceipts.length > TARGET_STAGING_MAX_RECEIPTS ||
           privateTaskCreateReceipts.length > TARGET_STAGING_MAX_RECEIPTS ||
@@ -391,8 +494,10 @@ export function inspectIsolatedTargetStore(
           noteDeleteReceipts.length > TARGET_STAGING_MAX_RECEIPTS ||
           lifecycleReceipts.length > TARGET_STAGING_MAX_RECEIPTS ||
           projectTitleCancels.length > TARGET_STAGING_AUDIT_MAX_EVENTS ||
-          !projectTitleCancelsValid ||
+          !projectTitleCancelsValid || !inboxCancelsValid || !tombstoneCancelsValid || !undoRebasesValid ||
           (meta.get("schema_version") !== String(TARGET_STORE_SCHEMA_VERSION) &&
+            (inboxCancels.length !== 0 || tombstoneCancels.length !== 0 || undoRebases.length !== 0)) ||
+          (meta.get("schema_version") === String(TARGET_STORE_LEGACY_SCHEMA_VERSION) &&
             projectTitleCancels.length !== 0) ||
           !receiptValid(receipts, TARGET_STAGING_RECEIPT_PREFIX) ||
           !receiptValid(deleteReceipts, TARGET_STAGING_DELETE_RECEIPT_PREFIX) ||
@@ -426,7 +531,10 @@ export function inspectIsolatedTargetStore(
               row.key.startsWith(TARGET_STAGING_NOTE_RECEIPT_PREFIX) ||
               row.key.startsWith(TARGET_STAGING_NOTE_DELETE_RECEIPT_PREFIX) ||
               row.key.startsWith(TARGET_STAGING_NOTE_LIFECYCLE_RECEIPT_PREFIX) ||
-              row.key.startsWith(TARGET_STAGING_PROJECT_TITLE_CANCEL_PREFIX))) ||
+              row.key.startsWith(TARGET_STAGING_PROJECT_TITLE_CANCEL_PREFIX) ||
+              row.key.startsWith(TARGET_STAGING_INBOX_TRIAGE_CANCEL_PREFIX) ||
+               row.key.startsWith(TARGET_STAGING_INBOX_TOMBSTONE_CANCEL_PREFIX) ||
+              row.key.startsWith(TARGET_INBOX_UNDO_REBASE_PREFIX))) ||
           !isSupportedTargetSchemaVersion(meta.get("schema_version")) ||
           meta.get("activated") !== "false" || meta.get("write_protocol") !== "per-item-only" ||
           typeof meta.get("anchor_seq") !== "string" ||
@@ -457,7 +565,7 @@ export function inspectIsolatedTargetStore(
             typeof row.expected_revision !== "string" || !sha256Hex.test(row.expected_revision) ||
             !allowedGenerations.has(row.restore_generation) ||
             !meta.has(row.receipt_key))) fail("audit_invalid");
-      if (meta.get("schema_version") === String(TARGET_STORE_SCHEMA_VERSION)) {
+      if (meta.get("schema_version") !== String(TARGET_STORE_LEGACY_SCHEMA_VERSION)) {
         const projectAudit = all("SELECT receipt_key, request_digest, expected_revision, restore_generation FROM project_title_audit") as
           { receipt_key: unknown; request_digest: unknown; expected_revision: unknown; restore_generation: unknown }[];
         if (projectAudit.length > TARGET_STAGING_AUDIT_MAX_EVENTS || projectAudit.some(row =>
@@ -468,6 +576,54 @@ export function inspectIsolatedTargetStore(
             LEFT JOIN projects p ON p.id=a.project_id LEFT JOIN project_tombstones t ON t.id=a.project_id
             WHERE (p.id IS NULL AND t.id IS NULL) OR (p.id IS NOT NULL AND a.revision_after>p.revision)
               OR (t.id IS NOT NULL AND a.revision_after>=t.revision)`) !== 0) fail("audit_invalid");
+      }
+      // v27 canonical task-state audit: CHECK/triggers are not a substitute
+      // for read-only preflight of a database modified with guard bypasses.
+      // Migrated preexisting rows are the only valid processed + NULL state
+      // (revision 1 and no user Process); all other Process states have a time.
+      if (meta.get("schema_version") === String(TARGET_STORE_SCHEMA_VERSION)) {
+        const invalidTriage=count(`SELECT COUNT(*) AS n FROM tasks t
+          WHERE typeof(t.triage_revision)<>'integer' OR t.triage_revision<0
+            OR t.triage_revision>t.revision
+            OR typeof(t.revision)<>'integer' OR t.revision<0
+            OR (t.triage_state='unprocessed'
+              AND (t.triaged_at IS NOT NULL OR (t.triage_revision % 2)<>0))
+            OR (t.triage_state='processed'
+              AND (t.triage_revision=0 OR (t.triage_revision % 2)<>1
+                OR (t.triaged_at IS NULL AND t.triage_revision<>1)
+                OR (t.triaged_at IS NOT NULL AND
+                  (typeof(t.triaged_at)<>'integer' OR t.triaged_at<=0
+                  OR t.triaged_at>=9007199254740991))))
+            OR t.triage_state NOT IN ('unprocessed','processed')
+            OR t.triage_state IS NULL`);
+        if(invalidTriage!==0)fail("schema_invalid");
+      }
+      // C-3a: bounded immutable triage receipt ledger. Both the original
+      // Process and its Undo survive later task deletion; no task titles,
+      // Areas or other actors' data are ever stored in a receipt.
+      if (meta.get("schema_version") === String(TARGET_STORE_SCHEMA_VERSION)) {
+        const triage = all("SELECT receipt_key,request_digest,restore_generation,action,undo_of_receipt_key,triage_revision_before,triage_revision_after,task_revision_before,task_revision_after,committed_at_ms FROM task_triage_receipts") as
+          {receipt_key:unknown;request_digest:unknown;restore_generation:unknown;action:unknown;undo_of_receipt_key:unknown;
+           triage_revision_before:number;triage_revision_after:number;task_revision_before:number;task_revision_after:number;committed_at_ms:number}[];
+        if (triage.length > TARGET_INBOX_MAX_RECEIPTS || triage.some(row =>
+          typeof row.receipt_key !== "string" || !sha256Hex.test(row.receipt_key) ||
+          typeof row.request_digest !== "string" || !sha256Hex.test(row.request_digest) ||
+          !allowedGenerations.has(row.restore_generation) ||
+          (row.action !== "process" && row.action !== "undo") ||
+          !Number.isSafeInteger(row.triage_revision_before) || row.triage_revision_before < 0 ||
+          row.triage_revision_after !== row.triage_revision_before+1 ||
+          !Number.isSafeInteger(row.task_revision_before) || row.task_revision_before < 0 ||
+          row.task_revision_after !== row.task_revision_before+1 ||
+          !Number.isSafeInteger(row.committed_at_ms) || row.committed_at_ms <= 0
+        ) || count(`SELECT COUNT(*) AS n FROM task_triage_receipts u
+          JOIN task_triage_receipts p ON p.receipt_key=u.undo_of_receipt_key
+          WHERE u.action='undo' AND (p.action<>'process' OR u.task_id<>p.task_id OR
+            u.actor_user_id<>p.actor_user_id OR u.restore_generation<>p.restore_generation OR
+            u.triage_revision_before<>p.triage_revision_after OR
+            (u.task_revision_before<>p.task_revision_after AND NOT EXISTS (
+              SELECT 1 FROM metadata m WHERE m.key=?||p.receipt_key
+                AND m.value=CAST(u.task_revision_before AS TEXT))) OR
+            u.committed_at_ms<p.committed_at_ms)`,TARGET_INBOX_UNDO_REBASE_PREFIX) !== 0) fail("audit_invalid");
       }
       // R2c.1 delete audit: bounded, content-free, backed by a delete receipt and
       // by the tombstone (same Area, revision and change sequence) it describes.

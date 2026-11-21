@@ -152,3 +152,27 @@ test("automatic retry after a wake read that hit a network not ready yet: bounde
   for(const reason of ["not-available","signed-out","stale","rate-limited","invalid-response"])
     assert.equal(wakeRetryDelay(reason,0),null,reason);
 });
+
+
+test("wake exposes verified result; unavailable must never release an auth fence",async()=>{
+  const observed=[];
+  let result="unavailable";
+  const machine=createWakeMachine({
+    refresh:async()=>result,visible:()=>true,online:()=>true,
+    handlers:()=>({
+      hide:()=>{},
+      ready:outcome=>observed.push(outcome),
+      signedOut:()=>observed.push("signed_out"),
+    }),
+  });
+  machine.hide("offline");
+  await machine.wake();
+  assert.deepEqual(observed,["unavailable"],
+    "wake may re-read, but consumers must not release a security fence");
+  result="ok";
+  machine.hide("offline");
+  await machine.wake();
+  assert.deepEqual(observed,["unavailable","ok"],
+    "only successful verification provides a fresh-authorization signal");
+  machine.dispose();
+});

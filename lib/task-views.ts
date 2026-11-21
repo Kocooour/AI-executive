@@ -7,7 +7,7 @@ import { addLocalDays, ymd } from "./local-dates";
 // Historical archive aliases share their original presentation and task read/sort scopes.
 // This is not a routing or authorization decision; archive writes remain disabled.
 export const archiveReadView = (view: string) =>
-  view === "LegacyHome" ? "Home" : view === "LegacyUpcoming" ? "Upcoming" : view;
+  view === "LegacyHome" ? "Home" : view === "LegacyUpcoming" ? "Upcoming" : view === "LegacyInbox" ? "Inbox" : view;
 
 export const manualOrder = (entity: Entity, scope = `${entity.type}:all`) => {
   const stored = entity.properties.manualOrders;

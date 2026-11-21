@@ -12,6 +12,8 @@ import type {MyPlanTaskDayWindow,MyPlanTaskAreaFilter,MyPlanDayTask,MyPlanDayTas
 import {attentionEvaluationWindow,attentionKey,currentAttentionRule,type AttentionCandidate,type AttentionAreaFilter,type AttentionView} from "./target-attention-read-model";
 import {endOfLocalDate} from "./attention";
 import type {TargetGlobalTaskPage,TargetGlobalTask,TargetGlobalTaskScope} from "./target-global-task-read-model";
+import type {TargetInboxPage,TargetInboxItem} from "./target-inbox-read-model";
+import {inboxWorkerProofKey} from "./target-inbox-command-identity";
 import type {TargetGlobalProjectPage,TargetGlobalProject} from "./target-global-project-read-model";
 import type {TargetGlobalNotePage,TargetGlobalNote,GlobalNoteAreaEpoch} from "./target-global-note-read-model";
 import type {TargetGlobalCombinedPage,GlobalCombinedItem,GlobalCombinedPositions} from "./target-global-combined-read-model";
@@ -84,6 +86,8 @@ export function createStagingReadRunner(
         AI_EXECUTIVE_DATA_DIR: process.env.AI_EXECUTIVE_DATA_DIR || "",
         AI_EXECUTIVE_TARGET_STAGING_HTTP_ENABLED:
           process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_ENABLED || "",
+        AI_EXECUTIVE_TARGET_STAGING_HTTP_INBOX_ENABLED:
+          process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_INBOX_ENABLED || "",
         AI_EXECUTIVE_TARGET_STAGING_HTTP_NOTES_ENABLED:
           process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_NOTES_ENABLED || "",
         AI_EXECUTIVE_TARGET_STAGING_HTTP_PRIVATE_NOTE_AREAS_ENABLED:
@@ -134,6 +138,9 @@ export function createStagingReadRunner(
         AI_EXECUTIVE_TARGET_STAGING_RESTORE_GENERATION: config.expectedRestoreGeneration,
         AI_EXECUTIVE_TARGET_STAGING_OWNER_USER_ID: config.ownerUserId,
         AI_EXECUTIVE_TARGET_STAGING_SESSION_HASH: config.sessionTokenHash || "",
+        ...(scriptName==="target-staging-inbox-child.mjs"
+          ?{AI_EXECUTIVE_TARGET_STAGING_INBOX_PROOF_KEY:inboxWorkerProofKey()||""}
+          :{}),
         ...(config.noteSyncSecret ?
           { AI_EXECUTIVE_TARGET_STAGING_NOTE_SYNC_SECRET: config.noteSyncSecret } : {}),
       };
@@ -2590,4 +2597,82 @@ export async function readStagingAuthorizedNoteInChild(
   const parsed = parseStagingNoteDetail(payload, noteId);
   if (payload !== null && !parsed) logStagingFailure("note_detail", "invalid_child_dto");
   return parsed;
+}
+
+/** C-3a: validate all child output, including internal ACL and content witnesses. */
+export function parseStagingTargetInboxPage(value:unknown,limit:number):TargetInboxPage|null{
+  if(!value||typeof value!=="object"||Array.isArray(value)||
+      !Number.isInteger(limit)||limit<1||limit>100)return null;
+  const v=value as Record<string,unknown>;
+  if(Object.keys(v).sort().join(",")!=="areaEpochs,count,items,linearization,nextCursor,ok"||
+      v.ok!==true||!Number.isSafeInteger(v.count)||(v.count as number)<0||
+      !Array.isArray(v.items)||v.items.length>limit||
+      (v.nextCursor!==null&&(typeof v.nextCursor!=="string"||
+        !v.nextCursor||Buffer.byteLength(v.nextCursor)>512||
+        /[\u0000-\u001f\u007f]/u.test(v.nextCursor)))||
+      !Array.isArray(v.areaEpochs)||v.areaEpochs.length>MAX_SCOPED_READ_AREAS)return null;
+  const safe=(n:unknown)=>typeof n==="number"&&Number.isSafeInteger(n)&&n>=0;
+  const id=(x:unknown)=>typeof x==="string"&&x.length>0&&x.trim()===x&&
+    x!=="."&&x!==".."&&Buffer.byteLength(x,"utf8")<=512&&
+    !/[\u0000-\u001f\u007f]/u.test(x);
+  const epochs:HomeSummaryAreaEpoch[]=[];
+  const areaKinds=new Map<string,"private"|"shared">();
+  for(const entry of v.areaEpochs){
+    if(!entry||typeof entry!=="object"||Array.isArray(entry))return null;
+    const a=entry as Record<string,unknown>;
+    if(Object.keys(a).sort().join(",")!=="access,areaId,areaKind,contentRevision,policyRevision,projectContentRevision"||
+        !id(a.areaId)||!safe(a.policyRevision)||!safe(a.contentRevision)||
+        !safe(a.projectContentRevision)||(
+          a.areaKind==="private"?a.access!=="private-owner":
+          a.areaKind==="shared"?!["viewer","editor","admin"].includes(a.access as string):true)||
+        areaKinds.has(a.areaId as string))return null;
+    if(epochs.length&&Buffer.compare(Buffer.from(epochs[epochs.length-1].areaId),
+        Buffer.from(a.areaId as string))>=0)return null;
+    areaKinds.set(a.areaId as string,a.areaKind as "private"|"shared");
+    epochs.push({areaId:a.areaId as string,areaKind:a.areaKind as "private"|"shared",
+      access:a.access as HomeSummaryAreaEpoch["access"],
+      policyRevision:a.policyRevision as number,contentRevision:a.contentRevision as number,
+      projectContentRevision:a.projectContentRevision as number});
+  }
+  const linearization=parseLinearization(v.linearization,areaKinds);
+  if(!linearization||linearization.areas.length!==epochs.length||
+      linearization.areas.some((a,i)=>a.areaId!==epochs[i].areaId||
+        a.areaKind!==epochs[i].areaKind||a.access!==epochs[i].access||
+        a.policyRevision!==epochs[i].policyRevision))return null;
+  const items:TargetInboxItem[]=[];
+  for(const entry of v.items){
+    if(!entry||typeof entry!=="object"||Array.isArray(entry))return null;
+    const t=entry as Record<string,unknown>;
+    if(Object.keys(t).sort().join(",")!=="canProcess,effectiveAreaId,expectedRevision,id,status,taskRevision,title,triageRevision"||
+        !id(t.id)||typeof t.title!=="string"||!t.title.trim()||
+        Buffer.byteLength(t.title,"utf8")>4096||
+        !id(t.effectiveAreaId)||!areaKinds.has(t.effectiveAreaId as string)||
+        (t.status!=="open"&&t.status!=="completed")||
+        !safe(t.taskRevision)||!safe(t.triageRevision)||
+        typeof t.canProcess!=="boolean"||
+        (t.canProcess?typeof t.expectedRevision!=="string"||
+          !REVISION.test(t.expectedRevision):t.expectedRevision!==null))return null;
+    if(items.length&&Buffer.compare(Buffer.from(items[items.length-1].id),
+        Buffer.from(t.id as string))>=0)return null;
+    if(t.canProcess&&areaKinds.get(t.effectiveAreaId as string)==="shared"&&
+        epochs.find(a=>a.areaId===t.effectiveAreaId)?.access==="viewer")return null;
+    items.push({id:t.id as string,title:t.title as string,status:t.status as "open"|"completed",
+      taskRevision:t.taskRevision as number,triageRevision:t.triageRevision as number,
+      effectiveAreaId:t.effectiveAreaId as string,canProcess:t.canProcess as boolean,
+      expectedRevision:t.expectedRevision as string|null});
+  }
+  if(v.nextCursor!==null&&
+      (!items.length||v.nextCursor!==items[items.length-1].id||items.length!==limit))return null;
+  return {items,count:v.count as number,nextCursor:v.nextCursor as string|null,linearization,areaEpochs:epochs};
+}
+export async function readStagingTargetInboxInChild(
+  config:StagingPersonalReadConfig,limit:number,afterTaskId?:string|null,
+):Promise<TargetInboxPage|null>{
+  if(!Number.isInteger(limit)||limit<1||limit>100||
+     (afterTaskId!==undefined&&afterTaskId!==null&&
+      (typeof afterTaskId!=="string"||Buffer.byteLength(afterTaskId)>512||
+       !afterTaskId||/[\u0000-\u001f\u007f]/u.test(afterTaskId))))return null;
+  const cursor=afterTaskId?Buffer.from(afterTaskId).toString("base64url"):"_";
+  return parseStagingTargetInboxPage(await runChild(
+    config,"target-staging-inbox-child.mjs",[String(limit),cursor]),limit);
 }
