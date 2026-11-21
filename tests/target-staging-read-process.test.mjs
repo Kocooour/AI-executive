@@ -131,9 +131,11 @@ test("an aborted waiter never spawns and the next waiter retains FIFO order", as
   assert.deepEqual(scripts, ["a", "b", "d"]);
 });
 
-test("cancelling after a slot is handed over cannot leak the slot", async () => {
+test("aborting after FIFO handoff but before spawn cannot leak the inherited slot", async () => {
   const children = [];
-  const run = createStagingReadRunner(() => {
+  const launched = [];
+  const run = createStagingReadRunner((_command, args) => {
+    launched.push(args.at(-1));
     const child = fakeChild();
     children.push(child);
     return child;
@@ -142,13 +144,19 @@ test("cancelling after a slot is handed over cannot leak the slot", async () => 
   const second = run(config, "target-staging-detail-child.mjs", ["two"]);
   const controller = new AbortController();
   const cancelled = run(config, "target-staging-detail-child.mjs", ["cancelled"], controller.signal);
+  assert.deepEqual(launched, ["one", "two"]);
   children[0].finish({ ok: true });
-  controller.abort();
+  // The close handler resolves first; its async continuation inherits the
+  // physical slot before this queued microtask aborts the granted waiter.
+  // The waiter itself must check its signal before spawning the child.
+  queueMicrotask(() => controller.abort());
   assert.equal(await cancelled, null);
   assert.deepEqual(await first, { ok: true });
+  assert.deepEqual(launched, ["one", "two"], "a granted-but-aborted child must never spawn");
   const healthy = run(config, "target-staging-detail-child.mjs", ["healthy"]);
   await tick();
-  assert.equal(children.length, 3);
+  assert.deepEqual(launched, ["one", "two", "healthy"]);
+  assert.equal(children.length, 3, "handoff cancellation returns its inherited slot");
   children[1].finish({ ok: true });
   children[2].finish({ ok: true });
   await Promise.all([second, healthy]);
