@@ -31,6 +31,7 @@ Object.assign(process.env,{
   AI_EXECUTIVE_TARGET_STAGING_HTTP_INBOX_WRITE_ENABLED:"true",
 });
 const {bootstrapIsolatedTargetStore}=await import("../lib/target-store-bootstrap.ts");
+const {issueTargetInboxCommandId}=await import("../lib/target-inbox-command-identity.ts");
 const {TargetStagingSessionAuthority}=await import("../lib/target-staging-session-authority.ts");
 const durable=await import("../lib/target-staging-durable-session.ts");
 const {createSessionToken,sessionCookieName}=await import("./support/owner-session-test-cookie.mjs");
@@ -41,7 +42,7 @@ const {POST:CANCEL}=await import("../app/api/target-staging/inbox/cancel/route.t
 const {readStagingTargetInboxInChild}=await import("../lib/target-staging-read-process.ts");
 const {resolveStagingHttpIdentity,stagingChildSessionConfig,verifyStagingReadBeforeRelease}=
   await import("../lib/target-staging-http-identity.ts");
-let counter=0;const all=[];
+let counter=0;let currentIp="10.61.3.7";const all=[];
 after(()=>{
   for(const fx of all)fx.db.close();
   for(const [k,v] of Object.entries(before)){
@@ -54,6 +55,7 @@ function fixture(){
   const stage=bootstrapIsolatedTargetStore({
     stagingDirectory:path.join(root,"stage-"+(++counter)),ownerUserId:"alice",
   });
+  currentIp="10.61.3."+String(counter+7);
   const db=new DatabaseSync(stage.databasePath);db.exec("PRAGMA foreign_keys=ON");
   for(const user of ["bob","cara"]){
     db.prepare("INSERT INTO identities(id) VALUES (?)").run(user);
@@ -88,13 +90,13 @@ function session(fx,who){
 }
 const base="http://localhost:3001/api/target-staging/inbox";
 const read=(cookie=owner(),suffix="")=>GET(new Request(base+suffix,{
-  headers:{cookie,"x-forwarded-for":"10.61.3.7"},
+  headers:{cookie,"x-forwarded-for":currentIp},
 }));
 function post(kind,command,cookie=owner(),options={}){
   return (kind==="receipt"?RECEIPT:kind==="cancel"?CANCEL:TRIAGE)(new Request(base+"/"+kind,{
     method:"POST",
     headers:{cookie,"content-type":"application/json",
-      "x-forwarded-for":"10.61.3.7",
+      "x-forwarded-for":currentIp,
       ...(options.origin===null?{}:{origin:options.origin??"http://localhost:3001"}),
       ...(options.protocol===null?{}:{"x-lumi-target-protocol":options.protocol??"1"})},
     body:JSON.stringify(command),
@@ -107,10 +109,11 @@ async function ok(promise){
   return body;
 }
 function cmd(row,store,mode="process",prior=null){
-  return {commandId:randomUUID(),taskId:row.id,mode,undoOfCommandId:prior,
+  const fields={taskId:row.id,mode,undoOfCommandId:prior,
     expectedRevision:row.expectedRevision,
     expectedTriageRevision:row.triageRevision,writeAreaId:row.effectiveAreaId,
     restoreGeneration:store.expectedRestoreGeneration};
+  return {...fields,commandId:issueTargetInboxCommandId(fields)};
 }
 const ids=body=>body.items.map(x=>x.id);
 
