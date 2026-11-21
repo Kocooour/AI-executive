@@ -19,7 +19,7 @@ import {issueTargetInboxRevision,verifyIssuedTargetInboxRevision,
   verifyTargetInboxCommandId} from "./target-inbox-command-identity";
 import {
   checkTargetTaskWriteContract,targetTaskWriteTarget,canWriteIsolatedTargetArea,
-  targetStoreRestoreGeneration,targetTaskWriteRevision,
+  targetStoreRestoreGeneration,
   validTargetTaskTitleEditPreviewRequest,
 } from "./target-task-write-preflight";
 import type { TargetStagingReadStore } from "./target-task-staging-reader";
