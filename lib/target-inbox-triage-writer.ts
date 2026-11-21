@@ -7,7 +7,8 @@
  * not directly callable from HTTP without the same-origin identity boundary.
  */
 import { createHash } from "node:crypto";
-import { TARGET_INBOX_RECEIPT_RETENTION_DAYS, TARGET_INBOX_MAX_RECEIPTS } from "./target-inbox-schema";
+import { TARGET_INBOX_RECEIPT_RETENTION_DAYS, TARGET_INBOX_MAX_RECEIPTS,
+  TARGET_INBOX_UNDO_REBASE_PREFIX } from "./target-inbox-schema";
 import {TARGET_STAGING_INBOX_TRIAGE_CANCEL_PREFIX,TARGET_STAGING_INBOX_TOMBSTONE_CANCEL_PREFIX}
   from "./target-store-bootstrap";
 import { withPinnedTargetStagingWrite } from "./target-staging-pinned-write";
@@ -135,6 +136,21 @@ export function targetInboxTriageCancelled(
   }
   return result;
 }
+/** Allow a replacement Undo only after cancellation-only revision advances.
+ * A normal edit moves the revision past this exact retained Process witness. */
+export function targetInboxUndoRebaseKey(processReceiptKey:string):string{
+  return TARGET_INBOX_UNDO_REBASE_PREFIX+processReceiptKey;
+}
+export function targetInboxUndoRevisionEligible(
+  db:DatabaseSync,processReceiptKey:string,originalRevision:number,currentRevision:number,
+):boolean{
+  if(originalRevision===currentRevision)return true;
+  if(!Number.isSafeInteger(currentRevision)||currentRevision<=originalRevision)return false;
+  const row=db.prepare("SELECT value FROM metadata WHERE key=?")
+    .get(targetInboxUndoRebaseKey(processReceiptKey)) as {value:string}|undefined;
+  return row?.value===String(currentRevision);
+}
+
 export function targetInboxTriageDigest(command:TargetInboxTriageCommand):string{
   return createHash("sha256").update(JSON.stringify([
     "target-inbox-triage-v1",command.taskId,command.mode,
@@ -263,7 +279,8 @@ export function writePreflightedTargetInboxTriage(
           original.task_id!==command.taskId||
           original.restore_generation.toLowerCase()!==command.restoreGeneration.toLowerCase()||
           original.triage_revision_after!==before.triage_revision||
-          original.task_revision_after!==before.revision||
+          !targetInboxUndoRevisionEligible(db,originalKey,
+             original.task_revision_after,before.revision)||
           db.prepare("SELECT 1 FROM task_triage_receipts WHERE undo_of_receipt_key=?").get(originalKey))
         return {ok:false,reason:"stale_revision"};
     }
@@ -282,7 +299,10 @@ export function writePreflightedTargetInboxTriage(
           AND EXISTS (SELECT 1 FROM tasks t WHERE t.id=r.task_id
             AND t.triage_state='processed'
             AND t.triage_revision=r.triage_revision_after
-            AND t.revision=r.task_revision_after)`).get() as {n:number}).n;
+            AND (t.revision=r.task_revision_after OR EXISTS(
+               SELECT 1 FROM metadata m WHERE m.key=?||r.receipt_key
+                 AND m.value=CAST(t.revision AS TEXT))))`)
+         .get(TARGET_INBOX_UNDO_REBASE_PREFIX) as {n:number}).n;
     let rows=countReceipts(),active=countActive();
     if(!Number.isSafeInteger(rows)||!Number.isSafeInteger(active))return failed();
     const reserved=()=>rows+active+(command.mode==="process"?2:0);
@@ -305,7 +325,16 @@ export function writePreflightedTargetInboxTriage(
         AND NOT EXISTS (SELECT 1 FROM tasks t
           WHERE t.id=task_triage_receipts.task_id AND t.triage_state='processed'
             AND t.triage_revision=task_triage_receipts.triage_revision_after
-            AND t.revision=task_triage_receipts.task_revision_after)`).run(cutoff);
+            AND (t.revision=task_triage_receipts.task_revision_after OR EXISTS(
+               SELECT 1 FROM metadata m WHERE m.key=?||task_triage_receipts.receipt_key
+                 AND m.value=CAST(t.revision AS TEXT))))`)
+         .run(cutoff,TARGET_INBOX_UNDO_REBASE_PREFIX);
+       // Retire rebases only when their original Process was safely pruned.
+       db.prepare(`DELETE FROM metadata WHERE substr(key,1,?)=?
+         AND NOT EXISTS (SELECT 1 FROM task_triage_receipts r
+           WHERE r.receipt_key=substr(metadata.key,?) AND r.action='process')`)
+         .run(TARGET_INBOX_UNDO_REBASE_PREFIX.length,TARGET_INBOX_UNDO_REBASE_PREFIX,
+           TARGET_INBOX_UNDO_REBASE_PREFIX.length+1);
       rows=countReceipts();
       active=countActive();
     }
