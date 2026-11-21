@@ -506,6 +506,63 @@ for(const [width,status] of [[390,503],[1280,409]] as const){
 }
 
 
+test("C-3a: lost Undo can be cancelled and safely replaced without replaying its UUID",async({page})=>{
+  test.setTimeout(120_000);
+  if(!store)throw Error("Missing isolated C-3a SQLite store");
+  await page.setViewportSize({width:1280,height:844});
+  const seeded=store.seed.projects["1280"];
+  const db=new DatabaseSync(path.join(store.directory,"lumi-target.sqlite"));
+  const writes:unknown[]=[];
+  const dropFirstUndo=async(route:Route)=>{
+    const command=route.request().postDataJSON() as {mode:string;commandId:string};
+    if(command.mode==="undo"){
+      writes.push(command);
+      if(writes.length===1){
+        await route.fulfill({status:503,contentType:"application/json",
+          body:'{"error":"unavailable"}'});
+        return;
+      }
+    }
+    await route.continue();
+  };
+  try{
+    await openInbox(page);
+    await findInboxRow(page,seeded.taskId);
+    await processAction(page,seeded.taskTitle).click();
+    await expect(page.getByRole("button",{name:"Vrátit do Inboxu (Undo)"}))
+      .toBeVisible({timeout:20000});
+    await page.route("**/api/target-staging/inbox/triage",dropFirstUndo);
+    await page.getByRole("button",{name:"Vrátit do Inboxu (Undo)"}).click();
+    await expect(page.getByRole("button",{name:"Bezpečně ukončit původní příkaz"}))
+      .toBeVisible({timeout:20000});
+    expect(writes).toHaveLength(1);
+    await page.getByRole("button",{name:"Bezpečně ukončit původní příkaz"}).click();
+    await expect(page.getByText(
+      "Původní Undo bylo bezpečně zrušeno. Úkol lze nyní znovu vrátit do Inboxu."
+    )).toBeVisible({timeout:20000});
+    await expect(page.getByRole("button",{name:"Vrátit do Inboxu (Undo)"}))
+      .toBeVisible();
+    const oldUndo=writes[0];
+    await page.unroute("**/api/target-staging/inbox/triage",dropFirstUndo);
+    const late=await page.evaluate(async command=>{
+      const response=await fetch("/api/target-staging/inbox/triage",{
+        method:"POST",headers:{"content-type":"application/json",
+          "x-lumi-target-protocol":"1"},credentials:"same-origin",
+        body:JSON.stringify(command)});
+      return response.status;
+    },oldUndo);
+    expect(late).toBe(409,"old Undo UUID remains irrevocably retired");
+    await page.getByRole("button",{name:"Vrátit do Inboxu (Undo)"}).click();
+    await findInboxRow(page,seeded.taskId);
+    expect((db.prepare("SELECT triage_state FROM tasks WHERE id=?")
+      .get(seeded.taskId) as {triage_state:string}).triage_state).toBe("unprocessed");
+    expect(writes).toHaveLength(1);
+  }finally{
+    await page.unroute("**/api/target-staging/inbox/triage",dropFirstUndo);
+    db.close();
+  }
+});
+
 test("C-3a: missing POST recovers after reload by replaying only its original UUID",async({page})=>{
   test.setTimeout(120_000);
   if(!store)throw Error("Missing isolated C-3a SQLite store");
