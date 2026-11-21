@@ -10,6 +10,7 @@ import {
   TARGET_STORE_LEGACY_SCHEMA_VERSION, TARGET_STORE_PREVIOUS_SCHEMA_VERSION, isSupportedTargetSchemaVersion,
   TARGET_STAGING_AUDIT_MAX_EVENTS, TARGET_STAGING_MAX_RECEIPTS, TARGET_STAGING_SESSION_MAX_ROWS,
   TARGET_STAGING_RECEIPT_PREFIX, TARGET_STAGING_DELETE_RECEIPT_PREFIX,
+    TARGET_STAGING_INBOX_TRIAGE_CANCEL_PREFIX,
   TARGET_STAGING_PRIVATE_TASK_CREATE_RECEIPT_PREFIX,
   TARGET_STAGING_PRIVATE_TASK_CREATE_RECOVERY_PREFIX,
   TARGET_STAGING_PRIVATE_TASK_CREATE_CANCEL_PREFIX,
@@ -294,6 +295,23 @@ export function inspectIsolatedTargetStore(
         row.key.startsWith(TARGET_STAGING_NOTE_LIFECYCLE_RECEIPT_PREFIX));
       const projectTitleCancels = rows.filter(row => typeof row.key === "string" &&
         row.key.startsWith(TARGET_STAGING_PROJECT_TITLE_CANCEL_PREFIX));
+      // Actor-hashed bucket + receipt-key, digest bound to the exact original
+      // command. A permanent cancellation MUST NOT disappear after expiry.
+      const inboxCancels = rows.filter(row => typeof row.key === "string" &&
+        row.key.startsWith(TARGET_STAGING_INBOX_TRIAGE_CANCEL_PREFIX));
+      const inboxCancelBuckets = new Map<string,number>();
+      const inboxCancelsValid = inboxCancels.every(row => {
+        if(typeof row.key!=="string"||typeof row.value!=="string"||
+            !sha256Hex.test(row.value))return false;
+        const m=/^([a-f0-9]{64}):([a-f0-9]{64})$/.exec(
+          row.key.slice(TARGET_STAGING_INBOX_TRIAGE_CANCEL_PREFIX.length));
+        if(!m)return false;
+        const n=(inboxCancelBuckets.get(m[1])??0)+1;
+        inboxCancelBuckets.set(m[1],n);
+        if(n>TARGET_STAGING_MAX_RECEIPTS)return false;
+        return db.prepare("SELECT 1 FROM task_triage_receipts WHERE receipt_key=?")
+          .get(m[2])===undefined;
+      });
       // An irreversible fence is valid only as an opaque 64-hex key and a
       // literal '1'. Reject all other metadata rather than losing the fence.
       const projectTitleCancelsValid = projectTitleCancels.every(row =>
@@ -377,7 +395,7 @@ export function inspectIsolatedTargetStore(
         structureRecoveryValid;
       if (rows.length !== 6 + receipts.length + deleteReceipts.length + temporalReceipts.length + dueOnReceipts.length + privateWhenReceipts.length + attentionReceipts.length + noteReceipts.length +
             notificationReceipts.length + pushTargetReceipts.length + baselineMarkers.length +
-            noteDeleteReceipts.length + lifecycleReceipts.length + projectTitleCancels.length + privateTaskCreateReceipts.length + privateTaskCreateRecoveries.length + privateTaskCreateCancels.length + structureReceipts.length + structureRecoveries.length + structureCancels.length ||
+            noteDeleteReceipts.length + lifecycleReceipts.length + projectTitleCancels.length + inboxCancels.length + privateTaskCreateReceipts.length + privateTaskCreateRecoveries.length + privateTaskCreateCancels.length + structureReceipts.length + structureRecoveries.length + structureCancels.length ||
           receipts.length > TARGET_STAGING_MAX_RECEIPTS ||
           deleteReceipts.length > TARGET_STAGING_MAX_RECEIPTS ||
           privateTaskCreateReceipts.length > TARGET_STAGING_MAX_RECEIPTS ||
@@ -400,7 +418,9 @@ export function inspectIsolatedTargetStore(
           noteDeleteReceipts.length > TARGET_STAGING_MAX_RECEIPTS ||
           lifecycleReceipts.length > TARGET_STAGING_MAX_RECEIPTS ||
           projectTitleCancels.length > TARGET_STAGING_AUDIT_MAX_EVENTS ||
-          !projectTitleCancelsValid ||
+          !projectTitleCancelsValid || !inboxCancelsValid ||
+          (meta.get("schema_version") !== String(TARGET_STORE_SCHEMA_VERSION) &&
+            inboxCancels.length !== 0) ||
           (meta.get("schema_version") === String(TARGET_STORE_LEGACY_SCHEMA_VERSION) &&
             projectTitleCancels.length !== 0) ||
           !receiptValid(receipts, TARGET_STAGING_RECEIPT_PREFIX) ||
@@ -435,7 +455,8 @@ export function inspectIsolatedTargetStore(
               row.key.startsWith(TARGET_STAGING_NOTE_RECEIPT_PREFIX) ||
               row.key.startsWith(TARGET_STAGING_NOTE_DELETE_RECEIPT_PREFIX) ||
               row.key.startsWith(TARGET_STAGING_NOTE_LIFECYCLE_RECEIPT_PREFIX) ||
-              row.key.startsWith(TARGET_STAGING_PROJECT_TITLE_CANCEL_PREFIX))) ||
+              row.key.startsWith(TARGET_STAGING_PROJECT_TITLE_CANCEL_PREFIX) ||
+              row.key.startsWith(TARGET_STAGING_INBOX_TRIAGE_CANCEL_PREFIX))) ||
           !isSupportedTargetSchemaVersion(meta.get("schema_version")) ||
           meta.get("activated") !== "false" || meta.get("write_protocol") !== "per-item-only" ||
           typeof meta.get("anchor_seq") !== "string" ||
