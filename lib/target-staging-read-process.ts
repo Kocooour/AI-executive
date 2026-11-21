@@ -13,6 +13,7 @@ import {attentionEvaluationWindow,attentionKey,currentAttentionRule,type Attenti
 import {endOfLocalDate} from "./attention";
 import type {TargetGlobalTaskPage,TargetGlobalTask,TargetGlobalTaskScope} from "./target-global-task-read-model";
 import type {TargetInboxPage,TargetInboxItem} from "./target-inbox-read-model";
+import {inboxWorkerProofKey} from "./target-inbox-command-identity";
 import type {TargetGlobalProjectPage,TargetGlobalProject} from "./target-global-project-read-model";
 import type {TargetGlobalNotePage,TargetGlobalNote,GlobalNoteAreaEpoch} from "./target-global-note-read-model";
 import type {TargetGlobalCombinedPage,GlobalCombinedItem,GlobalCombinedPositions} from "./target-global-combined-read-model";
@@ -137,6 +138,9 @@ export function createStagingReadRunner(
         AI_EXECUTIVE_TARGET_STAGING_RESTORE_GENERATION: config.expectedRestoreGeneration,
         AI_EXECUTIVE_TARGET_STAGING_OWNER_USER_ID: config.ownerUserId,
         AI_EXECUTIVE_TARGET_STAGING_SESSION_HASH: config.sessionTokenHash || "",
+        ...(scriptName==="target-staging-inbox-child.mjs"
+          ?{AI_EXECUTIVE_TARGET_STAGING_INBOX_PROOF_KEY:inboxWorkerProofKey()||""}
+          :{}),
         ...(config.noteSyncSecret ?
           { AI_EXECUTIVE_TARGET_STAGING_NOTE_SYNC_SECRET: config.noteSyncSecret } : {}),
       };
