@@ -97,7 +97,7 @@ tombstones, reset task revisions or restore an old database under the
 unchanged generation.
 
 Regression coverage: `tests/target-inbox-http.test.mjs` verifies forged
-nonexistent tasks cannot write; eight unrelated UUIDs aimed at one unchanged
+nonexistent tasks cannot write; four unrelated UUIDs aimed at one unchanged
 original snapshot produce only one monotonic revision advance; existing
 4,096-row legacy and draft-shard ledgers remain unchanged and do not block
 safe recovery; receipt/Process races and tombstone ACL still hold.
