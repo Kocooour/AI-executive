@@ -449,7 +449,48 @@ test("C-3a: Area move and tombstone remain safely cancellable, without leaking m
   assert.deepEqual(await ok(post("receipt",tombstoneCommand)),
     {ok:true,status:"cancelled",next:null});
   assert.equal((await post("triage",tombstoneCommand)).status,409);
-  assert.notEqual((await post("receipt",{...tombstoneCommand,commandId:randomUUID()})).status,200);
+  assert.equal((await ok(post("receipt",{...tombstoneCommand,commandId:randomUUID()}))).status,
+    "cancelled","the explicit actor+task tombstone witness covers all late UUIDs");
+});
+
+test("C-3a: fabricated task and arbitrary UUID floods cannot create permanent fences",async()=>{
+  const fx=fixture(),page=await ok(read());
+  const original=cmd(page.items.find(x=>x.id==="shared-task"),fx.store);
+  const beforeRevision=fx.db.prepare("SELECT revision FROM tasks WHERE id='shared-task'")
+    .get().revision;
+  const beforeLog=fx.db.prepare("SELECT COUNT(*) AS n FROM change_log").get().n;
+  const fenceCount=()=>fx.db.prepare("SELECT COUNT(*) AS n FROM metadata WHERE key LIKE ?")
+    .get("r3:inbox-%cancel-v1:%").n;
+  const beforeFences=fenceCount();
+  const fake={...original,taskId:"never-existing-task",commandId:randomUUID()};
+  assert.equal((await post("cancel",fake)).status,404,
+    "writable Area alone cannot authorize a nonexistent task or insert a fence");
+  assert.equal(fenceCount(),beforeFences);
+  assert.equal(fx.db.prepare("SELECT COUNT(*) AS n FROM change_log").get().n,beforeLog);
+  // A live CAS can only be invalidated once. More fake command IDs using
+  // that original CAS cannot add rows or repeatedly bump the task revision.
+  assert.deepEqual(await ok(post("cancel",original)),{ok:true,status:"cancelled"});
+  assert.equal(fx.db.prepare("SELECT revision FROM tasks WHERE id='shared-task'")
+    .get().revision,beforeRevision+1);
+  const afterLog=fx.db.prepare("SELECT COUNT(*) AS n FROM change_log").get().n;
+  assert.equal(afterLog,beforeLog+1);
+  for(let i=0;i<8;i++){
+    const another={...original,commandId:randomUUID()};
+    assert.deepEqual(await ok(post("cancel",another)),{ok:true,status:"cancelled"});
+    assert.equal((await post("triage",another)).status,409,
+      "a fabricated command cannot use the old CAS after cancellation");
+  }
+  assert.equal(fenceCount(),beforeFences,"no arbitrary UUID creates permanent metadata");
+  assert.equal(fx.db.prepare("SELECT revision FROM tasks WHERE id='shared-task'")
+    .get().revision,beforeRevision+1,"only one monotonic revision advance");
+  assert.equal(fx.db.prepare("SELECT COUNT(*) AS n FROM change_log").get().n,afterLog);
+  assert.deepEqual(await ok(post("receipt",original)),{ok:true,status:"cancelled",next:null});
+  const now=(await ok(read())).items.find(x=>x.id==="shared-task");
+  assert.deepEqual(await ok(post("triage",cmd(now,fx.store))),{ok:true},
+    "a fresh authorized command works with its new CAS");
+  const {inspectIsolatedTargetStore}=await import("../lib/target-store-preflight.ts");
+  assert.deepEqual(inspectIsolatedTargetStore({...fx.store,mode:"r2-model"}),
+    {ok:true,mode:"r2-model",issues:[]});
 });
 
 test("C-3a: original commit wins cancel race, preserving receipt/Undo and ACL",async()=>{
