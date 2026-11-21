@@ -95,15 +95,11 @@ function useInbox(limit:number){
         setState({kind:"ready",key,page:result.value});
       }else{
         setState({kind:"error",key,reason:result.reason});
-        // A first-page 409 (changed ACL/policy snapshot) or 404 (Inbox
-        // disabled) revokes the authorization behind ALL Inbox surfaces.
-        // The sidebar/mobile badge is a separate useInbox(1) consumer: it
-        // must not continue showing an earlier count while this list fails.
-        // A fresh verified session + a NEW authorized GET is needed to lift
-        // this shared refusal fence; an old or late GET cannot lift it.
-        if(runtime&&(
-            result.reason==="signed-out"||result.reason==="stale"||
-            result.reason==="feature-off")){
+        // No failed first-page response (including 503, network errors or
+        // 429) can justify showing a count cached by another useInbox(1)
+        // consumer. Fence ALL Inbox surfaces until a fresh verified session
+        // and a fresh authorized GET; old in-flight badge GETs cannot lift it.
+        if(runtime){
           markInboxRefused(runtime,generation);
           if(result.reason==="signed-out"&&refusalBudgetFor(runtime).admit())
             void runtime.reportRefusal("session_revoked");
@@ -200,8 +196,10 @@ export default function TargetInbox({language="cs",taskDetail=false}:{language?:
         stage:command.mode==="undo"?"undone":"undo-ready",next:check.next});
       emitTargetChange({kind:"task",id:command.taskId,change:"updated"});
     }else if(check.ok===true&&check.status==="not_recorded"){
-      // Not-recorded is not proof that the old write has quiesced.
-      setDecision({command,title,processId,stage:"uncertain",next:null});
+      // The old request may still be in flight: NEVER allocate a fresh UUID.
+      // Replaying the identical command is safe because the pinned SQLite
+      // writer serializes transactions and deduplicates actor+UUID+digest.
+      setDecision({command,title,processId,stage:"not-recorded",next:null});
     }else{
       setDecision({command,title,processId,
         stage:"uncertain",next:null});
@@ -209,8 +207,17 @@ export default function TargetInbox({language="cs",taskDetail=false}:{language?:
       // It is not an authoritative negative receipt: never discard the UUID.
     }
   },[revoke,commandCurrent,setDecision]);
-  async function submit(command:InboxClientCommand,title:string,processId:string){
+  async function submit(
+    command:InboxClientCommand,title:string,processId:string,replayOriginal=false,
+  ){
     if(inFlight.current||!runtime?.known()||runtime.generation()!==generation)return;
+    if(replayOriginal){
+      const original=inboxDecisionSnapshot(runtime,generation);
+      // A recovery attempt must use the EXACT stored command and original
+      // UUID. Never accept a fresh command or replace its CAS/Area witness.
+      if(!original||original.stage!=="not-recorded"||
+          JSON.stringify(original.command)!==JSON.stringify(command))return;
+    }
     inFlight.current=true;
     if(!setDecision({command,title,processId,stage:"sending",next:null})){
       inFlight.current=false;setRecoveryFailed(true);return;
@@ -221,8 +228,9 @@ export default function TargetInbox({language="cs",taskDetail=false}:{language?:
       if(sent.ok===false&&sent.reason==="signed-out"){
         revoke();setDecision(null);return;
       }
-      if(sent.ok===true||(sent.ok===false&&sent.reason==="uncertain")){
-        // Never replace commandId or blind-retry an ambiguous Process/Undo.
+      if(sent.ok===true||(sent.ok===false&&sent.reason==="uncertain")||replayOriginal){
+        // A recovery's 409/404 may race with the original write: reconcile
+        // its historical receipt before considering any terminal outcome.
         await confirm(command,title,processId);
       }else{
         setDecision({command,title,processId,stage:"conflict",next:null});
@@ -231,7 +239,7 @@ export default function TargetInbox({language="cs",taskDetail=false}:{language?:
     }finally{inFlight.current=false;}
   }
   function process(item:TargetInboxItem){
-    if(inFlight.current||decision&&["sending","verifying","uncertain"].includes(decision.stage)||
+    if(inFlight.current||decision&&["sending","verifying","uncertain","not-recorded"].includes(decision.stage)||
         !page||!item.canProcess||!item.expectedRevision)return;
     const command:InboxClientCommand={
       commandId:crypto.randomUUID(),taskId:item.id,mode:"process",
@@ -255,14 +263,15 @@ export default function TargetInbox({language="cs",taskDetail=false}:{language?:
     void submit(command,decision.title,decision.processId);
   }
   async function recheck(){
-    if(inFlight.current||!decision||decision.stage!=="uncertain")return;
+    if(inFlight.current||!decision||
+        !["uncertain","not-recorded"].includes(decision.stage))return;
     inFlight.current=true;
     try{await confirm(decision.command,decision.title,decision.processId);}
     finally{inFlight.current=false;}
   }
   // An unresolved command survives navigating away and back. In every phase,
   // hide rows/count and block fresh UUIDs until the original receipt is settled.
-  const unresolved=decision&&["sending","verifying","uncertain"].includes(decision.stage);
+  const unresolved=decision&&["sending","verifying","uncertain","not-recorded"].includes(decision.stage);
   if(recoveryFailed)return <section className="targetInbox" data-testid="target-inbox-recovery-error">
     <p role="alert">{speak(
       "Nelze bezpečně obnovit původní příkaz. Zápisy jsou zablokované, aby nedošlo k duplicitě.",
@@ -275,13 +284,22 @@ export default function TargetInbox({language="cs",taskDetail=false}:{language?:
   if(gate==="ready"&&unresolved)return <section
     className="targetInbox" data-testid="target-inbox-uncertain"
     aria-label={speak("Cílový Inbox","Target Inbox")}>
-    <p role={decision?.stage==="uncertain"?"alert":"status"}>{decision?.stage==="uncertain"
+    <p role={decision?.stage==="uncertain"||decision?.stage==="not-recorded"
+      ?"alert":"status"}>{decision?.stage==="not-recorded"
+      ?speak("Původní zápis zatím není zaznamenaný. Seznam a počet zůstávají skryté. Můžete bezpečně zopakovat pouze původní příkaz se stejným UUID.",
+        "The original write is not yet recorded. Rows and count stay hidden. You may safely replay only the original command with the same UUID.")
+      :decision?.stage==="uncertain"
       ?speak("Výsledek posledního zápisu není potvrzen. Seznam a počet jsou skryté, dokud nelze získat aktuální stav.",
         "The latest write is uncertain. Rows and count remain hidden pending fresh verification.")
       :speak("Ověřuji původní příkaz. Seznam a počet jsou dočasně skryté.",
         "The original command is pending. Rows and count remain temporarily hidden.")}</p>
-    {decision?.stage==="uncertain"&&<button type="button" onClick={()=>void recheck()}>
-      {speak("Ověřit původní příkaz","Verify original command")}</button>}
+    {(decision?.stage==="uncertain"||decision?.stage==="not-recorded")&&
+      <button type="button" onClick={()=>void recheck()}>
+        {speak("Ověřit původní příkaz","Verify original command")}</button>}
+    {decision?.stage==="not-recorded"&&
+      <button type="button" onClick={()=>void submit(
+        decision.command,decision.title,decision.processId,true)}>
+        {speak("Opakovat původní příkaz","Retry original command")}</button>}
   </section>;
   if(!page)return <section aria-label={speak("Cílový Inbox","Target Inbox")}
     className="targetInbox" data-testid="target-inbox">
