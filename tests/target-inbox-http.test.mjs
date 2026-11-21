@@ -531,6 +531,10 @@ test("C-3a: fabricated task and arbitrary UUID floods cannot create permanent fe
   assert.equal(fx.db.prepare("SELECT COUNT(*) AS n FROM change_log").get().n,afterLog);
   assert.deepEqual(await ok(post("receipt",original)),{ok:true,status:"cancelled",next:null});
   const now=(await ok(read())).items.find(x=>x.id==="shared-task");
+  assert.notEqual(now.expectedRevision,original.expectedRevision,
+    "pinned cancellation must invalidate the actor-signed CAS, not compare a raw hash");
+  assert.equal((await post("triage",original)).status,409,
+    "the exact originally issued Process cannot commit after cancellation");
   const renewed=cmd(now,fx.store);
   assert.notEqual(renewed.commandId,original.commandId);
   assert.equal((await post("triage",{...renewed,commandId:original.commandId})).status,409,
