@@ -62,7 +62,7 @@ export function foldInboxMatchText(value: string): string {
 const validName = (name: unknown): name is string =>
   typeof name === "string" && name.trim() === name && name.length > 0 &&
   Buffer.byteLength(name,"utf8") <= MAX_NAME_BYTES &&
-  NAME.test(foldInboxMatchText(name));
+  !/[\u0000-\u001f\u007f]/u.test(name);
 const validRevision = (n: unknown): n is number =>
   typeof n === "number" && Number.isSafeInteger(n) && n >= 0;
 
@@ -103,6 +103,9 @@ const keep = (source: "rule" | "ai" = "rule"): InboxSuggestion => ({
 const words = (value: string): string[] =>
   foldInboxMatchText(value).match(WORD) ?? [];
 function matchesPhrase(titleWords: readonly string[], name: string): boolean {
+  // Punctuated or emoji-bearing names are allowed AI candidates, but rule
+  // matching abstains unless the complete name is an unambiguous word phrase.
+  if (!NAME.test(foldInboxMatchText(name))) return false;
   const candidate = words(name);
   if (!candidate.length) return false;
   for (let i = 0; i + candidate.length <= titleWords.length; i++) {
