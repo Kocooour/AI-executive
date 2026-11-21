@@ -420,6 +420,25 @@ test("C-3a: malformed or duplicate cancellation shards fail canonical preflight 
   }
 });
 
+test("C-3a: forged tombstone witness cannot pass canonical preflight",async()=>{
+  const fx=fixture(),page=await ok(read());
+  const original=cmd(page.items.find(x=>x.id==="shared-task"),fx.store);
+  const {createHash}=await import("node:crypto");
+  const prefix="r3:inbox-tombstone-cancel-v1:";
+  const taskId="never-existing-task";
+  const key=prefix+createHash("sha256").update(JSON.stringify([
+    "inbox-tombstone-cancel-v1","alice",taskId,
+  ])).digest("hex");
+  fx.db.prepare("INSERT INTO metadata(key,value) VALUES (?,?)")
+    .run(key,JSON.stringify(["alice",taskId]));
+  const {inspectIsolatedTargetStore}=await import("../lib/target-store-preflight.ts");
+  const checked=inspectIsolatedTargetStore({...fx.store,mode:"r2-model"});
+  assert.equal(checked.ok,false);
+  assert.ok(checked.issues.includes("metadata_invalid"),JSON.stringify(checked));
+  assert.equal((await post("cancel",original)).status,503,
+    "untrusted metadata must block a subsequent pinned write");
+});
+
 test("C-3a: Area move and tombstone remain safely cancellable, without leaking missing UUIDs",async()=>{
   const fx=fixture();
   const original=cmd((await ok(read())).items.find(x=>x.id==="shared-task"),fx.store);
