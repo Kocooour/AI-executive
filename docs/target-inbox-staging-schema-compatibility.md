@@ -42,51 +42,67 @@ journal unchanged. The existing v26→v27 migration tests prove the separate
 supported upgrade. `tests/target-inbox-triage-writer.test.mjs` protects
 4,096 simultaneously active Process receipts and their reserved Undo capacity.
 
-## Permanent cancellation capacity and safe rollover
+## C-3a cancellation: bounded monotonic CAS retirement
 
-C-3a's actor-bound **cancellation fences** are separate from the capped
-`task_triage_receipts` history. A cancelled UUID may be delivered to the server
-much later; no age, missing read-only receipt, or stale task CAS justifies
-deleting its durable negative fence.
+An ambiguous Process/Undo POST is serialized under the pinned staging write
+lock against the cancellation operation. A task can never return to an older
+task revision, Area policy revision or restore generation, and a tombstoned task
+ID can never be reused. These are the durable anti-ABA guarantees that prevent
+any late original command from passing the *same* CAS again.
 
-Earlier draft stores encoded fences as
-`r3:inbox-triage-cancel-v1:<actorSha256>:<receiptSha256>` and allowed at most
-4,096 entries per actor. Those original keys remain valid and **are never
-deleted or rewritten**. New cancellations use the same prefix but append a
-deterministic receipt-hash partition:
-`<actorSha256>:<receiptHashPrefix>:<receiptSha256>`.
-The prefix grows through **4, 8, 16, 32 and 64 hex digits** when the current
-partition fills its 4,096-row quota. The terminal 64-digit partition is unique
-to the original command, so no actor-lifetime 4,096-cancellation wall remains.
-Every write and exact-command receipt lookup checks both the original format
-and all five partition depths, even after restarts. The pinned write lock
-serializes cancellation versus the original late Process/Undo, and canonical
-preflight rejects forged shard prefixes, duplicate UUID fences across formats
-and over-quota partitions. No SQLite table/trigger DDL or schema version changes
-are required.
+1. **Live task, matching original CAS:** The cancellation writer validates
+   current actor/task write ACL, the named Area, session and generation, then
+   atomically advances only `tasks.revision` by one. Existing canonical triggers
+   advance the Area content epoch and bounded change log. This makes the
+   original command's CAS irrevocably stale while allowing a newly authorized
+   Process with a new CAS. An uncertain COMMIT is reconciled by a fresh
+   read-only CAS check; no permanent per-command cancellation row is needed.
+2. **Live task, already-stale CAS:** If no exact actor+UUID committed receipt
+   exists, a pinned read safely returns `cancelled` because the original
+   Process/Undo can *never commit in the future*. Unlike a mere
+   `not_recorded` receipt, this is durable monotonic proof; there is no
+   write or metadata growth. The committed receipt always takes precedence.
+3. **Immutable deleted task:** Only an actor still allowed to write its
+   tombstone may explicitly request cancellation. The first such request
+   stores ONE `r3:inbox-tombstone-cancel-v1:<sha256>` marker containing only
+   the actor and task IDs. Its key is derived from both; further requests
+   with arbitrarily many UUIDs re-use that exact marker. Subsequent receipt
+   reads may acknowledge this actor's reconciliation without revealing a
+   tombstone before the explicit request. Canonical preflight verifies the
+   registered identity, matching immutable task tombstone, key derivation and
+   the per-actor bound of at most **4,096 markers** (the tombstone table's
+   own hard bound). No task, no marker.
+4. **Never-existing or unauthorized task:** Reject without a write. A claimed
+   writable Area alone cannot authorize cancellation, and arbitrary UUIDs
+   never allocate durable storage.
 
-**Operator procedure (capacity / free disk):** Monitor the isolated staging
-SQLite file size, metadata-row counts and available filesystem capacity. This
-ledger is durable and its storage and canonical preflight cost grow with the
-number of actual cancellations; it is not an unlimited-memory cache. The HTTP
-cancel route is authenticated, default-OFF and rate limited, but disk-space
-exhaustion can still cause a safe 503. On low capacity, disable new Inbox
-writes, stop writers, preserve the *whole* staging database, journal, witness
-and access controls, expand the existing secure volume without resetting its
-files or restore generation, perform the normal read-only integrity preflight,
-then re-enable writes only after review. Retry only the **same UUID** and
-verify its exact receipt. If filesystem expansion and healthy preflight are
-not possible, leave writes disabled and escalate to an independently reviewed
-generation-rotation/data-migration plan; never hand-edit, delete, expire or
-truncate active cancellation fences, reuse a previous restore generation,
-restore a pre-cancellation backup, or silently issue a new UUID.
+**Compatibility:** Existing old-format
+`r3:inbox-triage-cancel-v1:<actorSha256>:<receiptSha256>` and draft nested
+receipt-hash fences remain readable, immutable and checked *before* every
+Process/Undo. Canonical preflight retains strict shape, digest and per-shard
+capacity validation. No existing fence is deleted, expired or silently
+converted; no table/trigger DDL change or schema-version change is needed.
+New cancellations create no additional actor+UUID fences. The one-per-tombstone
+marker is an additive, content-free metadata namespace in this still-unreleased
+v27 draft.
 
-The regression in `tests/target-inbox-http.test.mjs` seeds 4,096 valid
-old-format fences and verifies safe acceptance of another cancellation with
-old entries untouched. It separately fills a first-level 4-digit partition,
-proves an 8-digit fallback, preserves the old cancelled command's refusal and
-checks canonical staging preflight. This is isolated staging verification, not
-authorization to cut over a persistent production store.
+**Operational gates:** Monitor the isolated staging SQLite, canonical
+preflight and ordinary bounded `change_log` capacity. A 503 or an untrusted
+journal is NOT authority to retry under a new UUID; recover using the exact
+command receipt and verified current CAS. On physical volume exhaustion,
+stop writes, preserve the SQLite, journal, witness and restore generation,
+expand the existing secure filesystem capacity, run preflight and re-enable
+only after operator review. Never manually delete old UUID fences, remove
+tombstones, reset task revisions or restore an old database under the
+unchanged generation.
+
+Regression coverage: `tests/target-inbox-http.test.mjs` verifies forged
+nonexistent tasks cannot write; eight unrelated UUIDs aimed at one unchanged
+original snapshot produce only one monotonic revision advance; existing
+4,096-row legacy and draft-shard ledgers remain unchanged and do not block
+safe recovery; receipt/Process races and tombstone ACL still hold.
+`e2e/target-inbox-acceptance.spec.ts` exercises a lost POST followed by
+a concurrent title edit, and confirms zero new permanent UUID fences.
 
 PR #485 must remain **Draft** until current-head CI and the independent
 review pass; merging C-3a does **not** authorize deployment or the final
