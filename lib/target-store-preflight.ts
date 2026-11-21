@@ -331,24 +331,29 @@ export function inspectIsolatedTargetStore(
       // registered actor and irreversible tombstone; fail closed on forgery.
       const tombstoneCancels=rows.filter(row=>typeof row.key==="string"&&
         row.key.startsWith(TARGET_STAGING_INBOX_TOMBSTONE_CANCEL_PREFIX));
-      const knownActors=new Set((all("SELECT id FROM identities") as {id:string}[])
-        .map(row=>row.id));
+      // The metadata value contains ONLY two opaque SHA-256 digests.
+      // Join them to canonical IDs held in the main indexed tables, then
+      // validate the actor+task key. Neither ID is duplicated in metadata.
+      const hashedId=(tag:string,id:string)=>createHash("sha256")
+        .update(JSON.stringify([tag,id])).digest("hex");
+      const actorByDigest=new Map((all("SELECT id FROM identities") as {id:string}[])
+        .map(row=>[hashedId("inbox-tombstone-actor-v1",row.id),row.id]));
+      const taskByDigest=new Map((all("SELECT id FROM task_tombstones") as {id:string}[])
+        .map(row=>[hashedId("inbox-tombstone-task-v1",row.id),row.id]));
       const tombstoneCancelCounts=new Map<string,number>();
       const tombstoneCancelsValid=tombstoneCancels.every(row=>{
         if(typeof row.key!=="string"||typeof row.value!=="string"||
-            !sha256Hex.test(row.key.slice(TARGET_STAGING_INBOX_TOMBSTONE_CANCEL_PREFIX.length))||
-            Buffer.byteLength(row.value,"utf8")>2048)return false;
-        let parsed:unknown;
-        try{parsed=JSON.parse(row.value);}catch{return false;}
-        if(!Array.isArray(parsed)||parsed.length!==2||
-            typeof parsed[0]!=="string"||!knownActors.has(parsed[0])||
-            typeof parsed[1]!=="string"||!parsed[1]||
-            JSON.stringify(parsed)!==row.value)return false;
-        const [actor,taskId]=parsed as [string,string];
-        const hash=createHash("sha256").update(JSON.stringify([
+            !sha256Hex.test(row.key.slice(TARGET_STAGING_INBOX_TOMBSTONE_CANCEL_PREFIX.length)))
+          return false;
+        const m=/^([a-f0-9]{64}):([a-f0-9]{64})$/.exec(row.value);
+        if(!m)return false;
+        const actor=actorByDigest.get(m[1]),taskId=taskByDigest.get(m[2]);
+        if(!actor||!taskId)return false;
+        // The key is derived with the established [tag,actor,task] tuple,
+        // not the two digests themselves.
+        const canonical=createHash("sha256").update(JSON.stringify([
           "inbox-tombstone-cancel-v1",actor,taskId])).digest("hex");
-        if(row.key!==TARGET_STAGING_INBOX_TOMBSTONE_CANCEL_PREFIX+hash||
-            db.prepare("SELECT 1 FROM task_tombstones WHERE id=?").get(taskId)===undefined)
+        if(row.key!==TARGET_STAGING_INBOX_TOMBSTONE_CANCEL_PREFIX+canonical)
           return false;
         const n=(tombstoneCancelCounts.get(actor)??0)+1;
         tombstoneCancelCounts.set(actor,n);
