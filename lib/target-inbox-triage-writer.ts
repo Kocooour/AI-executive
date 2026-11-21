@@ -8,13 +8,14 @@
  */
 import { createHash } from "node:crypto";
 import { TARGET_INBOX_RECEIPT_RETENTION_DAYS, TARGET_INBOX_MAX_RECEIPTS } from "./target-inbox-schema";
+import {TARGET_STAGING_INBOX_TRIAGE_CANCEL_PREFIX} from "./target-store-bootstrap";
 import { withPinnedTargetStagingWrite } from "./target-staging-pinned-write";
 import { isTargetStagingSessionTokenHash,lookupLiveTargetStagingSession }
   from "./target-staging-durable-session";
 import { verifiedActor,type TargetStagingReadCredential } from "./target-task-authenticated-read";
 import { fingerprint } from "./target-task-staging-writer";
 import {
-  checkTargetTaskWriteContract,targetTaskWriteTarget,
+  checkTargetTaskWriteContract,targetTaskWriteTarget,canWriteIsolatedTargetArea,
   targetStoreRestoreGeneration,targetTaskWriteRevision,
   validTargetTaskTitleEditPreviewRequest,
 } from "./target-task-write-preflight";
@@ -37,7 +38,7 @@ export type TargetInboxTriageResult =
   | {ok:true; replayed?:true}
   | {ok:false; reason:"invalid_request"|"unavailable"|"resync_required"|
     "write_area_mismatch"|"session_revoked"|"stale_revision"|
-    "idempotency_conflict"|"write_failed" };
+    "idempotency_conflict"|"write_failed"|"cancelled" };
 
 const uuid=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const area=/^[A-Za-z0-9_.:@-]{1,120}$/;
@@ -68,6 +69,21 @@ export function targetInboxTriageReceiptKey(actor:string,commandId:string):strin
     JSON.stringify(["target-inbox-triage-v1",actor,commandId.toLowerCase()]),
   ).digest("hex");
 }
+/** Permanent actor+UUID fence; the digest binds the exact original CAS/Area. */
+export function targetInboxTriageCancellationKey(actor:string,commandId:string):string{
+  const bucket=createHash("sha256").update(JSON.stringify(["triage-cancel-actor-v1",actor]))
+    .digest("hex");
+  return TARGET_STAGING_INBOX_TRIAGE_CANCEL_PREFIX+bucket+":"+
+    targetInboxTriageReceiptKey(actor,commandId);
+}
+export function targetInboxTriageCancelled(
+  db:DatabaseSync,actor:string,command:TargetInboxTriageCommand,
+):"cancelled"|"conflict"|null{
+  const row=db.prepare("SELECT value FROM metadata WHERE key=?")
+    .get(targetInboxTriageCancellationKey(actor,command.commandId)) as {value:string}|undefined;
+  if(!row)return null;
+  return row.value===targetInboxTriageDigest(command)?"cancelled":"conflict";
+}
 export function targetInboxTriageDigest(command:TargetInboxTriageCommand):string{
   return createHash("sha256").update(JSON.stringify([
     "target-inbox-triage-v1",command.taskId,command.mode,
@@ -91,7 +107,7 @@ type Receipt={
  */
 export function readTargetInboxTriageReceipt(
   db:DatabaseSync,actor:string,command:TargetInboxTriageCommand,
-):"committed"|"not_recorded"|"conflict"|null{
+):"committed"|"not_recorded"|"cancelled"|"conflict"|null{
   if(!validTargetInboxTriageCommand(command)||!area.test(actor))return null;
   // An actor's exact receipt is historical proof, not a new mutation.
   // A Process/Undo may commit before the task moves or is tombstoned.
@@ -100,7 +116,10 @@ export function readTargetInboxTriageReceipt(
   // a new write to a deleted task, nor a lookup by a former editor/viewer.
   if(targetStoreRestoreGeneration(db)!==command.restoreGeneration.toLowerCase())return null;
   const target=targetTaskWriteTarget(db,actor,command.taskId);
-  if(!target)return null;
+  // A cancellation only confirms the caller's OWN exact command and requires
+  // current write access to its original Area. No tombstone or task existence
+  // is revealed for arbitrary, unrecorded UUIDs.
+  if(!target&&!canWriteIsolatedTargetArea(db,actor,command.writeAreaId))return null;
   try {
     const row=db.prepare(
       "SELECT request_digest,actor_user_id,task_id FROM task_triage_receipts WHERE receipt_key=?",
@@ -108,13 +127,16 @@ export function readTargetInboxTriageReceipt(
       request_digest:string;actor_user_id:string;task_id:string;
     }|undefined;
     if(!row){
-      // A tombstone is NOT evidence that this actor sent a triage command.
-      // On a deleted task, never disclose not_recorded or the task's existence.
-      // Live tasks retain the strict original Area/write contract.
+      const cancelled=targetInboxTriageCancelled(db,actor,command);
+      if(cancelled==="cancelled"&&canWriteIsolatedTargetArea(db,actor,command.writeAreaId))
+        return "cancelled";
+      if(cancelled==="conflict")return "conflict";
+      // A tombstone without an EXACT actor-owned fence is NOT evidence of
+      // a missing UUID. Never disclose not_recorded for that case.
       return target==="live"&&checkTargetTaskWriteContract(db,actor,command).ok
         ?"not_recorded":null;
     }
-    if(row.actor_user_id!==actor||row.task_id!==command.taskId)return null;
+    if(!target||row.actor_user_id!==actor||row.task_id!==command.taskId)return null;
     return row.request_digest===targetInboxTriageDigest(command)?"committed":"conflict";
   }catch{return null;}
 }
@@ -133,10 +155,15 @@ export function writePreflightedTargetInboxTriage(
     const sessionLive=():boolean=>durableSessionTokenHash===undefined||
       lookupLiveTargetStagingSession(db,durableSessionTokenHash,Date.now())?.userId===actor;
     if(!sessionLive())return {ok:false,reason:"session_revoked"};
-    const contract=checkTargetTaskWriteContract(db,actor,command);
-    if(contract.ok===false)return {ok:false,reason:contract.reason};
+    // Check the irreversible same-UUID cancellation BEFORE ACL/CAS: a late
+    // Process/Undo must never commit, even after the task moved or was deleted.
     if(store.expectedRestoreGeneration.toLowerCase()!==command.restoreGeneration.toLowerCase())
       return {ok:false,reason:"resync_required"};
+    const cancellation=targetInboxTriageCancelled(db,actor,command);
+    if(cancellation)return {ok:false,reason:cancellation==="cancelled"
+      ?"cancelled":"idempotency_conflict"};
+    const contract=checkTargetTaskWriteContract(db,actor,command);
+    if(contract.ok===false)return {ok:false,reason:contract.reason};
     const receiptKey=targetInboxTriageReceiptKey(actor,command.commandId);
     const digest=targetInboxTriageDigest(command);
     const prior=db.prepare("SELECT request_digest FROM task_triage_receipts WHERE receipt_key=?")
