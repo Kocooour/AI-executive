@@ -13,8 +13,9 @@
 export type WakeRefreshResult="ok"|"signed_out"|"unavailable";
 export type WakeHandlers={
   hide(reason:"hidden"|"offline"):void;
-  /** The screen may read again (resume the session, bump the read). */
-  ready():void;
+  /** The screen may read again; report whether verification actually succeeded.
+   * Consumers MUST NOT release auth fences after an unavailable wake. */
+  ready(result:Exclude<WakeRefreshResult,"signed_out">):void;
   /** The session ended: show the signed-out state, do not stay hidden. */
   signedOut():void;
 };
@@ -51,7 +52,7 @@ export function createWakeMachine(deps:{
       try{result=await deps.refresh();}catch{result="unavailable";}
       if(disposed||epoch!==id)return;
       if(result==="signed_out")deps.handlers().signedOut();
-      else deps.handlers().ready();
+      else deps.handlers().ready(result);
     },
     dispose():void{disposed=true;epoch++;},
   };

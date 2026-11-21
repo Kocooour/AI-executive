@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import {test} from "node:test";
-import {activeTargetViewFor,detailsActive,targetViewsFor,targetShellNavigationFor,SHELL_NAVIGATION_VIEWS} from "../lib/target-shell-views.ts";
+import {activeTargetViewFor,detailsActive,targetViewsFor,targetShellNavigationFor,targetMobileMoreCurrentViews,legacyInboxMailViewFor,SHELL_NAVIGATION_VIEWS} from "../lib/target-shell-views.ts";
 import {refusalBudgetFor} from "../lib/target-refusal-budget.ts";
 import {detailIdOk} from "../lib/target-detail-route.ts";
 import {validTaskPreviewId} from "../lib/target-staging-task-preview-client.ts";
@@ -19,6 +19,9 @@ test("target views exist only where a target list or the target plan really rend
   assert.deepEqual(targetViewsFor({...off,scopesOn:true,projectsList:true,notesList:true,myPlan:true,v1Shell:true}),
     ["Projects","Notes","MyPlanPreview"]);
   assert.deepEqual(targetViewsFor({...off,myPlan:true}),[],"the plan needs the v1 shell");
+  const inbox={...off,personalV1:true,homeRead:true,inboxRead:true};
+  assert.deepEqual(targetViewsFor(inbox),["Home","Upcoming","Inbox"]);
+  assert.deepEqual(targetViewsFor({...inbox,inboxRead:false}),["Home","Upcoming"]);
 });
 
 test("details without a list or plan to open them from are inert",()=>{
@@ -28,6 +31,7 @@ test("details without a list or plan to open them from are inert",()=>{
   assert.equal(detailsActive({task:false,project:false,note:true},["Projects"]),false);
   assert.equal(detailsActive({task:true,project:false,note:false},["MyPlanPreview"]),true);
   assert.equal(detailsActive({task:true,project:false,note:false},["Notes"]),false);
+  assert.equal(detailsActive({task:true,project:false,note:false},["Inbox"]),true);
   assert.equal(detailsActive({task:false,project:false,note:false},["Projects"]),false);
 });
 
@@ -42,6 +46,8 @@ test("the target view on screen: lists per flag, the plan only in the v1 'Můj p
   assert.equal(at("Projects",false,{projectsList:false}),null);
   assert.equal(at("Notes",false,{scopesOn:false}),null);
   assert.equal(at("Today",true,{v1Shell:false}),null);
+  assert.equal(at("Inbox",false,{personalV1:true,homeRead:true,inboxRead:true}),"Inbox");
+  assert.equal(at("Inbox",false,{personalV1:true,homeRead:true,inboxRead:false}),null);
 });
 
 test("one refusal budget per runtime, shared by every consumer",()=>{
@@ -129,4 +135,45 @@ test("C-2: only complete personal-v1 promotes authorized Home and Upcoming",()=>
     ["MyPlanPreview","Projects","Notes","Calendar","Search"]);
   assert.equal(activeTargetViewFor({...without,view:"Upcoming",planActive:false}).active,null);
   assert.equal(targetViewsFor(without).includes("Upcoming"),false);
+});
+
+
+test("C-3a: target Inbox and LegacyInbox have distinct primary/archive addresses only behind the complete gate",()=>{
+  const ready={...personalV1,personalV1:true,homeRead:true,inboxRead:true};
+  const nav=targetShellNavigationFor(ready);
+  assert.deepEqual(nav.primary,["MyPlanPreview","Home","Inbox","Upcoming","Projects","Notes","Calendar","Search"]);
+  assert.deepEqual(nav.archive,["LegacyHome","LegacyInbox","Today","LegacyUpcoming",
+    "Overdue","Anytime","Someday","Completed","Areas","Context"]);
+  assert.equal(nav.byView.Inbox,"primary");
+  assert.equal(nav.byView.LegacyInbox,"archive");
+  assert.equal(nav.byView.LegacyHome,"archive");
+  assert.equal(new Set([...nav.primary,...nav.archive,...nav.hidden]).size,SHELL_NAVIGATION_VIEWS.length);
+  for(const key of ["homeRead","inboxRead"]){
+    const withheld=targetShellNavigationFor({...ready,[key]:false});
+    assert.equal(withheld.byView.Inbox,"archive");
+    assert.equal(withheld.byView.LegacyInbox,"hidden");
+  }
+  const offNav=targetShellNavigationFor({...ready,quickCapture:false});
+  assert.equal(offNav.personalV1,false);
+  assert.equal(offNav.byView.LegacyInbox,"hidden");
+});
+
+test("C-3a: mobile More shows current Inbox exactly once, and LegacyInbox only in archive",()=>{
+  const ready={...personalV1,personalV1:true,homeRead:true,inboxRead:true};
+  const nav=targetShellNavigationFor(ready);
+  const current=targetMobileMoreCurrentViews(nav);
+  assert.deepEqual(current,["Home","Inbox","Upcoming","Notes","Search"]);
+  assert.deepEqual(nav.archive.filter(v=>v==="LegacyInbox"),["LegacyInbox"]);
+  assert.equal(current.filter(v=>v==="Inbox").length,1);
+  assert.ok(!current.includes("LegacyInbox"));
+  assert.equal(new Set([...current,...nav.archive]).size,current.length+nav.archive.length);
+  const noTarget=targetShellNavigationFor({...ready,inboxRead:false});
+  assert.equal(targetMobileMoreCurrentViews(noTarget).includes("Inbox"),false);
+});
+
+test("C-3a: historical Gmail source follows archive alias only after complete target cutover",()=>{
+  assert.equal(legacyInboxMailViewFor(false,false),"Inbox");
+  assert.equal(legacyInboxMailViewFor(false,true),"Inbox","off mode stays unchanged");
+  assert.equal(legacyInboxMailViewFor(true,false),"Inbox","C-2 archive remains readable");
+  assert.equal(legacyInboxMailViewFor(true,true),"LegacyInbox");
 });

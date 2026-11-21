@@ -14,6 +14,7 @@ import { DatabaseSync } from "node:sqlite";
 import { resolveDataDirectory } from "./data-dir";
 import { TARGET_STAGING_JOURNAL_FILENAME, targetStagingJournalGenesis } from "./target-staging-anchor-journal";
 import { bootstrapTargetStagingWitness } from "./target-staging-anchor-witness";
+import { TARGET_INBOX_SCHEMA_SQL } from "./target-inbox-schema";
 
 // v7 (issue #155) tracks monotonic per-Area task-content epochs for efficient,
 // ACL-scoped cursor revisions. v8 (R2c.1) adds durable content-free task/project
@@ -55,10 +56,14 @@ import { bootstrapTargetStagingWitness } from "./target-staging-anchor-witness";
 // crash. An explicit in-flight marker is committed BEFORE calling the sender;
 // only an interrupted in-flight send becomes unknown (never retried).
 // As with other schema revisions, old staging stores are intentionally rejected.
-export const TARGET_STORE_SCHEMA_VERSION = 26;
+// v26: explicit project title audit upgrade; v27: C-3a Inbox triage state.
+// Both older canonical schemas remain readable solely for explicit upgrades.
+export const TARGET_STORE_SCHEMA_VERSION = 27;
+export const TARGET_STORE_PREVIOUS_SCHEMA_VERSION = 26;
 export const TARGET_STORE_LEGACY_SCHEMA_VERSION = 25;
 export const isSupportedTargetSchemaVersion = (value: unknown): boolean =>
-  value === String(TARGET_STORE_SCHEMA_VERSION) || value === String(TARGET_STORE_LEGACY_SCHEMA_VERSION);
+  value === String(TARGET_STORE_SCHEMA_VERSION) || value === String(TARGET_STORE_PREVIOUS_SCHEMA_VERSION) ||
+  value === String(TARGET_STORE_LEGACY_SCHEMA_VERSION);
 /** Capacities of the v23 push foundation in a fresh isolated store. */
 export const TARGET_STAGING_MAX_PUSH_TARGETS = 4096;
 export const TARGET_STAGING_MAX_PUSH_TARGETS_PER_USER = 64;
@@ -125,6 +130,10 @@ export const TARGET_STAGING_NOTE_DELETE_RECEIPT_PREFIX = "r2:note-delete-receipt
 export const TARGET_STAGING_NOTE_LIFECYCLE_RECEIPT_PREFIX = "r2:note-lifecycle-receipt-v1:";
 /** R3 project-title cancellation fences: content-free, irreversible across reloads. */
 export const TARGET_STAGING_PROJECT_TITLE_CANCEL_PREFIX = "r3:project-title-cancel-v1:";
+/** C-3a actor+UUID cancellation fence: irrevocable even for late Process/Undo POSTs. */
+export const TARGET_STAGING_INBOX_TRIAGE_CANCEL_PREFIX = "r3:inbox-triage-cancel-v1:";
+/** At most one durable terminal-cancel witness per actor and immutable task tombstone. */
+export const TARGET_STAGING_INBOX_TOMBSTONE_CANCEL_PREFIX = "r3:inbox-tombstone-cancel-v1:";
 /** Per-table cap for task, project and note tombstones; fails closed. */
 export const TARGET_STAGING_MAX_TOMBSTONES = 4096;
 /** Provisional, isolated-staging audit policy; production retention is not approved. */
@@ -1940,7 +1949,8 @@ CREATE TRIGGER project_title_audit_capacity BEFORE INSERT ON project_title_audit
 WHEN (SELECT COUNT(*) FROM project_title_audit) >= ${TARGET_STAGING_AUDIT_MAX_EVENTS}
 BEGIN SELECT RAISE(ABORT, 'audit capacity reached'); END;
 `;
-export const TARGET_SCHEMA_SQL = TARGET_SCHEMA_V25_SQL + TARGET_PROJECT_TITLE_SCHEMA_SQL;
+export const TARGET_SCHEMA_V26_SQL = TARGET_SCHEMA_V25_SQL + TARGET_PROJECT_TITLE_SCHEMA_SQL;
+export const TARGET_SCHEMA_SQL = TARGET_SCHEMA_V26_SQL + TARGET_INBOX_SCHEMA_SQL;
 
 /**
  * Create a stage-only schema and initial private 'Nezařazeno' Area. Explicit caller

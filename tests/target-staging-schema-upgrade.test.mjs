@@ -18,7 +18,9 @@ const hashFile = file=>createHash('sha256').update(readFileSync(file)).digest('h
 function fixture(name) {
  const stage=bootstrapIsolatedTargetStore({stagingDirectory:path.join(root,name),ownerUserId:'alice'});
  const store={stagingDirectory:stage.directory,expectedRestoreGeneration:stage.restoreGeneration};
- const db=new DatabaseSync(stage.databasePath);db.exec("PRAGMA foreign_keys=ON; DROP TABLE project_title_audit; UPDATE metadata SET value='25' WHERE key='schema_version'");
+ const db=new DatabaseSync(stage.databasePath);
+ db.exec("PRAGMA foreign_keys=ON; DROP TABLE task_triage_receipts; DROP TRIGGER task_triage_create_guard; DROP TRIGGER task_triage_revision_guard; DROP TRIGGER task_triage_task_revision; DROP INDEX tasks_unprocessed_by_id; ALTER TABLE tasks DROP COLUMN triage_revision; ALTER TABLE tasks DROP COLUMN triaged_at; ALTER TABLE tasks DROP COLUMN triage_state; DROP TABLE project_title_audit; UPDATE metadata SET value='25' WHERE key='schema_version'");
+
  db.prepare("INSERT INTO projects(id,area_id,title) VALUES ('project',?,'Before')").run(stage.unassignedAreaId);
  db.prepare("INSERT INTO tasks(id,area_id,title) VALUES ('task',?,'Task')").run(stage.unassignedAreaId);
  return {stage,store,db};
