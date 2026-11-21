@@ -179,7 +179,8 @@ export function readTargetInboxTriageReceipt(
       // A tombstoned ID likewise cannot be recreated (canonical DDL guard).
       // These statuses do not claim that a Process happened or expose content;
       // a matching committed receipt, if any, always wins above.
-      if(target==="tombstone")return "cancelled";
+      if(target==="tombstone"&&
+          targetInboxTombstoneCancelWitness(db,actor,command.taskId))return "cancelled";
       if(target==="live"&&targetTaskWriteRevision(db,command.taskId)!==command.expectedRevision)
         return "cancelled";
       return target==="live"&&checkTargetTaskWriteContract(db,actor,command).ok
