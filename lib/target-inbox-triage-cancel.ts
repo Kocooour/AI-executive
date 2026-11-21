@@ -60,7 +60,8 @@ export function cancelPreflightedTargetInboxTriage(
     if(prior)return prior==="cancelled"?{ok:true,status:"cancelled"}:
       {ok:false,reason:"idempotency_conflict"};
     const bucket=targetInboxTriageCancellationKey(actor,command.commandId)
-      .slice(TARGET_STAGING_INBOX_TRIAGE_CANCEL_PREFIX.length,129);
+      .slice(TARGET_STAGING_INBOX_TRIAGE_CANCEL_PREFIX.length,
+        TARGET_STAGING_INBOX_TRIAGE_CANCEL_PREFIX.length+65);
     const total=db.prepare("SELECT COUNT(*) AS n FROM metadata WHERE key LIKE ?")
       .get(TARGET_STAGING_INBOX_TRIAGE_CANCEL_PREFIX+bucket+"%") as {n:number};
     if(!Number.isSafeInteger(total.n)||total.n>=TARGET_STAGING_MAX_RECEIPTS||
