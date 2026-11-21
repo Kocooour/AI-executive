@@ -133,8 +133,16 @@ export function cancelPreflightedTargetInboxTriage(
     const changed=db.prepare(
       "UPDATE tasks SET revision=revision+1 WHERE id=? AND revision=?"
     ).run(command.taskId,row.revision);
-    if(changed.changes!==1||
-        targetTaskWriteRevision(db,command.taskId)===command.expectedRevision||
+    // The original witness is an actor-signed CAS, NOT the raw
+    // targetTaskWriteRevision SHA-256. Re-issue the same actor/Area/triage
+    // witness after the update, while pinned, and prove it changed.
+    // This prevents acknowledging a cancelled command if the original
+    // signed CAS could still pass a late Process/Undo write.
+    const afterSignedRevision=issueTargetInboxRevision(
+      db,actor,command.taskId,command.expectedTriageRevision,
+      command.writeAreaId,command.restoreGeneration);
+    if(changed.changes!==1||!afterSignedRevision||
+        afterSignedRevision===command.expectedRevision||
         !sessionLive()||!context.stillPinned())return failed();
     return context.commit({kind:"task_triage",payload:{cancel:1}})
       ?{ok:true,status:"cancelled"}:failed();
