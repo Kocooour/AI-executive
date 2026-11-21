@@ -317,6 +317,74 @@ test("C-3a: lost POST + concurrent title edit is safely cancelled under pinned l
     "fresh, newly authorized CAS succeeds after cancellation");
 });
 
+test("C-3a: the 4096 legacy actor fences roll into a new shard without erasing old UUIDs",async()=>{
+  const fx=fixture(),page=await ok(read());
+  const original=cmd(page.items.find(x=>x.id==="shared-task"),fx.store);
+  const {targetInboxTriageCancellationKey,targetInboxTriageCancellationShardKeys}=
+    await import("../lib/target-inbox-triage-writer.ts");
+  const legacy=targetInboxTriageCancellationKey("alice",original.commandId);
+  const legacyPrefix=legacy.slice(0,-64);
+  const seed=fx.db.prepare("INSERT INTO metadata(key,value) VALUES (?,?)");
+  fx.db.exec("BEGIN IMMEDIATE");
+  try{
+    for(let i=0;i<4096;i++){
+      const receipt=i.toString(16).padStart(64,"0");
+      assert.notEqual(legacyPrefix+receipt,legacy);
+      seed.run(legacyPrefix+receipt,"0".repeat(64));
+    }
+    fx.db.exec("COMMIT");
+  }catch(error){fx.db.exec("ROLLBACK");throw error;}
+  // The old actor-only bucket is genuinely full before trying to cancel.
+  assert.equal(fx.db.prepare("SELECT COUNT(*) AS n FROM metadata WHERE key>=? AND key<?")
+    .get(legacyPrefix,legacyPrefix+"g").n,4096);
+  fx.db.prepare("UPDATE tasks SET title='Changed after lost POST' WHERE id='shared-task'").run();
+  assert.equal((await post("triage",original)).status,409,"old CAS was invalidated");
+  assert.deepEqual(await ok(post("cancel",original)),{ok:true,status:"cancelled"});
+  const firstShard=targetInboxTriageCancellationShardKeys("alice",original.commandId)[0];
+  assert.equal(fx.db.prepare("SELECT value FROM metadata WHERE key=?")
+    .get(firstShard)?.value?.length,64,"the new command is fenced in a distinct hash shard");
+  assert.equal(fx.db.prepare("SELECT COUNT(*) AS n FROM metadata WHERE key>=? AND key<?")
+    .get(legacyPrefix,legacyPrefix+"g").n,4096,"all legacy fences remain durable");
+  assert.deepEqual(await ok(post("receipt",original)),{ok:true,status:"cancelled",next:null});
+  assert.deepEqual(await ok(post("cancel",original)),{ok:true,status:"cancelled"});
+  assert.equal((await post("triage",original)).status,409,
+    "a delayed original write cannot commit after legacy-bucket rollover");
+  const {inspectIsolatedTargetStore}=await import("../lib/target-store-preflight.ts");
+  assert.deepEqual(inspectIsolatedTargetStore({...fx.store,mode:"r2-model"}),
+    {ok:true,mode:"r2-model",issues:[]},"rollover must retain canonical store integrity");
+});
+
+test("C-3a: a full first hash shard narrows deterministically without dropping fences",async()=>{
+  const fx=fixture(),page=await ok(read());
+  const original=cmd(page.items.find(x=>x.id==="shared-task"),fx.store);
+  const {targetInboxTriageCancellationShardKeys}=await import("../lib/target-inbox-triage-writer.ts");
+  const [first,second,...rest]=targetInboxTriageCancellationShardKeys("alice",original.commandId);
+  assert.equal(rest.length,3,"there must be a unique final 64-hex fallback");
+  const shardPrefix=first.slice(0,-64),receiptPrefix=first.slice(-64,-60);
+  const seed=fx.db.prepare("INSERT INTO metadata(key,value) VALUES (?,?)");
+  fx.db.exec("BEGIN IMMEDIATE");
+  try{
+    for(let i=0;i<4096;i++){
+      const receipt=receiptPrefix+i.toString(16).padStart(60,"0");
+      assert.notEqual(shardPrefix+receipt,first);
+      seed.run(shardPrefix+receipt,"0".repeat(64));
+    }
+    fx.db.exec("COMMIT");
+  }catch(error){fx.db.exec("ROLLBACK");throw error;}
+  assert.equal(fx.db.prepare("SELECT COUNT(*) AS n FROM metadata WHERE key>=? AND key<?")
+    .get(shardPrefix,shardPrefix+"g").n,4096);
+  assert.deepEqual(await ok(post("cancel",original)),{ok:true,status:"cancelled"});
+  assert.equal(fx.db.prepare("SELECT value FROM metadata WHERE key=?")
+    .get(second)?.value?.length,64,"a full first shard must not block a new UUID");
+  assert.equal(fx.db.prepare("SELECT COUNT(*) AS n FROM metadata WHERE key>=? AND key<?")
+    .get(shardPrefix,shardPrefix+"g").n,4096,"existing shard stays unchanged");
+  assert.deepEqual(await ok(post("receipt",original)),{ok:true,status:"cancelled",next:null});
+  assert.equal((await post("triage",original)).status,409);
+  const {inspectIsolatedTargetStore}=await import("../lib/target-store-preflight.ts");
+  assert.deepEqual(inspectIsolatedTargetStore({...fx.store,mode:"r2-model"}),
+    {ok:true,mode:"r2-model",issues:[]},"nested hash shard must be canonical");
+});
+
 test("C-3a: Area move and tombstone remain safely cancellable, without leaking missing UUIDs",async()=>{
   const fx=fixture();
   const original=cmd((await ok(read())).items.find(x=>x.id==="shared-task"),fx.store);
