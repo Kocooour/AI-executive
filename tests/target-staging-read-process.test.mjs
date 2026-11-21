@@ -109,7 +109,7 @@ test("an aborted waiter never spawns and the next waiter retains FIFO order", as
   const children = [];
   const scripts = [];
   const run = createStagingReadRunner((_command, args) => {
-    scripts.push(args[0]);
+    scripts.push(args.at(-1));
     const child = fakeChild();
     children.push(child);
     return child;
