@@ -181,7 +181,8 @@ export async function verifyInboxCommand(
       return {ok:false,reason:"unavailable"};
     let next:Extract<InboxClientReceipt,{ok:true}>["next"]=null;
     if(x.next!==null){
-      if(x.status!=="committed"||!x.next||typeof x.next!=="object"||Array.isArray(x.next))
+      if((x.status!=="committed"&&!(x.status==="cancelled"&&command.mode==="undo"))||
+          !x.next||typeof x.next!=="object"||Array.isArray(x.next))
         return {ok:false,reason:"unavailable"};
       const n=x.next as Record<string,unknown>;
       if(Object.keys(n).sort().join(",")!=="expectedRevision,triageRevision,writeAreaId"||
