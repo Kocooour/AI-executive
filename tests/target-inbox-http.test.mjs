@@ -385,6 +385,33 @@ test("C-3a: a full first hash shard narrows deterministically without dropping f
     {ok:true,mode:"r2-model",issues:[]},"nested hash shard must be canonical");
 });
 
+test("C-3a: malformed or duplicate cancellation shards fail canonical preflight closed",async()=>{
+  const {targetInboxTriageCancellationKey,targetInboxTriageCancellationShardKeys}=
+    await import("../lib/target-inbox-triage-writer.ts");
+  const {inspectIsolatedTargetStore}=await import("../lib/target-store-preflight.ts");
+  for(const shape of ["wrong-shard","duplicate-across-depths"]){
+    const fx=fixture(),page=await ok(read());
+    const original=cmd(page.items.find(x=>x.id==="shared-task"),fx.store);
+    const legacy=targetInboxTriageCancellationKey("alice",original.commandId);
+    const first=targetInboxTriageCancellationShardKeys("alice",original.commandId)[0];
+    const seed=fx.db.prepare("INSERT INTO metadata(key,value) VALUES (?,?)");
+    if(shape==="wrong-shard"){
+      const prefix=first.slice(0,-64),actual=prefix.slice(-5,-1);
+      const forged=prefix.slice(0,-5)+(actual==="ffff"?"0000":"ffff")+":"+
+        first.slice(-64);
+      seed.run(forged,"0".repeat(64));
+    }else{
+      seed.run(legacy,"0".repeat(64));
+      seed.run(first,"0".repeat(64));
+    }
+    const check=inspectIsolatedTargetStore({...fx.store,mode:"r2-model"});
+    assert.equal(check.ok,false,shape);
+    assert.ok(check.issues.includes("metadata_invalid"),JSON.stringify(check));
+    assert.equal((await post("cancel",original)).status,503,
+      "never mutate a malformed cancellation ledger");
+  }
+});
+
 test("C-3a: Area move and tombstone remain safely cancellable, without leaking missing UUIDs",async()=>{
   const fx=fixture();
   const original=cmd((await ok(read())).items.find(x=>x.id==="shared-task"),fx.store);
