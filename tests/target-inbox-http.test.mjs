@@ -37,6 +37,7 @@ const {createSessionToken,sessionCookieName}=await import("./support/owner-sessi
 const {GET}=await import("../app/api/target-staging/inbox/route.ts");
 const {POST:TRIAGE}=await import("../app/api/target-staging/inbox/triage/route.ts");
 const {POST:RECEIPT}=await import("../app/api/target-staging/inbox/receipt/route.ts");
+const {POST:CANCEL}=await import("../app/api/target-staging/inbox/cancel/route.ts");
 const {readStagingTargetInboxInChild}=await import("../lib/target-staging-read-process.ts");
 const {resolveStagingHttpIdentity,stagingChildSessionConfig,verifyStagingReadBeforeRelease}=
   await import("../lib/target-staging-http-identity.ts");
@@ -90,7 +91,7 @@ const read=(cookie=owner(),suffix="")=>GET(new Request(base+suffix,{
   headers:{cookie,"x-forwarded-for":"10.61.3.7"},
 }));
 function post(kind,command,cookie=owner(),options={}){
-  return (kind==="receipt"?RECEIPT:TRIAGE)(new Request(base+"/"+kind,{
+  return (kind==="receipt"?RECEIPT:kind==="cancel"?CANCEL:TRIAGE)(new Request(base+"/"+kind,{
     method:"POST",
     headers:{cookie,"content-type":"application/json",
       "x-forwarded-for":"10.61.3.7",
@@ -286,6 +287,89 @@ test("C-3a: CSRF/protocol/CAS and stale Area checks cannot commit",async()=>{
   assert.equal((await post("triage",command)).status,404);
   process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_INBOX_WRITE_ENABLED="true";
   assert.equal((await ok(post("receipt",command))).status,"not_recorded");
+});
+
+
+test("C-3a: lost POST + concurrent title edit is safely cancelled under pinned lock",async()=>{
+  const fx=fixture(),page=await ok(read());
+  const row=page.items.find(x=>x.id==="shared-task"),original=cmd(row,fx.store);
+  // Simulate an original POST lost before the server received it.
+  assert.equal((await ok(post("receipt",original))).status,"not_recorded");
+  fx.db.prepare("UPDATE tasks SET title='Concurrent title edit' WHERE id='shared-task'").run();
+  assert.equal((await post("triage",original)).status,409,"exact replay has stale CAS");
+  assert.equal((await ok(post("receipt",original))).status,"not_recorded",
+    "read-only absence alone must never release the original UUID");
+  assert.deepEqual(await ok(post("cancel",original)),{ok:true,status:"cancelled"});
+  assert.deepEqual(await ok(post("cancel",original)),{ok:true,status:"cancelled"},
+    "cancel itself is idempotent");
+  assert.deepEqual(await ok(post("receipt",original)),{ok:true,status:"cancelled",next:null},
+    "the exact actor/UUID has a durable terminal negative receipt");
+  assert.equal((await post("triage",original)).status,409,
+    "a late original POST cannot write after cancellation");
+  assert.equal((await post("cancel",{...original,expectedTriageRevision:7})).status,409,
+    "same UUID cannot be rebound to a different payload");
+  assert.equal(fx.db.prepare("SELECT COUNT(*) AS n FROM task_triage_receipts").get().n,0);
+  assert.equal(fx.db.prepare("SELECT triage_state FROM tasks WHERE id='shared-task'")
+    .get().triage_state,"unprocessed");
+  const now=(await ok(read())).items.find(x=>x.id==="shared-task");
+  assert.equal(now.title,"Concurrent title edit");
+  assert.deepEqual(await ok(post("triage",cmd(now,fx.store))),{ok:true},
+    "fresh, newly authorized CAS succeeds after cancellation");
+});
+
+test("C-3a: Area move and tombstone remain safely cancellable, without leaking missing UUIDs",async()=>{
+  const fx=fixture();
+  const original=cmd((await ok(read())).items.find(x=>x.id==="shared-task"),fx.store);
+  fx.db.prepare("UPDATE tasks SET area_id=? WHERE id='shared-task'")
+    .run(fx.stage.unassignedAreaId);
+  assert.notEqual((await post("receipt",original)).status,200,
+    "no unrecorded receipt under a moved Area");
+  assert.deepEqual(await ok(post("cancel",original)),{ok:true,status:"cancelled"});
+  assert.deepEqual(await ok(post("receipt",original)),{ok:true,status:"cancelled",next:null});
+  assert.equal((await post("triage",original)).status,409);
+
+  const current=(await ok(read())).items.find(x=>x.id==="shared-task");
+  const tombstoneCommand=cmd(current,fx.store);
+  const authority=new TargetStagingSessionAuthority(fx.store);
+  try{
+    const token=authority.issueWritable("alice").sessionToken;
+    const preview=authority.previewTaskTitleEdit(token,{taskId:"shared-task"});
+    assert.equal(preview.ok,true);
+    assert.deepEqual(authority.deleteTask(token,{
+      commandId:randomUUID(),taskId:"shared-task",expectedRevision:preview.snapshotRevision,
+      writeAreaId:fx.stage.unassignedAreaId,restoreGeneration:fx.stage.restoreGeneration,
+    }),{ok:true});
+  }finally{authority.close();}
+  assert.notEqual((await post("receipt",tombstoneCommand)).status,200,
+    "no tombstone existence leak for an arbitrary missing UUID");
+  assert.deepEqual(await ok(post("cancel",tombstoneCommand)),{ok:true,status:"cancelled"});
+  assert.deepEqual(await ok(post("receipt",tombstoneCommand)),
+    {ok:true,status:"cancelled",next:null});
+  assert.equal((await post("triage",tombstoneCommand)).status,409);
+  assert.notEqual((await post("receipt",{...tombstoneCommand,commandId:randomUUID()})).status,200);
+});
+
+test("C-3a: original commit wins cancel race, preserving receipt/Undo and ACL",async()=>{
+  const fx=fixture();
+  const original=cmd((await ok(read())).items.find(x=>x.id==="shared-task"),fx.store);
+  assert.deepEqual(await ok(post("triage",original)),{ok:true});
+  assert.deepEqual(await ok(post("cancel",original)),{ok:true,status:"committed"});
+  const receipt=await ok(post("receipt",original));
+  assert.equal(receipt.status,"committed");
+  assert.ok(receipt.next);
+  const prefix="r3:inbox-triage-cancel-v1:";
+  assert.equal(fx.db.prepare("SELECT COUNT(*) AS n FROM metadata WHERE key LIKE ?")
+    .get(prefix+"%").n,0,"never insert a negative fence for an already committed UUID");
+  const undo=cmd({id:original.taskId,
+    expectedRevision:receipt.next.expectedRevision,
+    triageRevision:receipt.next.triageRevision,
+    effectiveAreaId:receipt.next.writeAreaId},fx.store,"undo",original.commandId);
+  assert.deepEqual(await ok(post("triage",undo)),{ok:true});
+  const bob=session(fx,"bob");
+  fx.db.prepare("DELETE FROM area_members WHERE area_id='area-shared' AND user_id='bob'").run();
+  assert.notEqual((await post("cancel",original,bob)).status,200,
+    "a revoked editor cannot probe another actor's UUID");
+  assert.equal((await post("cancel",original,owner(),{origin:"http://attacker.invalid"})).status,403);
 });
 
 test("C-3a: late same-generation ACL revoke invalidates pinned title and count before HTTP release",async()=>{
