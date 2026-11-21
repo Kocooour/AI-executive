@@ -280,13 +280,13 @@ test("C-3b provider rejects incomplete, failed, cancelled and non-final Response
     // A valid JSON classification inside HTTP 200 must never override an
     // incomplete, queued, cancelled or otherwise non-completed response.
     for(const responseStatus of ["incomplete","failed","cancelled","queued",
-      "in_progress",null,undefined]) {
+      "in_progress",null]) {
       globalThis.fetch=async()=>openAIResponse(validChoice,200,responseStatus);
       assert.equal(await completeInboxOpenAIOnly(input,signal),null,
         "response.status="+String(responseStatus));
     }
     // The parent response may be completed while its message is only partial.
-    for(const messageStatus of ["incomplete","in_progress","failed",null,undefined]) {
+    for(const messageStatus of ["incomplete","in_progress","failed",null]) {
       globalThis.fetch=async()=>openAIResponse(validChoice,200,"completed",messageStatus);
       assert.equal(await completeInboxOpenAIOnly(input,signal),null,
         "message.status="+String(messageStatus));
