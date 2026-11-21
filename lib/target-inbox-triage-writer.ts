@@ -102,12 +102,20 @@ export function targetInboxTombstoneCancelKey(actor:string,taskId:string):string
       "inbox-tombstone-cancel-v1",actor,taskId,
     ])).digest("hex");
 }
+/** Only pseudonymous fixed-length digests are persisted in metadata.
+ * Preflight joins them back to canonical identities and task tombstones. */
+export function targetInboxTombstoneCancelValue(actor:string,taskId:string):string{
+  return createHash("sha256").update(JSON.stringify([
+    "inbox-tombstone-actor-v1",actor])).digest("hex")+":"+
+    createHash("sha256").update(JSON.stringify([
+      "inbox-tombstone-task-v1",taskId])).digest("hex");
+}
 export function targetInboxTombstoneCancelWitness(
   db:DatabaseSync,actor:string,taskId:string,
 ):boolean{
   const row=db.prepare("SELECT value FROM metadata WHERE key=?")
     .get(targetInboxTombstoneCancelKey(actor,taskId)) as {value:string}|undefined;
-  return row?.value===JSON.stringify([actor,taskId]);
+  return row?.value===targetInboxTombstoneCancelValue(actor,taskId);
 }
 
 export function targetInboxTriageCancelled(
