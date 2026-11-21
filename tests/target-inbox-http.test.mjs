@@ -445,12 +445,25 @@ test("C-3a: Area move and tombstone remain safely cancellable, without leaking m
   }finally{authority.close();}
   assert.notEqual((await post("receipt",tombstoneCommand)).status,200,
     "no tombstone existence leak for an arbitrary missing UUID");
+  const tombstoneMarkers=()=>fx.db.prepare("SELECT COUNT(*) AS n FROM metadata WHERE key LIKE ?")
+    .get("r3:inbox-tombstone-cancel-v1:%").n;
+  assert.equal(tombstoneMarkers(),0);
   assert.deepEqual(await ok(post("cancel",tombstoneCommand)),{ok:true,status:"cancelled"});
+  assert.equal(tombstoneMarkers(),1,"only one marker per actor and deleted task");
   assert.deepEqual(await ok(post("receipt",tombstoneCommand)),
     {ok:true,status:"cancelled",next:null});
   assert.equal((await post("triage",tombstoneCommand)).status,409);
-  assert.equal((await ok(post("receipt",{...tombstoneCommand,commandId:randomUUID()}))).status,
-    "cancelled","the explicit actor+task tombstone witness covers all late UUIDs");
+  for(let i=0;i<3;i++){
+    const another={...tombstoneCommand,commandId:randomUUID()};
+    assert.deepEqual(await ok(post("cancel",another)),{ok:true,status:"cancelled"});
+    assert.equal((await ok(post("receipt",another))).status,"cancelled");
+  }
+  assert.equal(tombstoneMarkers(),1,"random UUIDs cannot multiply tombstone metadata");
+  assert.notEqual((await post("receipt",tombstoneCommand,session(fx,"bob"))).status,200,
+    "another actor cannot probe Alice's explicit terminal marker");
+  const {inspectIsolatedTargetStore}=await import("../lib/target-store-preflight.ts");
+  assert.deepEqual(inspectIsolatedTargetStore({...fx.store,mode:"r2-model"}),
+    {ok:true,mode:"r2-model",issues:[]},"actor-scoped marker must pass canonical preflight");
 });
 
 test("C-3a: fabricated task and arbitrary UUID floods cannot create permanent fences",async()=>{
