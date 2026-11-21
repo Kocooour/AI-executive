@@ -45,7 +45,10 @@ function sandbox(scenario) {
     chmodSync(targetDirectory, 0o700);
     for (const name of ["lumi-target.sqlite", "lumi-target.journal", "lumi-target-witness.sqlite"])
       writeFileSync(path.join(targetDirectory, name),
-        name === "lumi-target.sqlite" ? targetOwner + "\n" + targetGeneration : "synthetic " + name,
+        name === "lumi-target.sqlite"
+          ? targetOwner + "\n" + targetGeneration + "\n" +
+            (scenario === "targetinboxcurrent" ? "schema=27" : "schema=26")
+          : "synthetic " + name,
         { mode: 0o600 });
     const all = targetPersonalV1Env();
     if (scenario === "targetinvalid") {
@@ -123,6 +126,10 @@ function sandbox(scenario) {
     path.join(app, "scripts/target-build-profile.mjs"));
   copyFileSync(path.join(repo, "lib/target-personal-profile.ts"),
     path.join(app, "lib/target-personal-profile.ts"));
+  // C-3a: the reviewed checkout ships the explicit Inbox schema upgrade CLI.
+  if (scenario.startsWith("target") && scenario !== "targetinboxmissing")
+    copyFileSync(path.join(repo, "scripts/target-staging-upgrade-inbox.mjs"),
+      path.join(app, "scripts/target-staging-upgrade-inbox.mjs"));
 
   const sqlite = new DatabaseSync(path.join(data, "store.sqlite"));
   try {
@@ -619,15 +626,24 @@ scenarioCase("targetsuccess: quiesced target preflight, shared verified archive,
   assert.deepEqual(r.events.filter(value => value.startsWith("start-with-target-flags:")),
     [fullProfileStart, fullProfileStart],
     "the two post-deployment service launches both use the fully reviewed profile");
-  assert.equal(r.events.filter(value => value === "target-check").length, 4,
-    "initial, post-copy, immediately-before-start and post-start semantic checks");
+  assert.equal(r.events.filter(value => value === "target-check").length, 5,
+    "initial, post-copy, pre-upgrade, immediately-before-start and post-start semantic checks");
   const firstStart = r.events.findIndex(value => value === "start-b");
-  assert.ok(r.events.slice(0, firstStart).filter(e => e === "target-check").length >= 3,
-    "all three pre-start checks must complete before target serves requests");
+  assert.ok(r.events.slice(0, firstStart).filter(e => e === "target-check").length >= 4,
+    "all four pre-start checks must complete before target serves requests");
+  // C-3a: explicit v26 -> v27 upgrade strictly after archive + build, before start.
+  const apply = r.events.indexOf("target-inbox-apply");
+  assert.ok(apply > r.events.indexOf("build-b"), "upgrade runs after the verified archive and build");
+  assert.ok(apply < firstStart, "upgrade completes before any new-code request");
+  assert.deepEqual(r.events.filter(e => e.startsWith("target-inbox-")),
+    ["target-inbox-apply", "target-inbox-upgraded", "target-inbox-check"]);
   const archive = path.join(f.backups, r.backups[0]);
-  for (const name of ["lumi-target.sqlite", "lumi-target.journal", "lumi-target-witness.sqlite"])
-    assert.equal(readFileSync(path.join(archive, "target", name), "utf8"),
-      readFileSync(path.join(f.targetDirectory, name), "utf8"));
+  assert.equal(readFileSync(path.join(archive, "target", "lumi-target-witness.sqlite"), "utf8"),
+    readFileSync(path.join(f.targetDirectory, "lumi-target-witness.sqlite"), "utf8"));
+  assert.match(readFileSync(path.join(archive, "target", "lumi-target.sqlite"), "utf8"), /schema=26$/,
+    "verified archive retains the pre-upgrade v26 store for an approved restore");
+  assert.match(readFileSync(path.join(f.targetDirectory, "lumi-target.sqlite"), "utf8"), /schema=27$/);
+  assert.doesNotMatch(readFileSync(path.join(archive, "target", "lumi-target.journal"), "utf8"), /schema_upgrade/);
   const manifest = readFileSync(path.join(archive, "SHA256SUMS"), "utf8");
   assert.match(manifest, /target\/lumi-target.sqlite/);
   assert.match(manifest, /target\/lumi-target.journal/);
@@ -637,7 +653,7 @@ scenarioCase("targetstatedir: approved isolated StateDirectory permits target ro
   assert.equal(r.status, 0, r.output);
   assert.equal(r.head, newSha);
   assert.equal(r.service, "active");
-  assert.equal(r.events.filter(e => e === "target-check").length, 4);
+  assert.equal(r.events.filter(e => e === "target-check").length, 5);
 });
 
 
@@ -704,7 +720,7 @@ for (const scenario of ["offsecurityoutbox", "targetsecurityoutbox"]) {
     assert.equal(r.backups.length, 1);
     assert.ok(r.events.includes("stop"), "a successful deploy reaches the service stop");
     if (scenario.startsWith("target")) {
-      assert.equal(r.events.filter(e => e === "target-check").length, 4);
+      assert.equal(r.events.filter(e => e === "target-check").length, 5);
       assert.equal(r.events.filter(e => e === "start-b").length, 2);
     }
   });
@@ -890,11 +906,13 @@ scenarioCase("targetsystemddriftbuild: new loaded EnvironmentFile during build b
 
 scenarioCase("targetbuildidentitydrift: store swap during build blocks first start", (r, f) => {
   assert.notEqual(r.status, 0);
-  assert.match(r.output, /cilovy preflight tesne pred startem/);
+  assert.match(r.output, /cilovy preflight pred migraci schematu/);
   assert.match(r.output, /Sluzba zustava zastavena/);
   assert.equal(r.events.includes("target-build-identity-drift"), true);
   assert.equal(r.events.filter(e => e === "target-check").length, 3,
     "the third check must detect a store changed after the verified archive");
+  assert.equal(r.events.some(e => e.startsWith("target-inbox-")), false,
+    "a substituted store is never upgraded");
   assert.equal(r.events.some(e => e.startsWith("start-")), false,
     "no request may be served from the new mismatched store");
   assert.equal(r.head, oldSha, "failed pre-start code rollout reverts code only");
@@ -937,6 +955,39 @@ scenarioCase("targetbuildfail: code rollback does not reactivate rejected target
   assert.equal(r.backups.length, 1);
   assert.equal(existsSync(path.join(f.backups, r.backups[0], "target", "lumi-target.sqlite")), true);
 });
+
+scenarioCase("targetinboxcurrent: already-current v27 store is an idempotent no-op", (r, f) => {
+  assert.equal(r.status, 0, r.output);
+  assert.equal(r.service, "active");
+  assert.deepEqual(r.events.filter(e => e.startsWith("target-inbox-")),
+    ["target-inbox-apply", "target-inbox-check"], "no second upgrade of a v27 store");
+  for (const name of ["lumi-target.sqlite", "lumi-target.journal", "lumi-target-witness.sqlite"])
+    assert.equal(readFileSync(path.join(f.backups, r.backups[0], "target", name), "utf8"),
+      readFileSync(path.join(f.targetDirectory, name), "utf8"));
+});
+for (const [scenario, message] of [
+  ["targetinboxapplyfail", /migrace ciloveho schematu Inbox selhala/],
+  ["targetinboxcheckfail", /cilove uloziste po migraci neni aktualni schema Inbox/],
+  ["targetinboxmissing", /cil nema prikaz pro migraci ciloveho schematu Inbox/],
+]) {
+  scenarioCase(scenario + ": Inbox schema upgrade failure keeps the service stopped", (r, f) => {
+    assert.notEqual(r.status, 0);
+    assert.match(r.output, message);
+    assert.match(r.output, /BEZPECNOSTNI BLOKACE: neuspesna aktivace personal-v1/);
+    assert.equal(r.service, "inactive", "no code may serve a partially upgraded or unconfirmed store");
+    assert.equal(r.events.some(e => e.startsWith("start-")), false);
+    assert.equal(r.head, oldSha, "code-only rollback");
+    assert.equal(r.backups.length, 1, "verified pre-upgrade archive is retained");
+    assert.match(readFileSync(path.join(f.backups, r.backups[0], "target", "lumi-target.sqlite"), "utf8"),
+      /schema=26$/, "archive holds the restorable v26 store");
+    if (scenario === "targetinboxmissing") {
+      assert.doesNotMatch(r.output, /mohlo byt migrovano na schema v27/);
+    } else {
+      assert.match(r.output, /mohlo byt migrovano na schema v27/);
+      assert.match(r.output, /obnovou adresare target\/ z overene zalohy/);
+    }
+  });
+}
 
 test("exclusive deployment lock rejects a second process before any service or repository change", { timeout: 15000 }, async () => {
   const fixture = sandbox("concurrent");

@@ -282,8 +282,8 @@ export default defineConfig({
         AI_EXECUTIVE_TARGET_STAGING_RESTORE_GENERATION: personalStore.restoreGeneration,
         AI_EXECUTIVE_TARGET_STAGING_OWNER_USER_ID: personalStore.ownerUserId,
       } : {}),
-      // Independent C-3a flags exist ONLY on this explicitly opted-in
-      // disposable SQLite browser run; the production C-2 profile stays off.
+      // C-3a flags are part of the personal-v1 profile since the activation
+      // release; kept explicit so the Inbox run never depends on that list.
       ...(inboxAcceptanceTest ? {
         AI_EXECUTIVE_TARGET_UI_INBOX_ENABLED: "true",
         AI_EXECUTIVE_TARGET_STAGING_HTTP_INBOX_ENABLED: "true",

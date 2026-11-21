@@ -222,6 +222,38 @@ effective EnvironmentFile, and follow a separately reviewed recovery/start
 procedure. Do not blindly run `systemctl start` or assume that restoring
 a previous git commit also restores the old process environment.
 
+### C-3a Inbox schema upgrade (v26 → v27, issue #483)
+
+From the C-3a activation release, the reviewed \`personal-v1\` profile also
+contains the three Inbox flags \`AI_EXECUTIVE_TARGET_STAGING_HTTP_INBOX_ENABLED\`,
+\`AI_EXECUTIVE_TARGET_STAGING_HTTP_INBOX_WRITE_ENABLED\` and
+\`AI_EXECUTIVE_TARGET_UI_INBOX_ENABLED\`. An env file without them is a
+**partial profile** and the deployment stops *before* stopping the service;
+add the three lines (owner-approved env change) before running the release.
+
+Inbox needs the target schema v27. The application **never** migrates on
+startup. For \`personal-v1\`, \`deploy-safe.sh\` runs the explicit
+\`scripts/target-staging-upgrade-inbox.mjs --apply\` as \`ai-executive\`
+exactly once per deployment, **after** the verified combined archive and the
+build, with the service stopped, after one more owner/generation-bound
+semantic check and **before** the first start; then \`--check\` must report
+the current v27 schema, followed by the existing pre-start and post-start
+checks. The upgrade is idempotent: an already-v27 store is a no-op (later
+deploys). Any other state, a failed write, or an unconfirmed commit aborts
+and the **service stays stopped** (personal-v1 failure rule above).
+
+**Rollback.** Code built before C-3a does not read v27. After an attempted
+upgrade, a return to earlier code is only possible by an **owner-approved
+restore of the archived v26 \`target/\` directory** from the deployment's
+verified backup (\`/var/backups/ai-executive/deploy-*/target\`, checked
+against its \`SHA256SUMS\`), with the service stopped and target flags
+handled per the recovery procedure. The script never restores or deletes
+target data by itself. Operator command to inspect without writing:
+\`runuser -u ai-executive -- env AI_EXECUTIVE_DATA_DIR=/var/lib/ai-executive
+node --experimental-loader ./scripts/target-staging-ts-loader.mjs
+scripts/target-staging-upgrade-inbox.mjs --check --directory <dir>
+--generation <generation>\` (status JSON only, no values).
+
 These tests are synthetic service mocks, not proof of a real deployment:
 \`node --test tests/target-profile-env.test.mjs tests/deploy-safe.test.mjs
 tests/reviewed-target-deploy.test.mjs\`. The exact release-SHA Browser E2E,
