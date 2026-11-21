@@ -8,7 +8,8 @@
  */
 import { createHash } from "node:crypto";
 import { TARGET_INBOX_RECEIPT_RETENTION_DAYS, TARGET_INBOX_MAX_RECEIPTS } from "./target-inbox-schema";
-import {TARGET_STAGING_INBOX_TRIAGE_CANCEL_PREFIX} from "./target-store-bootstrap";
+import {TARGET_STAGING_INBOX_TRIAGE_CANCEL_PREFIX,TARGET_STAGING_INBOX_TOMBSTONE_CANCEL_PREFIX}
+  from "./target-store-bootstrap";
 import { withPinnedTargetStagingWrite } from "./target-staging-pinned-write";
 import { isTargetStagingSessionTokenHash,lookupLiveTargetStagingSession }
   from "./target-staging-durable-session";
@@ -89,6 +90,24 @@ export function targetInboxTriageCancellationShardKeys(
   return TARGET_INBOX_CANCEL_SHARD_LENGTHS.map(length=>
     root+receipt.slice(0,length)+":"+receipt);
 }
+/** One tombstone witness per actor/task, independent of command UUIDs.
+ * The task's immutable tombstone is itself the proof no late write can commit;
+ * this marker records only that this actor explicitly reconciled it, so an
+ * unrelated actor cannot probe deletion via a fabricated receipt request. */
+export function targetInboxTombstoneCancelKey(actor:string,taskId:string):string{
+  return TARGET_STAGING_INBOX_TOMBSTONE_CANCEL_PREFIX+
+    createHash("sha256").update(JSON.stringify([
+      "inbox-tombstone-cancel-v1",actor,taskId,
+    ])).digest("hex");
+}
+export function targetInboxTombstoneCancelWitness(
+  db:DatabaseSync,actor:string,taskId:string,
+):boolean{
+  const row=db.prepare("SELECT value FROM metadata WHERE key=?")
+    .get(targetInboxTombstoneCancelKey(actor,taskId)) as {value:string}|undefined;
+  return row?.value===JSON.stringify([actor,taskId]);
+}
+
 export function targetInboxTriageCancelled(
   db:DatabaseSync,actor:string,command:TargetInboxTriageCommand,
 ):"cancelled"|"conflict"|null{
