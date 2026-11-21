@@ -384,8 +384,7 @@ test("C-3a: lost Process + concurrent title edit cancels old UUID and unlocks fr
       else await route.continue();
     };
     await page.route("**/api/target-staging/inbox/triage",dropFirst);
-    await page.locator(".targetInboxRow").first()
-      .getByRole("button",{name:/Zpracovat úkol:/}).click();
+    await processAction(page,seeded.taskTitle).click();
     await expect(page.getByRole("button",{name:"Opakovat původní příkaz"}))
       .toBeVisible({timeout:15000});
     const witness=(await page.evaluate(()=>
@@ -476,7 +475,8 @@ for(const [width,status] of [[390,503],[1280,409]] as const){
     await page.route("**/api/target-staging/inbox/triage",dropPost);
     await inbox(page).getByRole("button",{name:"Načíst další"}).click();
     await started;
-    await processAction(page,seeded.taskTitle).click();
+    await page.locator(".targetInboxRow").first()
+      .getByRole("button",{name:/Zpracovat úkol:/}).click();
     await expect(page.getByRole("button",{name:"Opakovat původní příkaz"}))
       .toBeVisible({timeout:15000});
     const witness=(await page.evaluate(()=>
