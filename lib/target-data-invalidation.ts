@@ -121,7 +121,11 @@ function validRecovery(x:unknown):x is InboxRecovery{
 function persistInboxRecovery(generation:string,decision:InboxDecision):boolean{
   if(typeof window==="undefined")return true;
   try{
-    if(pending(decision.stage)){
+    if(pending(decision.stage)||
+        (decision.stage==="undo-ready"&&decision.command.mode==="undo")){
+      // A cancelled Undo with a fresh replacement option must survive a tab
+      // reload too: the original command is rechecked read-only, never replayed.
+
       const record:InboxRecovery={version:1,generation,
         command:decision.command,processId:decision.processId};
       window.sessionStorage.setItem(INBOX_RECOVERY_KEY,JSON.stringify(record));
