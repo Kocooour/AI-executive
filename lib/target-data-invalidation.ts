@@ -83,7 +83,7 @@ export function clearInboxRefusedAfterSession(
 
 export type InboxDecision={
   command:InboxClientCommand;title:string;processId:string;
-  stage:"sending"|"verifying"|"uncertain"|"undo-ready"|"conflict"|"denied"|"undone";
+  stage:"sending"|"verifying"|"uncertain"|"not-recorded"|"undo-ready"|"conflict"|"denied"|"undone";
   next:{expectedRevision:string;triageRevision:number;writeAreaId:string}|null;
 };
 type ScopedDecision={runtime:TargetClientRuntime;generation:string;
@@ -91,7 +91,7 @@ type ScopedDecision={runtime:TargetClientRuntime;generation:string;
 const decisionListeners=new Set<()=>void>();
 let scopedDecision:ScopedDecision|null=null;
 const pending=(stage:InboxDecision["stage"])=>
-  stage==="sending"||stage==="verifying"||stage==="uncertain";
+  stage==="sending"||stage==="verifying"||stage==="uncertain"||stage==="not-recorded";
 /** A tab-only, content-free recovery witness is written BEFORE dispatch.
  * The original UUID/CAS must survive a reload while a write is ambiguous.
  * Never persist task titles, session tokens, or an authorization decision. */
