@@ -107,6 +107,7 @@ import type {TargetNoteEditCommandStatus,TargetNoteEditRecovery} from "./target-
 import type {TargetNoteCreateRecovery} from "./target-note-create-status";
 import type { TargetNoteDeleteCommandStatus } from "./target-note-delete-command-status";
 import { validTargetTaskTitleEditPreviewRequest,targetTaskWriteRevision } from "./target-task-write-preflight";
+import {issueTargetInboxRevision} from "./target-inbox-command-identity";
 import { writePreflightedTargetTaskTitle, validTargetStagingTaskTitleWriteRequest } from "./target-task-staging-writer";
 import {
   writePreflightedTemporalTaskStatus, validTargetStagingTemporalStatusCommand,
@@ -1214,7 +1215,8 @@ export class TargetStagingSessionAuthority {
           // check already verified current write access to its tombstone.
           // Deleted tasks have NO Undo witness and are never recreated here.
           if(row){
-            const expectedRevision=targetTaskWriteRevision(db,command.taskId);
+            const expectedRevision=issueTargetInboxRevision(
+              db,actor,command.taskId,row.revision,row.areaId,command.restoreGeneration);
             if(!receipt||!expectedRevision||!Number.isSafeInteger(row.revision)||
                 !Number.isSafeInteger(row.taskRevision)||!row.areaId)return null;
             // Undo is offered only against the exact post-Process CAS and
