@@ -48,14 +48,6 @@ function useInbox(limit:number){
       reload();
     }
   },[runtime,generation,reload]);
-  const revoke=useCallback(()=>{
-    abort.current?.abort();more.current?.abort();
-    setHidden(true);
-    if(runtime)markInboxRefused(runtime,generation);
-    setState({kind:"error",key:"",reason:"signed-out"});
-    if(runtime&&refusalBudgetFor(runtime).admit())
-      void runtime.reportRefusal("session_revoked");
-  },[runtime,generation]);
   const gate=targetOverviewGate(runtime,generation,outcome);
   const key=generation+":"+limit+":"+refresh+":"+securityEpoch;
   useTargetTick(()=>{
@@ -76,6 +68,19 @@ function useInbox(limit:number){
     signedOut(){abort.current?.abort();more.current?.abort();setHidden(true);
       setState({kind:"error",key,reason:"signed-out"});},
   });
+
+  // Revocations must also arm the wake machine. Setting React's hidden
+  // state alone does not mark it hidden, so an online event could never
+  // trigger a fresh session check and a new authorized Inbox read.
+  const revoke=useCallback(()=>{
+    abort.current?.abort();more.current?.abort();
+    markHidden();
+    setHidden(true);
+    if(runtime)markInboxRefused(runtime,generation);
+    setState({kind:"error",key:"",reason:"signed-out"});
+    if(runtime&&refusalBudgetFor(runtime).admit())
+      void runtime.reportRefusal("session_revoked");
+  },[runtime,generation,markHidden]);
   useEffect(()=>{
     if(gate.kind!=="ready"||hidden||blocked){
       abort.current?.abort();more.current?.abort();
