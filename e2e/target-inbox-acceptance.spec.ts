@@ -384,7 +384,8 @@ test("C-3a: lost Process + concurrent title edit cancels old UUID and unlocks fr
       else await route.continue();
     };
     await page.route("**/api/target-staging/inbox/triage",dropFirst);
-    await processAction(page,seeded.taskTitle).click();
+    await page.locator(".targetInboxRow").first()
+      .getByRole("button",{name:/Zpracovat úkol:/}).click();
     await expect(page.getByRole("button",{name:"Opakovat původní příkaz"}))
       .toBeVisible({timeout:15000});
     const witness=(await page.evaluate(()=>
@@ -447,9 +448,12 @@ for(const [width,status] of [[390,503],[1280,409]] as const){
     test.setTimeout(100_000);
     if(!store)throw Error("Missing isolated C-3a SQLite store");
     await page.setViewportSize({width,height:844});
-    const seeded=store.seed.projects[String(width)];
     await openInbox(page);
-    await findInboxRow(page,seeded.taskId);
+    await expect(count(page)).toBeVisible({timeout:15000});
+    // Operate on a FIRST-page row so that the page-2 cursor still exists.
+    // Seeded tasks can sort onto page two; findInboxRow would consume it.
+    await expect(page.locator(".targetInboxRow").first()).toBeVisible();
+    await expect(inbox(page).getByRole("button",{name:"Načíst další"})).toBeVisible();
     let begin:()=>void=()=>{},release:()=>void=()=>{};
     const started=new Promise<void>(resolve=>{begin=resolve;});
     const held=new Promise<void>(resolve=>{release=resolve;});
@@ -492,7 +496,7 @@ for(const [width,status] of [[390,503],[1280,409]] as const){
     await page.unroute("**/api/target-staging/inbox?*",delayedPage);
     await page.reload();
     await expect(page.getByTestId("target-inbox-uncertain")).toBeVisible();
-    await expect(processAction(page,seeded.taskTitle)).toHaveCount(0);
+    await expect(page.locator(".targetInboxRow")).toHaveCount(0);
     await page.getByRole("button",{name:"Bezpečně ukončit původní příkaz"}).click();
     await expect.poll(async()=>await page.evaluate(()=>
       sessionStorage.getItem("lumi:target-inbox-command:v1")),
