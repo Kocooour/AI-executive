@@ -295,22 +295,35 @@ export function inspectIsolatedTargetStore(
         row.key.startsWith(TARGET_STAGING_NOTE_LIFECYCLE_RECEIPT_PREFIX));
       const projectTitleCancels = rows.filter(row => typeof row.key === "string" &&
         row.key.startsWith(TARGET_STAGING_PROJECT_TITLE_CANCEL_PREFIX));
-      // Actor-hashed bucket + receipt-key, digest bound to the exact original
-      // command. A permanent cancellation MUST NOT disappear after expiry.
+      // Actor-hashed permanent cancellation fences, bound to exact original
+      // command digests. Preserve legacy actor:receipt keys and validate the
+      // progressive actor:hash-prefix:receipt shards used when a bucket fills.
+      // A 64-hex terminal prefix cannot fill: each hash names only one command.
+      // Never expire/delete an old fence: a delayed POST could still arrive.
       const inboxCancels = rows.filter(row => typeof row.key === "string" &&
         row.key.startsWith(TARGET_STAGING_INBOX_TRIAGE_CANCEL_PREFIX));
       const inboxCancelBuckets = new Map<string,number>();
+      const inboxCancelCommands = new Set<string>();
       const inboxCancelsValid = inboxCancels.every(row => {
         if(typeof row.key!=="string"||typeof row.value!=="string"||
             !sha256Hex.test(row.value))return false;
-        const m=/^([a-f0-9]{64}):([a-f0-9]{64})$/.exec(
+        const m=/^([a-f0-9]{64}):(?:([a-f0-9]{4,64}):)?([a-f0-9]{64})$/.exec(
           row.key.slice(TARGET_STAGING_INBOX_TRIAGE_CANCEL_PREFIX.length));
         if(!m)return false;
-        const n=(inboxCancelBuckets.get(m[1])??0)+1;
-        inboxCancelBuckets.set(m[1],n);
+        const [actor,shard,receipt]=[m[1],m[2],m[3]];
+        if(shard!==undefined&&
+            (![4,8,16,32,64].includes(shard.length)||
+              shard!==receipt.slice(0,shard.length)))return false;
+        // Multiple formats for one actor+UUID must never bypass idempotency.
+        const command=actor+":"+receipt;
+        if(inboxCancelCommands.has(command))return false;
+        inboxCancelCommands.add(command);
+        const bucket=actor+":"+(shard??"legacy");
+        const n=(inboxCancelBuckets.get(bucket)??0)+1;
+        inboxCancelBuckets.set(bucket,n);
         if(n>TARGET_STAGING_MAX_RECEIPTS)return false;
         return db.prepare("SELECT 1 FROM task_triage_receipts WHERE receipt_key=?")
-          .get(m[2])===undefined;
+          .get(receipt)===undefined;
       });
       // An irreversible fence is valid only as an opaque 64-hex key and a
       // literal '1'. Reject all other metadata rather than losing the fence.
