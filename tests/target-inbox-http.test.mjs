@@ -297,17 +297,22 @@ test("C-3a: lost POST + concurrent title edit is safely cancelled under pinned l
   assert.equal((await ok(post("receipt",original))).status,"not_recorded");
   fx.db.prepare("UPDATE tasks SET title='Concurrent title edit' WHERE id='shared-task'").run();
   assert.equal((await post("triage",original)).status,409,"exact replay has stale CAS");
-  assert.equal((await ok(post("receipt",original))).status,"not_recorded",
-    "read-only absence alone must never release the original UUID");
+  assert.equal((await ok(post("receipt",original))).status,"cancelled",
+    "stale monotonic CAS, not a missing receipt alone, proves late write impossible");
+  const beforeCancel=fx.db.prepare("SELECT revision FROM tasks WHERE id='shared-task'")
+    .get().revision;
   assert.deepEqual(await ok(post("cancel",original)),{ok:true,status:"cancelled"});
   assert.deepEqual(await ok(post("cancel",original)),{ok:true,status:"cancelled"},
-    "cancel itself is idempotent");
-  assert.deepEqual(await ok(post("receipt",original)),{ok:true,status:"cancelled",next:null},
-    "the exact actor/UUID has a durable terminal negative receipt");
+    "terminal CAS proof is idempotent without creating metadata");
+  assert.deepEqual(await ok(post("receipt",original)),{ok:true,status:"cancelled",next:null});
+  assert.equal(fx.db.prepare("SELECT revision FROM tasks WHERE id='shared-task'")
+    .get().revision,beforeCancel,"stale cancellation cannot advance revision again");
+  assert.equal(fx.db.prepare("SELECT COUNT(*) AS n FROM metadata WHERE key LIKE 'r3:inbox-triage-cancel-v1:%'")
+    .get().n,0,"no permanent negative receipt is created");
   assert.equal((await post("triage",original)).status,409,
     "a late original POST cannot write after cancellation");
-  assert.equal((await post("cancel",{...original,expectedTriageRevision:7})).status,409,
-    "same UUID cannot be rebound to a different payload");
+  assert.equal((await post("triage",{...original,expectedTriageRevision:7})).status,409,
+    "different stale payload cannot commit after CAS moved");
   assert.equal(fx.db.prepare("SELECT COUNT(*) AS n FROM task_triage_receipts").get().n,0);
   assert.equal(fx.db.prepare("SELECT triage_state FROM tasks WHERE id='shared-task'")
     .get().triage_state,"unprocessed");
@@ -317,10 +322,10 @@ test("C-3a: lost POST + concurrent title edit is safely cancelled under pinned l
     "fresh, newly authorized CAS succeeds after cancellation");
 });
 
-test("C-3a: the 4096 legacy actor fences roll into a new shard without erasing old UUIDs",async()=>{
+test("C-3a: the full legacy actor ledger cannot block CAS-safe cancellation",async()=>{
   const fx=fixture(),page=await ok(read());
   const original=cmd(page.items.find(x=>x.id==="shared-task"),fx.store);
-  const {targetInboxTriageCancellationKey,targetInboxTriageCancellationShardKeys}=
+  const {targetInboxTriageCancellationKey}=
     await import("../lib/target-inbox-triage-writer.ts");
   const legacy=targetInboxTriageCancellationKey("alice",original.commandId);
   const legacyPrefix=legacy.slice(0,-64);
@@ -340,9 +345,8 @@ test("C-3a: the 4096 legacy actor fences roll into a new shard without erasing o
   fx.db.prepare("UPDATE tasks SET title='Changed after lost POST' WHERE id='shared-task'").run();
   assert.equal((await post("triage",original)).status,409,"old CAS was invalidated");
   assert.deepEqual(await ok(post("cancel",original)),{ok:true,status:"cancelled"});
-  const firstShard=targetInboxTriageCancellationShardKeys("alice",original.commandId)[0];
-  assert.equal(fx.db.prepare("SELECT value FROM metadata WHERE key=?")
-    .get(firstShard)?.value?.length,64,"the new command is fenced in a distinct hash shard");
+  assert.equal(fx.db.prepare("SELECT COUNT(*) AS n FROM metadata WHERE key LIKE 'r3:inbox-triage-cancel-v1:%'")
+    .get().n,4096,"new cancellation must not increase the historical fence ledger");
   assert.equal(fx.db.prepare("SELECT COUNT(*) AS n FROM metadata WHERE key>=? AND key<?")
     .get(legacyPrefix,legacyPrefix+"g").n,4096,"all legacy fences remain durable");
   assert.deepEqual(await ok(post("receipt",original)),{ok:true,status:"cancelled",next:null});
@@ -354,7 +358,7 @@ test("C-3a: the 4096 legacy actor fences roll into a new shard without erasing o
     {ok:true,mode:"r2-model",issues:[]},"rollover must retain canonical store integrity");
 });
 
-test("C-3a: a full first hash shard narrows deterministically without dropping fences",async()=>{
+test("C-3a: a full first hash shard cannot starve monotonic CAS cancellation",async()=>{
   const fx=fixture(),page=await ok(read());
   const original=cmd(page.items.find(x=>x.id==="shared-task"),fx.store);
   const {targetInboxTriageCancellationShardKeys}=await import("../lib/target-inbox-triage-writer.ts");
@@ -373,16 +377,20 @@ test("C-3a: a full first hash shard narrows deterministically without dropping f
   }catch(error){fx.db.exec("ROLLBACK");throw error;}
   assert.equal(fx.db.prepare("SELECT COUNT(*) AS n FROM metadata WHERE key>=? AND key<?")
     .get(shardPrefix,shardPrefix+"g").n,4096);
+  const before=fx.db.prepare("SELECT revision FROM tasks WHERE id='shared-task'")
+    .get().revision;
   assert.deepEqual(await ok(post("cancel",original)),{ok:true,status:"cancelled"});
   assert.equal(fx.db.prepare("SELECT value FROM metadata WHERE key=?")
-    .get(second)?.value?.length,64,"a full first shard must not block a new UUID");
+    .get(second),undefined,"cancel never writes a new hash shard");
+  assert.equal(fx.db.prepare("SELECT revision FROM tasks WHERE id='shared-task'")
+    .get().revision,before+1,"the pinned cancellation invalidates old CAS once");
   assert.equal(fx.db.prepare("SELECT COUNT(*) AS n FROM metadata WHERE key>=? AND key<?")
     .get(shardPrefix,shardPrefix+"g").n,4096,"existing shard stays unchanged");
   assert.deepEqual(await ok(post("receipt",original)),{ok:true,status:"cancelled",next:null});
   assert.equal((await post("triage",original)).status,409);
   const {inspectIsolatedTargetStore}=await import("../lib/target-store-preflight.ts");
   assert.deepEqual(inspectIsolatedTargetStore({...fx.store,mode:"r2-model"}),
-    {ok:true,mode:"r2-model",issues:[]},"nested hash shard must be canonical");
+    {ok:true,mode:"r2-model",issues:[]},"old shard and retired CAS remain canonical");
 });
 
 test("C-3a: malformed or duplicate cancellation shards fail canonical preflight closed",async()=>{
