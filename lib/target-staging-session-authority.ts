@@ -119,6 +119,7 @@ import {
 } from "./target-task-temporal-due-on-writer";
 import {writePreflightedTargetInboxTriage,validTargetInboxTriageCommand,
   readTargetInboxTriageReceipt,targetInboxTriageReceiptKey,
+  targetInboxUndoRevisionEligible,
   type TargetInboxTriageCommand,type TargetInboxTriageResult,
 } from "./target-inbox-triage-writer";
 import {cancelPreflightedTargetInboxTriage,type TargetInboxTriageCancelResult}
@@ -1197,11 +1198,17 @@ export class TargetStagingSessionAuthority {
         const areaEpochs=eligibleGlobalTaskAreas(db,actor,"all");
         if(!areaEpochs)return null;
         let next:null|{expectedRevision:string;triageRevision:number;writeAreaId:string}=null;
-        if(status==="committed"&&command.mode==="process"){
-          const receiptKey=targetInboxTriageReceiptKey(actor,command.commandId);
-          const receipt=db.prepare(`SELECT action,triage_revision_after,task_revision_after
+        if((status==="committed"&&command.mode==="process")||
+            (status==="cancelled"&&command.mode==="undo")){
+          // An abandoned Undo may be replaced only if its original Process
+          // still has an eligible cancellation-only revision witness.
+          const processId=command.mode==="process"
+            ?command.commandId:command.undoOfCommandId!;
+          const receiptKey=targetInboxTriageReceiptKey(actor,processId);
+          const receipt=db.prepare(`SELECT action,actor_user_id,task_id,restore_generation,triage_revision_after,task_revision_after
             FROM task_triage_receipts WHERE receipt_key=?`).get(receiptKey) as {
-            action:string;triage_revision_after:number;task_revision_after:number;
+            action:string;actor_user_id:string;task_id:string;restore_generation:string;
+            triage_revision_after:number;task_revision_after:number;
           }|undefined;
           const row=db.prepare(`SELECT t.triage_state AS state,
             t.triage_revision AS revision,t.revision AS taskRevision,
@@ -1221,9 +1228,13 @@ export class TargetStagingSessionAuthority {
                 !Number.isSafeInteger(row.taskRevision)||!row.areaId)return null;
             // Undo is offered only against the exact post-Process CAS and
             // original Area, with no already-committed Undo child.
-            if(receipt.action==="process"&&row.state==="processed"&&
+            if(receipt.action==="process"&&receipt.actor_user_id===actor&&
+                receipt.task_id===command.taskId&&
+                receipt.restore_generation===command.restoreGeneration.toLowerCase()&&
+                row.state==="processed"&&
                 row.revision===receipt.triage_revision_after&&
-                row.taskRevision===receipt.task_revision_after&&
+                targetInboxUndoRevisionEligible(db,receiptKey,
+                  receipt.task_revision_after,row.taskRevision)&&
                 row.areaId===command.writeAreaId&&
                 !db.prepare("SELECT 1 FROM task_triage_receipts WHERE undo_of_receipt_key=? LIMIT 1")
                   .get(receiptKey))
