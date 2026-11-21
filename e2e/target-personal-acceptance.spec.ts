@@ -1423,7 +1423,10 @@ for(const width of [390,1280]){
       if(areaRequests===1)return;
       return route.continue();
     });
-    await page.route("**/api/target-staging/inbox",async route=>{
+    // The badge always fetches /inbox?limit=1. A pathname-only glob does
+    // NOT match its query string in Playwright, so that would falsely report
+    // no Inbox contention even while the badge actually loads.
+    await page.route(/\/api\/target-staging\/inbox\?(?:.*)$/,async route=>{
       if(!waking)return route.continue();
       inboxWakeReads++;
       // If the Inbox read starts while the cancelled Area has not yet
