@@ -34,12 +34,19 @@ async function findInboxRow(page:Page,id:string){
   // reload; never show cached titles. The user-visible Retry runs a FRESH
   // session verification before another authorized read.
   const retry=page.getByRole("button",{name:"Zkusit znovu"});
-  for(let attempt=0;attempt<3;attempt++){
+  for(let attempt=0;attempt<5;attempt++){
     if(await count(page).isVisible())break;
     await expect.poll(async()=>await count(page).isVisible()||
       await retry.isVisible(),{timeout:10000}).toBe(true);
     if(await count(page).isVisible())break;
-    await retry.click();
+    // After a wake/session refresh, Retry may disappear between the visibility
+    // probe and the click because a new authorized GET starts. Do not spend the
+    // entire 180s scenario timeout waiting for a button that no longer exists.
+    // The final count/row assertions still require real authorized content.
+    if(await retry.isVisible()){
+      try{await retry.click({timeout:2500});}
+      catch{/* transient remount; re-check count or retry on the next attempt */}
+    }
   }
   await expect(count(page)).toBeVisible({timeout:15000});
   for(let step=0;step<25;step++){
