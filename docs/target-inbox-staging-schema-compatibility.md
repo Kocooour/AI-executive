@@ -141,10 +141,16 @@ strict revision bounds, live task or tombstone monotonicity and any committed
 Undo child. The metadata count is at most the 8,192 retained Process/Undo
 receipts; normal 90-day receipt maintenance cleans markers only after their
 Process receipt is safely pruned. Receipt capacity reserves future Undo even
-after cancellation-only revision advances. No extra table, schema DDL change,
-raw session secret in workers, permanent per-Undo fences or task-content
-persistence is introduced. A forged marker, dangling parent, inconsistent
-historical Undo revision, or unexpected metadata remains fail-closed.
+after cancellation-only revision advances. The draft v27 SQLite
+`task_triage_receipts_guarded_delete` trigger also protects active rebased
+Process receipts after the 90-day minimum; `task_triage_receipts_rebase_cleanup`
+atomically deletes a Process's opaque rebase marker when that expired, now
+ineligible receipt is actually deleted (including direct operator SQL).
+This changes only the not-yet-shipped v27 trigger DDL, not the schema version,
+receipt protocol or production migration. No extra table, raw session secret
+in workers, permanent per-Undo fences or task-content persistence is introduced.
+A forged marker, dangling parent, inconsistent historical Undo revision, or
+unexpected metadata remains fail-closed.
 
 **Operational gates:** Monitor the isolated staging SQLite, canonical
 preflight and ordinary bounded `change_log` capacity. A 503 or an untrusted
