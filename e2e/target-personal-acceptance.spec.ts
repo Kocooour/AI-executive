@@ -751,7 +751,7 @@ for (const width of [390, 1280]) {
         await page.locator('.mobileNav [data-nav-tab="' + destination + '"]').click();
         await assertNoLegacyInCurrentView();
       }
-      for (const destination of ["Home", "Upcoming", "Notes", "Search"]) {
+      for (const destination of ["Home", "Inbox", "Upcoming", "Notes", "Search"]) {
         await page.locator('.mobileNav [data-nav-tab="More"]').click();
         await expect(page.getByTestId("target-archive-mobile")).toContainText(
           "Archiv (stará data, jen pro čtení)");
