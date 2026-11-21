@@ -19,6 +19,8 @@ const {validTargetInboxTriageCommand,readTargetInboxTriageReceipt}=
   await import("../lib/target-inbox-triage-writer.ts");
 const {issueTargetInboxRevision,issueTargetInboxCommandId}=
   await import("../lib/target-inbox-command-identity.ts");
+const {targetTaskWriteRevision}=
+  await import("../lib/target-task-write-preflight.ts");
 const fixtures=[];
 function fixture(){
   const stage=bootstrapIsolatedTargetStore({stagingDirectory:path.join(root,randomUUID()),ownerUserId:"alice"});
@@ -174,7 +176,7 @@ test("committed Process and Undo receipts survive authorized tombstone, never re
     }
     const latest=command(fx,token,"private");
     const deletion={commandId:randomUUID(),taskId:"private",
-      expectedRevision:latest.expectedRevision,writeAreaId:latest.writeAreaId,
+      expectedRevision:targetTaskWriteRevision(fx.db,"private"),writeAreaId:latest.writeAreaId,
       restoreGeneration:fx.stage.restoreGeneration};
     assert.deepEqual(fx.authority.deleteTask(token,deletion),{ok:true},
       "real pinned task delete must create a valid tombstone");
@@ -214,7 +216,8 @@ test("tombstoned Process receipt is only visible to its actor with current write
   assert.deepEqual(fx.authority.changeInboxTriage(bob,process),{ok:true});
   const latest=command(fx,alice,"shared");
   assert.deepEqual(fx.authority.deleteTask(alice,{
-    commandId:randomUUID(),taskId:"shared",expectedRevision:latest.expectedRevision,
+    commandId:randomUUID(),taskId:"shared",
+    expectedRevision:targetTaskWriteRevision(fx.db,"shared"),
     writeAreaId:latest.writeAreaId,restoreGeneration:fx.stage.restoreGeneration,
   }),{ok:true});
   assert.equal(readTargetInboxTriageReceipt(fx.db,"bob",process),"committed");
@@ -240,7 +243,7 @@ test("stale task/triage revisions, invalid shape and replay with another ID do n
   assert.equal(validTargetInboxTriageCommand({...cmd,undoOfCommandId:randomUUID()}),false);
   assert.equal(validTargetInboxTriageCommand({...cmd,expectedTriageRevision:-1}),false);
   assert.deepEqual(fx.authority.changeInboxTriage(token,{...cmd,expectedTriageRevision:99}),
-    denied("stale_revision"));
+    denied("unavailable"),"forged revision lacks its actor-issued HMAC");
   assert.equal(count(fx),0);
   assert.deepEqual(fx.authority.changeInboxTriage(token,cmd),{ok:true});
   const shared=command(fx,token,"shared");
@@ -250,7 +253,7 @@ test("stale task/triage revisions, invalid shape and replay with another ID do n
   assert.equal(count(fx),1);
   assert.deepEqual(fx.authority.changeInboxTriage(token,
     {...command(fx,token,"private"),expectedRevision:cmd.expectedRevision}),
-    denied("stale_revision"));
+    denied("unavailable"),"a stale issued CAS cannot be reused with newer triage fields");
   assert.equal(count(fx),1);
 });
 
