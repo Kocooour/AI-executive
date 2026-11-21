@@ -406,7 +406,7 @@ test("C-3a: missing POST recovers after reload by replaying only its original UU
       .toBeVisible({timeout:20000});
     expect(sent).toHaveLength(2);
     expect(sent[1]).toEqual(sent[0]);
-    expect(receiptCount()).toBe(before+1,"one committed Process, no duplicate");
+    expect(receiptCount()).toBe(before+1); // exactly one committed Process
     expect((db.prepare("SELECT triage_state FROM tasks WHERE id=?")
       .get(seeded.taskId) as {triage_state:string}).triage_state).toBe("processed");
     await page.getByRole("button",{name:"Vrátit do Inboxu (Undo)"}).click();
