@@ -120,6 +120,8 @@ import {writePreflightedTargetInboxTriage,validTargetInboxTriageCommand,
   readTargetInboxTriageReceipt,targetInboxTriageReceiptKey,
   type TargetInboxTriageCommand,type TargetInboxTriageResult,
 } from "./target-inbox-triage-writer";
+import {cancelPreflightedTargetInboxTriage,type TargetInboxTriageCancelResult}
+  from "./target-inbox-triage-cancel";
 import {writePreflightedPersonalWhen,validTargetStagingPersonalWhenCommand,
   type TargetStagingPersonalWhenCommand,type TargetStagingPersonalWhenResult,
 } from "./target-personal-when-writer";
@@ -1160,10 +1162,21 @@ export class TargetStagingSessionAuthority {
       this.#store,credential,command,durableSessionTokenHash);
   }
 
+  /** C-3a: irrevocably fence an unresolved actor UUID or confirm a prior commit. */
+  cancelInboxTriage(
+    sessionToken:string,command:TargetInboxTriageCommand,
+    durableSessionTokenHash?:string,
+  ):TargetInboxTriageCancelResult{
+    const credential=this.#credential(sessionToken,true);
+    if(!credential)return {ok:false,reason:"unavailable"};
+    return cancelPreflightedTargetInboxTriage(
+      this.#store,credential,command,durableSessionTokenHash);
+  }
+
   /** C-3a: receipt and post-command CAS from the same actor-bound pinned snapshot.
    * This only reports committed when the original receipt exactly matches. */
   readInboxTriageReceiptSnapshot(actorUserId:string,command:TargetInboxTriageCommand):{
-    status:"committed"|"not_recorded"|"conflict";
+    status:"committed"|"not_recorded"|"cancelled"|"conflict";
     next:{expectedRevision:string;triageRevision:number;writeAreaId:string}|null;
     linearization:{actorUserId:string;areas:{
       areaId:string;areaKind:"private"|"shared";
