@@ -444,8 +444,9 @@ test("C-3a: Area move and tombstone remain safely cancellable, without leaking m
   const original=cmd((await ok(read())).items.find(x=>x.id==="shared-task"),fx.store);
   fx.db.prepare("UPDATE tasks SET area_id=? WHERE id='shared-task'")
     .run(fx.stage.unassignedAreaId);
-  assert.notEqual((await post("receipt",original)).status,200,
-    "no unrecorded receipt under a moved Area");
+  assert.deepEqual(await ok(post("receipt",original)),
+    {ok:true,status:"cancelled",next:null},
+    "a moved task has a permanently stale original CAS, not just a missing receipt");
   assert.deepEqual(await ok(post("cancel",original)),{ok:true,status:"cancelled"});
   assert.deepEqual(await ok(post("receipt",original)),{ok:true,status:"cancelled",next:null});
   assert.equal((await post("triage",original)).status,409);
