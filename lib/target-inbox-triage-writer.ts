@@ -69,20 +69,42 @@ export function targetInboxTriageReceiptKey(actor:string,commandId:string):strin
     JSON.stringify(["target-inbox-triage-v1",actor,commandId.toLowerCase()]),
   ).digest("hex");
 }
-/** Permanent actor+UUID fence; the digest binds the exact original CAS/Area. */
+/** Permanent legacy actor+UUID fence. Never delete or reinterpret old v1 keys. */
 export function targetInboxTriageCancellationKey(actor:string,commandId:string):string{
   const bucket=createHash("sha256").update(JSON.stringify(["triage-cancel-actor-v1",actor]))
     .digest("hex");
   return TARGET_STAGING_INBOX_TRIAGE_CANCEL_PREFIX+bucket+":"+
     targetInboxTriageReceiptKey(actor,commandId);
 }
+/** A fixed-capacity shard can fill, so use successively narrower SHA-256
+ * partitions. The final 64-hex partition is unique to the command: no global
+ * actor-lifetime cancellation cap or deletion of a late-POST fence is needed.
+ * All levels are deterministic and read on EVERY Process, Undo and receipt. */
+export const TARGET_INBOX_CANCEL_SHARD_LENGTHS=[4,8,16,32,64] as const;
+export function targetInboxTriageCancellationShardKeys(
+  actor:string,commandId:string,
+):string[]{
+  const receipt=targetInboxTriageReceiptKey(actor,commandId);
+  const root=targetInboxTriageCancellationKey(actor,commandId).slice(0,-receipt.length);
+  return TARGET_INBOX_CANCEL_SHARD_LENGTHS.map(length=>
+    root+receipt.slice(0,length)+":"+receipt);
+}
 export function targetInboxTriageCancelled(
   db:DatabaseSync,actor:string,command:TargetInboxTriageCommand,
 ):"cancelled"|"conflict"|null{
-  const row=db.prepare("SELECT value FROM metadata WHERE key=?")
-    .get(targetInboxTriageCancellationKey(actor,command.commandId)) as {value:string}|undefined;
-  if(!row)return null;
-  return row.value===targetInboxTriageDigest(command)?"cancelled":"conflict";
+  const digest=targetInboxTriageDigest(command);
+  const keys=[targetInboxTriageCancellationKey(actor,command.commandId),
+    ...targetInboxTriageCancellationShardKeys(actor,command.commandId)];
+  const lookup=db.prepare("SELECT value FROM metadata WHERE key=?");
+  let result:"cancelled"|"conflict"|null=null;
+  for(const key of keys){
+    const row=lookup.get(key) as {value:string}|undefined;
+    if(!row)continue;
+    // Duplicate fences across levels are noncanonical; fail closed.
+    if(result!==null)return "conflict";
+    result=row.value===digest?"cancelled":"conflict";
+  }
+  return result;
 }
 export function targetInboxTriageDigest(command:TargetInboxTriageCommand):string{
   return createHash("sha256").update(JSON.stringify([
