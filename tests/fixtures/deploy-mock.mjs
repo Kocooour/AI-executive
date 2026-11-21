@@ -509,6 +509,45 @@ switch (name) {
       ].join("\n"));
       break;
     }
+    if (scenario.startsWith("target") && exec === "env" &&
+        rest[0] === "AI_EXECUTIVE_DATA_DIR=" + path.join(root, "var/lib/ai-executive") &&
+        rest[1] === process.execPath &&
+        rest.includes(path.join(app, "scripts/target-staging-upgrade-inbox.mjs"))) {
+      // Synthetic C-3a v26 -> v27 Inbox upgrade CLI: exact argv contract.
+      const expectedDirectory = path.join(root, "var/lib/ai-executive-target/personal-v1");
+      const tail = rest.slice(rest.indexOf(path.join(app, "scripts/target-staging-upgrade-inbox.mjs")) + 1);
+      const loader = rest.indexOf("--experimental-loader");
+      if (loader < 0 || rest[loader + 1] !== path.join(app, "scripts/target-staging-ts-loader.mjs") ||
+          tail.length !== 5 || !["--apply", "--check"].includes(tail[0]) ||
+          tail[1] !== "--directory" || tail[2] !== expectedDirectory ||
+          tail[3] !== "--generation" || get("service") !== "inactive") process.exit(9);
+      const store = path.join(expectedDirectory, "lumi-target.sqlite");
+      const [owner, generation, schema] = fs.readFileSync(store, "utf8").split("\n");
+      if (tail[4] !== generation) process.exit(9);
+      log("target-inbox-" + tail[0].slice(2));
+      if (tail[0] === "--check") {
+        console.log(JSON.stringify({ ok: schema === "schema=27", mode: "check" }));
+        process.exit(schema === "schema=27" ? 0 : 1);
+      }
+      if (scenario === "targetinboxapplyfail") {
+        console.log(JSON.stringify({ ok: false, reason: "unavailable" }));
+        process.exit(1);
+      }
+      if (schema === "schema=27") {
+        console.log(JSON.stringify({ ok: true, status: "already_current" }));
+        break;
+      }
+      if (schema !== "schema=26") process.exit(1);
+      fs.writeFileSync(store, [owner, generation, "schema=27"].join("\n"));
+      fs.appendFileSync(path.join(expectedDirectory, "lumi-target.journal"), "\nschema_upgrade 26->27");
+      if (scenario === "targetinboxcheckfail") {
+        // Committed write that is not confirmed current: must stay stopped.
+        fs.writeFileSync(store, [owner, generation, "schema=27-unconfirmed"].join("\n"));
+      }
+      log("target-inbox-upgraded");
+      console.log(JSON.stringify({ ok: true, status: "upgraded" }));
+      break;
+    }
     if (exec === "test") {
       const file = rest[1], mode = rest[0];
       const perm = fs.statSync(file).mode & 0o777;
