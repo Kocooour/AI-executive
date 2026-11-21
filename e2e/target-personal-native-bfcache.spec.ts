@@ -283,8 +283,8 @@ for(const width of [390,1280]){
       read.cancelled=failure.canceled===true;
       pendingReads.delete(read.requestId);
     });
-    const successfulRead=(path:string)=>reads.find(read=>
-      backReadMark!==null&&read.requestOrder>backReadMark&&
+    const successfulRead=(path:string,afterOrder:number|null=backReadMark)=>reads.find(read=>
+      afterOrder!==null&&read.requestOrder>afterOrder&&
       read.path===path&&read.method==="GET"&&read.status===200&&
       read.fromServiceWorker===false&&read.fromDiskCache===false&&
       read.fromPrefetchCache===false&&read.cacheServed!==true&&
@@ -493,9 +493,41 @@ for(const width of [390,1280]){
           "!!document.querySelector('[data-testid=\"target-capture-task-kind\"]')"));
         await cdp.eval("document.querySelector('[data-testid=\"target-capture-task-kind\"]').click()");
         // A new document does not load Area choices until the user opens the
-        // task editor. The fresh Area GET must finish before selection/save.
-        const areaRead=await waitFor("new direct authorized private Area GET",async()=>
-          successfulRead("/api/target-staging/notes/create-targets"));
+        // task editor. A 200 response whose body was cancelled by a competing
+        // mobile wake is NOT an authorization witness. The normal path must
+        // finish; recovery is permitted only via the visible user Retry action
+        // and a NEW completed session + Area GET, never a stale/cached body.
+        const areaPath="/api/target-staging/notes/create-targets";
+        const firstArea=await waitFor("complete private Area GET or explicit retry after transport abort",async()=>{
+          const complete=successfulRead(areaPath);
+          if(complete)return {kind:"complete" as const,read:complete};
+          const interrupted=reads.some(read=>
+            backReadMark!==null&&read.requestOrder>backReadMark&&
+            read.path===areaPath&&read.method==="GET"&&read.status===200&&
+            read.failed===true&&read.cancelled===true);
+          if(!interrupted)return null;
+          const retryReady=await cdp.eval<boolean>(
+            "!!document.querySelector('[data-testid=\\\"target-private-task-retry\\\"]')");
+          return retryReady?{kind:"retry" as const}:null;
+        });
+        let areaRead:NativeRead;
+        if(firstArea.kind==="retry"){
+          enter("explicitly recovering a cancelled private Area response");
+          expect(taskCreatePosts,"No task CREATE before explicit Area retry").toHaveLength(0);
+          const cancelledSnapshot=await cdp.eval<any>(snapshotExpression(secret));
+          expect(cancelledSnapshot.titleVisible,"Abandoned draft during cancelled read").toBe(false);
+          expect(["",null],"Old Area during cancelled read").toContain(cancelledSnapshot.area);
+          // This is a real user retry, never automatic client authorization.
+          // The retry button itself verifies a fresh session before re-reading.
+          const beforeRetry=networkOrder;
+          await cdp.eval("document.querySelector('[data-testid=\\\"target-private-task-retry\\\"]').click()");
+          const retriedSession=await waitFor("completed owner session GET after explicit retry",async()=>
+            successfulRead("/api/target-staging/session",beforeRetry));
+          areaRead=await waitFor("completed private Area GET after reauthorization",async()=>
+            successfulRead(areaPath,retriedSession.finishedOrder));
+          expect(retriedSession.finishedOrder,"Retry Area read must follow new session authorization")
+            .toBeLessThan(areaRead.requestOrder);
+        }else areaRead=firstArea.read;
         expect(session.finishedOrder,"Session authorization must precede private Area access")
           .toBeLessThan(areaRead.requestOrder);
         const label=JSON.stringify(store!.seed!.areaTitle);
