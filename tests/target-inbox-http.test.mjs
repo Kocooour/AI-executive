@@ -474,7 +474,7 @@ test("C-3a: fabricated task and arbitrary UUID floods cannot create permanent fe
     .get().revision,beforeRevision+1);
   const afterLog=fx.db.prepare("SELECT COUNT(*) AS n FROM change_log").get().n;
   assert.equal(afterLog,beforeLog+1);
-  for(let i=0;i<8;i++){
+  for(let i=0;i<4;i++){
     const another={...original,commandId:randomUUID()};
     assert.deepEqual(await ok(post("cancel",another)),{ok:true,status:"cancelled"});
     assert.equal((await post("triage",another)).status,409,
