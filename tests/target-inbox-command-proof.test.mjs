@@ -54,8 +54,15 @@ test("C-3a issued CAS authenticates actor and original Area/epoch after task rev
   ]){
     assert.equal(verifyTargetInboxCommandId(modified),false,
       "same UUID cannot be rebound to a different original payload");
-    assert.equal(verifyIssuedTargetInboxRevision("alice",modified),false,
-      "the signer binds Area, epoch and restore generation");
+    if(modified.expectedRevision!==fields.expectedRevision||
+        modified.writeAreaId!==fields.writeAreaId||
+        modified.expectedTriageRevision!==fields.expectedTriageRevision||
+        modified.restoreGeneration!==fields.restoreGeneration)
+      assert.equal(verifyIssuedTargetInboxRevision("alice",modified),false,
+        "the signer binds Area, epoch and restore generation");
+    // Mode/Undo parent are bound by the self-certifying UUID, not by the
+    // actor-issued task CAS (which is also used to mint a later Undo).
+
   }
   db.prepare("UPDATE tasks SET title='new CAS' WHERE id='entry'").run();
   assert.equal(verifyIssuedTargetInboxRevision("alice",fields),true,
