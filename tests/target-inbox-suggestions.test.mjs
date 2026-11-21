@@ -72,6 +72,22 @@ test("C-3b AI inputs contain only task title and actor-private Area/open-project
   assert.equal(inboxAIAllowedInput(snapshot({privateAreas:[]})),null);
 });
 
+test("C-3b: punctuated or emoji project names remain valid AI candidates but are not fuzzy rule matches",()=>{
+  const s=snapshot({
+    taskTitle:"Panthers Praha",
+    privateOpenProjects:[
+      {id:"club",name:"Panthers/Praha",areaId:"personal",revision:1},
+      {id:"weather",name:"Zahrada ☀",areaId:"garden",revision:1},
+    ],
+  });
+  assert.equal(validInboxSuggestionSnapshot(s),true);
+  assert.deepEqual(inboxAIAllowedInput(s).privateOpenProjectNames,["Panthers/Praha","Zahrada ☀"]);
+  assert.deepEqual(suggestInboxByRules(s).changes,noChanges);
+  assert.equal(resolveInboxAIChoice(s,{
+    action:"project",targetName:"Panthers/Praha",reason:"exact allowlist",
+  }).changes.projectId,"club");
+});
+
 test("C-3b AI choices: names must resolve to one allowlisted target only",()=>{
   const s=snapshot({taskTitle:"Do zítřka nákup"});
   assert.deepEqual(resolveInboxAIChoice(s,{
