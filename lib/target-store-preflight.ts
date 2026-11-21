@@ -337,7 +337,7 @@ export function inspectIsolatedTargetStore(
       const tombstoneCancelsValid=tombstoneCancels.every(row=>{
         if(typeof row.key!=="string"||typeof row.value!=="string"||
             !sha256Hex.test(row.key.slice(TARGET_STAGING_INBOX_TOMBSTONE_CANCEL_PREFIX.length))||
-            Buffer.byteLength(row.value,"utf8")>700)return false;
+            Buffer.byteLength(row.value,"utf8")>2048)return false;
         let parsed:unknown;
         try{parsed=JSON.parse(row.value);}catch{return false;}
         if(!Array.isArray(parsed)||parsed.length!==2||
