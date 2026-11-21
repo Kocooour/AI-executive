@@ -475,13 +475,21 @@ test("C-3a: Area move and tombstone remain safely cancellable, without leaking m
   assert.equal(tombstoneMarkers(),1,"only one marker per actor and deleted task");
   assert.deepEqual(await ok(post("receipt",tombstoneCommand)),
     {ok:true,status:"cancelled",next:null});
-  assert.equal((await post("triage",tombstoneCommand)).status,409);
+  assert.equal((await post("triage",tombstoneCommand)).status,404);
   for(let i=0;i<3;i++){
     const another={...tombstoneCommand,commandId:randomUUID()};
-    assert.deepEqual(await ok(post("cancel",another)),{ok:true,status:"cancelled"});
-    assert.equal((await ok(post("receipt",another))).status,"cancelled");
+    assert.equal((await post("cancel",another)).status,409,
+      "a foreign UUID without a server-minted original payload cannot retire a tombstone");
+    assert.notEqual((await post("receipt",another)).status,200);
   }
   assert.equal(tombstoneMarkers(),1,"random UUIDs cannot multiply tombstone metadata");
+  const value=fx.db.prepare("SELECT value FROM metadata WHERE key LIKE ?")
+    .get("r3:inbox-tombstone-cancel-v1:%")?.value;
+  assert.match(value,/^[a-f0-9]{64}:[a-f0-9]{64}$/);
+  assert.ok(!value.includes("alice")&&!value.includes("shared-task"),
+    "metadata may contain neither plaintext actor nor task ID");
+  assert.equal((await post("cancel",{...tombstoneCommand,writeAreaId:"no-such-area"})).status,404,
+    "a formerly issued command cannot be used in a foreign Area");
   assert.notEqual((await post("receipt",tombstoneCommand,session(fx,"bob"))).status,200,
     "another actor cannot probe Alice's explicit terminal marker");
   const {inspectIsolatedTargetStore}=await import("../lib/target-store-preflight.ts");
@@ -503,8 +511,8 @@ test("C-3a: fabricated task and arbitrary UUID floods cannot create permanent fe
     "writable Area alone cannot authorize a nonexistent task or insert a fence");
   assert.equal(fenceCount(),beforeFences);
   assert.equal(fx.db.prepare("SELECT COUNT(*) AS n FROM change_log").get().n,beforeLog);
-  // A live CAS can only be invalidated once. More fake command IDs using
-  // that original CAS cannot add rows or repeatedly bump the task revision.
+  // A live CAS can only be invalidated once. Randomly re-bound UUIDs
+  // must be rejected, and cannot add rows or repeatedly bump task revision.
   assert.deepEqual(await ok(post("cancel",original)),{ok:true,status:"cancelled"});
   assert.equal(fx.db.prepare("SELECT revision FROM tasks WHERE id='shared-task'")
     .get().revision,beforeRevision+1);
@@ -512,7 +520,7 @@ test("C-3a: fabricated task and arbitrary UUID floods cannot create permanent fe
   assert.equal(afterLog,beforeLog+1);
   for(let i=0;i<4;i++){
     const another={...original,commandId:randomUUID()};
-    assert.deepEqual(await ok(post("cancel",another)),{ok:true,status:"cancelled"});
+    assert.equal((await post("cancel",another)).status,409);
     assert.equal((await post("triage",another)).status,409,
       "a fabricated command cannot use the old CAS after cancellation");
   }
@@ -522,8 +530,13 @@ test("C-3a: fabricated task and arbitrary UUID floods cannot create permanent fe
   assert.equal(fx.db.prepare("SELECT COUNT(*) AS n FROM change_log").get().n,afterLog);
   assert.deepEqual(await ok(post("receipt",original)),{ok:true,status:"cancelled",next:null});
   const now=(await ok(read())).items.find(x=>x.id==="shared-task");
-  assert.deepEqual(await ok(post("triage",cmd(now,fx.store))),{ok:true},
-    "a fresh authorized command works with its new CAS");
+  const renewed=cmd(now,fx.store);
+  assert.notEqual(renewed.commandId,original.commandId);
+  assert.equal((await post("triage",{...renewed,commandId:original.commandId})).status,409,
+    "a retired UUID cannot be rebound to a later authorized CAS");
+  assert.equal((await post("cancel",{...renewed,commandId:original.commandId})).status,409);
+  assert.deepEqual(await ok(post("triage",renewed)),{ok:true},
+    "a genuinely fresh issued command works with its new CAS");
   const {inspectIsolatedTargetStore}=await import("../lib/target-store-preflight.ts");
   assert.deepEqual(inspectIsolatedTargetStore({...fx.store,mode:"r2-model"}),
     {ok:true,mode:"r2-model",issues:[]});
