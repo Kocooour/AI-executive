@@ -178,9 +178,11 @@ test("C-3b AI choices: names must resolve to one allowlisted target only",()=>{
   }).source,"rule");
 });
 
-function openAIResponse(choice, status = 200) {
-  return new Response(JSON.stringify({output:[{
-    type:"message",content:[{type:"output_text",text:JSON.stringify(choice)}],
+function openAIResponse(choice, status = 200, responseStatus = "completed",
+    messageStatus = "completed") {
+  return new Response(JSON.stringify({status:responseStatus,output:[{
+    type:"message",role:"assistant",status:messageStatus,
+    content:[{type:"output_text",text:JSON.stringify(choice)}],
   }]}),{status,headers:{"content-type":"application/json"}});
 }
 async function withMockProvider(handler) {
@@ -267,6 +269,49 @@ test("C-3b provider rejects out-of-list, ambiguous, malformed and failed respons
       action:"project",targetName:"Kuchyň",reason:"ambiguous",
     });
     assert.equal(await completeInboxOpenAIOnly(duplicate,new AbortController().signal),null);
+  });
+});
+
+test("C-3b provider rejects incomplete, failed, cancelled and non-final Responses output",async()=>{
+  await withMockProvider(async()=>{
+    const input=inboxAIAllowedInput(snapshot());
+    const validChoice={action:"project",targetName:"Rekonstrukce",reason:"exact"};
+    const signal=new AbortController().signal;
+    // A valid JSON classification inside HTTP 200 must never override an
+    // incomplete, queued, cancelled or otherwise non-completed response.
+    for(const responseStatus of ["incomplete","failed","cancelled","queued",
+      "in_progress",null,undefined]) {
+      globalThis.fetch=async()=>openAIResponse(validChoice,200,responseStatus);
+      assert.equal(await completeInboxOpenAIOnly(input,signal),null,
+        "response.status="+String(responseStatus));
+    }
+    // The parent response may be completed while its message is only partial.
+    for(const messageStatus of ["incomplete","in_progress","failed",null,undefined]) {
+      globalThis.fetch=async()=>openAIResponse(validChoice,200,"completed",messageStatus);
+      assert.equal(await completeInboxOpenAIOnly(input,signal),null,
+        "message.status="+String(messageStatus));
+    }
+    // Missing assistant role, missing status, or multiple messages are invalid.
+    const completeMessage={type:"message",role:"assistant",status:"completed",
+      content:[{type:"output_text",text:JSON.stringify(validChoice)}]};
+    for(const malformed of [
+      {output:[completeMessage]},
+      {status:"completed",output:[{...completeMessage,role:"user"}]},
+      {status:"completed",output:[{...completeMessage,role:undefined}]},
+      {status:"completed",output:[completeMessage,completeMessage]},
+      {status:"completed",output:[{...completeMessage,
+        content:[...completeMessage.content,...completeMessage.content]}]},
+    ]) {
+      globalThis.fetch=async()=>new Response(JSON.stringify(malformed),
+        {status:200,headers:{"content-type":"application/json"}});
+      assert.equal(await completeInboxOpenAIOnly(input,signal),null);
+    }
+    // Completion can include a separate reasoning element but exactly one
+    // final assistant message must supply the structured JSON.
+    globalThis.fetch=async()=>new Response(JSON.stringify({
+      status:"completed",output:[{type:"reasoning"},completeMessage],
+    }),{status:200,headers:{"content-type":"application/json"}});
+    assert.deepEqual(await completeInboxOpenAIOnly(input,signal),validChoice);
   });
 });
 
