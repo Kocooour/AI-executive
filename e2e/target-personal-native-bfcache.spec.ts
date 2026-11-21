@@ -23,6 +23,11 @@ const store=JSON.parse(process.env.LUMI_E2E_TARGET_STORE||"null") as
 const origin="http://localhost:"+Number(process.env.E2E_PORT||3100);
 const strict=process.env.LUMI_REAL_BFCACHE_E2E==="true";
 const pause=(ms:number)=>new Promise<void>(resolve=>setTimeout(resolve,ms));
+// Native Chromium is driven by raw CDP, outside Playwright navigation control.
+// Every handshake and protocol reply MUST be bounded: otherwise a hung socket
+// outlives the waitFor deadlines and Playwright kills the test at 120s without
+// any browser evidence or the name of the stalled operation.
+const CDP_REPLY_TIMEOUT_MS=12_000;
 async function waitFor<T>(label:string,fn:()=>Promise<T|null|undefined|false>,ms=20000):Promise<T>{
   const end=Date.now()+ms;
   let lastError:unknown;
@@ -60,16 +65,43 @@ class CDP{
   static async connect(url:string){
     const ws=new WebSocket(url);
     await new Promise<void>((resolve,reject)=>{
-      ws.addEventListener("open",()=>resolve(),{once:true});
-      ws.addEventListener("error",()=>reject(Error("Cannot attach to Chrome")),{once:true});
+      let finished=false;
+      const settle=(error?:Error)=>{
+        if(finished)return;
+        finished=true;clearTimeout(timer);
+        if(error){
+          try{ws.close();}catch{/* connecting socket may already be closed */}
+          reject(error);
+        }else resolve();
+      };
+      const timer=setTimeout(()=>settle(Error(
+        "Chrome CDP WebSocket handshake exceeded "+CDP_REPLY_TIMEOUT_MS+"ms")),
+        CDP_REPLY_TIMEOUT_MS);
+      ws.addEventListener("open",()=>settle(),{once:true});
+      ws.addEventListener("error",()=>settle(Error("Cannot attach to Chrome")),{once:true});
+      ws.addEventListener("close",()=>settle(Error("Chrome closed before CDP attached")),{once:true});
     });
     return new CDP(ws);
   }
   send(method:string,params:Record<string,unknown>={}):Promise<any>{
     return new Promise((resolve,reject)=>{
+      if(this.socket.readyState!==WebSocket.OPEN){
+        reject(Error("Chrome CDP socket not open for "+method));return;
+      }
       const id=++this.seq;
-      this.requests.set(id,{resolve,reject});
-      this.socket.send(JSON.stringify({id,method,params}));
+      const timer=setTimeout(()=>{
+        this.requests.delete(id);
+        reject(Error("Chrome CDP reply timed out: "+method+
+          " (request "+id+", "+CDP_REPLY_TIMEOUT_MS+"ms)"));
+      },CDP_REPLY_TIMEOUT_MS);
+      this.requests.set(id,{
+        resolve:value=>{clearTimeout(timer);resolve(value);},
+        reject:error=>{clearTimeout(timer);reject(error);},
+      });
+      try{this.socket.send(JSON.stringify({id,method,params}));}
+      catch(error){
+        this.requests.delete(id);clearTimeout(timer);reject(error);
+      }
     });
   }
   async eval<T>(expression:string):Promise<T>{
@@ -86,6 +118,7 @@ class CDP{
   close(){this.socket.close();}
 }
 async function nativeBrowser(width:number){
+  console.log("NATIVE_BFCACHE_PHASE "+JSON.stringify({width,phase:"launching isolated Chrome"}));
   if(!dir||!existsSync(dir)||!store?.seed?.areaTitle)
     throw Error("Only an isolated E2E target store may be used");
   const profile=mkdtempSync(path.join(dir,"native-bfcache-"+width+"-"));
@@ -102,11 +135,13 @@ async function nativeBrowser(width:number){
       const filename=path.join(profile,"DevToolsActivePort");
       return existsSync(filename)?Number(readFileSync(filename,"utf8").split("\n")[0]):null;
     });
+    console.log("NATIVE_BFCACHE_PHASE "+JSON.stringify({width,phase:"Chrome DevTools port ready"}));
     const pageSocket=await waitFor("Chrome page target",async()=>{
       const pages=await fetch("http://127.0.0.1:"+port+"/json/list")
         .then(r=>r.json()) as {type:string;webSocketDebuggerUrl?:string}[];
       return pages.find(p=>p.type==="page")?.webSocketDebuggerUrl||null;
     });
+    console.log("NATIVE_BFCACHE_PHASE "+JSON.stringify({width,phase:"attaching Chrome CDP"}));
     const cdp=await CDP.connect(pageSocket);
     // Chromium requires the Page domain to be enabled for document-start
     // injection. Without this, missing pageshow instrumentation resembles
@@ -127,6 +162,7 @@ async function nativeBrowser(width:number){
     await cdp.send("Page.addScriptToEvaluateOnNewDocument",{source:
       "window.__lumiNative={shows:[],docToken:Math.random().toString(36).slice(2)};"+
       "addEventListener('pageshow',e=>window.__lumiNative.shows.push(e.persisted))"});
+    console.log("NATIVE_BFCACHE_PHASE "+JSON.stringify({width,phase:"Chrome CDP ready"}));
     return {profile,chrome,closeWatch,cdp};
   }catch(e){
     await stopNativeChromeAndRemoveProfile(chrome,closeWatch,profile);
@@ -160,6 +196,13 @@ for(const width of [390,1280]){
     test.setTimeout(120000);
     const {profile,chrome,closeWatch,cdp}=await nativeBrowser(width);
     let phase="before initial navigation";
+    const enter=(next:string)=>{
+      phase=next;
+      // The raw native CDP client is not represented in Playwright traces.
+      // Emit only the stage and viewport, never private task text or cookies.
+      console.log("NATIVE_BFCACHE_PHASE "+JSON.stringify({width,phase}));
+    };
+    enter(phase);
     let secret="";
     let preBack: {shows:boolean[];docToken:string}|null=null;
     let initialPageShowObserved=false;
@@ -302,7 +345,7 @@ for(const width of [390,1280]){
       await cdp.send("Page.navigate",{url:origin+"/?view=Calendar&scope=personal"});
       // This is a prerequisite, not a BFCache hit: the initial navigation
       // must fire the genuine (persisted:false) pageshow before drafting.
-      phase="awaiting initial native pageshow";
+      enter("awaiting initial native pageshow");
       await waitFor("initial browser-fired pageshow",()=>cdp.eval<boolean>(
         "window.__lumiNative?.shows?.includes(false)===true"));
       initialPageShowObserved=true;
@@ -331,7 +374,7 @@ for(const width of [390,1280]){
         "window.__lumiShowsBeforeLeave=window.__lumiNative?.shows.length??0");
       preBack=await cdp.eval<{shows:boolean[];docToken:string}>(
         "({shows:[...window.__lumiNative.shows],docToken:window.__lumiNative.docToken})");
-      phase="navigating away to robots.txt";
+      enter("navigating away to robots.txt");
       // Both navigations are native browser actions; no Playwright goBack and
       // no synthetic PageTransitionEvent. Keep the private response no-store.
       await cdp.eval("location.assign('/robots.txt');true");
@@ -346,14 +389,14 @@ for(const width of [390,1280]){
       backReasonStartIndex=cacheNotUsed.length;
       // Only requests begun after this marker may certify a fresh wake.
       backReadMark=networkOrder;
-      phase="native history.back";
+      enter("native history.back");
       await cdp.eval("history.back();true");
       await waitFor("native browser back",()=>cdp.eval<boolean>(
         "location.search.includes('view=Calendar')"));
       // A navigation can commit to the destination before its pageshow
       // actually fires. An earlier snapshot saw shows:[] and incorrectly
       // classified that in-flight navigation as a BFCache miss.
-      phase="awaiting actual post-Back pageshow";
+      enter("awaiting actual post-Back pageshow");
       await waitFor("actual browser-fired pageshow after Back",()=>cdp.eval<boolean>(
         "!!window.__lumiNative?.shows.length && ("+
         "window.__lumiShowsBeforeLeave===undefined || "+
@@ -364,7 +407,7 @@ for(const width of [390,1280]){
       expect(afterBackFrame?.id,"Back changed top-level frame identity")
         .toBe(topFrameId);
       returnedLoaderId=afterBackFrame?.loaderId??null;
-      phase="asserting native Back privacy and authorization";
+      enter("asserting native Back privacy and authorization");
       const first=await evidence("observed");
       expect(first.titleVisible,"Private draft remains in DOM").toBe(false);
       expect(first.storageLeak,"Private draft persisted to browser storage").toBe(false);
@@ -421,7 +464,7 @@ for(const width of [390,1280]){
         expect(postRestoreTitle,"Old React draft reappeared after Area reselect").toBe("");
         expect(taskCreatePosts,"Automatic CREATE after private Area reselect")
           .toHaveLength(0);
-        phase="attempting empty-composer save after BFCache restore";
+        enter("attempting empty-composer save after BFCache restore");
         await cdp.eval("document.querySelector('[data-testid=\"target-private-task-save\"]').click()");
         await pause(300);
         expect(taskCreatePosts,"Blank restored composer must not submit CREATE")
@@ -439,7 +482,7 @@ for(const width of [390,1280]){
           successfulRead("/api/target-staging/session"));
         expect(taskCreatePosts,"Automatic CREATE during cache-miss reload")
           .toHaveLength(0);
-        phase="reopening private editor after newly authorized reload";
+        enter("reopening private editor after newly authorized reload");
         await waitFor("private capture after reload",()=>cdp.eval<boolean>(
           "!!document.querySelector("+JSON.stringify(fab)+")"));
         await cdp.eval("document.querySelector("+JSON.stringify(fab)+").click()");
@@ -469,7 +512,7 @@ for(const width of [390,1280]){
           "document.querySelector('[data-testid=\"target-private-task-form\"] input').value");
         expect(newTitle,"Abandoned draft became submittable after cache miss").toBe("");
         expect(taskCreatePosts,"Unexpected CREATE after new Area selection").toHaveLength(0);
-        phase="attempting empty-composer save after explained cache miss";
+        enter("attempting empty-composer save after explained cache miss");
         await cdp.eval("document.querySelector('[data-testid=\"target-private-task-save\"]').click()");
         await pause(300);
         expect(taskCreatePosts,"Blank composer after cache miss must not submit CREATE")
