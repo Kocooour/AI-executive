@@ -148,13 +148,20 @@ export async function completeInboxOpenAIOnly(
     });
     if (!response.ok || signal.aborted) return null;
     const data = await response.json();
-    if (signal.aborted || !data || !Array.isArray(data.output)) return null;
-    const message = data.output.flatMap((x: any) =>
-      x && Array.isArray(x.content) ? x.content : [])
-      .filter((x: any) => x && x.type === "output_text" && typeof x.text === "string")
-      .map((x: any) => x.text).join("").trim();
+    // HTTP 200 is not completion: an incomplete/cancelled/failed Responses
+    // object may still contain a syntactically valid output_text fragment.
+    // Fail closed on missing/unknown state, partial messages and ambiguity.
+    if (signal.aborted || !data || data.status !== "completed" ||
+        !Array.isArray(data.output)) return null;
+    const messages = data.output.filter((item: any) => item?.type === "message");
+    if (messages.length !== 1) return null;
+    const message = messages[0];
+    if (message.status !== "completed" || message.role !== "assistant" ||
+        !Array.isArray(message.content) || message.content.length !== 1 ||
+        message.content[0]?.type !== "output_text" ||
+        typeof message.content[0].text !== "string") return null;
     if (signal.aborted) return null;
-    return parseInboxAIChoice(message,input);
+    return parseInboxAIChoice(message.content[0].text.trim(),input);
   } catch {
     // Do not log provider error bodies: they can include task/Area/project names.
     return null;
