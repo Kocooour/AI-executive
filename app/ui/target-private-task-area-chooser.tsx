@@ -393,7 +393,7 @@ export default function TargetPrivateTaskAreaChooser({
       {phase==="saved"&&<p role="status">{c.success}</p>}
       {message&&<p role="alert">{message}</p>}
       <div className="captureActions">
-        {!ready&&<button type="button" onClick={()=>{
+        {!ready&&<button type="button" data-testid="target-private-task-retry" onClick={()=>{
           if(!runtime)return;
           void runtime.refresh().then(result=>{
             if(result==="ok"&&live()){
