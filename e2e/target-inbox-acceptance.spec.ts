@@ -372,6 +372,8 @@ test("C-3a: lost Process + concurrent title edit cancels old UUID and unlocks fr
   const db=new DatabaseSync(path.join(store.directory,"lumi-target.sqlite"));
   const originalTitle=(db.prepare("SELECT title FROM tasks WHERE id=?")
     .get(seeded.taskId) as {title:string}).title;
+  const receiptsBefore=(db.prepare("SELECT COUNT(*) AS n FROM task_triage_receipts WHERE task_id=?")
+    .get(seeded.taskId) as {n:number}).n;
   let changed=false;
   try{
     await openInbox(page);
@@ -415,7 +417,7 @@ test("C-3a: lost Process + concurrent title edit cancels old UUID and unlocks fr
     expect(fenced).toBeGreaterThan(0);
     const receipts=(db.prepare("SELECT COUNT(*) AS n FROM task_triage_receipts WHERE task_id=?")
       .get(seeded.taskId) as {n:number}).n;
-    expect(receipts).toBe(0); // old command never committed
+    expect(receipts).toBe(receiptsBefore); // old UUID added no Process receipt
 
     // Simulate delivery of the original command AFTER cancellation. The
     // server must reject it; it cannot commit or duplicate the Process.
