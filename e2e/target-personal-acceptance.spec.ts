@@ -1245,3 +1245,119 @@ for (const width of [390, 1280]) {
     }
   });
 }
+
+
+/** #490/#462: full C-3a real-store profile, including an Inbox badge read,
+ * must recover an interrupted 200 Area body AUTOMATICALLY after wake.
+ * No Retry/Close/reopen action can satisfy this test. */
+for(const width of [390,1280]){
+  test("C-3a concurrent Inbox wake automatically reauthorizes interrupted Area at "+width+"px",async({page})=>{
+    test.setTimeout(90_000);
+    if(!store?.seed?.areaTitle)throw Error("Missing isolated private Area fixture");
+    await page.setViewportSize({width,height:844});
+    await page.addInitScript(()=>{
+      const proof={
+        armed:false,inboxStarted:0,areaAttempts:0,bodyInterrupted:false,
+        taskPosts:0,events:[] as string[],
+      };
+      (window as typeof window & {__lumiC3aWake?:typeof proof}).__lumiC3aWake=proof;
+      const real=window.fetch.bind(window);
+      window.fetch=(input,init)=>{
+        const raw=typeof input==="string"?input:
+          input instanceof URL?input.href:input.url;
+        const pathname=new URL(raw,location.href).pathname;
+        if(pathname==="/api/target-staging/tasks"&&init?.method==="POST"&&proof.armed)
+          proof.taskPosts++;
+        if(!proof.armed)return real(input,init);
+        if(pathname==="/api/target-staging/inbox"){
+          proof.inboxStarted++;
+          proof.events.push("inbox:queued");
+          // The Inbox's queued read may overlap the wake and private Area
+          // recovery, but the server still uses its real isolated store.
+          return new Promise<Response>((resolve,reject)=>{
+            const signal=init?.signal;
+            const aborted=()=>{
+              clearTimeout(timer);reject(new DOMException("Aborted","AbortError"));
+            };
+            if(signal?.aborted){reject(new DOMException("Aborted","AbortError"));return;}
+            const timer=setTimeout(()=>{
+              signal?.removeEventListener("abort",aborted);
+              void real(input,init).then(resolve,reject);
+            },120);
+            signal?.addEventListener("abort",aborted,{once:true});
+          });
+        }
+        if(pathname==="/api/target-staging/session"){
+          return real(input,init).then(response=>{
+            proof.events.push("session:"+response.status);
+            return response;
+          });
+        }
+        if(pathname==="/api/target-staging/notes/create-targets"){
+          const attempt=++proof.areaAttempts;
+          proof.events.push("area:"+attempt);
+          if(attempt===1){
+            // 200 HEADERS + partial streamed JSON, then a body failure.
+            // The client must discard it, verify the session and start
+            // its one automatic fresh GET. Never present partial Area data.
+            const body=new ReadableStream<Uint8Array>({
+              start(controller){
+                controller.enqueue(new TextEncoder().encode('{"areas":['));
+                setTimeout(()=>{
+                  proof.bodyInterrupted=true;
+                  controller.error(new TypeError("C-3a interrupted 200 body"));
+                },15);
+              },
+            });
+            return Promise.resolve(new Response(body,{status:200,headers:{
+              "content-type":"application/json","cache-control":"no-store",
+            }}));
+          }
+        }
+        return real(input,init);
+      };
+    });
+    await page.goto("/?view=Calendar&scope=personal");
+    const capture=page.locator('[data-target-private-capture-fab="'+
+      (width===390?"mobile":"desktop")+'"]');
+    await expect(capture).toBeVisible();
+    await capture.click();
+    await page.getByTestId("target-capture-task-kind").click();
+    const select=page.getByTestId("target-private-task-area");
+    await expect(select.locator("option")).toContainText([store.seed.areaTitle],{timeout:15000});
+    await select.selectOption({label:store.seed.areaTitle});
+    const title=page.getByTestId("target-private-task-form").locator("input");
+    await title.fill("Abandoned C-3a private draft");
+    await page.evaluate(()=>{
+      const proof=(window as typeof window & {__lumiC3aWake?:{armed:boolean}}).__lumiC3aWake!;
+      proof.armed=true;
+      Object.defineProperty(document,"visibilityState",{configurable:true,value:"hidden"});
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
+    await expect(page.getByTestId("target-private-task-form")).toHaveCount(0);
+    await page.evaluate(()=>{
+      Reflect.deleteProperty(document,"visibilityState");
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
+    // No user action after wake: the chooser must itself load a fresh Area.
+    await expect(select.locator("option")).toContainText([store.seed.areaTitle],{timeout:25000});
+    await expect(select).toHaveValue("");
+    const proof=await page.evaluate(()=>(window as typeof window & {
+      __lumiC3aWake:{inboxStarted:number;areaAttempts:number;
+        bodyInterrupted:boolean;taskPosts:number;events:string[]};
+    }).__lumiC3aWake);
+    expect(proof.bodyInterrupted).toBe(true);
+    expect(proof.areaAttempts,"one interrupted read and one fresh automatic GET").toBe(2);
+    expect(proof.inboxStarted,"Inbox badge must also be active during wake").toBeGreaterThan(0);
+    const failed=proof.events.indexOf("area:1"),replacement=proof.events.indexOf("area:2");
+    expect(failed).toBeGreaterThan(-1);
+    expect(replacement).toBeGreaterThan(failed);
+    expect(proof.events.slice(failed+1,replacement),
+      "a new owner session GET 200 must precede automatic private Area retry")
+      .toContain("session:200");
+    await select.selectOption({label:store.seed.areaTitle});
+    await expect(page.getByTestId("target-private-task-form").locator("input"))
+      .toHaveValue("");
+    expect(proof.taskPosts,"wake may never replay a private CREATE").toBe(0);
+  });
+}
