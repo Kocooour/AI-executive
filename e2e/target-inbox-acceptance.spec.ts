@@ -542,6 +542,14 @@ test("C-3a: lost Undo can be cancelled and safely replaced without replaying its
     )).toBeVisible({timeout:20000});
     await expect(page.getByRole("button",{name:"Vrátit do Inboxu (Undo)"}))
       .toBeVisible();
+    // Reload cannot discard the recovery of a cancelled pending Undo.
+    // Only the old actor-issued command is persisted and reverified.
+    await page.reload();
+    await expect(page.getByTestId("target-inbox-uncertain"))
+      .toBeVisible({timeout:20000});
+    await page.getByRole("button",{name:"Ověřit původní příkaz"}).click();
+    await expect(page.getByRole("button",{name:"Vrátit do Inboxu (Undo)"}))
+      .toBeVisible({timeout:20000});
     const oldUndo=writes[0];
     await page.unroute("**/api/target-staging/inbox/triage",dropFirstUndo);
     const late=await page.evaluate(async command=>{
