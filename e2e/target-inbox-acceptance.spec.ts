@@ -363,6 +363,146 @@ for(const width of [390,1280]){
   });
 }
 
+
+test("C-3a: lost Process + concurrent title edit cancels old UUID and unlocks fresh CAS",async({page})=>{
+  test.setTimeout(115_000);
+  if(!store)throw Error("Missing isolated C-3a SQLite store");
+  await page.setViewportSize({width:1280,height:844});
+  const seeded=store.seed.projects["390"];
+  const db=new DatabaseSync(path.join(store.directory,"lumi-target.sqlite"));
+  const originalTitle=(db.prepare("SELECT title FROM tasks WHERE id=?")
+    .get(seeded.taskId) as {title:string}).title;
+  let changed=false;
+  try{
+    await openInbox(page);
+    await findInboxRow(page,seeded.taskId);
+    const commands:unknown[]=[];
+    const dropFirst=async(route:Route)=>{
+      commands.push(route.request().postDataJSON());
+      if(commands.length===1)await route.fulfill({status:503,contentType:"application/json",
+        body:'{"error":"unavailable"}'});
+      else await route.continue();
+    };
+    await page.route("**/api/target-staging/inbox/triage",dropFirst);
+    await processAction(page,seeded.taskTitle).click();
+    await expect(page.getByRole("button",{name:"Opakovat původní příkaz"}))
+      .toBeVisible({timeout:15000});
+    const witness=(await page.evaluate(()=>
+      sessionStorage.getItem("lumi:target-inbox-command:v1")))!;
+    const original=JSON.parse(witness) as {command:{commandId:string;taskId:string}};
+    expect(original.command.taskId).toBe(seeded.taskId);
+    const freshTitle="Concurrent C-3a title edit";
+    db.prepare("UPDATE tasks SET title=? WHERE id=?").run(freshTitle,seeded.taskId);
+    changed=true;
+
+    // A same-UUID replay MUST reject stale CAS, and the read-only receipt
+    // alone still cannot prove that an original POST won't arrive later.
+    await page.getByRole("button",{name:"Opakovat původní příkaz"}).click();
+    await expect(page.getByRole("button",{name:"Bezpečně ukončit původní příkaz"}))
+      .toBeVisible({timeout:15000});
+    expect(commands).toHaveLength(2);
+    expect(commands[1]).toEqual(commands[0]);
+    expect((await page.evaluate(()=>
+      sessionStorage.getItem("lumi:target-inbox-command:v1")))).toContain(
+        original.command.commandId);
+
+    await page.getByRole("button",{name:"Bezpečně ukončit původní příkaz"}).click();
+    await expect.poll(async()=>await page.evaluate(()=>
+      sessionStorage.getItem("lumi:target-inbox-command:v1")),
+      {timeout:20000}).toBeNull();
+    const fenced=(db.prepare("SELECT COUNT(*) AS n FROM metadata WHERE key LIKE ?")
+      .get("r3:inbox-triage-cancel-v1:%") as {n:number}).n;
+    expect(fenced).toBeGreaterThan(0);
+    const receipts=(db.prepare("SELECT COUNT(*) AS n FROM task_triage_receipts WHERE task_id=?")
+      .get(seeded.taskId) as {n:number}).n;
+    expect(receipts).toBe(0,"old command never committed");
+
+    // Simulate delivery of the original command AFTER cancellation. The
+    // server must reject it; it cannot commit or duplicate the Process.
+    await page.unroute("**/api/target-staging/inbox/triage",dropFirst);
+    const lateStatus=await page.evaluate(async command=>{
+      const response=await fetch("/api/target-staging/inbox/triage",{
+        method:"POST",headers:{"content-type":"application/json",
+          "x-lumi-target-protocol":"1"},
+        body:JSON.stringify(command),credentials:"same-origin"});
+      return response.status;
+    },original.command);
+    expect(lateStatus).toBe(409);
+    await findInboxRow(page,seeded.taskId);
+    await processAction(page,freshTitle).click();
+    await expect(page.getByRole("button",{name:"Vrátit do Inboxu (Undo)"}))
+      .toBeVisible({timeout:15000});
+    await page.getByRole("button",{name:"Vrátit do Inboxu (Undo)"}).click();
+    await findInboxRow(page,seeded.taskId);
+  }finally{
+    if(changed)db.prepare("UPDATE tasks SET title=? WHERE id=?")
+      .run(originalTitle,seeded.taskId);
+    db.close();
+  }
+});
+
+for(const [width,status] of [[390,503],[1280,409]] as const){
+  test("C-3a: delayed page-2 "+status+" preserves pending original UUID ("+
+    width+"px)",async({page})=>{
+    test.setTimeout(100_000);
+    if(!store)throw Error("Missing isolated C-3a SQLite store");
+    await page.setViewportSize({width,height:844});
+    const seeded=store.seed.projects[String(width)];
+    await openInbox(page);
+    await findInboxRow(page,seeded.taskId);
+    let begin:()=>void=()=>{},release:()=>void=()=>{};
+    const started=new Promise<void>(resolve=>{begin=resolve;});
+    const held=new Promise<void>(resolve=>{release=resolve;});
+    const delayedPage=async(route:Route)=>{
+      if(!new URL(route.request().url()).searchParams.has("cursor")){
+        await route.continue();return;
+      }
+      begin();await held;
+      try{await route.fulfill({status,contentType:"application/json",
+        body:JSON.stringify({error:status===409?"read_stale_reload":"unavailable"})});}
+      catch{/* session may abort the old GET before it is fulfilled */}
+    };
+    let commands=0;
+    const dropPost=async(route:Route)=>{
+      commands++;
+      await route.fulfill({status:503,contentType:"application/json",
+        body:'{"error":"unavailable"}'});
+    };
+    await page.route("**/api/target-staging/inbox?*",delayedPage);
+    await page.route("**/api/target-staging/inbox/triage",dropPost);
+    await inbox(page).getByRole("button",{name:"Načíst další"}).click();
+    await started;
+    await processAction(page,seeded.taskTitle).click();
+    await expect(page.getByRole("button",{name:"Opakovat původní příkaz"}))
+      .toBeVisible({timeout:15000});
+    const witness=(await page.evaluate(()=>
+      sessionStorage.getItem("lumi:target-inbox-command:v1")))!;
+    const original=JSON.parse(witness) as {command:{commandId:string}};
+    release();
+    await expect(count(page)).toHaveCount(0);
+    await expect(page.getByTestId("target-inbox-sidebar-count")).toHaveCount(0);
+    await expect(page.getByTestId("target-inbox-uncertain")).toBeVisible();
+    expect(commands).toBe(1);
+    expect((await page.evaluate(()=>
+      sessionStorage.getItem("lumi:target-inbox-command:v1")))).toContain(
+        original.command.commandId);
+
+    // A reload must restore that exact command, not silently offer a fresh
+    // Process. Resolve only through the pinned cancellation lock.
+    await page.unroute("**/api/target-staging/inbox?*",delayedPage);
+    await page.reload();
+    await expect(page.getByTestId("target-inbox-uncertain")).toBeVisible();
+    await expect(processAction(page,seeded.taskTitle)).toHaveCount(0);
+    await page.getByRole("button",{name:"Bezpečně ukončit původní příkaz"}).click();
+    await expect.poll(async()=>await page.evaluate(()=>
+      sessionStorage.getItem("lumi:target-inbox-command:v1")),
+      {timeout:15000}).toBeNull();
+    expect(commands).toBe(1);
+    await page.unroute("**/api/target-staging/inbox/triage",dropPost);
+  });
+}
+
+
 test("C-3a: missing POST recovers after reload by replaying only its original UUID",async({page})=>{
   test.setTimeout(120_000);
   if(!store)throw Error("Missing isolated C-3a SQLite store");
