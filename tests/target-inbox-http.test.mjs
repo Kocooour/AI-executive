@@ -283,7 +283,8 @@ test("C-3a: CSRF/protocol/CAS and stale Area checks cannot commit",async()=>{
   const command=cmd(row,fx.store);
   assert.equal((await post("triage",command,owner(),{origin:"http://attacker.invalid"})).status,403);
   assert.equal((await post("triage",command,owner(),{protocol:null})).status,400);
-  assert.equal((await post("triage",{...command,expectedTriageRevision:42})).status,409);
+  assert.equal((await post("triage",{...command,expectedTriageRevision:42})).status,404,
+    "a changed triage epoch invalidates the actor-issued proof");
   assert.equal((await post("triage",{...command,writeAreaId:"area-shared"})).status,409);
   assert.equal(fx.db.prepare("SELECT COUNT(*) AS n FROM task_triage_receipts").get().n,0);
   process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_INBOX_WRITE_ENABLED="false";
@@ -314,8 +315,8 @@ test("C-3a: lost POST + concurrent title edit is safely cancelled under pinned l
     .get().n,0,"no permanent negative receipt is created");
   assert.equal((await post("triage",original)).status,409,
     "a late original POST cannot write after cancellation");
-  assert.equal((await post("triage",{...original,expectedTriageRevision:7})).status,409,
-    "different stale payload cannot commit after CAS moved");
+  assert.equal((await post("triage",{...original,expectedTriageRevision:7})).status,404,
+    "different payload cannot use the original actor-signed CAS");
   assert.equal(fx.db.prepare("SELECT COUNT(*) AS n FROM task_triage_receipts").get().n,0);
   assert.equal(fx.db.prepare("SELECT triage_state FROM tasks WHERE id='shared-task'")
     .get().triage_state,"unprocessed");
