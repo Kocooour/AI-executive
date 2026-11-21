@@ -13,6 +13,7 @@ import {withPinnedTargetStagingWrite} from "./target-staging-pinned-write";
 import {targetInboxTriageCancelled,targetInboxTriageDigest,
   targetInboxTriageReceiptKey,targetInboxTombstoneCancelKey,
   targetInboxTombstoneCancelValue,targetInboxTombstoneCancelWitness,
+  targetInboxUndoRevisionEligible,targetInboxUndoRebaseKey,
   validTargetInboxTriageCommand,type TargetInboxTriageCommand}
   from "./target-inbox-triage-writer";
 import {issueTargetInboxRevision,verifyIssuedTargetInboxRevision,
@@ -118,14 +119,26 @@ export function cancelPreflightedTargetInboxTriage(
         (command.mode==="undo"&&row.triage_state!=="processed"))
       return sessionLive()?{ok:true,status:"cancelled"}:
         {ok:false,reason:"session_revoked"};
+    let processReceiptKey:string|null=null;
     if(command.mode==="undo"){
-      // Without a committed exact Process, this Undo could never execute.
+      // Only a still-eligible Process lineage can be carried over this
+      // cancellation. A later title/Area edit or a committed Undo must never
+      // regain Undo eligibility via a forged or stale cancellation request.
+      processReceiptKey=targetInboxTriageReceiptKey(actor,command.undoOfCommandId!);
       const original=db.prepare(
-        "SELECT action,actor_user_id,task_id FROM task_triage_receipts WHERE receipt_key=?"
-      ).get(targetInboxTriageReceiptKey(actor,command.undoOfCommandId!)) as
-        {action:string;actor_user_id:string;task_id:string}|undefined;
+        "SELECT action,actor_user_id,task_id,restore_generation,"+
+        "triage_revision_after,task_revision_after FROM task_triage_receipts WHERE receipt_key=?"
+      ).get(processReceiptKey) as {action:string;actor_user_id:string;task_id:string;
+        restore_generation:string;triage_revision_after:number;
+        task_revision_after:number}|undefined;
       if(!original||original.action!=="process"||
-          original.actor_user_id!==actor||original.task_id!==command.taskId)
+          original.actor_user_id!==actor||original.task_id!==command.taskId||
+          original.restore_generation!==command.restoreGeneration.toLowerCase()||
+          original.triage_revision_after!==row.triage_revision||
+          !targetInboxUndoRevisionEligible(db,processReceiptKey,
+            original.task_revision_after,row.revision)||
+          db.prepare("SELECT 1 FROM task_triage_receipts WHERE undo_of_receipt_key=?")
+            .get(processReceiptKey))
         return sessionLive()?{ok:true,status:"cancelled"}:
           {ok:false,reason:"session_revoked"};
     }
@@ -144,6 +157,14 @@ export function cancelPreflightedTargetInboxTriage(
     if(changed.changes!==1||!afterSignedRevision||
         afterSignedRevision===command.expectedRevision||
         !sessionLive()||!context.stillPinned())return failed();
+    if(processReceiptKey){
+      // Preserve only the latest cancellation-only revision for this Process.
+      // Replacements receive a different self-bound UUID while the old CAS
+      // stays irrevocably stale. One row per retained Process, not per Undo.
+      db.prepare(`INSERT INTO metadata(key,value) VALUES(?,?)
+        ON CONFLICT(key) DO UPDATE SET value=excluded.value`).run(
+        targetInboxUndoRebaseKey(processReceiptKey),String(row.revision+1));
+    }
     return context.commit({kind:"task_triage",payload:{cancel:1}})
       ?{ok:true,status:"cancelled"}:failed();
   },denied,failed);
