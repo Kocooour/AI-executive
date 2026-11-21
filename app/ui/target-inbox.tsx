@@ -341,7 +341,7 @@ export default function TargetInbox({language="cs",taskDetail=false}:{language?:
         {speak("Opakovat původní příkaz","Retry original command")}</button>}
     {(decision?.stage==="uncertain"||decision?.stage==="not-recorded")&&
       <button type="button" onClick={()=>void cancelOriginal()}>
-        {speak("Bezpečně ukončit původní příkaz","Safely cancel original command")}</button>
+        {speak("Bezpečně ukončit původní příkaz","Safely cancel original command")}</button>}
   </section>;
   if(!page)return <section aria-label={speak("Cílový Inbox","Target Inbox")}
     className="targetInbox" data-testid="target-inbox">
