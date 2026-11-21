@@ -40,7 +40,8 @@ export function parseInboxReceiptReply(raw:unknown):InboxReceiptReply|null{
   if(!witness)return null;
   let next:InboxReceiptReply["next"]=null;
   if(v.next!==null){
-    if(v.status!=="committed"||!v.next||typeof v.next!=="object"||Array.isArray(v.next))
+    if(!["committed","cancelled"].includes(v.status as string)||
+        !v.next||typeof v.next!=="object"||Array.isArray(v.next))
       return null;
     const n=v.next as Record<string,unknown>;
     if(Object.keys(n).sort().join(",")!=="expectedRevision,triageRevision,writeAreaId"||
