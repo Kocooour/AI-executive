@@ -283,8 +283,8 @@ for(const width of [390,1280]){
       read.cancelled=failure.canceled===true;
       pendingReads.delete(read.requestId);
     });
-    const successfulRead=(path:string,afterOrder:number|null=backReadMark)=>reads.find(read=>
-      afterOrder!==null&&read.requestOrder>afterOrder&&
+    const successfulRead=(path:string,afterOrder:number|null|undefined=backReadMark)=>reads.find(read=>
+      afterOrder!=null&&read.requestOrder>afterOrder&&
       read.path===path&&read.method==="GET"&&read.status===200&&
       read.fromServiceWorker===false&&read.fromDiskCache===false&&
       read.fromPrefetchCache===false&&read.cacheServed!==true&&
@@ -507,7 +507,7 @@ for(const width of [390,1280]){
             read.failed===true&&read.cancelled===true);
           if(!interrupted)return null;
           const retryReady=await cdp.eval<boolean>(
-            "!!document.querySelector('[data-testid=\\\"target-private-task-retry\\\"]')");
+            "!!document.querySelector('[data-testid=target-private-task-retry]')");
           return retryReady?{kind:"retry" as const}:null;
         });
         let areaRead:NativeRead;
@@ -520,7 +520,7 @@ for(const width of [390,1280]){
           // This is a real user retry, never automatic client authorization.
           // The retry button itself verifies a fresh session before re-reading.
           const beforeRetry=networkOrder;
-          await cdp.eval("document.querySelector('[data-testid=\\\"target-private-task-retry\\\"]').click()");
+          await cdp.eval("document.querySelector('[data-testid=target-private-task-retry]').click()");
           const retriedSession=await waitFor("completed owner session GET after explicit retry",async()=>
             successfulRead("/api/target-staging/session",beforeRetry));
           areaRead=await waitFor("completed private Area GET after reauthorization",async()=>
