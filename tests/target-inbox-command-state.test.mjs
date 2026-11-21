@@ -47,6 +47,13 @@ test("Inbox UUID survives view unsubscribe/remount; new write is blocked until r
     assert.equal(inboxDecisionSnapshot(runtime,g)?.command.commandId,"first");
     assert.equal(setInboxDecision(runtime,g,decision("first","uncertain")),true);
     assert.equal(inboxUncertainSnapshot(),g);
+    // A missing receipt is not proof the original transport has quiesced.
+    // The exact UUID remains pending and cannot be replaced by a fresh one;
+    // the UI may safely replay the ORIGINAL idempotent command instead.
+    assert.equal(setInboxDecision(runtime,g,decision("first","not-recorded")),true);
+    assert.equal(inboxUncertainSnapshot(),g);
+    assert.equal(setInboxDecision(runtime,g,decision("second","sending")),false);
+    assert.equal(inboxDecisionSnapshot(runtime,g)?.command.commandId,"first");
     assert.equal(setInboxDecision(runtime,g,decision("first","undo-ready")),true);
     assert.equal(inboxUncertainSnapshot(),"");
     assert.equal(setInboxDecision(runtime,g,decision("second","sending")),true);
