@@ -651,7 +651,7 @@ for (const width of [390, 1280]) {
   });
 }
 
-// C13: the real target profile must expose legacy Home/Inbox/Today for reading
+// C13: the full C-3a profile keeps LegacyHome/LegacyInbox/Today available for reading
 // without ever turning the historical local-first store into a migration source.
 for (const width of [390, 1280]) {
   test("C-1 current navigation isolates synthetic legacy records; archive stays read-only at " + width + "px", async ({ page }) => {
@@ -727,13 +727,16 @@ for (const width of [390, 1280]) {
           .not.toContainText(oldTitle);
       await expect(page.getByTestId("target-archive-heading")).toHaveCount(0);
     };
-    const currentViews = ["MyPlanPreview", "Home", "Upcoming", "Projects", "Notes", "Calendar", "Search"] as const;
+    const currentViews = ["MyPlanPreview", "Home", "Inbox", "Upcoming", "Projects", "Notes", "Calendar", "Search"] as const;
     await expect(page.locator('[data-target-private-capture-fab="' +
       (width === 390 ? "mobile" : "desktop") + '"]')).toBeVisible();
     if (width === 1280) {
       const primary = page.locator(".appShell > aside > nav [data-nav-view]");
       await expect(primary).toHaveCount(currentViews.length);
-      await expect(page.locator(".appShell > aside > nav .navCount")).toHaveCount(0);
+      // The only allowed sidebar count is the live, actor-authorized Inbox badge,
+      // not a count reconstructed from the historical legacy store.
+      await expect(page.getByTestId("target-inbox-sidebar-count")).toBeVisible();
+      await expect(page.locator(".appShell > aside > nav .navCount")).toHaveCount(1);
       await expect(page.getByTestId("target-archive-sidebar")).toContainText(
         "Archiv (stará data, jen pro čtení)");
       for (const destination of currentViews) {
@@ -757,7 +760,7 @@ for (const width of [390, 1280]) {
         await assertNoLegacyInCurrentView();
       }
       await page.locator('.mobileNav [data-nav-tab="More"]').click();
-      await page.getByTestId("target-archive-mobile").locator('[data-nav-view="Inbox"]').click();
+      await page.getByTestId("target-archive-mobile").locator('[data-nav-view="LegacyInbox"]').click();
       await expect(page.getByTestId("target-archive-heading")).toBeVisible();
       await expect(page.getByTestId("legacy-read-only-notice")).toBeVisible();
     }
@@ -783,7 +786,7 @@ for (const width of [390, 1280]) {
     const before = await (await page.request.get("/api/store")).body();
     const beforeDb = legacyDbRows();
 
-    for (const [view, title] of [["LegacyHome", homeTitle], ["Inbox", inboxTitle], ["Today", homeTitle]] as const) {
+    for (const [view, title] of [["LegacyHome", homeTitle], ["LegacyInbox", inboxTitle], ["Today", homeTitle]] as const) {
       await page.goto("/?view=" + view);
       const banner = page.getByTestId("legacy-read-only-notice");
       await expect(banner).toBeVisible();
@@ -1042,7 +1045,7 @@ for (const width of [390, 1280]) {
     expect(bundle.local.entities.some((item: {title: string}) => item.title === newestTitle)).toBe(true);
     expect(bundle.local.entities.some((item: {title: string}) => item.title === updatedTitle)).toBe(false);
     expect(bundle.local.entities.some((item: {title: string}) => item.title === title)).toBe(false);
-    await page.goto("/?view=Inbox");
+    await page.goto("/?view=LegacyInbox");
     await expect(page.getByTestId("legacy-pending-rescue")).toBeVisible();
     await page.goto("/?view=Today");
     await expect(page.getByTestId("legacy-pending-rescue")).toBeVisible();
