@@ -337,9 +337,9 @@ export function inspectIsolatedTargetStore(
       const hashedId=(tag:string,id:string)=>createHash("sha256")
         .update(JSON.stringify([tag,id])).digest("hex");
       const actorByDigest=new Map((all("SELECT id FROM identities") as {id:string}[])
-        .map(row=>[hashedId("inbox-tombstone-actor-v1",row.id),row.id]));
+        .map(row=>[hashedId("inbox-tombstone-actor-v1",row.id),row.id] as const));
       const taskByDigest=new Map((all("SELECT id FROM task_tombstones") as {id:string}[])
-        .map(row=>[hashedId("inbox-tombstone-task-v1",row.id),row.id]));
+        .map(row=>[hashedId("inbox-tombstone-task-v1",row.id),row.id] as const));
       const tombstoneCancelCounts=new Map<string,number>();
       const tombstoneCancelsValid=tombstoneCancels.every(row=>{
         if(typeof row.key!=="string"||typeof row.value!=="string"||
