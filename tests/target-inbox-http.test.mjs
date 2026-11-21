@@ -547,6 +547,90 @@ test("C-3a: fabricated task and arbitrary UUID floods cannot create permanent fe
     {ok:true,mode:"r2-model",issues:[]});
 });
 
+test("C-3a: cancelled lost Undo reissues a fresh actor CAS without reviving old UUID",async()=>{
+  const fx=fixture(),page=await ok(read());
+  const row=page.items.find(x=>x.id==="shared-task");
+  const process=cmd(row,fx.store);
+  assert.deepEqual(await ok(post("triage",process)),{ok:true});
+  const committed=await ok(post("receipt",process));
+  assert.equal(committed.status,"committed");
+  const fromNext=next=>cmd({id:row.id,expectedRevision:next.expectedRevision,
+    triageRevision:next.triageRevision,effectiveAreaId:next.writeAreaId},
+  fx.store,"undo",process.commandId);
+  const original=fromNext(committed.next);
+  assert.equal((await ok(post("receipt",original))).status,"not_recorded");
+  const before=fx.db.prepare("SELECT revision FROM tasks WHERE id=?").get(row.id).revision;
+  assert.deepEqual(await ok(post("cancel",original)),{ok:true,status:"cancelled"});
+  assert.equal(fx.db.prepare("SELECT revision FROM tasks WHERE id=?").get(row.id).revision,
+    before+1);
+  assert.equal(fx.db.prepare("SELECT triage_state FROM tasks WHERE id=?")
+    .get(row.id).triage_state,"processed");
+  const retired=await ok(post("receipt",original));
+  assert.equal(retired.status,"cancelled");
+  assert.ok(retired.next,"original Process remains eligible after cancellation-only bump");
+  assert.notEqual(retired.next.expectedRevision,original.expectedRevision);
+  assert.equal((await post("triage",original)).status,409,
+    "late old Undo must never execute after its cancellation");
+  assert.deepEqual(await ok(post("cancel",original)),{ok:true,status:"cancelled"});
+  assert.equal(fx.db.prepare("SELECT revision FROM tasks WHERE id=?").get(row.id).revision,
+    before+1,"idempotent cancel must not increment twice");
+
+  const replacement=fromNext(retired.next);
+  assert.notEqual(replacement.commandId,original.commandId);
+  assert.equal((await post("triage",{...replacement,commandId:original.commandId})).status,409,
+    "retired UUID cannot be rebound to a fresh CAS");
+  assert.deepEqual(await ok(post("triage",replacement)),{ok:true});
+  assert.equal(fx.db.prepare("SELECT triage_state FROM tasks WHERE id=?")
+    .get(row.id).triage_state,"unprocessed");
+  assert.equal((await ok(post("receipt",process))).next,null);
+  const markers=fx.db.prepare("SELECT key,value FROM metadata WHERE key LIKE ?")
+    .all("r3:inbox-undo-rebase-v1:%");
+  assert.equal(markers.length,1,"one marker per Process, not per cancelled Undo");
+  assert.equal(markers[0].value,String(before+1));
+  assert.ok(!JSON.stringify(markers).includes("shared-task")&&
+    !JSON.stringify(markers).includes("alice"),"lineage metadata is content-free");
+  const {inspectIsolatedTargetStore}=await import("../lib/target-store-preflight.ts");
+  assert.deepEqual(inspectIsolatedTargetStore({...fx.store,mode:"r2-model"}),
+    {ok:true,mode:"r2-model",issues:[]},"re-based Undo receipt passes canonical audit");
+});
+
+test("C-3a: repeated Undo cancellation stays bounded; unrelated task edit defeats rebase",async()=>{
+  const fx=fixture(),page=await ok(read());
+  const row=page.items.find(x=>x.id==="shared-task");
+  const process=cmd(row,fx.store);
+  assert.deepEqual(await ok(post("triage",process)),{ok:true});
+  const fromNext=next=>cmd({id:row.id,expectedRevision:next.expectedRevision,
+    triageRevision:next.triageRevision,effectiveAreaId:next.writeAreaId},
+  fx.store,"undo",process.commandId);
+  let undo=fromNext((await ok(post("receipt",process))).next);
+  for(let i=0;i<3;i++){
+    assert.deepEqual(await ok(post("cancel",undo)),{ok:true,status:"cancelled"});
+    const recovery=await ok(post("receipt",undo));
+    assert.equal(recovery.status,"cancelled");
+    assert.ok(recovery.next);
+    const renewed=fromNext(recovery.next);
+    assert.notEqual(renewed.commandId,undo.commandId);
+    assert.equal((await post("triage",undo)).status,409);
+    undo=renewed;
+    assert.equal(fx.db.prepare("SELECT COUNT(*) AS n FROM metadata WHERE key LIKE ?")
+      .get("r3:inbox-undo-rebase-v1:%").n,1);
+  }
+  const lastWitness=undo;
+  fx.db.prepare("UPDATE tasks SET title='Edited after cancelled Undo' WHERE id=?")
+    .run(row.id);
+  const noReplacement=await ok(post("receipt",lastWitness));
+  assert.equal(noReplacement.status,"cancelled");
+  assert.equal(noReplacement.next,null,
+    "intervening title edit must never inherit a cancellation-only Undo witness");
+  assert.equal((await ok(post("receipt",process))).next,null);
+  assert.equal((await post("triage",lastWitness)).status,409);
+  assert.equal((await post("cancel",lastWitness)).status,200,
+    "stale cancellation can be safely acknowledged without creating another rebase");
+  const {inspectIsolatedTargetStore}=await import("../lib/target-store-preflight.ts");
+  assert.deepEqual(inspectIsolatedTargetStore({...fx.store,mode:"r2-model"}),
+    {ok:true,mode:"r2-model",issues:[]});
+});
+
 test("C-3a: original commit wins cancel race, preserving receipt/Undo and ACL",async()=>{
   const fx=fixture();
   const original=cmd((await ok(read())).items.find(x=>x.id==="shared-task"),fx.store);
