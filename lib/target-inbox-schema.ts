@@ -12,6 +12,11 @@ export const TARGET_INBOX_RECEIPT_RETENTION_DAYS = 90;
 /** Bounded ledger with headroom for Undo of every live Process. */
 export const TARGET_INBOX_MAX_RECEIPTS = 8192;
 
+/** At most one content-free Undo cancellation rebase per retained Process receipt.
+ * The key is the existing actor-hashed receipt key; the value is the latest
+ * revision reached by cancellation alone. No task title, actor or task ID. */
+export const TARGET_INBOX_UNDO_REBASE_PREFIX = "r3:inbox-undo-rebase-v1:";
+
 export const TARGET_INBOX_SCHEMA_SQL = [
   "ALTER TABLE tasks ADD COLUMN triage_state TEXT NOT NULL DEFAULT 'unprocessed' CHECK(triage_state IN ('unprocessed','processed'));",
   "ALTER TABLE tasks ADD COLUMN triaged_at INTEGER DEFAULT NULL CHECK(triaged_at IS NULL OR (typeof(triaged_at)='integer' AND triaged_at>0 AND triaged_at<9007199254740991));",
