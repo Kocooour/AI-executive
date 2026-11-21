@@ -128,7 +128,8 @@ export function readTargetInboxTriageReceipt(
     }|undefined;
     if(!row){
       const cancelled=targetInboxTriageCancelled(db,actor,command);
-      if(cancelled==="cancelled"&&canWriteIsolatedTargetArea(db,actor,command.writeAreaId))
+      if(cancelled==="cancelled"&&(target!==null||
+          canWriteIsolatedTargetArea(db,actor,command.writeAreaId)))
         return "cancelled";
       if(cancelled==="conflict")return "conflict";
       // A tombstone without an EXACT actor-owned fence is NOT evidence of
