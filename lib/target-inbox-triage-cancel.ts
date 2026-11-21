@@ -3,8 +3,8 @@
  * a tombstone or already-stale revision also prevents any future commit.
  * Legacy permanent fences are still checked and never removed.
  */
-import {canWriteIsolatedTargetArea,checkTargetTaskWriteContract,targetStoreRestoreGeneration,
-  targetTaskWriteRevision,targetTaskWriteTarget} from "./target-task-write-preflight";
+import {canWriteIsolatedTargetArea,checkTargetTaskWriteContract,
+  targetStoreRestoreGeneration,targetTaskWriteTarget} from "./target-task-write-preflight";
 import {isTargetStagingSessionTokenHash,lookupLiveTargetStagingSession}
   from "./target-staging-durable-session";
 import {verifiedActor,type TargetStagingReadCredential}
