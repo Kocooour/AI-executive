@@ -42,7 +42,12 @@ import type { FeedItem, TargetChangeFeedPage } from "./target-change-feed-read-m
 import { validFeedClaims, validFeedPosition } from "./target-staging-feed-cursor";
 import type { FeedClaims, FeedPosition } from "./target-staging-feed-cursor";
 
+// Two subprocesses remain the hard CPU/memory budget. Requests arriving while
+// both slots are busy wait briefly in a FIFO queue rather than making a healthy
+// primary view fail due to a transient race across tabs/devices.
 const MAX_CONCURRENT = 2;
+const MAX_CAPACITY_WAITERS = 32;
+const CAPACITY_WAIT_MS = 10_000;
 const TIMEOUT_MS = 20_000;
 const MAX_OUTPUT_BYTES = 1024 * 1024;
 const REVISION = /^[a-f0-9]{64}$/;
@@ -64,15 +69,64 @@ export interface StagingPersonalReadConfig {
 export function createStagingReadRunner(
   startChild: typeof spawn = spawn,
   timeoutMs = TIMEOUT_MS,
-): (config: StagingPersonalReadConfig, scriptName: string, args: string[]) => Promise<unknown | null> {
+  capacityWaitMs = CAPACITY_WAIT_MS,
+  maxWaiters = MAX_CAPACITY_WAITERS,
+): (config: StagingPersonalReadConfig, scriptName: string, args: string[],
+  signal?: AbortSignal) => Promise<unknown | null> {
   let active = 0;
-  return async (config, scriptName, args) => {
-    if (active >= MAX_CONCURRENT) {
-      logStagingFailure("read_child", "concurrency_limit");
-      return null;
+  // Slot ownership passes directly to the oldest waiter; newcomers cannot
+  // overtake it between a child closing and the waiting request resuming.
+  const waiting: Array<() => void> = [];
+  function acquire(signal?: AbortSignal): boolean | Promise<boolean> {
+    if (signal?.aborted) return false;
+    if (active < MAX_CONCURRENT && waiting.length === 0) {
+      active++;
+      return true;
     }
-    active++;
+    if (waiting.length >= maxWaiters) {
+      logStagingFailure("read_child", "capacity_queue_full");
+      return false;
+    }
+    return new Promise<boolean>(resolve => {
+      let settled = false;
+      const cleanup = () => {
+        clearTimeout(timer);
+        signal?.removeEventListener("abort", onAbort);
+        const index = waiting.indexOf(grant);
+        if (index >= 0) waiting.splice(index, 1);
+      };
+      const grant = () => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        // The active slot is inherited, not incremented.
+        resolve(true);
+      };
+      const fail = (timedOut: boolean) => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        if (timedOut) logStagingFailure("read_child", "capacity_wait_timeout");
+        resolve(false);
+      };
+      const onAbort = () => fail(false);
+      const timer = setTimeout(() => fail(true), capacityWaitMs);
+      waiting.push(grant);
+      signal?.addEventListener("abort", onAbort, { once: true });
+      if (signal?.aborted) onAbort();
+    });
+  }
+  function release(): void {
+    const next = waiting.shift();
+    if (next) next();
+    else active--;
+  }
+  return async (config, scriptName, args, signal) => {
+    const entry = acquire(signal);
+    const acquired = typeof entry === "boolean" ? entry : await entry;
+    if (!acquired) return null; // bounded timeout, queue overflow or abort
     try {
+      if (signal?.aborted) return null; // cancelled after FIFO handoff
       const cwd = process.cwd();
       const loader = path.join(cwd, "scripts/target-staging-ts-loader.mjs");
       const script = path.join(cwd, "scripts", scriptName);
@@ -192,7 +246,7 @@ export function createStagingReadRunner(
         });
       });
     } finally {
-      active--;
+      release();
     }
   };
 }
