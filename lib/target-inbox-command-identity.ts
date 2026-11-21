@@ -14,9 +14,22 @@ export type InboxCommandFields={
   writeAreaId:string;restoreGeneration:string;
 };
 const hex64=/^[a-f0-9]{64}$/;
-const secret=():string|null=>{
-  const value=process.env.AI_EXECUTIVE_SESSION_SECRET;
-  return typeof value==="string"&&value.length>=32?value:null;
+/** Only a purpose-derived key enters the isolated Inbox read/write child.
+ * The raw application session secret is never placed in worker environments. */
+export function inboxWorkerProofKey():string|null{
+  const secret=process.env.AI_EXECUTIVE_SESSION_SECRET;
+  if(typeof secret!=="string"||secret.length<32)return null;
+  return createHmac("sha256",secret)
+    .update("lumi:c3a:inbox-worker-key:v1").digest("hex");
+}
+const secret=():Buffer|null=>{
+  // A configured but malformed parent secret must never be bypassed by
+  // a weaker worker key. Workers receive ONLY the derived proof key.
+  const key=process.env.AI_EXECUTIVE_SESSION_SECRET===undefined
+    ?process.env.AI_EXECUTIVE_TARGET_STAGING_INBOX_PROOF_KEY
+    :inboxWorkerProofKey();
+  return typeof key==="string"&&/^[a-f0-9]{64}$/.test(key)
+    ?Buffer.from(key,"hex"):null;
 };
 const signature=(actor:string,fields:Omit<InboxCommandFields,"mode"|"undoOfCommandId">,
   rawPrefix:string):string|null=>{
