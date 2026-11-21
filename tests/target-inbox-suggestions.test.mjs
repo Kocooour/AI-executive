@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   foldInboxMatchText,validInboxSuggestionSnapshot,
   suggestInboxByRules,inboxAIAllowedInput,resolveInboxAIChoice,
+  validInboxAIAllowedInput,validInboxAIChoice,parseInboxAIChoice,
 } from "../lib/target-inbox-suggestions.ts";
 import {completeInboxOpenAIOnly} from "../lib/server-ai-provider.ts";
 
@@ -20,24 +21,43 @@ const snapshot = (overrides = {}) => ({
   ],
   ...overrides,
 });
-const noChanges = {whenOn:"unchanged",projectId:"unchanged",areaId:"unchanged"};
+const noChanges = {whenOn:"unchanged",projectId:"unchanged",
+  taskAreaId:"unchanged",effectiveAreaId:"unchanged"};
 
 test("C-3b rules: stable NFC, case-insensitive whole-word matching without stripping accents",()=>{
   assert.equal(foldInboxMatchText("KUChYŇ"),"kuchyň");
   const s=snapshot({taskTitle:"připravit KUCHYŇ;"});
   assert.deepEqual(suggestInboxByRules(s).changes,
-    {whenOn:"unchanged",projectId:"unchanged",areaId:"kitchen"});
+    {whenOn:"unchanged",projectId:"unchanged",
+      taskAreaId:"kitchen",effectiveAreaId:"kitchen"});
   assert.deepEqual(suggestInboxByRules(snapshot({taskTitle:"kuchyňský nábytek"})).changes,noChanges);
   assert.deepEqual(suggestInboxByRules(snapshot({taskTitle:"Kuchyn"})).changes,noChanges);
   assert.deepEqual(suggestInboxByRules(snapshot()).changes,noChanges,
     "two matching Areas must not be selected by arbitrary order");
 });
 
+test("C-3b full Unicode case folding: German sharp S, NFC, Greek sigma and Cherokee",()=>{
+  assert.equal(foldInboxMatchText("Straße"),foldInboxMatchText("STRASSE"));
+  assert.equal(foldInboxMatchText("café"),foldInboxMatchText("café"));
+  assert.equal(foldInboxMatchText("ΟΣ"),foldInboxMatchText("ος"));
+  assert.equal(foldInboxMatchText("Ꭰ"),foldInboxMatchText("ꭰ"));
+  assert.notEqual(foldInboxMatchText("Kuchyň"),foldInboxMatchText("Kuchyn"),
+    "do not discard diacritics");
+  assert.equal(suggestInboxByRules(snapshot({
+    taskTitle:"připrav STRASSE",
+    privateAreas:[
+      {id:"personal",name:"Osobní",revision:1},
+      {id:"street",name:"Straße",revision:2},
+    ],privateOpenProjects:[],
+  })).changes.taskAreaId,"street");
+});
+
 test("C-3b rules: an exact project match inherits only its authorized private Area",()=>{
   const s=snapshot({taskTitle:"REKONSTRUKCE: připravit nabídky"});
   const result=suggestInboxByRules(s);
   assert.equal(result.source,"rule");
-  assert.deepEqual(result.changes,{whenOn:"unchanged",projectId:"renovation",areaId:"kitchen"});
+  assert.deepEqual(result.changes,{whenOn:"unchanged",projectId:"renovation",
+    taskAreaId:null,effectiveAreaId:"kitchen"});
   assert.match(result.why,/Rekonstrukce/);
   assert.deepEqual(suggestInboxByRules(snapshot({
     taskTitle:"Kuchyň",
@@ -88,11 +108,53 @@ test("C-3b: punctuated or emoji project names remain valid AI candidates but are
   }).changes.projectId,"club");
 });
 
+test("C-3b shared AI validator rejects cross-kind and Unicode-equivalent labels",()=>{
+  const acrossKinds=snapshot({
+    taskTitle:"Oblast Kuchyň",
+    privateOpenProjects:[
+      {id:"same-project",name:"Kuchyň",areaId:"personal",revision:0},
+    ],
+  });
+  const prompt=inboxAIAllowedInput(acrossKinds);
+  assert.equal(validInboxAIAllowedInput(prompt),true);
+  const projectChoice={action:"project",targetName:"Kuchyň",reason:"test"};
+  assert.equal(validInboxAIChoice(prompt,projectChoice),false);
+  assert.equal(parseInboxAIChoice(JSON.stringify(projectChoice),prompt),null);
+  assert.equal(resolveInboxAIChoice(acrossKinds,projectChoice).source,"rule");
+
+  const folded=snapshot({
+    taskTitle:"STRASSE",
+    privateAreas:[
+      {id:"personal",name:"Osobní",revision:1},
+      {id:"street",name:"Straße",revision:0},
+    ],
+    privateOpenProjects:[{id:"road",name:"STRASSE",areaId:"personal",revision:0}],
+  });
+  const foldedPrompt=inboxAIAllowedInput(folded);
+  const foldedChoice={action:"area",targetName:"Straße",reason:"collision"};
+  assert.equal(validInboxAIChoice(foldedPrompt,foldedChoice),false);
+  assert.equal(resolveInboxAIChoice(folded,foldedChoice).source,"rule");
+  assert.deepEqual(suggestInboxByRules(folded).changes,noChanges);
+  assert.equal(validInboxAIAllowedInput({...prompt,metadata:"not permitted"}),false);
+});
+
+test("C-3b AI keep explains its decision independently of rule availability",()=>{
+  const s=snapshot({taskTitle:"Kuchyň"});
+  assert.equal(suggestInboxByRules(s).changes.taskAreaId,"kitchen");
+  const ai=resolveInboxAIChoice(s,{action:"keep",targetName:null,reason:"untrusted provider prose"});
+  assert.equal(ai.source,"ai");
+  assert.deepEqual(ai.changes,noChanges);
+  assert.match(ai.why,/AI doporučila ponechat/);
+  assert.equal(ai.why.includes("untrusted provider prose"),false);
+  assert.equal(ai.why.includes("nebyl nalezen"),false);
+});
+
 test("C-3b AI choices: names must resolve to one allowlisted target only",()=>{
   const s=snapshot({taskTitle:"Do zítřka nákup"});
   assert.deepEqual(resolveInboxAIChoice(s,{
     action:"project",targetName:"Rekonstrukce",reason:"suggestion",
-  }).changes,{whenOn:"unchanged",projectId:"renovation",areaId:"kitchen"});
+  }).changes,{whenOn:"unchanged",projectId:"renovation",
+    taskAreaId:null,effectiveAreaId:"kitchen"});
   for(const targetName of ["Foreign","reKonstrukce",null]) {
     assert.equal(resolveInboxAIChoice(s,{
       action:"project",targetName,reason:"suggestion",
@@ -157,6 +219,7 @@ test("C-3b OpenAI-only ignores AI_PROVIDER=hermes; sends strictly minimized prom
     assert.equal(calls[0].options.signal.aborted,false);
     const payload=JSON.parse(calls[0].options.body);
     assert.equal(payload.model,"test-model");
+    assert.equal(payload.store,false,"prevent OpenAI response-object persistence");
     assert.equal(payload.text.format.type,"json_schema");
     assert.equal(payload.text.format.strict,true);
     assert.deepEqual(JSON.parse(payload.input[1].content),{
@@ -185,6 +248,20 @@ test("C-3b provider rejects out-of-list, ambiguous, malformed and failed respons
     assert.equal(await completeInboxOpenAIOnly(input,new AbortController().signal),null);
     globalThis.fetch=async()=>new Response("{not-json",{status:200});
     assert.equal(await completeInboxOpenAIOnly(input,new AbortController().signal),null);
+    const crossKind={...input,privateOpenProjectNames:["Kuchyň"]};
+    globalThis.fetch=async()=>openAIResponse({
+      action:"project",targetName:"Kuchyň",reason:"cross-kind collision",
+    });
+    assert.equal(await completeInboxOpenAIOnly(crossKind,new AbortController().signal),null);
+    const folded={
+      taskTitle:"check",
+      privateAreaNames:["Straße"],
+      privateOpenProjectNames:["STRASSE"],
+    };
+    globalThis.fetch=async()=>openAIResponse({
+      action:"area",targetName:"Straße",reason:"Unicode fold collision",
+    });
+    assert.equal(await completeInboxOpenAIOnly(folded,new AbortController().signal),null);
     const duplicate={...input,privateOpenProjectNames:["Kuchyň","Kuchyň"]};
     globalThis.fetch=async()=>openAIResponse({
       action:"project",targetName:"Kuchyň",reason:"ambiguous",
