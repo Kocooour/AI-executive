@@ -2,8 +2,7 @@
  * The irreversible fence and Process/Undo share the same pinned BEGIN IMMEDIATE.
  * This is a write operation, never an inference from a read-only missing receipt.
  */
-import {TARGET_STAGING_INBOX_TRIAGE_CANCEL_PREFIX,TARGET_STAGING_MAX_RECEIPTS}
-  from "./target-store-bootstrap";
+import {TARGET_STAGING_MAX_RECEIPTS} from "./target-store-bootstrap";
 import {canWriteIsolatedTargetArea,targetStoreRestoreGeneration,targetTaskWriteTarget}
   from "./target-task-write-preflight";
 import {isTargetStagingSessionTokenHash,lookupLiveTargetStagingSession}
@@ -11,7 +10,7 @@ import {isTargetStagingSessionTokenHash,lookupLiveTargetStagingSession}
 import {verifiedActor,type TargetStagingReadCredential}
   from "./target-task-authenticated-read";
 import {withPinnedTargetStagingWrite} from "./target-staging-pinned-write";
-import {targetInboxTriageCancellationKey,targetInboxTriageCancelled,
+import {targetInboxTriageCancellationShardKeys,targetInboxTriageCancelled,
   targetInboxTriageDigest,targetInboxTriageReceiptKey,validTargetInboxTriageCommand,
   type TargetInboxTriageCommand} from "./target-inbox-triage-writer";
 import type {TargetStagingReadStore} from "./target-task-staging-reader";
@@ -60,16 +59,23 @@ export function cancelPreflightedTargetInboxTriage(
     const prior=targetInboxTriageCancelled(db,actor,command);
     if(prior)return prior==="cancelled"?{ok:true,status:"cancelled"}:
       {ok:false,reason:"idempotency_conflict"};
-    const bucket=targetInboxTriageCancellationKey(actor,command.commandId)
-      .slice(TARGET_STAGING_INBOX_TRIAGE_CANCEL_PREFIX.length,
-        TARGET_STAGING_INBOX_TRIAGE_CANCEL_PREFIX.length+65);
-    const total=db.prepare("SELECT COUNT(*) AS n FROM metadata WHERE key LIKE ?")
-      .get(TARGET_STAGING_INBOX_TRIAGE_CANCEL_PREFIX+bucket+"%") as {n:number};
-    if(!Number.isSafeInteger(total.n)||total.n>=TARGET_STAGING_MAX_RECEIPTS||
-        !context.stillPinned()||!context.noSidecars()||!sessionLive())return failed();
+    // Keep all earlier permanent fences. Once one actor/shard has 4096
+    // commands, narrow the receipt-hash partition rather than failing every
+    // subsequent cancellation or deleting a fence a late POST may still need.
+    // The 64-hex terminal shard is unique to this command (already checked
+    // above), so it cannot be full. Prefix-range probes use metadata's PK.
+    const count=db.prepare("SELECT COUNT(*) AS n FROM metadata WHERE key>=? AND key<?");
+    let selected:string|null=null;
+    for(const key of targetInboxTriageCancellationShardKeys(actor,command.commandId)){
+      const prefix=key.slice(0,-64);
+      const row=count.get(prefix,prefix+"g") as {n:number};
+      if(!Number.isSafeInteger(row.n))return failed();
+      if(row.n<TARGET_STAGING_MAX_RECEIPTS){selected=key;break;}
+    }
+    if(!selected||!context.stillPinned()||!context.noSidecars()||!sessionLive())
+      return failed();
     db.prepare("INSERT INTO metadata(key,value) VALUES (?,?)").run(
-      targetInboxTriageCancellationKey(actor,command.commandId),
-      targetInboxTriageDigest(command));
+      selected,targetInboxTriageDigest(command));
     if(!sessionLive())return {ok:false,reason:"session_revoked"};
     return context.commit({kind:"task_triage",payload:{cancel:1}})
       ?{ok:true,status:"cancelled"}:failed();
