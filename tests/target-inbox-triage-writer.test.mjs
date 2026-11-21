@@ -8,12 +8,17 @@ import {test,after} from "node:test";
 
 const root=mkdtempSync(path.join(os.tmpdir(),"lumi-c3a-triage-writer-"));
 const legacy=path.join(root,"legacy");mkdirSync(legacy);
-const beforeEnv=process.env.AI_EXECUTIVE_DATA_DIR;process.env.AI_EXECUTIVE_DATA_DIR=legacy;
+const beforeEnv=process.env.AI_EXECUTIVE_DATA_DIR;
+const beforeSecret=process.env.AI_EXECUTIVE_SESSION_SECRET;
+process.env.AI_EXECUTIVE_DATA_DIR=legacy;
+process.env.AI_EXECUTIVE_SESSION_SECRET="test-c3a-authority-signing-secret-32-bytes-minimum";
 const {bootstrapIsolatedTargetStore}=await import("../lib/target-store-bootstrap.ts");
 const {TargetStagingSessionAuthority}=await import("../lib/target-staging-session-authority.ts");
 const {inspectIsolatedTargetStore}=await import("../lib/target-store-preflight.ts");
 const {validTargetInboxTriageCommand,readTargetInboxTriageReceipt}=
   await import("../lib/target-inbox-triage-writer.ts");
+const {issueTargetInboxRevision,issueTargetInboxCommandId}=
+  await import("../lib/target-inbox-command-identity.ts");
 const fixtures=[];
 function fixture(){
   const stage=bootstrapIsolatedTargetStore({stagingDirectory:path.join(root,randomUUID()),ownerUserId:"alice"});
@@ -35,23 +40,40 @@ function fixture(){
   db.prepare("INSERT INTO tasks(id,area_id,title) VALUES ('shared','team-area','Shared task')").run();
   const store={stagingDirectory:stage.directory,expectedRestoreGeneration:stage.restoreGeneration};
   const authority=new TargetStagingSessionAuthority(store);
-  const fx={stage,db,store,authority};
+  const tokenActors=new Map();
+  for(const method of ["issueWritable","issue"]){
+    const issue=authority[method].bind(authority);
+    authority[method]=(actor,...args)=>{
+      const result=issue(actor,...args);
+      if(result?.sessionToken)tokenActors.set(result.sessionToken,actor);
+      return result;
+    };
+  }
+  const fx={stage,db,store,authority,tokenActors};
   fixtures.push(fx);return fx;
 }
 after(()=>{
   for(const fx of fixtures){fx.authority.close();fx.db.close();}
   if(beforeEnv===undefined)delete process.env.AI_EXECUTIVE_DATA_DIR;
   else process.env.AI_EXECUTIVE_DATA_DIR=beforeEnv;
+  if(beforeSecret===undefined)delete process.env.AI_EXECUTIVE_SESSION_SECRET;
+  else process.env.AI_EXECUTIVE_SESSION_SECRET=beforeSecret;
   rmSync(root,{recursive:true,force:true});
 });
-function command(fx,token,taskId,mode="process",original=null,id=randomUUID()){
+function command(fx,token,taskId,mode="process",original=null,id=null){
   const preview=fx.authority.previewTaskTitleEdit(token,{taskId});
   assert.equal(preview.ok,true,JSON.stringify(preview));
+  const actor=fx.tokenActors.get(token);
+  assert.ok(actor,"a command must originate from a known issued session");
   const row=fx.db.prepare("SELECT triage_revision,COALESCE(t.area_id,p.area_id) AS area FROM tasks t LEFT JOIN projects p ON p.id=t.project_id WHERE t.id=?")
     .get(taskId);
-  return {commandId:id,taskId,mode,undoOfCommandId:original,
-    expectedRevision:preview.snapshotRevision,expectedTriageRevision:row.triage_revision,
+  const fields={taskId,mode,undoOfCommandId:original,
+    expectedRevision:issueTargetInboxRevision(fx.db,actor,taskId,row.triage_revision,
+      row.area,fx.stage.restoreGeneration),
+    expectedTriageRevision:row.triage_revision,
     writeAreaId:row.area,restoreGeneration:fx.stage.restoreGeneration};
+  assert.ok(fields.expectedRevision);
+  return {...fields,commandId:id??issueTargetInboxCommandId(fields)};
 }
 const denied=reason=>({ok:false,reason});
 const read=(fx,id)=>fx.db.prepare(
