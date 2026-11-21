@@ -430,7 +430,10 @@ test("C-3a: lost Process + concurrent title edit cancels old UUID and unlocks fr
       return response.status;
     },original.command);
     expect(lateStatus).toBe(409);
+    const close=page.getByRole("button",{name:"Zavřít a obnovit"});
+    if(await close.isVisible())await close.click();
     await findInboxRow(page,seeded.taskId);
+    await expect(row(page,seeded.taskId)).toContainText(freshTitle,{timeout:15000});
     await processAction(page,freshTitle).click();
     await expect(page.getByRole("button",{name:"Vrátit do Inboxu (Undo)"}))
       .toBeVisible({timeout:15000});
