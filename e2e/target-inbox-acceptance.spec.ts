@@ -397,24 +397,18 @@ test("C-3a: lost Process + concurrent title edit cancels old UUID and unlocks fr
     db.prepare("UPDATE tasks SET title=? WHERE id=?").run(freshTitle,seeded.taskId);
     changed=true;
 
-    // A same-UUID replay MUST reject stale CAS, and the read-only receipt
-    // alone still cannot prove that an original POST won't arrive later.
+    // Exact same-UUID replay rejects stale CAS. A pinned read verifies no
+    // committed receipt and that the monotonic CAS can never match again:
+    // the browser can retire it without any permanent negative UUID row.
     await page.getByRole("button",{name:"Opakovat původní příkaz"}).click();
-    await expect(page.getByRole("button",{name:"Bezpečně ukončit původní příkaz"}))
-      .toBeVisible({timeout:15000});
     expect(commands).toHaveLength(2);
     expect(commands[1]).toEqual(commands[0]);
-    expect((await page.evaluate(()=>
-      sessionStorage.getItem("lumi:target-inbox-command:v1")))).toContain(
-        original.command.commandId);
-
-    await page.getByRole("button",{name:"Bezpečně ukončit původní příkaz"}).click();
     await expect.poll(async()=>await page.evaluate(()=>
       sessionStorage.getItem("lumi:target-inbox-command:v1")),
       {timeout:20000}).toBeNull();
     const fenced=(db.prepare("SELECT COUNT(*) AS n FROM metadata WHERE key LIKE ?")
       .get("r3:inbox-triage-cancel-v1:%") as {n:number}).n;
-    expect(fenced).toBeGreaterThan(0);
+    expect(fenced).toBe(0,"no indefinite actor+UUID ledger after stale-CAS recovery");
     const receipts=(db.prepare("SELECT COUNT(*) AS n FROM task_triage_receipts WHERE task_id=?")
       .get(seeded.taskId) as {n:number}).n;
     expect(receipts).toBe(receiptsBefore); // old UUID added no Process receipt
