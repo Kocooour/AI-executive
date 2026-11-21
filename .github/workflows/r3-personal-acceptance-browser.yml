@@ -19,6 +19,7 @@ on:
       - "e2e/target-personal-store-setup.mjs"
       - "tests/target-personal-profile.test.mjs"
       - "tests/target-app-fetch.test.mjs"
+      - "tests/target-read-queue.test.mjs"
       - "tests/target-personal-native-bfcache-gate.test.mjs"
       - "playwright.config.ts"
       - "e2e/fixtures.ts"
