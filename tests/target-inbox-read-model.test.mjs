@@ -8,7 +8,9 @@ import { DatabaseSync } from "node:sqlite";
 const root=mkdtempSync(path.join(os.tmpdir(),"lumi-c3a-inbox-read-"));
 const legacy=path.join(root,"legacy");mkdirSync(legacy);
 const previous=process.env.AI_EXECUTIVE_DATA_DIR;
+const previousSecret=process.env.AI_EXECUTIVE_SESSION_SECRET;
 process.env.AI_EXECUTIVE_DATA_DIR=legacy;
+process.env.AI_EXECUTIVE_SESSION_SECRET="test-c3a-read-model-signing-secret-32-bytes-minimum";
 const {bootstrapIsolatedTargetStore}=await import("../lib/target-store-bootstrap.ts");
 const {TARGET_INBOX_BACKFILL_SQL}=await import("../lib/target-inbox-schema.ts");
 const {readAuthorizedTargetInboxPage}=
@@ -49,6 +51,8 @@ after(()=>{
   reader.close();db.close();
   if(previous===undefined)delete process.env.AI_EXECUTIVE_DATA_DIR;
   else process.env.AI_EXECUTIVE_DATA_DIR=previous;
+  if(previousSecret===undefined)delete process.env.AI_EXECUTIVE_SESSION_SECRET;
+  else process.env.AI_EXECUTIVE_SESSION_SECRET=previousSecret;
   rmSync(root,{recursive:true,force:true});
 });
 
