@@ -8,7 +8,7 @@ import type {HomeSummaryAreaEpoch} from "./target-my-plan-home-summary";
 
 export type InboxWriteReply={ok:true;replayed?:true}|{ok:false;reason:
   "unavailable"|"resync_required"|"write_area_mismatch"|"session_revoked"|
-  "stale_revision"|"idempotency_conflict"|"write_failed"};
+  "stale_revision"|"idempotency_conflict"|"write_failed"|"cancelled"};
 export type InboxReceiptReply={
   ok:true;status:"committed"|"not_recorded"|"cancelled"|"conflict";
   next:{expectedRevision:string;triageRevision:number;writeAreaId:string}|null;
@@ -24,7 +24,7 @@ export function parseInboxWriteReply(raw:unknown):InboxWriteReply|null{
     return {ok:true,replayed:true};
   if(v.ok===false&&keys==="ok,reason"&&[
     "unavailable","resync_required","write_area_mismatch","session_revoked",
-    "stale_revision","idempotency_conflict","write_failed",
+    "stale_revision","idempotency_conflict","write_failed","cancelled",
   ].includes(v.reason as string))return {ok:false,reason:v.reason as
     Extract<InboxWriteReply,{ok:false}>["reason"]};
   return null;
