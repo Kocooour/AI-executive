@@ -3,6 +3,7 @@ import { spawn } from "node:child_process";
 import path from "node:path";
 import type { StagingPersonalReadConfig } from "./target-staging-read-process";
 import {projectTitleWorkerProofKey} from "./target-project-title-identity";
+import {inboxWorkerProofKey} from "./target-inbox-command-identity";
 import type { TargetStagingTaskTitleWriteRequest } from "./target-task-staging-writer";
 import type { TargetStagingTaskDeleteRequest } from "./target-task-delete-writer";
 
@@ -137,6 +138,9 @@ async function run(config: StagingPersonalReadConfig, scriptName: string,
             // to that worker, never the application's session signing secret.
             ...(scriptName === "target-staging-project-title-write-child.mjs"
               ? {AI_EXECUTIVE_TARGET_STAGING_PROJECT_TITLE_PROOF_KEY: projectTitleWorkerProofKey() || ""}
+              : {}),
+            ...(scriptName.startsWith("target-staging-inbox-")
+              ? {AI_EXECUTIVE_TARGET_STAGING_INBOX_PROOF_KEY:inboxWorkerProofKey()||""}
               : {}),
           },
         });
