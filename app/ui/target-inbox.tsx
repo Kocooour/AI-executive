@@ -364,7 +364,7 @@ export default function TargetInbox({language="cs",taskDetail=false}:{language?:
         decision.stage==="cancelled"?speak(
           "Původní příkaz byl bezpečně ukončen. Případný opožděný zápis už nemůže proběhnout.",
           "The original command was safely cancelled; no late write can commit."):
-        decision.stage==="conflict"?speak("Konflikt revize nebo oprávnění. Načtěte aktuální stav.","Revision or access conflict. Refresh the current state."): 
+        decision.stage==="conflict"?speak("Konflikt revize nebo oprávnění. Načtěte aktuální stav.","Revision or access conflict. Refresh the current state."):
         decision.stage==="denied"?speak("Přístup byl odebrán. Změna není potvrzena.","Access revoked. Change not confirmed."):
         decision.stage==="undone"?speak("Úkol byl vrácen do Inboxu.","Task returned to Inbox."):
         decision.stage==="undo-ready"&&!decision.next?speak(
