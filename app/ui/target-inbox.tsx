@@ -204,6 +204,12 @@ export default function TargetInbox({language="cs",taskDetail=false}:{language?:
       setDecision({command,title,processId,
         stage:command.mode==="undo"?"undone":"undo-ready",next:check.next});
       emitTargetChange({kind:"task",id:command.taskId,change:"updated"});
+     }else if(check.ok===true&&check.status==="cancelled"&&
+        command.mode==="undo"&&check.next){
+      // The old Undo is irrevocably stale, but cancellation-only lineage
+      // permits one new signed Undo with a distinct self-bound UUID.
+      setDecision({command,title,processId,stage:"undo-ready",next:check.next});
+      emitTargetChange({kind:"task",id:command.taskId,change:"updated"});
     }else if(check.ok===true&&check.status==="cancelled"){
       // A pinned, irreversible cancellation fence is terminal even if the
       // original POST appears later. It cannot commit after this point.
@@ -265,7 +271,11 @@ export default function TargetInbox({language="cs",taskDetail=false}:{language?:
     try{
       const result=await cancelInboxCommand(command);
       if(!commandCurrent(command))return;
-      if(result.ok===true&&result.status==="cancelled"){
+      if(result.ok===true&&result.status==="cancelled"&&command.mode==="undo"){
+        // Read the exact cancelled Undo receipt for a fresh, actor-authorized
+        // replacement witness. Any failure keeps the original UUID uncertain.
+        await confirm(command,title,processId);
+      }else if(result.ok===true&&result.status==="cancelled"){
         // Only this durable server proof may retire the original UUID. A
         // missing read-only receipt or stale CAS is NOT terminal evidence.
         setDecision({command,title,processId,stage:"cancelled",next:null});
@@ -383,6 +393,9 @@ export default function TargetInbox({language="cs",taskDetail=false}:{language?:
         decision.stage==="conflict"?speak("Konflikt revize nebo oprávnění. Načtěte aktuální stav.","Revision or access conflict. Refresh the current state."):
         decision.stage==="denied"?speak("Přístup byl odebrán. Změna není potvrzena.","Access revoked. Change not confirmed."):
         decision.stage==="undone"?speak("Úkol byl vrácen do Inboxu.","Task returned to Inbox."):
+        decision.stage==="undo-ready"&&decision.command.mode==="undo"&&decision.next?speak(
+          "Původní Undo bylo bezpečně zrušeno. Úkol lze nyní znovu vrátit do Inboxu.",
+          "The original Undo was cancelled safely. You may now return the task to Inbox."):
         decision.stage==="undo-ready"&&!decision.next?speak(
           "Zpracování bylo potvrzeno. Po novější změně úkolu už Undo není dostupné.",
           "Processing was confirmed. Undo is unavailable after a newer task change."):
