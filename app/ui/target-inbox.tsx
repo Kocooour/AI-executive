@@ -14,6 +14,7 @@ import {inboxUncertainSnapshot,subscribeInboxUncertain} from "../../lib/target-d
 import {refusalBudgetFor} from "../../lib/target-refusal-budget";
 import {
   fetchTargetInbox,sendInboxCommand,verifyInboxCommand,cancelInboxCommand,
+  issueInboxClientCommandId,
   type InboxClientCommand,type InboxClientPage,type InboxClientFailure,
 } from "../../lib/target-inbox-client";
 import type {TargetInboxItem} from "../../lib/target-inbox-client-types";
@@ -282,28 +283,38 @@ export default function TargetInbox({language="cs",taskDetail=false}:{language?:
       }
     }finally{inFlight.current=false;}
   }
-  function process(item:TargetInboxItem){
+  async function process(item:TargetInboxItem){
     if(inFlight.current||decision&&["sending","verifying","uncertain","not-recorded"].includes(decision.stage)||
         !page||!item.canProcess||!item.expectedRevision)return;
-    const command:InboxClientCommand={
-      commandId:crypto.randomUUID(),taskId:item.id,mode:"process",
-      undoOfCommandId:null,expectedRevision:item.expectedRevision,
+    inFlight.current=true;
+    const fields:Omit<InboxClientCommand,"commandId">={
+      taskId:item.id,mode:"process",undoOfCommandId:null,
+      expectedRevision:item.expectedRevision,
       expectedTriageRevision:item.triageRevision,writeAreaId:item.effectiveAreaId,
       restoreGeneration:page.restoreGeneration,
     };
+    const commandId=await issueInboxClientCommandId(fields);
+    inFlight.current=false;
+    if(!commandId){setRecoveryFailed(true);return;}
+    const command:InboxClientCommand={commandId,...fields};
     void submit(command,item.title,command.commandId);
   }
-  function undo(){
+  async function undo(){
     if(inFlight.current||!decision||decision.stage!=="undo-ready"||!decision.next||
         !page)return;
-    const command:InboxClientCommand={
-      commandId:crypto.randomUUID(),taskId:decision.command.taskId,mode:"undo",
+    inFlight.current=true;
+    const fields:Omit<InboxClientCommand,"commandId">={
+      taskId:decision.command.taskId,mode:"undo",
       undoOfCommandId:decision.processId,
       expectedRevision:decision.next.expectedRevision,
       expectedTriageRevision:decision.next.triageRevision,
       writeAreaId:decision.next.writeAreaId,
       restoreGeneration:decision.command.restoreGeneration,
     };
+    const commandId=await issueInboxClientCommandId(fields);
+    inFlight.current=false;
+    if(!commandId){setRecoveryFailed(true);return;}
+    const command:InboxClientCommand={commandId,...fields};
     void submit(command,decision.title,decision.processId);
   }
   async function recheck(){
