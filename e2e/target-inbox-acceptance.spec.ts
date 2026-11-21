@@ -408,7 +408,7 @@ test("C-3a: lost Process + concurrent title edit cancels old UUID and unlocks fr
       {timeout:20000}).toBeNull();
     const fenced=(db.prepare("SELECT COUNT(*) AS n FROM metadata WHERE key LIKE ?")
       .get("r3:inbox-triage-cancel-v1:%") as {n:number}).n;
-    expect(fenced).toBe(0,"no indefinite actor+UUID ledger after stale-CAS recovery");
+    expect(fenced).toBe(0); // No permanent actor+UUID ledger after stale-CAS recovery.
     const receipts=(db.prepare("SELECT COUNT(*) AS n FROM task_triage_receipts WHERE task_id=?")
       .get(seeded.taskId) as {n:number}).n;
     expect(receipts).toBe(receiptsBefore); // old UUID added no Process receipt
