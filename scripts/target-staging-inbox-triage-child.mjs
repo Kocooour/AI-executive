@@ -28,7 +28,7 @@ try {
     const result=authority.changeInboxTriage(issued.sessionToken,command,resolved.sessionTokenHash);
     if(result.ok)process.stdout.write(JSON.stringify(result.replayed?{ok:true,replayed:true}:{ok:true}));
     else if(["unavailable","resync_required","write_area_mismatch","session_revoked",
-      "stale_revision","idempotency_conflict","write_failed"].includes(result.reason))
+      "stale_revision","idempotency_conflict","write_failed","cancelled"].includes(result.reason))
       process.stdout.write(JSON.stringify({ok:false,reason:result.reason}));
     else throw Error("unavailable");
   }finally{authority.close();}
