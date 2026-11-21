@@ -1,3 +1,6 @@
+import {parseInboxAIChoice,validInboxAIAllowedInput} from "./target-inbox-suggestions";
+import type {InboxAIAllowedInput,InboxAIChoice} from "./target-inbox-suggestions";
+
 export interface ServerAIResult {
   message: string;
   provider: "hermes" | "openai" | "local";
@@ -82,40 +85,14 @@ export async function completeServerAI(prompt: string): Promise<ServerAIResult |
  * management, an authorization mechanism, a cache, or a suggestion token.
  *
  * Unlike completeServerAI(), this can NEVER dispatch to Hermes/local. It does
- * not log private content or keep the AI response after returning. Remote
- * provider retention is independent and must be disclosed in release docs.
+ * not log private content or keep the AI response after returning. Explicit store:false disables response-object storage; it does not guarantee
+ * zero provider-side safety/abuse retention. Disclose provider policy in docs.
  */
-export interface InboxOpenAIOnlyInput {
-  readonly taskTitle: string;
-  readonly privateAreaNames: readonly string[];
-  readonly privateOpenProjectNames: readonly string[];
-}
-export type InboxOpenAIOnlyChoice = {
-  readonly action: "keep" | "area" | "project";
-  readonly targetName: string | null;
-  readonly reason: string;
-};
+/** Alias to the shared, privacy-limited Inbox suggestion contract. */
+export type InboxOpenAIOnlyInput = InboxAIAllowedInput;
+export type InboxOpenAIOnlyChoice = InboxAIChoice;
 
-const INBOX_AI_MAX_NAMES = 128;
-const INBOX_AI_MAX_TITLE_BYTES = 4096;
-const INBOX_AI_MAX_NAME_BYTES = 512;
-const INBOX_AI_MAX_OUTPUT_BYTES = 8192;
 const INBOX_AI_TIMEOUT_MS = 8_000;
-
-/** Explicit input allowlist: no IDs, session, notes, email, metadata or shared data. */
-function validInboxAIInput(input: InboxOpenAIOnlyInput): boolean {
-  if (!input || typeof input.taskTitle !== "string" ||
-      !input.taskTitle.trim() || Buffer.byteLength(input.taskTitle,"utf8") > INBOX_AI_MAX_TITLE_BYTES ||
-      !Array.isArray(input.privateAreaNames) ||
-      !Array.isArray(input.privateOpenProjectNames) ||
-      input.privateAreaNames.length > INBOX_AI_MAX_NAMES ||
-      input.privateOpenProjectNames.length > INBOX_AI_MAX_NAMES) return false;
-  return [...input.privateAreaNames,...input.privateOpenProjectNames].every(
-    name => typeof name === "string" && name.length > 0 &&
-      name.trim() === name && Buffer.byteLength(name,"utf8") <= INBOX_AI_MAX_NAME_BYTES &&
-      !/[\u0000-\u001f\u007f]/u.test(name),
-  );
-}
 
 const INBOX_AI_RESPONSE_SCHEMA = {
   type: "object",
@@ -128,32 +105,6 @@ const INBOX_AI_RESPONSE_SCHEMA = {
   },
 } as const;
 
-function parseInboxAIChoice(
-  text: string, input: InboxOpenAIOnlyInput,
-): InboxOpenAIOnlyChoice | null {
-  if (!text || Buffer.byteLength(text,"utf8") > INBOX_AI_MAX_OUTPUT_BYTES) return null;
-  let value: unknown;
-  try { value = JSON.parse(text); } catch { return null; }
-  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
-  const item = value as Record<string,unknown>;
-  if (Object.keys(item).sort().join(",") !== "action,reason,targetName" ||
-      !["keep","area","project"].includes(String(item.action)) ||
-      typeof item.reason !== "string" || item.reason.length > 240 ||
-      /[\u0000-\u001f\u007f]/u.test(item.reason)) return null;
-  const action = item.action as InboxOpenAIOnlyChoice["action"];
-  if (action === "keep")
-    return item.targetName === null ? {action,targetName:null,reason:item.reason} : null;
-  if (typeof item.targetName !== "string") return null;
-  // A name is accepted ONLY when unique in the entire actor-private allowlist.
-  // Distinct IDs sharing the same name cannot be disambiguated by AI.
-  const allNames = [...input.privateAreaNames,...input.privateOpenProjectNames];
-  if (allNames.filter(name => name === item.targetName).length !== 1) return null;
-  const authorizedNames = action === "area" ? input.privateAreaNames
-    : input.privateOpenProjectNames;
-  if (!authorizedNames.includes(item.targetName)) return null;
-  return {action,targetName:item.targetName,reason:item.reason};
-}
-
 /**
  * Caller-owned AbortSignal + independent ~8s cap. A failed OpenAI call returns
  * null; the caller's ONLY fallback is its local deterministic rule engine.
@@ -163,7 +114,7 @@ export async function completeInboxOpenAIOnly(
   input: InboxOpenAIOnlyInput,
   callerSignal: AbortSignal,
 ): Promise<InboxOpenAIOnlyChoice | null> {
-  if (!validInboxAIInput(input) || !(callerSignal instanceof AbortSignal) ||
+  if (!validInboxAIAllowedInput(input) || !(callerSignal instanceof AbortSignal) ||
       callerSignal.aborted) return null;
   const key = process.env.OPENAI_API_KEY?.trim();
   if (!key) return null;
@@ -178,6 +129,9 @@ export async function completeInboxOpenAIOnly(
       },
       body:JSON.stringify({
         model:process.env.OPENAI_MODEL || "gpt-5-mini",
+        // One-shot classification: do not persist response objects at OpenAI.
+        // This does NOT guarantee zero provider-side abuse/safety logs.
+        store:false,
         input:[
           {role:"system",content:"Classify the task against the listed private Area or open private project NAMES only. Return keep/area/project and an exact supplied targetName, or null for keep. Never invent names. Return only the prescribed JSON."},
           {role:"user",content:JSON.stringify({
