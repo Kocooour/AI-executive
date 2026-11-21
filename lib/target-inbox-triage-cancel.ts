@@ -3,7 +3,7 @@
  * a tombstone or already-stale revision also prevents any future commit.
  * Legacy permanent fences are still checked and never removed.
  */
-import {checkTargetTaskWriteContract,targetStoreRestoreGeneration,
+import {canWriteIsolatedTargetArea,checkTargetTaskWriteContract,targetStoreRestoreGeneration,
   targetTaskWriteRevision,targetTaskWriteTarget} from "./target-task-write-preflight";
 import {isTargetStagingSessionTokenHash,lookupLiveTargetStagingSession}
   from "./target-staging-durable-session";
@@ -42,7 +42,15 @@ export function cancelPreflightedTargetInboxTriage(
     // Never insert a cancellation for an arbitrary ID merely because its
     // claimed Area is writable. Live task or immutable tombstone ACL is needed.
     const target=targetTaskWriteTarget(db,actor,command.taskId);
-    if(!target)return denied();
+    if(!target){
+      // Historical draft fences could be written for a missing task using
+      // original-Area ACL alone. Only acknowledge an EXISTING exact fence,
+      // preserving its old UUID/digest, without ever allocating another row.
+      if(!canWriteIsolatedTargetArea(db,actor,command.writeAreaId))return denied();
+      const old=targetInboxTriageCancelled(db,actor,command);
+      return old==="cancelled"?{ok:true,status:"cancelled"}:
+        old==="conflict"?{ok:false,reason:"idempotency_conflict"}:denied();
+    }
     const receipt=db.prepare(
       "SELECT request_digest,actor_user_id,task_id FROM task_triage_receipts WHERE receipt_key=?"
     ).get(targetInboxTriageReceiptKey(actor,command.commandId)) as
