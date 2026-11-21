@@ -83,7 +83,7 @@ export function clearInboxRefusedAfterSession(
 
 export type InboxDecision={
   command:InboxClientCommand;title:string;processId:string;
-  stage:"sending"|"verifying"|"uncertain"|"not-recorded"|"undo-ready"|"conflict"|"denied"|"undone";
+  stage:"sending"|"verifying"|"uncertain"|"not-recorded"|"undo-ready"|"conflict"|"cancelled"|"denied"|"undone";
   next:{expectedRevision:string;triageRevision:number;writeAreaId:string}|null;
 };
 type ScopedDecision={runtime:TargetClientRuntime;generation:string;
