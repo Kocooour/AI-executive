@@ -9,9 +9,11 @@ export type InboxClientPage={
 };
 export type InboxClientRead={ok:true;value:InboxClientPage}|{ok:false;reason:InboxClientFailure};
 export type InboxClientWrite={ok:true}|{ok:false;reason:"conflict"|"signed-out"|"uncertain"|"feature-off"};
-export type InboxClientReceipt={ok:true;status:"committed"|"not_recorded";
+export type InboxClientReceipt={ok:true;status:"committed"|"not_recorded"|"cancelled";
   next:{expectedRevision:string;triageRevision:number;writeAreaId:string}|null}
   |{ok:false;reason:InboxClientFailure};
+export type InboxClientCancel={ok:true;status:"cancelled"|"committed"}|
+  {ok:false;reason:InboxClientFailure};
 export type InboxClientCommand={
   commandId:string;taskId:string;mode:TargetInboxTriageMode;
   undoOfCommandId:string|null;expectedRevision:string;expectedTriageRevision:number;
@@ -116,6 +118,25 @@ export async function sendInboxCommand(
     });
   }catch{return {ok:false,reason:"uncertain"};}
 }
+/** Explicit actor-authorized cancellation, serialized with Process/Undo under
+ * the same pinned SQLite write lock. Never treat a timeout as success. */
+export async function cancelInboxCommand(command:InboxClientCommand):Promise<InboxClientCancel>{
+  if(!validCommand(command))return {ok:false,reason:"unavailable"};
+  try{
+    return await commandDeadline<InboxClientCancel>(async signal=>{
+      const response=await postCommand("/api/target-staging/inbox/cancel",command,signal);
+      if(!response.ok)return {ok:false,reason:failure(response.status)};
+      const body:unknown=await response.json();
+      if(!body||typeof body!=="object"||Array.isArray(body))
+        return {ok:false,reason:"unavailable"};
+      const v=body as Record<string,unknown>;
+      if(Object.keys(v).sort().join(",")!=="ok,status"||v.ok!==true||
+          (v.status!=="cancelled"&&v.status!=="committed"))
+        return {ok:false,reason:"unavailable"};
+      return {ok:true,status:v.status};
+    });
+  }catch{return {ok:false,reason:"unavailable"};}
+}
 export async function verifyInboxCommand(
   command:InboxClientCommand,
 ):Promise<InboxClientReceipt>{
@@ -128,7 +149,8 @@ export async function verifyInboxCommand(
     if(!body||typeof body!=="object"||Array.isArray(body))return {ok:false,reason:"unavailable"};
     const x=body as Record<string,unknown>;
     if(Object.keys(x).sort().join(",")!=="next,ok,status"||x.ok!==true||
-        (x.status!=="committed"&&x.status!=="not_recorded"))return {ok:false,reason:"unavailable"};
+        (x.status!=="committed"&&x.status!=="not_recorded"&&x.status!=="cancelled"))
+      return {ok:false,reason:"unavailable"};
     let next:Extract<InboxClientReceipt,{ok:true}>["next"]=null;
     if(x.next!==null){
       if(x.status!=="committed"||!x.next||typeof x.next!=="object"||Array.isArray(x.next))
