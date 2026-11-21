@@ -27,26 +27,139 @@ function fakeChild() {
   return child;
 }
 
-test("two child slots are shared; third read fails closed and a freed slot recovers", async () => {
+const tick = () => new Promise(resolve => setImmediate(resolve));
+
+test("two read children remain the hard limit; a third waits for a freed slot", async () => {
   const children = [];
   const run = createStagingReadRunner(() => {
     const child = fakeChild();
     children.push(child);
     return child;
-  }, 1_000);
+  }, 1_000, 1_000);
   const first = run(config, "target-staging-detail-child.mjs", ["one"]);
   const second = run(config, "target-staging-read-child.mjs", ["1", "0"]);
-  assert.equal(children.length, 2);
-  assert.equal(await run(config, "target-staging-detail-child.mjs", ["three"]), null);
-  assert.equal(children.length, 2, "over capacity must not spawn");
+  const third = run(config, "target-staging-detail-child.mjs", ["three"]);
+  assert.equal(children.length, 2, "over capacity must queue, never spawn");
   children[0].finish({ ok: true });
   assert.deepEqual(await first, { ok: true });
-  const recovered = run(config, "target-staging-detail-child.mjs", ["three"]);
-  assert.equal(children.length, 3);
+  await tick();
+  assert.equal(children.length, 3, "a waiter automatically takes the slot");
   children[1].finish({ ok: false });
   children[2].finish({ ok: true, recovered: true });
   assert.deepEqual(await second, { ok: false });
-  assert.deepEqual(await recovered, { ok: true, recovered: true });
+  assert.deepEqual(await third, { ok: true, recovered: true });
+});
+
+test("capacity handoff is FIFO and preserves exactly two physical child slots", async () => {
+  const children = [];
+  const scripts = [];
+  const run = createStagingReadRunner((_command, args) => {
+    scripts.push(args.at(-1));
+    const child = fakeChild();
+    children.push(child);
+    return child;
+  }, 1_000, 1_000);
+  const pending = ["a", "b", "c", "d", "e"].map(name =>
+    run(config, "target-staging-detail-child.mjs", [name]));
+  assert.deepEqual(scripts, ["a", "b"]);
+  children[0].finish({ ok: true });
+  await tick();
+  assert.deepEqual(scripts, ["a", "b", "c"]);
+  children[1].finish({ ok: true });
+  await tick();
+  assert.deepEqual(scripts, ["a", "b", "c", "d"]);
+  children[2].finish({ ok: true });
+  await tick();
+  assert.deepEqual(scripts, ["a", "b", "c", "d", "e"]);
+  children[3].finish({ ok: true });
+  children[4].finish({ ok: true });
+  assert.equal((await Promise.all(pending)).length, 5);
+});
+
+test("queue overflow and bounded wait fail closed, then recover without leaking capacity", async () => {
+  const logs = [];
+  const original = console.error;
+  console.error = (...parts) => logs.push(parts.join(" "));
+  try {
+    const children = [];
+    const run = createStagingReadRunner(() => {
+      const child = fakeChild();
+      children.push(child);
+      return child;
+    }, 1_000, 15, 1);
+    const first = run(config, "target-staging-detail-child.mjs", ["a"]);
+    const second = run(config, "target-staging-detail-child.mjs", ["b"]);
+    const waiting = run(config, "target-staging-detail-child.mjs", ["c"]);
+    assert.equal(await run(config, "target-staging-detail-child.mjs", ["overflow"]), null);
+    assert.equal(await waiting, null, "wait budget must be finite");
+    assert.equal(children.length, 2, "no third child on saturation");
+    assert.ok(logs.some(line => line.includes("reason=capacity_queue_full")));
+    assert.ok(logs.some(line => line.includes("reason=capacity_wait_timeout")));
+    children[0].finish({ ok: true });
+    assert.deepEqual(await first, { ok: true });
+    const recovered = run(config, "target-staging-detail-child.mjs", ["recovered"]);
+    assert.equal(children.length, 3);
+    children[1].finish({ ok: true });
+    children[2].finish({ ok: true });
+    await Promise.all([second, recovered]);
+  } finally { console.error = original; }
+});
+
+test("an aborted waiter never spawns and the next waiter retains FIFO order", async () => {
+  const children = [];
+  const scripts = [];
+  const run = createStagingReadRunner((_command, args) => {
+    scripts.push(args.at(-1));
+    const child = fakeChild();
+    children.push(child);
+    return child;
+  }, 1_000, 1_000);
+  const first = run(config, "target-staging-detail-child.mjs", ["a"]);
+  const second = run(config, "target-staging-detail-child.mjs", ["b"]);
+  const controller = new AbortController();
+  const aborted = run(config, "target-staging-detail-child.mjs", ["c"], controller.signal);
+  const next = run(config, "target-staging-detail-child.mjs", ["d"]);
+  controller.abort();
+  assert.equal(await aborted, null);
+  children[0].finish({ ok: true });
+  await tick();
+  assert.deepEqual(scripts, ["a", "b", "d"]);
+  children[1].finish({ ok: true });
+  children[2].finish({ ok: true });
+  await Promise.all([first, second, next]);
+  assert.equal(await run(config, "target-staging-detail-child.mjs", ["aborted"], controller.signal), null);
+  assert.deepEqual(scripts, ["a", "b", "d"]);
+});
+
+test("aborting after FIFO handoff but before spawn cannot leak the inherited slot", async () => {
+  const children = [];
+  const launched = [];
+  const run = createStagingReadRunner((_command, args) => {
+    launched.push(args.at(-1));
+    const child = fakeChild();
+    children.push(child);
+    return child;
+  }, 1_000, 1_000);
+  const first = run(config, "target-staging-detail-child.mjs", ["one"]);
+  const second = run(config, "target-staging-detail-child.mjs", ["two"]);
+  const controller = new AbortController();
+  const cancelled = run(config, "target-staging-detail-child.mjs", ["cancelled"], controller.signal);
+  assert.deepEqual(launched, ["one", "two"]);
+  children[0].finish({ ok: true });
+  // The close handler resolves first; its async continuation inherits the
+  // physical slot before this queued microtask aborts the granted waiter.
+  // The waiter itself must check its signal before spawning the child.
+  queueMicrotask(() => controller.abort());
+  assert.equal(await cancelled, null);
+  assert.deepEqual(await first, { ok: true });
+  assert.deepEqual(launched, ["one", "two"], "a granted-but-aborted child must never spawn");
+  const healthy = run(config, "target-staging-detail-child.mjs", ["healthy"]);
+  await tick();
+  assert.deepEqual(launched, ["one", "two", "healthy"]);
+  assert.equal(children.length, 3, "handoff cancellation returns its inherited slot");
+  children[1].finish({ ok: true });
+  children[2].finish({ ok: true });
+  await Promise.all([second, healthy]);
 });
 
 test("timeout hard-kills child, ignores late successful output, and releases slot", async () => {
