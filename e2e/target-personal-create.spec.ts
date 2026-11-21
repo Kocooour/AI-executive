@@ -35,7 +35,7 @@ for(const width of [390,1280]){
     const myPlanFailures:number[]=[];
     page.on("response",response=>{
       const path=new URL(response.url()).pathname;
-      if(/^\\/api\\/target-staging\\/my-plan/.test(path)&&!response.ok())
+      if(path.startsWith("/api/target-staging/my-plan")&&!response.ok())
         myPlanFailures.push(response.status());
     });
     const nonce="create"+width+"-"+Math.random().toString(36).slice(2,9);
