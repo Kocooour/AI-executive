@@ -12,8 +12,11 @@ import {verifiedActor,type TargetStagingReadCredential}
 import {withPinnedTargetStagingWrite} from "./target-staging-pinned-write";
 import {targetInboxTriageCancelled,targetInboxTriageDigest,
   targetInboxTriageReceiptKey,targetInboxTombstoneCancelKey,
-  targetInboxTombstoneCancelWitness,validTargetInboxTriageCommand,
-  type TargetInboxTriageCommand} from "./target-inbox-triage-writer";
+  targetInboxTombstoneCancelValue,targetInboxTombstoneCancelWitness,
+  validTargetInboxTriageCommand,type TargetInboxTriageCommand}
+  from "./target-inbox-triage-writer";
+import {issueTargetInboxRevision,verifyIssuedTargetInboxRevision,
+  verifyTargetInboxCommandId} from "./target-inbox-command-identity";
 import type {TargetStagingReadStore} from "./target-task-staging-reader";
 
 export type TargetInboxTriageCancelResult=
@@ -67,6 +70,12 @@ export function cancelPreflightedTargetInboxTriage(
     const prior=targetInboxTriageCancelled(db,actor,command);
     if(prior)return prior==="cancelled"?{ok:true,status:"cancelled"}:
       {ok:false,reason:"idempotency_conflict"};
+    // Authoritative issued-command proof, valid even after a move or delete.
+    // Neither a guessed tombstone ID nor another actor's command is enough.
+    if(!verifyIssuedTargetInboxRevision(actor,command)||
+        !canWriteIsolatedTargetArea(db,actor,command.writeAreaId))return denied();
+    if(!verifyTargetInboxCommandId(command))
+      return {ok:false,reason:"idempotency_conflict"};
 
     if(target==="tombstone"){
       // The tombstone forbids task-ID recycling. Persist just ONE witness for
@@ -78,7 +87,7 @@ export function cancelPreflightedTargetInboxTriage(
       if(!context.stillPinned()||!context.noSidecars()||!sessionLive())return failed();
       db.prepare("INSERT INTO metadata(key,value) VALUES (?,?)").run(
         targetInboxTombstoneCancelKey(actor,command.taskId),
-        JSON.stringify([actor,command.taskId]));
+        targetInboxTombstoneCancelValue(actor,command.taskId));
       if(!sessionLive())return {ok:false,reason:"session_revoked"};
       return context.commit({kind:"task_triage",payload:{cancel:1}})
         ?{ok:true,status:"cancelled"}:failed();
@@ -86,7 +95,9 @@ export function cancelPreflightedTargetInboxTriage(
     // A changed CAS (including a monotonic policy revision, move or triage
     // update) can never match again in this restore generation. It is a
     // terminal negative proof under the pinned lock without any new metadata.
-    if(targetTaskWriteRevision(db,command.taskId)!==command.expectedRevision)
+    if(issueTargetInboxRevision(db,actor,command.taskId,
+        command.expectedTriageRevision,command.writeAreaId,
+        command.restoreGeneration)!==command.expectedRevision)
       return sessionLive()?{ok:true,status:"cancelled"}:
         {ok:false,reason:"session_revoked"};
 
