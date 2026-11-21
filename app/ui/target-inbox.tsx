@@ -13,7 +13,7 @@ import {detailRowKey,openTargetDetail} from "./target-detail-state";
 import {inboxUncertainSnapshot,subscribeInboxUncertain} from "../../lib/target-data-invalidation";
 import {refusalBudgetFor} from "../../lib/target-refusal-budget";
 import {
-  fetchTargetInbox,sendInboxCommand,verifyInboxCommand,
+  fetchTargetInbox,sendInboxCommand,verifyInboxCommand,cancelInboxCommand,
   type InboxClientCommand,type InboxClientPage,type InboxClientFailure,
 } from "../../lib/target-inbox-client";
 import type {TargetInboxItem} from "../../lib/target-inbox-client-types";
@@ -132,14 +132,17 @@ function useInbox(limit:number){
         result.value.items.some(item=>first.items.some(old=>old.id===item.id))){
       // The failure may mean an ACL revocation. A separate Inbox badge
       // must not keep showing the previously authorized count.
-      const command=inboxDecisionSnapshot(runtime,generation);
-      if(command&&["sending","verifying","uncertain"].includes(command.stage))
-        setState({kind:"error",key,reason:"stale"});
-      else{
-        // The next online/visible wake must reverify the session before
-        // restoring any Inbox count. A refusal is a security hide event.
-        markHidden();revoke();
+      if(result.ok===false&&result.reason==="signed-out"){
+        // Only a genuine 401/403 can invalidate the authenticated runtime.
+        // A 503, 409 or stale page witness MUST NOT erase a pending UUID.
+        revoke();return;
       }
+      // Hide every page and independent navigation badge, including when an
+      // unresolved command is in 'not-recorded'. Never report session_revoked
+      // for a pagination/transport failure; keep the tab recovery witness.
+      if(runtime)markInboxRefused(runtime,generation);
+      markHidden();
+      setState({kind:"error",key,reason:"stale"});
       return;
     }
     setState(before=>before.kind==="ready"&&before.key===key?{
@@ -195,6 +198,12 @@ export default function TargetInbox({language="cs",taskDetail=false}:{language?:
       setDecision({command,title,processId,
         stage:command.mode==="undo"?"undone":"undo-ready",next:check.next});
       emitTargetChange({kind:"task",id:command.taskId,change:"updated"});
+    }else if(check.ok===true&&check.status==="cancelled"){
+      // A pinned, irreversible cancellation fence is terminal even if the
+      // original POST appears later. It cannot commit after this point.
+      setDecision({command,title,processId,stage:"cancelled",next:null});
+      emitTargetChange({kind:"task",id:command.taskId,change:"updated"});
+      reload();
     }else if(check.ok===true&&check.status==="not_recorded"){
       // The old request may still be in flight: NEVER allocate a fresh UUID.
       // Replaying the identical command is safe because the pinned SQLite
@@ -206,7 +215,7 @@ export default function TargetInbox({language="cs",taskDetail=false}:{language?:
       // A 409 can be read_stale_reload AFTER the original write committed.
       // It is not an authoritative negative receipt: never discard the UUID.
     }
-  },[revoke,commandCurrent,setDecision]);
+  },[revoke,commandCurrent,setDecision,reload]);
   async function submit(
     command:InboxClientCommand,title:string,processId:string,replayOriginal=false,
   ){
@@ -235,6 +244,36 @@ export default function TargetInbox({language="cs",taskDetail=false}:{language?:
       }else{
         setDecision({command,title,processId,stage:"conflict",next:null});
         reload();
+      }
+    }finally{inFlight.current=false;}
+  }
+  async function cancelOriginal(){
+    if(inFlight.current||!decision||
+        !["uncertain","not-recorded"].includes(decision.stage)||
+        !runtime?.known()||runtime.generation()!==generation)return;
+    const {command,title,processId}=decision;
+    inFlight.current=true;
+    if(!setDecision({command,title,processId,stage:"verifying",next:null})){
+      inFlight.current=false;setRecoveryFailed(true);return;
+    }
+    try{
+      const result=await cancelInboxCommand(command);
+      if(!commandCurrent(command))return;
+      if(result.ok===true&&result.status==="cancelled"){
+        // Only this durable server proof may retire the original UUID. A
+        // missing read-only receipt or stale CAS is NOT terminal evidence.
+        setDecision({command,title,processId,stage:"cancelled",next:null});
+        emitTargetChange({kind:"task",id:command.taskId,change:"updated"});
+        reload();
+      }else if(result.ok===true&&result.status==="committed"){
+        // The old Process won the lock. Recover its exact receipt and Undo.
+        await confirm(command,title,processId);
+      }else if(result.ok===false&&result.reason==="signed-out"){
+        revoke();setDecision(null);
+      }else{
+        // Timeout/403/409/503 is ambiguous; a cancellation may have committed
+        // after the response was lost. Check only its exact original receipt.
+        await confirm(command,title,processId);
       }
     }finally{inFlight.current=false;}
   }
@@ -300,6 +339,9 @@ export default function TargetInbox({language="cs",taskDetail=false}:{language?:
       <button type="button" onClick={()=>void submit(
         decision.command,decision.title,decision.processId,true)}>
         {speak("Opakovat původní příkaz","Retry original command")}</button>}
+    {(decision?.stage==="uncertain"||decision?.stage==="not-recorded")&&
+      <button type="button" onClick={()=>void cancelOriginal()}>
+        {speak("Bezpečně ukončit původní příkaz","Safely cancel original command")}</button>
   </section>;
   if(!page)return <section aria-label={speak("Cílový Inbox","Target Inbox")}
     className="targetInbox" data-testid="target-inbox">
@@ -319,7 +361,10 @@ export default function TargetInbox({language="cs",taskDetail=false}:{language?:
         decision.stage==="uncertain"?speak(
           "Výsledek není potvrzen. Stejný příkaz neposílejte znovu; ověřte původní potvrzení.",
           "The outcome is uncertain. Do not resubmit; check the original receipt."):
-        decision.stage==="conflict"?speak("Konflikt revize nebo oprávnění. Načtěte aktuální stav.","Revision or access conflict. Refresh the current state."):
+        decision.stage==="cancelled"?speak(
+          "Původní příkaz byl bezpečně ukončen. Případný opožděný zápis už nemůže proběhnout.",
+          "The original command was safely cancelled; no late write can commit."):
+        decision.stage==="conflict"?speak("Konflikt revize nebo oprávnění. Načtěte aktuální stav.","Revision or access conflict. Refresh the current state."): 
         decision.stage==="denied"?speak("Přístup byl odebrán. Změna není potvrzena.","Access revoked. Change not confirmed."):
         decision.stage==="undone"?speak("Úkol byl vrácen do Inboxu.","Task returned to Inbox."):
         decision.stage==="undo-ready"&&!decision.next?speak(
@@ -330,7 +375,7 @@ export default function TargetInbox({language="cs",taskDetail=false}:{language?:
         {speak("Ověřit potvrzení","Check receipt")}</button>}
       {decision.stage==="undo-ready"&&decision.next&&<button type="button"
         onClick={undo}>{speak("Vrátit do Inboxu (Undo)","Return to Inbox (Undo)")}</button>}
-      {(decision.stage==="conflict"||decision.stage==="undone"||
+      {(decision.stage==="conflict"||decision.stage==="cancelled"||decision.stage==="undone"||
         (decision.stage==="undo-ready"&&!decision.next))&&
         <button type="button" onClick={()=>{setDecision(null);reload();}}>
           {speak("Zavřít a obnovit","Close and refresh")}</button>}
