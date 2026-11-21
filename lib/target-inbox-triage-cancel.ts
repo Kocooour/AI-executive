@@ -11,7 +11,8 @@ import {verifiedActor,type TargetStagingReadCredential}
   from "./target-task-authenticated-read";
 import {withPinnedTargetStagingWrite} from "./target-staging-pinned-write";
 import {targetInboxTriageCancelled,targetInboxTriageDigest,
-  targetInboxTriageReceiptKey,validTargetInboxTriageCommand,
+  targetInboxTriageReceiptKey,targetInboxTombstoneCancelKey,
+  targetInboxTombstoneCancelWitness,validTargetInboxTriageCommand,
   type TargetInboxTriageCommand} from "./target-inbox-triage-writer";
 import type {TargetStagingReadStore} from "./target-task-staging-reader";
 
@@ -59,12 +60,25 @@ export function cancelPreflightedTargetInboxTriage(
     if(prior)return prior==="cancelled"?{ok:true,status:"cancelled"}:
       {ok:false,reason:"idempotency_conflict"};
 
-    // A tombstone forbids task-ID recycling. A changed CAS (including a
-    // monotonic policy revision, move or triage update) can never match again
-    // within the same restore generation. Both are terminal *negative* proofs
-    // under the pinned lock; no additional permanent metadata is necessary.
-    if(target==="tombstone"||
-        targetTaskWriteRevision(db,command.taskId)!==command.expectedRevision)
+    if(target==="tombstone"){
+      // The tombstone forbids task-ID recycling. Persist just ONE witness for
+      // this actor and task (not one per supplied UUID). A prior unknown UUID
+      // cannot probe deletion before its owner explicitly requests cancellation.
+      if(targetInboxTombstoneCancelWitness(db,actor,command.taskId))
+        return sessionLive()?{ok:true,status:"cancelled"}:
+          {ok:false,reason:"session_revoked"};
+      if(!context.stillPinned()||!context.noSidecars()||!sessionLive())return failed();
+      db.prepare("INSERT INTO metadata(key,value) VALUES (?,?)").run(
+        targetInboxTombstoneCancelKey(actor,command.taskId),
+        JSON.stringify([actor,command.taskId]));
+      if(!sessionLive())return {ok:false,reason:"session_revoked"};
+      return context.commit({kind:"task_triage",payload:{cancel:1}})
+        ?{ok:true,status:"cancelled"}:failed();
+    }
+    // A changed CAS (including a monotonic policy revision, move or triage
+    // update) can never match again in this restore generation. It is a
+    // terminal negative proof under the pinned lock without any new metadata.
+    if(targetTaskWriteRevision(db,command.taskId)!==command.expectedRevision)
       return sessionLive()?{ok:true,status:"cancelled"}:
         {ok:false,reason:"session_revoked"};
 
