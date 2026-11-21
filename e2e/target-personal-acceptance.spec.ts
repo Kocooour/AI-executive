@@ -1274,7 +1274,7 @@ for(const width of [390,1280]){
           proof.events.push("inbox:queued");
           // The Inbox's queued read may overlap the wake and private Area
           // recovery, but the server still uses its real isolated store.
-          return new Promise<Response>((resolve,reject)=>{
+          return new Promise<globalThis.Response>((resolve,reject)=>{
             const signal=init?.signal;
             const aborted=()=>{
               clearTimeout(timer);reject(new DOMException("Aborted","AbortError"));
