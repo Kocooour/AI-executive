@@ -32,7 +32,7 @@ import {
   TARGET_STAGING_MAX_PUSH_TARGETS, TARGET_STAGING_MAX_PUSH_TARGETS_PER_USER,
   TARGET_STAGING_MAX_ATTENTION_DELIVERIES, TARGET_STAGING_MAX_DEVICE_DELIVERIES,
 } from "./target-store-bootstrap";
-import { TARGET_INBOX_MAX_RECEIPTS } from "./target-inbox-schema";
+import { TARGET_INBOX_MAX_RECEIPTS, TARGET_INBOX_UNDO_REBASE_PREFIX } from "./target-inbox-schema";
 
 export type TargetPreflightMode = "stage" | "r2-model";
 export type TargetPreflightCode =
@@ -359,6 +359,35 @@ export function inspectIsolatedTargetStore(
         tombstoneCancelCounts.set(actor,n);
         return n<=TARGET_STAGING_MAX_TOMBSTONES;
       });
+      // A cancelled, not-yet-committed Undo advances task.revision but does
+      // not change triage. Its one-per-Process opaque lineage witness enables
+      // a new Undo only at the exact cancellation-only revision. Old/replaced
+      // Process receipts cannot be pruned without also removing this marker.
+      const undoRebases=rows.filter(row=>typeof row.key==="string"&&
+        row.key.startsWith(TARGET_INBOX_UNDO_REBASE_PREFIX));
+      const undoRebasesValid=undoRebases.length<=TARGET_INBOX_MAX_RECEIPTS&&
+        undoRebases.every(row=>{
+          if(typeof row.key!=="string"||typeof row.value!=="string"||
+              !sha256Hex.test(row.key.slice(TARGET_INBOX_UNDO_REBASE_PREFIX.length))||
+              !/^[1-9][0-9]{0,15}$/.test(row.value))return false;
+          const after=Number(row.value);
+          if(!Number.isSafeInteger(after)||after>=9007199254740991)return false;
+          const processKey=row.key.slice(TARGET_INBOX_UNDO_REBASE_PREFIX.length);
+          const process=db.prepare("SELECT task_id,action,task_revision_after "+
+            "FROM task_triage_receipts WHERE receipt_key=?").get(processKey) as
+            {task_id:string;action:string;task_revision_after:number}|undefined;
+          if(!process||process.action!=="process"||
+              after<=process.task_revision_after)return false;
+          const state=db.prepare("SELECT revision FROM tasks WHERE id=?")
+            .get(process.task_id) as {revision:number}|undefined;
+          const tombstone=db.prepare("SELECT revision FROM task_tombstones WHERE id=?")
+            .get(process.task_id) as {revision:number}|undefined;
+          if((state?.revision??tombstone?.revision??-1)<after)return false;
+          const child=db.prepare("SELECT task_revision_before FROM task_triage_receipts "+
+            "WHERE undo_of_receipt_key=?").get(processKey) as
+            {task_revision_before:number}|undefined;
+          return !child||child.task_revision_before===after;
+        });
       // An irreversible fence is valid only as an opaque 64-hex key and a
       // literal '1'. Reject all other metadata rather than losing the fence.
       const projectTitleCancelsValid = projectTitleCancels.every(row =>
@@ -442,7 +471,7 @@ export function inspectIsolatedTargetStore(
         structureRecoveryValid;
       if (rows.length !== 6 + receipts.length + deleteReceipts.length + temporalReceipts.length + dueOnReceipts.length + privateWhenReceipts.length + attentionReceipts.length + noteReceipts.length +
             notificationReceipts.length + pushTargetReceipts.length + baselineMarkers.length +
-            noteDeleteReceipts.length + lifecycleReceipts.length + projectTitleCancels.length + inboxCancels.length + tombstoneCancels.length + privateTaskCreateReceipts.length + privateTaskCreateRecoveries.length + privateTaskCreateCancels.length + structureReceipts.length + structureRecoveries.length + structureCancels.length ||
+            noteDeleteReceipts.length + lifecycleReceipts.length + projectTitleCancels.length + inboxCancels.length + tombstoneCancels.length + undoRebases.length + privateTaskCreateReceipts.length + privateTaskCreateRecoveries.length + privateTaskCreateCancels.length + structureReceipts.length + structureRecoveries.length + structureCancels.length ||
           receipts.length > TARGET_STAGING_MAX_RECEIPTS ||
           deleteReceipts.length > TARGET_STAGING_MAX_RECEIPTS ||
           privateTaskCreateReceipts.length > TARGET_STAGING_MAX_RECEIPTS ||
@@ -465,9 +494,9 @@ export function inspectIsolatedTargetStore(
           noteDeleteReceipts.length > TARGET_STAGING_MAX_RECEIPTS ||
           lifecycleReceipts.length > TARGET_STAGING_MAX_RECEIPTS ||
           projectTitleCancels.length > TARGET_STAGING_AUDIT_MAX_EVENTS ||
-          !projectTitleCancelsValid || !inboxCancelsValid || !tombstoneCancelsValid ||
+          !projectTitleCancelsValid || !inboxCancelsValid || !tombstoneCancelsValid || !undoRebasesValid ||
           (meta.get("schema_version") !== String(TARGET_STORE_SCHEMA_VERSION) &&
-            (inboxCancels.length !== 0 || tombstoneCancels.length !== 0)) ||
+            (inboxCancels.length !== 0 || tombstoneCancels.length !== 0 || undoRebases.length !== 0)) ||
           (meta.get("schema_version") === String(TARGET_STORE_LEGACY_SCHEMA_VERSION) &&
             projectTitleCancels.length !== 0) ||
           !receiptValid(receipts, TARGET_STAGING_RECEIPT_PREFIX) ||
@@ -504,7 +533,8 @@ export function inspectIsolatedTargetStore(
               row.key.startsWith(TARGET_STAGING_NOTE_LIFECYCLE_RECEIPT_PREFIX) ||
               row.key.startsWith(TARGET_STAGING_PROJECT_TITLE_CANCEL_PREFIX) ||
               row.key.startsWith(TARGET_STAGING_INBOX_TRIAGE_CANCEL_PREFIX) ||
-               row.key.startsWith(TARGET_STAGING_INBOX_TOMBSTONE_CANCEL_PREFIX))) ||
+               row.key.startsWith(TARGET_STAGING_INBOX_TOMBSTONE_CANCEL_PREFIX) ||
+              row.key.startsWith(TARGET_INBOX_UNDO_REBASE_PREFIX))) ||
           !isSupportedTargetSchemaVersion(meta.get("schema_version")) ||
           meta.get("activated") !== "false" || meta.get("write_protocol") !== "per-item-only" ||
           typeof meta.get("anchor_seq") !== "string" ||
@@ -590,8 +620,10 @@ export function inspectIsolatedTargetStore(
           WHERE u.action='undo' AND (p.action<>'process' OR u.task_id<>p.task_id OR
             u.actor_user_id<>p.actor_user_id OR u.restore_generation<>p.restore_generation OR
             u.triage_revision_before<>p.triage_revision_after OR
-            u.task_revision_before<>p.task_revision_after OR
-            u.committed_at_ms<p.committed_at_ms)`) !== 0) fail("audit_invalid");
+            (u.task_revision_before<>p.task_revision_after AND NOT EXISTS (
+              SELECT 1 FROM metadata m WHERE m.key=?||p.receipt_key
+                AND m.value=CAST(u.task_revision_before AS TEXT))) OR
+            u.committed_at_ms<p.committed_at_ms)`,TARGET_INBOX_UNDO_REBASE_PREFIX) !== 0) fail("audit_invalid");
       }
       // R2c.1 delete audit: bounded, content-free, backed by a delete receipt and
       // by the tombstone (same Area, revision and change sequence) it describes.
