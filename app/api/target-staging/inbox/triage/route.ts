@@ -61,7 +61,8 @@ export async function POST(request:Request):Promise<Response>{
       if(result.reason==="unavailable")return inboxAnswer(404,"Not found");
       if(result.reason==="resync_required")return resyncRequiredResponse();
       if(result.reason==="write_area_mismatch")return writeAreaMismatchResponse();
-      if(result.reason==="stale_revision"||result.reason==="idempotency_conflict")
+      if(result.reason==="stale_revision"||result.reason==="idempotency_conflict"||
+          result.reason==="cancelled")
         return inboxAnswer(409,"Revision conflict");
       return inboxAnswer(503,"Staging unavailable");
     }
