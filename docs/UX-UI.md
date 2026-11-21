@@ -174,3 +174,23 @@ Akceptace: český online dotaz s odlišnou formulací lze ověřit otevřením 
 - **Přístupnost a offline:** souhrny a linky ovladatelné klávesnicí i čtečkou, české popisky, bez technických ID v běžném UI. Mobilní detail používá stávající full-page navigaci. Offline lze číst jen dříve autorizovaná uložená kanonická data; live provenance/semantic search a import jsou nedostupné a stav je označen jako neúplný.
 
 **UX akceptace:** z opakovaného importu vznikne jediný viditelný návrh s původními speaker roles a více korektně označenými zdroji; hypotéza napsaná AI se nesmí objevit jako potvrzené osobní tvrzení; samostatné review/freshness/conflict štítky neztrácejí kombinace; protichůdný termín se neupraví bez potvrzení; člověk může opravit fakt na stránce a novou odpověď Lumi lze dohledat ke stejné revizi; změna Vše/Osobní/Sdílené nebo identity nepropustí text, počty ani odkazy cizí Oblasti; chybějící export či odpojený Gmail je pravdivě označen a nevyvolá falešný pocit úplné znalosti.
+
+
+### C-3a — Inbox vs. archivní LegacyInbox (#483)
+
+- Po výslovném zapnutí kompletního osobního v1 profilu je primární položkou **Inbox** nad cílovými úkoly, s oprávněným počtem nezpracovaných. **Archiv → Inbox** vede samostatnou adresou `?view=LegacyInbox` na stará read-only data; běžná navigace mimo v1 profil zůstává nezměněna.
+- Na desktopu i na mobilu je v cílovém Inboxu jeden čitelný řádek/název, primární klávesnicí dostupné **Zpracovat**, po potvrzení krátkodobé **Vrátit do Inboxu**. A11y: stav odesílání v živém regionu, jasný focus, nikdy ikona jako jediný název akce.
+- Optimistické skrytí není autoritativní: 409 drží položku jako nevyřešenou a vyžaduje nové čtení; 401/403/503 a offline skryjí dřívější chráněné titulky i počty a ukáží neutrální stav. Při nejasném výsledku zůstává `uncertain` až do ověření receiptu, nikoli falešné „hotovo“.
+- Deep linky, reload a Back/Forward rozlišují `Inbox` a `LegacyInbox`. Testovat šířky 390 a 1280 px i odmítnutou/odvolanou session.
+
+**Stav:** kontrakt pro draft PR #485; cílová HTTP/UI integrace a přístupnost čekají na dokončení a regresní prohlížečové ověření.
+
+
+### C-3a Inbox — autorizovaná cílová data (draft PR #485)
+
+- **Desktop:** Inbox je primární navigace s živě autorizovaným počtem; historický Inbox se stěhuje pod Archiv jako `LegacyInbox`. Nikdy nesčítat původní lokální počty.
+- **Mobil:** čtyři spodní položky zůstávají; Inbox je ve Více → Aktuální pohledy (s odděleným countem), `LegacyInbox` ve Více → Archiv. Při vypnutém/částečném profilu se staré chování nemění.
+- **Řádek:** název, samostatné **Zpracovat** pro oprávněného aktéra; viewer pouze čte. Dokončený a nezpracovaný úkol má přístupný text **„Dokončeno, čeká na zpracování“**. Dokončení není triage.
+- **Undo:** po potvrzeném Process je dostupné **Vrátit do Inboxu** s novým UUID a CAS potvrzeným z receiptu původního Process. `409` znamená konflikt a nové autorizované načtení, `401/403` skryje data; `uncertain` skrývá názvy a počty a nabízí pouze kontrolu *původního* UUID (nikdy slepý retry).
+- **Soukromí:** tituly/count se vydávají až po ověření živé relace, úplné Area ACL matice a monotónních content epoch; stejnogenerační selhání pasivního ověření i BFCache musí obsah okamžitě skrýt. UI je responzivní v 390 i 1280 px. Historický Gmail je live connected read-only, nikoli archivovaná schránka; vytváření legacy tasku je v cílovém profilu zakázané.
+- **Stav:** opt-in implementace bez dosud doloženého zeleného CI/browser E2E a produkční aktivace. C-3b návrhy a Přijmout nejsou součástí.

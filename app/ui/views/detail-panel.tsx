@@ -465,7 +465,7 @@ export function DetailPanel({ app }: { app: LumiApp }) {
                   closeDetail();
                   app.selectWorkspace(selected.workspaceId);
                   app.setInboxTab("mail");
-                  app.setView("Inbox");
+                  app.setView(app.legacyMailInboxView);
                 }}>{language === "cs" ? "Otevřít zdrojovou zprávu" : "Open source message"}</button>
               </section>
             )}

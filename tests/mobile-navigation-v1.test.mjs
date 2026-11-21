@@ -46,3 +46,16 @@ test("UI-03f desktop preview adds My Plan as a distinct first destination withou
   assert.equal(mobileV1IsPlanPreviewRoute("?view=MyPlanPreview"), true);
   assert.equal(mobileV1IsPlanPreviewRoute("?view=Today"), false);
 });
+
+
+test("C-3a: LegacyInbox is a separate URL-capable destination, not a legacy primary tab",async()=>{
+  const {views,viewIcons}=await import("../app/ui/navigation.ts");
+  const {searchForView,viewFromSearch}=await import("../lib/view-url.ts");
+  assert.equal(views.includes("LegacyInbox"),true);
+  assert.equal(primaryViews.includes("LegacyInbox"),false);
+  assert.equal(mobileV1MoreViews.includes("LegacyInbox"),false,
+    "only the dedicated archive navigation offers this destination");
+  assert.equal(viewIcons.LegacyInbox,viewIcons.Inbox);
+  const url=searchForView("LegacyInbox","Home");
+  assert.equal(viewFromSearch(url,views),"LegacyInbox");
+});

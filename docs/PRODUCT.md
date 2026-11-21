@@ -207,3 +207,17 @@ Nezavádíme PostgreSQL, pgvector ani paralelní nasazení HumanAgentWiki. Tato 
 - **UX:** Kontext přes Více a hledání; na desktopu přes sidebar/inspektor. Články mají souhrn, „Co platí“, vztahy, časové změny a „Proč to vím?“ s dostupnou citací. **Můj plán** a čtyři spodní mobilní položky zůstávají beze změny.
 
 **Status 2026-11-08:** schválená specifikace a plán, **nikoli implementovaný import, HumanWiki UI, e-mailová obsahová synchronizace nebo autonomní učení**. Syntetický H1-synthetic smí vznikat paralelně s R2d/R3 bez osobních dat; H1-real s osobními exporty vyžaduje autorizované R2d/R3 rozhraní a vědomý souhlas. Produkční aktivace nad cílovými daty podléhá samostatné R4 bráně. Přesné akceptační scénáře v rozhodnutí jsou součástí LUMI-FR-014.
+
+
+### Milník C-3a — cílový Inbox, triage a Undo (#483)
+
+- Cílový Inbox je seznam serverových úkolů s `triage_state=unprocessed`; **není** alternativní filtr podle `when_on`, termínu, dokončení ani priority. Úkol zmizí teprve po explicitním `Zpracovat` (samostatná triage revize).
+- Při jednorázové, operátorem spuštěné migraci v26 → v27 se **již existující cílové** úkoly označí jako `processed` a `triaged_at=NULL` (bez uživatelského auditního Process). Nové úkoly výchozí hodnotou vstupují jako `unprocessed`. Původní lokální/legacy data se nemigrují.
+- `Zpracovat` mění jen triage; nemění `Kdy`, termín, zařazení, přiřazení ani dokončení. `Vrátit do Inboxu` je explicitní Undo konkrétního Process, chráněné revizí, oprávněními a neměnným potvrzením. Replay stejného UUID je idempotentní, druhý Undo nesmí přepsat jinou úpravu.
+- Triage receipt má nejméně **90denní retenční okno**: při dosažení kapacity lze v jediném připnutém zápisu odstranit pouze historické nepoužitelné doklady. Původní Process potřebný pro možné Undo nelze promazat, ani když je starší. Po skončení retence nelze absentující receipt považovat za důkaz neprovedeného zápisu; klient musí zachovat bezpečné řešení stavu `uncertain`.
+- Seznam i počet čte pouze aktuálně oprávněný aktér; samotné načtení z backendu nestačí k vydání dat po změně session nebo ACL. Viewer může číst povolený obsah, nikoli provádět triage. Chyba načtení nesmí odhalit staré titulky ani stale počty.
+- `LegacyInbox` zůstává v archivu jen pro čtení. Pravidlové/AI návrhy, přijetí návrhu a AI souhlas patří až do C-3b.
+
+**Implementační stav:** draft [PR #485](https://github.com/Kocooour/AI-executive/pull/485); schéma/read/writer, bounded HTTP GET/Process/Undo/receipt a opt-in obrazovka Inboxu s desktop/mobilním počtem jsou v branchi. Vše je **default-off**, bez potvrzeného CI, izolované HTTP/browser akceptace a integrace s `main` nelze považovat za hotové. Neslučovat před produkčním C-1+C-2.
+
+**Aktivace C-3a:** cílové UI navíc vyžaduje `AI_EXECUTIVE_TARGET_UI_INBOX_ENABLED=true`, `AI_EXECUTIVE_TARGET_STAGING_HTTP_INBOX_ENABLED=true`, `AI_EXECUTIVE_TARGET_STAGING_HTTP_INBOX_WRITE_ENABLED=true` a základní `AI_EXECUTIVE_TARGET_STAGING_HTTP_WRITE_ENABLED=true`, současně úplný profil C-2. API GET je samostatně vypnuté příznakem `..._HTTP_INBOX_ENABLED`, zápis a receipt oba vyžadují i write gate. Starý Inbox a Gmail zůstávají při částečném profilu na původní adrese; v úplném C-3a se e-mail zobrazuje pouze v read-only `LegacyInbox` (živé čtení připojené pošty, nikoli její archivní kopie).

@@ -130,9 +130,12 @@ for(const width of [390,1280]){
  * Chrome CDP. The focused Quick Capture test instead intercepts and fulfills
  * the Area response with Playwright: CDP may report loadingFailed after HTTP
  * 200 even when the component consumed the entire synthetic JSON body.
- * For the synthetic Area, assert one HTTP 200 response AND the valid rendered
- * catalog. Still require a fully finished direct CDP session GET 200 before
- * the Area request; the real-network BFCache release gate stays unchanged. */
+ * For the synthetic Area, assert HTTP 200 and the validated rendered catalog.
+ * Playwright-fulfilled session GETs can also report CDP loadingFailed/ERR_ABORTED
+ * after the application fully consumed their body; requiring loadingFinished
+ * rejects an authorized wake even though the current Area was rendered.
+ * Require the mocked 200 session to precede the Area GET, while the separate
+ * native BFCache release gate still enforces real-network loadingFinished. */
 async function captureAreaWakeHttp(page:Page){
   type Read={requestId:string;path:string;requestOrder:number;
     status?:number;finishedOrder?:number;failedOrder?:number;
@@ -225,11 +228,16 @@ async function captureAreaWakeHttp(page:Page){
       }
       const authorized=reads.filter(read=>read.path===sessionPath&&
         read.requestOrder>mark&&read.status===200&&
-        read.finishedOrder!==undefined&&read.finishedOrder<area.requestOrder&&
-        read.failedOrder===undefined);
-      // Keep the strict transport invariant; print the CDP timeline if it
-      // fails so a missing session can be distinguished from delayed CDP
-      // loadingFinished, a pre-wake request or a missing route altogether.
+        read.requestOrder<area.requestOrder&&
+        (read.finishedOrder!==undefined&&read.finishedOrder<area.requestOrder&&
+          read.failedOrder===undefined||
+          // Only this synthetic, Playwright-fulfilled session route is allowed
+          // to have a post-response CDP abort. The fresh rendered Area catalog
+          // above proves that the client accepted a completed session body.
+          read.cancelled===true&&read.errorText==="net::ERR_ABORTED"&&
+          read.failedOrder!==undefined&&read.failedOrder<area.requestOrder));
+      // Record the complete CDP sequence, including mock-induced aborts.
+      // Unmocked BFCache tests retain the strict finished-transport assertion.
       const timeline=reads.map(read=>[
         read.path===sessionPath?"session":"area",
         "start="+read.requestOrder,"status="+(read.status??"-"),
@@ -239,7 +247,7 @@ async function captureAreaWakeHttp(page:Page){
         "id="+read.requestId,
       ].join(" ")).join(" | ");
       expect(authorized.length,
-        "completed direct session GET 200 must precede replacement Area GET; "+
+        "validated synthetic session GET 200 must precede replacement Area GET; "+
         "mark="+mark+"; "+timeline).toBeGreaterThan(0);
     },
     close:()=>cdp.detach(),

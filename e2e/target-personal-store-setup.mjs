@@ -67,6 +67,12 @@ try {
   for(let i=0;i<35;i++)
     insertExistingTask.run("0-create:"+String(i).padStart(3,"0"),
       seed.createLargeProjectId,"Previously created task "+i);
+  // C-3a pagination security acceptance needs an actual second Inbox page,
+  // without changing fixture sizes for unrelated browser workflows.
+  if(process.env.LUMI_TARGET_INBOX_E2E==="true")
+    for(let i=35;i<60;i++)
+      insertExistingTask.run("0-create:"+String(i).padStart(3,"0"),
+        seed.createLargeProjectId,"Inbox pagination fixture "+i);
   for (const item of [...Object.values(seed.projects), ...Object.values(seed.searchProjects)]) {
     db.prepare("INSERT INTO projects(id,area_id,title) VALUES (?,?,?)").run(item.projectId, seed.areaId, item.projectTitle);
     db.prepare("INSERT INTO tasks(id,project_id,title) VALUES (?,?,?)").run(item.taskId, item.projectId, item.taskTitle);

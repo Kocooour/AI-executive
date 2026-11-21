@@ -36,8 +36,9 @@ test("the server page mounts the provider only behind the flag and reads it per 
   // Search is independently gated by the target UI and title-search HTTP
   // flags. Neither details-only nor scopes-only activates a runtime.
   assert.match(page,/const targetSearch=Boolean\(config\)&&targetMainTitleSearchEnabled\(process\.env\);/);
+  assert.match(page,/const targetInbox=Boolean\(config\)&&targetInboxUiEnabled\(process\.env\);/);
   assert.match(page,/const targetData = targetDataNeeded\(config\)\|\|targetSearch;/);
-  assert.match(page,/targetData\s*\n?\s*\?\s*<TargetDataProvider><LumiAppRoot targetHomeSummary=\{Boolean\(config\)&&targetHomeSummaryEnabled\(process\.env\)\} targetMyPlan=\{config\?\.myPlan\} targetScopes=\{config\?\.scopes\} targetDetails=\{config\?\.details\} targetEdits=\{config\?\.edits\}/);
+  assert.match(page,/targetData\s*\n?\s*\?\s*<TargetDataProvider><LumiAppRoot targetHomeSummary=\{Boolean\(config\)&&targetHomeSummaryEnabled\(process\.env\)\} targetInboxRead=\{targetInbox\} targetMyPlan=\{config\?\.myPlan\} targetScopes=\{config\?\.scopes\} targetDetails=\{config\?\.details\} targetEdits=\{config\?\.edits\}/);
   assert.match(page,/targetNoteEdit=\{Boolean\(config\?\.details\.note\) && targetNoteEditUiEnabled\(process\.env\)\}/);
   assert.match(page,/targetProjectEdit=\{Boolean\(config\?\.details\.project\) && targetProjectTitleEditUiEnabled\(process\.env\)\}/);
   assert.match(page,/targetPrivateNoteAreas=\{Boolean\(config\?\.scopes\.notes\)&&targetPrivateNoteAreaUiEnabled\(process\.env\)\}/);
@@ -98,6 +99,8 @@ test("only the runtime (and its server route) reference the session endpoint; no
     "app/ui/target-data-provider.tsx","app/ui/target-data-status.tsx","app/ui/target-my-plan.tsx",
     // C-2: lazily loaded Home and Upcoming share the runtime, never legacy storage.
     "app/ui/target-overview.tsx",
+    // C-3a: lazily loaded target Inbox is an independently gated runtime consumer.
+    "app/ui/target-inbox.tsx",
     // R3-FE-3: the lazily loaded scope lists and the gate hook.
     "app/ui/target-scope-lists.tsx","app/ui/use-target-gate.ts",
     // R3-FE-4a: the lazily loaded authorized detail panel and the compact sidebar project list.

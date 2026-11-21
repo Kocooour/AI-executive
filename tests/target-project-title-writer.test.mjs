@@ -93,7 +93,7 @@ test('project rename enforces roles and CAS, persists audit, supports retry, and
 test('v25 remains readable and is not silently migrated or mutated by project rename',()=>{
  const old=bootstrapIsolatedTargetStore({stagingDirectory:path.join(root,'old-stage'),ownerUserId:'alice'});
  const oldStore={stagingDirectory:old.directory,expectedRestoreGeneration:old.restoreGeneration};
- const oldDb=new DatabaseSync(old.databasePath);oldDb.exec('DROP TABLE project_title_audit');
+ const oldDb=new DatabaseSync(old.databasePath);oldDb.exec("DROP TABLE task_triage_receipts; DROP TRIGGER task_triage_create_guard; DROP TRIGGER task_triage_revision_guard; DROP TRIGGER task_triage_task_revision; DROP INDEX tasks_unprocessed_by_id; ALTER TABLE tasks DROP COLUMN triage_revision; ALTER TABLE tasks DROP COLUMN triaged_at; ALTER TABLE tasks DROP COLUMN triage_state; DROP TABLE project_title_audit;");
  oldDb.prepare("UPDATE metadata SET value='25' WHERE key='schema_version'").run();
  oldDb.prepare("INSERT INTO projects(id,area_id,title) VALUES ('old',?,'Old')").run(old.unassignedAreaId);
  assert.deepEqual(inspectIsolatedTargetStore({...oldStore,mode:'r2-model'}),{ok:true,mode:'r2-model',issues:[]});

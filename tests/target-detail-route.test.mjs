@@ -18,6 +18,7 @@ test("project, task and note routes round-trip through the address, keeping the 
     {kind:"task",id:"t2",view:"MyPlanPreview"},
     {kind:"task",id:"th",view:"Home"},
     {kind:"task",id:"tu",view:"Upcoming"},
+    {kind:"task",id:"ti",view:"Inbox"},
     {kind:"note",id:"n1",view:"Notes"},
   ];
   for(const route of routes)for(const scope of ["all","personal","shared"]){
@@ -32,7 +33,8 @@ test("project, task and note routes round-trip through the address, keeping the 
   assert.equal(searchForDetail(routes[2],"all"),"?view=MyPlanPreview&taskId=t2");
   assert.equal(searchForDetail(routes[3],"personal"),"?view=Home&taskId=th&scope=personal");
   assert.equal(searchForDetail(routes[4],"personal"),"?view=Upcoming&taskId=tu&scope=personal");
-  assert.equal(searchForDetail(routes[5],"personal"),"?view=Notes&noteId=n1&scope=personal");
+  assert.equal(searchForDetail(routes[5],"personal"),"?view=Inbox&taskId=ti&scope=personal");
+  assert.equal(searchForDetail(routes[6],"personal"),"?view=Notes&noteId=n1&scope=personal");
 });
 
 test("opaque ids are encoded, never interpreted",()=>{
@@ -128,8 +130,11 @@ test("closing the unavailable overlay returns to the current view's own parent a
   assert.equal(parentSearchForDetail(null,"all","?view=Notes&noteId=a&noteId=b"),"?view=Notes");
   assert.equal(parentSearchForDetail(null,"shared","?view=MyPlanPreview&taskId="),"?view=MyPlanPreview&scope=shared");
   assert.equal(parentSearchForDetail(null,"all","?view=Projects&projectId=x%00"),"?view=Projects");
-  // A view that is not a detail view falls back to Projects (never to a legacy view).
-  assert.equal(parentSearchForDetail(null,"all","?view=Inbox&taskId=x"),"?view=Projects");
+  // C-3a target Inbox is now a detail origin; closing an unavailable typed
+  // address returns to its Inbox list rather than an unrelated project.
+  assert.equal(parentSearchForDetail(null,"all","?view=Inbox&taskId=x"),"?view=Inbox");
+  // A view outside the typed target route set still falls back to Projects.
+  assert.equal(parentSearchForDetail(null,"all","?view=Today&taskId=x"),"?view=Projects");
   assert.equal(viewOfSearch("?view=Notes&noteId=1&scope=shared"),"Notes");
 });
 
