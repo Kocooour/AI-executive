@@ -243,11 +243,11 @@ for(const width of [390,1280]){
 
 
 // A successful limit=1 GET may have already mounted the navigation badge
-// while the main Inbox (limit=50) has not been opened. The first-page response
-// must revoke that independently cached count on either an ACL/policy 409 or
-// a disabled Inbox 404, and never revive it from a late old GET.
+// while the main Inbox (limit=50) has not been opened. ANY failed first-page
+// response, including transient 503 and rate-limit 429, must suppress that
+// independently cached count until a new verified session and authorized GET.
 for(const width of [390,1280]){
-  for(const status of [409,404]){
+  for(const status of [409,404,503,429]){
     test("C-3a: first-page "+status+" hides already-visible navigation count ("+
       width+"px)",async({page})=>{
       test.setTimeout(90_000);
@@ -270,7 +270,9 @@ for(const width of [390,1280]){
           refused++;
           await route.fulfill({status,contentType:"application/json",
             headers:{"cache-control":"no-store"},
-            body:JSON.stringify({error:status===409?"read_stale_reload":"Not found"})});
+            body:JSON.stringify({error:status===409?"read_stale_reload":
+              status===404?"Not found":status===429?"Too many requests":
+              "Staging unavailable"})});
         }else await route.continue(); // badge had a successful authorized GET
       };
       await page.route("**/api/target-staging/inbox?*",firstPageRefusal);
@@ -353,6 +355,65 @@ for(const width of [390,1280]){
     await expect(count(page)).toBeVisible({timeout:15000});
   });
 }
+
+test("C-3a: missing POST recovers after reload by replaying only its original UUID",async({page})=>{
+  test.setTimeout(120_000);
+  if(!store)throw Error("Missing isolated C-3a SQLite store");
+  await page.setViewportSize({width:1280,height:844});
+  const seeded=store.seed.projects["1280"],title=seeded.taskTitle;
+  const db=new DatabaseSync(path.join(store.directory,"lumi-target.sqlite"));
+  const receiptCount=()=>Number((db.prepare(
+    "SELECT COUNT(*) AS n FROM task_triage_receipts WHERE task_id=? AND action='process'",
+  ).get(seeded.taskId) as {n:number}).n);
+  const before=receiptCount();
+  try{
+    await openInbox(page);
+    await findInboxRow(page,seeded.taskId);
+    const sent:unknown[]=[];
+    const loseFirstPost=async(route:Route)=>{
+      sent.push(route.request().postDataJSON());
+      if(sent.length===1){
+        // No server write at all. A matching receipt says not_recorded.
+        await route.fulfill({status:503,contentType:"application/json",
+          headers:{"cache-control":"no-store"},body:'{"error":"unavailable"}'});
+      }else await route.continue();
+    };
+    await page.route("**/api/target-staging/inbox/triage",loseFirstPost);
+    await processAction(page,title).click();
+    await expect(page.getByTestId("target-inbox-uncertain")).toBeVisible();
+    await expect(page.getByRole("button",{name:"Opakovat původní příkaz"}))
+      .toBeVisible({timeout:15000});
+    await expect(count(page)).toHaveCount(0);
+    await expect(page.getByTestId("target-inbox-sidebar-count")).toHaveCount(0);
+    expect(sent).toHaveLength(1);
+    expect(receiptCount()).toBe(before);
+    const original=JSON.parse((await page.evaluate(()=>
+      sessionStorage.getItem("lumi:target-inbox-command:v1")))!) as
+      {command:{commandId:string}};
+    expect(original.command.commandId).toBe(
+      (sent[0] as {commandId:string}).commandId);
+
+    // A full reload has only the original content-free witness. Verify again
+    // and replay THAT exact UUID/CAS, never a new command or a blind retry.
+    await page.reload();
+    await expect(page.getByTestId("target-inbox-uncertain")).toBeVisible();
+    await expect(processAction(page,title)).toHaveCount(0);
+    await page.getByRole("button",{name:"Ověřit původní příkaz"}).click();
+    await expect(page.getByRole("button",{name:"Opakovat původní příkaz"}))
+      .toBeVisible();
+    await page.getByRole("button",{name:"Opakovat původní příkaz"}).click();
+    await expect(page.getByRole("button",{name:"Vrátit do Inboxu (Undo)"}))
+      .toBeVisible({timeout:20000});
+    expect(sent).toHaveLength(2);
+    expect(sent[1]).toEqual(sent[0]);
+    expect(receiptCount()).toBe(before+1,"one committed Process, no duplicate");
+    expect((db.prepare("SELECT triage_state FROM tasks WHERE id=?")
+      .get(seeded.taskId) as {triage_state:string}).triage_state).toBe("processed");
+    await page.getByRole("button",{name:"Vrátit do Inboxu (Undo)"}).click();
+    await findInboxRow(page,seeded.taskId);
+    await page.unroute("**/api/target-staging/inbox/triage",loseFirstPost);
+  }finally{db.close();}
+});
 
 test("C-3a: hung Process request times out without losing UUID after reload",async({page})=>{
   test.setTimeout(100_000);
