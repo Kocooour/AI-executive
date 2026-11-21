@@ -651,7 +651,7 @@ for (const width of [390, 1280]) {
   });
 }
 
-// C13: the real target profile must expose legacy Home/Inbox/Today for reading
+// C13: the full C-3a profile keeps LegacyHome/LegacyInbox/Today available for reading
 // without ever turning the historical local-first store into a migration source.
 for (const width of [390, 1280]) {
   test("C-1 current navigation isolates synthetic legacy records; archive stays read-only at " + width + "px", async ({ page }) => {
@@ -727,15 +727,16 @@ for (const width of [390, 1280]) {
           .not.toContainText(oldTitle);
       await expect(page.getByTestId("target-archive-heading")).toHaveCount(0);
     };
-    // C-3a activation: the authorized target Inbox is current; old Inbox is LegacyInbox.
     const currentViews = ["MyPlanPreview", "Home", "Inbox", "Upcoming", "Projects", "Notes", "Calendar", "Search"] as const;
     await expect(page.locator('[data-target-private-capture-fab="' +
       (width === 390 ? "mobile" : "desktop") + '"]')).toBeVisible();
     if (width === 1280) {
       const primary = page.locator(".appShell > aside > nav [data-nav-view]");
       await expect(primary).toHaveCount(currentViews.length);
-      // Only the actor-scoped target Inbox badge may appear; never legacy sidebar counts.
-      await expect(page.locator(".appShell > aside > nav .navCount:not([data-testid=\"target-inbox-sidebar-count\"])")).toHaveCount(0);
+      // The only allowed sidebar count is the live, actor-authorized Inbox badge,
+      // not a count reconstructed from the historical legacy store.
+      await expect(page.getByTestId("target-inbox-sidebar-count")).toBeVisible();
+      await expect(page.locator(".appShell > aside > nav .navCount")).toHaveCount(1);
       await expect(page.getByTestId("target-archive-sidebar")).toContainText(
         "Archiv (stará data, jen pro čtení)");
       for (const destination of currentViews) {
@@ -1241,6 +1242,262 @@ for (const width of [390, 1280]) {
         revivedIds: [],
       } });
       expect(cleanup.status(), "remove synthetic archived ranks: " + await cleanup.text()).toBe(200);
+    }
+  });
+}
+
+
+/** #490/#462: full C-3a real-store profile, including an Inbox badge read,
+ * must recover an interrupted 200 Area body AUTOMATICALLY after wake.
+ * No Retry/Close/reopen action can satisfy this test. */
+for(const width of [390,1280]){
+  test("C-3a concurrent Inbox wake automatically reauthorizes interrupted Area at "+width+"px",async({page})=>{
+    test.setTimeout(90_000);
+    if(!store?.seed?.areaTitle)throw Error("Missing isolated private Area fixture");
+    await page.setViewportSize({width,height:844});
+    await page.addInitScript(()=>{
+      const proof={
+        armed:false,inboxStarted:0,areaAttempts:0,bodyInterrupted:false,
+        taskPosts:0,events:[] as string[],
+      };
+      (window as typeof window & {__lumiC3aWake?:typeof proof}).__lumiC3aWake=proof;
+      const real=window.fetch.bind(window);
+      window.fetch=(input,init)=>{
+        const raw=typeof input==="string"?input:
+          input instanceof URL?input.href:input.url;
+        const pathname=new URL(raw,location.href).pathname;
+        if(pathname==="/api/target-staging/tasks"&&init?.method==="POST"&&proof.armed)
+          proof.taskPosts++;
+        if(!proof.armed)return real(input,init);
+        if(pathname==="/api/target-staging/inbox"){
+          proof.inboxStarted++;
+          proof.events.push("inbox:queued");
+          // The Inbox's queued read may overlap the wake and private Area
+          // recovery, but the server still uses its real isolated store.
+          return new Promise<globalThis.Response>((resolve,reject)=>{
+            const signal=init?.signal;
+            const aborted=()=>{
+              clearTimeout(timer);reject(new DOMException("Aborted","AbortError"));
+            };
+            if(signal?.aborted){reject(new DOMException("Aborted","AbortError"));return;}
+            const timer=setTimeout(()=>{
+              signal?.removeEventListener("abort",aborted);
+              void real(input,init).then(resolve,reject);
+            },120);
+            signal?.addEventListener("abort",aborted,{once:true});
+          });
+        }
+        if(pathname==="/api/target-staging/session"){
+          return real(input,init).then(response=>{
+            proof.events.push("session:"+response.status);
+            return response;
+          });
+        }
+        if(pathname==="/api/target-staging/notes/create-targets"){
+          const attempt=++proof.areaAttempts;
+          proof.events.push("area:"+attempt);
+          if(attempt===1){
+            // 200 HEADERS + partial streamed JSON, then a body failure.
+            // The client must discard it, verify the session and start
+            // its one automatic fresh GET. Never present partial Area data.
+            const body=new ReadableStream<Uint8Array>({
+              start(controller){
+                controller.enqueue(new TextEncoder().encode('{"areas":['));
+                setTimeout(()=>{
+                  proof.bodyInterrupted=true;
+                  controller.error(new TypeError("C-3a interrupted 200 body"));
+                },15);
+              },
+            });
+            return Promise.resolve(new Response(body,{status:200,headers:{
+              "content-type":"application/json","cache-control":"no-store",
+            }}));
+          }
+        }
+        return real(input,init);
+      };
+    });
+    await page.goto("/?view=Calendar&scope=personal");
+    const capture=page.locator('[data-target-private-capture-fab="'+
+      (width===390?"mobile":"desktop")+'"]');
+    await expect(capture).toBeVisible();
+    await capture.click();
+    await page.getByTestId("target-capture-task-kind").click();
+    const select=page.getByTestId("target-private-task-area");
+    await expect(select.locator("option")).toContainText([store.seed.areaTitle],{timeout:15000});
+    await select.selectOption({label:store.seed.areaTitle});
+    const title=page.getByTestId("target-private-task-form").locator("input");
+    await title.fill("Abandoned C-3a private draft");
+    await page.evaluate(()=>{
+      const proof=(window as typeof window & {__lumiC3aWake?:{armed:boolean}}).__lumiC3aWake!;
+      proof.armed=true;
+      Object.defineProperty(document,"visibilityState",{configurable:true,value:"hidden"});
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
+    await expect(page.getByTestId("target-private-task-form")).toHaveCount(0);
+    await page.evaluate(()=>{
+      Reflect.deleteProperty(document,"visibilityState");
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
+    // No user action after wake: the chooser must itself load a fresh Area.
+    await expect(select.locator("option")).toContainText([store.seed.areaTitle],{timeout:25000});
+    await expect(select).toHaveValue("");
+    const proof=await page.evaluate(()=>(window as typeof window & {
+      __lumiC3aWake:{inboxStarted:number;areaAttempts:number;
+        bodyInterrupted:boolean;taskPosts:number;events:string[]};
+    }).__lumiC3aWake);
+    expect(proof.bodyInterrupted).toBe(true);
+    expect(proof.areaAttempts,"one interrupted read and one fresh automatic GET").toBe(2);
+    expect(proof.inboxStarted,"Inbox badge must also be active during wake").toBeGreaterThan(0);
+    const failed=proof.events.indexOf("area:1"),replacement=proof.events.indexOf("area:2");
+    expect(failed).toBeGreaterThan(-1);
+    expect(replacement).toBeGreaterThan(failed);
+    expect(proof.events.slice(failed+1,replacement),
+      "a new owner session GET 200 must precede automatic private Area retry")
+      .toContain("session:200");
+    await select.selectOption({label:store.seed.areaTitle});
+    await expect(page.getByTestId("target-private-task-form").locator("input"))
+      .toHaveValue("");
+    expect(proof.taskPosts,"wake may never replay a private CREATE").toBe(0);
+  });
+}
+
+
+/** #490/#475: real Chrome network cancellation is distinct from a synthetic
+ * broken response body. The real-store personal profile mounts Inbox alongside
+ * Quick Capture. This CDP witness must observe the first Area GET cancelled by
+ * the app's own pagehide/AbortController and an automatic, independently
+ * completed owner-session → Area read after pageshow. No UI retry is allowed.
+ * Only test-owned transport delays and isolated seeded SQLite are used. */
+for(const width of [390,1280]){
+  test("C-3a client-cancelled Area automatically resumes with Inbox at "+width+"px",async({page})=>{
+    test.setTimeout(90_000);
+    if(!store?.seed?.areaTitle)throw Error("Missing isolated personal Area fixture");
+    await page.setViewportSize({width,height:844});
+    const cdp=await page.context().newCDPSession(page);
+    await cdp.send("Network.enable");
+    type NetworkRead={
+      id:string;path:string;method:string;order:number;
+      status?:number;finished?:number;failed?:number;
+      reason?:string;cancelled?:boolean;disk?:boolean;serviceWorker?:boolean;
+    };
+    const events:NetworkRead[]=[];
+    const pending=new Map<string,NetworkRead>();
+    let order=0;
+    const areaPath="/api/target-staging/notes/create-targets";
+    const sessionPath="/api/target-staging/session";
+    const inboxPath="/api/target-staging/inbox";
+    const relevant=new Set([areaPath,sessionPath,inboxPath]);
+    cdp.on("Network.requestWillBeSent",event=>{
+      const pathname=new URL(event.request.url).pathname;
+      if(!relevant.has(pathname)||event.request.method!=="GET")return;
+      const read:NetworkRead={id:event.requestId,path:pathname,
+        method:event.request.method,order:++order};
+      events.push(read);pending.set(read.id,read);
+    });
+    cdp.on("Network.responseReceived",event=>{
+      const read=pending.get(event.requestId);
+      if(!read)return;
+      read.status=event.response.status;
+      read.disk=event.response.fromDiskCache;
+      read.serviceWorker=event.response.fromServiceWorker;
+      order++;
+    });
+    cdp.on("Network.loadingFinished",event=>{
+      const read=pending.get(event.requestId);
+      if(read){read.finished=++order;pending.delete(read.id);}
+    });
+    cdp.on("Network.loadingFailed",event=>{
+      const read=pending.get(event.requestId);
+      if(read){
+        read.failed=++order;read.reason=event.errorText;
+        read.cancelled=event.canceled===true;pending.delete(read.id);
+      }
+    });
+    let areaRequests=0,inboxWakeReads=0,overlapWitness=false;
+    let waking=false,taskPosts=0;
+    await page.route("**/api/target-staging/notes/create-targets",route=>{
+      areaRequests++;
+      // The first GET is a real browser request, held at the HTTP route.
+      // Only the app's pagehide listener/AbortController may cancel it.
+      if(areaRequests===1)return;
+      return route.continue();
+    });
+    // The badge always fetches /inbox?limit=1. A pathname-only glob does
+    // NOT match its query string in Playwright, so that would falsely report
+    // no Inbox contention even while the badge actually loads.
+    await page.route(/\/api\/target-staging\/inbox\?(?:.*)$/,async route=>{
+      if(!waking)return route.continue();
+      inboxWakeReads++;
+      // If the Inbox read starts while the cancelled Area has not yet
+      // been replaced, the two consumers genuinely contend for the shared
+      // target client queue. Delay Inbox's HTTP completion to expose it.
+      if(areaRequests===1)overlapWitness=true;
+      await new Promise(resolve=>setTimeout(resolve,220));
+      await route.continue().catch(()=>{});
+    });
+    page.on("request",request=>{
+      if(request.method()==="POST"&&
+        new URL(request.url()).pathname==="/api/target-staging/tasks")taskPosts++;
+    });
+    try{
+      await page.goto("/?view=Calendar&scope=personal");
+      const capture=page.locator('[data-target-private-capture-fab="'+
+        (width===390?"mobile":"desktop")+'"]');
+      await expect(capture).toBeVisible();
+      await capture.click();
+      await page.getByTestId("target-capture-task-kind").click();
+      await expect.poll(()=>areaRequests).toBe(1);
+      await expect.poll(()=>events.some(e=>e.path===areaPath&&e.order>0))
+        .toBe(true);
+      const original=events.find(e=>e.path===areaPath)!;
+      expect(original.finished).toBeUndefined();
+      expect(original.failed).toBeUndefined();
+      await page.evaluate(()=>window.dispatchEvent(
+        new PageTransitionEvent("pagehide",{persisted:false})));
+      await expect.poll(()=>original.failed,{timeout:10000}).not.toBeUndefined();
+      expect(original.cancelled,"the browser must cancel the original GET")
+        .toBe(true);
+      expect(original.reason,"AbortController cancellation must be real")
+        .toBe("net::ERR_ABORTED");
+      expect(original.finished).toBeUndefined();
+      expect(areaRequests,"no unauthorized Area GET while hidden").toBe(1);
+      waking=true;
+      await page.evaluate(()=>window.dispatchEvent(
+        new PageTransitionEvent("pageshow",{persisted:false})));
+      const select=page.getByTestId("target-private-task-area");
+      // The only user action above was opening Capture; no Retry, Close, or
+      // reopen follows the wake. The chooser must repair itself.
+      await expect(select.locator("option").filter({hasText:store.seed.areaTitle}))
+        .toHaveCount(1,{timeout:25000});
+      await expect.poll(()=>areaRequests).toBe(2);
+      await expect.poll(()=>inboxWakeReads).toBeGreaterThan(0);
+      expect(overlapWitness,
+        "Inbox badge must start while the cancelled Area is awaiting replacement")
+        .toBe(true);
+      const fresh=events.filter(e=>e.path===areaPath&&e.order>original.order);
+      expect(fresh,"exactly one automatic replacement Area GET").toHaveLength(1);
+      const replacement=fresh[0];
+      await expect.poll(()=>replacement.finished,{timeout:10000})
+        .not.toBeUndefined();
+      expect(replacement.status).toBe(200);
+      expect(replacement.failed).toBeUndefined();
+      expect(replacement.disk).toBe(false);
+      expect(replacement.serviceWorker).toBe(false);
+      const authorized=events.filter(e=>e.path===sessionPath&&
+        e.order>original.failed!&&e.finished!==undefined&&
+        e.failed===undefined&&e.status===200&&
+        e.finished<replacement.order);
+      expect(authorized.length,
+        "fresh completed owner session HTTP 200 must precede Area replacement")
+        .toBeGreaterThan(0);
+      await expect(select).toHaveValue("");
+      await select.selectOption({label:store.seed.areaTitle});
+      await expect(page.getByTestId("target-private-task-form").locator("input"))
+        .toHaveValue("");
+      expect(taskPosts,"restoring the Area must never issue CREATE").toBe(0);
+    }finally{
+      await cdp.detach();
     }
   });
 }

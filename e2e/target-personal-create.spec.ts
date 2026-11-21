@@ -30,11 +30,23 @@ for(const width of [390,1280]){
     if(!store)throw Error("No isolated target fixture");
     await page.setViewportSize({width,height:844});
     const calls=observe(page);
+    // #490: both viewports run with the synthetic full C-3a Inbox flags.
+    // Capture real My Plan HTTP failures, not a mocked client response.
+    const myPlanFailures:number[]=[];
+    page.on("response",response=>{
+      const path=new URL(response.url()).pathname;
+      if(path.startsWith("/api/target-staging/my-plan")&&!response.ok())
+        myPlanFailures.push(response.status());
+    });
     const nonce="create"+width+"-"+Math.random().toString(36).slice(2,9);
     const projectTitle="Projekt "+nonce,taskTitle="Úkol "+nonce;
     await page.goto("/?view=Projects&scope=personal");
     const list=page.getByTestId("target-scope-list");
     await expect(list).toHaveAttribute("data-state","ready");
+    // On desktop the independent sidebar Inbox count must actually be
+    // mounted and fetching while Projects and My Plan are navigated.
+    if(width===1280)
+      await expect(page.getByTestId("target-inbox-sidebar-count")).toBeVisible();
 
     await page.getByTestId("target-project-create-open").click();
     const projectForm=page.getByTestId("target-project-create-form");
@@ -81,10 +93,12 @@ for(const width of [390,1280]){
       .toContainText("Termín „Kdy“ je uložen.");
     await page.goto("/?view=MyPlanPreview&scope=personal");
     await expect(page.getByTestId("target-my-plan")).toContainText(taskTitle);
+    expect(myPlanFailures).toEqual([]);
 
     // Neither record came from optimistic state: reload forces fresh SQLite reads.
     await page.reload();
     await expect(page.getByTestId("target-my-plan")).toContainText(taskTitle);
+    expect(myPlanFailures).toEqual([]);
     await page.goto("/?view=Projects&scope=personal");
     await expect(page.getByTestId("target-scope-list")).toContainText(projectTitle);
     await page.getByTestId("target-scope-list")

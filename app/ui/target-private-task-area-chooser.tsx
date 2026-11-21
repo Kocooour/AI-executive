@@ -173,6 +173,26 @@ export default function TargetPrivateTaskAreaChooser({
     window.addEventListener("pageshow",show);
     return ()=>window.removeEventListener("pageshow",show);
   },[generation]);
+  // A native Back/pagehide can suspend the runtime just as this chooser
+  // registers, before its wake machine observes the paired hide event. A
+  // resumed/visible event must independently claim the single pending ticket.
+  // restartAfterWake always verifies a fresh session; old Area data and draft
+  // are never restored, and two wake paths cannot start duplicate reads.
+  useEffect(()=>{
+    const onReturn=()=>{
+      if(wakeReadPending.current&&live())restartAfterWake();
+    };
+    window.addEventListener("pageshow",onReturn);
+    window.addEventListener("focus",onReturn);
+    window.addEventListener("online",onReturn);
+    document.addEventListener("visibilitychange",onReturn);
+    return ()=>{
+      window.removeEventListener("pageshow",onReturn);
+      window.removeEventListener("focus",onReturn);
+      window.removeEventListener("online",onReturn);
+      document.removeEventListener("visibilitychange",onReturn);
+    };
+  },[runtime,generation]);
   useEffect(()=>{
     const lifetime=new AbortController();
     let active=true;
@@ -242,11 +262,15 @@ export default function TargetPrivateTaskAreaChooser({
       if(!stillLive())return;
       let {result,timedOut}=await read();
       if(!stillLive())return;
+      // A live cancelled-body read may also return "aborted" before Chrome
+      // settles its transport. The lifetime guard forbids retrying a hidden,
+      // suspended, unmounted, rotated or refused read.
       // A body interrupted after HTTP 200, network error, or read deadline is
       // not a valid Area catalog. Reverify the identity before ONE new no-store
       // GET. Runtime suspend, unmount, generation rotation, 401/403 and invalid
       // catalogs are never retried.
-      if(result.ok===false&&(result.reason==="unavailable"||timedOut)){
+      if(result.ok===false&&(result.reason==="unavailable"||
+        result.reason==="aborted"||timedOut)){
         const verified=await runtime.refresh().catch(()=>"unavailable" as const);
         if(!stillLive())return;
         if(verified==="ok"){
@@ -393,7 +417,7 @@ export default function TargetPrivateTaskAreaChooser({
       {phase==="saved"&&<p role="status">{c.success}</p>}
       {message&&<p role="alert">{message}</p>}
       <div className="captureActions">
-        {!ready&&<button type="button" onClick={()=>{
+        {!ready&&<button type="button" data-testid="target-private-task-retry" onClick={()=>{
           if(!runtime)return;
           void runtime.refresh().then(result=>{
             if(result==="ok"&&live()){

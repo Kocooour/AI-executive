@@ -282,9 +282,11 @@ export default defineConfig({
         AI_EXECUTIVE_TARGET_STAGING_RESTORE_GENERATION: personalStore.restoreGeneration,
         AI_EXECUTIVE_TARGET_STAGING_OWNER_USER_ID: personalStore.ownerUserId,
       } : {}),
-      // C-3a flags are part of the personal-v1 profile since the activation
-      // release; kept explicit so the Inbox run never depends on that list.
-      ...(inboxAcceptanceTest ? {
+      // Both focused suites exercise the FULL C-3a personal profile, including
+      // the sidebar Inbox badge competing for read-child capacity. Since the
+      // activation release these flags are part of personal-v1 as well; they
+      // stay explicit here so the suites never depend on that list.
+      ...((inboxAcceptanceTest || personalAcceptanceTest) ? {
         AI_EXECUTIVE_TARGET_UI_INBOX_ENABLED: "true",
         AI_EXECUTIVE_TARGET_STAGING_HTTP_INBOX_ENABLED: "true",
         AI_EXECUTIVE_TARGET_STAGING_HTTP_INBOX_WRITE_ENABLED: "true",
