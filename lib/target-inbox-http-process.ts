@@ -10,7 +10,7 @@ export type InboxWriteReply={ok:true;replayed?:true}|{ok:false;reason:
   "unavailable"|"resync_required"|"write_area_mismatch"|"session_revoked"|
   "stale_revision"|"idempotency_conflict"|"write_failed"};
 export type InboxReceiptReply={
-  ok:true;status:"committed"|"not_recorded"|"conflict";
+  ok:true;status:"committed"|"not_recorded"|"cancelled"|"conflict";
   next:{expectedRevision:string;triageRevision:number;writeAreaId:string}|null;
   areaEpochs:HomeSummaryAreaEpoch[];
   linearization:TargetReadLinearization;
@@ -33,7 +33,7 @@ export function parseInboxReceiptReply(raw:unknown):InboxReceiptReply|null{
   if(!raw||typeof raw!=="object"||Array.isArray(raw))return null;
   const v=raw as Record<string,unknown>;
   if(Object.keys(v).sort().join(",")!=="areaEpochs,linearization,next,ok,status"||
-      v.ok!==true||!["committed","not_recorded","conflict"].includes(v.status as string))
+      v.ok!==true||!["committed","not_recorded","cancelled","conflict"].includes(v.status as string))
     return null;
   const witness=parseStagingTargetInboxPage({ok:true,count:0,items:[],
     nextCursor:null,areaEpochs:v.areaEpochs,linearization:v.linearization},50);
@@ -56,6 +56,26 @@ export function parseInboxReceiptReply(raw:unknown):InboxReceiptReply|null{
   return {ok:true,status:v.status as InboxReceiptReply["status"],next,
     linearization:witness.linearization,areaEpochs:witness.areaEpochs};
 }
+export type InboxCancelReply={ok:true;status:"committed"|"cancelled"}|
+  {ok:false;reason:"unavailable"|"resync_required"|"session_revoked"|
+    "write_failed"|"idempotency_conflict"};
+export function parseInboxCancelReply(raw:unknown):InboxCancelReply|null{
+  if(!raw||typeof raw!=="object"||Array.isArray(raw))return null;
+  const v=raw as Record<string,unknown>;
+  if(Object.keys(v).sort().join(",")==="ok,status"&&v.ok===true&&
+      (v.status==="committed"||v.status==="cancelled"))
+    return {ok:true,status:v.status};
+  if(Object.keys(v).sort().join(",")==="ok,reason"&&v.ok===false&&
+      ["unavailable","resync_required","session_revoked","write_failed",
+        "idempotency_conflict"].includes(v.reason as string))
+    return {ok:false,reason:v.reason as Extract<InboxCancelReply,{ok:false}>["reason"]};
+  return null;
+}
+export const cancelInboxTriageInChild=async(
+  config:StagingPersonalReadConfig,command:TargetInboxTriageCommand,
+):Promise<InboxCancelReply|null>=>parseInboxCancelReply(await runStagingWriteChild(
+  config,"target-staging-inbox-cancel-child.mjs",JSON.stringify(command)));
+
 export const writeInboxTriageInChild=async(
   config:StagingPersonalReadConfig,command:TargetInboxTriageCommand,
 ):Promise<InboxWriteReply|null>=>parseInboxWriteReply(await runStagingWriteChild(
