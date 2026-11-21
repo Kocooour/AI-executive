@@ -41,7 +41,8 @@ export function cancelPreflightedTargetInboxTriage(
       return {ok:false,reason:"resync_required"};
     // An actor can retire only UUIDs associated with an Area they can STILL
     // write. Do not reveal whether a missing task, foreign task or tombstone exists.
-    if(!canWriteIsolatedTargetArea(db,actor,command.writeAreaId))return denied();
+    if(!canWriteIsolatedTargetArea(db,actor,command.writeAreaId)&&
+        !targetTaskWriteTarget(db,actor,command.taskId))return denied();
     const receipt=db.prepare(
       "SELECT request_digest,actor_user_id,task_id FROM task_triage_receipts WHERE receipt_key=?"
     ).get(targetInboxTriageReceiptKey(actor,command.commandId)) as
