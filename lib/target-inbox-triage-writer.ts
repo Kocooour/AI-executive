@@ -154,8 +154,15 @@ export function readTargetInboxTriageReceipt(
           canWriteIsolatedTargetArea(db,actor,command.writeAreaId)))
         return "cancelled";
       if(cancelled==="conflict")return "conflict";
-      // A tombstone without an EXACT actor-owned fence is NOT evidence of
-      // a missing UUID. Never disclose not_recorded for that case.
+      // A monotonic task CAS mismatch is a durable negative proof: the
+      // original Process/Undo cannot ever pass the pinned writer's CAS again
+      // within this restore generation, even if its HTTP POST arrives late.
+      // A tombstoned ID likewise cannot be recreated (canonical DDL guard).
+      // These statuses do not claim that a Process happened or expose content;
+      // a matching committed receipt, if any, always wins above.
+      if(target==="tombstone")return "cancelled";
+      if(target==="live"&&targetTaskWriteRevision(db,command.taskId)!==command.expectedRevision)
+        return "cancelled";
       return target==="live"&&checkTargetTaskWriteContract(db,actor,command).ok
         ?"not_recorded":null;
     }
