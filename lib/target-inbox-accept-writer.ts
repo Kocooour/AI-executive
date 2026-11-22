@@ -614,8 +614,24 @@ function cancelUndoLocked(db:DatabaseSync,actor:string,
   });
   if(!current||current.status==="conflict"||
      current.status==="cancelled"||current.status==="not_recorded")return null;
-  if(current.status==="undone"||current.status==="undo_cancelled")
+  if(current.status==="undone")return {view:current,inserted:false};
+  if(current.status==="undo_cancelled"){
+    // A different UUID must not inherit the old Undo's cancellation receipt.
+    // Only the exact original command may replay the terminal outcome.
+    const row=db.prepare("SELECT value FROM metadata WHERE key=?").get(
+      receiptKey(UNDO,actor,command.undoOfCommandId)) as {value:string}|undefined;
+    if(!row)return null;
+    try{
+      const x=JSON.parse(row.value) as UndoCancelReceipt;
+      if(x.kind!=="undo_cancelled"||
+         x.commandId!==command.commandId.toLowerCase()||
+         x.undoOfCommandId!==command.undoOfCommandId.toLowerCase()||
+         x.actor!==actor||x.taskId!==command.taskId||
+         x.restoreGeneration!==command.restoreGeneration.toLowerCase())
+        return null;
+    }catch{return null;}
     return {view:current,inserted:false};
+  }
   if(!checkCapacity(db,"undo"))return null;
   const cancelledAtMs=Date.now();
   if(!validEpoch(cancelledAtMs)||cancelledAtMs<=0)return null;
