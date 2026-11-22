@@ -156,8 +156,8 @@ const storeReceipt=(db:DatabaseSync,key:string,receipt:object):void=>{
 };
 const readCancelReceipt=(db:DatabaseSync,key:string):CancelReceipt|null=>{
   try{
-    const row=db.prepare("SELECT value FROM metadata WHERE key=?").get(key)
-      as {value:string}|undefined;
+    const row=db.prepare("SELECT value FROM metadata WHERE key=?")
+      .get(key) as {value:string}|undefined;
     if(!row||typeof row.value!=="string"||
        Buffer.byteLength(row.value,"utf8")>MAX_RECEIPT_BYTES)return null;
     const x:unknown=JSON.parse(row.value);
