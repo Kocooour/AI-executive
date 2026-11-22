@@ -161,6 +161,25 @@ for(const width of [390,1280]){
     expect(readTask(taskId).task?.projectId).toBe(seeded.projectId);
     await expect(page.getByTestId("target-c3b-committed"))
       .toBeVisible({timeout:25000});
+    // P1: an intervening edit must make Undo fail its CAS, but its ORIGINAL
+    // UUID must be terminally fenced so Inbox never remains stuck/hidden.
+    const changedTitle="Novější zadání "+randomUUID().slice(0,8);
+    const edited=new DatabaseSync(path.join(store.directory,"lumi-target.sqlite"));
+    try{
+      edited.prepare("UPDATE tasks SET title=? WHERE id=?")
+        .run(changedTitle,taskId);
+    }finally{edited.close();}
+    await page.getByTestId("target-c3b-committed")
+      .getByRole("button",{name:"Vrátit změny (Undo)"}).click();
+    await expect(page.getByTestId("target-c3b-undo-cancelled"))
+      .toBeVisible({timeout:30000});
+    expect(readTask(taskId).task?.triageState).toBe("processed");
+    const verified=new DatabaseSync(path.join(store.directory,"lumi-target.sqlite"),{readOnly:true});
+    try{
+      expect(verified.prepare("SELECT title FROM tasks WHERE id=?")
+        .get(taskId)?.title).toBe(changedTitle);
+    }finally{verified.close();}
+    await expect(count(page)).toBeVisible();
     await page.reload();
     await expect(count(page)).toBeVisible();
     // No model outputs/notes are persisted in the local browser session.
