@@ -75,7 +75,7 @@ Počty jsou snapshot, nikoliv trvalá kapacita. U `Rodina` přibydou nové zázn
 1. **Inventura** všech polí, hodnot, vzorců, existujících view/automatizací a celkového počtu souborů; samostatná read-only kontrola využití a možných externích integrací v `Rekonstrukce Světice`, bez změn.
 2. **Obnovitelný export originálních tří bází**: všech záznamů, zdrojových hodnot a **binárních příloh** s SHA-256, velikostmi, časem a lokální mapou zdrojových Airtable ID. Běžné CSV s krátkodobými download URL není záloha souborů.
 3. **Předběžný kapacitní a API rozpočet** pro novou `Rodina`: očekávaný počet nových objektů (včetně 246 příloh) + rezerva pro nové dokumenty, zkontrolovat součet dat oproti 1 GB a plán API operací proti 1 000 za workspace/měsíc. Případná duplicitní příloha nebo nedostatek API kvóty **zastavuje**, nesmí vést ke ztrátě původního souboru.
-4. **Vytvořit novou base `Rodina`** se třemi tabulkami a bezpečnými obousměrnými linky; nedotknout se `Rekonstrukce Světice`.
+4. **Vytvořit novou base `Rodina` v přístupu jen pro vlastníka** se třemi tabulkami a bezpečnými obousměrnými linky; nedotknout se `Rekonstrukce Světice`. **Před udělením rodinného přístupu** prohlédnout reálné složení starých dokumentů a výslovně potvrdit, že celý přenesený soubor dat lze zpřístupnit stejné skupině; záznamy, které takto sdílet nelze, zůstávají mimo společnou base. MVP nevyžaduje per-dokumentové ACL, ale nesmí automaticky rozšířit dosavadní přístup.
 5. **Syntetický test + malý vzorek**: otestovat import dokumentů a příloh **pod i nad 5 MB**, zachování binární shody a přístupu bez trvalého veřejného URL, poznámek, `Záruka do`, identity vozidel, obnovu a znovuzískání aktuálních attachment URL.
 6. **Dvouprůchodový import**: nejprve cílové záznamy a migrace příloh s manifestem, potom relace podle `source → target UUID`; opakování je idempotentní.
 7. **Rekonsiliace** původních tří tabulek: jejich zdrojové počty, každý přenesený binární soubor/velikost/hash, ruční poznámky, vzorce a relevantní select hodnoty; všechny rozdíly zaznamenat před cutoverem.
@@ -95,7 +95,7 @@ Počty jsou snapshot, nikoliv trvalá kapacita. U `Rodina` přibydou nové zázn
 
 | ID | Ověřitelný scénář |
 |---|---|
-| UNI-01 | Ověřený export/záloha všech tří zdrojových bází včetně binárních příloh; stávající `Rekonstrukce Světice` zůstává beze změny. |
+| UNI-01 | Ověřený export/záloha všech tří zdrojových bází včetně binárních příloh; stávající `Rekonstrukce Světice` zůstává beze změny. Nová base při importu zůstává owner-only; případné rozšíření rodinného přístupu vyžaduje vědomé potvrzení sdíleného rozsahu historických dokumentů. |
 | UNI-02 | Nová `Rodina` se 3 tabulkami zachovává všech 222 původních záznamů přes stabilní mapování a případné nově potřebné objekty majetku/dokumentů se přidávají transparentně, bez duplikátů. |
 | UNI-03 | Každá ze 246 snapshot příloh (počet v čase cutoveru ověřit znovu), včetně nejméně tří nad 5 MB, má v cíli **binárně ověřený originál se SHA-256**; přenos nad limitem přímého upload endpointu používá zabezpečenou alternativu, ne neomezené veřejné URL, kompresi nebo ztrátu souboru. |
 | UNI-04 | Existujících 8 tabulek rekonstrukce a všechny původní `linked records` mají totožný stav před i po migračním cutoveru tří jiných bází. |
