@@ -1,6 +1,7 @@
 "use client";
 /** Explicit actor-owner AI consent; local rules never require this toggle. */
 import {useCallback,useEffect,useState} from "react";
+import "./target-inbox-ai-consent-settings.css";
 import {getC3bConsent,setC3bConsent}
   from "../../lib/target-inbox-c3b-client";
 type State={kind:"loading"|"disabled"|"error"}|
