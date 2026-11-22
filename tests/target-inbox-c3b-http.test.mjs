@@ -121,6 +121,11 @@ test("C-3b HTTP: rule Accept+Today+project/triage receipt, single atomic Undo",a
   const command={commandId:randomUUID(),taskId:p.taskId,
     restoreGeneration:p.restoreGeneration,token:p.token,
     displayedWhy:p.why,displayedChanges:p.changes};
+  const swapped=await post(ACCEPT,"accept",{command},{session:cookie()});
+  assert.notEqual(swapped.status,200,
+    "a fresh owner cookie must not accept an old session's sealed proposal");
+  assert.equal(db.prepare("SELECT triage_state AS t FROM tasks WHERE id='captured'")
+    .get().t,"unprocessed");
   await read(post(ACCEPT,"accept",{command}));
   await read(post(ACCEPT,"accept",{command})); // idempotent retry
   const receipt=await read(post(RECEIPT,"receipt",{command:{
