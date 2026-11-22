@@ -186,6 +186,22 @@ test("C-3b HTTP: explicit consent, mock OpenAI, revoke and fail-closed fallback"
   }});
   assert.notEqual(refused.status,200);
 });
+test("C-3b HTTP: concurrent optional previews preserve rules worker capacity",async()=>{
+  // Best mode remains a bounded optional lane even if no OpenAI grant exists.
+  // The second request must not acquire another worker while the first is
+  // running; a rules preview still has a separate subprocess slot.
+  const headers={cookie:fixedOwnerSession,"x-forwarded-for":"10.91.17.248"};
+  const optional=base+"?taskId=captured";
+  const first=PREVIEW(new Request(optional,{headers}));
+  const second=await PREVIEW(new Request(optional,{headers}));
+  assert.equal(second.status,429,
+    "a second optional request cannot occupy the rules worker slot");
+  const rules=await PREVIEW(new Request(optional+"&mode=rules",{headers}));
+  assert.equal(rules.status,200,"local rules must run while best is in flight");
+  assert.equal((await rules.json()).source,"rule");
+  assert.equal((await first).status,200);
+});
+
 test("C-3b HTTP: exhausting the optional AI bucket cannot rate-limit local rules",async()=>{
   const fixed={cookie:fixedOwnerSession,"x-forwarded-for":"10.91.17.249"};
   // Consent is explicitly revoked in the preceding test. Best mode safely
