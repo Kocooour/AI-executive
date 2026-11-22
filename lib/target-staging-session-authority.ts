@@ -108,6 +108,8 @@ import type {TargetNoteCreateRecovery} from "./target-note-create-status";
 import type { TargetNoteDeleteCommandStatus } from "./target-note-delete-command-status";
 import { validTargetTaskTitleEditPreviewRequest,targetTaskWriteRevision } from "./target-task-write-preflight";
 import {issueTargetInboxRevision} from "./target-inbox-command-identity";
+import {readAuthorizedInboxSuggestionSnapshot,
+  type AuthorizedInboxSuggestionSnapshot} from "./target-inbox-suggestion-snapshot";
 import { writePreflightedTargetTaskTitle, validTargetStagingTaskTitleWriteRequest } from "./target-task-staging-writer";
 import {
   writePreflightedTemporalTaskStatus, validTargetStagingTemporalStatusCommand,
@@ -471,6 +473,28 @@ export class TargetStagingSessionAuthority {
       const credential=this.#oneShotReadCredential(actorUserId);
       return credential?readPreflightedTargetInboxPage(this.#store,credential,
         {limit,afterTaskId}):null;
+    }catch{return null;}
+  }
+
+  /**
+   * C-3b private suggestions: the actor is resolved by trusted server session
+   * issuance (never from untrusted HTTP payload), then checked INSIDE the
+   * canonical preflighted SQLite snapshot. This core-only method must NOT
+   * release titles or candidate names to HTTP without a separate live ACL,
+   * session, restore and consent revalidation.
+   */
+  readPrivateInboxSuggestionSnapshot(
+    actorUserId:string,taskId:string,
+  ):AuthorizedInboxSuggestionSnapshot|null {
+    if(this.#closed)return null;
+    try{
+      const credential=this.#oneShotReadCredential(actorUserId);
+      if(!credential)return null;
+      return readPreflightedStoreSnapshot(this.#store,db=>{
+        if(verifiedActor(db,credential)!==actorUserId)return null;
+        return readAuthorizedInboxSuggestionSnapshot(
+          db,actorUserId,taskId,this.#store.expectedRestoreGeneration);
+      });
     }catch{return null;}
   }
 
