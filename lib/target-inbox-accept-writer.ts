@@ -356,6 +356,59 @@ function undoLocked(db:DatabaseSync,actor:string,c:InboxAcceptUndoCommand):Inbox
   return {ok:true};
 }
 
+/**
+ * Read-only reconciliation for an uncertain original Accept. A missing
+ * receipt is NOT proof a still-running write cannot commit; clients must
+ * preserve their original UUID and never issue an automatic replacement.
+ * Call only on a pinned preflighted actor snapshot, and revalidate the live
+ * session/ACL before exposing this status through any future HTTP route.
+ */
+export type InboxAcceptReceiptView={
+  status:"committed"|"undone"|"not_recorded"|"conflict";
+  next:{expectedTaskRevision:number;expectedTriageRevision:number;
+    expectedPrivateEpoch:number;expectedPlanRevision:number|null}|null;
+};
+export function readInboxAcceptReceiptInSnapshot(
+  db:DatabaseSync,actor:string,command:InboxAcceptCommand,
+):InboxAcceptReceiptView|null{
+  if(!validateAccept(command)||
+     !canEditIsolatedTargetTaskTitle(db,actor,command.taskId,true)||
+     targetStoreRestoreGeneration(db)!==command.restoreGeneration.toLowerCase())
+    return null;
+  try{
+    const keyId=receiptKey(ACCEPT,actor,command.commandId);
+    const old=readReceipt(db,keyId);
+    if(!old){
+      if(db.prepare("SELECT 1 FROM metadata WHERE key=?").get(keyId))
+        return {status:"conflict",next:null};
+      return {status:"not_recorded",next:null};
+    }
+    if(old.actor!==actor||old.taskId!==command.taskId||
+       old.digest!==acceptDigest(command))
+      return {status:"conflict",next:null};
+    if(db.prepare("SELECT 1 FROM metadata WHERE key=?").get(
+      receiptKey(UNDO,actor,command.commandId)))
+      return {status:"undone",next:null};
+    const row=currentTask(db,command.taskId);
+    const plan=currentPlan(db,actor,command.taskId);
+    const epoch=currentPrivateEpoch(db,actor);
+    const next=row&&row.status==="open"&&row.triage_state==="processed"&&
+      row.revision===old.after.taskRevision&&
+      row.triage_revision===old.after.triageRevision&&
+      row.triaged_at===old.after.triagedAtMs&&
+      row.area_id===old.after.areaId&&
+      row.project_id===old.after.projectId&&
+      (plan?.when_on??null)===old.after.whenOn&&
+      (plan?.revision??null)===old.after.planRevision&&
+      epoch!==null?
+        {expectedTaskRevision:row.revision,
+          expectedTriageRevision:row.triage_revision,
+          expectedPrivateEpoch:epoch,
+          expectedPlanRevision:plan?.revision??null}:null;
+    return {status:"committed",next};
+  }catch{return null;}
+}
+
 type WriteMode={mode:"accept";command:InboxAcceptCommand;key:Uint8Array;
   sessionTokenHash:string}|{mode:"undo";command:InboxAcceptUndoCommand;
   sessionTokenHash:string};
