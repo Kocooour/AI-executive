@@ -168,3 +168,49 @@ test('abort before the dispatch microtask never starts an HTTP read',async()=>{
  assert.equal(started,0);
  assert.deepEqual(targetReadQueueState(),{active:0,waiting:0});
 });
+
+test("C-3a: aborted Inbox transport and cancelled chooser wake cannot starve a reauthorized Area read",async()=>{
+  const started=[];
+  let completeInbox;
+  let cancelledBody=false;
+  const q=queuedTargetFetch(url=>{
+    started.push(String(url));
+    if(String(url)==="/api/target-staging/inbox")
+      return new Promise(resolve=>{completeInbox=resolve;});
+    return Promise.resolve(new Response('{"areas":[]}',{
+      status:200,headers:{"content-type":"application/json","cache-control":"no-store"},
+    }));
+  });
+  const badgeController=new AbortController();
+  const badge=q("/api/target-staging/inbox",{signal:badgeController.signal});
+  await tick();
+  const oldWakeController=new AbortController();
+  const stale=q("/api/target-staging/notes/create-targets",{
+    signal:oldWakeController.signal,
+  });
+  await tick();
+  assert.deepEqual(started,["/api/target-staging/inbox"],
+    "an unverified chooser read must queue behind the badge");
+  oldWakeController.abort();
+  await assert.rejects(stale);
+  badgeController.abort();
+  await assert.rejects(badge);
+  // The old badge transport can ignore abort. Only a NEW chooser request
+  // under an independently verified session may occupy the freed logical slot.
+  const retried=q("/api/target-staging/notes/create-targets");
+  const response=await retried;
+  assert.equal(response.status,200);
+  assert.deepEqual(started,[
+    "/api/target-staging/inbox",
+    "/api/target-staging/notes/create-targets",
+  ],"cancelled chooser never reaches the network; retry does");
+  assert.deepEqual(targetReadQueueState(),{active:0,waiting:0});
+  completeInbox(new Response(new ReadableStream({
+    cancel(){cancelledBody=true;},
+  })));
+  await tick();
+  assert.equal(cancelledBody,true,"late, aborted Inbox content cannot be observed");
+  const later=await q("/api/target-staging/notes/create-targets");
+  assert.equal(later.status,200);
+  assert.deepEqual(targetReadQueueState(),{active:0,waiting:0});
+});

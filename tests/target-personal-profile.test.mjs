@@ -7,7 +7,7 @@ import {TARGET_PERSONAL_V1_PROFILE,TARGET_PERSONAL_V1_EXCLUDED,
   TARGET_PERSONAL_V1_EXCLUDED_PREFIXES,TARGET_PERSONAL_V1_REQUIRED_SETTINGS,
   TARGET_PERSONAL_V1_NOT_SETTINGS,targetPersonalV1Env}
   from "../lib/target-personal-profile.ts";
-import {targetUiConfig,targetHomeSummaryEnabled} from "../lib/target-ui-config.ts";
+import {targetUiConfig,targetHomeSummaryEnabled,targetInboxUiEnabled} from "../lib/target-ui-config.ts";
 import {targetMainTitleSearchEnabled} from "../lib/target-main-title-search-ui.ts";
 import {targetPrivateNoteAreaUiEnabled} from "../lib/target-private-note-area-ui-gate.ts";
 import {targetPrivateNoteCreateUiEnabled} from "../lib/target-private-note-create-ui-gate.ts";
@@ -159,7 +159,7 @@ test("removing any single profile flag turns at least one gate or route off (no 
     targetPrivateNoteAreaUiEnabled(e),targetPrivateNoteCreateUiEnabled(e),
     targetPrivateTaskCreateUiEnabled(e),targetPrivateProjectCreateUiEnabled(e),
     targetProjectTaskCreateUiEnabled(e),targetProjectTitleEditUiEnabled(e),targetNoteEditUiEnabled(e),
-    targetHomeSummaryEnabled(e)]);
+    targetHomeSummaryEnabled(e),targetInboxUiEnabled(e)]);
   const base=gates(env);
   for(const flag of TARGET_PERSONAL_V1_PROFILE){
     const reduced={...env};delete reduced[flag];
