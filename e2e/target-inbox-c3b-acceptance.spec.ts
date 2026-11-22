@@ -63,6 +63,7 @@ for(const width of [390,1280]){
     const consent=page.getByTestId("target-c3b-consent-settings");
     await expect(consent).toBeVisible({timeout:25000});
     const toggle=consent.getByRole("checkbox");
+    await expect(toggle).toBeVisible({timeout:15000});
     // The viewport cases share isolated SQLite; never inherit an earlier
     // interrupted run\u0027s owner grant without an explicit revoke.
     if(await toggle.isChecked()){
@@ -71,6 +72,17 @@ for(const width of [390,1280]){
     }
     await toggle.check();
     await expect(toggle).toBeChecked({timeout:15000});
+    await expect(toggle).toBeEnabled({timeout:15000});
+    await expect.poll(async()=>{
+      const r=await page.request.get("/api/target-staging/inbox/c3b/consent");
+      return r.ok()&&(await r.json()).enabled===true;
+    },{timeout:15000}).toBe(true);
+    // The isolated mock OpenAI branch must ACTUALLY be authorized, not just
+    // inferred from a visually optimistic checkbox or fallback rules.
+    const aiProof=await page.request.get("/api/target-staging/inbox/c3b?taskId="+
+      encodeURIComponent(seeded.taskId));
+    expect(aiProof.ok()).toBe(true);
+    expect((await aiProof.json()).source).toBe("ai");
 
     await openInbox(page);
     const before=Number((await count(page).textContent())?.trim());
@@ -162,6 +174,11 @@ for(const width of [390,1280]){
     await expect(revokeToggle).toBeChecked({timeout:25000});
     await revokeToggle.uncheck();
     await expect(revokeToggle).not.toBeChecked({timeout:15000});
+    await expect(revokeToggle).toBeEnabled({timeout:15000});
+    await expect.poll(async()=>{
+      const r=await page.request.get("/api/target-staging/inbox/c3b/consent");
+      return r.ok()&&(await r.json()).enabled===false;
+    },{timeout:15000}).toBe(true);
     if(width===1280){
       await page.goto("/?view=Settings");
       await waitUntilSynced(page);
@@ -205,8 +222,14 @@ test("C-3b 390px: lost response -> reload -> query-only cancellation terminates 
   await page.reload();
   await expect(page.getByTestId("target-c3b-uncertain"))
     .toBeVisible({timeout:25000});
+  const cancelling=page.waitForResponse(r=>r.request().method()==="POST"&&
+    new URL(r.url()).pathname==="/api/target-staging/inbox/c3b/cancel");
   await page.getByRole("button",{name:"Bezpečně ukončit původní Přijmout"})
     .click();
+  const cancellation=await cancelling;
+  const reply=await cancellation.json();
+  expect(cancellation.status(),JSON.stringify(reply)).toBe(200);
+  expect(reply).toMatchObject({ok:true,status:"cancelled"});
   await expect(page.getByTestId("target-c3b-uncertain"))
     .toHaveCount(0,{timeout:25000});
   await page.unroute("**/api/target-staging/inbox/c3b/accept");

@@ -33,7 +33,8 @@ export default function InboxAIConsentSettings({language="cs"}:{
     return ()=>document.removeEventListener("visibilitychange",onVisibility);
   },[refresh]);
   async function change(enable:boolean){
-    if(saving||state.kind!=="ready"||state.pending)return;
+    if(saving||state.kind==="loading"||state.kind==="disabled"||
+       state.kind==="ready"&&state.pending)return;
     // Reflect the explicit user intent in the controlled checkbox while POST
     // is pending. On failure, render a conservative unknown-state error.
     setSaving(true);setNotice("");
@@ -50,9 +51,11 @@ export default function InboxAIConsentSettings({language="cs"}:{
           :enable?speak("Souhlas byl aktivován.","Consent enabled.")
           :speak("Souhlas byl odvolán.","Consent withdrawn."));
       }else{
-        setState({kind:"error"});
-        setNotice(speak("Změnu nelze bezpečně potvrdit. Ověřte aktuální stav.",
-          "The change cannot be confirmed. Recheck current consent."));
+        // The POST might have committed even if its response was lost.
+        // Do not falsely claim AI is disabled: re-read durable consent.
+        setNotice(speak("Výsledek změny není potvrzen. Ověřuji aktuální stav.",
+          "The outcome is uncertain. Rechecking the current consent."));
+        await refresh();
       }
     }finally{setSaving(false);}
   }
@@ -67,8 +70,8 @@ export default function InboxAIConsentSettings({language="cs"}:{
     {state.kind==="loading"&&<p role="status">{speak(
       "Ověřuji souhlas…","Checking consent…")}</p>}
     {state.kind==="error"&&<p role="alert">{speak(
-      "Souhlas není dostupný. AI zůstává vypnutá.",
-      "Consent is unavailable. Remote AI remains off.")}</p>}
+      "Aktuální stav souhlasu nelze ověřit. Mohl se změnit; obnovte kontrolu nebo souhlas odvolejte.",
+      "Consent status cannot be verified. It may have changed; refresh or withdraw consent.")}</p>}
     {state.kind==="ready"&&<label className="targetInboxAIConsentToggle">
       <input type="checkbox" checked={state.enabled}
         disabled={saving||state.pending} onChange={e=>void change(e.target.checked)}/>
@@ -78,6 +81,10 @@ export default function InboxAIConsentSettings({language="cs"}:{
     {state.kind==="ready"&&state.pending&&<p role="status">{speak(
       "Odvolání čeká na bezpečné dokončení rozběhnutých požadavků.",
       "Withdrawal is pending until active requests have drained.")}</p>}
+    {state.kind==="error"&&<button type="button"
+      disabled={saving} onClick={()=>void change(false)}>
+      {speak("Odvolat souhlas i při neznámém stavu",
+        "Withdraw consent even when status is unknown")}</button>}
     {notice&&<p role="status">{notice}</p>}
     <button type="button" disabled={saving} onClick={()=>void refresh()}>
       {speak("Ověřit aktuální souhlas","Refresh consent status")}</button>
