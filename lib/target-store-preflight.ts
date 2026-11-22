@@ -255,8 +255,8 @@ export function inspectIsolatedTargetStore(
       // four namespaces are validated for exact actor-bound hashes, bounded
       // receipts, original/Undo lineage and versioned owner consent before
       // they may be counted as legal metadata. No titles or payloads in logs.
-      const c3b=validateC3BMetadata(rows,(all("SELECT id FROM identities")
-        as {id:string}[]).map(x=>x.id));
+      const c3bActorRows = all("SELECT id FROM identities") as {id:string}[];
+      const c3b=validateC3BMetadata(rows,c3bActorRows.map(x=>x.id));
       if(!c3b.valid)fail("metadata_invalid");
       const receipts = rows.filter(row => typeof row.key === "string" &&
         row.key.startsWith(TARGET_STAGING_RECEIPT_PREFIX));
