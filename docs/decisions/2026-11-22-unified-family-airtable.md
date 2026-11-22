@@ -1,104 +1,104 @@
-# Jednotná rodinná databáze v Airtable — návrh konsolidace (2026-11-22)
+# Rodinná evidence v Airtable Free — konsolidace tří bází (2026-11-22)
 
-**Status:** návrh nové struktury na základě výslovného cíle vlastníka sjednotit současné databáze **Auto, Dokumenty, Nákupy a Rekonstrukce Světice**. Byla provedena **pouze read-only inventura schémat a agregovaných počtů**. Nová base, tabulky, data, přílohy ani automatizace **zatím nebyly vytvořeny ani změněny**. Návrh podléhá review a následnému samostatnému migračnímu kroku. Souvisí s [rodinným archivem dokumentů](2026-11-22-family-document-archive.md), [PRODUCT](../PRODUCT.md) a [architekturou Lumi](../ARCHITECTURE.md).
+**Status:** aktualizovaný návrh podle rozhodnutí vlastníka: **sjednotit Auto, Dokumenty a Nákupy do nové base `Rodina`; Rekonstrukci Světice ponechat odděleně**. Zpracována read-only inventura schémat, agregovaných počtů a metadat příloh. **Nevytváří se žádná base, nekopírují se dokumenty a nemění se žádná produkční data.** Cíl: jednoduché nativní nahrávání dokumentů na iPhonu, současná evidence v Airtable a pozdější přenos do Lumi.
 
-## 1. Rozhodnutí a cíl
+Související kontrakty: [rodinný archiv dokumentů](2026-11-22-family-document-archive.md), [PRODUCT](../PRODUCT.md), [ARCHITECTURE](../ARCHITECTURE.md). Konkrétní názvy souborů, osobní údaje, Airtable interní ID a attachment URL se **nesmějí** ukládat do veřejného repozitáře.
 
-V etapě 1 nebude kanonická evidence v původní samostatné Airtable base `Dokumenty`, ale ve **zcela nové společné Airtable base `Rodina`**. Tam se konsolidují záznamy všech čtyř původních bází včetně binárních příloh, specifických polí a existujících vztahů. Původní čtyři báze se při migraci **nesmažou**, dokud není ověřena úplnost a provoz nové evidence. Přidávání dokumentů z iPhonu zůstane bez vlastní aplikace: Soubory/skener a Sdílet/Zkratky → iCloud Drive příchozí → ingest worker → centrální `Dokumenty` v Airtable → Lumi pro autorizované dotazy.
+## 1. Rozdělení na dvě Airtable báze
 
-V etapě 2 lze stejnou logickou strukturu **beze změny rodinného workflow** převést do kanonického úložiště Lumi (originály ve file store, metadata v cílovém SQLite, index jako obnovitelný derivát). Nová Airtable struktura proto musí mít stabilní, přenosná ID a explicitní vztahy.
-
-**Nezaměňovat:** jedna *Airtable base* neznamená jednu tabulku; doménové záznamy se propojují přes `linked records`, nikoli kopírováním příloh nebo textu na mnoho míst. Jedna společná dokumentová evidence není povolení vydat všechny existující osobní údaje každému; multi-user přístup přes Lumi nadále čeká na R5.
-
-## 2. Ověřená výchozí struktura
-
-| Zdroj | Současná tabulka / oblast | Podstatné informace k zachování |
+| Airtable base | Obsah | Postup |
 |---|---|---|
-| Auto | `Události` | Datum, výběr auta, stav, tachometr, poznámky, kategorie, servis, přílohy |
-| Dokumenty | `Dokumenty` | Datum, kdo, instituce, kategorie, důvod, typ dokumentu, poznámky, originály v přílohách |
-| Nákupy | `Nákupy` | Předmět, foto, datum nákupu, záruka v měsících, účtenka, prodejce, vypočtené `Záruka do`, manuály, původní složka |
-| Rekonstrukce Světice | `Požadavky` | Kritéria, priorita, lokalita, stav ve studii/DSP/realizaci, citace a návaznosti |
-| Rekonstrukce Světice | `Kontroly`, `Otevřené body`, `Etapy`, `Zdroje` | Skutečné Airtable linked-record vazby k požadavkům; nesmí se ztratit |
-| Rekonstrukce Světice | `Rozhodnutí`, `Rozpočet`, `Starší náměty` | Rozhodnutí, cenové intervaly, původní neuplatněné návrhy |
+| **Rodina** (nová) | `Auto` + `Dokumenty` + `Nákupy` | Jedna propojená evidence pro rodinný majetek, servisní události a dokumenty |
+| **Rekonstrukce Světice** (stávající) | Všech 8 původních tabulek projektu | **Bez migrace a zásahu do existujících dat, linked records, výpočtů a workflow** |
 
-Zdroj má celkem **11 tabulek**. Při inventuře bylo v původních třech evidencích zjištěno několik typů příloh (dokumenty, fotografie, účtenky, manuály). Aktuální stav dat a počet příloh se **musí znovu načíst při migračním exportu**, protože se mohou měnit. Do repozitáře nepatří skutečný obsah záznamů, jména rodiny, hodnoty citlivých polí, download URL ani Airtable API identifikátory a tokeny.
+Rekonstrukce není povinnou součástí nové base, její oddělení je dlouhodobě platné řešení, nikoli dočasná chyba návrhu. Lumi může v budoucnu číst obě báze **oddělenými autorizovanými read adaptéry** a uživateli nabídnout sjednocené vyhledávání při respektování přístupových oprávnění. **Airtable Free neumí nativní `linked records` napříč bázemi**; vazby do rekonstrukce proto nevytvářet jako neexistující cross-base link. Případná reference může být ověřený URL odkaz nebo stabilní externí ID, které interpretuje až Lumi; nesynchronizovat kopii celé rekonstrukční tabulky do `Rodina`. Cross-base Airtable Sync funkcionalita je mimo Free.
 
-## 3. Navrhované tabulky v nové base `Rodina`
+### Limity Airtable Free — ověřeno 2026-11-22
 
-| Nová tabulka | Účel | Zdroj |
+Podle oficiálního Airtable: **1 000 záznamů na base (součet tabulek), 1 GB příloh na base, 1 000 API volání na workspace za měsíc, maximálně 5 požadavků za sekundu na base**. Tedy oddělením rekonstrukce získáme samostatný datový a přílohový limit pro každou z obou bází, ale **nikoliv další API rozpočet, pokud jsou ve stejném workspace**.
+
+- [Airtable — Workspace settings, limity](https://support.airtable.com/articles/9157745778-Airtable-workspace-settings-overview)
+- [Airtable — Getting started with sync](https://support.airtable.com/articles/2849803278-Getting-started-with-Airtable-sync) (neexistuje přímý link mezi bázemi)
+- [Airtable — Linking records across synced bases](https://support.airtable.com/articles/3175509073-Linking-records-across-synced-bases-in-Airtable) (Team+)
+
+### Ověřený výchozí stav
+
+| Zdrojová base / tabulka | Záznamů | Počet příloh | Součet velikostí |
+|---|---:|---:|---:|
+| `Auto / Události` | 78 | 45 | 44,8 MiB |
+| `Dokumenty / Dokumenty` | 101 | 108 | 73,1 MiB |
+| `Nákupy / Nákupy` | 43 | 93 (foto + účtenky + manuály) | 52,8 MiB |
+| **Rodina — tři migrované zdroje** | **222** | **246** | **170,7 MiB** |
+| `Rekonstrukce Světice` — 8 tabulek | **352** | **nebylo inventarizováno** | **nebylo inventarizováno** |
+
+Počty jsou snapshot, nikoliv trvalá kapacita. U `Rodina` přibydou nové záznamy pro položky majetku, auta a dokumenty převzaté z příloh událostí/nákupů; cílový počet tedy **nebude automaticky 222**. Přesto je značná rezerva pod 1 000 záznamy. Velikosti souborů jsou součtem dostupných `size` metadat 246 příloh, **ne potvrzená fakturace storage**; zohlednit budoucí nové soubory i případné duplikáty při převodu. Kapacitu celé existující `Rekonstrukce Světice` nutno zkontrolovat samostatně, nikoliv dovozovat z počtu záznamů.
+
+**Speciální omezení:** 1 000 API volání na workspace/měsíc může být kritičtější než počet záznamů. Dát přednost dávkovým čtením a zápisům, minimalizaci polling intervalu, lokálnímu OCR před odesláním, krátkým cache a auditovanému rozpočtu API volání; plánovat jednorázovou migraci s rezervou pro obnovu a opravy. Po dosažení kvóty selhat čitelně, ne tiše ztratit import. Nekoncipovat periodické oboustranné synchronizace na vysoké frekvenci.
+
+## 2. Jednoduchá struktura nové base `Rodina`
+
+**Tři základní tabulky**, oddělené podle významu, propojené Airtable `linked records` **uvnitř stejné base**:
+
+| Tabulka | Hlavní smysl | Zdroje |
 |---|---|---|
-| **Dokumenty** | Jediný katalog dokumentů včetně originálních souborů, OCR, typu, data, subjektu, instituce, platnosti a zdroje | `Dokumenty` + přílohy z `Auto` a `Nákupy`, časem i projektové podklady |
-| **Majetek** | Vozidla, zakoupené výrobky a případně nemovitosti; datum koupě, prodejce, délka/končení záruky, sériové ID, vazby na dokumenty | `Nákupy` + hodnoty pole `Auto` v `Události` |
-| **Události** | Servisy, opravy, kontroly a další životní události majetku; datum, stav, tachometr (pro vozidla), servis a přílohy přes odkaz na `Dokumenty` | `Auto / Události` |
-| **Projekty** | Nadřazený kontext; první projekt Rekonstrukce Světice, v budoucnu další | Nový referenční záznam bez duplicitní kopie všech podkladů |
-| **Požadavky** | Zadání, kritéria, priority, fáze a zdroje rekonstrukce | `Rekonstrukce / Požadavky` |
-| **Kontroly** | Jednotlivé ověření požadavků ve studii, DSP a realizaci | `Rekonstrukce / Kontroly` |
-| **Otevřené body** | Rozpory a nevyjasněné otázky | `Rekonstrukce / Otevřené body` |
-| **Etapy** | Etapizace, rozsah, závislosti | `Rekonstrukce / Etapy` |
-| **Zdroje** | Evidované projektové podklady a odkazy na e-maily; postupně link na `Dokumenty`, pokud existuje archivovaný originál | `Rekonstrukce / Zdroje` |
-| **Rozhodnutí** | Schválené a navržené projektové záměry s původem | `Rekonstrukce / Rozhodnutí` |
-| **Rozpočet** | Práce/kapitoly, spodní a horní odhad, etapa | `Rekonstrukce / Rozpočet` |
-| **Starší náměty** | Read-only historické podněty, které se nemají zaměnit za aktivní požadavek | `Rekonstrukce / Starší náměty` |
+| **Dokumenty** | Originální přílohy, typ, datum, vydavatel, subjekt, OCR výtah/stav, případná platnost, provenience a zdrojové citace | `Dokumenty / Dokumenty`, přílohy z `Auto / Události`, `Nákupy / Nákupy` |
+| **Majetek** | Auta, zakoupené věci a zařízení, datum koupě, prodejce, záruka, vazby na dokumenty a servis | `Nákupy / Nákupy` + hodnoty pole `Auto` ze servisních událostí |
+| **Události** | Servisní záznamy, opravy a události majetku, datum, stav, tachometr, kategorie, servis, poznámky a související dokumenty | `Auto / Události` |
 
-**Celkem 12 tabulek** v první konzervativní migraci: 4 společné jádrové a 8 dosavadních projektových. Osm tabulek rekonstrukce se záměrně předčasně neslučuje, aby nezmizely významové rozdíly a její již fungující kontrolní matice. `Starší náměty` lze zjednodušit až po pozdějším rozhodnutí; historické záznamy se nesmějí automaticky stát aktivními úkoly.
+Žádná povinná tabulka `Projekty` ani kopie osmi tabulek rekonstrukce. Případný odkaz na nezávislý projekt je pouze URL/externí ID; projektový kontext pro sjednocené vyhledávání může dodat Lumi po ověření přístupu. Zabraňuje se zbytečným počtům záznamů a složitosti.
 
-### Vztahy místo duplicit
+### Pole a mapování
 
-- `Majetek ↔ Dokumenty`: účtenky, záruky, manuály, smlouvy, fotografie.
-- `Majetek ↔ Události ↔ Dokumenty`: vozidlo / servisní zásah / příloha.
-- `Projekty ↔ Požadavky ↔ Kontroly`: požadavek a průběžná kontrola v různých fázích.
-- `Požadavky ↔ Otevřené body / Etapy / Zdroje`: **zachovat skutečné existující `linked records`**, žádné pouhé textové kopie názvu.
-- `Projekty ↔ Rozhodnutí / Rozpočet / Etapy`, `Zdroje ↔ Dokumenty` (jen pokud se podaří bezpečně dohledat odpovídající originál).
-- `Dokumenty` mohou odkazovat na více příbuzných objektů, projektů nebo událostí. Nemají obsahovat kopii téhož PDF u každé vazby.
+**Dokumenty**: primární `Název` (lidsky čitelný, pro staré záznamy bezpečně vytvořený), `Druh`/typ, `Datum dokumentu`, `Kdo`, `Instituce`, `Kategorie`, `Důvod`, `Poznámky` (zachovat ručně upravený text), `Soubor(y)` (attachment), `OCR výtah` a jeho stav, `Platnost do`, `Ke kontrole`, stabilní UUID a odkazy na Majetek/Události. Staré záznamy s více přílohami zůstanou seskupeny, identita každé přílohy a její checksum je v manifestu. Základní Dokumenty mohou mít více připojených logických zdrojů, ale jedna fyzická příloha se bez potřeby nekopíruje opakovaně.
 
-## 4. Struktura `Dokumenty` a `Majetek`
+**Majetek**: `Název`, `Druh` (auto / pořízená věc / zařízení), `Datum nákupu`, `Prodejce`, `Záruka` (měsíce), `Záruka do` (zachovat původní logiku Airtable `DATEADD(Datum nákupu, Záruka, 'month')`), volitelně původní číselná `Složka`, odkaz na dokumenty a události. Existující hodnoty `Auto` se normalizují na samostatné položky Majetku, ale **nesmí** se neověřeně spojovat dva automobily kvůli podobnému názvu.
 
-**Dokumenty:** srozumitelný `Název` (primární pole), `Typ`, `Datum dokumentu`, `Instituce/vystavitel`, `Kdo/subjekt`, `Kategorie`, `Důvod` (stávající význam neautomaticky neměnit), `Poznámky`, `Soubor(y)` (Airtable attachments), `OCR výtah` / stav OCR, `Platnost do`, `Ke kontrole`, vztahy k Majetku, Událostem a Projektům a stabilní UUID/provenance. Pole OCR má velikostní limity; úplný výsledek lze držet jako obnovitelný index mimo Airtable, dokud probíhá etapa 1. Když jeden původní záznam obsahuje více originálů, zachovat jeho skupinu a u každé přílohy zvlášť identitu, checksum a zdrojové umístění v exportním manifestu.
+**Události**: `Datum`, odkaz na `Majetek`, `Stav`, `Tachometr`, `Servis`, `Kategorie`, `Poznámky`, odkaz na `Dokumenty`. Nevytvářet prázdné nebo umělé hodnoty při přenosu.
 
-**Majetek:** `Název`, `Druh` (vozidlo/výrobek/nemovitost), `Datum koupě`, `Záruka [měsíce]`, `Záruka do` (**vzorec ze dvou původních polí**, s ověřením data a nulových hodnot), `Prodejce`, identifikační údaje (jen podle potřeby), původní `Složka` jako legacy pole, vazby na `Dokumenty` a `Události`. Původní `Nákupy` tak zůstanou evidencí pořízených věcí, nikoli nákupním seznamem. Výběrové hodnoty automobilů se převedou na objekty/auta v Majetku, pokud jsou skutečně používané; bez deduplikace vozidel podle podobného názvu.
+**U všech tabulek**: skrytá technická pole nebo zabezpečený manifest pro stabilní `uuid`, původní source base/table/record ID, příslušná stará field/attachment ID, hash, čas importu, stav ověření a opravy; související UUID používá budoucí Lumi. Starý autonumber je **`Původní ID`**, nikoliv primární migrační klíč. Cílové Airtable record ID je technické a může se při migraci do Lumi změnit.
 
-**Události:** `Datum`, `Majetek`, `Typ/kategorie`, `Stav`, `Tachometr`, `Servis`, `Poznámky`, `Dokumenty`. Typově nesouvisející údaje (tachometr u běžného výrobku) zůstanou prázdné.
+## 3. Vztahy a zpětná kompatibilita
 
-**Projekty:** `Název`, `Stav`, `Poznámka`, stabilní ID, vazba na domácnost/objekt a příslušné požadavky, etapy, rozpočet, zdroje.
+- `Majetek ↔ Dokumenty`: účtenky, fotografie, manuály a smlouvy vztahující se ke konkrétní věci.
+- `Majetek ↔ Události ↔ Dokumenty`: historie vozidla nebo zařízení a příslušné servisní dokumenty.
+- `Rekonstrukce Světice`: původní vazby `Požadavky ↔ Kontroly / Otevřené body / Etapy / Zdroje`, etapy, rozhodnutí, rozpočet a historické náměty zůstávají v existující base **beze změny**.
+- `Rodina ↔ Rekonstrukce`: **žádný Airtable linked-record**, žádná povinná Airtable Sync funkce. Potřebuje-li Lumi společný kontext, zkontroluje oprávněné zdroje v obou bázích a odkaz uvede jako externí zdroj, nikoliv interní vazbu.
+- `Rodina / Dokumenty` je vstup pro nové nativní skeny a soubory; projektové podklady v `Rekonstrukce / Zdroje` nezmizí ani se nepovažují za duplikáty bez ověřené shody.
 
-**U všech migrovaných záznamů:** skryté technické atributy nebo samostatný bezpečně ukládaný mapovací manifest pro `uuid`, `source_base`, `source_table`, `source_record_id`, `source_field`, `source_attachment_id`, checksum, čas/verzi exportu a stav převzetí. Původní `ID`/autonumber se zachová jako `Původní ID`; nové Airtable record ID ani autonumber nejsou trvalé identifikátory budoucí Lumi. Nespoléhat na krátkodobá attachment download URL jako na trvalé odkazy.
+## 4. Bezpečná migrace tří zdrojů a limity Free
 
-## 5. Postup migrace bez výpadku a ztráty
+1. **Inventura** všech polí, hodnot, vzorců, existujících view/automatizací a celkového počtu souborů; samostatná read-only kontrola využití a možných externích integrací v `Rekonstrukce Světice`, bez změn.
+2. **Obnovitelný export originálních tří bází**: všech záznamů, zdrojových hodnot a **binárních příloh** s SHA-256, velikostmi, časem a lokální mapou zdrojových Airtable ID. Běžné CSV s krátkodobými download URL není záloha souborů.
+3. **Předběžný kapacitní a API rozpočet** pro novou `Rodina`: očekávaný počet nových objektů (včetně 246 příloh) + rezerva pro nové dokumenty, zkontrolovat součet dat oproti 1 GB a plán API operací proti 1 000 za workspace/měsíc. Případná duplicitní příloha nebo nedostatek API kvóty **zastavuje**, nesmí vést ke ztrátě původního souboru.
+4. **Vytvořit novou base `Rodina`** se třemi tabulkami a bezpečnými obousměrnými linky; nedotknout se `Rekonstrukce Světice`.
+5. **Syntetický test + malý vzorek**: otestovat import dokumentů a příloh, zachování poznámek, `Záruka do`, identitu vozidel, obnovu a znovuzískání aktuálních attachment URL.
+6. **Dvouprůchodový import**: nejprve cílové záznamy a migrace příloh s manifestem, potom relace podle `source → target UUID`; opakování je idempotentní.
+7. **Rekonsiliace** původních tří tabulek: jejich zdrojové počty, každý přenesený binární soubor/velikost/hash, ruční poznámky, vzorce a relevantní select hodnoty; všechny rozdíly zaznamenat před cutoverem.
+8. **Cutover a rollback**: doplnit změny vzniklé během importu nebo dočasně zastavit zápisy do tří zdrojů; teprve po ověření přeorientovat ingest/Zkratky/Lumi na **`Rodina`**, původní tři báze prozatím ponechat read-only. **Rekonstrukce Světice zůstane aktivní a na stejné adrese.** Bez automatického mazání či resetu původních bází.
 
-1. **Read-only inventura a kontrolní manifest**: uložit mimo veřejný repozitář verzi všech zdrojových schémat, vzorců, select options, záznamů, skutečné mapy linked-record vazeb, příloh, view/automations, přístupových práv a referencí do jiných služeb. Přepočítat počty v čase exportu.
-2. **Záloha zdrojů**: úplný výpis všech záznamů s originálními Airtable ID a daty, **binární stažení každé přílohy pomocí aktuálního autentizovaného odkazu**, individuální SHA-256/velikost a kontrolní manifest; vyzkoušet čtení zálohy. Samotný CSV export ani seznam attachment URL není úplnou zálohou.
-3. **Vytvoření nové base `Rodina`** ve správném Airtable workspace s 12 tabulkami, definovanými typy polí a obousměrnými linky. Novou base vytvořit bez kopírování tajemství a bez úprav původních čtyř bází. Ověřit správné primární pole u každé tabulky a vazby podle schématu.
-4. **Testovací import** syntetických a malého ověřeného vzorku záznamů; žádné tiché přejmenování hodnot, změna měny či interpretace neznámých polí. Nahrát originály do centrální `Dokumenty` a zpětně ověřit jejich existenci. Při přenosu příloh postupovat podle skutečně podporovaných Airtable attachment API a velikostních limitů.
-5. **Dvouprůchodový import**: (a) vytvořit řádky se stabilními UUID a mapou source → target IDs, (b) až potom propojit `linked records` (zejména Požadavky ↔ Kontroly/Otevřené body/Etapy/Zdroje), a přílohy/zdrojové citace. Opakované spuštění musí bezpečně doplnit chybějící, nikoli zdvojit existující.
-6. **Rekonsiliace**: porovnat počty zdrojových a cílových řádků **po tabulkách**, počty a checksumy souborů, důležité prázdné hodnoty, záruky/odvozená data, počet oboustranných vazeb, volby/filtry, vzorce, výstupy rekonstrukční matice a náhodně vybrané konkrétní záznamy. Všechny nesrovnalosti explicitně evidovat a vyřešit.
-7. **Cutover**: při krátkém odstavném nebo řízeném delta-sync okně znovu zpracovat změny; přesměrovat iPhone Zkratku/worker/Lumi na **jedinou kanonickou `Rodina`**. Původní zdroje ponechat dočasně read-only, oznámit jasně, která base je autoritativní. Žádné dual-write bez transakčně řízeného konfliktového protokolu.
-8. **Obnova a rollback**: otestovat vrácení na předchozí zdroj i obnovu z manifestu, později navázat na vlastní Lumi file store/SQLite import. Staré báze a přílohy **nemažeme automaticky**, ani po úspěšném importu.
+## 5. Uživatelské používání a pozdější Lumi
 
-## 6. Fáze a uživatelský kontrakt
+**Fáze A — Airtable:** nová `Rodina` (Dokumenty, Majetek, Události) + beze změny aktivní `Rekonstrukce Světice`. Rodina si nadále vystačí s nativním iPhone skenem a Zkratkami, podání dokumentu přes iCloud Příchozí. Worker provede OCR, navrhne metadata a uloží dokument do Airtable. Běžná interakce je bez ručního třídění.
 
-**Fáze A — konsolidace Airtable:** nová `Rodina` přebere 4 zdroje. Uživatelské pohledy oddělit pro Dokumenty, Majetek (vozidla a nákupy), Události, Rekonstrukce, ale data žijí ve stejné base a lze je propojovat. Rodina může stále použít původně schválené nativní nahrávání iOS; v této etapě se implementuje bezpečný upload přílohy do centrálních Dokumentů, OCR a návrhy metadat.
+**Fáze B — Lumi jako čtecí vrstva:** Lumi v mezích identity/ACL pracuje se dvěma zdroji: `Rodina` a `Rekonstrukce Světice`; dotazy a citace mohou spojit informace z obou bází, aniž by Airtable uměl jejich záznamy přímo propojit. PACT Context Resolver vrací pouze aktuálně autorizovaný výřez. Výpadek/API quota je explicitně označen jako neúplné čtení.
 
-**Fáze B — Lumi nad Airtable:** serverový read adaptér a Context Resolver vracejí oprávněné záznamy, metadata a aktuální odkaz na originál. Neprovozovat automatické rozšiřování osobních profilů v HumanWiki. Již připojené rodinné sdílení nedovozovat ze sdílení Airtable workspace; R5 pravidla zůstávají zachována.
+**Fáze C — Lumi jako kanonický archiv:** migrace `Rodina` a **samostatně, pokud bude rozhodnuto, i rekonstrukce**. Nevyžadovat současný cutover obou zdrojů. Nová Lumi spravuje originály, metadata, UUID a vazby; Airtable se postupně odpojuje. Historické zdroje nikdy neodstraňovat jen kvůli dokončenému exportu.
 
-**Fáze C — Lumi jako kanonické úložiště:** po úspěšném exportu, kontrole příloh a revizí převezme záznamy/vztahy Lumi; Airtable se stane dočasným read-only archivem. Nativní iPhone workflow ani uživatelské dotazy se nezmění.
+**Bezpečnost:** veřejná GitHub dokumentace neobsahuje citlivé údaje, API tokeny ani binární přílohy. iCloud slouží jako příchozí schránka, ne záloha. API token není v mobilní Zkratce. Externí AI nad obsahem je default-off; rodinný přístup přes Lumi je vázaný na budoucí R5 a zdrojové autorizace, nikoli na fakt, že Airtable má společné pojmenování. Soukromé historické dokumenty se nesmějí bez souhlasu automaticky publikovat.
 
-### Ochranné hranice
+## 6. Akceptace
 
-Rodinná base je určena pro společnou evidenci, ale **nemá být veřejně sdílená**, rodinný přístup vyžaduje účty/role. Importovaná historická data mohou obsahovat citlivé informace; automaticky je **nepublikovat širšímu okruhu**, než měly původně. Až bude vlastník explicitně chtít společný multi-user přístup v Lumi, podléhá R5 identitám, Area ACL a zvláštním omezením již existující HumanWiki specifikace. API tokeny a binární zálohy jsou v soukromých serverových konfiguračních/backup lokacích, ne v Zkratkách či veřejném GitHubu.
-
-## 7. Akceptační scénáře
-
-| ID | Podmínka splnění |
+| ID | Ověřitelný scénář |
 |---|---|
-| UNI-01 | Všechny čtyři zdrojové báze mají ověřený export a kontrolní manifest; zdroje zůstaly nezměněné. |
-| UNI-02 | Nová `Rodina` obsahuje požadované počty záznamů ze všech 11 zdrojových tabulek (se zdokumentovaným mapováním do 12 cílových), bez ztráty nebo zdvojení. |
-| UNI-03 | Každá původní příloha má binárně ověřenou kopii v novém úložišti a checksum, včetně samostatných kategorií foto/účtenka/manuál a příloh událostí. |
-| UNI-04 | Všechny původní linked-record vztahy rekonstrukce jsou obnovené, existující kontrolní matice dává stejný obsah jako před migrací. |
-| UNI-05 | Záruky v měsících a výpočet `Záruka do` odpovídají zdroji; ruční poznámky, původní ID, datum a ostatní důležitá pole zachována. |
-| UNI-06 | Jeden dokument se dá propojit s majetkem, servisní událostí a projektem bez duplikování fyzické přílohy. |
-| UNI-07 | Duplicitní import a přerušená migrace jsou idempotentní; pozdější změna má řízený delta/cutover a bez schválení nikdy nemaže zdroj. |
-| UNI-08 | Uživatel může z iPhonu nativně přidat dokument bez nové aplikace; vznikne v nové `Rodina/Dokumenty` a Lumi jej po autorizovaném ingestu dokáže citovat. |
-| UNI-09 | Při nedostupnosti Airtable/attachmentu nevznikne falešně úspěšný import ani neplatný trvalý URL; chybu lze bezpečně opravit. |
-| UNI-10 | Pozdější přechod na Lumi zachová UUID, originály, vazby a ruční opravy, stejnou iPhone Zkratku i výsledné odpovědi se zdrojovými citacemi. |
+| UNI-01 | Ověřený export/záloha všech tří zdrojových bází včetně binárních příloh; stávající `Rekonstrukce Světice` zůstává beze změny. |
+| UNI-02 | Nová `Rodina` se 3 tabulkami zachovává všech 222 původních záznamů přes stabilní mapování a případné nově potřebné objekty majetku/dokumentů se přidávají transparentně, bez duplikátů. |
+| UNI-03 | Každá ze 246 snapshot příloh (skutečný počet v čase cutoveru ověřit znovu) má v cíli ověřený binární originál a manifest s SHA-256; bez trvalých expirovaných URL. |
+| UNI-04 | Existujících 8 tabulek rekonstrukce a všechny původní `linked records` mají totožný stav před i po migračním cutoveru tří jiných bází. |
+| UNI-05 | Původní výpočet `Záruka do` a ruční poznámky byly zachovány, cizí/nedoložená data se nedoplňují odhadem. |
+| UNI-06 | Dokument/účtenku lze propojit s majetkem a událostí v rámci `Rodina` bez duplicitního fyzického PDF. |
+| UNI-07 | Systém bezpečně hlídá 1 000 záznamů a 1 GB příloh na base a sdílenou měsíční kvótu API volání ve workspace. Výpadek/kvóta vede k dohledatelnému importu čekajícímu ve frontě. |
+| UNI-08 | iPhone bez další aplikace uloží sken → worker zpracuje → `Rodina / Dokumenty` jej bezpečně zpřístupní → Lumi jej umí citovat. |
+| UNI-09 | Lumi umí přečíst autorizovaná data z oddělené `Rekonstrukce Světice` bez Airtable cross-base syncu/linku; neodhalí cizí data a při nedostupnosti oznámí omezení. |
+| UNI-10 | Pozdější přechod na Lumi zachová soubory/metadata/UUID/vazby a nevyžaduje předčasnou migraci rekonstrukce ani změnu iOS Zkratky. |
 
-**Další rozhodnutí až před implementací:** konkrétní práva k vytvoření nové base, kompatibilita stávajících integrací/automatizací, mapování více souborů na jeden logický dokument, preferovaná podoba Airtable rozhraní, technika importu příloh, pravidla přístupu rodinných účtů a migrační/rollback okno.
+**Otevřená implementační rozhodnutí:** přesné limity workspace, mechanismus podpory Mac/iCloud příchozí složky, Airtable API budget monitoring, duplicity příloh a jejich kanonická identita, role členů v Airtable, forma orientačních externích odkazů do rekonstrukce a migrační/rollback okno. Rozhodnutí nemají být přijímána automaticky na základě názvů tabulek.
