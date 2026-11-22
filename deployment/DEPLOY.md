@@ -344,7 +344,7 @@ migration or modification. C-3b only writes its metadata after an explicit
 authenticated command. This rollout does NOT authorize production activation
 of unfinished Inbox suggestion HTTP/UI or any real outbound OpenAI request.
 
- 
+
 ### C-3b durable Inbox receipt capacity (owner maintenance)
 
 The canonical C-3b metadata receipt limit is **65,536 rows** (raised from
