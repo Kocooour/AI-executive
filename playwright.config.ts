@@ -78,7 +78,7 @@ const mainTitleSearchMode = process.env.LUMI_TARGET_MAIN_SEARCH_MODE ?? "on";
 if(mainTitleSearchTest&&!["on","off"].includes(mainTitleSearchMode))
   throw new Error("Invalid LUMI_TARGET_MAIN_SEARCH_MODE");
 // Profile-specific recovery QA (including BOTH active edit flags), isolated to Playwright.
-const noteEditProfile = process.env.LUMI_TARGET_NOTE_EDIT_PROFILE ?? "legacy";
+const noteEditProfile = process.env.LUMI_TARGET_NOTE_EDIT_PROFILE ?? "combined";
 if(noteEditRecoveryTest&&!["legacy","combined","4b"].includes(noteEditProfile))
   throw new Error("Invalid LUMI_TARGET_NOTE_EDIT_PROFILE");
 const privateNoteAreasTest = process.env.LUMI_PRIVATE_NOTE_AREAS_E2E === "true";
