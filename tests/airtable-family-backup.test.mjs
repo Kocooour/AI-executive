@@ -5,6 +5,7 @@ import {
   snapshotRecord,
   buildBackupManifest,
   validateSourceConfiguration,
+  validateOutputDirectory,
 } from '../scripts/airtable-family-backup.mjs';
 
 const id = 'att12345678901234';
@@ -92,4 +93,11 @@ test('source settings are explicit and do not include credentials in output', ()
   assert.equal(JSON.stringify(sources).includes(env.AIRTABLE_TOKEN), false);
   assert.throws(() => validateSourceConfiguration({ ...env, AIRTABLE_TOKEN: '' }), /AIRTABLE_TOKEN/);
   assert.throws(() => validateSourceConfiguration({ ...env, AIRTABLE_FAMILY_AUTO_BASE: 'wrong' }), /AIRTABLE_FAMILY_AUTO_BASE/);
+});
+
+test('private backup output cannot be inside the public Git repository', () => {
+  const root = '/home/operator/lumi-repo';
+  assert.throws(() => validateOutputDirectory(root, root), /Refusing to store private/);
+  assert.throws(() => validateOutputDirectory(root + '/backups/secrets', root), /Refusing to store private/);
+  assert.equal(validateOutputDirectory('/home/operator/private-backups/family', root), '/home/operator/private-backups/family');
 });
