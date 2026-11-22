@@ -157,14 +157,15 @@ export function suggestInboxByRules(input: InboxSuggestionSnapshot): InboxSugges
 }
 
 /**
- * Today is actor-private planning, not the shared due_on column.
- * Caller derives localToday from a server IANA timezone; the signed proposal
- * and writer recheck it. AI never chooses this date.
+ * Today is actor-private planning, not the shared due_on column. Only the
+ * trusted server profile supplies the local day. This function composes
+ * the deterministic day with EITHER an AI-selected target or local rules;
+ * the model never receives, invents or selects a date.
  */
-export function suggestInboxWithLocalToday(
-  snapshot:InboxSuggestionSnapshot,localToday:string,
+export function composeInboxWithLocalToday(
+  snapshot:InboxSuggestionSnapshot,base:InboxSuggestion,localToday:string,
 ):InboxSuggestion{
-  const base=suggestInboxByRules(snapshot);
+
   if(!validInboxSuggestionSnapshot(snapshot)||
      typeof localToday!=="string"||
      !/^\d{4}-\d{2}-\d{2}$/.test(localToday)||
@@ -174,10 +175,19 @@ export function suggestInboxWithLocalToday(
      date.toISOString().slice(0,10)!==localToday)return base;
   const reason=base.changes.projectId==="unchanged"&&
     base.changes.taskAreaId==="unchanged"
-    ?"Výslovně uvedeno „dnes“; návrh osobního dne bez změny Oblasti."
+    ?(base.source==="ai"
+      ?"AI navrhla ponechání; výslovné „dnes“ určuje osobní plán na aktuální den."
+      :"Výslovně uvedeno „dnes“; návrh osobního dne bez změny Oblasti.")
     :base.why+" Současně výslovně uvedeno „dnes“ pro osobní plán.";
-  return {source:"rule",changes:{...base.changes,whenOn:localToday},
+  return {source:base.source,changes:{...base.changes,whenOn:localToday},
     why:reason};
+}
+
+/** Safe local-rules entrypoint used when AI is not involved. */
+export function suggestInboxWithLocalToday(
+  snapshot:InboxSuggestionSnapshot,localToday:string,
+):InboxSuggestion{
+  return composeInboxWithLocalToday(snapshot,suggestInboxByRules(snapshot),localToday);
 }
 
 /**

@@ -10,6 +10,7 @@ import {createHash} from "node:crypto";
 import type {DatabaseSync} from "node:sqlite";
 import {targetStoreRestoreGeneration,targetTaskWriteRevision} from "./target-task-write-preflight";
 import {validInboxSuggestionSnapshot} from "./target-inbox-suggestions";
+import {readTargetAttentionProfileZone} from "./target-attention-profile-zone";
 import type {InboxSuggestionSnapshot} from "./target-inbox-suggestions";
 
 const ACTOR=/^[A-Za-z0-9_.:@-]{1,120}$/;
@@ -41,6 +42,9 @@ export type AuthorizedInboxSuggestionSnapshot={
   readonly personalWhenOn:string|null;
   readonly personalWhenRevision:number|null;
   readonly personalPlanEpoch:number;
+  /** Authoritative, actor-owned profile timezone and monotonic settings revision. */
+  readonly timeZone:string;
+  readonly notificationEpoch:number;
   /** SHA-256 of the full candidate set and all relevant mutable witnesses. */
   readonly candidateFingerprint:string;
 };
@@ -127,6 +131,8 @@ export function readAuthorizedInboxSuggestionSnapshot(
     const planEpoch=db.prepare(`SELECT revision FROM personal_plan_epochs
       WHERE user_id=?`).get(actorUserId) as EpochRow|undefined;
     if(!planEpoch||!epoch(planEpoch.revision))return null;
+    const zone=readTargetAttentionProfileZone(db,actorUserId);
+    if(!zone)return null;
     const snapshot:InboxSuggestionSnapshot={
       taskTitle:task.taskTitle,currentAreaId:task.currentAreaId,
       currentProjectId:task.currentProjectId,
@@ -144,6 +150,7 @@ export function readAuthorizedInboxSuggestionSnapshot(
         actorUserId,taskId,restoreGeneration,taskWriteRevision,
         task.taskRevision,task.triageRevision,
         personal?.whenOn??null,personal?.revision??null,planEpoch.revision,
+        zone.timeZone,zone.notificationEpoch,
         areas.map(a=>[a.id,a.name,a.revision,a.contentRevision,a.projectContentRevision]),
         projects.map(p=>[p.id,p.name,p.areaId,p.revision]),
       ])).digest("hex");
@@ -151,6 +158,8 @@ export function readAuthorizedInboxSuggestionSnapshot(
       triageRevision:task.triageRevision,restoreGeneration,taskWriteRevision,
       personalWhenOn:personal?.whenOn??null,
       personalWhenRevision:personal?.revision??null,
-      personalPlanEpoch:planEpoch.revision,candidateFingerprint};
+      personalPlanEpoch:planEpoch.revision,
+      timeZone:zone.timeZone,notificationEpoch:zone.notificationEpoch,
+      candidateFingerprint};
   }catch{return null;}
 }

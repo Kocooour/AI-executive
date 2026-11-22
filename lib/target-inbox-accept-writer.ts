@@ -25,8 +25,9 @@ import {canEditIsolatedTargetTaskTitle,canWriteIsolatedTargetArea,
   targetStoreRestoreGeneration} from "./target-task-write-preflight";
 import {readAuthorizedInboxSuggestionSnapshot}
   from "./target-inbox-suggestion-snapshot";
-import {unsealInboxDisplayedAction}
+import {unsealInboxDisplayedAction,inboxLocalDate}
   from "./target-inbox-suggestion-commitment";
+import {readTargetAttentionProfileZone} from "./target-attention-profile-zone";
 import type {InboxSuggestedChanges} from "./target-inbox-suggestions";
 
 const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -207,6 +208,14 @@ function acceptLocked(db:DatabaseSync,actor:string,hash:string,
   // proposal by treating it as a rule.
   if(proof.suggestion.source!=="rule"||proof.consentEpoch!==0)
     return bad("unavailable");
+  // The token zone is only a claim about what was displayed. Verify the
+  // CURRENT actor profile within this SAME pinned write transaction, even
+  // when two zones happen to have the same local calendar day (including DST).
+  const zone=readTargetAttentionProfileZone(db,actor);
+  if(!zone||zone.timeZone!==proof.timeZone||
+     zone.notificationEpoch!==proof.notificationEpoch||
+     inboxLocalDate(Date.now(),zone.timeZone)!==proof.localDate)
+    return bad("stale_revision");
   const snapshot=readAuthorizedInboxSuggestionSnapshot(
     db,actor,c.taskId,c.restoreGeneration);
   if(!snapshot||snapshot.taskWriteRevision!==proof.taskWriteRevision||
@@ -214,7 +223,9 @@ function acceptLocked(db:DatabaseSync,actor:string,hash:string,
      snapshot.taskRevision!==proof.taskRevision||
      snapshot.triageRevision!==proof.triageRevision||
      snapshot.personalPlanEpoch!==proof.personalPlanEpoch||
-     snapshot.personalWhenRevision!==proof.personalWhenRevision)
+     snapshot.personalWhenRevision!==proof.personalWhenRevision||
+     snapshot.timeZone!==proof.timeZone||
+     snapshot.notificationEpoch!==proof.notificationEpoch)
     return bad("stale_revision");
   const task=currentTask(db,c.taskId),plan=currentPlan(db,actor,c.taskId);
   if(!task||!validEpoch(task.revision)||!validEpoch(task.triage_revision)||

@@ -24,6 +24,7 @@ function fixture(){
       restoreGeneration:GEN,taskWriteRevision:"a".repeat(64),
       candidateFingerprint:"b".repeat(64),
       personalWhenOn:null,personalWhenRevision:null,personalPlanEpoch:0,
+      timeZone:"Europe/Prague",notificationEpoch:0,
       snapshot:{taskTitle:"Připravit Rekonstrukce",currentAreaId:"personal",
         currentProjectId:null,privateAreas:[
           {id:"personal",name:"Osobní",revision:0},
@@ -69,11 +70,11 @@ test("C-3b dispatch: no consent or stale target snapshot => no provider request"
     const original=x.state;
     assert.equal((await run(x,provider,async()=>({
       ...original,sessionAlive:false,
-    }))).source,"rule");
+    })),null,"revoked session cannot release old private names");
     assert.equal((await run(x,provider,async()=>({
       ...original,privateSnapshot:{...original.privateSnapshot,
         candidateFingerprint:"c".repeat(64)},
-    }))).source,"rule");
+    })),null,"stale actor-private snapshot cannot be released");
     assert.equal(calls,0);
   }finally{x.close();}
 });
@@ -116,5 +117,55 @@ test("C-3b dispatch: concurrent per-actor backpressure and provider failure => r
     assert.equal((await first).source,"ai");
     assert.equal((await run(x,async()=>{throw Error("mock 5xx");})).source,
       "rule");
+  }finally{x.close();}
+});
+
+test("C-3b: explicit Today composes with AI success, 5xx and safe fallback",async()=>{
+  const x=fixture();
+  try{
+    x.state.privateSnapshot.snapshot.taskTitle="Dnes připravit Rekonstrukce";
+    const today=new Intl.DateTimeFormat("en-CA",{timeZone:"Europe/Prague",
+      year:"numeric",month:"2-digit",day:"2-digit"}).format(new Date());
+    const {inboxLocalDate}=await import("../lib/target-inbox-suggestion-commitment.ts");
+    const date=inboxLocalDate(Date.now(),"Europe/Prague");
+    const ai=await run(x,async()=>choice);
+    assert.equal(ai.source,"ai");
+    assert.equal(ai.changes.whenOn,date);
+    const failed=await run(x,async()=>{throw Error("mock 5xx");});
+    assert.equal(failed.source,"rule");
+    assert.equal(failed.changes.whenOn,date);
+    const invalid=await run(x,async()=>null);
+    assert.equal(invalid.source,"rule");
+    assert.equal(invalid.changes.whenOn,date);
+    assert.equal(typeof today,"string");
+  }finally{x.close();}
+});
+
+test("C-3b: failed post-provider authorization returns NO stale private suggestion",async()=>{
+  const x=fixture();
+  try{
+    let reads=0;
+    const out=await run(x,async()=>choice,async()=>{
+      reads++;
+      return reads===1?x.state:{...x.state,sessionAlive:false};
+    });
+    assert.equal(out,null);
+    const changedActor=await run(x,async()=>{throw Error("mock fail");},
+      async()=>({...x.state,actorUserId:"other"}));
+    assert.equal(changedActor,null);
+  }finally{x.close();}
+});
+
+test("C-3b: actor timezone or its revision changes during provider wait => no stale result",async()=>{
+  const x=fixture();
+  try{
+    let reads=0;
+    const out=await run(x,async()=>choice,async()=>{
+      reads++;
+      return reads===1?x.state:{...x.state,
+        privateSnapshot:{...x.state.privateSnapshot,
+          timeZone:"Europe/London",notificationEpoch:1}};
+    });
+    assert.equal(out,null);
   }finally{x.close();}
 });

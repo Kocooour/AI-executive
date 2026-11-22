@@ -26,6 +26,8 @@ export type InboxActionCommitmentInput={
   restoreGeneration:string;candidateFingerprint:string;taskWriteRevision:string;
   taskRevision:number;triageRevision:number;
   personalPlanEpoch:number;personalWhenRevision:number|null;
+  /** Monotonic revision of authoritative personal timezone/settings. */
+  notificationEpoch:number;
   consentEpoch:number;dataScopeVersion:string;
   localDate:string;timeZone:string;
   suggestion:InboxSuggestion;
@@ -86,7 +88,7 @@ const validPayload=(v:unknown,nowMs:number):v is InboxActionCommitmentInput=>{
   if(!v||typeof v!=="object"||Array.isArray(v))return false;
   const x=v as Record<string,unknown>;
   if(Object.keys(x).sort().join(",")!==
-    "actorUserId,candidateFingerprint,consentEpoch,dataScopeVersion,localDate,personalPlanEpoch,personalWhenRevision,restoreGeneration,sessionTokenHash,suggestion,taskId,taskRevision,taskWriteRevision,timeZone,triageRevision")return false;
+    "actorUserId,candidateFingerprint,consentEpoch,dataScopeVersion,localDate,notificationEpoch,personalPlanEpoch,personalWhenRevision,restoreGeneration,sessionTokenHash,suggestion,taskId,taskRevision,taskWriteRevision,timeZone,triageRevision")return false;
   if(!validAreaId(x.actorUserId)||typeof x.taskId!=="string"||
      !TASK.test(x.taskId)||x.taskId==="."||x.taskId===".."||
      typeof x.sessionTokenHash!=="string"||!HEX64.test(x.sessionTokenHash)||
@@ -95,7 +97,7 @@ const validPayload=(v:unknown,nowMs:number):v is InboxActionCommitmentInput=>{
      typeof x.taskWriteRevision!=="string"||!HEX64.test(x.taskWriteRevision)||
      !epoch(x.taskRevision)||!epoch(x.triageRevision)||!epoch(x.personalPlanEpoch)||
      (x.personalWhenRevision!==null&&!epoch(x.personalWhenRevision))||
-     !epoch(x.consentEpoch)||!clean(x.dataScopeVersion)||
+     !epoch(x.notificationEpoch)||!epoch(x.consentEpoch)||!clean(x.dataScopeVersion)||
      (x.dataScopeVersion as string).length>64||
      typeof x.localDate!=="string"||!DAY.test(x.localDate)||
      typeof x.timeZone!=="string"||
@@ -163,7 +165,7 @@ export function unsealInboxDisplayedAction(
     if(!value||typeof value!=="object"||Array.isArray(value))return null;
     const x=value as Record<string,unknown>;
     if(Object.keys(x).sort().join(",")!==
-      "actorUserId,candidateFingerprint,consentEpoch,dataScopeVersion,expiresAtMs,issuedAtMs,localDate,personalPlanEpoch,personalWhenRevision,restoreGeneration,sessionTokenHash,suggestion,taskId,taskRevision,taskWriteRevision,timeZone,triageRevision,v"||
+      "actorUserId,candidateFingerprint,consentEpoch,dataScopeVersion,expiresAtMs,issuedAtMs,localDate,notificationEpoch,personalPlanEpoch,personalWhenRevision,restoreGeneration,sessionTokenHash,suggestion,taskId,taskRevision,taskWriteRevision,timeZone,triageRevision,v"||
        x.v!==1||!Number.isSafeInteger(x.issuedAtMs)||
        !Number.isSafeInteger(x.expiresAtMs)||
        (x.issuedAtMs as number)>nowMs||

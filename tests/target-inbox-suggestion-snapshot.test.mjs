@@ -21,6 +21,8 @@ function dbFixture(){
       project_id TEXT,revision INTEGER,triage_revision INTEGER,
       triage_state TEXT,status TEXT,assignee_user_id TEXT);
     CREATE TABLE personal_plan_epochs (user_id TEXT PRIMARY KEY,revision INTEGER);
+    CREATE TABLE personal_notification_settings (user_id TEXT PRIMARY KEY,time_zone TEXT);
+    CREATE TABLE personal_notification_epochs (user_id TEXT PRIMARY KEY,revision INTEGER);
     CREATE TABLE personal_task_plans (user_id TEXT,task_id TEXT,
       when_on TEXT,revision INTEGER);
     INSERT INTO metadata VALUES ('restore_generation','${GEN}');
@@ -43,6 +45,8 @@ function dbFixture(){
       ('processed','Zpracováno','personal',NULL,1,1,'processed','open',NULL),
       ('done','Dokončeno','personal',NULL,1,0,'unprocessed','completed',NULL);
     INSERT INTO personal_plan_epochs VALUES('owner',4),('other',0);
+    INSERT INTO personal_notification_settings VALUES('owner','Europe/Prague'),('other','UTC');
+    INSERT INTO personal_notification_epochs VALUES('owner',3),('other',0);
     INSERT INTO personal_task_plans VALUES('owner','source','2026-11-23',3),
       ('other','source','2026-12-25',7);
   `);
@@ -60,6 +64,8 @@ test("C-3b candidates: pinned SQL returns only actor-private Areas/projects and 
     assert.equal(read.personalWhenOn,"2026-11-23");
     assert.equal(read.personalWhenRevision,3);
     assert.equal(read.personalPlanEpoch,4);
+    assert.equal(read.timeZone,"Europe/Prague");
+    assert.equal(read.notificationEpoch,3);
     assert.match(read.candidateFingerprint,/^[a-f0-9]{64}$/);
     assert.match(read.taskWriteRevision,/^[a-f0-9]{64}$/);
     const allowed=inboxAIAllowedInput(read.snapshot);
@@ -122,6 +128,13 @@ test("C-3b candidates: no truncated set; changes to ACL/Area/project/plan alter 
     const fourth=readAuthorizedInboxSuggestionSnapshot(db,"owner","source",GEN);
     assert.ok(fourth);
     assert.notEqual(fourth.candidateFingerprint,third.candidateFingerprint);
+    db.prepare("UPDATE personal_notification_settings SET time_zone=? WHERE user_id=?")
+      .run("Europe/London","owner");
+    db.prepare("UPDATE personal_notification_epochs SET revision=revision+1 WHERE user_id=?").run("owner");
+    const changedZone=readAuthorizedInboxSuggestionSnapshot(db,"owner","source",GEN);
+    assert.ok(changedZone);
+    assert.equal(changedZone.timeZone,"Europe/London");
+    assert.notEqual(changedZone.candidateFingerprint,fourth.candidateFingerprint);
     const insert=db.prepare("INSERT INTO projects(id,title,area_id,revision) VALUES(?,?,?,0)");
     for(let i=0;i<128;i++)insert.run("p"+i,"Projekt "+i,"personal");
     assert.equal(readAuthorizedInboxSuggestionSnapshot(db,"owner","source",GEN),null,

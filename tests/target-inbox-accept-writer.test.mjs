@@ -64,7 +64,7 @@ function prepare(fx,{today=false}={}){
   const snapshot=readAuthorizedInboxSuggestionSnapshot(
     fx.db,"alice","captured",fx.stage.restoreGeneration);
   assert.ok(snapshot);
-  const now=Date.now(),timeZone="Europe/Prague";
+  const now=Date.now(),timeZone=snapshot.timeZone;
   const suggestion=today
     ?suggestInboxWithLocalToday(snapshot.snapshot,inboxLocalDate(now,timeZone))
     :suggestInboxByRules(snapshot.snapshot);
@@ -79,6 +79,7 @@ function prepare(fx,{today=false}={}){
     personalPlanEpoch:snapshot.personalPlanEpoch,
     personalWhenRevision:snapshot.personalWhenRevision,
     consentEpoch:0,dataScopeVersion:"c3b:v1",timeZone,
+    notificationEpoch:snapshot.notificationEpoch,
     localDate:inboxLocalDate(now,timeZone),suggestion};
   const sealed=sealInboxDisplayedAction(data,fx.key,now);
   assert.ok(sealed);
@@ -273,4 +274,19 @@ test("C-3b canonical v27: concurrent edit after Accept forbids Undo of other cha
   });
   assert.deepEqual(result,{ok:false,reason:"stale_revision"});
   assert.equal(row(fx).state,"processed");
+});
+
+test("C-3b: actor timezone revision is verified in same write transaction",()=>{
+  const fx=fixture(),command=prepare(fx),before=row(fx);
+  // A same-day zone change must invalidate the signed Today capability.
+  // Notification preferences are authoritative, not a browser-provided zone.
+  fx.db.prepare("UPDATE personal_notification_settings SET time_zone=? WHERE user_id=?")
+    .run("Europe/London","alice");
+  fx.db.prepare("UPDATE personal_notification_epochs SET revision=revision+1 WHERE user_id=?")
+    .run("alice");
+  const actual=fx.authority.changeInboxSuggestedAction(fx.token,{
+    mode:"accept",command,key:fx.key,sessionTokenHash:fx.sessionHash,
+  });
+  assert.deepEqual(actual,{ok:false,reason:"stale_revision"});
+  assert.deepEqual(row(fx),before);
 });
