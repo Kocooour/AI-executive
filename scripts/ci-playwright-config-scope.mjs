@@ -9,7 +9,7 @@ export const BROWSER_PROFILES = [
   "main_title", "humanwiki", "mobile_more", "note_preview",
   "detail_races", "global_capture", "inbox", "note_edit",
   "note_areas", "note_create", "task_create", "project_title",
-  "task_preview", "title_preview",
+  "task_preview", "title_preview", "project_tasks", "backup_restore", "legacy_c4",
 ];
 
 // These two defaults are inert unless their *own* opt-in test flag is true.
