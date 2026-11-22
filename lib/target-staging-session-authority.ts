@@ -108,6 +108,9 @@ import type {TargetNoteCreateRecovery} from "./target-note-create-status";
 import type { TargetNoteDeleteCommandStatus } from "./target-note-delete-command-status";
 import { validTargetTaskTitleEditPreviewRequest,targetTaskWriteRevision } from "./target-task-write-preflight";
 import {issueTargetInboxRevision} from "./target-inbox-command-identity";
+import {writePreflightedInboxSuggestedAction,
+  type InboxAcceptCommand,type InboxAcceptUndoCommand,type InboxAcceptResult}
+  from "./target-inbox-accept-writer";
 import {readAuthorizedInboxSuggestionSnapshot,
   type AuthorizedInboxSuggestionSnapshot} from "./target-inbox-suggestion-snapshot";
 import { writePreflightedTargetTaskTitle, validTargetStagingTaskTitleWriteRequest } from "./target-task-staging-writer";
@@ -1186,6 +1189,24 @@ export class TargetStagingSessionAuthority {
       return {ok:false,reason:"invalid_request"};
     return writePreflightedTargetInboxTriage(
       this.#store,credential,command,durableSessionTokenHash);
+  }
+
+  /**
+   * C-3b private Inbox Accept/Undo. Default-off internal writer method, not
+   * an HTTP capability. A trusted caller must provide its server-derived
+   * durable session hash (never from the body). AI actions remain rejected by
+   * the writer until the external consent/revoke barrier is fully wired.
+   */
+  changeInboxSuggestedAction(
+    sessionToken:string,
+    work:{mode:"accept";command:InboxAcceptCommand;
+      key:Uint8Array;sessionTokenHash:string}|
+         {mode:"undo";command:InboxAcceptUndoCommand;
+      sessionTokenHash:string},
+  ):InboxAcceptResult{
+    const credential=this.#credential(sessionToken,true);
+    if(!credential)return {ok:false,reason:"unavailable"};
+    return writePreflightedInboxSuggestedAction(this.#store,credential,work);
   }
 
   /** C-3a: irrevocably fence an unresolved actor UUID or confirm a prior commit. */
