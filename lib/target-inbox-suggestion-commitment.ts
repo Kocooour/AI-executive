@@ -172,7 +172,10 @@ export function unsealInboxDisplayedAction(
        p.sessionTokenHash!==expect.sessionTokenHash||
        p.restoreGeneration!==expect.restoreGeneration||
        p.suggestion.why!==expect.displayedWhy||
-       JSON.stringify(p.suggestion.changes)!==JSON.stringify(expect.displayedChanges))return null;
+       p.suggestion.changes.whenOn!==expect.displayedChanges.whenOn||
+       p.suggestion.changes.projectId!==expect.displayedChanges.projectId||
+       p.suggestion.changes.taskAreaId!==expect.displayedChanges.taskAreaId||
+       p.suggestion.changes.effectiveAreaId!==expect.displayedChanges.effectiveAreaId)return null;
     return {...p,issuedAtMs:issuedAtMs as number,expiresAtMs:expiresAtMs as number};
   }catch{return null;}
 }
