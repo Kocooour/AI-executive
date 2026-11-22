@@ -35,9 +35,17 @@ export function selectBrowserProfiles(patch) {
   // Only a single contiguous old/new declaration replacement is provably
   // isolated without a TS parser. Extra hunks/lines, comments, deletions or
   // additions are deliberately fail-closed, never guessed from variable names.
-  const hunks = patch.split("\n").filter((line) => line.startsWith("@@ ")).length;
-  const changed = patch.split("\n").filter((line) =>
-    /^[+-]/.test(line) && !/^(?:---|\+\+\+)/.test(line));
+  const changed = [];
+  let hunks = 0;
+  for (const line of patch.split("\n")) {
+    if (line.startsWith("@@ ")) {
+      hunks++;
+    } else if (hunks > 0 && (line.startsWith("+") || line.startsWith("-"))) {
+      // Once inside a hunk, ---/+++ can be real source (e.g. --counter;).
+      // Only the diff headers BEFORE the first hunk may be ignored.
+      changed.push(line);
+    }
+  }
   if (hunks !== 1 || changed.length !== 2
     || !changed[0].startsWith("-") || !changed[1].startsWith("+")) {
     return [...BROWSER_PROFILES];

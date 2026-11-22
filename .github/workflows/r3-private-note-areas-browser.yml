@@ -25,7 +25,7 @@ on:
 permissions:
   contents: read
 concurrency:
-  group: lumi-r3-private-note-area-${{ github.event.pull_request.number || github.sha }}
+  group: lumi-r3-private-note-area-${{ github.event.pull_request.number || github.sha }}-${{ github.workflow }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
   chromium:

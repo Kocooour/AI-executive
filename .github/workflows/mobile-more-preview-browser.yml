@@ -22,7 +22,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: lumi-mobile-more-browser-${{ github.event.pull_request.number || github.sha }}
+  group: lumi-mobile-more-browser-${{ github.event.pull_request.number || github.sha }}-${{ github.workflow }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:

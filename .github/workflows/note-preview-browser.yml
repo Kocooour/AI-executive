@@ -14,7 +14,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: ui09d-browser-${{ github.event.pull_request.number }}
+  group: ui09d-browser-${{ github.event.pull_request.number }}-${{ github.workflow }}
   cancel-in-progress: true
 
 jobs:

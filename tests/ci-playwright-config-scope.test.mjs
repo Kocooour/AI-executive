@@ -78,6 +78,18 @@ test("multiple independent safe edits fail closed instead of inferring semantics
   assert.deepEqual(selectBrowserProfiles(twoHunks), BROWSER_PROFILES);
 });
 
+test("diff header filter counts double-prefixed source lines inside a hunk", () => {
+  const defaultOld = '-const noteEditProfile = process.env.LUMI_TARGET_NOTE_EDIT_PROFILE ?? "legacy";';
+  const defaultNew = '+const noteEditProfile = process.env.LUMI_TARGET_NOTE_EDIT_PROFILE ?? "combined";';
+  for (const extra of ["---counter;", "+++counter;", "----state;", "++++state;"]) {
+    // +++/--- file headers occur before @@, but inside a hunk these are edits.
+    assert.deepEqual(selectBrowserProfiles(patch(defaultOld, defaultNew, extra)),
+      BROWSER_PROFILES, extra);
+    assert.deepEqual(selectBrowserProfiles(patch(extra, defaultOld, defaultNew)),
+      BROWSER_PROFILES, extra);
+  }
+});
+
 test("config impact workflow retains all affected existing reusable workflows", () => {
   const workflow = readFileSync(".github/workflows/playwright-config-impact-browser.yml", "utf8");
   assert.match(workflow, /playwright\.config\.ts/);
@@ -91,5 +103,9 @@ test("config impact workflow retains all affected existing reusable workflows", 
   for (const [, name] of matches) {
     const called = readFileSync(".github/workflows/" + name + ".yml", "utf8");
     assert.match(called, /\n  workflow_call:/);
+    // Direct PR and config-impact reusable invocations must not cancel each other.
+    if (/^concurrency:/m.test(called)) {
+      assert.match(called, /^  group: .*\$\{\{ github\.workflow \}\}/m);
+    }
   }
 });

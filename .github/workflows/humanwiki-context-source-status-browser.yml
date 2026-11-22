@@ -23,7 +23,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: lumi-humanwiki-context-status-browser-${{ github.event.pull_request.number || github.sha }}
+  group: lumi-humanwiki-context-status-browser-${{ github.event.pull_request.number || github.sha }}-${{ github.workflow }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
