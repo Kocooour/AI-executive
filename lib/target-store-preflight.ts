@@ -544,7 +544,7 @@ export function inspectIsolatedTargetStore(
               row.key.startsWith(TARGET_STAGING_INBOX_TRIAGE_CANCEL_PREFIX) ||
                row.key.startsWith(TARGET_STAGING_INBOX_TOMBSTONE_CANCEL_PREFIX) ||
               row.key.startsWith(TARGET_INBOX_UNDO_REBASE_PREFIX) ||
-              c3b.prefixes.some(prefix=>row.key.startsWith(prefix)))) ||
+              c3b.prefixes.some(prefix=>(row.key as string).startsWith(prefix)))) ||
           !isSupportedTargetSchemaVersion(meta.get("schema_version")) ||
           meta.get("activated") !== "false" || meta.get("write_protocol") !== "per-item-only" ||
           typeof meta.get("anchor_seq") !== "string" ||
