@@ -8,7 +8,7 @@ import {
   provisionInboxAIFenceSchema,recordExplicitInboxAIGrant,
   readInboxAIFenceGrant,revokeInboxAIConsent,inboxAIRevokeDrained,
   beginInboxAIDispatch,inboxAIDispatchStillAllowed,endInboxAIDispatch,
-  verifiedInboxAIFencePath,
+  verifiedInboxAIFencePath,materializeInboxAIUnderFence,
 } from "../lib/target-inbox-ai-consent-fence.ts";
 
 const GEN="123e4567-e89b-42d3-a456-426614174000",SCOPE="c3b:v1";
@@ -180,4 +180,30 @@ test("C-3b production-style fence: one-time provision, offline check, no implici
     symlinkSync(fence,symlink);
     assert.equal(provisionInboxAIFenceFile(target,"check",symlink),false);
   }finally{rmSync(dir,{recursive:true,force:true});}
+});
+
+test("C-3b P1: final AI preview body and remote revoke share one SQLite linearization",()=>{
+  const x=fixture();
+  try{
+    assert.equal(grant(x.db).epoch,1);
+    let bodies=0;
+    const first=materializeInboxAIUnderFence(x.db,"owner",GEN,SCOPE,1,()=>{
+      // A second worker cannot confirm revoke between the very last
+      // persistent grant check and generation of the response body.
+      assert.equal(revokeInboxAIConsent(x.db2,"owner"),null,
+        "independent worker must wait for final release lock");
+      bodies++;
+      return {source:"ai",text:"signed preview"};
+    });
+    assert.deepEqual(first,{source:"ai",text:"signed preview"});
+    assert.equal(bodies,1);
+    assert.deepEqual(revokeInboxAIConsent(x.db2,"owner"),
+      {epoch:2,drained:true});
+    assert.equal(materializeInboxAIUnderFence(x.db,"owner",GEN,SCOPE,1,()=>{
+      bodies++;return {source:"ai"};
+    }),null,"cached or late AI result cannot release after confirmed revoke");
+    assert.equal(bodies,1);
+    assert.equal(materializeInboxAIUnderFence(x.db,"owner",GEN,
+      "c3b:altered",1,()=>{throw Error("must not execute");}),null);
+  }finally{x.close();}
 });
