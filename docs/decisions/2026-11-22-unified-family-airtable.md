@@ -101,4 +101,4 @@ Rodinná base je určena pro společnou evidenci, ale **nemá být veřejně sd�
 | UNI-09 | Při nedostupnosti Airtable/attachmentu nevznikne falešně úspěšný import ani neplatný trvalý URL; chybu lze bezpečně opravit. |
 | UNI-10 | Pozdější přechod na Lumi zachová UUID, originály, vazby a ruční opravy, stejnou iPhone Zkratku i výsledné odpovědi se zdrojovými citacemi. |
 
-**Další rozhodnutí až před implementací:** konkrétní práva k vytvoření nové base, kompatibilita stávajících integrací/automatizací, mapování více souborů na jeden logický dokument, preferovaná podoba Airtable rozhraní, technika importu příloh, pravidla přístupu rodinných účtů a migrační/rollback okno. 
+**Další rozhodnutí až před implementací:** konkrétní práva k vytvoření nové base, kompatibilita stávajících integrací/automatizací, mapování více souborů na jeden logický dokument, preferovaná podoba Airtable rozhraní, technika importu příloh, pravidla přístupu rodinných účtů a migrační/rollback okno.
