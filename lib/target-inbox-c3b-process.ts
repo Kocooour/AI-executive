@@ -43,7 +43,7 @@ const changesValid=(x:unknown):x is InboxSuggestedChanges=>{
 };
 function parsePreview(value:unknown):C3bPreview|null{
   if(!primitive(value)||Object.keys(value).sort().join(",")!==
-    "areaEpochs,changes,linearization,notificationEpoch,ok,privateEpoch,restoreGeneration,source,taskId,token,why"||
+    "areaEpochs,changes,consentEpoch,linearization,notificationEpoch,ok,privateEpoch,restoreGeneration,source,taskId,token,why"||
     value.ok!==true||typeof value.taskId!=="string"||!TASK.test(value.taskId)||
     typeof value.token!=="string"||!/^c3b1\.[A-Za-z0-9_-]{48,8192}$/.test(value.token)||
     typeof value.why!=="string"||value.why.length>512||!value.why.trim()||
