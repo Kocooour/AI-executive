@@ -187,7 +187,7 @@ test("a new C-3b workflow cannot silently miss shared Playwright changes", () =>
   files.set("r3-inbox-c3b-acceptance-browser.yml",
     "on:\n  pull_request:\n    paths:\n      - 'e2e/c3b.spec.ts'\njobs:\n" +
     "  chromium:\n    steps:\n      - run: pnpm exec playwright test e2e/c3b.spec.ts\n");
-  assert.throws(() => checkCoverage(files), /every focused Playwright suite/);
+  assert.throws(() => checkCoverage(files), /workflow_call|every focused Playwright suite/);
 });
 
 test("a missing dispatcher job, output, or conditional fails closed", () => {
