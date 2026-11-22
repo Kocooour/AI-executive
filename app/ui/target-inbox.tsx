@@ -567,7 +567,7 @@ export default function TargetInbox({language="cs",taskDetail=false}:{language?:
           :<strong>{item.title}</strong>}
           {item.status==="completed"&&<span className="targetInboxCompleted">
             {speak("Dokončeno, čeká na zpracování","Completed, awaiting processing")}</span>}
-          {item.status==="open"&&item.canProcess&&
+          {item.canSuggest&&
             <TargetInboxC3b item={item} restoreGeneration={page.restoreGeneration}
               language={language} disabled={Boolean(unresolved)||Boolean(c3bOutcome)}
               onOutcome={onC3bOutcome} onRevoked={revoke}/>}
