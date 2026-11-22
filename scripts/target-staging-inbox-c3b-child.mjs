@@ -112,7 +112,8 @@ try{
         why:suggestion.why,changes:suggestion.changes,source:suggestion.source,
         restoreGeneration:gen,linearization:page.linearization,
         areaEpochs:page.areaEpochs,privateEpoch:p.personalPlanEpoch,
-        notificationEpoch:p.notificationEpoch});
+        notificationEpoch:p.notificationEpoch,
+        consentEpoch:suggestion.source==="ai"?(verified.consent?.epoch??0):0});
     }else if(request.operation==="accept"||request.operation==="undo"){
       if(!request.command||typeof request.command!=="object")fail();
       const issued=authority.issueWritable(actor);
