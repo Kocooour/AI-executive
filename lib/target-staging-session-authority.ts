@@ -108,8 +108,9 @@ import type {TargetNoteCreateRecovery} from "./target-note-create-status";
 import type { TargetNoteDeleteCommandStatus } from "./target-note-delete-command-status";
 import { validTargetTaskTitleEditPreviewRequest,targetTaskWriteRevision } from "./target-task-write-preflight";
 import {issueTargetInboxRevision} from "./target-inbox-command-identity";
-import {writePreflightedInboxSuggestedAction,
-  type InboxAcceptCommand,type InboxAcceptUndoCommand,type InboxAcceptResult}
+import {writePreflightedInboxSuggestedAction,readInboxAcceptReceiptInSnapshot,
+  type InboxAcceptCommand,type InboxAcceptUndoCommand,type InboxAcceptResult,
+  type InboxAcceptReceiptView}
   from "./target-inbox-accept-writer";
 import {readAuthorizedInboxSuggestionSnapshot,
   type AuthorizedInboxSuggestionSnapshot} from "./target-inbox-suggestion-snapshot";
@@ -1207,6 +1208,21 @@ export class TargetStagingSessionAuthority {
     const credential=this.#credential(sessionToken,true);
     if(!credential)return {ok:false,reason:"unavailable"};
     return writePreflightedInboxSuggestedAction(this.#store,credential,work);
+  }
+
+  /** Read-only recovery for an uncertain C-3b Accept, never a new write. */
+  readInboxSuggestionReceipt(
+    actorUserId:string,command:InboxAcceptCommand,
+  ):InboxAcceptReceiptView|null{
+    if(this.#closed)return null;
+    try{
+      const credential=this.#oneShotReadCredential(actorUserId);
+      if(!credential)return null;
+      return readPreflightedStoreSnapshot(this.#store,db=>{
+        if(verifiedActor(db,credential)!==actorUserId)return null;
+        return readInboxAcceptReceiptInSnapshot(db,actorUserId,command);
+      });
+    }catch{return null;}
   }
 
   /** C-3a: irrevocably fence an unresolved actor UUID or confirm a prior commit. */
