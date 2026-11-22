@@ -26,8 +26,8 @@ export type InboxSuggestionSnapshot = {
   readonly privateOpenProjects: readonly InboxPrivateOpenProject[];
 };
 export type InboxSuggestedChanges = {
-  /** No implicit scheduling; "today" requires a separately witnessed IANA local date. */
-  readonly whenOn: "unchanged";
+  /** Local YYYY-MM-DD only after server-side IANA date/timezone witness. */
+  readonly whenOn: "unchanged" | string;
   readonly projectId: "unchanged" | string;
   /**
    * PHYSICAL tasks.area_id value, not the inherited/effective Area.
@@ -154,6 +154,30 @@ export function suggestInboxByRules(input: InboxSuggestionSnapshot): InboxSugges
     changes:{whenOn:"unchanged",projectId:target.id,
       taskAreaId:null,effectiveAreaId:target.areaId},
     why:"Přesný název otevřeného soukromého projektu v názvu úkolu: „" + target.name + "“."};
+}
+
+/**
+ * Today is actor-private planning, not the shared due_on column.
+ * Caller derives localToday from a server IANA timezone; the signed proposal
+ * and writer recheck it. AI never chooses this date.
+ */
+export function suggestInboxWithLocalToday(
+  snapshot:InboxSuggestionSnapshot,localToday:string,
+):InboxSuggestion{
+  const base=suggestInboxByRules(snapshot);
+  if(!validInboxSuggestionSnapshot(snapshot)||
+     typeof localToday!=="string"||
+     !/^\d{4}-\d{2}-\d{2}$/.test(localToday)||
+     !words(snapshot.taskTitle).includes("dnes"))return base;
+  const date=new Date(localToday+"T00:00:00Z");
+  if(Number.isNaN(date.valueOf())||
+     date.toISOString().slice(0,10)!==localToday)return base;
+  const reason=base.changes.projectId==="unchanged"&&
+    base.changes.taskAreaId==="unchanged"
+    ?"Výslovně uvedeno „dnes“; návrh osobního dne bez změny Oblasti."
+    :base.why+" Současně výslovně uvedeno „dnes“ pro osobní plán.";
+  return {source:"rule",changes:{...base.changes,whenOn:localToday},
+    why:reason};
 }
 
 /**
