@@ -122,8 +122,21 @@ export async function getC3bPreview(request:Request):Promise<Response>{
       // freshly authenticated child; never publish a stale AI suggestion.
       const current=await readC3bConsentInChild(
         childConfig(request,identity,base));
-      const last=verifyStagingIdentityBeforeRelease(request,identity,base);
-      if(last!=="ok")return stagingIdentityRefusal(last);
+      // Consent check is a separate worker round trip. Recheck the ENTIRE
+      // actor/Area/personal-plan/timezone witness at the last release point:
+      // session-only revalidation here would leak an Area name if its ACL
+      // were revoked after the first snapshot check.
+      const last=verifyStagingReadBeforeRelease(
+        request,identity,base,base.ownerUserId,
+        result.linearization,undefined,undefined,undefined,undefined,
+        undefined,{scope:"global-all",areas:result.areaEpochs},
+        undefined,{privateEpoch:result.privateEpoch},undefined,
+        {notificationEpoch:result.notificationEpoch});
+      if(last!=="ok"&&last!=="stale")return stagingIdentityRefusal(last);
+      if(last==="stale"){
+        if(cacheKey)previews.delete(cacheKey);
+        return answer(409,"read_stale_reload");
+      }
       if(!current||!current.enabled||current.pending||
          current.epoch!==result.consentEpoch||!c3bUnchanged(base)){
         if(cacheKey)previews.delete(cacheKey);
