@@ -1,6 +1,7 @@
 name: Scoped UI-09f task-preview browser
 
 on:
+  workflow_call:
   pull_request:
     paths:
       - "app/target-staging/tasks/**"

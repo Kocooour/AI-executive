@@ -1,6 +1,7 @@
 name: Focused R3 main title Search browser
 
 on:
+  workflow_call:
   pull_request:
     paths:
       - '.github/workflows/focused-r3-main-title-search-browser.yml'

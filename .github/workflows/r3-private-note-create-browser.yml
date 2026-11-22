@@ -1,5 +1,6 @@
 name: Focused R3 private note creation browser
 on:
+  workflow_call:
   pull_request:
     paths:
       - ".github/workflows/r3-private-note-create-browser.yml"

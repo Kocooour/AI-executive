@@ -3,6 +3,7 @@ name: Focused R3 note edit recovery browser
 # Only the target-editor/receipt acceptance scenario in an isolated synthetic
 # login/Next.js instance. This is NOT the full production release Browser E2E.
 on:
+  workflow_call:
   pull_request:
     paths:
       - ".github/workflows/r3-note-edit-recovery-browser.yml"

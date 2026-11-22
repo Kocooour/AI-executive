@@ -2,6 +2,7 @@ name: Focused R3 detail edit race browser
 
 # Only two synthetic, mounted-React race cases. This is NOT full release E2E.
 on:
+  workflow_call:
   pull_request:
     paths:
       - ".github/workflows/r3-detail-edit-races-browser.yml"

@@ -1,6 +1,7 @@
 name: Scoped UI-09d note-preview browser
 
 on:
+  workflow_call:
   pull_request:
     paths:
       - "app/target-staging/notes/**"

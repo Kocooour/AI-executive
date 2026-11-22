@@ -4,6 +4,7 @@ name: Focused HumanWiki Context source status browser
 # Does NOT run the full Browser E2E release suite, import personal data,
 # contact an external witness, or activate this UI in production.
 on:
+  workflow_call:
   pull_request:
     paths:
       - ".github/workflows/humanwiki-context-source-status-browser.yml"

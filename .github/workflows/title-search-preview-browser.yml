@@ -1,6 +1,7 @@
 name: Scoped UI-09b browser regression
 
 on:
+  workflow_call:
   pull_request:
     paths:
       - "app/target-staging/title-search/preview/**"

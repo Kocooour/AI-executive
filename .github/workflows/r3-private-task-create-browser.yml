@@ -1,5 +1,6 @@
 name: Focused R3 private task Quick Capture browser
 on:
+  workflow_call:
   pull_request:
     paths:
       - ".github/workflows/r3-private-task-create-browser.yml"

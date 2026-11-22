@@ -8,12 +8,15 @@
 /** Alphabetically sorted. Covers: target UI runtime, My Plan (read, status, When, Undo),
  * Vše/Osobní/Sdílené scopes for projects and notes, task/project/note details, edits
  * (task title/status/When/delete, note edit/delete, project title incl. reauth recovery),
- * main title search, private note Areas chooser + private note create, private task create. */
+ * main title search, private note Areas chooser + private note create, private task create,
+ * C-3a Inbox (read, explicit Process/Undo; requires target schema v27, upgraded only by deploy-safe.sh). */
 export const TARGET_PERSONAL_V1_PROFILE=[
   "AI_EXECUTIVE_TARGET_STAGING_HTTP_ENABLED",
   "AI_EXECUTIVE_TARGET_STAGING_HTTP_GLOBAL_NOTES_ENABLED",
   "AI_EXECUTIVE_TARGET_STAGING_HTTP_GLOBAL_PROJECTS_ENABLED",
   "AI_EXECUTIVE_TARGET_STAGING_HTTP_HOME_ENABLED",
+  "AI_EXECUTIVE_TARGET_STAGING_HTTP_INBOX_ENABLED",
+  "AI_EXECUTIVE_TARGET_STAGING_HTTP_INBOX_WRITE_ENABLED",
   "AI_EXECUTIVE_TARGET_STAGING_HTTP_MY_PLAN_DAY_ENABLED",
   "AI_EXECUTIVE_TARGET_STAGING_HTTP_MY_PLAN_SLICE_ENABLED",
   "AI_EXECUTIVE_TARGET_STAGING_HTTP_NOTES_CREATE_ENABLED",
@@ -35,6 +38,7 @@ export const TARGET_PERSONAL_V1_PROFILE=[
   "AI_EXECUTIVE_TARGET_UI_DETAILS_ENABLED",
   "AI_EXECUTIVE_TARGET_UI_EDITS_ENABLED",
   "AI_EXECUTIVE_TARGET_UI_ENABLED",
+  "AI_EXECUTIVE_TARGET_UI_INBOX_ENABLED",
   "AI_EXECUTIVE_TARGET_UI_MY_PLAN_ENABLED",
   "AI_EXECUTIVE_TARGET_UI_NOTE_EDIT_ENABLED",
   "AI_EXECUTIVE_TARGET_UI_PRIVATE_NOTE_AREAS_ENABLED",
@@ -55,8 +59,6 @@ export const TARGET_PERSONAL_V1_EXCLUDED:readonly {readonly flag:string;readonly
   {flag:"AI_EXECUTIVE_TARGET_STAGING_HTTP_ATTENTION_WRITE_ENABLED",reason:"Attention lifecycle writes are out of scope."},
   {flag:"AI_EXECUTIVE_TARGET_STAGING_HTTP_GLOBAL_COMBINED_ENABLED",reason:"Combined index feeds only the preview page; the main app uses per-kind indexes."},
   {flag:"AI_EXECUTIVE_TARGET_STAGING_HTTP_GLOBAL_TASKS_ENABLED",reason:"Task index is not consumed by the main app UI; tasks come from My Plan."},
-  {flag:"AI_EXECUTIVE_TARGET_STAGING_HTTP_INBOX_ENABLED",reason:"C-3a Inbox is not part of the already approved C-2 personal-v1 deployment; requires separate C-3a release approval."},
-  {flag:"AI_EXECUTIVE_TARGET_STAGING_HTTP_INBOX_WRITE_ENABLED",reason:"C-3a triage Process/Undo is disabled until the full C-3a acceptance and operator release gate."},
 
   {flag:"AI_EXECUTIVE_TARGET_STAGING_HTTP_NOTE_SYNC_ENABLED",reason:"Offline note sync is not part of the server-rendered daily loop."},
   {flag:"AI_EXECUTIVE_TARGET_STAGING_HTTP_NOTIFICATIONS_ENABLED",reason:"Notifications/push are out of scope."},
@@ -70,7 +72,6 @@ export const TARGET_PERSONAL_V1_EXCLUDED:readonly {readonly flag:string;readonly
   {flag:"AI_EXECUTIVE_TARGET_STAGING_PROJECT_TASKS_CLIENT_PREVIEW_ENABLED",reason:"Client preview page, not the main app."},
   {flag:"AI_EXECUTIVE_TARGET_STAGING_TASK_CLIENT_PREVIEW_ENABLED",reason:"Client preview page, not the main app."},
   {flag:"AI_EXECUTIVE_TARGET_STAGING_TITLE_SEARCH_CLIENT_PREVIEW_ENABLED",reason:"Client preview page, not the main app."},
-  {flag:"AI_EXECUTIVE_TARGET_UI_INBOX_ENABLED",reason:"C-3a Inbox UI is default-off in the C-2-only personal-v1 operator profile pending explicit final release."},
 ];
 
 /** Non-boolean settings (not flags) an operator MUST also provide for the profile to work. Each names the

@@ -30,6 +30,9 @@ TARGET_PROFILE=off
 TARGET_DIRECTORY=""
 TARGET_OWNER=""
 TARGET_GENERATION=""
+# Set only once the explicit C-3a v26 -> v27 Inbox upgrade has been invoked on
+# the quiesced store after the verified archive. Earlier code cannot read v27.
+TARGET_SCHEMA_UPGRADE_ATTEMPTED=0
 PROFILE_TMP=""
 PROFILE_TOOL=""
 ENV_BASELINE_SHA=""
@@ -376,6 +379,10 @@ on_exit() {
     echo "BEZPECNOSTNI BLOKACE: neuspesna aktivace personal-v1; restart s ponechanym .env je zakazan." >&2
     echo "Kod byl pripadne vracen; ani legacy, ani cilova data nebyla obnovena nebo smazana." >&2
     echo "Sluzba zustava zastavena. Operator musi explicitne vypnout cilove prepinace, overit profil off a schvalit samostatny postup obnovy." >&2
+    if [ "$TARGET_SCHEMA_UPGRADE_ATTEMPTED" = 1 ]; then
+      echo "Cilove uloziste mohlo byt migrovano na schema v27 (Inbox); predchozi kod v27 necte." >&2
+      echo "Navrat na v26 je mozny jen schvalenou obnovou adresare target/ z overene zalohy: ${BACKUP:-nevytvorena}" >&2
+    fi
     exit "$rc"
   fi
   # A failed off deployment can also see unit/env drift *after* its last
@@ -634,6 +641,15 @@ verify_target_store() {
     "AI_EXECUTIVE_TARGET_STAGING_RESTORE_GENERATION=$TARGET_GENERATION")"
   [ "$actual" = "$expected" ]
 }
+# Explicit C-3a Inbox schema upgrade/check of the quiesced store, as the
+# service user. Exactly the approved directory and restore generation.
+run_target_inbox_upgrade() {
+  runuser -u ai-executive -- env AI_EXECUTIVE_DATA_DIR="$DATA" /usr/bin/node \
+    --disable-warning=ExperimentalWarning --disable-warning=MODULE_TYPELESS_PACKAGE_JSON \
+    --experimental-loader "$APP/scripts/target-staging-ts-loader.mjs" \
+    "$APP/scripts/target-staging-upgrade-inbox.mjs" "$1" \
+    --directory "$TARGET_DIRECTORY" --generation "$TARGET_GENERATION"
+}
 if [ "$TARGET_PROFILE" = personal-v1 ]; then
   verify_target_store || die "cilovy preflight: neshoda vlastnika, generace nebo integrity"
 fi
@@ -745,6 +761,26 @@ fi
 if ! verify_mail_sync_prestart "$BACKUP/before-mail.json" "$BACKUP/prestart-mail.json"; then
   MAIL_PRESTART_INTEGRITY_FAILED=1
   die "Gmail souhlas nebo metadata se zmenily pri zastavene sluzbe"
+fi
+
+if [ "$TARGET_PROFILE" = personal-v1 ]; then
+  # C-3a: the reviewed personal-v1 profile includes Inbox, which needs the v27
+  # target schema. The explicit, idempotent v26 -> v27 upgrade runs ONLY here:
+  # after the verified combined archive, with the service stopped, as the
+  # service user, and before any new-code start. Never on app startup.
+  # An already-current v27 store is a no-op; any other state fails closed and
+  # the service stays stopped (see on_exit). Output is status JSON only.
+  echo "=== CILOVE SCHEMA INBOX (v26 -> v27) ==="
+  ! systemctl is-active --quiet "$SERVICE" || die "sluzba bezi pred migraci ciloveho schematu"
+  test -f "$APP/scripts/target-staging-upgrade-inbox.mjs" ||
+    die "cil nema prikaz pro migraci ciloveho schematu Inbox"
+  verify_target_store ||
+    die "cilovy preflight pred migraci schematu: neshoda vlastnika, generace nebo integrity"
+  TARGET_SCHEMA_UPGRADE_ATTEMPTED=1
+  run_target_inbox_upgrade --apply ||
+    die "migrace ciloveho schematu Inbox selhala"
+  run_target_inbox_upgrade --check ||
+    die "cilove uloziste po migraci neni aktualni schema Inbox"
 fi
 
 echo "=== START A PROVOZNI KONTROLY ==="

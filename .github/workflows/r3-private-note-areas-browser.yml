@@ -3,6 +3,7 @@ name: Focused R3 private note Area chooser browser
 # One actor-private read-only UI flow in an isolated synthetic Chromium server.
 # This is NOT the full pre-production Browser E2E suite.
 on:
+  workflow_call:
   pull_request:
     paths:
       - ".github/workflows/r3-private-note-areas-browser.yml"

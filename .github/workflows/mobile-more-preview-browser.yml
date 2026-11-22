@@ -3,6 +3,7 @@ name: Focused Lumi mobile More preview
 # Preview navigation is disabled in ordinary production builds. This narrow
 # browser check compiles with that preview on; it is NOT the full release E2E.
 on:
+  workflow_call:
   pull_request:
     paths:
       - ".github/workflows/mobile-more-preview-browser.yml"
