@@ -20,7 +20,7 @@ export type C3bUndo={
   expectedTriageRevision:number;expectedPrivateEpoch:number;
   expectedPlanRevision:number|null;
 };
-export type C3bReceipt={status:"committed"|"undone"|"not_recorded";
+export type C3bReceipt={status:"committed"|"undone"|"not_recorded"|"cancelled";
   next:{expectedTaskRevision:number;expectedTriageRevision:number;
     expectedPrivateEpoch:number;expectedPlanRevision:number|null}|null};
 export type C3bFailure="signed-out"|"stale"|"disabled"|"unavailable";
@@ -90,7 +90,7 @@ export const undoC3b=(command:C3bUndo)=>
 const parseReceipt=(x:unknown):C3bReceipt|null=>{
   if(!object(x)||x.ok!==true||
      Object.keys(x).sort().join(",")!=="next,ok,status"||
-     !["committed","undone","not_recorded"].includes(x.status as string))return null;
+     !["committed","undone","not_recorded","cancelled"].includes(x.status as string))return null;
   if(x.next!==null){
     if(!object(x.next)||Object.keys(x.next).sort().join(",")!==
         "expectedPlanRevision,expectedPrivateEpoch,expectedTaskRevision,expectedTriageRevision"||
@@ -103,6 +103,8 @@ const parseReceipt=(x:unknown):C3bReceipt|null=>{
   return {status:x.status as C3bReceipt["status"],
     next:x.next as C3bReceipt["next"]};
 };
+export const cancelC3b=(command:C3bReceiptQuery)=>
+  post("cancel",{command},parseReceipt);
 export const receiptC3b=(command:C3bAccept|C3bReceiptQuery)=>
   post("receipt",{command},parseReceipt);
 /** Consent never loads a cached response, and never calls another AI provider. */

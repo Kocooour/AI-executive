@@ -77,7 +77,7 @@ function parseReceipt(value:unknown):C3bReceipt|null{
   if(!primitive(value)||value.ok!==true||
     Object.keys(value).sort().join(",")!==
       "areaEpochs,linearization,next,ok,status"||
-    !["committed","undone","not_recorded","conflict"].includes(value.status as string))
+    !["committed","undone","not_recorded","conflict","cancelled"].includes(value.status as string))
     return null;
   const w=witness(value);
   if(!w)return null;
@@ -115,6 +115,9 @@ export const undoC3bInChild=async(config:StagingPersonalReadConfig,command:Inbox
 export const receiptC3bInChild=async(config:StagingPersonalReadConfig,
   command:InboxAcceptCommand|InboxAcceptReceiptQuery)=>
   parseReceipt(await call(config,{operation:"receipt",command}));
+export const cancelC3bInChild=async(config:StagingPersonalReadConfig,
+  command:InboxAcceptReceiptQuery)=>
+  parseReceipt(await call(config,{operation:"cancel",command}));
 export const readC3bConsentInChild=async(config:StagingPersonalReadConfig)=>
   parseConsent(await call(config,{operation:"consent_read"}),true) as C3bConsentRead|null;
 export const writeC3bConsentInChild=async(

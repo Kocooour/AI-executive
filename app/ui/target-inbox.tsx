@@ -20,7 +20,7 @@ import {
 } from "../../lib/target-inbox-client";
 import type {TargetInboxItem} from "../../lib/target-inbox-client-types";
 import TargetInboxC3b,{type C3bOutcome} from "./target-inbox-c3b";
-import {acceptC3b,undoC3b,receiptC3b,persistC3bRecovery,readC3bRecovery,
+import {acceptC3b,undoC3b,receiptC3b,cancelC3b,persistC3bRecovery,readC3bRecovery,
   type C3bUndo,type C3bReceiptQuery,type C3bAccept}
   from "../../lib/target-inbox-c3b-client";
 import "./target-inbox.css";
@@ -229,7 +229,8 @@ export default function TargetInbox({language="cs",taskDetail=false}:{language?:
     const current=c3bOutcome;
     if(!current||!runtime?.known()||runtime.generation()!==generation)return;
     const result=await receiptC3b(current.command);
-    if(result.ok===true&&result.value.status==="undone"){
+    if(result.ok===true&&(result.value.status==="undone"||
+        result.value.status==="cancelled")){
       c3bClear();setC3bOutcome(null);
       emitTargetChange({kind:"task",id:current.command.taskId,change:"updated"});
       reload();
@@ -243,6 +244,33 @@ export default function TargetInbox({language="cs",taskDetail=false}:{language?:
     // If an Undo may be in flight, a still-committed Accept is NOT terminal
     // evidence that Undo cannot commit later; retain the exact UUID.
   },[c3bOutcome,runtime,generation,onC3bOutcome,c3bClear,reload,revoke]);
+  const c3bCancel=useCallback(async()=>{
+    const original=c3bOutcome;
+    if(!original||original.status!=="uncertain"||
+       original.undoCommand||!runtime?.known()||
+       runtime.generation()!==generation)return;
+    // Same pinned target write lock as Accept: whichever commits first wins.
+    const cancelled=await cancelC3b({
+      commandId:original.command.commandId,
+      taskId:original.command.taskId,
+      restoreGeneration:original.command.restoreGeneration,
+    });
+    if(!runtime.known()||runtime.generation()!==generation)return;
+    if(cancelled.ok&&cancelled.value.status==="cancelled"){
+      c3bClear();setC3bOutcome(null);
+      emitTargetChange({kind:"task",id:original.command.taskId,
+        change:"updated"});
+      reload();
+    }else if(cancelled.ok&&cancelled.value.status==="committed"){
+      onC3bOutcome({command:original.command as C3bAccept,
+        status:"committed",next:cancelled.value.next});
+    }else if(cancelled.ok&&cancelled.value.status==="undone"){
+      c3bClear();setC3bOutcome(null);reload();
+    }else if(cancelled.ok===false&&cancelled.reason==="signed-out"){
+      c3bClear();setC3bOutcome(null);revoke();
+    }
+    // Any failed/unknown cancellation retains the same UUID and lockout.
+  },[c3bOutcome,runtime,generation,c3bClear,reload,onC3bOutcome,revoke]);
   const c3bRetry=useCallback(async()=>{
     const current=c3bOutcome;
     if(!current||current.status!=="uncertain"||
@@ -435,6 +463,10 @@ export default function TargetInbox({language="cs",taskDetail=false}:{language?:
       "Checking the original command. Rows remain hidden until its receipt is confirmed.")}</p>
     <button type="button" onClick={()=>void c3bVerify()}>
       {speak("Ověřit původní příkaz","Verify original receipt")}</button>
+    {!c3bOutcome.undoCommand&&<button type="button"
+      onClick={()=>void c3bCancel()}>
+      {speak("Bezpečně ukončit původní Přijmout",
+        "Safely cancel original Accept")}</button>}
     {c3bOutcome.undoCommand?<button type="button"
       onClick={()=>void c3bRetryUndo()}>
       {speak("Opakovat původní Undo","Retry original Undo")}</button>:

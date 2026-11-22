@@ -17,7 +17,7 @@ import {c3bEnabled,c3bWriteEnabled,c3bConfig,c3bUnchanged,
   inboxC3bActionKey,inboxC3bOwnerCookieBinding}
   from "./target-inbox-c3b-runtime";
 import {previewC3bInChild,acceptC3bInChild,undoC3bInChild,
-  receiptC3bInChild,readC3bConsentInChild,writeC3bConsentInChild,
+  receiptC3bInChild,cancelC3bInChild,readC3bConsentInChild,writeC3bConsentInChild,
   type C3bPreview}
   from "./target-inbox-c3b-process";
 import type {InboxAcceptCommand,InboxAcceptReceiptQuery,InboxAcceptUndoCommand}
@@ -158,7 +158,7 @@ export async function getC3bPreview(request:Request):Promise<Response>{
   }
 }
 export async function postC3b(
-  request:Request,operation:"accept"|"undo"|"receipt"|"consent",
+  request:Request,operation:"accept"|"undo"|"receipt"|"consent"|"cancel",
 ):Promise<Response>{
   if(!(operation==="receipt"||operation==="consent"?c3bEnabled():c3bWriteEnabled()))
     return answer(404,"Not found");
@@ -203,9 +203,12 @@ export async function postC3b(
       return Response.json({ok:true,enabled:reply.enabled,
         pending:reply.pending},{status:reply.pending?202:200,headers});
     }
-    if(operation==="receipt"){
-      const reply=await receiptC3bInChild(actorChild,
-        obj.command as InboxAcceptCommand|InboxAcceptReceiptQuery);
+    if(operation==="receipt"||operation==="cancel"){
+      const reply=operation==="receipt"
+        ?await receiptC3bInChild(actorChild,
+          obj.command as InboxAcceptCommand|InboxAcceptReceiptQuery)
+        :await cancelC3bInChild(actorChild,
+          obj.command as InboxAcceptReceiptQuery);
       const release=reply
         ?verifyStagingReadBeforeRelease(request,identity,base,base.ownerUserId,
           reply.linearization,undefined,undefined,undefined,undefined,

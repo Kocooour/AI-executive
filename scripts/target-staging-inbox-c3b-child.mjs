@@ -33,9 +33,9 @@ try{
      !gen||!UUID.test(gen)||!owner)fail();
   const request=await readTitleCommand(process.stdin);
   if(!request||typeof request!=="object"||Array.isArray(request)||
-     !["preview","accept","undo","receipt","consent_read","consent_write"]
+     !["preview","accept","undo","receipt","cancel","consent_read","consent_write"]
        .includes(request.operation))fail();
-  const write=["accept","undo","consent_write"].includes(request.operation);
+  const write=["accept","undo","cancel","consent_write"].includes(request.operation);
   if(write&&!c3bWriteEnabled())fail();
   const authority=new TargetStagingSessionAuthority({
     stagingDirectory:dir,expectedRestoreGeneration:gen,
@@ -128,6 +128,16 @@ try{
           :{mode:"undo",command:request.command,sessionTokenHash:binding};
         output(authority.changeInboxSuggestedAction(issued.sessionToken,work));
       }finally{fence?.close();}
+    }else if(request.operation==="cancel"){
+      if(!request.command||typeof request.command!=="object")fail();
+      const issued=authority.issueWritable(actor);
+      if(!issued)fail();
+      const terminal=authority.cancelInboxSuggestedAction(
+        issued.sessionToken,request.command,binding);
+      const page=storePage();
+      if(!terminal||!page)fail();
+      output({ok:true,...terminal,
+        linearization:page.linearization,areaEpochs:page.areaEpochs});
     }else if(request.operation==="receipt"){
       if(!request.command||typeof request.command!=="object")fail();
       const receipt=authority.readInboxSuggestionReceipt(actor,request.command);
