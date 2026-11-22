@@ -46,6 +46,18 @@ export type InboxAcceptCommand={
   commandId:string;taskId:string;restoreGeneration:string;
   token:string;displayedWhy:string;displayedChanges:InboxSuggestedChanges;
 };
+export type InboxAcceptReceiptQuery={
+  commandId:string;taskId:string;restoreGeneration:string;
+};
+const validReceiptQuery=(value:unknown):value is InboxAcceptReceiptQuery=>{
+  if(!value||typeof value!=="object"||Array.isArray(value))return false;
+  const x=value as Record<string,unknown>;
+  return Object.keys(x).sort().join(",")===
+    "commandId,restoreGeneration,taskId"&&
+    typeof x.commandId==="string"&&UUID.test(x.commandId)&&
+    typeof x.restoreGeneration==="string"&&UUID.test(x.restoreGeneration)&&
+    typeof x.taskId==="string"&&TASK.test(x.taskId);
+};
 export type InboxAcceptUndoCommand={
   commandId:string;undoOfCommandId:string;taskId:string;
   restoreGeneration:string;
@@ -463,9 +475,12 @@ export type InboxAcceptReceiptView={
     expectedPrivateEpoch:number;expectedPlanRevision:number|null}|null;
 };
 export function readInboxAcceptReceiptInSnapshot(
-  db:DatabaseSync,actor:string,command:InboxAcceptCommand,
+  db:DatabaseSync,actor:string,
+  command:InboxAcceptCommand|InboxAcceptReceiptQuery,
 ):InboxAcceptReceiptView|null{
-  if(!validateAccept(command)||
+  const full=validateAccept(command);
+  if(!full&&!validReceiptQuery(command))return null;
+  if(
      !canEditIsolatedTargetTaskTitle(db,actor,command.taskId,true)||
      targetStoreRestoreGeneration(db)!==command.restoreGeneration.toLowerCase())
     return null;
@@ -478,7 +493,7 @@ export function readInboxAcceptReceiptInSnapshot(
       return {status:"not_recorded",next:null};
     }
     if(old.actor!==actor||old.taskId!==command.taskId||
-       old.digest!==acceptDigest(command))
+       (full&&old.digest!==acceptDigest(command)))
       return {status:"conflict",next:null};
     if(db.prepare("SELECT 1 FROM metadata WHERE key=?").get(
       receiptKey(UNDO,actor,command.commandId)))
