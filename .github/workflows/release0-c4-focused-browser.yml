@@ -3,6 +3,7 @@ name: Release 0 C4 focused legacy browser regressions
 # Targeted investigation only. The complete Browser E2E remains the
 # manual production-release gate; no preview or target staging flags here.
 on:
+  workflow_call:
   pull_request:
     paths:
       - ".github/workflows/release0-c4-focused-browser.yml"
@@ -22,7 +23,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: lumi-release0-c4-${{ github.event.pull_request.number || github.sha }}
+  group: lumi-release0-c4-${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:

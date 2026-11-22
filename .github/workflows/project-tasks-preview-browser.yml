@@ -1,6 +1,7 @@
 name: Scoped UI-09c project task viewer browser
 
 on:
+  workflow_call:
   pull_request:
     paths:
       - ".github/workflows/project-tasks-preview-browser.yml"
@@ -14,7 +15,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: ui09c-project-browser-${{ github.event.pull_request.number }}
+  group: ui09c-project-browser-${{ github.workflow }}-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 
 jobs:

@@ -1,6 +1,7 @@
 name: Release 0 backup restore browser
 
 on:
+  workflow_call:
   pull_request:
     paths:
       - "app/ui/hooks/use-sync.ts"
@@ -26,7 +27,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: lumi-release0-c9-${{ github.event.pull_request.number || github.sha }}
+  group: lumi-release0-c9-${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
