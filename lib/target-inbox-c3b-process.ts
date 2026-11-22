@@ -77,7 +77,7 @@ function parseReceipt(value:unknown):C3bReceipt|null{
   if(!primitive(value)||value.ok!==true||
     Object.keys(value).sort().join(",")!==
       "areaEpochs,linearization,next,ok,status"||
-    !["committed","undone","not_recorded","conflict","cancelled"].includes(value.status as string))
+    !["committed","undone","not_recorded","conflict","cancelled","undo_cancelled"].includes(value.status as string))
     return null;
   const w=witness(value);
   if(!w)return null;
@@ -121,7 +121,8 @@ export const receiptC3bInChild=async(config:StagingPersonalReadConfig,
  * Every retry is re-authorized by the child and the HTTP final-release gate.
  * Never treat a missing/unparseable response as proof of cancellation. */
 export async function cancelC3bInChild(
-  config:StagingPersonalReadConfig,command:InboxAcceptReceiptQuery,
+  config:StagingPersonalReadConfig,
+  command:InboxAcceptReceiptQuery|InboxAcceptUndoCommand,
 ):Promise<C3bReceipt|null>{
   for(let attempt=0;attempt<4;attempt++){
     const parsed=parseReceipt(await call(config,{operation:"cancel",command}));
