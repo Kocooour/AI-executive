@@ -227,8 +227,8 @@ test("C-3b P1 HTTP: a stale Undo is terminally cancelled, no late Undo or partia
     "undo_cancelled");
   assert.equal((await post(UNDO,"undo",{command:undo})).status,409,
     "late original Undo must lose the receipt lock");
-  assert.deepEqual(db.prepare(`SELECT title,triage_state AS state,project_id AS projectId
-    FROM tasks WHERE id='stale-undo'`).get(),{
+  assert.deepEqual({...db.prepare(`SELECT title,triage_state AS state,project_id AS projectId
+    FROM tasks WHERE id='stale-undo'`).get()},{
     title:"Změněné zadání",state:"processed",projectId:"project:c3b:home",
   });
 });
