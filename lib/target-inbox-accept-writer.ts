@@ -33,13 +33,15 @@ import {inboxC3bSessionBinding} from "./target-inbox-c3b-runtime";
 import {readTargetInboxAIConsent,targetInboxAIConsentMatchesFence}
   from "./target-inbox-ai-consent";
 import {readInboxAIFenceGrant} from "./target-inbox-ai-consent-fence";
+import {C3B_RECEIPT_MAX_ROWS,C3B_RECEIPT_WARNING_ROWS}
+  from "./target-inbox-metadata-validation";
 
 const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const TASK=/^[^\u0000-\u001f\u007f]{1,512}$/u;
 const HEX=/^[a-f0-9]{64}$/;
 const ACCEPT="r3:c3b:accept:v1:";
 const UNDO="r3:c3b:undo:v1:";
-const MAX_RECEIPTS=4096;
+const MAX_RECEIPTS=C3B_RECEIPT_MAX_ROWS;
 const MAX_RECEIPT_BYTES=8192;
 
 export type InboxAcceptCommand={
@@ -206,6 +208,16 @@ export function inboxCompoundLedgerHasCapacity(
   if(!validEpoch(receiptRows)||!validEpoch(activeAccepts)||
      activeAccepts>receiptRows||receiptRows>=MAX_RECEIPTS)return false;
   return receiptRows+activeAccepts+(mode==="accept"?2:mode==="cancel"?1:0)<=MAX_RECEIPTS;
+}
+/** No actor, task or content in these owner-side capacity diagnostics. */
+export function inboxCompoundLedgerCapacity(receiptRows:number,activeAccepts:number):
+  {limit:number;used:number;reserved:number;remainingAccepts:number;warning:boolean}|null{
+  if(!validEpoch(receiptRows)||!validEpoch(activeAccepts)||
+     activeAccepts>receiptRows||receiptRows>MAX_RECEIPTS)return null;
+  const reserved=receiptRows+activeAccepts;
+  return {limit:MAX_RECEIPTS,used:receiptRows,reserved,
+    remainingAccepts:Math.max(0,Math.floor((MAX_RECEIPTS-reserved)/2)),
+    warning:reserved>=C3B_RECEIPT_WARNING_ROWS};
 }
 const checkCapacity=(db:DatabaseSync,mode:"accept"|"undo"|"cancel"):boolean=>{
   const row=db.prepare(`SELECT COUNT(*) AS n FROM metadata WHERE

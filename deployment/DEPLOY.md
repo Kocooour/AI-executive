@@ -343,3 +343,36 @@ available, keep the service stopped and roll forward to fixed C-3b-aware code.
 migration or modification. C-3b only writes its metadata after an explicit
 authenticated command. This rollout does NOT authorize production activation
 of unfinished Inbox suggestion HTTP/UI or any real outbound OpenAI request.
+
+ 
+### C-3b durable Inbox receipt capacity (owner maintenance)
+
+The canonical C-3b metadata receipt limit is **65,536 rows** (raised from
+4,096), reserving one future Undo slot for every active Accept. Thus a
+pure Accept workload supports 32,768 new decisions before its bounded limit;
+already completed Undo consumes only its reserved slot. Permanent terminal
+cancellations also consume rows. The writer and canonical read-only preflight
+share `C3B_RECEIPT_MAX_ROWS`, so a partially upgraded application fails closed.
+
+**Read-only capacity inspection** against a stopped, backed-up target SQLite
+store (never output metadata values or private IDs):
+
+```sql
+SELECT COUNT(*) AS receipts FROM metadata
+WHERE key LIKE 'r3:c3b:accept:v1:%' OR key LIKE 'r3:c3b:undo:v1:%';
+SELECT COUNT(*) AS active_accepts FROM metadata AS a
+WHERE a.key LIKE 'r3:c3b:accept:v1:%'
+  AND json_extract(a.value,'$.kind')='accept'
+  AND NOT EXISTS (SELECT 1 FROM metadata AS u WHERE
+    u.key='r3:c3b:undo:v1:' || substr(a.key,length('r3:c3b:accept:v1:')+1));
+```
+
+At **49,152 reserved slots (75%)**, schedule a reviewed, nondestructive
+capacity upgrade, increasing *both* writer and preflight limits, with
+verified backups and exact-SHA test/restart acceptance. Reservation =
+`receipts + active_accepts`. No automatic expiry or deletion of accepted,
+undone or cancelled UUIDs: the immutable history prevents replay and supports
+old Undo. At the ceiling, only new C-3b Accepts are safely rejected; receipt,
+terminal cancellation and already reserved Undo remain readable/writable,
+and manual Inbox triage remains available. Never reset the ledger, discard
+old tombstones, bypass preflight or silently shrink historical records.

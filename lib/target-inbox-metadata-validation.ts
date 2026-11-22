@@ -16,7 +16,10 @@ const PREFIXES=[C3B_ACCEPT_PREFIX,C3B_UNDO_PREFIX,
 const HEX=/^[a-f0-9]{64}$/;
 const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const ID=/^[A-Za-z0-9_.:@-]{1,120}$/;
-const MAX_ACCEPT=4096,MAX_CONSENT=4096,MAX_BYTES=8192;
+/** Bounded canonical metadata budget; adjust writer, preflight and runbook together. */
+export const C3B_RECEIPT_MAX_ROWS=65_536;
+export const C3B_RECEIPT_WARNING_ROWS=49_152; // 75% of fixed replay-safe ledger
+const MAX_CONSENT=4096,MAX_BYTES=8192;
 const epoch=(n:unknown):n is number=>typeof n==="number"&&Number.isSafeInteger(n)&&n>=0;
 const keys=(value:Record<string,unknown>,names:string):boolean=>
   Object.keys(value).sort().join(",")===names;
@@ -59,7 +62,7 @@ export function validateC3BMetadata(
   const undo=list.filter(r=>(r.key as string).startsWith(C3B_UNDO_PREFIX));
   const consents=list.filter(r=>(r.key as string).startsWith(C3B_CONSENT_PREFIX));
   const decisions=list.filter(r=>(r.key as string).startsWith(C3B_DECISION_PREFIX));
-  if(accept.length+undo.length>MAX_ACCEPT||consents.length>actorIds.length||
+  if(accept.length+undo.length>C3B_RECEIPT_MAX_ROWS||consents.length>actorIds.length||
     decisions.length>MAX_CONSENT)return invalid;
   const actors=new Set(actorIds);
   const accepted=new Map<string,Record<string,unknown>>();
