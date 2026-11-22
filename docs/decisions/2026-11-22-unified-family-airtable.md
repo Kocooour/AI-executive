@@ -15,11 +15,12 @@ Rekonstrukce není povinnou součástí nové base, její oddělení je dlouhodo
 
 ### Limity Airtable Free — ověřeno 2026-11-22
 
-Podle oficiálního Airtable: **1 000 záznamů na base (součet tabulek), 1 GB příloh na base, 1 000 API volání na workspace za měsíc, maximálně 5 požadavků za sekundu na base**. Tedy oddělením rekonstrukce získáme samostatný datový a přílohový limit pro každou z obou bází, ale **nikoliv další API rozpočet, pokud jsou ve stejném workspace**. Free má navíc **100 běhů automatizací na workspace měsíčně** a akce **Run a script není dostupná**; OCR a klasifikace proto musí probíhat mimo Airtable (externí worker), ne v Airtable skriptech/na jeden dokument spouštěné automatizaci.
+Podle oficiálního Airtable: **1 000 záznamů na base (součet tabulek), 1 GB příloh na base, 1 000 API volání na workspace za měsíc, maximálně 5 požadavků za sekundu na base**. Tedy oddělením rekonstrukce získáme samostatný datový a přílohový limit pro každou z obou bází, ale **nikoliv další API rozpočet, pokud jsou ve stejném workspace**. Free má navíc **100 běhů automatizací na workspace měsíčně** a akce **Run a script není dostupná**; OCR a klasifikace proto musí probíhat mimo Airtable (externí worker), ne v Airtable skriptech/na jeden dokument spouštěné automatizaci. Free omezuje spolupracovníky s právy **Owner/Creator/Editor na nejvýše 5 v rámci workspace**; před zpřístupněním celé rodině ověřit aktuální počet účtů a nepoužívat pro zápis sdílený společný login.
 
 - [Airtable — Workspace settings, limity](https://support.airtable.com/articles/9157745778-Airtable-workspace-settings-overview)
 - [Airtable — API limit management](https://support.airtable.com/articles/7735693959-Managing-API-call-limits-in-Airtable)
 - [Airtable — automation limits](https://support.airtable.com/articles/3669392397-Getting-started-with-Airtable-automations)
+- [Airtable — collaborator limits](https://support.airtable.com/articles/1636857517-How-Airtable-collaborators-impact-billing)
 - [Airtable — attachment API upload limits](https://support.airtable.com/articles/1744327578-Using-Omni-AI-in-Airtable)
 - [Airtable — Getting started with sync](https://support.airtable.com/articles/2849803278-Getting-started-with-Airtable-sync) (neexistuje přímý link mezi bázemi)
 - [Airtable — Linking records across synced bases](https://support.airtable.com/articles/3175509073-Linking-records-across-synced-bases-in-Airtable) (Team+)
