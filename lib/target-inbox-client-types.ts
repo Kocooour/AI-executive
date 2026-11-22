@@ -3,5 +3,5 @@ export type TargetInboxTriageMode="process"|"undo";
 export type TargetInboxItem={
   id:string;title:string;status:"open"|"completed";
   triageRevision:number;taskRevision:number;
-  effectiveAreaId:string;canProcess:boolean;expectedRevision:string|null;
+  effectiveAreaId:string;canProcess:boolean;canSuggest:boolean;expectedRevision:string|null;
 };
