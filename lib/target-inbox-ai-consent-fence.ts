@@ -82,6 +82,10 @@ export function provisionInboxAIFenceSchema(db:DatabaseSync):boolean{
         restore_generation TEXT NOT NULL,scope_version TEXT NOT NULL,
         owner_decision TEXT NOT NULL
       ) WITHOUT ROWID;
+      CREATE TABLE IF NOT EXISTS inbox_ai_fence_decisions (
+        actor TEXT NOT NULL,decision TEXT NOT NULL,
+        epoch INTEGER NOT NULL,PRIMARY KEY(actor,decision)
+      ) WITHOUT ROWID;
       CREATE TABLE IF NOT EXISTS inbox_ai_fence_pending (
         ticket TEXT PRIMARY KEY,actor TEXT NOT NULL,
         epoch INTEGER NOT NULL,created_at_ms INTEGER NOT NULL,
@@ -149,9 +153,16 @@ export function recordExplicitInboxAIGrant(
         dataScopeVersion:existing.scope_version};
     }
     // A revoked principal must ONLY be re-granted after a DISTINCT new
-    // explicit owner decision. Replayed decision IDs from restored target
-    // backups cannot re-enable an external, already-revoked grant.
-    if(existing?.owner_decision===decisionId)return null;
+    // explicit owner decision. All prior decisions are immutable and
+    // never reusable (including decision v1 after grant/revoke v2/v3).
+    if(existing?.owner_decision===decisionId||
+      db.prepare("SELECT 1 FROM inbox_ai_fence_decisions WHERE actor=? AND decision=?")
+        .get(actorUserId,decisionId))return null;
+    // Do not re-enable while previous workers are still draining: the old
+    // pending tickets must remain a permanent revocation barrier on crash.
+    const pending=db.prepare("SELECT COUNT(*) AS n FROM inbox_ai_fence_pending WHERE actor=?")
+      .get(actorUserId) as {n:number};
+    if(pending.n!==0)return null;
     const epoch=existing?existing.epoch+1:1;
     if(!Number.isSafeInteger(epoch))return null;
     db.prepare(`INSERT INTO inbox_ai_fence_grants
@@ -163,6 +174,8 @@ export function recordExplicitInboxAIGrant(
         owner_decision=excluded.owner_decision`)
       .run(actorUserId,epoch,restoreGeneration.toLowerCase(),
         dataScopeVersion,decisionId);
+    db.prepare("INSERT INTO inbox_ai_fence_decisions(actor,decision,epoch) VALUES(?,?,?)")
+      .run(actorUserId,decisionId,epoch);
     return {actorUserId,epoch,active:true,
       restoreGeneration:restoreGeneration.toLowerCase(),dataScopeVersion};
   });
