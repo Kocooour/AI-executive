@@ -77,6 +77,14 @@ test("all target write routes use the shared target Origin guard (direct or dele
     if(!file.startsWith(targetRoutes+path.sep)||!file.endsWith("route.ts"))continue;
     if(!/export async function (?:POST|PATCH|PUT|DELETE)\b/.test(source))continue;
     if(source.includes("requireTargetSameOrigin(request)")){direct++;continue;}
+    // C-3b's five write methods delegate to one audited HTTP shell with
+    // mandatory requireTargetSameOrigin before parsing or child dispatch.
+    if(source.includes('target-inbox-c3b-http')){
+      assert.match(source,/return postC3b\(request,"(?:accept|undo|receipt|consent|cancel)"\);/,
+        "unguarded C-3b write route "+file);
+      delegated++;
+      continue;
+    }
     assert.match(source,/from ["'][^"']*target-private-(?:task|structure)-create-http["']/,
       "unguarded write route "+file);
     assert.match(source,/return postPrivate(?:Task|Project|ProjectTask)[A-Za-z]*\(request\);/,
@@ -92,7 +100,10 @@ test("all target write routes use the shared target Origin guard (direct or dele
       /requireTargetSameOrigin\(request\)/);
   }
   assert.equal(direct,29);
-  assert.equal(delegated,12);
+  assert.equal(delegated,17);
+  assert.match(readFileSync(path.join(libs,"target-inbox-c3b-http.ts"),"utf8"),
+    /requireTargetSameOrigin\(request\)/,
+    "shared C-3b delegated shell must preserve strict Origin guard");
   for(const file of ["target-private-task-create-http.ts","target-private-structure-create-http.ts"]){
     assert.match(readFileSync(path.join(libs,file),"utf8"),/requireTargetSameOrigin\(request\)/);
   }
