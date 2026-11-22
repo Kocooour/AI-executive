@@ -27,6 +27,9 @@ jobs:
       project_title: ${{ steps.detect.outputs.project_title }}
       task_preview: ${{ steps.detect.outputs.task_preview }}
       title_preview: ${{ steps.detect.outputs.title_preview }}
+      project_tasks: ${{ steps.detect.outputs.project_tasks }}
+      backup_restore: ${{ steps.detect.outputs.backup_restore }}
+      legacy_c4: ${{ steps.detect.outputs.legacy_c4 }}
     steps:
       - uses: actions/checkout@v5
         with:
@@ -119,5 +122,23 @@ jobs:
     needs: scope
     if: needs.scope.outputs.title_preview == 'true'
     uses: ./.github/workflows/title-search-preview-browser.yml
+    permissions:
+      contents: read
+  project-tasks:
+    needs: scope
+    if: needs.scope.outputs.project_tasks == 'true'
+    uses: ./.github/workflows/project-tasks-preview-browser.yml
+    permissions:
+      contents: read
+  backup-restore:
+    needs: scope
+    if: needs.scope.outputs.backup_restore == 'true'
+    uses: ./.github/workflows/release0-backup-restore-browser.yml
+    permissions:
+      contents: read
+  legacy-c4:
+    needs: scope
+    if: needs.scope.outputs.legacy_c4 == 'true'
+    uses: ./.github/workflows/release0-c4-focused-browser.yml
     permissions:
       contents: read
