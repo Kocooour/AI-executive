@@ -16,7 +16,7 @@
 
 **Hierarchie:** produktové chování a priority určuje PRODUCT.md, interakce a obrazovky UX-UI.md, implementační a datové kontrakty ARCHITECTURE.md. Technický stav **není** důkazem dodání cílových funkcí. Pro konflikty či změny požadavků je nutné explicitní produktové rozhodnutí, nikoli tichá úprava implementace.
 
-Další podklady: [rodinný archiv dokumentů](docs/decisions/2026-11-22-family-document-archive.md), [sjednocení rodinných databází v Airtable](docs/decisions/2026-11-22-unified-family-airtable.md), [postupy vývoje](docs/DEVELOPMENT.md), [vývojová pravidla](AGENTS.md), [bezpečnostní audit](SECURITY_AUDIT.md), [plán přechodu na systémový účet](docs/PRECHOD-SYSTEMOVY-UCET.md), [návrh zjednodušení UI (10/2026)](docs/proposals/2026-10-zjednoduseni-ui.md), [historická úplná specifikace před rozdělením](docs/archive/README-before-split-2026-10-14.md) (archiv, **není** aktuální source of truth).
+Další podklady: [rodinný archiv dokumentů](docs/decisions/2026-11-22-family-document-archive.md), [rodinná evidence na Airtable Free](docs/decisions/2026-11-22-unified-family-airtable.md), [postupy vývoje](docs/DEVELOPMENT.md), [vývojová pravidla](AGENTS.md), [bezpečnostní audit](SECURITY_AUDIT.md), [plán přechodu na systémový účet](docs/PRECHOD-SYSTEMOVY-UCET.md), [návrh zjednodušení UI (10/2026)](docs/proposals/2026-10-zjednoduseni-ui.md), [historická úplná specifikace před rozdělením](docs/archive/README-before-split-2026-10-14.md) (archiv, **není** aktuální source of truth).
 
 ## Stav produktu
 
