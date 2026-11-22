@@ -1,4 +1,6 @@
-/** R3-QA-01: opt-in focused browser acceptance of the actual main-app editor.
+/** CI witness: direct and reusable note-edit workflows must not cancel each other.
+ * Synthetic temporary PR #498; NOT FOR MERGE.
+ * R3-QA-01: opt-in focused browser acceptance of the actual main-app editor.
  * Synthetic, actor-scoped staging responses only. No production data or real
  * writes; this is NOT the full release Browser E2E suite. */
 import {expect,test} from "./fixtures";
