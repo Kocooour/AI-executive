@@ -33,7 +33,8 @@ import {inboxC3bSessionBinding} from "./target-inbox-c3b-runtime";
 import {readTargetInboxAIConsent,targetInboxAIConsentMatchesFence}
   from "./target-inbox-ai-consent";
 import {readInboxAIFenceGrant} from "./target-inbox-ai-consent-fence";
-import {C3B_RECEIPT_MAX_ROWS,C3B_RECEIPT_WARNING_ROWS}
+import {C3B_RECEIPT_MAX_ROWS,C3B_RECEIPT_WARNING_ROWS,
+  C3B_RECEIPT_CANCEL_RESERVE}
   from "./target-inbox-metadata-validation";
 
 const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -207,7 +208,12 @@ export function inboxCompoundLedgerHasCapacity(
 ):boolean{
   if(!validEpoch(receiptRows)||!validEpoch(activeAccepts)||
      activeAccepts>receiptRows||receiptRows>=MAX_RECEIPTS)return false;
-  return receiptRows+activeAccepts+(mode==="accept"?2:mode==="cancel"?1:0)<=MAX_RECEIPTS;
+  // Leave a non-Undo emergency window for terminal cancellations of
+  // requests that timed out/lost their signed body before an Accept commit.
+  // Undo's already-reserved slot is NEVER consumed by such a cancellation.
+  const reserve=mode==="accept"?C3B_RECEIPT_CANCEL_RESERVE:0;
+  return receiptRows+activeAccepts+(mode==="accept"?2:mode==="cancel"?1:0)<=
+    MAX_RECEIPTS-reserve;
 }
 /** No actor, task or content in these owner-side capacity diagnostics. */
 export function inboxCompoundLedgerCapacity(receiptRows:number,activeAccepts:number):
@@ -216,7 +222,8 @@ export function inboxCompoundLedgerCapacity(receiptRows:number,activeAccepts:num
      activeAccepts>receiptRows||receiptRows>MAX_RECEIPTS)return null;
   const reserved=receiptRows+activeAccepts;
   return {limit:MAX_RECEIPTS,used:receiptRows,reserved,
-    remainingAccepts:Math.max(0,Math.floor((MAX_RECEIPTS-reserved)/2)),
+    remainingAccepts:Math.max(0,Math.floor(
+      (MAX_RECEIPTS-C3B_RECEIPT_CANCEL_RESERVE-reserved)/2)),
     warning:reserved>=C3B_RECEIPT_WARNING_ROWS};
 }
 const checkCapacity=(db:DatabaseSync,mode:"accept"|"undo"|"cancel"):boolean=>{

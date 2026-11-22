@@ -100,18 +100,24 @@ test("C-3b receipt capacity reserves an Undo for every live Accept",async()=>{
   assert.equal(allowed(0,0,"accept"),true);
   assert.equal(allowed(2048,2048,"accept"),true,
     "the previous 4096-row ceiling must not disable future Accepts");
+  assert.equal(allowed(32255,32255,"accept"),true);
+  assert.equal(allowed(32256,32256,"accept"),false,
+    "terminal-cancel capacity must be reserved beyond all pending Undo slots");
   assert.equal(allowed(32768,32768,"accept"),false,
     "all remaining ledger slots belong to future Undo receipts");
   assert.equal(allowed(32768,32768,"undo"),true,
     "reserved Undo must still succeed at capacity");
   assert.equal(allowed(65535,0,"accept"),false);
   assert.equal(allowed(65535,0,"undo"),true);
+  assert.equal(allowed(64512,0,"cancel"),true,
+    "cancel remains available after new Accept admission is exhausted");
+  assert.equal(allowed(65535,0,"cancel"),true);
   assert.equal(allowed(65536,0,"undo"),false);
   assert.equal(allowed(3000,3001,"undo"),false);
   const {inboxCompoundLedgerCapacity}=await import(
     "../lib/target-inbox-accept-writer.ts");
   assert.deepEqual(inboxCompoundLedgerCapacity(0,0),{
-    limit:65536,used:0,reserved:0,remainingAccepts:32768,warning:false,
+    limit:65536,used:0,reserved:0,remainingAccepts:32256,warning:false,
   });
   assert.equal(inboxCompoundLedgerCapacity(24000,24000).warning,false);
   assert.equal(inboxCompoundLedgerCapacity(24576,24576).warning,true);

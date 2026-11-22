@@ -18,7 +18,8 @@ const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]
 const ID=/^[A-Za-z0-9_.:@-]{1,120}$/;
 /** Bounded canonical metadata budget; adjust writer, preflight and runbook together. */
 export const C3B_RECEIPT_MAX_ROWS=65_536;
-export const C3B_RECEIPT_WARNING_ROWS=49_152; // 75% of fixed replay-safe ledger
+export const C3B_RECEIPT_WARNING_ROWS=49_152;
+export const C3B_RECEIPT_CANCEL_RESERVE=1_024; // 75% of fixed replay-safe ledger
 const MAX_CONSENT=4096,MAX_BYTES=8192;
 const epoch=(n:unknown):n is number=>typeof n==="number"&&Number.isSafeInteger(n)&&n>=0;
 const keys=(value:Record<string,unknown>,names:string):boolean=>

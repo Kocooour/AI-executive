@@ -349,9 +349,9 @@ of unfinished Inbox suggestion HTTP/UI or any real outbound OpenAI request.
 
 The canonical C-3b metadata receipt limit is **65,536 rows** (raised from
 4,096), reserving one future Undo slot for every active Accept. Thus a
-pure Accept workload supports 32,768 new decisions before its bounded limit;
-already completed Undo consumes only its reserved slot. Permanent terminal
-cancellations also consume rows. The writer and canonical read-only preflight
+pure Accept workload supports 32,256 new decisions before its bounded limit;
+already completed Undo consumes only its reserved slot. A separate 1,024-slot emergency reserve protects terminal cancellation after new
+Accept admission is exhausted. Permanent terminal cancellations consume rows. The writer and canonical read-only preflight
 share `C3B_RECEIPT_MAX_ROWS`, so a partially upgraded application fails closed.
 
 **Read-only capacity inspection** against a stopped, backed-up target SQLite
@@ -372,7 +372,8 @@ capacity upgrade, increasing *both* writer and preflight limits, with
 verified backups and exact-SHA test/restart acceptance. Reservation =
 `receipts + active_accepts`. No automatic expiry or deletion of accepted,
 undone or cancelled UUIDs: the immutable history prevents replay and supports
-old Undo. At the ceiling, only new C-3b Accepts are safely rejected; receipt,
-terminal cancellation and already reserved Undo remain readable/writable,
+old Undo. New Accepts stop before the emergency cancellation reserve is consumed; receipts
+and already reserved Undo stay valid, and cancellation remains available while
+emergency slots exist,
 and manual Inbox triage remains available. Never reset the ledger, discard
 old tombstones, bypass preflight or silently shrink historical records.
