@@ -346,3 +346,54 @@ test("C-3b recovery: revoked actor session cannot cancel another UUID",()=>{
   assert.deepEqual(fx.authority.readInboxSuggestionReceipt("alice",query),
     {status:"not_recorded",next:null});
 });
+
+
+test("C-3b P1: stale Undo can be terminally cancelled, never overwriting later edits",()=>{
+  const fx=fixture(),cmd=prepare(fx);
+  assert.deepEqual(fx.authority.changeInboxSuggestedAction(fx.token,{
+    mode:"accept",command:cmd,key:fx.key,sessionTokenHash:fx.sessionHash,
+  }),{ok:true});
+  const original=fx.authority.readInboxSuggestionReceipt("alice",cmd);
+  assert.equal(original.status,"committed");
+  const undo={commandId:randomUUID(),undoOfCommandId:cmd.commandId,
+    taskId:"captured",restoreGeneration:fx.stage.restoreGeneration,
+    ...original.next};
+  // Genuine newer task edit means the original CAS cannot safely Undo.
+  fx.db.prepare("UPDATE tasks SET title='Novější zadání' WHERE id='captured'").run();
+  assert.deepEqual(fx.authority.changeInboxSuggestedAction(fx.token,{
+    mode:"undo",command:undo,sessionTokenHash:fx.sessionHash,
+  }),{ok:false,reason:"stale_revision"});
+  const cancel=()=>fx.authority.cancelInboxSuggestedUndo(
+    fx.token,undo,fx.sessionHash);
+  assert.deepEqual(cancel(),{status:"undo_cancelled",next:null});
+  assert.deepEqual(cancel(),{status:"undo_cancelled",next:null},
+    "terminal cancellation must be idempotent across reloads");
+  assert.deepEqual(fx.authority.readInboxSuggestionReceipt("alice",cmd),
+    {status:"undo_cancelled",next:null});
+  assert.deepEqual(fx.authority.changeInboxSuggestedAction(fx.token,{
+    mode:"undo",command:undo,sessionTokenHash:fx.sessionHash,
+  }),{ok:false,reason:"idempotency_conflict"},
+    "late original Undo must be rejected after the pinned cancellation");
+  assert.equal(fx.db.prepare("SELECT title FROM tasks WHERE id='captured'").get().title,
+    "Novější zadání");
+  assert.equal(row(fx).state,"processed");
+  assert.deepEqual(inspectIsolatedTargetStore({...fx.store,mode:"r2-model"}),
+    {ok:true,mode:"r2-model",issues:[]});
+});
+
+test("C-3b P1: successful Undo wins before a racing cancellation",()=>{
+  const fx=fixture(),cmd=prepare(fx);
+  assert.deepEqual(fx.authority.changeInboxSuggestedAction(fx.token,{
+    mode:"accept",command:cmd,key:fx.key,sessionTokenHash:fx.sessionHash,
+  }),{ok:true});
+  const receipt=fx.authority.readInboxSuggestionReceipt("alice",cmd);
+  const undo={commandId:randomUUID(),undoOfCommandId:cmd.commandId,
+    taskId:"captured",restoreGeneration:fx.stage.restoreGeneration,
+    ...receipt.next};
+  assert.deepEqual(fx.authority.changeInboxSuggestedAction(fx.token,{
+    mode:"undo",command:undo,sessionTokenHash:fx.sessionHash,
+  }),{ok:true});
+  assert.deepEqual(fx.authority.cancelInboxSuggestedUndo(
+    fx.token,undo,fx.sessionHash),{status:"undone",next:null});
+  assert.equal(row(fx).state,"unprocessed");
+});
