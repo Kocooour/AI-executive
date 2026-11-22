@@ -2,10 +2,10 @@
 /** Explicit actor-owner AI consent; local rules never require this toggle. */
 import {useCallback,useEffect,useState} from "react";
 import "./target-inbox-ai-consent-settings.css";
-import {getC3bConsent,setC3bConsent}
+import {getC3bConsent,setC3bConsent,type C3bCapacity}
   from "../../lib/target-inbox-c3b-client";
 type State={kind:"loading"|"disabled"|"error"}|
-  {kind:"ready";enabled:boolean;pending:boolean};
+  {kind:"ready";enabled:boolean;pending:boolean;capacity:C3bCapacity|null};
 export default function InboxAIConsentSettings({language="cs"}:{
   language?:"cs"|"en";
 }){
@@ -48,13 +48,15 @@ export default function InboxAIConsentSettings({language="cs"}:{
     // Reflect the explicit user intent in the controlled checkbox while POST
     // is pending. On failure, render a conservative unknown-state error.
     setSaving(true);setNotice("");
-    setState({kind:"ready",enabled:enable,pending:false});
+    setState({kind:"ready",enabled:enable,pending:false,
+      capacity:state.kind==="ready"?state.capacity:null});
     try{
       // Explicit owner action. No auto-enabling during restore, page reload
       // or initial rollout; the two-store ledger must agree first.
       const r=await setC3bConsent(enable);
       if(r.ok){
-        setState({kind:"ready",...r.value});
+        setState({kind:"ready",...r.value,
+          capacity:state.kind==="ready"?state.capacity:null});
         setNotice(r.value.pending?speak(
           "Odvolání souhlasu probíhá; otevřené požadavky se dokončují nebo ruší.",
           "Consent withdrawal is pending while in-flight requests drain.")
@@ -88,6 +90,22 @@ export default function InboxAIConsentSettings({language="cs"}:{
       {speak("Povolit OpenAI návrhy pro moje soukromé úkoly",
         "Allow OpenAI suggestions for my private tasks")}
     </label>}
+    {state.kind==="ready"&&state.capacity&&<>
+      <p role="status" data-testid="target-c3b-receipt-capacity">
+        {speak("Kapacita historie Přijmout/Undo: ",
+          "Accept/Undo receipt capacity: ")}
+        {state.capacity.reserved} / {state.capacity.limit}
+        {" · "}
+        {speak("zbývá přibližně ","approximately ")}
+        {state.capacity.remainingAccepts}
+        {speak(" nových potvrzení"," new Accepts remain")}
+      </p>
+      {state.capacity.warning&&<p role="alert"
+        data-testid="target-c3b-receipt-capacity-warning">
+        {speak("Historie potvrzení dosáhla 75 % kapacity. Naplánujte bezpečné rozšíření bez mazání záznamů podle provozního návodu.",
+          "Receipt ledger reached 75% capacity. Plan a nondestructive capacity expansion using the operator runbook.")}
+      </p>}
+    </>}
     {state.kind==="ready"&&state.pending&&<p role="status">{speak(
       "Odvolání čeká na bezpečné dokončení rozběhnutých požadavků.",
       "Withdrawal is pending until active requests have drained.")}</p>}

@@ -115,7 +115,11 @@ test("C-3b HTTP: default-off, unauthenticated, CSRF, read-only foreign actor",as
   assert.equal("actorUserId" in legitimate,false);
   await read(post(ACCEPT,"accept",{command:{}},{origin:"https://evil.invalid"}),403);
   const raw=await read(consent());
-  assert.deepEqual(raw,{enabled:false,pending:false});
+  assert.equal(raw.enabled,false);
+  assert.equal(raw.pending,false);
+  assert.deepEqual(raw.capacity,{
+    limit:65536,used:0,reserved:0,remainingAccepts:32256,warning:false,
+  },"owner receives numeric headroom without receipt IDs");
 });
 test("C-3b HTTP: rule Accept+Today+project/triage receipt, single atomic Undo",async()=>{
   const p=await read(preview());

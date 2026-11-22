@@ -377,3 +377,26 @@ and already reserved Undo stay valid, and cancellation remains available while
 emergency slots exist,
 and manual Inbox triage remains available. Never reset the ledger, discard
 old tombstones, bypass preflight or silently shrink historical records.
+
+ 
+**Operator-visible headroom (C-3b Settings):** the authenticated owner-only
+`GET /api/target-staging/inbox/c3b/consent` now includes exact numeric
+`capacity.{used,reserved,limit,remainingAccepts,warning}` from an independently
+pinned, read-only canonical database snapshot. Settings renders a visible 75%
+warning without exposing receipt keys, UUIDs, task IDs or private content.
+The server's frequent post-AI-release consent check skips these expensive
+headroom calculations; they are only retrieved on an explicit Settings or
+consent-refresh read. This is a human-visible owner warning, NOT an
+always-on notification or automated destructive maintenance operation.
+
+**Grow-only upgrade rehearsal:** before any future capacity expansion, take
+verified pre-upgrade backups. Test canonical validation with **more than the
+old 4,096 immutable tombstones**, verify no old UUID can be accepted after
+cancellation, and reject any ledger above the new bound. Increase writer and
+read-only preflight limits in the same reviewed release while preserving the
+1,024 terminal-cancel reserve and one Undo per active Accept. Run exact-SHA
+C-3b real-store/owner/restore acceptance and verify both the complete
+receipt count and original receipt outcomes in an isolated restored copy.
+Do not code-only rollback to a lower ceiling once new receipts exceed it;
+roll forward with compatible code. Never recycle, reset, truncate or
+re-key receipt history.

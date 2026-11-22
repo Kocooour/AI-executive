@@ -110,16 +110,28 @@ export const cancelC3b=(command:C3bReceiptQuery|C3bUndo)=>
 export const receiptC3b=(command:C3bAccept|C3bReceiptQuery)=>
   post("receipt",{command},parseReceipt);
 /** Consent never loads a cached response, and never calls another AI provider. */
+export type C3bCapacity={limit:number;used:number;reserved:number;
+  remainingAccepts:number;warning:boolean};
 export async function getC3bConsent(signal?:AbortSignal):
-  Promise<C3bResponse<{enabled:boolean;pending:boolean}>>{
+  Promise<C3bResponse<{enabled:boolean;pending:boolean;capacity:C3bCapacity}>>{
   try{
     const r=await targetAppFetch("/api/target-staging/inbox/c3b/consent",{
       credentials:"same-origin",cache:"no-store",signal});
     if(!r.ok)return {ok:false,reason:status(r.status)};
     const x:unknown=await r.json();
-    return object(x)&&Object.keys(x).sort().join(",")==="enabled,pending"&&
-      typeof x.enabled==="boolean"&&typeof x.pending==="boolean"
-      ?{ok:true,value:{enabled:x.enabled,pending:x.pending}}
+    const cap=object(x)?x.capacity:null;
+    const validCap=object(cap)&&
+      Object.keys(cap).sort().join(",")==="limit,remainingAccepts,reserved,used,warning"&&
+      Number.isSafeInteger(cap.limit)&&Number(cap.limit)>0&&
+      Number.isSafeInteger(cap.used)&&Number(cap.used)>=0&&
+      Number.isSafeInteger(cap.reserved)&&Number(cap.reserved)>=Number(cap.used)&&
+      Number(cap.reserved)<=Number(cap.limit)&&
+      Number.isSafeInteger(cap.remainingAccepts)&&Number(cap.remainingAccepts)>=0&&
+      typeof cap.warning==="boolean";
+    return object(x)&&Object.keys(x).sort().join(",")==="capacity,enabled,pending"&&
+      typeof x.enabled==="boolean"&&typeof x.pending==="boolean"&&validCap
+      ?{ok:true,value:{enabled:x.enabled,pending:x.pending,
+          capacity:cap as C3bCapacity}}
       :{ok:false,reason:"unavailable"};
   }catch{return {ok:false,reason:"unavailable"};}
 }

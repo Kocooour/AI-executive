@@ -124,6 +124,28 @@ test("C-3b receipt capacity reserves an Undo for every live Accept",async()=>{
   assert.equal(inboxCompoundLedgerCapacity(2048,4096),null);
 });
 
+test("C-3b canonical metadata accepts >4096 immutable terminal receipts without cleanup",async()=>{
+  const {createHash}=await import("node:crypto");
+  const {validateC3BMetadata,C3B_RECEIPT_MAX_ROWS}=
+    await import("../lib/target-inbox-metadata-validation.ts");
+  const actor="alice",generation="00000000-0000-4000-8000-000000000099";
+  const rows=Array.from({length:4100},(_,i)=>{
+    const commandId="00000000-0000-4000-8000-"+i.toString(16).padStart(12,"0");
+    const hash=createHash("sha256").update(JSON.stringify([
+      "lumi:c3b:compound-inbox-receipt:v1",actor,commandId,
+    ])).digest("hex");
+    return {key:"r3:c3b:accept:v1:"+hash,value:JSON.stringify({
+      v:1,kind:"cancelled",actor,taskId:"captured",commandId,
+      restoreGeneration:generation,cancelledAtMs:i+1,
+    })};
+  });
+  assert.equal(validateC3BMetadata(rows,[actor]).valid,true,
+    "old immutable tombstones must still pass expanded preflight");
+  const over=Array.from({length:C3B_RECEIPT_MAX_ROWS+1},()=>rows[0]);
+  assert.equal(validateC3BMetadata(over,[actor]).valid,false,
+    "excessive stores must fail closed, never truncate receipt history");
+});
+
 test("C-3b canonical v27: Accept move + Process is one pinned command; Undo reverses both",()=>{
   const fx=fixture(),before=row(fx),command=prepare(fx);
   const beforePlan=fx.db.prepare(`SELECT when_on,revision FROM personal_task_plans
