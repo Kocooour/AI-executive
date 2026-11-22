@@ -1,5 +1,6 @@
 name: C-3a Inbox real-store browser acceptance
 on:
+  workflow_call:
   pull_request:
     paths:
       - ".github/workflows/r3-inbox-acceptance-browser.yml"
@@ -16,7 +17,6 @@ on:
       - "lib/target-data-invalidation.ts"
       - "e2e/target-inbox-acceptance.spec.ts"
       - "e2e/target-personal-store-setup.mjs"
-      - "playwright.config.ts"
       - "e2e/fixtures.ts"
       - "e2e/auth.setup.ts"
       - "lib/target-personal-profile.ts"

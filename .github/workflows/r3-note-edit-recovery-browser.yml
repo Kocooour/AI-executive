@@ -3,6 +3,7 @@ name: Focused R3 note edit recovery browser
 # Only the target-editor/receipt acceptance scenario in an isolated synthetic
 # login/Next.js instance. This is NOT the full production release Browser E2E.
 on:
+  workflow_call:
   pull_request:
     paths:
       - ".github/workflows/r3-note-edit-recovery-browser.yml"
@@ -26,14 +27,13 @@ on:
       - "e2e/target-note-edit-recovery.spec.ts"
       - "e2e/fixtures.ts"
       - "e2e/auth.setup.ts"
-      - "playwright.config.ts"
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: lumi-r3-note-edit-recovery-${{ github.event.pull_request.number || github.sha }}
+  group: lumi-r3-note-edit-recovery-${{ github.event.pull_request.number || github.sha }}-${{ github.workflow }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:

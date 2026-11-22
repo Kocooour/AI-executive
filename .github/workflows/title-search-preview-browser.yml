@@ -1,6 +1,7 @@
 name: Scoped UI-09b browser regression
 
 on:
+  workflow_call:
   pull_request:
     paths:
       - "app/target-staging/title-search/preview/**"
@@ -9,14 +10,13 @@ on:
       - "lib/target-staging-title-search-session.ts"
       - "e2e/title-search-ui09b.spec.ts"
       - "e2e/title-search-ui09b-default-off.spec.ts"
-      - "playwright.config.ts"
       - ".github/workflows/title-search-preview-browser.yml"
 
 permissions:
   contents: read
 
 concurrency:
-  group: ui09b-browser-${{ github.event.pull_request.number }}
+  group: ui09b-browser-${{ github.event.pull_request.number }}-${{ github.workflow }}
   cancel-in-progress: true
 
 jobs:

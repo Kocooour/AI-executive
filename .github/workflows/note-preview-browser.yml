@@ -1,20 +1,20 @@
 name: Scoped UI-09d note-preview browser
 
 on:
+  workflow_call:
   pull_request:
     paths:
       - "app/target-staging/notes/**"
       - "app/ui/target-staging-note-preview.tsx"
       - "lib/target-staging-note-preview-client.ts"
       - "e2e/note-preview-ui09d*.spec.ts"
-      - "playwright.config.ts"
       - ".github/workflows/note-preview-browser.yml"
 
 permissions:
   contents: read
 
 concurrency:
-  group: ui09d-browser-${{ github.event.pull_request.number }}
+  group: ui09d-browser-${{ github.event.pull_request.number }}-${{ github.workflow }}
   cancel-in-progress: true
 
 jobs:
