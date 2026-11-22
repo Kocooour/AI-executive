@@ -76,6 +76,11 @@ type TaskRow={
 type PlanRow={when_on:string;revision:number};
 type CancelReceipt={v:1;kind:"cancelled";actor:string;taskId:string;
   commandId:string;restoreGeneration:string;cancelledAtMs:number};
+/** Same original-Undo ledger key: a terminal tombstone prevents a late
+ * in-flight Undo from reverting more recent edits after cancellation. */
+type UndoCancelReceipt={v:1;kind:"undo_cancelled";actor:string;
+  taskId:string;commandId:string;undoOfCommandId:string;
+  restoreGeneration:string;cancelledAtMs:number};
 type Receipt={
   v:1;kind:"accept";actor:string;taskId:string;digest:string;
   commandId:string;restoreGeneration:string;
@@ -387,7 +392,8 @@ function undoLocked(db:DatabaseSync,actor:string,c:InboxAcceptUndoCommand):Inbox
   if(previous){
     try{
       const r=JSON.parse(previous.value) as Record<string,unknown>;
-      return r.digest===digest&&r.commandId===c.commandId.toLowerCase()
+      return r.kind==="undo"&&r.digest===digest&&
+        r.commandId===c.commandId.toLowerCase()
         ?{ok:true,replayed:true}:bad("idempotency_conflict");
     }catch{return bad("idempotency_conflict");}
   }
@@ -493,7 +499,7 @@ function undoLocked(db:DatabaseSync,actor:string,c:InboxAcceptUndoCommand):Inbox
  * session/ACL before exposing this status through any future HTTP route.
  */
 export type InboxAcceptReceiptView={
-  status:"committed"|"undone"|"not_recorded"|"conflict"|"cancelled";
+  status:"committed"|"undone"|"not_recorded"|"conflict"|"cancelled"|"undo_cancelled";
   next:{expectedTaskRevision:number;expectedTriageRevision:number;
     expectedPrivateEpoch:number;expectedPlanRevision:number|null}|null;
 };
@@ -524,9 +530,23 @@ export function readInboxAcceptReceiptInSnapshot(
     if(old.actor!==actor||old.taskId!==command.taskId||
        (full&&old.digest!==acceptDigest(command)))
       return {status:"conflict",next:null};
-    if(db.prepare("SELECT 1 FROM metadata WHERE key=?").get(
-      receiptKey(UNDO,actor,command.commandId)))
-      return {status:"undone",next:null};
+    const undoRow=db.prepare("SELECT value FROM metadata WHERE key=?").get(
+      receiptKey(UNDO,actor,command.commandId)) as {value:string}|undefined;
+    if(undoRow){
+      if(typeof undoRow.value!=="string"||undoRow.value.length>MAX_RECEIPT_BYTES)
+        return {status:"conflict",next:null};
+      const terminal:unknown=JSON.parse(undoRow.value);
+      if(!terminal||typeof terminal!=="object"||Array.isArray(terminal))
+        return {status:"conflict",next:null};
+      const t=terminal as Record<string,unknown>;
+      if(t.actor!==actor||t.taskId!==command.taskId||
+         t.undoOfCommandId!==command.commandId.toLowerCase()||
+         t.restoreGeneration!==command.restoreGeneration.toLowerCase())
+        return {status:"conflict",next:null};
+      if(t.kind==="undo")return {status:"undone",next:null};
+      if(t.kind==="undo_cancelled")return {status:"undo_cancelled",next:null};
+      return {status:"conflict",next:null};
+    }
     const row=currentTask(db,command.taskId);
     const plan=currentPlan(db,actor,command.taskId);
     const epoch=currentPrivateEpoch(db,actor);
@@ -569,6 +589,63 @@ function cancelLocked(db:DatabaseSync,actor:string,
     cancelledAtMs,
   } satisfies CancelReceipt);
   return {view:{status:"cancelled",next:null},inserted:true};
+}
+
+/**
+ * A permanently terminal Undo cancellation. It uses the SAME original Accept
+ * keyed Undo receipt slot, the SAME pinned BEGIN IMMEDIATE lock and actor ACL
+ * as Undo. An in-flight Undo can either commit first or lose to this marker;
+ * never infer cancellation merely from missing receipt or a 409 response.
+ * Once cancelled, this specific compound Undo is deliberately not reissued.
+ */
+function cancelUndoLocked(db:DatabaseSync,actor:string,
+  command:InboxAcceptUndoCommand,
+):{view:InboxAcceptReceiptView;inserted:boolean}|null{
+  if(!validateUndo(command)||
+     targetStoreRestoreGeneration(db)!==command.restoreGeneration.toLowerCase()||
+     !canEditIsolatedTargetTaskTitle(db,actor,command.taskId,true))return null;
+  const original=readReceipt(db,receiptKey(ACCEPT,actor,command.undoOfCommandId));
+  if(!original||original.actor!==actor||original.taskId!==command.taskId||
+     original.restoreGeneration!==command.restoreGeneration.toLowerCase())
+    return null;
+  const current=readInboxAcceptReceiptInSnapshot(db,actor,{
+    commandId:command.undoOfCommandId,taskId:command.taskId,
+    restoreGeneration:command.restoreGeneration,
+  });
+  if(!current||current.status==="conflict"||
+     current.status==="cancelled"||current.status==="not_recorded")return null;
+  if(current.status==="undone"||current.status==="undo_cancelled")
+    return {view:current,inserted:false};
+  if(!checkCapacity(db,"undo"))return null;
+  const cancelledAtMs=Date.now();
+  if(!validEpoch(cancelledAtMs)||cancelledAtMs<=0)return null;
+  storeReceipt(db,receiptKey(UNDO,actor,command.undoOfCommandId),{
+    v:1,kind:"undo_cancelled",actor,taskId:command.taskId,
+    commandId:command.commandId.toLowerCase(),
+    undoOfCommandId:command.undoOfCommandId.toLowerCase(),
+    restoreGeneration:command.restoreGeneration.toLowerCase(),cancelledAtMs,
+  } satisfies UndoCancelReceipt);
+  return {view:{status:"undo_cancelled",next:null},inserted:true};
+}
+export function cancelPreflightedInboxSuggestedUndo(
+  store:TargetStagingReadStore,credential:TargetStagingReadCredential,
+  command:InboxAcceptUndoCommand,sessionTokenHash:string,
+):InboxAcceptReceiptView|null{
+  if(!validateUndo(command)||!isTargetStagingSessionTokenHash(sessionTokenHash))
+    return null;
+  return withPinnedTargetStagingWrite<InboxAcceptReceiptView|null>(store,ctx=>{
+    const actor=verifiedActor(ctx.db,credential,true);
+    if(!actor||!sessionIsLive(ctx.db,actor,sessionTokenHash)||
+       !ctx.stillPinned()||!ctx.noSidecars())return null;
+    fingerprint(ctx.databaseFd);
+    const result=cancelUndoLocked(ctx.db,actor,command);
+    if(!result)return null;
+    if(!result.inserted)return result.view;
+    if(!sessionIsLive(ctx.db,actor,sessionTokenHash)||!ctx.stillPinned())
+      return null;
+    if(!ctx.commit({kind:"task_triage",payload:{}}))return null;
+    return result.view;
+  },()=>null,()=>null);
 }
 
 export function cancelPreflightedInboxSuggestedAction(
