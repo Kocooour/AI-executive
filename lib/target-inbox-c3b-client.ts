@@ -121,13 +121,31 @@ export async function getC3bConsent(signal?:AbortSignal):
       :{ok:false,reason:"unavailable"};
   }catch{return {ok:false,reason:"unavailable"};}
 }
-export const setC3bConsent=(enabled:boolean)=>
-  post("consent",{enabled},(raw)=>{
+/** Broadcast only a content-free invalidation, never a name, token or AI text. */
+export const C3B_CONSENT_CHANGED="lumi:c3b:consent-changed";
+export function notifyC3bConsentChanged():void{
+  if(typeof window==="undefined")return;
+  window.dispatchEvent(new Event(C3B_CONSENT_CHANGED));
+  try{
+    if(typeof BroadcastChannel!=="undefined"){
+      const channel=new BroadcastChannel(C3B_CONSENT_CHANGED);
+      channel.postMessage("changed");channel.close();
+    }
+  }catch{}
+}
+export const setC3bConsent=async(enabled:boolean)=>{
+  // A revoke/renewal click retires all displayed AI tokens immediately,
+  // before a slow or ambiguous response. Cross-tab changes do the same.
+  notifyC3bConsentChanged();
+  const result=await post("consent",{enabled},(raw)=>{
     if(!object(raw)||raw.ok!==true||typeof raw.enabled!=="boolean"||
        typeof raw.pending!=="boolean"||Object.keys(raw).sort().join(",")!==
        "enabled,ok,pending")return null;
     return {enabled:raw.enabled,pending:raw.pending};
   });
+  notifyC3bConsentChanged();
+  return result;
+};
 
 /** Tab-only recovery stores original UUID and CAS, NEVER private task title,
  * displayed Why, signed token, target names or provider response. A missing
