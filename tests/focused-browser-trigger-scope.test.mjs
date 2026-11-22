@@ -169,7 +169,8 @@ function checkCoverage(files, profiles = BROWSER_PROFILES) {
   // The isolated config's independence is the justification for the sole
   // allowlist entry. If it imports the root config, it must join the dispatcher.
   const isolatedConfig = readFileSync("e2e/playwright.indexeddb.config.ts", "utf8");
-  assert.doesNotMatch(isolatedConfig, /(?:from|import)\s*["'][^"']*playwright\.config/);
+  assert.doesNotMatch(isolatedConfig, /playwright\.config(?:\.ts)?/,
+    "independent configuration must not reference the root Playwright config");
   assert.deepEqual([...independentConfigs.keys()].sort(), ["target-sync-indexeddb.yml"]);
 
   const release = files.get(releaseName);
