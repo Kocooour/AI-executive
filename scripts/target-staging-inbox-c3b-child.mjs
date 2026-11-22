@@ -1,0 +1,191 @@
+/** C-3b bounded actor-scoped child. No private content in argv/stderr. */
+import path from "node:path";
+import {randomUUID} from "node:crypto";
+import {TargetStagingSessionAuthority}
+  from "../lib/target-staging-session-authority.ts";
+import {resolveChildActor} from "./target-staging-child-actor.mjs";
+import {readTitleCommand} from "./target-staging-title-stdin.mjs";
+import {inboxC3bActionKey,inboxC3bSessionBinding,openVerifiedInboxC3bFence,
+  c3bEnabled,c3bWriteEnabled} from "../lib/target-inbox-c3b-runtime.ts";
+import {inboxLocalDate,sealInboxDisplayedAction}
+  from "../lib/target-inbox-suggestion-commitment.ts";
+import {suggestInboxWithLocalToday}
+  from "../lib/target-inbox-suggestions.ts";
+import {dispatchAuthorizedInboxOpenAIOnly}
+  from "../lib/target-inbox-suggestion-dispatch.ts";
+import {INBOX_FIRST_OWNER_DECISION,INBOX_AI_DATA_SCOPE_VERSION,
+  targetInboxAIConsentMatchesFence}
+  from "../lib/target-inbox-ai-consent.ts";
+import {recordExplicitInboxAIGrant,readInboxAIFenceGrant,
+  revokeInboxAIConsent,inboxAIRevokeDrained}
+  from "../lib/target-inbox-ai-consent-fence.ts";
+
+const dir=process.env.AI_EXECUTIVE_TARGET_STAGING_DIRECTORY;
+const gen=process.env.AI_EXECUTIVE_TARGET_STAGING_RESTORE_GENERATION;
+const owner=process.env.AI_EXECUTIVE_TARGET_STAGING_OWNER_USER_ID;
+const HEX=/^[a-f0-9]{64}$/;
+const TASK=/^[^\u0000-\u001f\u007f]{1,512}$/u;
+const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const fail=()=>{throw Error("unavailable");};
+const output=value=>process.stdout.write(JSON.stringify(value));
+try{
+  if(process.argv.length!==2||!c3bEnabled()||!dir||!path.isAbsolute(dir)||
+     !gen||!UUID.test(gen)||!owner)fail();
+  const request=await readTitleCommand(process.stdin);
+  if(!request||typeof request!=="object"||Array.isArray(request)||
+     !["preview","accept","undo","receipt","consent_read","consent_write"]
+       .includes(request.operation))fail();
+  const write=["accept","undo","consent_write"].includes(request.operation);
+  if(write&&!c3bWriteEnabled())fail();
+  const authority=new TargetStagingSessionAuthority({
+    stagingDirectory:dir,expectedRestoreGeneration:gen,
+  });
+  try{
+    const identity=resolveChildActor({stagingDirectory:dir,
+      expectedRestoreGeneration:gen,ownerUserId:owner});
+    if(!identity)fail();
+    const actor=identity.actor;
+    const key=inboxC3bActionKey();
+    const binding=inboxC3bSessionBinding(actor,gen,identity.sessionTokenHash);
+    if(!key||!binding||!HEX.test(binding))fail();
+    const storePage=()=>authority.readInboxPage(actor,1);
+    const fresh=async()=>{
+      const live=resolveChildActor({stagingDirectory:dir,
+        expectedRestoreGeneration:gen,ownerUserId:owner});
+      const snapshot=live?.actor===actor
+        ?authority.readPrivateInboxSuggestionSnapshot(actor,request.taskId):null;
+      return snapshot?{actorUserId:actor,sessionAlive:true,
+        privateSnapshot:snapshot,consent:authority.readInboxAIConsent(actor)}:null;
+    };
+    if(request.operation==="preview"){
+      if(typeof request.taskId!=="string"||!TASK.test(request.taskId))fail();
+      const current=await fresh();
+      if(!current)fail();
+      const snapshot=current.privateSnapshot;
+      const localDay=inboxLocalDate(Date.now(),snapshot.timeZone);
+      if(!localDay)fail();
+      let suggestion=suggestInboxWithLocalToday(snapshot.snapshot,localDay);
+      let fence=openVerifiedInboxC3bFence(dir);
+      try{
+        // AI is OFF without the independent external fence, valid consent or
+        // configured OpenAI provider. Rules remain fully local and available.
+        if(fence&&current.consent){
+          const selected=await dispatchAuthorizedInboxOpenAIOnly({
+            fenceDb:fence,initial:current,
+            deps:{freshAuthorizedState:fresh},
+          });
+          if(!selected)fail(); // revoked actor/ACL: release nothing
+          suggestion=selected;
+        }
+      }finally{fence?.close();}
+      const verified=await fresh();
+      if(!verified||verified.privateSnapshot.candidateFingerprint!==
+          snapshot.candidateFingerprint)fail();
+      const p=verified.privateSnapshot;
+      const day=inboxLocalDate(Date.now(),p.timeZone);
+      if(day!==localDay)fail();
+      const sealed=sealInboxDisplayedAction({
+        actorUserId:actor,taskId:request.taskId,sessionTokenHash:binding,
+        restoreGeneration:gen,candidateFingerprint:p.candidateFingerprint,
+        taskWriteRevision:p.taskWriteRevision,taskRevision:p.taskRevision,
+        triageRevision:p.triageRevision,personalPlanEpoch:p.personalPlanEpoch,
+        personalWhenRevision:p.personalWhenRevision,notificationEpoch:p.notificationEpoch,
+        timeZone:p.timeZone,localDate:day,consentEpoch:suggestion.source==="ai"
+          ?(verified.consent?.epoch??0):0,
+        dataScopeVersion:INBOX_AI_DATA_SCOPE_VERSION,suggestion,
+      },key);
+      const page=storePage();
+      if(!sealed||!page)fail();
+      output({ok:true,taskId:request.taskId,token:sealed,
+        why:suggestion.why,changes:suggestion.changes,source:suggestion.source,
+        restoreGeneration:gen,linearization:page.linearization,
+        areaEpochs:page.areaEpochs});
+    }else if(request.operation==="accept"||request.operation==="undo"){
+      if(!request.command||typeof request.command!=="object")fail();
+      const issued=authority.issueWritable(actor);
+      if(!issued)fail();
+      const fence=request.operation==="accept"
+        ?openVerifiedInboxC3bFence(dir):null;
+      try{
+        const work=request.operation==="accept"
+          ?{mode:"accept",command:request.command,key,
+            sessionTokenHash:binding,...(fence?{fenceDb:fence}:{})}
+          :{mode:"undo",command:request.command,sessionTokenHash:binding};
+        output(authority.changeInboxSuggestedAction(issued.sessionToken,work));
+      }finally{fence?.close();}
+    }else if(request.operation==="receipt"){
+      if(!request.command||typeof request.command!=="object")fail();
+      const receipt=authority.readInboxSuggestionReceipt(actor,request.command);
+      const page=storePage();
+      if(!receipt||!page)fail();
+      output({ok:true,...receipt,
+        linearization:page.linearization,areaEpochs:page.areaEpochs});
+    }else if(request.operation==="consent_read"){
+      if(actor!==owner)fail();
+      const record=authority.readInboxAIConsent(actor);
+      const fence=openVerifiedInboxC3bFence(dir);
+      if(!fence)fail();
+      try{
+        const grant=readInboxAIFenceGrant(fence,actor);
+        const enabled=targetInboxAIConsentMatchesFence(record,grant,gen);
+        const pending=Boolean(record&&!record.enabled&&grant&&!grant.active&&
+          !inboxAIRevokeDrained(fence,actor,grant.epoch));
+        output({ok:true,enabled,pending,epoch:record?.epoch??0,
+          restoreGeneration:gen});
+      }finally{fence.close();}
+    }else if(request.operation==="consent_write"){
+      if(actor!==owner||!["grant","revoke"].includes(request.mode))fail();
+      const fence=openVerifiedInboxC3bFence(dir);
+      if(!fence)fail();
+      const issued=authority.issueWritable(actor);
+      if(!issued){fence.close();fail();}
+      try{
+        const previous=authority.readInboxAIConsent(actor);
+        const external=readInboxAIFenceGrant(fence,actor);
+        if(request.mode==="grant"){
+          if(previous?.enabled&&
+             targetInboxAIConsentMatchesFence(previous,external,gen)){
+            output({ok:true,enabled:true,pending:false});}
+          else if(previous?.enabled)fail();
+          else{
+            const epoch=(previous?.epoch??0)+1;
+            const decision=previous?randomUUID():INBOX_FIRST_OWNER_DECISION;
+            // Initial grant first records target, regrant first records fence.
+            // Until BOTH commit, an outbound AI call cannot be authorized.
+            if(previous&&!recordExplicitInboxAIGrant(
+              fence,actor,owner,gen,INBOX_AI_DATA_SCOPE_VERSION,decision))fail();
+            const changed=authority.changeInboxAIConsent(
+              issued.sessionToken,actor,{mode:"grant",epoch,
+                restoreGeneration:gen,ownerDecision:decision,
+                dataScopeVersion:INBOX_AI_DATA_SCOPE_VERSION},
+              identity.sessionTokenHash);
+            if(!changed.ok)fail();
+            if(!previous&&!recordExplicitInboxAIGrant(fence,actor,owner,
+              gen,INBOX_AI_DATA_SCOPE_VERSION,decision))fail();
+            if(!targetInboxAIConsentMatchesFence(changed.record,
+                readInboxAIFenceGrant(fence,actor),gen))fail();
+            output({ok:true,enabled:true,pending:false});
+          }
+        }else{
+          // Revoke fence FIRST. The dispatch worker cannot start another
+          // request after the external serial revoke commits.
+          const revoked=revokeInboxAIConsent(fence,actor);
+          if(!revoked)fail();
+          let record=previous;
+          if(record?.enabled){
+            const result=authority.changeInboxAIConsent(
+              issued.sessionToken,actor,{mode:"revoke",epoch:revoked.epoch,
+                restoreGeneration:gen,ownerDecision:record.ownerDecision,
+                dataScopeVersion:INBOX_AI_DATA_SCOPE_VERSION},
+              identity.sessionTokenHash);
+            if(!result.ok)fail();
+            record=result.record;
+          }
+          if(!record||record.enabled||record.epoch!==revoked.epoch)fail();
+          output({ok:true,enabled:false,pending:
+            !inboxAIRevokeDrained(fence,actor,revoked.epoch)});
+        }
+      }finally{fence.close();}
+    }
+  }finally{authority.close();}
+}catch{process.exitCode=1;}
