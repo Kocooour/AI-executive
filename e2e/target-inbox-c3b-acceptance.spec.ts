@@ -101,7 +101,32 @@ for(const width of [390,1280]){
     await expect(suggestion.locator(".targetInboxSuggestionWhy")).toBeVisible();
     const why=await suggestion.locator(".targetInboxSuggestionWhy").innerText();
     expect(why.length).toBeGreaterThan(8);
+    // Rules are immediately available; explicitly request and choose the
+    // additional AI version. The Accept POST must use its exact signed token.
+    const aiNetwork=page.waitForResponse(r=>r.request().method()==="GET"&&
+      new URL(r.url()).pathname==="/api/target-staging/inbox/c3b"&&
+      new URL(r.url()).searchParams.get("taskId")===seeded.taskId&&
+      new URL(r.url()).searchParams.get("mode")!=="rules");
+    await suggestion.getByRole("button",{name:"Získat alternativu AI"}).click();
+    const aiReply=await aiNetwork;
+    expect(aiReply.status()).toBe(200);
+    const aiVersion=await aiReply.json() as {
+      source:string;token:string;why:string;changes:unknown;
+    };
+    expect(aiVersion.source).toBe("ai");
+    await expect(suggestion.getByRole("button",{name:"Zobrazit alternativní návrh AI"}))
+      .toBeVisible({timeout:25000});
+    await suggestion.getByRole("button",{name:"Zobrazit alternativní návrh AI"}).click();
+    await expect(suggestion.getByTestId("target-c3b-ai-selected")).toBeVisible();
+    const acceptNetwork=page.waitForRequest(r=>r.request().method()==="POST"&&
+      new URL(r.url()).pathname==="/api/target-staging/inbox/c3b/accept");
     await suggestion.getByRole("button",{name:"Přijmout"}).click();
+    const submitted=(await acceptNetwork).postDataJSON() as {
+      command:{token:string;displayedWhy:string;displayedChanges:unknown};
+    };
+    expect(submitted.command.token).toBe(aiVersion.token);
+    expect(submitted.command.displayedWhy).toBe(aiVersion.why);
+    expect(submitted.command.displayedChanges).toEqual(aiVersion.changes);
 
     await expect(page.getByTestId("target-c3b-committed")).toBeVisible({
       timeout:25000});
@@ -270,9 +295,15 @@ test("C-3b: signed rules appear before a delayed optional AI response",async({pa
       .innerText();
     expect(visibleAction).toContain(seeded.projectTitle);
     expect(visibleAction).toMatch(/\d{4}-\d{2}-\d{2}/);
+    // No second request is allowed just because a row came into view.
+    expect(aiStarted).toBe(false);
+    await suggestion.getByRole("button",{name:"Získat alternativu AI"}).click();
     await expect.poll(()=>aiStarted,{timeout:10000}).toBe(true);
-    expect(aiCompleted).toBe(false,
-      "a pending AI request must not prevent a visible rule Accept");
+    expect(aiCompleted,"a pending AI request must not prevent rule Accept")
+      .toBe(false);
+    await expect(suggestion.getByRole("button",{name:"Přijmout"})).toBeEnabled();
+    expect(await suggestion.locator(".targetInboxSuggestionHeading span")
+      .innerText()).toBe(visibleAction);
   }finally{releaseAI();}
 });
 

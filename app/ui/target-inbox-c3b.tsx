@@ -3,7 +3,7 @@
  * Never retain titles, suggestions or model output in browser storage. */
 import {useCallback,useEffect,useRef,useState} from "react";
 import type {TargetInboxItem} from "../../lib/target-inbox-client-types";
-import {fetchC3bProposal,acceptC3b,receiptC3b,
+import {fetchC3bProposal,getC3bConsent,acceptC3b,receiptC3b,
   type C3bProposal,type C3bAccept,type C3bReceipt,
   C3B_CONSENT_CHANGED}
   from "../../lib/target-inbox-c3b-client";
@@ -21,6 +21,7 @@ export default function TargetInboxC3b({item,restoreGeneration,
   const runtime=useTargetRuntime(),generation=useTargetGeneration();
   const root=useRef<HTMLDivElement|null>(null);
   const pendingPreview=useRef<AbortController|null>(null);
+  const pendingAI=useRef<AbortController|null>(null);
   // Parent wake/refusal handlers can be refreshed without retriggering the
   // network effect on every Inbox redraw. Always invoke the latest handler.
   const revoked=useRef(onRevoked);
@@ -29,6 +30,8 @@ export default function TargetInboxC3b({item,restoreGeneration,
   const [fetchKey,setFetchKey]=useState(0);
   const [suggestion,setSuggestion]=useState<C3bProposal|null>(null);
   const [alternative,setAlternative]=useState<C3bProposal|null>(null);
+  const [aiBusy,setAiBusy]=useState(false);
+  const [aiNotice,setAiNotice]=useState<"off"|"failed"|null>(null);
   const [status,setStatus]=useState<"idle"|"loading"|"ready"|"off"|"failed"|"sending">("idle");
   const [expanded,setExpanded]=useState(false);
   const speak=(cs:string,en:string)=>language==="cs"?cs:en;
@@ -52,6 +55,8 @@ export default function TargetInboxC3b({item,restoreGeneration,
       // a late AI response in the same event turn must never resurrect a
       // proposal invalidated by the explicit consent/ACL boundary.
       pendingPreview.current?.abort();
+      pendingAI.current?.abort();pendingAI.current=null;
+      setAiBusy(false);setAiNotice(null);
       setSuggestion(null);setAlternative(null);setStatus("idle");setFetchKey(n=>n+1);
     };
     window.addEventListener(C3B_CONSENT_CHANGED,changed);
@@ -70,8 +75,10 @@ export default function TargetInboxC3b({item,restoreGeneration,
     };
   },[]);
   const reload=useCallback(()=>{
+    pendingAI.current?.abort();pendingAI.current=null;
     setSuggestion(null);
     setAlternative(null);
+    setAiBusy(false);setAiNotice(null);
     setStatus("idle");
     setFetchKey(n=>n+1);
   },[]);
@@ -81,7 +88,7 @@ export default function TargetInboxC3b({item,restoreGeneration,
     const abort=new AbortController();
     pendingPreview.current=abort;
     setStatus("loading");
-    setAlternative(null);
+    setAlternative(null);setAiNotice(null);setAiBusy(false);
     void (async()=>{
       // Release the local, signed rules proposal before any remote AI work.
       // A delayed provider must not block the user's Accept/manual controls.
@@ -99,25 +106,54 @@ export default function TargetInboxC3b({item,restoreGeneration,
         setSuggestion(null);setStatus("failed");return;
       }
       setSuggestion(rules.value);setStatus("ready");
-      // Remote refinement is an OPTIONAL second visible version. It never
-      // silently replaces the displayed action/token while Accept is possible.
-      const ai=await fetchC3bProposal(item.id,abort.signal);
-      if(abort.signal.aborted||!runtime.known()||
-         runtime.generation()!==generation)return;
-      if(ai.ok===true&&ai.value.source==="ai"&&
-         ai.value.restoreGeneration===restoreGeneration)
-        setAlternative(ai.value);
-      else if(ai.ok===false&&ai.reason==="signed-out"){
-        setSuggestion(null);setAlternative(null);
-        revoked.current();setStatus("failed");
-      }
+      // No automatic "best" request. An optional OpenAI call requires a
+      // separate explicit click AND freshly confirmed two-store consent.
     })();
     return ()=>{
       abort.abort();
+      pendingAI.current?.abort();pendingAI.current=null;
       if(pendingPreview.current===abort)pendingPreview.current=null;
     };
   },[visible,disabled,runtime,generation,item.id,restoreGeneration,
     fetchKey]);
+  async function requestAI(){
+    if(disabled||!suggestion||status!=="ready"||aiBusy||
+       pendingAI.current||alternative||suggestion.source==="ai"||
+       !runtime?.known()||runtime.generation()!==generation)return;
+    const ctrl=new AbortController();
+    pendingAI.current=ctrl;
+    setAiBusy(true);setAiNotice(null);
+    try{
+      // A consent grant is not inferred from the presence of an AI button
+      // or a previously cached preview; check a fresh durable two-store read.
+      const consent=await getC3bConsent(ctrl.signal);
+      if(ctrl.signal.aborted||!runtime.known()||
+         runtime.generation()!==generation)return;
+      if(consent.ok===false){
+        if(consent.reason==="signed-out"){revoked.current();return;}
+        setAiNotice("failed");return;
+      }
+      if(!consent.value.enabled||consent.value.pending){
+        setAiNotice("off");return;
+      }
+      const result=await fetchC3bProposal(item.id,ctrl.signal,"best");
+      if(ctrl.signal.aborted||!runtime.known()||
+         runtime.generation()!==generation)return;
+      if(result.ok===true&&result.value.source==="ai"&&
+         result.value.restoreGeneration===restoreGeneration&&
+         result.value.token!==suggestion.token){
+        // Only expose an ALTERNATIVE. Never replace the signed rule action
+        // until the owner explicitly selects it.
+        setAlternative(result.value);
+      }else if(result.ok===false&&result.reason==="signed-out"){
+        setSuggestion(null);revoked.current();
+      }else setAiNotice("failed");
+    }finally{
+      if(pendingAI.current===ctrl){
+        pendingAI.current=null;setAiBusy(false);
+      }
+    }
+  }
   async function accept(){
     if(disabled||!suggestion||status!=="ready"||
        !runtime?.known()||runtime.generation()!==generation)return;
@@ -130,7 +166,8 @@ export default function TargetInboxC3b({item,restoreGeneration,
     // The original UUID must be saved without private text BEFORE dispatch.
     // Refuse the write if the tab recovery witness cannot be persisted.
     if(!onOutcome({command,status:"uncertain",next:null}))return;
-    setAlternative(null);
+    pendingAI.current?.abort();pendingAI.current=null;
+    setAiBusy(false);setAlternative(null);
     setStatus("sending");
     const sent=await acceptC3b(command);
     if(!runtime.known()||runtime.generation()!==generation)return;
@@ -166,6 +203,8 @@ export default function TargetInboxC3b({item,restoreGeneration,
     {status==="ready"&&suggestion&&<>
       <div className="targetInboxSuggestionHeading">
         <span>{summary}</span>
+        {suggestion.source==="ai"&&<small data-testid="target-c3b-ai-selected">
+          {speak("AI návrh","AI suggestion")}</small>}
         <button type="button" aria-expanded={expanded}
           onClick={()=>setExpanded(x=>!x)}
           aria-label={speak("Proč tento návrh?","Why this suggestion?")}>
@@ -178,6 +217,17 @@ export default function TargetInboxC3b({item,restoreGeneration,
       </div>
       {expanded&&<p className="targetInboxSuggestionWhy">
         {suggestion.why}</p>}
+      {!alternative&&suggestion.source==="rule"&&<button type="button"
+        disabled={disabled||aiBusy} onClick={()=>void requestAI()}>
+        {aiBusy?speak("Ověřuji alternativu AI…","Checking AI alternative…"):
+          speak("Získat alternativu AI","Get AI alternative")}
+      </button>}
+      {aiNotice==="off"&&<small role="status">{speak(
+        "AI návrhy nejsou povoleny v Nastavení.",
+        "AI suggestions are not enabled in Settings.")}</small>}
+      {aiNotice==="failed"&&<small role="status">{speak(
+        "Alternativu AI nyní nelze načíst. Pravidlový návrh zůstává dostupný.",
+        "AI alternative unavailable; local rules remain available.")}</small>}
       {alternative&&<button type="button" disabled={disabled}
         onClick={()=>{
           // Explicit selection changes both the visible action and its token.

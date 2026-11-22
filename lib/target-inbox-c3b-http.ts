@@ -39,6 +39,9 @@ const childConfig=(request:Request,identity:StagingHttpIdentity,
 // private titles, prompts or AI responses on disk.
 const previews=new Map<string,{expiry:number;result:C3bPreview}>();
 const CACHE_TTL_MS=15_000,MAX_CACHE=48;
+// The shared staging pool has two subprocess slots. Never let two slow
+// optional provider requests occupy both while a rules preview needs one.
+let aiPreviewInFlight=false;
 function previewCacheKey(request:Request,
   identity:{kind:"owner"}|{kind:"session";tokenHash:string},
   actor:string,taskId:string,generation:string,mode:"rules"|"best"):string|null{
@@ -67,7 +70,8 @@ const issue=(request:Request,operation:string)=>{
   // the OpenAI dispatch allowance: the external cross-worker fence keeps its
   // much stricter 3/actor-minute and 12/global-minute provider limits.
   const limited=enforceRateLimit(request,"target-staging-c3b-"+operation,
-    operation==="preview"?180:operation==="consent"?10:30,600000);
+    operation==="preview-rules"?180:
+    operation==="preview-ai"?30:operation==="consent"?10:30,600000);
   return limited?Response.json({error:"Too many requests"},{status:429,
     headers:{...headers,"retry-after":String(limited.retryAfter)}}):null;
 };
@@ -101,15 +105,30 @@ export async function getC3bPreview(request:Request):Promise<Response>{
     if(mode!==null&&mode!=="rules")return answer(400,"Invalid request");
     const taskId=params.get("taskId");
     if(!taskId||!id.test(taskId))return answer(400,"Invalid request");
-    const limited=issue(request,"preview");
+    // Local rules must never share the optional AI request-rate bucket.
+    const limited=issue(request,mode==="rules"?"preview-rules":"preview-ai");
     if(limited)return limited;
     const cacheKey=previewCacheKey(request,identity,base.ownerUserId,
       taskId,base.expectedRestoreGeneration,mode==="rules"?"rules":"best");
     const cached=cacheKey?previews.get(cacheKey):undefined;
     if(cached&&cached.expiry<=Date.now()&&cacheKey)previews.delete(cacheKey);
-    const result=cached&&cached.expiry>Date.now()?cached.result
-      :await previewC3bInChild(childConfig(request,identity,base),taskId,
-        mode==="rules"?"rules":"best");
+    const liveCache=cached&&cached.expiry>Date.now()?cached.result:null;
+    // On uncached optional AI work, keep one shared child slot free for rules
+    // and critical receipt/Undo operations. Reject additional AI requests
+    // without ever consuming a rules slot or its HTTP rate bucket.
+    if(mode!=="rules"&&!liveCache&&aiPreviewInFlight)
+      return Response.json({error:"AI request busy"},{status:429,headers});
+    let result:C3bPreview|null=liveCache;
+    if(!result){
+      const aiSlot=mode!=="rules";
+      if(aiSlot)aiPreviewInFlight=true;
+      try{
+        result=await previewC3bInChild(childConfig(request,identity,base),taskId,
+          mode==="rules"?"rules":"best");
+      }finally{
+        if(aiSlot)aiPreviewInFlight=false;
+      }
+    }
     const released=result
       ?verifyStagingReadBeforeRelease(request,identity,base,base.ownerUserId,
         result.linearization,undefined,undefined,undefined,undefined,
