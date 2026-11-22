@@ -241,7 +241,7 @@ export async function postC3b(
         ?await receiptC3bInChild(actorChild,
           obj.command as InboxAcceptCommand|InboxAcceptReceiptQuery)
         :await cancelC3bInChild(actorChild,
-          obj.command as InboxAcceptReceiptQuery);
+          obj.command as InboxAcceptReceiptQuery|InboxAcceptUndoCommand);
       const release=reply
         ?verifyStagingReadBeforeRelease(request,identity,base,base.ownerUserId,
           reply.linearization,undefined,undefined,undefined,undefined,
