@@ -114,7 +114,8 @@ import {writePreflightedInboxAIConsent,readTargetInboxAIConsent,
   from "./target-inbox-ai-consent";
 import {writePreflightedInboxSuggestedAction,readInboxAcceptReceiptInSnapshot,
   type InboxAcceptCommand,type InboxAcceptReceiptQuery,type InboxAcceptUndoCommand,type InboxAcceptResult,
-  type InboxAcceptReceiptView,cancelPreflightedInboxSuggestedAction}
+  type InboxAcceptReceiptView,cancelPreflightedInboxSuggestedAction,
+  cancelPreflightedInboxSuggestedUndo}
   from "./target-inbox-accept-writer";
 import {readAuthorizedInboxSuggestionSnapshot,
   type AuthorizedInboxSuggestionSnapshot} from "./target-inbox-suggestion-snapshot";
@@ -1222,6 +1223,18 @@ export class TargetStagingSessionAuthority {
     const credential=this.#credential(sessionToken,true);
     return credential
       ?cancelPreflightedInboxSuggestedAction(
+        this.#store,credential,command,sessionTokenHash)
+      :null;
+  }
+
+  /** Irreversible rejection fence for an uncertain or stale C-3b Undo. */
+  cancelInboxSuggestedUndo(
+    sessionToken:string,command:InboxAcceptUndoCommand,
+    sessionTokenHash:string,
+  ):InboxAcceptReceiptView|null{
+    const credential=this.#credential(sessionToken,true);
+    return credential
+      ?cancelPreflightedInboxSuggestedUndo(
         this.#store,credential,command,sessionTokenHash)
       :null;
   }
