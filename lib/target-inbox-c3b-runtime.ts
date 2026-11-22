@@ -1,6 +1,7 @@
 /** C-3b default-off runtime gates and cross-worker cryptographic bindings.
  * Never derive an actor or commit key from a client request. */
 import {createHmac} from "node:crypto";
+import path from "node:path";
 import {DatabaseSync} from "node:sqlite";
 import {inboxWorkerProofKey} from "./target-inbox-command-identity";
 import {INBOX_AI_FENCE_PRODUCTION_PATH,verifiedInboxAIFencePath}
@@ -54,7 +55,16 @@ export function inboxC3bSessionBinding(
 }
 /** Missing/unprovisioned/corrupt external fence is always AI-OFF. */
 export function openVerifiedInboxC3bFence(targetDirectory:string):DatabaseSync|null{
-  const filename=INBOX_AI_FENCE_PRODUCTION_PATH;
+  const testParent=path.dirname(targetDirectory);
+  const e2e=process.env.AI_EXECUTIVE_E2E==="true"&&
+    process.env.LUMI_TARGET_INBOX_C3B_E2E==="true"&&
+    targetDirectory===path.join(testParent,"target-store")&&
+    /^lumi-e2e-[A-Za-z0-9_-]+$/.test(path.basename(testParent))&&
+    testParent.startsWith("/tmp/");
+  const filename=e2e?path.join(testParent,"inbox-ai-consent-fence.sqlite")
+    :INBOX_AI_FENCE_PRODUCTION_PATH;
+  // Synthetic substitution is limited to the explicitly isolated Playwright
+  // directory, never a configurable arbitrary path or the target restore DB.
   if(!verifiedInboxAIFencePath(filename,targetDirectory))return null;
   let db:DatabaseSync|null=null;
   try{
