@@ -1,0 +1,10 @@
+/* C-3b; fits both 390px and 1280px without horizontal scrolling. */
+.targetInboxAIConsent{display:flex;flex-direction:column;gap:.75rem;max-width:46rem;
+  margin:1rem 0;padding:1rem;border:1px solid var(--border,rgba(120,120,120,.25));
+  border-radius:12px;min-width:0;overflow-wrap:anywhere}
+.targetInboxAIConsent>h3,.targetInboxAIConsent>p{margin:0}
+.targetInboxAIConsentToggle{display:flex;align-items:flex-start;gap:.65rem;
+  line-height:1.45;max-width:100%}
+.targetInboxAIConsentToggle input{flex:none;width:1.15rem;height:1.15rem;margin-top:.1rem}
+.targetInboxAIConsent>button{align-self:flex-start;min-height:44px}
+@media(max-width:480px){.targetInboxAIConsent{padding:.75rem;margin:.75rem 0}}
