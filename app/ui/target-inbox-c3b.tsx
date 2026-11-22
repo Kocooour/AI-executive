@@ -20,6 +20,7 @@ export default function TargetInboxC3b({item,restoreGeneration,
   language,disabled,onOutcome,onRevoked}:Props){
   const runtime=useTargetRuntime(),generation=useTargetGeneration();
   const root=useRef<HTMLDivElement|null>(null);
+  const pendingPreview=useRef<AbortController|null>(null);
   // Parent wake/refusal handlers can be refreshed without retriggering the
   // network effect on every Inbox redraw. Always invoke the latest handler.
   const revoked=useRef(onRevoked);
@@ -46,6 +47,10 @@ export default function TargetInboxC3b({item,restoreGeneration,
   // already displayed AI actions. A fresh read may show local rules instead.
   useEffect(()=>{
     const changed=()=>{
+      // React's effect cleanup runs on the following commit. Abort right now:
+      // a late AI response in the same event turn must never resurrect a
+      // proposal invalidated by the explicit consent/ACL boundary.
+      pendingPreview.current?.abort();
       setSuggestion(null);setStatus("idle");setFetchKey(n=>n+1);
     };
     window.addEventListener(C3B_CONSENT_CHANGED,changed);
@@ -72,6 +77,7 @@ export default function TargetInboxC3b({item,restoreGeneration,
     if(!visible||disabled||!runtime?.known()||
        runtime.generation()!==generation)return;
     const abort=new AbortController();
+    pendingPreview.current=abort;
     setStatus("loading");
     void fetchC3bProposal(item.id,abort.signal).then(result=>{
       if(abort.signal.aborted||!runtime.known()||
@@ -87,7 +93,10 @@ export default function TargetInboxC3b({item,restoreGeneration,
         else setStatus(result.reason==="disabled"?"off":"failed");
       }
     });
-    return ()=>abort.abort();
+    return ()=>{
+      abort.abort();
+      if(pendingPreview.current===abort)pendingPreview.current=null;
+    };
   },[visible,disabled,runtime,generation,item.id,restoreGeneration,
     fetchKey]);
   async function accept(){
