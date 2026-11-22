@@ -70,9 +70,21 @@ try{
         // AI is OFF without the independent external fence, valid consent or
         // configured OpenAI provider. Rules remain fully local and available.
         if(fence&&current.consent){
+          const synthetic=process.env.AI_EXECUTIVE_E2E==="true"&&
+            process.env.LUMI_TARGET_INBOX_C3B_E2E==="true"&&
+            dir.startsWith("/tmp/lumi-e2e-");
           const selected=await dispatchAuthorizedInboxOpenAIOnly({
             fenceDb:fence,initial:current,
-            deps:{freshAuthorizedState:fresh},
+            deps:{freshAuthorizedState:fresh,
+              ...(synthetic?{complete:async input=>{
+                // Only synthetic browser acceptance. This branch makes NO
+                // network call, cannot run under an ordinary production
+                // deployment and cannot choose outside the input allowlist.
+                const label=input.privateOpenProjectNames.find(name=>
+                  input.taskTitle.includes(name));
+                return label?{action:"project",targetName:label,reason:"mock"}
+                  :{action:"keep",targetName:null,reason:"mock"};
+              }}:{})},
           });
           if(!selected)fail(); // revoked actor/ACL: release nothing
           suggestion=selected;
