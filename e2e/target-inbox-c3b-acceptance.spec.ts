@@ -69,8 +69,8 @@ test("C-3b: signed rules appear before a delayed optional AI response",async({pa
   await withoutGrant.getByRole("button",{name:"Získat alternativu AI"}).click();
   await expect(withoutGrant.getByText("AI návrhy nejsou povoleny v Nastavení."))
     .toBeVisible({timeout:20000});
-  expect(unconsentedAIRequests).toBe(0,
-    "the browser must refuse an OpenAI request until durable consent is enabled");
+  expect(unconsentedAIRequests,
+    "the browser must refuse an OpenAI request until durable consent is enabled").toBe(0);
   // The check only authorizes a model request after an explicit Settings
   // grant; no implicit AI dispatch is allowed on scroll or focus.
   await page.goto("/?view=Settings");
@@ -195,7 +195,7 @@ for(const width of [390,1280]){
       .toBeVisible({timeout:25000});
     await suggestion.getByRole("button",{name:"Zobrazit alternativní návrh AI"}).click();
     await expect(suggestion.getByTestId("target-c3b-ai-selected")).toBeVisible();
-    const acceptNetwork=page.waitForRequest(r=>r.request().method()==="POST"&&
+    const acceptNetwork=page.waitForRequest(r=>r.method()==="POST"&&
       new URL(r.url()).pathname==="/api/target-staging/inbox/c3b/accept");
     await suggestion.getByRole("button",{name:"Přijmout"}).click();
     const submitted=(await acceptNetwork).postDataJSON() as {

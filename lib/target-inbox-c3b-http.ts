@@ -118,7 +118,7 @@ export async function getC3bPreview(request:Request):Promise<Response>{
     // and critical receipt/Undo operations. Reject additional AI requests
     // without ever consuming a rules slot or its HTTP rate bucket.
     if(mode!=="rules"&&!liveCache&&aiPreviewInFlight)
-      return Response.json({error:"AI request busy"},{status:429,headers});
+      return Response.json({error:"Too many requests"},{status:429,headers});
     let result:C3bPreview|null=liveCache;
     if(!result){
       const aiSlot=mode!=="rules";
