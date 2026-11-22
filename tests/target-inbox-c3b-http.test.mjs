@@ -81,14 +81,15 @@ after(()=>{
 });
 const base="http://localhost:3001/api/target-staging/inbox/c3b";
 const cookie=()=>sessionCookieName+"="+createSessionToken();
+const fixedOwnerSession=cookie(); // One authenticated cookie across preview+Accept.
 let seq=0;
-const hdr=(session=cookie())=>({
+const hdr=(session=fixedOwnerSession)=>({
   cookie:session,"x-forwarded-for":"10.91.17."+String(10+(seq++%120)),
 });
-const preview=(id="captured",session=cookie())=>PREVIEW(
+const preview=(id="captured",session=fixedOwnerSession)=>PREVIEW(
   new Request(base+"?taskId="+encodeURIComponent(id),{headers:hdr(session)}));
 const consent=()=>CONSENT(new Request(base+"/consent",{headers:hdr()}));
-const post=(handler,endpoint,body,{session=cookie(),origin="http://localhost:3001",protocol="1"}={})=>
+const post=(handler,endpoint,body,{session=fixedOwnerSession,origin="http://localhost:3001",protocol="1"}={})=>
   handler(new Request(base+"/"+endpoint,{method:"POST",headers:{
     ...hdr(session),"content-type":"application/json",
     origin,"x-lumi-target-protocol":protocol,
