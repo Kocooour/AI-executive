@@ -19,6 +19,10 @@ export default function TargetInboxC3b({item,restoreGeneration,
   language,disabled,onOutcome,onRevoked}:Props){
   const runtime=useTargetRuntime(),generation=useTargetGeneration();
   const root=useRef<HTMLDivElement|null>(null);
+  // Parent wake/refusal handlers can be refreshed without retriggering the
+  // network effect on every Inbox redraw. Always invoke the latest handler.
+  const revoked=useRef(onRevoked);
+  revoked.current=onRevoked;
   const [visible,setVisible]=useState(false);
   const [fetchKey,setFetchKey]=useState(0);
   const [suggestion,setSuggestion]=useState<C3bProposal|null>(null);
@@ -57,13 +61,13 @@ export default function TargetInboxC3b({item,restoreGeneration,
         setSuggestion(result.value);setStatus("ready");
       }else{
         setSuggestion(null);
-        if(result.reason==="signed-out"){onRevoked();setStatus("failed");}
+        if(result.reason==="signed-out"){revoked.current();setStatus("failed");}
         else setStatus(result.reason==="disabled"?"off":"failed");
       }
     });
     return ()=>abort.abort();
   },[visible,disabled,runtime,generation,item.id,restoreGeneration,
-    fetchKey,onRevoked]);
+    fetchKey]);
   async function accept(){
     if(disabled||!suggestion||status!=="ready"||
        !runtime?.known()||runtime.generation()!==generation)return;

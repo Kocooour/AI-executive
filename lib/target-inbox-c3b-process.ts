@@ -115,9 +115,22 @@ export const undoC3bInChild=async(config:StagingPersonalReadConfig,command:Inbox
 export const receiptC3bInChild=async(config:StagingPersonalReadConfig,
   command:InboxAcceptCommand|InboxAcceptReceiptQuery)=>
   parseReceipt(await call(config,{operation:"receipt",command}));
-export const cancelC3bInChild=async(config:StagingPersonalReadConfig,
-  command:InboxAcceptReceiptQuery)=>
-  parseReceipt(await call(config,{operation:"cancel",command}));
+/** A terminal cancel is idempotent under the actor+UUID target lock.
+ * Brief bounded retries tolerate contention with an already-running
+ * preview/receipt child (the shared subprocess pool admits only two).
+ * Every retry is re-authorized by the child and the HTTP final-release gate.
+ * Never treat a missing/unparseable response as proof of cancellation. */
+export async function cancelC3bInChild(
+  config:StagingPersonalReadConfig,command:InboxAcceptReceiptQuery,
+):Promise<C3bReceipt|null>{
+  for(let attempt=0;attempt<4;attempt++){
+    const parsed=parseReceipt(await call(config,{operation:"cancel",command}));
+    if(parsed)return parsed;
+    if(attempt<3)await new Promise<void>(resolve=>
+      setTimeout(resolve,125*(attempt+1)));
+  }
+  return null;
+}
 export const readC3bConsentInChild=async(config:StagingPersonalReadConfig)=>
   parseConsent(await call(config,{operation:"consent_read"}),true) as C3bConsentRead|null;
 export const writeC3bConsentInChild=async(
