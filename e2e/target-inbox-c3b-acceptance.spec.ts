@@ -92,6 +92,11 @@ for(const width of [390,1280]){
     const suggestion=await locateRow(page,seeded.taskId);
     await expect(suggestion.getByRole("button",{name:"Proč tento návrh?"}))
       .toBeVisible({timeout:25000});
+    // The signed exact destination and actor-local Today must be displayed
+    // BEFORE clicking Why or Accept (not hidden behind an explanation).
+    const visibleAction=await suggestion.locator(".targetInboxSuggestionHeading span").innerText();
+    expect(visibleAction).toContain(seeded.projectTitle);
+    expect(visibleAction).toMatch(/\\d{4}-\\d{2}-\\d{2}/);
     await suggestion.getByRole("button",{name:"Proč tento návrh?"}).click();
     await expect(suggestion.locator(".targetInboxSuggestionWhy")).toBeVisible();
     const why=await suggestion.locator(".targetInboxSuggestionWhy").innerText();
