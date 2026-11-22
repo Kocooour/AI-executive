@@ -148,6 +148,15 @@ for(const width of [390,1280]){
     const contents=await page.evaluate(()=>JSON.stringify({...sessionStorage}));
     expect(contents).not.toContain(seeded.taskTitle);
     expect(contents).not.toContain(why);
+    // Tests share one isolated SQLite store. Explicitly revoke after each
+    // viewport so 1280 also exercises a NEW explicit grant after revocation,
+    // never inherits the 390 consent or silently skips the Settings action.
+    await page.goto("/?view=Settings");
+    const revokeToggle=page.getByTestId("target-c3b-consent-settings")
+      .getByRole("checkbox");
+    await expect(revokeToggle).toBeChecked({timeout:25000});
+    await revokeToggle.uncheck();
+    await expect(revokeToggle).not.toBeChecked({timeout:15000});
     if(width===1280){
       await page.goto("/?view=Settings");
       await waitUntilSynced(page);
