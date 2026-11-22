@@ -143,4 +143,3 @@ test("C-3b fence: consent regrant blocked until all prior tickets drain",()=>{
     assert.equal(grant(x.db,"owner",GEN,"new-explicit-owner-decision").epoch,3);
   }finally{x.close();}
 });
-
