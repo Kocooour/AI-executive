@@ -14,7 +14,7 @@ export type C3bOutcome={
 };
 type Props={item:TargetInboxItem;restoreGeneration:string;
   language:"cs"|"en";disabled:boolean;
-  onOutcome:(outcome:C3bOutcome)=>void;onRevoked:()=>void};
+  onOutcome:(outcome:C3bOutcome)=>boolean;onRevoked:()=>void};
 export default function TargetInboxC3b({item,restoreGeneration,
   language,disabled,onOutcome,onRevoked}:Props){
   const runtime=useTargetRuntime(),generation=useTargetGeneration();
@@ -67,8 +67,10 @@ export default function TargetInboxC3b({item,restoreGeneration,
       token:suggestion.token,displayedWhy:suggestion.why,
       displayedChanges:suggestion.changes,
     };
+    // The original UUID must be saved without private text BEFORE dispatch.
+    // Refuse the write if the tab recovery witness cannot be persisted.
+    if(!onOutcome({command,status:"uncertain",next:null}))return;
     setStatus("sending");
-    onOutcome({command,status:"uncertain",next:null});
     const sent=await acceptC3b(command);
     if(!runtime.known()||runtime.generation()!==generation)return;
     if(sent.ok===false&&sent.reason==="signed-out"){
