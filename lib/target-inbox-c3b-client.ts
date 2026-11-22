@@ -126,3 +126,51 @@ export const setC3bConsent=(enabled:boolean)=>
        "enabled,ok,pending")return null;
     return {enabled:raw.enabled,pending:raw.pending};
   });
+
+/** Tab-only recovery stores original UUID and CAS, NEVER private task title,
+ * displayed Why, signed token, target names or provider response. A missing
+ * Accept body after reload is intentionally unretryable; receipt may still be
+ * reconciled, and a new UUID must not be issued while unresolved. */
+const RECOVERY_KEY="lumi:target-c3b-recovery:v1";
+export type C3bRecovery={
+  version:1;generation:string;command:C3bReceiptQuery;undo:C3bUndo|null;
+};
+const validQuery=(x:unknown):x is C3bReceiptQuery=>object(x)&&
+  Object.keys(x).sort().join(",")==="commandId,restoreGeneration,taskId"&&
+  typeof x.commandId==="string"&&uuid.test(x.commandId)&&
+  typeof x.restoreGeneration==="string"&&uuid.test(x.restoreGeneration)&&
+  typeof x.taskId==="string"&&TASK.test(x.taskId);
+const validUndo=(x:unknown):x is C3bUndo=>object(x)&&
+  Object.keys(x).sort().join(",")===
+    "commandId,expectedPlanRevision,expectedPrivateEpoch,expectedTaskRevision,expectedTriageRevision,restoreGeneration,taskId,undoOfCommandId"&&
+  typeof x.commandId==="string"&&uuid.test(x.commandId)&&
+  typeof x.undoOfCommandId==="string"&&uuid.test(x.undoOfCommandId)&&
+  typeof x.restoreGeneration==="string"&&uuid.test(x.restoreGeneration)&&
+  typeof x.taskId==="string"&&TASK.test(x.taskId)&&
+  Number.isSafeInteger(x.expectedTaskRevision)&&
+  Number.isSafeInteger(x.expectedTriageRevision)&&
+  Number.isSafeInteger(x.expectedPrivateEpoch)&&
+  (x.expectedPlanRevision===null||Number.isSafeInteger(x.expectedPlanRevision));
+export function persistC3bRecovery(value:C3bRecovery|null):boolean{
+  try{
+    if(value===null){sessionStorage.removeItem(RECOVERY_KEY);return true;}
+    if(value.version!==1||!value.generation||!validQuery(value.command)||
+       value.undo!==null&&!validUndo(value.undo))return false;
+    const encoded=JSON.stringify(value);
+    if(encoded.length>2048)return false;
+    sessionStorage.setItem(RECOVERY_KEY,encoded);
+    return true;
+  }catch{return false;}
+}
+export function readC3bRecovery(generation:string):C3bRecovery|null{
+  try{
+    const raw=sessionStorage.getItem(RECOVERY_KEY);
+    if(!raw||raw.length>2048)return null;
+    const x:unknown=JSON.parse(raw);
+    if(!object(x)||Object.keys(x).sort().join(",")!==
+      "command,generation,undo,version"||x.version!==1||
+      x.generation!==generation||!validQuery(x.command)||
+      x.undo!==null&&!validUndo(x.undo))return null;
+    return x as C3bRecovery;
+  }catch{return null;}
+}
