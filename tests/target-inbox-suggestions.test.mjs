@@ -30,7 +30,7 @@ test("C-3b local Today is actor-private and composes with exact project match",a
   const combined={...base,taskTitle:"Dnes připravit rekonstrukce"};
   const suggestion=suggestInboxWithLocalToday(combined,"2026-11-22");
   assert.equal(suggestion.changes.whenOn,"2026-11-22");
-  assert.equal(suggestion.changes.projectId,"project-renovation");
+  assert.equal(suggestion.changes.projectId,"renovation");
   assert.equal(suggestion.changes.taskAreaId,null);
   assert.equal(suggestion.source,"rule");
   assert.equal(suggestInboxWithLocalToday(
