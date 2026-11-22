@@ -186,32 +186,11 @@ test("C-3b HTTP: explicit consent, mock OpenAI, revoke and fail-closed fallback"
   }});
   assert.notEqual(refused.status,200);
 });
-test("C-3b HTTP: concurrent optional previews preserve rules worker capacity",async()=>{
-  // Best mode remains a bounded optional lane even if no OpenAI grant exists.
-  // The second request must not acquire another worker while the first is
-  // running; a rules preview still has a separate subprocess slot.
-  db.prepare("INSERT INTO tasks(id,area_id,title) VALUES (?,?,?)")
-    .run("ai-admission-test",fixture.unassignedAreaId,"Připravit Rekonstrukce dnes");
-  const headers={cookie:fixedOwnerSession,"x-forwarded-for":"10.91.17.248"};
-  // A fresh task ID bypasses the 15-second in-memory preview cache.
-  const optional=base+"?taskId=ai-admission-test";
-  const first=PREVIEW(new Request(optional,{headers}));
-  const second=await PREVIEW(new Request(optional,{headers}));
-  assert.equal(second.status,429,
-    "a second optional request cannot occupy the rules worker slot");
-  const rules=await PREVIEW(new Request(optional+"&mode=rules",{headers}));
-  assert.equal(rules.status,200,"local rules must run while best is in flight");
-  assert.equal((await rules.json()).source,"rule");
-  assert.equal((await first).status,200);
-});
-
 test("C-3b HTTP: exhausting the optional AI bucket cannot rate-limit local rules",async()=>{
   const fixed={cookie:fixedOwnerSession,"x-forwarded-for":"10.91.17.249"};
-  // The preceding concurrency test added a task, invalidating previously
-  // cached "captured" snapshots. Use the new task's current witness instead
-  // of asserting that a stale preview must succeed.
-  // Consent is revoked, so best safely falls back to local rules.
-  const best=base+"?taskId=ai-admission-test";
+  // Consent was explicitly revoked in the preceding test. Best mode
+  // falls back to local rules and still spends its independent HTTP budget.
+  const best=base+"?taskId=captured";
   for(let i=0;i<30;i++){
     const response=await PREVIEW(new Request(best,{headers:fixed}));
     assert.equal(response.status,200,"best-mode request before the limit");
@@ -281,4 +260,23 @@ test("C-3b P1 HTTP: a stale Undo is terminally cancelled, no late Undo or partia
     FROM tasks WHERE id='stale-undo'`).get()},{
     title:"Změněné zadání",state:"processed",projectId:"project:c3b:home",
   });
+});
+
+test("C-3b HTTP: concurrent optional previews preserve rules worker capacity",async()=>{
+  // Best mode remains a bounded optional lane even if no OpenAI grant exists.
+  // The second request must not acquire another worker while the first is
+  // running; a rules preview still has a separate subprocess slot.
+  db.prepare("INSERT INTO tasks(id,area_id,title) VALUES (?,?,?)")
+    .run("ai-admission-test",fixture.unassignedAreaId,"Připravit Rekonstrukce dnes");
+  const headers={cookie:fixedOwnerSession,"x-forwarded-for":"10.91.17.248"};
+  // A fresh task ID bypasses the 15-second in-memory preview cache.
+  const optional=base+"?taskId=ai-admission-test";
+  const first=PREVIEW(new Request(optional,{headers}));
+  const second=await PREVIEW(new Request(optional,{headers}));
+  assert.equal(second.status,429,
+    "a second optional request cannot occupy the rules worker slot");
+  const rules=await PREVIEW(new Request(optional+"&mode=rules",{headers}));
+  assert.equal(rules.status,200,"local rules must run while best is in flight");
+  assert.equal((await rules.json()).source,"rule");
+  assert.equal((await first).status,200);
 });
