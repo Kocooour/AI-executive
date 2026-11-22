@@ -4,7 +4,8 @@
 import {useCallback,useEffect,useRef,useState} from "react";
 import type {TargetInboxItem} from "../../lib/target-inbox-client-types";
 import {fetchC3bProposal,acceptC3b,receiptC3b,
-  type C3bProposal,type C3bAccept,type C3bReceipt}
+  type C3bProposal,type C3bAccept,type C3bReceipt,
+  C3B_CONSENT_CHANGED}
   from "../../lib/target-inbox-c3b-client";
 import {useTargetGeneration,useTargetRuntime} from "./target-data-provider";
 
@@ -40,6 +41,27 @@ export default function TargetInboxC3b({item,restoreGeneration,
     },{rootMargin:"180px"});
     observer.observe(el);
     return ()=>observer.disconnect();
+  },[]);
+  // An explicit revoke/renewal in Settings (including another tab) retires
+  // already displayed AI actions. A fresh read may show local rules instead.
+  useEffect(()=>{
+    const changed=()=>{
+      setSuggestion(null);setStatus("idle");setFetchKey(n=>n+1);
+    };
+    window.addEventListener(C3B_CONSENT_CHANGED,changed);
+    window.addEventListener("focus",changed);
+    let channel:BroadcastChannel|null=null;
+    try{
+      if(typeof BroadcastChannel!=="undefined"){
+        channel=new BroadcastChannel(C3B_CONSENT_CHANGED);
+        channel.onmessage=changed;
+      }
+    }catch{}
+    return ()=>{
+      window.removeEventListener(C3B_CONSENT_CHANGED,changed);
+      window.removeEventListener("focus",changed);
+      channel?.close();
+    };
   },[]);
   const reload=useCallback(()=>{
     setSuggestion(null);
