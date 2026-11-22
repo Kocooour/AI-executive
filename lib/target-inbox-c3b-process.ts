@@ -51,6 +51,7 @@ function parsePreview(value:unknown):C3bPreview|null{
     typeof value.restoreGeneration!=="string"||!UUID.test(value.restoreGeneration)||
     !changesValid(value.changes)||
     !Number.isSafeInteger(value.privateEpoch)||!Number.isSafeInteger(value.notificationEpoch)||
+    !Number.isSafeInteger(value.consentEpoch)||(value.consentEpoch as number)<0||
     (value.privateEpoch as number)<0||(value.notificationEpoch as number)<0)return null;
   const w=witness(value);
   return w?{...w,taskId:value.taskId,token:value.token,
