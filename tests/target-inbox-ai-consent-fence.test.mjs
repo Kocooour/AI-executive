@@ -121,5 +121,26 @@ test("C-3b fence: revoke is monotonic and never undone by an old restored target
     assert.equal(again.epoch,3);
     assert.equal(again.active,true);
     assert.equal(inboxAIRevokeDrained(x.db,"owner",2),false);
+    assert.deepEqual(revokeInboxAIConsent(x.db,"owner"),{epoch:4,drained:true});
+    assert.equal(grant(x.db,"owner",GEN,"owner-approved-v1"),null,
+      "historically used decision v1 must never be reusable after later epochs");
+    assert.equal(grant(x.db,"owner",GEN,"new-explicit-owner-decision"),null,
+      "historically used decision v2 must never be reusable either");
   }finally{x.close();}
 });
+
+test("C-3b fence: consent regrant blocked until all prior tickets drain",()=>{
+  const x=fixture();
+  try{
+    grant(x.db);
+    const ticket=beginInboxAIDispatch(x.db,"owner",GEN,SCOPE,baseTime);
+    assert.ok(ticket);
+    assert.deepEqual(revokeInboxAIConsent(x.db2,"owner"),
+      {epoch:2,drained:false});
+    assert.equal(grant(x.db,"owner",GEN,"new-explicit-owner-decision"),null);
+    assert.equal(endInboxAIDispatch(x.db2,ticket),false);
+    assert.equal(inboxAIRevokeDrained(x.db,"owner",2),true);
+    assert.equal(grant(x.db,"owner",GEN,"new-explicit-owner-decision").epoch,3);
+  }finally{x.close();}
+});
+
