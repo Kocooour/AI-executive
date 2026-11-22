@@ -14,7 +14,17 @@ export default function InboxAIConsentSettings({language="cs"}:{
   const [notice,setNotice]=useState("");
   const speak=(cs:string,en:string)=>language==="cs"?cs:en;
   const refresh=useCallback(async(signal?:AbortSignal)=>{
-    const r=await getC3bConsent(signal);
+    // A busy child-process pool can briefly return 503 during concurrent Inbox
+    // previews. Never display a cached grant; re-read durable consent with a
+    // small bounded retry budget, keeping the toggle hidden while unknown.
+    setState({kind:"loading"});
+    let r=await getC3bConsent(signal);
+    for(const delay of [350,700,1050]){
+      if(r.ok||r.reason!=="unavailable"||signal?.aborted)break;
+      await new Promise<void>(resolve=>setTimeout(resolve,delay));
+      if(signal?.aborted)return;
+      r=await getC3bConsent(signal);
+    }
     if(signal?.aborted)return;
     if(r.ok===true)setState({kind:"ready",...r.value});
     else setState({kind:r.reason==="disabled"?"disabled":"error"});

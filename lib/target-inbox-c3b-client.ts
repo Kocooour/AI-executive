@@ -23,7 +23,7 @@ export type C3bUndo={
 export type C3bReceipt={status:"committed"|"undone"|"not_recorded"|"cancelled";
   next:{expectedTaskRevision:number;expectedTriageRevision:number;
     expectedPrivateEpoch:number;expectedPlanRevision:number|null}|null};
-export type C3bFailure="signed-out"|"stale"|"disabled"|"unavailable";
+export type C3bFailure="signed-out"|"stale"|"disabled"|"unavailable"|"rate-limited";
 export type C3bResponse<T>={ok:true;value:T}|{ok:false;reason:C3bFailure};
 const uuid=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const TASK=/^[^\u0000-\u001f\u007f]{1,512}$/u;
@@ -40,7 +40,7 @@ const validChanges=(x:unknown):x is C3bChanges=>{
     id(x.effectiveAreaId);
 };
 const status=(n:number):C3bFailure=>n===401||n===403?"signed-out":
-  n===404?"disabled":n===409?"stale":"unavailable";
+  n===404?"disabled":n===409?"stale":n===429?"rate-limited":"unavailable";
 export function parseC3bProposal(raw:unknown):C3bProposal|null{
   if(!object(raw)||Object.keys(raw).sort().join(",")!==
       "changes,restoreGeneration,source,taskId,token,why"||

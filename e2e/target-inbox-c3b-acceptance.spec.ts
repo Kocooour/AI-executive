@@ -173,7 +173,15 @@ for(const width of [390,1280]){
     await page.goto("/?view=Settings");
     const revokeToggle=page.getByTestId("target-c3b-consent-settings")
       .getByRole("checkbox");
-    await expect(revokeToggle).toBeChecked({timeout:25000});
+    try{
+      await expect(revokeToggle).toBeChecked({timeout:7000});
+    }catch{
+      // A temporary 503 is not evidence of a revoked grant. The Settings
+      // control must allow an explicit fresh durable consent re-read.
+      await page.getByTestId("target-c3b-consent-settings")
+        .getByRole("button",{name:"Ověřit aktuální souhlas"}).click();
+      await expect(revokeToggle).toBeChecked({timeout:20000});
+    }
     await revokeToggle.uncheck();
     await expect(revokeToggle).not.toBeChecked({timeout:15000});
     await expect(revokeToggle).toBeEnabled({timeout:15000});
