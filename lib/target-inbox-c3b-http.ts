@@ -72,6 +72,18 @@ export async function getC3bPreview(request:Request):Promise<Response>{
     if(!result||result.taskId!==taskId||
        result.restoreGeneration!==base.expectedRestoreGeneration)
       return answer(503,"Staging unavailable");
+    if(result.source==="ai"){
+      // A confirmed revoke may interleave with a finished provider promise
+      // BEFORE HTTP releases the body. Re-read both durable stores from a
+      // freshly authenticated child; never publish a stale AI suggestion.
+      const current=await readC3bConsentInChild({
+        ...base,...stagingChildSessionConfig(identity)});
+      const last=verifyStagingIdentityBeforeRelease(request,identity,base);
+      if(last!=="ok")return stagingIdentityRefusal(last);
+      if(!current||!current.enabled||current.pending||
+         current.epoch!==result.consentEpoch||!c3bUnchanged(base))
+        return answer(409,"read_stale_reload");
+    }
     // All ACL, session, candidate, epoch and linearization proofs stay internal.
     return Response.json({taskId:result.taskId,why:result.why,
       token:result.token,changes:result.changes,source:result.source,
