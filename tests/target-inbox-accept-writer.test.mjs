@@ -106,6 +106,10 @@ test("C-3b canonical v27: Accept move + Process is one pinned command; Undo reve
   assert.equal(afterAccept.triageRevision,before.triageRevision+1);
   assert.equal(afterAccept.revision,before.revision+2);
   assert.deepEqual(accept(),{ok:true,replayed:true});
+  const receipt=fx.authority.readInboxSuggestionReceipt("alice",command);
+  assert.equal(receipt?.status,"committed");
+  assert.equal(receipt?.next?.expectedTaskRevision,afterAccept.revision);
+  assert.equal(receipt?.next?.expectedTriageRevision,afterAccept.triageRevision);
   const afterPlan=fx.db.prepare(`SELECT when_on,revision FROM personal_task_plans
     WHERE user_id='alice' AND task_id='captured'`).get();
   assert.deepEqual(afterPlan,beforePlan,"only this actor's plan remains intact");
@@ -128,6 +132,8 @@ test("C-3b canonical v27: Accept move + Process is one pinned command; Undo reve
   assert.equal(undone.triaged,null);
   assert.equal(undone.triageRevision,afterAccept.triageRevision+1);
   assert.deepEqual(revert(),{ok:true,replayed:true});
+  assert.deepEqual(fx.authority.readInboxSuggestionReceipt("alice",command),
+    {status:"undone",next:null});
   assert.equal(fx.db.prepare(`SELECT COUNT(*) AS n FROM metadata
     WHERE key LIKE 'r3:c3b:%'`).get().n,2);
   assert.deepEqual(inspectIsolatedTargetStore({...fx.store,mode:"r2-model"}),
