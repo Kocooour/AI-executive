@@ -108,6 +108,22 @@ test("C-3b consent: external revoke immediately disables AI even with stale targ
     randomUUID()),false,"old DB consent does not survive a new restore generation");
 });
 
+test("C-3b target preflight rejects tampered consent record",()=>{
+  const x=fixture(),first=cmd(x,"grant",1,INBOX_FIRST_OWNER_DECISION);
+  assert.equal(x.authority.changeInboxAIConsent(x.token,"alice",first).ok,true);
+  const db=new DatabaseSync(x.stage.databasePath);
+  try{
+    const old=db.prepare("SELECT key,value FROM metadata WHERE key LIKE 'r3:c3b:ai-target-consent:v1:%'").get();
+    assert.ok(old);
+    const forged=JSON.parse(old.value);forged.actorUserId="bob";
+    db.prepare("UPDATE metadata SET value=? WHERE key=?")
+      .run(JSON.stringify(forged),old.key);
+    const inspection=inspectIsolatedTargetStore({...x.store,mode:"r2-model"});
+    assert.equal(inspection.ok,false);
+    assert.ok(inspection.issues.includes("metadata_invalid"));
+  }finally{db.close();}
+});
+
 test("C-3b consent: fail closed on bad generation and scope without write",()=>{
   const x=fixture();
   const first=cmd(x,"grant",1,INBOX_FIRST_OWNER_DECISION);
