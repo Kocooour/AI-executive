@@ -222,7 +222,10 @@ function acceptLocked(db:DatabaseSync,actor:string,hash:string,
       return bad("unavailable");
     nextArea=action.taskAreaId;
   }
-  if(action.whenOn!=="unchanged")return bad("invalid_request");
+  if(action.whenOn!=="unchanged"&&action.whenOn!==proof.localDate)
+    return bad("invalid_request");
+  const nextWhen=action.whenOn==="unchanged"?before.whenOn:action.whenOn;
+  const planning=nextWhen!==before.whenOn;
   const relocated=nextProject!==task.project_id||nextArea!==task.area_id;
   if(relocated){
     const moved=db.prepare(`UPDATE tasks SET project_id=?,area_id=?
@@ -230,6 +233,19 @@ function acceptLocked(db:DatabaseSync,actor:string,hash:string,
       .run(nextProject,nextArea,c.taskId,task.revision,
         task.project_id,task.area_id);
     if(moved.changes!==1)return bad("stale_revision");
+  }
+  if(planning){
+    if(!plan){
+      const inserted=db.prepare(`INSERT INTO personal_task_plans
+        (user_id,task_id,when_on,revision) VALUES(?,?,?,0)`)
+        .run(actor,c.taskId,nextWhen);
+      if(inserted.changes!==1)return bad("write_failed");
+    }else{
+      const changedPlan=db.prepare(`UPDATE personal_task_plans SET when_on=?
+        WHERE user_id=? AND task_id=? AND revision=? AND when_on=?`)
+        .run(nextWhen,actor,c.taskId,plan.revision,plan.when_on);
+      if(changedPlan.changes!==1)return bad("stale_revision");
+    }
   }
   const now=Date.now();
   if(!Number.isSafeInteger(now)||now<=0)return bad("write_failed");
@@ -239,13 +255,16 @@ function acceptLocked(db:DatabaseSync,actor:string,hash:string,
       AND triaged_at IS NULL`).run(now,c.taskId,task.triage_revision);
   if(changed.changes!==1)return bad("stale_revision");
   const after=currentTask(db,c.taskId),afterPlan=currentPlan(db,actor,c.taskId);
+  const expectedPlanRevision=planning?(plan?plan.revision+1:0):before.planRevision;
+  const afterEpoch=currentPrivateEpoch(db,actor);
   if(!after||after.status!=="open"||after.triage_state!=="processed"||
      after.triaged_at!==now||
      after.triage_revision!==task.triage_revision+1||
      after.revision!==task.revision+(relocated?2:1)||
      after.project_id!==nextProject||after.area_id!==nextArea||
-     (afterPlan?.when_on??null)!==before.whenOn||
-     (afterPlan?.revision??null)!==before.planRevision)
+     (afterPlan?.when_on??null)!==nextWhen||
+     (afterPlan?.revision??null)!==expectedPlanRevision||
+     afterEpoch!==snapshot.personalPlanEpoch+(planning?1:0))
     return bad("write_failed");
   storeReceipt(db,keyId,{
     v:1,kind:"accept",actor,taskId:c.taskId,digest,
@@ -331,6 +350,22 @@ function undoLocked(db:DatabaseSync,actor:string,c:InboxAcceptUndoCommand):Inbox
         c.taskId,task.revision,task.project_id,task.area_id);
     if(r.changes!==1)return bad("stale_revision");
   }
+  const planning=original.before.whenOn!==original.after.whenOn;
+  if(planning){
+    if(original.before.whenOn===null){
+      const removed=db.prepare(`DELETE FROM personal_task_plans
+        WHERE user_id=? AND task_id=? AND revision=? AND when_on=?`)
+        .run(actor,c.taskId,original.after.planRevision,original.after.whenOn);
+      if(removed.changes!==1)return bad("stale_revision");
+    }else{
+      if(!plan||original.after.planRevision===null)return bad("stale_revision");
+      const restored=db.prepare(`UPDATE personal_task_plans SET when_on=?
+        WHERE user_id=? AND task_id=? AND revision=? AND when_on=?`)
+        .run(original.before.whenOn,actor,c.taskId,
+          original.after.planRevision,original.after.whenOn);
+      if(restored.changes!==1)return bad("stale_revision");
+    }
+  }
   const r=db.prepare(`UPDATE tasks SET triage_state='unprocessed',
     triaged_at=NULL,triage_revision=triage_revision+1
     WHERE id=? AND triage_state='processed'
@@ -338,6 +373,10 @@ function undoLocked(db:DatabaseSync,actor:string,c:InboxAcceptUndoCommand):Inbox
     .run(c.taskId,original.after.triagedAtMs,task.triage_revision);
   if(r.changes!==1)return bad("stale_revision");
   const after=currentTask(db,c.taskId),afterPlan=currentPlan(db,actor,c.taskId);
+  const expectedRevertedPlanRevision=planning
+    ?(original.before.whenOn===null?null:
+        (original.after.planRevision as number)+1)
+    :original.before.planRevision;
   if(!after||after.triage_state!=="unprocessed"||
      after.triaged_at!==null||
      after.revision!==task.revision+(relocated?2:1)||
@@ -345,7 +384,8 @@ function undoLocked(db:DatabaseSync,actor:string,c:InboxAcceptUndoCommand):Inbox
      after.project_id!==original.before.projectId||
      after.area_id!==original.before.areaId||
      (afterPlan?.when_on??null)!==original.before.whenOn||
-     (afterPlan?.revision??null)!==original.before.planRevision)
+     (afterPlan?.revision??null)!==expectedRevertedPlanRevision||
+     currentPrivateEpoch(db,actor)!==epoch+(planning?1:0))
     return bad("write_failed");
   storeReceipt(db,undoKey,{
     v:1,kind:"undo",actor,taskId:c.taskId,
