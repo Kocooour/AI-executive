@@ -143,3 +143,41 @@ test("C-3b fence: consent regrant blocked until all prior tickets drain",()=>{
     assert.equal(grant(x.db,"owner",GEN,"new-explicit-owner-decision").epoch,3);
   }finally{x.close();}
 });
+
+test("C-3b production-style fence: one-time provision, offline check, no implicit regrant",async()=>{
+  const {mkdtempSync,mkdirSync,chmodSync,rmSync,readFileSync,symlinkSync}=
+    await import("node:fs");
+  const {tmpdir}=await import("node:os");
+  const {join}=await import("node:path");
+  const {provisionInboxAIFenceFile,verifiedInboxAIFencePath}=
+    await import("../lib/target-inbox-ai-consent-fence.ts");
+  const dir=mkdtempSync(join(tmpdir(),"lumi-c3b-production-"));
+  try{
+    chmodSync(dir,0o700);
+    const target=join(dir,"personal-v1");
+    mkdirSync(target,{mode:0o700});
+    const fence=join(dir,"inbox-ai-consent-fence.sqlite");
+    assert.equal(provisionInboxAIFenceFile(target,"check",fence),false,
+      "HTTP/read-only path must never create state");
+    assert.equal(provisionInboxAIFenceFile(target,"provision",fence),true);
+    assert.equal(verifiedInboxAIFencePath(fence,target),fence);
+    assert.equal(provisionInboxAIFenceFile(target,"check",fence),true);
+    const v=new DatabaseSync(fence,{readOnly:true});
+    try{
+      assert.deepEqual(v.prepare("SELECT * FROM inbox_ai_fence_grants").all(),[],
+        "deployment provisioning must not grant consent");
+    }finally{v.close();}
+    assert.equal(provisionInboxAIFenceFile(target,"provision",fence),true,
+      "existing fence is verified, not reset");
+    chmodSync(fence,0o644);
+    assert.equal(provisionInboxAIFenceFile(target,"check",fence),false);
+    chmodSync(fence,0o600);
+    assert.equal(provisionInboxAIFenceFile(target,"check",fence),true);
+    assert.equal(provisionInboxAIFenceFile(target,"provision",
+      join(target,"forbidden.sqlite")),false,
+      "never inside target restore domain");
+    const symlink=join(dir,"consent-symlink.sqlite");
+    symlinkSync(fence,symlink);
+    assert.equal(provisionInboxAIFenceFile(target,"check",symlink),false);
+  }finally{rmSync(dir,{recursive:true,force:true});}
+});
