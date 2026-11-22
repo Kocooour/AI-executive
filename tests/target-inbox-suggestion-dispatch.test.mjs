@@ -70,11 +70,11 @@ test("C-3b dispatch: no consent or stale target snapshot => no provider request"
     const original=x.state;
     assert.equal((await run(x,provider,async()=>({
       ...original,sessionAlive:false,
-    })),null,"revoked session cannot release old private names");
+    }))),null,"revoked session cannot release old private names");
     assert.equal((await run(x,provider,async()=>({
       ...original,privateSnapshot:{...original.privateSnapshot,
         candidateFingerprint:"c".repeat(64)},
-    })),null,"stale actor-private snapshot cannot be released");
+    }))),null,"stale actor-private snapshot cannot be released");
     assert.equal(calls,0);
   }finally{x.close();}
 });
