@@ -159,6 +159,13 @@ test("C-3b HTTP: explicit consent, mock OpenAI, revoke and fail-closed fallback"
   await read(post(CONSENT_WRITE,"consent",{enabled:true}));
   const enabled=await read(consent());
   assert.equal(enabled.enabled,true);
+  const ruleWhileAIEnabled=await read(PREVIEW(new Request(
+    base+"?taskId=captured&mode=rules",{headers:hdr()})));
+  assert.equal(ruleWhileAIEnabled.source,"rule",
+    "consented AI cannot delay the standalone signed rules preview");
+  assert.equal(ruleWhileAIEnabled.changes.projectId,"project:c3b:home");
+  await read(PREVIEW(new Request(base+"?taskId=captured&mode=unsafe",
+    {headers:hdr()})),400);
   const ai=await read(preview());
   assert.equal(ai.source,"ai");
   assert.equal(ai.changes.projectId,"project:c3b:home");

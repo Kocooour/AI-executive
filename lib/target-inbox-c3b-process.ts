@@ -106,8 +106,9 @@ function parseConsent(value:unknown,read:boolean):C3bConsentRead|C3bConsentWrite
 }
 const call=async(config:StagingPersonalReadConfig,body:object)=>
   runStagingWriteChild(config,"target-staging-inbox-c3b-child.mjs",JSON.stringify(body),512*1024);
-export const previewC3bInChild=async(config:StagingPersonalReadConfig,taskId:string)=>
-  parsePreview(await call(config,{operation:"preview",taskId}));
+export const previewC3bInChild=async(config:StagingPersonalReadConfig,
+  taskId:string,mode:"rules"|"best"="best")=>
+  parsePreview(await call(config,{operation:"preview",taskId,mode}));
 export const acceptC3bInChild=async(config:StagingPersonalReadConfig,command:InboxAcceptCommand)=>
   parseWrite(await call(config,{operation:"accept",command}));
 export const undoC3bInChild=async(config:StagingPersonalReadConfig,command:InboxAcceptUndoCommand)=>

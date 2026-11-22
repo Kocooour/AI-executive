@@ -59,7 +59,9 @@ try{
         privateSnapshot:snapshot,consent:authority.readInboxAIConsent(actor)}:null;
     };
     if(request.operation==="preview"){
-      if(typeof request.taskId!=="string"||!TASK.test(request.taskId))fail();
+      if(typeof request.taskId!=="string"||!TASK.test(request.taskId)||
+         (request.mode!==undefined&&request.mode!=="rules"&&request.mode!=="best"))
+        fail();
       const current=await fresh();
       if(!current)fail();
       const snapshot=current.privateSnapshot;
@@ -70,7 +72,7 @@ try{
       try{
         // AI is OFF without the independent external fence, valid consent or
         // configured OpenAI provider. Rules remain fully local and available.
-        if(fence&&current.consent){
+        if(request.mode!=="rules"&&fence&&current.consent){
           const synthetic=process.env.AI_EXECUTIVE_E2E==="true"&&
             process.env.LUMI_TARGET_INBOX_C3B_E2E==="true"&&
             dir.startsWith("/tmp/lumi-e2e-");

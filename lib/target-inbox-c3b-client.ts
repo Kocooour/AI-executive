@@ -52,12 +52,14 @@ export function parseC3bProposal(raw:unknown):C3bProposal|null{
      !validChanges(raw.changes))return null;
   return raw as unknown as C3bProposal;
 }
-export async function fetchC3bProposal(taskId:string,signal?:AbortSignal):
+export async function fetchC3bProposal(taskId:string,signal?:AbortSignal,
+  mode:"rules"|"best"="best"):
   Promise<C3bResponse<C3bProposal>>{
   if(!TASK.test(taskId))return {ok:false,reason:"unavailable"};
   try{
     const response=await targetAppFetch(
-      "/api/target-staging/inbox/c3b?taskId="+encodeURIComponent(taskId),{
+      "/api/target-staging/inbox/c3b?taskId="+encodeURIComponent(taskId)+
+        (mode==="rules"?"&mode=rules":""),{
         credentials:"same-origin",cache:"no-store",signal,
       });
     if(!response.ok)return {ok:false,reason:status(response.status)};

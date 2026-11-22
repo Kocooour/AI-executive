@@ -41,14 +41,14 @@ const previews=new Map<string,{expiry:number;result:C3bPreview}>();
 const CACHE_TTL_MS=15_000,MAX_CACHE=48;
 function previewCacheKey(request:Request,
   identity:{kind:"owner"}|{kind:"session";tokenHash:string},
-  actor:string,taskId:string,generation:string):string|null{
+  actor:string,taskId:string,generation:string,mode:"rules"|"best"):string|null{
   const key=inboxC3bActionKey();
   if(!key)return null;
   const session=identity.kind==="owner"?
     request.headers.get("cookie")??"":identity.tokenHash;
   return createHmac("sha256",key).update(JSON.stringify([
     "lumi:c3b:preview-cache:v1",identity.kind,session,
-    actor,taskId,generation,
+    actor,taskId,generation,mode,
   ])).digest("hex");
 }
 function rememberPreview(key:string|null,result:C3bPreview):void{
@@ -94,18 +94,22 @@ export async function getC3bPreview(request:Request):Promise<Response>{
   if(admitted)return admitted;
   try{
     const params=new URL(request.url).searchParams;
-    if([...params.keys()].some(k=>k!=="taskId")||
-       params.getAll("taskId").length!==1)return answer(400,"Invalid request");
+    if([...params.keys()].some(k=>k!=="taskId"&&k!=="mode")||
+       params.getAll("taskId").length!==1||
+       params.getAll("mode").length>1)return answer(400,"Invalid request");
+    const mode=params.get("mode");
+    if(mode!==null&&mode!=="rules")return answer(400,"Invalid request");
     const taskId=params.get("taskId");
     if(!taskId||!id.test(taskId))return answer(400,"Invalid request");
     const limited=issue(request,"preview");
     if(limited)return limited;
     const cacheKey=previewCacheKey(request,identity,base.ownerUserId,
-      taskId,base.expectedRestoreGeneration);
+      taskId,base.expectedRestoreGeneration,mode==="rules"?"rules":"best");
     const cached=cacheKey?previews.get(cacheKey):undefined;
     if(cached&&cached.expiry<=Date.now()&&cacheKey)previews.delete(cacheKey);
     const result=cached&&cached.expiry>Date.now()?cached.result
-      :await previewC3bInChild(childConfig(request,identity,base),taskId);
+      :await previewC3bInChild(childConfig(request,identity,base),taskId,
+        mode==="rules"?"rules":"best");
     const released=result
       ?verifyStagingReadBeforeRelease(request,identity,base,base.ownerUserId,
         result.linearization,undefined,undefined,undefined,undefined,

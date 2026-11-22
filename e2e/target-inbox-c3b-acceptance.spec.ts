@@ -240,6 +240,42 @@ for(const width of [390,1280]){
   });
 }
 
+
+test("C-3b: signed rules appear before a delayed optional AI response",async({page})=>{
+  test.setTimeout(80_000);
+  if(!store)throw Error("C-3b test requires isolated target SQLite");
+  const width=Number(process.env.LUMI_TARGET_C3B_VIEWPORT||390);
+  await page.setViewportSize({width,height:844});
+  const seeded=store.seed.c3bProjects[String(width)];
+  let releaseAI:()=>void=()=>{};
+  const held=new Promise<void>(resolve=>{releaseAI=resolve;});
+  let aiStarted=false,aiCompleted=false;
+  await page.route("**/api/target-staging/inbox/c3b?*",async route=>{
+    const requestUrl=new URL(route.request().url());
+    if(requestUrl.searchParams.get("taskId")!==seeded.taskId||
+       requestUrl.searchParams.get("mode")==="rules"){
+      await route.continue();return;
+    }
+    aiStarted=true;
+    await held;
+    await route.continue();
+    aiCompleted=true;
+  });
+  try{
+    await openInbox(page);
+    const suggestion=await locateRow(page,seeded.taskId);
+    await expect(suggestion.getByRole("button",{name:"Přijmout"}))
+      .toBeVisible({timeout:25000});
+    const visibleAction=await suggestion.locator(".targetInboxSuggestionHeading span")
+      .innerText();
+    expect(visibleAction).toContain(seeded.projectTitle);
+    expect(visibleAction).toMatch(/\\d{4}-\\d{2}-\\d{2}/);
+    await expect.poll(()=>aiStarted,{timeout:10000}).toBe(true);
+    expect(aiCompleted).toBe(false,
+      "a pending AI request must not prevent a visible rule Accept");
+  }finally{releaseAI();}
+});
+
 test("C-3b 390px: lost response -> reload -> query-only cancellation terminates UUID",async({page})=>{
   test.setTimeout(120_000);
   if(process.env.LUMI_TARGET_C3B_VIEWPORT==="1280")test.skip();

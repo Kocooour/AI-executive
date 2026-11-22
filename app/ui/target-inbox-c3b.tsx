@@ -28,6 +28,7 @@ export default function TargetInboxC3b({item,restoreGeneration,
   const [visible,setVisible]=useState(false);
   const [fetchKey,setFetchKey]=useState(0);
   const [suggestion,setSuggestion]=useState<C3bProposal|null>(null);
+  const [alternative,setAlternative]=useState<C3bProposal|null>(null);
   const [status,setStatus]=useState<"idle"|"loading"|"ready"|"off"|"failed"|"sending">("idle");
   const [expanded,setExpanded]=useState(false);
   const speak=(cs:string,en:string)=>language==="cs"?cs:en;
@@ -51,7 +52,7 @@ export default function TargetInboxC3b({item,restoreGeneration,
       // a late AI response in the same event turn must never resurrect a
       // proposal invalidated by the explicit consent/ACL boundary.
       pendingPreview.current?.abort();
-      setSuggestion(null);setStatus("idle");setFetchKey(n=>n+1);
+      setSuggestion(null);setAlternative(null);setStatus("idle");setFetchKey(n=>n+1);
     };
     window.addEventListener(C3B_CONSENT_CHANGED,changed);
     window.addEventListener("focus",changed);
@@ -70,6 +71,7 @@ export default function TargetInboxC3b({item,restoreGeneration,
   },[]);
   const reload=useCallback(()=>{
     setSuggestion(null);
+    setAlternative(null);
     setStatus("idle");
     setFetchKey(n=>n+1);
   },[]);
@@ -79,20 +81,37 @@ export default function TargetInboxC3b({item,restoreGeneration,
     const abort=new AbortController();
     pendingPreview.current=abort;
     setStatus("loading");
-    void fetchC3bProposal(item.id,abort.signal).then(result=>{
+    setAlternative(null);
+    void (async()=>{
+      // Release the local, signed rules proposal before any remote AI work.
+      // A delayed provider must not block the user's Accept/manual controls.
+      const rules=await fetchC3bProposal(item.id,abort.signal,"rules");
       if(abort.signal.aborted||!runtime.known()||
          runtime.generation()!==generation)return;
-      if(result.ok===true){
-        if(result.value.restoreGeneration!==restoreGeneration){
-          setSuggestion(null);setStatus("failed");return;
-        }
-        setSuggestion(result.value);setStatus("ready");
-      }else{
+      if(rules.ok===false){
         setSuggestion(null);
-        if(result.reason==="signed-out"){revoked.current();setStatus("failed");}
-        else setStatus(result.reason==="disabled"?"off":"failed");
+        if(rules.reason==="signed-out"){revoked.current();setStatus("failed");}
+        else setStatus(rules.reason==="disabled"?"off":"failed");
+        return;
       }
-    });
+      if(rules.value.restoreGeneration!==restoreGeneration||
+         rules.value.source!=="rule"){
+        setSuggestion(null);setStatus("failed");return;
+      }
+      setSuggestion(rules.value);setStatus("ready");
+      // Remote refinement is an OPTIONAL second visible version. It never
+      // silently replaces the displayed action/token while Accept is possible.
+      const ai=await fetchC3bProposal(item.id,abort.signal);
+      if(abort.signal.aborted||!runtime.known()||
+         runtime.generation()!==generation)return;
+      if(ai.ok===true&&ai.value.source==="ai"&&
+         ai.value.restoreGeneration===restoreGeneration)
+        setAlternative(ai.value);
+      else if(ai.ok===false&&ai.reason==="signed-out"){
+        setSuggestion(null);setAlternative(null);
+        revoked.current();setStatus("failed");
+      }
+    })();
     return ()=>{
       abort.abort();
       if(pendingPreview.current===abort)pendingPreview.current=null;
@@ -111,6 +130,7 @@ export default function TargetInboxC3b({item,restoreGeneration,
     // The original UUID must be saved without private text BEFORE dispatch.
     // Refuse the write if the tab recovery witness cannot be persisted.
     if(!onOutcome({command,status:"uncertain",next:null}))return;
+    setAlternative(null);
     setStatus("sending");
     const sent=await acceptC3b(command);
     if(!runtime.known()||runtime.generation()!==generation)return;
@@ -158,6 +178,14 @@ export default function TargetInboxC3b({item,restoreGeneration,
       </div>
       {expanded&&<p className="targetInboxSuggestionWhy">
         {suggestion.why}</p>}
+      {alternative&&<button type="button" disabled={disabled}
+        onClick={()=>{
+          // Explicit selection changes both the visible action and its token.
+          // The prior rules token remains untouched until this user click.
+          setSuggestion(alternative);setAlternative(null);setExpanded(false);
+        }}>
+        {speak("Zobrazit alternativní návrh AI","Show alternative AI suggestion")}
+      </button>}
     </>}
     {status==="loading"&&<small role="status">
       {speak("Připravuji návrh…","Preparing suggestion…")}</small>}
