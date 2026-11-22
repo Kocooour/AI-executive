@@ -121,10 +121,10 @@ function immediate<T>(db:DatabaseSync,body:()=>T):T|null{
 }
 type GrantRow={
   actor:string;epoch:number;active:number;restore_generation:string;
-  scope_version:string;
+  scope_version:string;owner_decision:string;
 };
 const grantRow=(db:DatabaseSync,actor:string)=>
-  db.prepare("SELECT actor,epoch,active,restore_generation,scope_version FROM inbox_ai_fence_grants WHERE actor=?")
+  db.prepare("SELECT actor,epoch,active,restore_generation,scope_version,owner_decision FROM inbox_ai_fence_grants WHERE actor=?")
     .get(actor) as GrantRow|undefined;
 
 /**
@@ -142,13 +142,16 @@ export function recordExplicitInboxAIGrant(
     const existing=grantRow(db,actorUserId);
     if(existing?.active===1){
       if(existing.restore_generation!==restoreGeneration.toLowerCase()||
-         existing.scope_version!==dataScopeVersion)return null;
+         existing.scope_version!==dataScopeVersion||
+         existing.owner_decision!==decisionId)return null;
       return {actorUserId,epoch:existing.epoch,active:true,
         restoreGeneration:existing.restore_generation,
         dataScopeVersion:existing.scope_version};
     }
-    // A revoked principal must ONLY be re-granted after a NEW explicit
-    // owner decision. The caller owns that proof; never guess from a backup.
+    // A revoked principal must ONLY be re-granted after a DISTINCT new
+    // explicit owner decision. Replayed decision IDs from restored target
+    // backups cannot re-enable an external, already-revoked grant.
+    if(existing?.owner_decision===decisionId)return null;
     const epoch=existing?existing.epoch+1:1;
     if(!Number.isSafeInteger(epoch))return null;
     db.prepare(`INSERT INTO inbox_ai_fence_grants
