@@ -190,8 +190,11 @@ test("C-3b HTTP: concurrent optional previews preserve rules worker capacity",as
   // Best mode remains a bounded optional lane even if no OpenAI grant exists.
   // The second request must not acquire another worker while the first is
   // running; a rules preview still has a separate subprocess slot.
+  db.prepare("INSERT INTO tasks(id,area_id,title) VALUES (?,?,?)")
+    .run("ai-admission-test",fixture.unassignedAreaId,"Připravit Rekonstrukce dnes");
   const headers={cookie:fixedOwnerSession,"x-forwarded-for":"10.91.17.248"};
-  const optional=base+"?taskId=captured";
+  // A fresh task ID bypasses the 15-second in-memory preview cache.
+  const optional=base+"?taskId=ai-admission-test";
   const first=PREVIEW(new Request(optional,{headers}));
   const second=await PREVIEW(new Request(optional,{headers}));
   assert.equal(second.status,429,
