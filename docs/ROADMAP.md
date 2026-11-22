@@ -431,9 +431,9 @@ R2d.4 Search/AI a R2d.5 attention/push následují až po dokončení přísluš
 
 ### Milník C — krok C-3b (#484), návrhy Lumi a Přijmout/Undo
 
-**Stav 2026-11-22:** jediný [draft PR #492](https://github.com/Kocooour/AI-executive/pull/492) integroval aktuální `main` po C-3a (včetně aktivačního #489 a fronty #491). Implementována a mockově testována izolovaná pravidla, OpenAI-only strict výstup, soukromé SQL čtení kandidátů, krátkodobý šifrovaný token a externí persistentní SQLite revokační fence/budget jako **neaktivní primitivy**.
+**Stav 2026-11-22:** jediný [draft PR #492](https://github.com/Kocooour/AI-executive/pull/492) integroval aktuální `main` po C-3a (včetně #489 a #491). Pravidla, OpenAI-only strict výstup, soukromý SQLite snapshot kandidátů, AES-GCM token, externí trvalá revokační bariéra/budget a cílový ledger souhlasu jsou implementovány jako **neaktivní primitivy**. Přidáno interní pinned SQLite **pravidlové** Accept + osobní Today + projekt/Oblast + triage + receipt a atomické full Undo s CAS a read-only reconciliation. Testy pro kanonický v27 store jsou ve větvi; jejich poslední výsledek vždy ověřit na přesném SHA.
 
-**Povinná nedokončená akceptace:** produkční grant v cílovém úložišti a kontrola scope, sdílený dispatch/revoke tok do OpenAI se safe abort, revalidace živého ACL/session/restore po odpovědi, jednotlivý pinned SQLite Accept+triage+receipt+Undo s CAS, HTTP/UX pod 390/1280 px, replay/tamper/cross-actor/bad provider matice a plný Quick Capture → návrh → Přijmout → Undo → reload/logout test na skutečné SQLite. Před finálním vydáním společný přesný SHA a schválené E2E/BFCache/Safari podle #471. **Neslučovat, nenastavovat produkční flagy ani nenasazovat částečný slice.**
+**Povinná nedokončená akceptace:** skutečná produkční inicializace souhlasu + externí revoke koordinace, OpenAI dispatch s abort/late-result ACL/session/restore revalidací a omezenou cache, zapojení AI návrhů do writeru s bezpečnou revokační bariérou, C-3b HTTP+UI/Nastavení na 390/1280 px, úplná ACL/timeout/uncertain matice a plný Quick Capture → návrh → Přijmout → Undo → reload/logout browser test na skutečné SQLite. Před finálním vydáním společný přesný SHA a schválené E2E/BFCache/Safari podle #471. **Neslučovat, nenastavovat produkční flagy ani nenasazovat částečný slice.**
 
 ### Milník C — krok C-3a (#483), target Inbox / triage / LegacyInbox
 
