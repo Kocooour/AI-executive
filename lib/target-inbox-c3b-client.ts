@@ -29,7 +29,7 @@ const object=(x:unknown):x is Record<string,unknown>=>
 const validChanges=(x:unknown):x is C3bChanges=>{
   if(!object(x)||Object.keys(x).sort().join(",")!==
     "effectiveAreaId,projectId,taskAreaId,whenOn")return false;
-  const id=v=>typeof v==="string"&&v.length<121&&
+  const id=(v:unknown)=>typeof v==="string"&&v.length<121&&
     /^[A-Za-z0-9_.:@-]+$/.test(v);
   return typeof x.whenOn==="string"&&
     (x.whenOn==="unchanged"||/^\d{4}-\d{2}-\d{2}$/.test(x.whenOn))&&
