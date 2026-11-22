@@ -24,6 +24,22 @@ const snapshot = (overrides = {}) => ({
 const noChanges = {whenOn:"unchanged",projectId:"unchanged",
   taskAreaId:"unchanged",effectiveAreaId:"unchanged"};
 
+test("C-3b local Today is actor-private and composes with exact project match",async()=>{
+  const {suggestInboxWithLocalToday}=await import("../lib/target-inbox-suggestions.ts");
+  const base=snapshot();
+  const combined={...base,taskTitle:"Dnes připravit rekonstrukce"};
+  const suggestion=suggestInboxWithLocalToday(combined,"2026-11-22");
+  assert.equal(suggestion.changes.whenOn,"2026-11-22");
+  assert.equal(suggestion.changes.projectId,"project-renovation");
+  assert.equal(suggestion.changes.taskAreaId,null);
+  assert.equal(suggestion.source,"rule");
+  assert.equal(suggestInboxWithLocalToday(
+    {...combined,taskTitle:"Dneska připravit rekonstrukce"},"2026-11-22")
+    .changes.whenOn,"unchanged");
+  assert.equal(suggestInboxWithLocalToday(combined,"2026-02-31")
+    .changes.whenOn,"unchanged");
+});
+
 test("C-3b rules: stable NFC, case-insensitive whole-word matching without stripping accents",()=>{
   assert.equal(foldInboxMatchText("KUChYŇ"),"kuchyň");
   const s=snapshot({taskTitle:"připravit KUCHYŇ;"});
