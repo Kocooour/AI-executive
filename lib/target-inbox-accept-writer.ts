@@ -35,6 +35,7 @@ const HEX=/^[a-f0-9]{64}$/;
 const ACCEPT="r3:c3b:accept:v1:";
 const UNDO="r3:c3b:undo:v1:";
 const MAX_RECEIPTS=4096;
+const MAX_RECEIPT_BYTES=8192;
 
 export type InboxAcceptCommand={
   commandId:string;taskId:string;restoreGeneration:string;
@@ -128,14 +129,17 @@ const currentPrivateEpoch=(db:DatabaseSync,actor:string):number|null=>{
   return r&&validEpoch(r.revision)?r.revision:null;
 };
 const storeReceipt=(db:DatabaseSync,key:string,receipt:object):void=>{
+  const encoded=JSON.stringify(receipt);
+  if(Buffer.byteLength(encoded,"utf8")>MAX_RECEIPT_BYTES)
+    throw Error("compound receipt capacity");
   db.prepare("INSERT INTO metadata(key,value) VALUES(?,?)")
-    .run(key,JSON.stringify(receipt));
+    .run(key,encoded);
 };
 const readReceipt=(db:DatabaseSync,key:string):Receipt|null=>{
   try{
     const row=db.prepare("SELECT value FROM metadata WHERE key=?")
       .get(key) as {value:string}|undefined;
-    if(!row||typeof row.value!=="string"||Buffer.byteLength(row.value)>2048)return null;
+    if(!row||typeof row.value!=="string"||Buffer.byteLength(row.value,"utf8")>MAX_RECEIPT_BYTES)return null;
     const v:unknown=JSON.parse(row.value);
     if(!v||typeof v!=="object"||Array.isArray(v))return null;
     const a=v as Receipt;
