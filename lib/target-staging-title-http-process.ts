@@ -147,7 +147,12 @@ async function run(config: StagingPersonalReadConfig, scriptName: string,
             // Its own actor-private two-store consent gate still protects fetch.
             ...(scriptName==="target-staging-inbox-c3b-child.mjs"
               ? {OPENAI_API_KEY:process.env.OPENAI_API_KEY||"",
-                 OPENAI_MODEL:process.env.OPENAI_MODEL||""}:{}),
+                 OPENAI_MODEL:process.env.OPENAI_MODEL||"",
+                 // Only an explicitly isolated browser-test server opts into
+                 // a local synthetic consent fence and mock classifier.
+                 ...(process.env.AI_EXECUTIVE_E2E==="true"&&
+                     process.env.LUMI_TARGET_INBOX_C3B_E2E==="true"
+                   ?{AI_EXECUTIVE_E2E:"true",LUMI_TARGET_INBOX_C3B_E2E:"true"}:{})}:{}),
           },
         });
       } catch { resolve(null); return; }
