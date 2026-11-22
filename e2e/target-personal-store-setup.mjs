@@ -51,7 +51,7 @@ if(process.env.LUMI_TARGET_INBOX_C3B_E2E==="true"){
 const seed = { areaId: "area:e2e:rodina", areaTitle: "Rodina",
   createAreaId: "area:e2e:create:private", createAreaTitle: "Tvoření",
   createLargeProjectId: "project:e2e:create:paginated",
-  projects: {}, searchProjects: {}, revokeProjects: {} };
+  projects: {}, searchProjects: {}, revokeProjects: {}, c3bProjects:{} };
 for (const width of ["390", "1280"]) {
   seed.projects[width] = {
     projectId: `project:e2e:${width}`, projectTitle: `Seed Projekt ${width}`,
@@ -61,6 +61,13 @@ for (const width of ["390", "1280"]) {
     projectId: `project:e2e:search:${width}`, projectTitle: `Seed Projekt Search ${width}`,
     taskId: `task:e2e:search:${width}`, taskTitle: `Seed úkol Search ${width}`,
   };
+  if(process.env.LUMI_TARGET_INBOX_C3B_E2E==="true")
+    seed.c3bProjects[width]={
+      projectId:seed.projects[width].projectId,
+      projectTitle:seed.projects[width].projectTitle,
+      taskId:"0-c3b:"+width,
+      taskTitle:"Dnes připravit "+seed.projects[width].projectTitle,
+    };
   seed.revokeProjects[width] = {
     adminId: `owner:e2e:revoke:${width}`,
     workspaceId: `workspace:e2e:revoke:${width}`,
@@ -82,6 +89,11 @@ try {
   // A newly-created UUID must still be openable without fetching all pages.
   db.prepare("INSERT INTO projects(id,area_id,title) VALUES (?,?,?)")
     .run(seed.createLargeProjectId,seed.createAreaId,"A/3 paginated project");
+  if(process.env.LUMI_TARGET_INBOX_C3B_E2E==="true"){
+    const create=db.prepare("INSERT INTO tasks(id,area_id,title) VALUES (?,?,?)");
+    for(const entry of Object.values(seed.c3bProjects))
+      create.run(entry.taskId,seed.createAreaId,entry.taskTitle);
+  }
   const insertExistingTask=db.prepare("INSERT INTO tasks(id,project_id,title) VALUES (?,?,?)");
   for(let i=0;i<35;i++)
     insertExistingTask.run("0-create:"+String(i).padStart(3,"0"),
