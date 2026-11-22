@@ -19,7 +19,6 @@ import {randomBytes} from "node:crypto";
 import {lstatSync,realpathSync,existsSync} from "node:fs";
 import {DatabaseSync} from "node:sqlite";
 import path from "node:path";
-import type {DatabaseSync} from "node:sqlite";
 
 /** Inside the already-approved ai-executive-target StateDirectory and OUTSIDE
  * personal-v1 (the domain restored from target/ backups). Never configurable
