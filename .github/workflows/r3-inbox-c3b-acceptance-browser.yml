@@ -20,8 +20,12 @@ permissions:
   contents: read
 jobs:
   chromium:
-    name: C-3b 390/1280 real SQLite + mocked OpenAI
+    name: C-3b ${{ matrix.viewport }}px real SQLite + mocked OpenAI
     runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        viewport: [390, 1280]
     timeout-minutes: 30
     env:
       CI: "true"
@@ -31,6 +35,8 @@ jobs:
       E2E_PORT: "3147"
       LUMI_TARGET_INBOX_E2E: "true"
       LUMI_TARGET_INBOX_C3B_E2E: "true"
+      # Isolate consent, actor session and provider budgets across viewports.
+      LUMI_TARGET_C3B_VIEWPORT: "${{ matrix.viewport }}"
     steps:
       - name: Checkout exact PR head
         uses: actions/checkout@v5
@@ -55,7 +61,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v6
         with:
-          name: lumi-c3b-inbox-acceptance
+          name: lumi-c3b-inbox-acceptance-${{ matrix.viewport }}
           path: |
             test-results/
             playwright-report/

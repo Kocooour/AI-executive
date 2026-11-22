@@ -51,6 +51,8 @@ for(const width of [390,1280]){
   test("C-3b real SQLite: explicit AI consent, Today+project+triage Accept/Undo, reload at "+
     width+"px",async({page})=>{
     test.setTimeout(220_000);
+    if(process.env.LUMI_TARGET_C3B_VIEWPORT&&
+       process.env.LUMI_TARGET_C3B_VIEWPORT!==String(width))test.skip();
     if(!store)throw Error("C-3b test requires an isolated target store");
     await page.setViewportSize({width,height:844});
     const seeded=store.seed.c3bProjects[String(width)];
@@ -205,6 +207,7 @@ for(const width of [390,1280]){
 
 test("C-3b 390px: lost response -> reload -> query-only cancellation terminates UUID",async({page})=>{
   test.setTimeout(120_000);
+  if(process.env.LUMI_TARGET_C3B_VIEWPORT==="1280")test.skip();
   if(!store)throw Error("C-3b needs isolated store");
   await page.setViewportSize({width:390,height:844});
   await openInbox(page);
