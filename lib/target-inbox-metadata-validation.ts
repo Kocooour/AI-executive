@@ -69,6 +69,20 @@ export function validateC3BMetadata(
          Buffer.byteLength(row.value,"utf8")>MAX_BYTES||
          !HEX.test(row.key.slice(C3B_ACCEPT_PREFIX.length)))return invalid;
       const x:unknown=JSON.parse(row.value);
+      // Cancellation is a strict content-free tombstone under the original
+      // Accept key; no later Accept may claim that UUID or be undone.
+      if(object(x)&&x.kind==="cancelled"){
+        if(!keys(x,
+          "actor,cancelledAtMs,commandId,kind,restoreGeneration,taskId,v")||
+          x.v!==1||typeof x.actor!=="string"||!actors.has(x.actor)||
+          typeof x.taskId!=="string"||!optionalId(x.taskId)||x.taskId===null||
+          typeof x.commandId!=="string"||!UUID.test(x.commandId)||
+          typeof x.restoreGeneration!=="string"||!UUID.test(x.restoreGeneration)||
+          !epoch(x.cancelledAtMs)||(x.cancelledAtMs as number)<=0||
+          row.key!==entryKey(C3B_ACCEPT_PREFIX,x.actor,x.commandId))
+          return invalid;
+        continue;
+      }
       if(!object(x)||!keys(x,
         "actor,after,before,commandId,committedAtMs,digest,kind,restoreGeneration,taskId,v")||
         x.v!==1||x.kind!=="accept"||typeof x.actor!=="string"||

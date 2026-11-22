@@ -74,6 +74,8 @@ type TaskRow={
   project_id:string|null;area_id:string|null;
 };
 type PlanRow={when_on:string;revision:number};
+type CancelReceipt={v:1;kind:"cancelled";actor:string;taskId:string;
+  commandId:string;restoreGeneration:string;cancelledAtMs:number};
 type Receipt={
   v:1;kind:"accept";actor:string;taskId:string;digest:string;
   commandId:string;restoreGeneration:string;
@@ -152,6 +154,25 @@ const storeReceipt=(db:DatabaseSync,key:string,receipt:object):void=>{
   db.prepare("INSERT INTO metadata(key,value) VALUES(?,?)")
     .run(key,encoded);
 };
+const readCancelReceipt=(db:DatabaseSync,key:string):CancelReceipt|null=>{
+  try{
+    const row=db.prepare("SELECT value FROM metadata WHERE key=?").get(key)
+      as {value:string}|undefined;
+    if(!row||typeof row.value!=="string"||
+       Buffer.byteLength(row.value,"utf8")>MAX_RECEIPT_BYTES)return null;
+    const x:unknown=JSON.parse(row.value);
+    if(!x||typeof x!=="object"||Array.isArray(x))return null;
+    const v=x as Record<string,unknown>;
+    return Object.keys(v).sort().join(",")===
+      "actor,cancelledAtMs,commandId,kind,restoreGeneration,taskId,v"&&
+      v.v===1&&v.kind==="cancelled"&&typeof v.actor==="string"&&
+      typeof v.taskId==="string"&&TASK.test(v.taskId)&&
+      typeof v.commandId==="string"&&UUID.test(v.commandId)&&
+      typeof v.restoreGeneration==="string"&&UUID.test(v.restoreGeneration)&&
+      validEpoch(v.cancelledAtMs)&&(v.cancelledAtMs as number)>0
+      ?v as CancelReceipt:null;
+  }catch{return null;}
+};
 const readReceipt=(db:DatabaseSync,key:string):Receipt|null=>{
   try{
     const row=db.prepare("SELECT value FROM metadata WHERE key=?")
@@ -175,20 +196,20 @@ const readReceipt=(db:DatabaseSync,key:string):Receipt|null=>{
  * permanently prevent a previously successful Accept from being undone.
  */
 export function inboxCompoundLedgerHasCapacity(
-  receiptRows:number,activeAccepts:number,mode:"accept"|"undo",
+  receiptRows:number,activeAccepts:number,mode:"accept"|"undo"|"cancel",
 ):boolean{
   if(!validEpoch(receiptRows)||!validEpoch(activeAccepts)||
      activeAccepts>receiptRows||receiptRows>=MAX_RECEIPTS)return false;
-  return receiptRows+activeAccepts+(mode==="accept"?2:0)<=MAX_RECEIPTS;
+  return receiptRows+activeAccepts+(mode==="accept"?2:mode==="cancel"?1:0)<=MAX_RECEIPTS;
 }
-const checkCapacity=(db:DatabaseSync,mode:"accept"|"undo"):boolean=>{
+const checkCapacity=(db:DatabaseSync,mode:"accept"|"undo"|"cancel"):boolean=>{
   const row=db.prepare(`SELECT COUNT(*) AS n FROM metadata WHERE
     substr(key,1,?)=? OR substr(key,1,?)=?`)
     .get(ACCEPT.length,ACCEPT,UNDO.length,UNDO) as {n:number};
   // The two receipts have the same SHA256 suffix for one original Accept;
   // the Undo key substitutes the prefix, without exposing any task content.
   const active=db.prepare(`SELECT COUNT(*) AS n FROM metadata a
-    WHERE substr(a.key,1,?)=? AND NOT EXISTS(
+    WHERE substr(a.key,1,?)=? AND json_extract(a.value,'$.kind')='accept' AND NOT EXISTS(
       SELECT 1 FROM metadata u
        WHERE u.key=?||substr(a.key,?)
     )`).get(ACCEPT.length,ACCEPT,UNDO,ACCEPT.length+1) as {n:number};
@@ -472,7 +493,7 @@ function undoLocked(db:DatabaseSync,actor:string,c:InboxAcceptUndoCommand):Inbox
  * session/ACL before exposing this status through any future HTTP route.
  */
 export type InboxAcceptReceiptView={
-  status:"committed"|"undone"|"not_recorded"|"conflict";
+  status:"committed"|"undone"|"not_recorded"|"conflict"|"cancelled";
   next:{expectedTaskRevision:number;expectedTriageRevision:number;
     expectedPrivateEpoch:number;expectedPlanRevision:number|null}|null;
 };
@@ -490,8 +511,14 @@ export function readInboxAcceptReceiptInSnapshot(
     const keyId=receiptKey(ACCEPT,actor,command.commandId);
     const old=readReceipt(db,keyId);
     if(!old){
-      if(db.prepare("SELECT 1 FROM metadata WHERE key=?").get(keyId))
-        return {status:"conflict",next:null};
+      if(db.prepare("SELECT 1 FROM metadata WHERE key=?").get(keyId)){
+        const cancelled=readCancelReceipt(db,keyId);
+        return cancelled&&cancelled.actor===actor&&
+          cancelled.taskId===command.taskId&&
+          cancelled.restoreGeneration===command.restoreGeneration.toLowerCase()&&
+          cancelled.commandId===command.commandId.toLowerCase()
+          ?{status:"cancelled",next:null}:{status:"conflict",next:null};
+      }
       return {status:"not_recorded",next:null};
     }
     if(old.actor!==actor||old.taskId!==command.taskId||
@@ -518,6 +545,51 @@ export function readInboxAcceptReceiptInSnapshot(
           expectedPlanRevision:plan?.revision??null}:null;
     return {status:"committed",next};
   }catch{return null;}
+}
+
+/**
+ * Terminal actor-bound tombstone on the SAME actor/UUID key an Accept must
+ * acquire. BEGIN IMMEDIATE serializes cancellation with any in-flight Accept.
+ * No private title, token or AI content persists in the recovery marker.
+ */
+function cancelLocked(db:DatabaseSync,actor:string,
+  command:InboxAcceptReceiptQuery,
+):{view:InboxAcceptReceiptView;inserted:boolean}|null{
+  if(!validReceiptQuery(command))return null;
+  const view=readInboxAcceptReceiptInSnapshot(db,actor,command);
+  if(!view)return null;
+  if(view.status!=="not_recorded")return {view,inserted:false};
+  if(!checkCapacity(db,"cancel"))return null;
+  const cancelledAtMs=Date.now();
+  if(!validEpoch(cancelledAtMs)||cancelledAtMs<=0)return null;
+  storeReceipt(db,receiptKey(ACCEPT,actor,command.commandId),{
+    v:1,kind:"cancelled",actor,taskId:command.taskId,
+    commandId:command.commandId.toLowerCase(),
+    restoreGeneration:command.restoreGeneration.toLowerCase(),
+    cancelledAtMs,
+  } satisfies CancelReceipt);
+  return {view:{status:"cancelled",next:null},inserted:true};
+}
+
+export function cancelPreflightedInboxSuggestedAction(
+  store:TargetStagingReadStore,credential:TargetStagingReadCredential,
+  command:InboxAcceptReceiptQuery,sessionTokenHash:string,
+):InboxAcceptReceiptView|null{
+  if(!validReceiptQuery(command)||!isTargetStagingSessionTokenHash(sessionTokenHash))
+    return null;
+  return withPinnedTargetStagingWrite<InboxAcceptReceiptView|null>(store,ctx=>{
+    const actor=verifiedActor(ctx.db,credential,true);
+    if(!actor||!sessionIsLive(ctx.db,actor,sessionTokenHash)||
+       !ctx.stillPinned()||!ctx.noSidecars())return null;
+    fingerprint(ctx.databaseFd);
+    const result=cancelLocked(ctx.db,actor,command);
+    if(!result)return null;
+    if(!result.inserted)return result.view;
+    if(!sessionIsLive(ctx.db,actor,sessionTokenHash)||!ctx.stillPinned())
+      return null;
+    if(!ctx.commit({kind:"task_triage",payload:{}}))return null;
+    return result.view;
+  },()=>null,()=>null);
 }
 
 type WriteMode={mode:"accept";command:InboxAcceptCommand;key:Uint8Array;

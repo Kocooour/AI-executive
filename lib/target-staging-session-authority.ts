@@ -114,7 +114,7 @@ import {writePreflightedInboxAIConsent,readTargetInboxAIConsent,
   from "./target-inbox-ai-consent";
 import {writePreflightedInboxSuggestedAction,readInboxAcceptReceiptInSnapshot,
   type InboxAcceptCommand,type InboxAcceptReceiptQuery,type InboxAcceptUndoCommand,type InboxAcceptResult,
-  type InboxAcceptReceiptView}
+  type InboxAcceptReceiptView,cancelPreflightedInboxSuggestedAction}
   from "./target-inbox-accept-writer";
 import {readAuthorizedInboxSuggestionSnapshot,
   type AuthorizedInboxSuggestionSnapshot} from "./target-inbox-suggestion-snapshot";
@@ -1212,6 +1212,18 @@ export class TargetStagingSessionAuthority {
     const credential=this.#credential(sessionToken,true);
     if(!credential)return {ok:false,reason:"unavailable"};
     return writePreflightedInboxSuggestedAction(this.#store,credential,work);
+  }
+
+  /** Durable terminal UUID fence on a lost/uncertain C-3b Accept. */
+  cancelInboxSuggestedAction(
+    sessionToken:string,command:InboxAcceptReceiptQuery,
+    sessionTokenHash:string,
+  ):InboxAcceptReceiptView|null{
+    const credential=this.#credential(sessionToken,true);
+    return credential
+      ?cancelPreflightedInboxSuggestedAction(
+        this.#store,credential,command,sessionTokenHash)
+      :null;
   }
 
   /** Read-only recovery for an uncertain C-3b Accept, never a new write. */
