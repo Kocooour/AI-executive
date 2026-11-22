@@ -148,6 +148,8 @@ async function run(config: StagingPersonalReadConfig, scriptName: string,
             ...(scriptName==="target-staging-inbox-c3b-child.mjs"
               ? {OPENAI_API_KEY:process.env.OPENAI_API_KEY||"",
                  OPENAI_MODEL:process.env.OPENAI_MODEL||"",
+                 AI_EXECUTIVE_TARGET_STAGING_C3B_OWNER_COOKIE_BINDING:
+                   config.c3bOwnerCookieBinding||"",
                  // Only an explicitly isolated browser-test server opts into
                  // a local synthetic consent fence and mock classifier.
                  ...(process.env.AI_EXECUTIVE_E2E==="true"&&
