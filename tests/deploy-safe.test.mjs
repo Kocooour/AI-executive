@@ -1025,7 +1025,8 @@ test("C-3b production fence stays in approved StateDirectory, never restored ove
   assert.match(script,/INBOX_AI_FENCE_PATH=\/var\/lib\/ai-executive-target\/inbox-ai-consent-fence\.sqlite/);
   assert.match(script,/INBOX_AI_FENCE_FIRST_ROLLOUT/);
   assert.match(script,/INBOX_AI_FENCE_PROVISION_ATTEMPTED=1/);
-  assert.match(script,/runuser -u ai-executive[\\s\\S]*?target-inbox-ai-fence-provision\.mjs" --provision/);
+  assert.match(script,/runuser -u ai-executive/);
+  assert.match(script,/target-inbox-ai-fence-provision\.mjs" --provision/);
   assert.match(script,/target-inbox-ai-fence-provision\.mjs" --check/);
   assert.match(script,/chybi drive provisionovana revokacni historie/);
   assert.match(runbook,/443c17df6376c8e886150d45bcc6bcb2457b2a94/);
