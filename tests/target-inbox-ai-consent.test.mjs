@@ -53,7 +53,7 @@ test("C-3b v27 consent: default off, explicit owner first release, idempotent gr
   assert.equal(x.authority.readInboxAIConsent("alice"),null);
   assert.equal(x.authority.changeInboxAIConsent(x.token,"bob",first).ok,false);
   assert.equal(x.authority.changeInboxAIConsent(x.token,"alice",
-    cmd(x,"grant",1,"unapproved")),null?.ok??false);
+    cmd(x,"grant",1,"unapproved")).ok,false);
   const g=x.authority.changeInboxAIConsent(x.token,"alice",first);
   assert.equal(g.ok,true);
   assert.equal(g.record.enabled,true);
