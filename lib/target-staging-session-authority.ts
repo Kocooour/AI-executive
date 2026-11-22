@@ -108,6 +108,9 @@ import type {TargetNoteCreateRecovery} from "./target-note-create-status";
 import type { TargetNoteDeleteCommandStatus } from "./target-note-delete-command-status";
 import { validTargetTaskTitleEditPreviewRequest,targetTaskWriteRevision } from "./target-task-write-preflight";
 import {issueTargetInboxRevision} from "./target-inbox-command-identity";
+import {writePreflightedInboxAIConsent,readTargetInboxAIConsent,
+  type InboxConsentCommand,type InboxConsentResult,type TargetInboxAIConsent}
+  from "./target-inbox-ai-consent";
 import {writePreflightedInboxSuggestedAction,readInboxAcceptReceiptInSnapshot,
   type InboxAcceptCommand,type InboxAcceptUndoCommand,type InboxAcceptResult,
   type InboxAcceptReceiptView}
@@ -1221,6 +1224,31 @@ export class TargetStagingSessionAuthority {
       return readPreflightedStoreSnapshot(this.#store,db=>{
         if(verifiedActor(db,credential)!==actorUserId)return null;
         return readInboxAcceptReceiptInSnapshot(db,actorUserId,command);
+      });
+    }catch{return null;}
+  }
+
+  /** Owner-only target-store AI consent; caller must first coordinate the
+   * external non-restore fence. Not connected to any public HTTP route. */
+  changeInboxAIConsent(
+    sessionToken:string,ownerUserId:string,command:InboxConsentCommand,
+    durableSessionTokenHash?:string,
+  ):InboxConsentResult{
+    const credential=this.#credential(sessionToken,true);
+    if(!credential)return {ok:false,reason:"unavailable"};
+    return writePreflightedInboxAIConsent(this.#store,credential,
+      ownerUserId,command,durableSessionTokenHash);
+  }
+
+  /** Actor-private consent read; caller MUST live-revalidate before release. */
+  readInboxAIConsent(actorUserId:string):TargetInboxAIConsent|null{
+    if(this.#closed)return null;
+    try{
+      const credential=this.#oneShotReadCredential(actorUserId);
+      if(!credential)return null;
+      return readPreflightedStoreSnapshot(this.#store,db=>{
+        if(verifiedActor(db,credential)!==actorUserId)return null;
+        return readTargetInboxAIConsent(db,actorUserId);
       });
     }catch{return null;}
   }
