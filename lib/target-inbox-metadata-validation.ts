@@ -118,7 +118,7 @@ export function validateC3BMetadata(
       const orig=accepted.get(origKey);
       if(!orig||orig.taskId!==x.taskId||
          orig.restoreGeneration!==x.restoreGeneration||
-         (orig.committedAtMs as number)>=(x.committedAtMs as number)||
+         (orig.committedAtMs as number)>(x.committedAtMs as number)||
          usedOriginals.has(origKey))return invalid;
       usedOriginals.add(origKey);
     }
