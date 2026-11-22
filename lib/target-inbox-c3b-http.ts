@@ -71,7 +71,8 @@ const issue=(request:Request,operation:string)=>{
   // much stricter 3/actor-minute and 12/global-minute provider limits.
   const limited=enforceRateLimit(request,"target-staging-c3b-"+operation,
     operation==="preview-rules"?180:
-    operation==="preview-ai"?30:operation==="consent"?10:30,600000);
+    operation==="preview-ai"?30:
+    operation==="consent-read"?60:operation==="consent-write"?10:30,600000);
   return limited?Response.json({error:"Too many requests"},{status:429,
     headers:{...headers,"retry-after":String(limited.retryAfter)}}):null;
 };
@@ -229,7 +230,9 @@ export async function postC3b(
     if(new URL(request.url).search!=="")return answer(400,"Invalid request");
     const protocol=targetProtocolRefusal(request);
     if(protocol)return protocol;
-    const limited=issue(request,operation);
+    // A burst of read-only status checks must never consume owner consent
+    // write admission (grant/revoke), especially during a revocation race.
+    const limited=issue(request,operation==="consent"?"consent-write":operation);
     if(limited)return limited;
     const body=await readJsonBody<unknown>(request,16*1024,{strictUtf8:true});
     const legacy=legacySnapshotRefusal(body);
@@ -305,7 +308,7 @@ export async function getC3bConsent(request:Request):Promise<Response>{
   if(admitted)return admitted;
   try{
     if(new URL(request.url).search!=="")return answer(400,"Invalid request");
-    const limited=issue(request,"consent");
+    const limited=issue(request,"consent-read");
     if(limited)return limited;
     const result=await readC3bConsentInChild(
       childConfig(request,identity,base),true);
