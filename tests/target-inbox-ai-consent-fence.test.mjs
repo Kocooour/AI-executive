@@ -113,6 +113,8 @@ test("C-3b fence: revoke is monotonic and never undone by an old restored target
       "revoke idempotent across workers");
     assert.equal(inboxAIRevokeDrained(x.db2,"owner",2),true);
     assert.equal(beginInboxAIDispatch(x.db,"owner",GEN,SCOPE,baseTime),null);
+    assert.equal(grant(x.db,"owner",GEN,"owner-approved-v1"),null,
+      "restored initial decision cannot regrant after external revocation");
     // This primitive does NOT infer new consent from the restored target DB.
     // Only an explicit privileged grant may advance the epoch to 3.
     const again=grant(x.db2,"owner",GEN,"new-explicit-owner-decision");
