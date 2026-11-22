@@ -338,6 +338,36 @@ export function inboxAIDispatchStillAllowed(
       r.scope_version===ticket.dataScopeVersion);
   }catch{return false;}
 }
+/**
+ * Final HTTP release linearization point for both fresh AND cached AI previews.
+ * The caller must have already revalidated the actor's target snapshot,
+ * session, and target-store consent. No await is permitted inside emit().
+ *
+ * Revoke uses BEGIN IMMEDIATE on this exact independent DB. Therefore a
+ * successfully confirmed revoke either precedes this grant check (and denies
+ * the AI body), or follows creation of the already-released body. A late
+ * provider result cannot bypass the durable independent consent epoch.
+ */
+export function materializeInboxAIUnderFence<T>(
+  db:DatabaseSync,actorUserId:string,restoreGeneration:string,
+  dataScopeVersion:string,consentEpoch:number,emit:()=>T,
+):T|null{
+  if(!ACTOR.test(actorUserId)||!UUID.test(restoreGeneration)||
+     !validScope(dataScopeVersion)||!validEpoch(consentEpoch)||
+     consentEpoch===0||typeof emit!=="function"||!healthy(db))return null;
+  try{
+    db.exec("BEGIN IMMEDIATE");
+    const grant=readInboxAIFenceGrant(db,actorUserId);
+    if(!grant?.active||grant.epoch!==consentEpoch||
+       grant.restoreGeneration!==restoreGeneration.toLowerCase()||
+       grant.dataScopeVersion!==dataScopeVersion)return null;
+    return emit();
+  }catch{return null;
+  }finally{
+    try{if(db.isTransaction)db.exec("ROLLBACK");}catch{}
+  }
+}
+
 /** Remove pending and report whether the late result is still allowed. */
 export function endInboxAIDispatch(
   db:DatabaseSync,ticket:InboxAIFenceTicket,
