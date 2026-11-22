@@ -60,12 +60,13 @@ export function parseInboxClientPage(raw:unknown,limit:number):InboxClientPage|n
   for(const x of v.items){
     if(!x||typeof x!=="object"||Array.isArray(x))return null;
     const t=x as Record<string,unknown>;
-    if(Object.keys(t).sort().join(",")!=="canProcess,effectiveAreaId,expectedRevision,id,status,taskRevision,title,triageRevision"||
+    if(Object.keys(t).sort().join(",")!=="canProcess,canSuggest,effectiveAreaId,expectedRevision,id,status,taskRevision,title,triageRevision"||
         !id(t.id)||!id(t.effectiveAreaId)||typeof t.title!=="string"||
         !t.title.trim()||new TextEncoder().encode(t.title).length>4096||
         !safe(t.taskRevision)||!safe(t.triageRevision)||
         (t.status!=="open"&&t.status!=="completed")||
-        typeof t.canProcess!=="boolean"||
+        typeof t.canProcess!=="boolean"||typeof t.canSuggest!=="boolean"||
+        (t.canSuggest&&(!t.canProcess||t.status!=="open"))||
         (t.canProcess?typeof t.expectedRevision!=="string"||!cas.test(t.expectedRevision):
           t.expectedRevision!==null))return null;
     items.push(t as unknown as TargetInboxItem);
