@@ -20,7 +20,7 @@ export default function InboxAIConsentSettings({language="cs"}:{
     setState({kind:"loading"});
     let r=await getC3bConsent(signal);
     for(const delay of [350,700,1050]){
-      if(r.ok||r.reason!=="unavailable"||signal?.aborted)break;
+      if(r.ok===true||r.reason!=="unavailable"||signal?.aborted)break;
       await new Promise<void>(resolve=>setTimeout(resolve,delay));
       if(signal?.aborted)return;
       r=await getC3bConsent(signal);
