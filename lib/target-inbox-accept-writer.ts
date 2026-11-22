@@ -59,9 +59,9 @@ type PlanRow={when_on:string;revision:number};
 type Receipt={
   v:1;kind:"accept";actor:string;taskId:string;digest:string;
   commandId:string;restoreGeneration:string;
-  before:{projectId:string|null;areaId:string|null;whenOn:string|null;
+  before:{projectId:string|null;areaId:string|null;effectiveAreaId:string;whenOn:string|null;
     planRevision:number|null;taskRevision:number;triageRevision:number};
-  after:{projectId:string|null;areaId:string|null;whenOn:string|null;
+  after:{projectId:string|null;areaId:string|null;effectiveAreaId:string;whenOn:string|null;
     planRevision:number|null;taskRevision:number;triageRevision:number;
     triagedAtMs:number};
   committedAtMs:number;
@@ -201,6 +201,7 @@ function acceptLocked(db:DatabaseSync,actor:string,hash:string,
      (plan?.when_on??null)!==snapshot.personalWhenOn)
     return bad("stale_revision");
   const before={projectId:task.project_id,areaId:task.area_id,
+    effectiveAreaId:snapshot.snapshot.currentAreaId,
     whenOn:plan?.when_on??null,planRevision:plan?.revision??null,
     taskRevision:task.revision,triageRevision:task.triage_revision};
   const action=proof.suggestion.changes;
@@ -251,6 +252,8 @@ function acceptLocked(db:DatabaseSync,actor:string,hash:string,
     commandId:c.commandId.toLowerCase(),
     restoreGeneration:c.restoreGeneration.toLowerCase(),before,
     after:{projectId:nextProject,areaId:nextArea,
+      effectiveAreaId:action.effectiveAreaId==="unchanged"
+        ?snapshot.snapshot.currentAreaId:action.effectiveAreaId,
       whenOn:afterPlan?.when_on??null,
       planRevision:afterPlan?.revision??null,
       taskRevision:after.revision,triageRevision:after.triage_revision,
@@ -302,6 +305,7 @@ function undoLocked(db:DatabaseSync,actor:string,c:InboxAcceptUndoCommand):Inbox
     :db.prepare("SELECT area_id AS areaId FROM projects WHERE id=?")
       .get(original.before.projectId)?.areaId;
   if(typeof oldArea!=="string"||
+     oldArea!==original.before.effectiveAreaId||
      !canWriteIsolatedTargetArea(db,actor,oldArea,true))
     return bad("unavailable");
   if(original.before.projectId!==null){
@@ -314,6 +318,10 @@ function undoLocked(db:DatabaseSync,actor:string,c:InboxAcceptUndoCommand):Inbox
       .get(original.before.projectId,oldArea,actor,actor);
     if(!project||original.before.areaId!==null)return bad("unavailable");
   }
+  const liveEffectiveArea=task.project_id!==null
+    ?db.prepare("SELECT area_id AS areaId FROM projects WHERE id=?")
+      .get(task.project_id)?.areaId:task.area_id;
+  if(liveEffectiveArea!==original.after.effectiveAreaId)return bad("stale_revision");
   const relocated=task.project_id!==original.before.projectId||
     task.area_id!==original.before.areaId;
   if(relocated){
@@ -361,9 +369,10 @@ export function writePreflightedInboxSuggestedAction(
   store:TargetStagingReadStore,credential:TargetStagingReadCredential,
   work:WriteMode,
 ):InboxAcceptResult{
-  if(!work||typeof work!=="object"||(
-      work.mode==="accept"?!validateAccept(work.command):validateUndo(work.command)===false
-    )||!isTargetStagingSessionTokenHash(work.sessionTokenHash))
+  if(!work||typeof work!=="object"||
+     (work.mode==="accept"?!validateAccept(work.command):
+       work.mode==="undo"?!validateUndo(work.command):true)||
+     !isTargetStagingSessionTokenHash(work.sessionTokenHash))
     return bad("invalid_request");
   return withPinnedTargetStagingWrite<InboxAcceptResult>(store,ctx=>{
     const actor=verifiedActor(ctx.db,credential,true);
