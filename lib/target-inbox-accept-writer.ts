@@ -29,6 +29,10 @@ import {unsealInboxDisplayedAction,inboxLocalDate}
   from "./target-inbox-suggestion-commitment";
 import {readTargetAttentionProfileZone} from "./target-attention-profile-zone";
 import type {InboxSuggestedChanges} from "./target-inbox-suggestions";
+import {inboxC3bSessionBinding} from "./target-inbox-c3b-runtime";
+import {readTargetInboxAIConsent,targetInboxAIConsentMatchesFence}
+  from "./target-inbox-ai-consent";
+import {readInboxAIFenceGrant} from "./target-inbox-ai-consent-fence";
 
 const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const TASK=/^[^\u0000-\u001f\u007f]{1,512}$/u;
@@ -178,12 +182,20 @@ const checkCapacity=(db:DatabaseSync,mode:"accept"|"undo"):boolean=>{
     )`).get(ACCEPT.length,ACCEPT,UNDO,ACCEPT.length+1) as {n:number};
   return inboxCompoundLedgerHasCapacity(row.n,active.n,mode);
 };
-const sessionIsLive=(db:DatabaseSync,actor:string,hash:string|null):boolean=>
-  hash===null||lookupLiveTargetStagingSession(db,hash,Date.now())?.userId===actor;
+const sessionIsLive=(db:DatabaseSync,actor:string,hash:string|null):boolean=>{
+  if(hash===null)return false;
+  if(lookupLiveTargetStagingSession(db,hash,Date.now())?.userId===actor)return true;
+  // Only the configured owner can use the owner-cookie binder; HTTP routes
+  // authenticate and revalidate the cookie before and after the child write.
+  const owner=process.env.AI_EXECUTIVE_TARGET_STAGING_OWNER_USER_ID;
+  return actor===owner&&hash===inboxC3bSessionBinding(
+    actor,targetStoreRestoreGeneration(db)??"");
+};
 
 /** Internal core; call ONLY inside the canonical pinned BEGIN IMMEDIATE. */
 function acceptLocked(db:DatabaseSync,actor:string,hash:string,
-  c:InboxAcceptCommand,key:Uint8Array):InboxAcceptResult{
+  c:InboxAcceptCommand,key:Uint8Array,
+  fenceDb?:DatabaseSync):InboxAcceptResult{
   if(targetStoreRestoreGeneration(db)!==c.restoreGeneration.toLowerCase())
     return bad("resync_required");
   // Read right first: a fabricated command cannot probe another actor's
@@ -203,10 +215,18 @@ function acceptLocked(db:DatabaseSync,actor:string,hash:string,
     displayedWhy:c.displayedWhy,
   });
   if(!proof)return bad("stale_revision");
-  // Only the entirely local rule slice is enabled until the external
-  // consent/revoke barrier is integrated. Never accept a remotely sourced
-  // proposal by treating it as a rule.
-  if(proof.suggestion.source!=="rule"||proof.consentEpoch!==0)
+  if(proof.suggestion.source==="ai"){
+    // The caller MUST hold a RESERVED write lock on the external, non-restore
+    // fence during the entire pinned target write. Concurrent revoke must
+    // acquire this same lock before it can be confirmed.
+    if(!fenceDb?.isTransaction)return bad("unavailable");
+    const target=readTargetInboxAIConsent(db,actor);
+    const fence=readInboxAIFenceGrant(fenceDb,actor);
+    if(!targetInboxAIConsentMatchesFence(target,fence,
+          c.restoreGeneration)||target?.epoch!==proof.consentEpoch||
+       target.dataScopeVersion!==proof.dataScopeVersion)
+      return bad("stale_revision");
+  }else if(proof.suggestion.source!=="rule"||proof.consentEpoch!==0)
     return bad("unavailable");
   // The token zone is only a claim about what was displayed. Verify the
   // CURRENT actor profile within this SAME pinned write transaction, even
@@ -484,8 +504,8 @@ export function readInboxAcceptReceiptInSnapshot(
 }
 
 type WriteMode={mode:"accept";command:InboxAcceptCommand;key:Uint8Array;
-  sessionTokenHash:string}|{mode:"undo";command:InboxAcceptUndoCommand;
-  sessionTokenHash:string};
+  sessionTokenHash:string;fenceDb?:DatabaseSync}|{mode:"undo";
+  command:InboxAcceptUndoCommand;sessionTokenHash:string};
 
 /**
  * Single pinned command. The HTTP adapter MUST derive sessionTokenHash from
@@ -501,14 +521,23 @@ export function writePreflightedInboxSuggestedAction(
        work.mode==="undo"?!validateUndo(work.command):true)||
      !isTargetStagingSessionTokenHash(work.sessionTokenHash))
     return bad("invalid_request");
-  return withPinnedTargetStagingWrite<InboxAcceptResult>(store,ctx=>{
+  // The AI fence lock is acquired BEFORE the target BEGIN IMMEDIATE and
+  // retained until the target write commits or rolls back. Rule actions do
+  // not require a fence database and remain available offline.
+  const fence=work.mode==="accept"?work.fenceDb:undefined;
+  if(fence){
+    try{fence.exec("BEGIN IMMEDIATE");}
+    catch{return bad("unavailable");}
+  }
+  try{return withPinnedTargetStagingWrite<InboxAcceptResult>(store,ctx=>{
     const actor=verifiedActor(ctx.db,credential,true);
     if(!actor||!sessionIsLive(ctx.db,actor,work.sessionTokenHash))
       return bad("session_revoked");
     if(!ctx.stillPinned()||!ctx.noSidecars())return bad("unavailable");
     fingerprint(ctx.databaseFd);
     const result=work.mode==="accept"
-      ?acceptLocked(ctx.db,actor,work.sessionTokenHash,work.command,work.key)
+      ?acceptLocked(ctx.db,actor,work.sessionTokenHash,work.command,
+        work.key,work.fenceDb)
       :undoLocked(ctx.db,actor,work.command);
     if(!result.ok||result.replayed)return result;
     if(!sessionIsLive(ctx.db,actor,work.sessionTokenHash)||
@@ -516,4 +545,11 @@ export function writePreflightedInboxSuggestedAction(
     if(!ctx.commit({kind:"task_triage",payload:{}}))return bad("write_failed");
     return result;
   },()=>bad("unavailable"),()=>bad("write_failed"));
+  }finally{
+    // No contents are modified in the fence transaction; releasing the lock
+    // serializes a revoke with the target Accept's commit boundary.
+    if(fence?.isTransaction){
+      try{fence.exec("COMMIT");}catch{try{fence.exec("ROLLBACK");}catch{}}
+    }
+  }
 }
