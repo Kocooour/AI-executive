@@ -48,7 +48,8 @@ const validChanges=(value:unknown):value is InboxSuggestedChanges=>{
   if(!value||typeof value!=="object"||Array.isArray(value))return false;
   const v=value as Record<string,unknown>;
   if(Object.keys(v).sort().join(",")!=="effectiveAreaId,projectId,taskAreaId,whenOn"||
-     v.whenOn!=="unchanged"||
+     (v.whenOn!=="unchanged"&&(typeof v.whenOn!=="string"||
+       !DAY.test(v.whenOn)))||
      (v.projectId!=="unchanged"&&!validAreaId(v.projectId))||
      (v.taskAreaId!=="unchanged"&&v.taskAreaId!==null&&!validAreaId(v.taskAreaId))||
      (v.effectiveAreaId!=="unchanged"&&!validAreaId(v.effectiveAreaId)))return false;
@@ -99,7 +100,9 @@ const validPayload=(v:unknown,nowMs:number):v is InboxActionCommitmentInput=>{
      typeof x.localDate!=="string"||!DAY.test(x.localDate)||
      typeof x.timeZone!=="string"||
      inboxLocalDate(nowMs,x.timeZone)!==x.localDate||
-     !validSuggestion(x.suggestion))return false;
+     !validSuggestion(x.suggestion)||
+     (x.suggestion.changes.whenOn!=="unchanged"&&
+       x.suggestion.changes.whenOn!==x.localDate))return false;
   return x.suggestion.source==="ai"
     ? x.consentEpoch>0
     : x.consentEpoch===0;
