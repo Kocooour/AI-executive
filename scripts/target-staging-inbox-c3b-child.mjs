@@ -46,7 +46,8 @@ try{
     if(!identity)fail();
     const actor=identity.actor;
     const key=inboxC3bActionKey();
-    const binding=inboxC3bSessionBinding(actor,gen,identity.sessionTokenHash);
+    const binding=inboxC3bSessionBinding(actor,gen,identity.sessionTokenHash,
+      process.env.AI_EXECUTIVE_TARGET_STAGING_C3B_OWNER_COOKIE_BINDING);
     if(!key||!binding||!HEX.test(binding))fail();
     const storePage=()=>authority.readInboxPage(actor,1);
     const fresh=async()=>{
