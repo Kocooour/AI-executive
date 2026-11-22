@@ -6,7 +6,7 @@ import {randomUUID} from "node:crypto";
 import path from "node:path";
 import {DatabaseSync} from "node:sqlite";
 import type {Page} from "@playwright/test";
-import {settingsSections,waitUntilSynced} from "./helpers";
+import {settingsSections} from "./helpers";
 
 test.skip(process.env.LUMI_TARGET_INBOX_C3B_E2E!=="true",
   "C-3b acceptance requires explicit isolated test opt-in");
@@ -191,7 +191,10 @@ for(const width of [390,1280]){
     },{timeout:15000}).toBe(true);
     if(width===1280){
       await page.goto("/?view=Settings");
-      await waitUntilSynced(page);
+      // C-3b is isolated target SQLite, not legacy browser sync. Readiness
+      // means the actual Settings UI is mounted, not a legacy storage bit.
+      await expect(page.getByRole("navigation",{name:"Sekce nastavení"}))
+        .toBeVisible({timeout:25000});
       await settingsSections(page).filter({hasText:"Přístup"}).click();
       await page.getByRole("button",{name:"Odhlásit se"}).click();
       await expect(page.locator(".authCard")).toBeVisible();
