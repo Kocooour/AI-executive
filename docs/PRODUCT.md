@@ -209,6 +209,14 @@ Nezavádíme PostgreSQL, pgvector ani paralelní nasazení HumanAgentWiki. Tato 
 **Status 2026-11-08:** schválená specifikace a plán, **nikoli implementovaný import, HumanWiki UI, e-mailová obsahová synchronizace nebo autonomní učení**. Syntetický H1-synthetic smí vznikat paralelně s R2d/R3 bez osobních dat; H1-real s osobními exporty vyžaduje autorizované R2d/R3 rozhraní a vědomý souhlas. Produkční aktivace nad cílovými daty podléhá samostatné R4 bráně. Přesné akceptační scénáře v rozhodnutí jsou součástí LUMI-FR-014.
 
 
+### Milník C-3b — návrhy Lumi a potvrzení jedním kliknutím (#484, draft)
+
+**Závazný produktový kontrakt:** [#471](https://github.com/Kocooour/AI-executive/issues/471) a [#484](https://github.com/Kocooour/AI-executive/issues/484). U každého nového úkolu z Quick Capture zůstává samostatné `triage_state=unprocessed`. Návrh Lumi může doporučit bezpečné zařazení do vlastní soukromé Oblasti, projektu nebo naplánování na přesné místní datum; uživatel vidí akci a serverem napsané **Proč?**. `Přijmout` musí v jednom atomickém zápisu vykonat přesně zobrazenou změnu a Zpracovat; Undo musí vrátit všechna právě změněná pole.
+
+**Soukromí a souhlas:** pravidla jsou lokální. Vzdálená AI je výhradně OpenAI, jen po platném odvolatelném souhlasu vlastníka; prompt obsahuje pouze název aktuálního úkolu a názvy aktuálně povolených vlastních soukromých Oblastí/projektů. Žádný sdílený/cizí obsah, poznámky ani interní ID. Výpadek, chybějící klíč, revokace či nejednoznačnost vždy znamenají bezpečný lokální návrh. Odpovědi AI se v Lumi trvale neukládají; `store:false` omezuje ukládání response objektů u OpenAI, nikoli všechny bezpečnostní logy poskytovatele.
+
+**Stav k 2026-11-22:** [draft PR #492](https://github.com/Kocooour/AI-executive/pull/492) obsahuje pravidla, strict OpenAI-only adaptér, autorizované SQL čtení kandidátů a izolované primitivy pro šifrovaný závazek/externí revokační fence. **Nejsou zatím propojené s produkčními route, Nastavením, writerem ani UI.** Není dodáno jedno kliknutí, Undo ani C-3b release akceptace; do splnění #471/#484 neslučovat/nenechat zapnout.
+
 ### Milník C-3a — cílový Inbox, triage a Undo (#483)
 
 - Cílový Inbox je seznam serverových úkolů s `triage_state=unprocessed`; **není** alternativní filtr podle `when_on`, termínu, dokončení ani priority. Úkol zmizí teprve po explicitním `Zpracovat` (samostatná triage revize).
