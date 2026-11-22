@@ -36,12 +36,13 @@ async function locateRow(page:Page,id:string){
   await expect(count(page)).toBeVisible({timeout:30000});
   const target=page.getByTestId("target-c3b-suggestion-"+id);
   for(let i=0;i<30;i++){
-    if(await target.count())return target;
+    if(await target.count()){await target.scrollIntoViewIfNeeded();return target;}
     const more=page.getByRole("button",{name:"Načíst další"});
     if(!await more.count())break;
     await more.click();
   }
   await expect(target).toBeVisible({timeout:15000});
+  await target.scrollIntoViewIfNeeded();
   return target;
 }
 
