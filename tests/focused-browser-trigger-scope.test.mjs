@@ -102,12 +102,16 @@ function checkCoverage(files, profiles = BROWSER_PROFILES) {
     const needs = [...body.matchAll(/^    needs:\s*(.+)\s*$/gm)];
     assert.equal(needs.length, 1, "dispatcher job must depend on scope: " + jobName);
     assert.equal(needs[0][1].trim(), "scope", "dispatcher dependency: " + jobName);
-    const uses = [...body.matchAll(/^    uses: \.\/\.github\/workflows\/([a-z0-9-]+\.yml)\s*$/gm)];
-    assert.equal(uses.length, 1, "dispatcher job must call one workflow: " + jobName);
-    const conditions = [...body.matchAll(/^    if: needs\.scope\.outputs\.([a-z0-9_]+) == 'true'\s*$/gm)];
-    assert.equal(conditions.length, 1, "dispatcher job must bind its if to scope: " + jobName);
-    const profile = conditions[0][1];
-    const filename = uses[0][1];
+    const uses = [...body.matchAll(/^    uses:\s*(.*)$/gm)];
+    assert.equal(uses.length, 1, "dispatcher job must call exactly one workflow: " + jobName);
+    const use = uses[0][1].trim().match(/^\.\/\.github\/workflows\/([a-z0-9-]+\.yml)$/);
+    assert.ok(use, "dispatcher job must use a local workflow: " + jobName);
+    const conditions = [...body.matchAll(/^    if:\s*(.*)$/gm)];
+    assert.equal(conditions.length, 1, "dispatcher job must have exactly one if: " + jobName);
+    const condition = conditions[0][1].trim().match(/^needs\.scope\.outputs\.([a-z0-9_]+) == 'true'$/);
+    assert.ok(condition, "dispatcher job must bind its if to scope: " + jobName);
+    const profile = condition[1];
+    const filename = use[1];
     assert.ok(!selectedProfiles.has(profile), "duplicate dispatcher profile: " + profile);
     assert.ok(!called.has(filename), "duplicate dispatcher workflow: " + filename);
     selectedProfiles.add(profile);
@@ -132,9 +136,14 @@ function checkCoverage(files, profiles = BROWSER_PROFILES) {
     if (!/\bplaywright\s+test\b/.test(yaml)) continue;
     const independentConfig = independentConfigs.get(filename);
     if (independentConfig) {
-      assert.match(yaml, new RegExp("playwright\\s+test\\s+--config\\s+" +
-        independentConfig.replace(/[.*+?^$()|[\]{}\\]/g, "\\$&")),
-        "allowlisted workflow must explicitly select independent config: " + filename);
+      const configPattern = new RegExp("^playwright\\s+test\\s+--config\\s+" +
+        independentConfig.replace(/[.*+?^$()|[\]{}\\]/g, "\\$&") + "(?:\\s|$)");
+      const commands = [...yaml.matchAll(/\bplaywright\s+test\b[^\n]*/g)];
+      assert.ok(commands.length, "allowlisted workflow must run Playwright: " + filename);
+      for (const command of commands) {
+        assert.match(command[0], configPattern,
+          "every Playwright invocation must use the independent config: " + filename);
+      }
       assert.equal(hasPrConfigPath(yaml), false,
         "independent workflow must not claim shared-config trigger: " + filename);
       continue;
@@ -189,6 +198,8 @@ test("a missing dispatcher job, output, or conditional fails closed", () => {
     dispatcher.replace("      project_tasks: ", "      missing_project_tasks: "),
     dispatcher.replace("if: needs.scope.outputs.project_tasks == 'true'",
       "if: needs.scope.outputs.inbox == 'true'"),
+    dispatcher.replace("if: needs.scope.outputs.project_tasks == 'true'",
+      "if: needs.scope.outputs.project_tasks == 'true'\n    if: always()"),
     dispatcher.replace("uses: ./.github/workflows/project-tasks-preview-browser.yml",
       "uses: ./.github/workflows/r3-inbox-acceptance-browser.yml"),
   ]) {
@@ -210,6 +221,11 @@ test("missing workflow_call, broken exception, or sentinel manual trigger is rej
     files.get("target-sync-indexeddb.yml").replace(
       "--config e2e/playwright.indexeddb.config.ts", "--project=desktop"));
   assert.throws(() => checkCoverage(files), /independent config/);
+  files.set("target-sync-indexeddb.yml", original.get("target-sync-indexeddb.yml"));
+  files.set("target-sync-indexeddb.yml",
+    files.get("target-sync-indexeddb.yml") +
+    "\n      - run: pnpm exec playwright test e2e/unscoped.spec.ts\n");
+  assert.throws(() => checkCoverage(files), /every Playwright invocation/);
   files.set("target-sync-indexeddb.yml", original.get("target-sync-indexeddb.yml"));
 
   files.set("r3-personal-acceptance-browser.yml",
