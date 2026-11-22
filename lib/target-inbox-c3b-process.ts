@@ -58,7 +58,8 @@ function parsePreview(value:unknown):C3bPreview|null{
     why:value.why,changes:value.changes,source:value.source,
     restoreGeneration:value.restoreGeneration,
     privateEpoch:value.privateEpoch as number,
-    notificationEpoch:value.notificationEpoch as number}:null;
+    notificationEpoch:value.notificationEpoch as number,
+    consentEpoch:value.consentEpoch as number}:null;
 }
 function parseWrite(value:unknown):InboxAcceptResult|null{
   if(!primitive(value))return null;
