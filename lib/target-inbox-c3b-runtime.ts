@@ -41,17 +41,29 @@ export function inboxC3bActionKey():Buffer|null{
     ?process.env.AI_EXECUTIVE_TARGET_STAGING_INBOX_PROOF_KEY:inboxWorkerProofKey();
   return raw&&HEX.test(raw)?Buffer.from(raw,"hex"):null;
 }
-/** Owner-cookie-only binder; durable sessions always use their live SHA256. */
+/** Derive a secret one-way binding from the VALIDATED owner cookie.
+ * Parent HTTP verifies this cookie first; its RAW value NEVER enters workers.
+ * A newly issued owner session cannot accept the previous session's token. */
+export function inboxC3bOwnerCookieBinding(
+  ownerCookie:string,actor:string,restoreGeneration:string,
+):string|null{
+  const key=inboxC3bActionKey();
+  return key&&typeof ownerCookie==="string"&&ownerCookie.length>0&&
+     ownerCookie.length<=8192&&ACTOR.test(actor)&&UUID.test(restoreGeneration)
+    ?createHmac("sha256",key).update(JSON.stringify([
+      "lumi:c3b:owner-cookie-binding:v2",ownerCookie,
+      actor,restoreGeneration.toLowerCase(),
+    ])).digest("hex"):null;
+}
 export function inboxC3bSessionBinding(
   actor:string,restoreGeneration:string,durableSessionHash?:string,
+  ownerCookieBinding?:string,
 ):string|null{
   if(durableSessionHash!==undefined)
     return HEX.test(durableSessionHash)?durableSessionHash:null;
-  const key=inboxC3bActionKey();
-  return key&&ACTOR.test(actor)&&UUID.test(restoreGeneration)
-    ?createHmac("sha256",key).update(JSON.stringify([
-      "lumi:c3b:owner-cookie-binding:v1",actor,restoreGeneration.toLowerCase(),
-    ])).digest("hex"):null;
+  return ACTOR.test(actor)&&UUID.test(restoreGeneration)&&
+    typeof ownerCookieBinding==="string"&&HEX.test(ownerCookieBinding)
+    ?ownerCookieBinding:null;
 }
 /** Missing/unprovisioned/corrupt external fence is always AI-OFF. */
 export function openVerifiedInboxC3bFence(targetDirectory:string):DatabaseSync|null{
