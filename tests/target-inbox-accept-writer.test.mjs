@@ -19,7 +19,8 @@ const {issueDurableTargetStagingSession,hashTargetStagingSessionToken,
   revokeDurableTargetStagingSession}=await import("../lib/target-staging-durable-session.ts");
 const {readAuthorizedInboxSuggestionSnapshot}=
   await import("../lib/target-inbox-suggestion-snapshot.ts");
-const {suggestInboxByRules}=await import("../lib/target-inbox-suggestions.ts");
+const {suggestInboxByRules,suggestInboxWithLocalToday}=
+  await import("../lib/target-inbox-suggestions.ts");
 const {sealInboxDisplayedAction,inboxLocalDate}=
   await import("../lib/target-inbox-suggestion-commitment.ts");
 const {inspectIsolatedTargetStore}=await import("../lib/target-store-preflight.ts");
@@ -59,13 +60,15 @@ after(()=>{
   else process.env.AI_EXECUTIVE_SESSION_SECRET=originalSecret;
   rmSync(root,{recursive:true,force:true});
 });
-function prepare(fx){
+function prepare(fx,{today=false}={}){
   const snapshot=readAuthorizedInboxSuggestionSnapshot(
     fx.db,"alice","captured",fx.stage.restoreGeneration);
   assert.ok(snapshot);
-  const suggestion=suggestInboxByRules(snapshot.snapshot);
-  assert.equal(suggestion.changes.projectId,"renovation");
   const now=Date.now(),timeZone="Europe/Prague";
+  const suggestion=today
+    ?suggestInboxWithLocalToday(snapshot.snapshot,inboxLocalDate(now,timeZone))
+    :suggestInboxByRules(snapshot.snapshot);
+  assert.equal(suggestion.changes.projectId,"renovation");
   const data={actorUserId:"alice",taskId:"captured",
     sessionTokenHash:fx.sessionHash,
     restoreGeneration:fx.stage.restoreGeneration,
@@ -141,6 +144,47 @@ test("C-3b canonical v27: Accept move + Process is one pinned command; Undo reve
   const audit=readFileSync(path.join(fx.stage.directory,"lumi-target.journal"),"utf8");
   assert.equal((audit.match(/"k":"task_triage"/g)||[]).length,2);
   assert.equal(audit.includes("Připravit rekonstrukce"),false);
+});
+
+test("C-3b canonical v27: personal Today + project + triage, Undo restores date with monotonic revision",()=>{
+  const fx=fixture();
+  fx.db.prepare("UPDATE tasks SET title='Připravit rekonstrukce dnes' WHERE id='captured'").run();
+  const original=row(fx);
+  const originalPlan=fx.db.prepare("SELECT when_on,revision FROM personal_task_plans WHERE user_id='alice' AND task_id='captured'").get();
+  const originalEpoch=fx.db.prepare("SELECT revision FROM personal_plan_epochs WHERE user_id='alice'").get().revision;
+  const cmd=prepare(fx,{today:true});
+  assert.equal(cmd.displayedChanges.whenOn,inboxLocalDate(Date.now(),"Europe/Prague"));
+  assert.deepEqual(fx.authority.changeInboxSuggestedAction(fx.token,{
+    mode:"accept",command:cmd,key:fx.key,sessionTokenHash:fx.sessionHash,
+  }),{ok:true});
+  const accepted=row(fx);
+  const acceptedPlan=fx.db.prepare("SELECT when_on,revision FROM personal_task_plans WHERE user_id='alice' AND task_id='captured'").get();
+  const acceptedEpoch=fx.db.prepare("SELECT revision FROM personal_plan_epochs WHERE user_id='alice'").get().revision;
+  assert.equal(acceptedPlan.when_on,cmd.displayedChanges.whenOn);
+  assert.equal(acceptedPlan.revision,originalPlan.revision+1);
+  assert.equal(acceptedEpoch,originalEpoch+1);
+  assert.equal(accepted.projectId,"renovation");
+  assert.equal(accepted.areaId,null);
+  assert.equal(accepted.state,"processed");
+  const undo={commandId:randomUUID(),undoOfCommandId:cmd.commandId,
+    taskId:"captured",restoreGeneration:fx.stage.restoreGeneration,
+    expectedTaskRevision:accepted.revision,
+    expectedTriageRevision:accepted.triageRevision,
+    expectedPrivateEpoch:acceptedEpoch,
+    expectedPlanRevision:acceptedPlan.revision};
+  assert.deepEqual(fx.authority.changeInboxSuggestedAction(fx.token,{
+    mode:"undo",command:undo,sessionTokenHash:fx.sessionHash,
+  }),{ok:true});
+  const reverted=row(fx);
+  const revertedPlan=fx.db.prepare("SELECT when_on,revision FROM personal_task_plans WHERE user_id='alice' AND task_id='captured'").get();
+  assert.equal(reverted.state,"unprocessed");
+  assert.equal(reverted.projectId,original.projectId);
+  assert.equal(reverted.areaId,original.areaId);
+  assert.equal(revertedPlan.when_on,originalPlan.when_on);
+  assert.equal(revertedPlan.revision,originalPlan.revision+2);
+  assert.equal(fx.db.prepare("SELECT revision FROM personal_plan_epochs WHERE user_id='alice'").get().revision,originalEpoch+2);
+  assert.deepEqual(inspectIsolatedTargetStore({...fx.store,mode:"r2-model"}),
+    {ok:true,mode:"r2-model",issues:[]});
 });
 
 test("C-3b canonical v27: tamper and stale signed proposal cannot write",()=>{
