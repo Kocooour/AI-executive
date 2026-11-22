@@ -7,7 +7,7 @@
 - Node.js 24 nebo novější, přístup k Airtable API a dostatek místa na lokálním **šifrovaném soukromém disku** (historický snapshot: 222 záznamů, 246 příloh, ~170,7 MiB; aktuální velikost a počet se mohou změnit).
 - Osobní přístupový token Airtable s nejmenším oprávněním `data.records:read` k bázím Auto, Dokumenty a Nákupy. Nezapisujte token do repozitáře, textu PR, logů, Zkratek ani historie shellu.
 - ID tří zdrojových bází jsou privátní konfigurace operátora; veřejný GitHub je **neobsahuje**. Nevyžaduje se žádný token pro zápis a nepoužívá se ID cílové base.
-- Výstupní adresář musí být **nový**, existující adresář odmítnout; umístěte jej mimo checkout GitHub repozitáře. Výstup obsahuje reálné rodinné dokumenty a citlivé údaje.
+- Výstupní adresář musí být **nový**, existující adresář se odmítne; **exportér technicky blokuje jakoukoliv výstupní cestu uvnitř veřejného GitHub checkoutu**. Použijte soukromý šifrovaný disk mimo repozitář. Výstup obsahuje reálné rodinné dokumenty a citlivé údaje.
 
 ## Spuštění
 
