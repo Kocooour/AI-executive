@@ -53,6 +53,24 @@ test("C-3b: signed rules appear before a delayed optional AI response",async({pa
   const width=Number(process.env.LUMI_TARGET_C3B_VIEWPORT||390);
   await page.setViewportSize({width,height:844});
   const seeded=store.seed.c3bProjects[String(width)];
+  // Default-off: merely viewing an Inbox row, and even explicitly asking
+  // for an AI alternative before granting consent, must not dispatch "best".
+  let unconsentedAIRequests=0;
+  page.on("request",request=>{
+    const u=new URL(request.url());
+    if(u.pathname==="/api/target-staging/inbox/c3b"&&
+       u.searchParams.get("mode")!=="rules")unconsentedAIRequests++;
+  });
+  await openInbox(page);
+  const withoutGrant=await locateRow(page,seeded.taskId);
+  await expect(withoutGrant.getByRole("button",{name:"Přijmout"}))
+    .toBeVisible({timeout:25000});
+  expect(unconsentedAIRequests).toBe(0);
+  await withoutGrant.getByRole("button",{name:"Získat alternativu AI"}).click();
+  await expect(withoutGrant.getByText("AI návrhy nejsou povoleny v Nastavení."))
+    .toBeVisible({timeout:20000});
+  expect(unconsentedAIRequests).toBe(0,
+    "the browser must refuse an OpenAI request until durable consent is enabled");
   // The check only authorizes a model request after an explicit Settings
   // grant; no implicit AI dispatch is allowed on scroll or focus.
   await page.goto("/?view=Settings");
