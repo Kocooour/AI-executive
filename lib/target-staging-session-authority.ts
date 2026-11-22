@@ -1,3 +1,4 @@
+import type {DatabaseSync} from "node:sqlite";
 import {createPreflightedPrivateStructure,cancelPreflightedPrivateStructureCreate,
   validPrivateStructureCreateCommand,
   type PrivateStructureKind,type PrivateStructureCreateCommand,
@@ -1204,7 +1205,7 @@ export class TargetStagingSessionAuthority {
   changeInboxSuggestedAction(
     sessionToken:string,
     work:{mode:"accept";command:InboxAcceptCommand;
-      key:Uint8Array;sessionTokenHash:string}|
+      key:Uint8Array;sessionTokenHash:string;fenceDb?:DatabaseSync}|
          {mode:"undo";command:InboxAcceptUndoCommand;
       sessionTokenHash:string},
   ):InboxAcceptResult{
