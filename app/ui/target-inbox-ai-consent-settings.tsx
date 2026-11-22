@@ -16,7 +16,7 @@ export default function InboxAIConsentSettings({language="cs"}:{
   const refresh=useCallback(async(signal?:AbortSignal)=>{
     const r=await getC3bConsent(signal);
     if(signal?.aborted)return;
-    if(r.ok)setState({kind:"ready",...r.value});
+    if(r.ok===true)setState({kind:"ready",...r.value});
     else setState({kind:r.reason==="disabled"?"disabled":"error"});
   },[]);
   useEffect(()=>{
