@@ -182,7 +182,7 @@ Akceptace: český online dotaz s odlišnou formulací lze ověřit otevřením 
 
 V **Nastavení** má být přepínač `AI návrhy pro Inbox` s jasným rozlišením lokálních pravidel a soukromého volání OpenAI. Revokace ihned znemožní nové žádosti, rozběhnuté požadavky přeruší, kde to jde, a zneplatní staré návrhy/tokeny; opětovný souhlas je nový explicitní akt. AI `reason` se nikdy nezobrazuje přímo jako `Proč?`. Testy musí pokrýt 390/1280 px, klávesnici, live-region a reload/logout.
 
-**Stav:** [draft #492](https://github.com/Kocooour/AI-executive/pull/492) obsahuje interní, dosud neaktivovaný pravidlový Accept/Undo (včetně osobního „dnes“), autorizované kandidáty, tokeny a evidenci souhlasu; **žádné C-3b HTTP/Nastavení/Inbox UI zatím neexistuje**. AI návrhy writer odmítá, dokud není dokončen provozní consent+revoke. Úplná 390/1280 px akceptace a aktivace čekají na #471/#484.
+**Stav:** [draft #492](https://github.com/Kocooour/AI-executive/pull/492) již zahrnuje responzivní Inbox návrh s přesným „Proč?“/Přijmout/Undo, live-region a skryté staré řádky při nejistém výsledku, včetně pouze originálního UUID po reloadu. V Nastavení je explicitní přepínač souhlasu s OpenAI, jeho pending revokace a srozumitelné rozlišení místních pravidel. Uživatel nesmí vidět interní tokeny, jména jiného aktéra ani staré count; spodní menu má původní čtyři položky. **UI zůstává default-off, protože cílená 390/1280 px Playwright, reload/logout, mobilní a klávesnicová QA ještě není potvrzená na finálním SHA; PR je stále draft.**
 
 ### C-3a — Inbox vs. archivní LegacyInbox (#483)
 
