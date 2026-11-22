@@ -6,6 +6,7 @@ import {randomUUID} from "node:crypto";
 import path from "node:path";
 import {DatabaseSync} from "node:sqlite";
 import type {Page} from "@playwright/test";
+import {settingsSections,waitUntilSynced} from "./helpers";
 
 test.skip(process.env.LUMI_TARGET_INBOX_C3B_E2E!=="true",
   "C-3b acceptance requires explicit isolated test opt-in");
@@ -87,9 +88,11 @@ for(const width of [390,1280]){
     const accepted=readTask(seeded.taskId);
     expect(accepted.task?.projectId).toBe(seeded.projectId);
     expect(accepted.task?.areaId).toBeNull();
-    const date=new Intl.DateTimeFormat("en-CA",{
+    const parts=new Intl.DateTimeFormat("en-GB",{
       timeZone:"Europe/Prague",year:"numeric",month:"2-digit",day:"2-digit",
-    }).format(new Date());
+    }).formatToParts(new Date());
+    const field=(name:string)=>parts.find(p=>p.type===name)?.value;
+    const date=field("year")+"-"+field("month")+"-"+field("day");
     expect(accepted.whenOn).toBe(date);
     await expect.poll(async()=>Number((await count(page).textContent())?.trim()))
       .toBe(before-1);
@@ -145,5 +148,26 @@ for(const width of [390,1280]){
     const contents=await page.evaluate(()=>JSON.stringify({...sessionStorage}));
     expect(contents).not.toContain(seeded.taskTitle);
     expect(contents).not.toContain(why);
+    if(width===1280){
+      await page.goto("/?view=Settings");
+      await waitUntilSynced(page);
+      await settingsSections(page).filter({hasText:"Přístup"}).click();
+      await page.getByRole("button",{name:"Odhlásit se"}).click();
+      await expect(page.locator(".authCard")).toBeVisible();
+      // Every Inbox and consent route must hide actor-private content and
+      // must never infer an owner from a revoked browser session.
+      const statuses=await page.evaluate(async()=>{
+        const urls=[
+          "/api/target-staging/inbox/c3b?taskId=0-c3b:390",
+          "/api/target-staging/inbox/c3b/consent",
+        ];
+        return Promise.all(urls.map(u=>fetch(u,{cache:"no-store"})
+          .then(r=>r.status)));
+      });
+      expect(statuses).toEqual([401,401]);
+      await page.goto("/?view=Inbox&scope=personal");
+      await expect(count(page)).toHaveCount(0);
+      await expect(page.locator(".targetInboxRow")).toHaveCount(0);
+    }
   });
 }
