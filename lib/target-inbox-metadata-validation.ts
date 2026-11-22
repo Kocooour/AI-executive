@@ -50,8 +50,10 @@ export function validateC3BMetadata(
   rows:readonly {key:unknown;value:unknown}[],
   actorIds:readonly string[],
 ):C3BMetadataPreflight{
-  const list=rows.filter(r=>typeof r.key==="string"&&
-    PREFIXES.some(p=>r.key.startsWith(p)));
+  const list=rows.filter(r=>{
+    const key=r.key;
+    return typeof key==="string"&&PREFIXES.some(p=>key.startsWith(p));
+  });
   const invalid={valid:false,count:list.length,prefixes:PREFIXES};
   const accept=list.filter(r=>(r.key as string).startsWith(C3B_ACCEPT_PREFIX));
   const undo=list.filter(r=>(r.key as string).startsWith(C3B_UNDO_PREFIX));
