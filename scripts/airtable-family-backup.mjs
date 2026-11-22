@@ -3,7 +3,7 @@
 // No writes to Airtable. Output is sensitive: keep it outside the repository.
 import { createHash } from 'node:crypto';
 import { createWriteStream } from 'node:fs';
-import { mkdir, readFile, unlink, writeFile, rename } from 'node:fs/promises';
+import { mkdir, unlink, writeFile, rename } from 'node:fs/promises';
 import { resolve, join } from 'node:path';
 import { Readable, Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
@@ -39,7 +39,7 @@ export function snapshotRecord(record, sourceName) {
   const files = [];
   for (const [fieldName, value] of Object.entries(record.fields)) {
     if (Array.isArray(value) && value.some(v => v && typeof v === 'object' &&
-        typeof v.id === 'string' && v.id.startsWith('att'))) {
+        ('url' in v || 'filename' in v || (typeof v.id === 'string' && v.id.startsWith('att'))))) {
       fields[fieldName] = value.map(attachment => {
         if (!attachment || !ATT_ID.test(attachment.id) ||
             !Number.isSafeInteger(attachment.size) || attachment.size < 0 ||
