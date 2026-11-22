@@ -152,11 +152,30 @@ const readReceipt=(db:DatabaseSync,key:string):Receipt|null=>{
       validEpoch(a.after.triagedAtMs)?a:null;
   }catch{return null;}
 };
-const checkCapacity=(db:DatabaseSync):boolean=>{
+/**
+ * An Accept reserves TWO slots: its immutable receipt and a future Undo.
+ * An Undo consumes that reserved slot. Otherwise a full ledger could
+ * permanently prevent a previously successful Accept from being undone.
+ */
+export function inboxCompoundLedgerHasCapacity(
+  receiptRows:number,activeAccepts:number,mode:"accept"|"undo",
+):boolean{
+  if(!validEpoch(receiptRows)||!validEpoch(activeAccepts)||
+     activeAccepts>receiptRows||receiptRows>=MAX_RECEIPTS)return false;
+  return receiptRows+activeAccepts+(mode==="accept"?2:0)<=MAX_RECEIPTS;
+}
+const checkCapacity=(db:DatabaseSync,mode:"accept"|"undo"):boolean=>{
   const row=db.prepare(`SELECT COUNT(*) AS n FROM metadata WHERE
     substr(key,1,?)=? OR substr(key,1,?)=?`)
     .get(ACCEPT.length,ACCEPT,UNDO.length,UNDO) as {n:number};
-  return validEpoch(row.n)&&row.n<MAX_RECEIPTS;
+  // The two receipts have the same SHA256 suffix for one original Accept;
+  // the Undo key substitutes the prefix, without exposing any task content.
+  const active=db.prepare(`SELECT COUNT(*) AS n FROM metadata a
+    WHERE substr(a.key,1,?)=? AND NOT EXISTS(
+      SELECT 1 FROM metadata u
+       WHERE u.key=?||substr(a.key,?)
+    )`).get(ACCEPT.length,ACCEPT,UNDO,ACCEPT.length+1) as {n:number};
+  return inboxCompoundLedgerHasCapacity(row.n,active.n,mode);
 };
 const sessionIsLive=(db:DatabaseSync,actor:string,hash:string|null):boolean=>
   hash===null||lookupLiveTargetStagingSession(db,hash,Date.now())?.userId===actor;
@@ -176,7 +195,7 @@ function acceptLocked(db:DatabaseSync,actor:string,hash:string,
       existing.digest===digest?{ok:true,replayed:true}:bad("idempotency_conflict");
   if(db.prepare("SELECT 1 FROM metadata WHERE key=?").get(keyId))
     return bad("idempotency_conflict");
-  if(!checkCapacity(db))return bad("write_failed");
+  if(!checkCapacity(db,"accept"))return bad("write_failed");
   const proof=unsealInboxDisplayedAction(c.token,key,{
     actorUserId:actor,taskId:c.taskId,sessionTokenHash:hash,
     restoreGeneration:c.restoreGeneration,displayedChanges:c.displayedChanges,
@@ -306,7 +325,7 @@ function undoLocked(db:DatabaseSync,actor:string,c:InboxAcceptUndoCommand):Inbox
         ?{ok:true,replayed:true}:bad("idempotency_conflict");
     }catch{return bad("idempotency_conflict");}
   }
-  if(!checkCapacity(db))return bad("write_failed");
+  if(!checkCapacity(db,"undo"))return bad("write_failed");
   const task=currentTask(db,c.taskId),plan=currentPlan(db,actor,c.taskId);
   const epoch=currentPrivateEpoch(db,actor);
   if(!task||task.status!=="open"||
