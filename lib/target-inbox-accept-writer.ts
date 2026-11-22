@@ -200,8 +200,10 @@ const sessionIsLive=(db:DatabaseSync,actor:string,hash:string|null):boolean=>{
   // Only the configured owner can use the owner-cookie binder; HTTP routes
   // authenticate and revalidate the cookie before and after the child write.
   const owner=process.env.AI_EXECUTIVE_TARGET_STAGING_OWNER_USER_ID;
-  return actor===owner&&hash===inboxC3bSessionBinding(
-    actor,targetStoreRestoreGeneration(db)??"");
+  const cookieBinding=process.env.AI_EXECUTIVE_TARGET_STAGING_C3B_OWNER_COOKIE_BINDING;
+  return actor===owner&&cookieBinding?.length===64&&
+    hash===inboxC3bSessionBinding(
+      actor,targetStoreRestoreGeneration(db)??"",undefined,cookieBinding);
 };
 
 /** Internal core; call ONLY inside the canonical pinned BEGIN IMMEDIATE. */
