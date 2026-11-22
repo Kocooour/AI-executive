@@ -378,7 +378,7 @@ emergency slots exist,
 and manual Inbox triage remains available. Never reset the ledger, discard
 old tombstones, bypass preflight or silently shrink historical records.
 
- 
+
 **Operator-visible headroom (C-3b Settings):** the authenticated owner-only
 `GET /api/target-staging/inbox/c3b/consent` now includes exact numeric
 `capacity.{used,reserved,limit,remainingAccepts,warning}` from an independently
