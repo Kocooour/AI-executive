@@ -45,7 +45,7 @@ export default function TargetInboxC3b({item,restoreGeneration,
     void fetchC3bProposal(item.id,abort.signal).then(result=>{
       if(abort.signal.aborted||!runtime.known()||
          runtime.generation()!==generation)return;
-      if(result.ok){
+      if(result.ok===true){
         if(result.value.restoreGeneration!==restoreGeneration){
           setSuggestion(null);setStatus("failed");return;
         }
