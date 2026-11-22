@@ -1018,3 +1018,17 @@ test("exclusive deployment lock rejects a second process before any service or r
     fixture.cleanup();
   }
 });
+
+test("C-3b production fence stays in approved StateDirectory, never restored over revoke",()=>{
+  const script=readFileSync(path.join(process.cwd(),"deployment/deploy-safe.sh"),"utf8");
+  const runbook=readFileSync(path.join(process.cwd(),"deployment/DEPLOY.md"),"utf8");
+  assert.match(script,/INBOX_AI_FENCE_PATH=\/var\/lib\/ai-executive-target\/inbox-ai-consent-fence\.sqlite/);
+  assert.match(script,/INBOX_AI_FENCE_FIRST_ROLLOUT/);
+  assert.match(script,/INBOX_AI_FENCE_PROVISION_ATTEMPTED=1/);
+  assert.match(script,/runuser -u ai-executive[\\s\\S]*?target-inbox-ai-fence-provision\.mjs" --provision/);
+  assert.match(script,/target-inbox-ai-fence-provision\.mjs" --check/);
+  assert.match(script,/chybi drive provisionovana revokacni historie/);
+  assert.match(runbook,/443c17df6376c8e886150d45bcc6bcb2457b2a94/);
+  assert.match(runbook,/pre-C-3b-write/);
+  assert.match(runbook,/leave the latest external fence in place/);
+});

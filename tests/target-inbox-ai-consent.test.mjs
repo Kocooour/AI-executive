@@ -133,3 +133,14 @@ test("C-3b consent: fail closed on bad generation and scope without write",()=>{
     {...first,dataScopeVersion:"c3b:v2"}).ok,false);
   assert.equal(x.authority.readInboxAIConsent("alice"),null);
 });
+
+test("C-3b clean production v27 remains backward compatible without metadata writes",()=>{
+  const x=fixture();
+  const before=x.authority.readInboxAIConsent("alice");
+  assert.equal(before,null,"untouched v27 does not acquire C-3b consent");
+  
+  assert.deepEqual(inspectIsolatedTargetStore({...x.store,mode:"r2-model"}),
+    {ok:true,mode:"r2-model",issues:[]});
+  assert.equal(x.authority.readInboxAIConsent("alice"),null,
+    "read-only check never writes consent namespaces");
+});

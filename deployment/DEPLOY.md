@@ -287,3 +287,60 @@ authenticated owner session; a refused, unlisted `Origin` must still yield
 403. Do not use a production write as an automated CI probe. Perform the
 normal exact-SHA release gate and owner-controlled deployment procedure
 above; this fix does not authorize a direct production change.
+
+
+### C-3b consent fence outside restore and rollback after first write (PR #492)
+
+**Approved production location:** `/var/lib/ai-executive-target/inbox-ai-consent-fence.sqlite`.
+This is inside the existing `StateDirectory=ai-executive-target` under
+`ProtectSystem=strict`, but strictly **outside** the restorable
+`/var/lib/ai-executive-target/personal-v1` target store. There is no new
+systemd `ReadWritePaths`, no change to the unit sandbox, and no HTTP-created
+SQLite file. The standalone fence contains only actor/decision IDs, revocation
+epochs, pending cross-process dispatch tickets and budgets; no private task
+titles, AI prompts or responses. It is owned by `ai-executive`, mode 0600.
+
+**Deployment step:** after the verified backup and while the service is
+stopped, `deploy-safe.sh` performs the C-3a idempotent v27 check/upgrade,
+then (on the *first* reviewed C-3b code rollout only) runs
+`scripts/target-inbox-ai-fence-provision.mjs --provision --directory
+/var/lib/ai-executive-target/personal-v1` **as ai-executive**. It then
+always runs the same command with `--check` before starting the service.
+Provisioning initializes schema only, **never grants consent**.
+An already-existing file is verified read-only, never repaired or replaced.
+Missing, symlinked, wrong-owner/mode or corrupt fence aborts the deploy;
+later deploys **must not recreate** it. Runtime must be fail-closed when this
+fence is missing or mismatched. The first owner grant is a separate explicit
+approved action at actual C-3b release, not a deploy script side effect.
+
+**Backup and restore:** if an existing fence is present at deploy time, the
+root-only deployment archive includes a byte-for-byte diagnostic copy and
+checksum `inbox-ai-consent-fence.sqlite`; this archive is **not** an
+authorized restore source for the fence. On restoring older
+`target/` from backup, **leave the latest external fence in place**.
+Any restore-generation or consent-epoch mismatch disables AI, requiring a
+new explicit owner decision. Never copy an older fence from the archive over
+a newer revoked fence: that would replay consent. Keep any crash/orphaned
+pending dispatch tickets until manual safe reconciliation, not automatic
+TTL deletion. Do not write new grants during recovery or restart.
+
+**Older code rollback:** C-3b introduces target metadata namespaces
+`r3:c3b:*` and journal kind `inbox_consent`. Once **any C-3b
+metadata/journal write** has happened, older code such as
+`443c17df6376c8e886150d45bcc6bcb2457b2a94` cannot safely read the
+current v27 target, even though the schema version number is unchanged.
+Rolling back **code only** is insufficient. Stop the service; restore
+`target/` only from a verified **pre-C-3b-write** archive with explicit
+owner approval and matching integrity/generation checks. Keep the latest
+external fence outside this restoration and verify AI remains disabled until
+reconsent. Never downgrade live SQLite schema, erase C-3b metadata manually,
+overwrite the fence, or silently roll back consent. If a safe archive is not
+available, keep the service stopped and roll forward to fixed C-3b-aware code.
+
+**Compatibility control:** a current, untouched production v27 store with no
+`r3:c3b:*` metadata must continue to pass
+`target-store-provision.mjs --check` and the read-only preflight without
+migration or modification. C-3b only writes its metadata after an explicit
+authenticated command. This rollout does NOT authorize production activation
+of unfinished Inbox suggestion HTTP/UI or any real outbound OpenAI request.
+

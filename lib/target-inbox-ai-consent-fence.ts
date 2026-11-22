@@ -16,10 +16,16 @@
  * do not expire them to claim revocation while a worker might still dispatch.
  */
 import {randomBytes} from "node:crypto";
-import {lstatSync,realpathSync} from "node:fs";
+import {lstatSync,realpathSync,existsSync} from "node:fs";
+import {DatabaseSync} from "node:sqlite";
 import path from "node:path";
 import type {DatabaseSync} from "node:sqlite";
 
+/** Inside the already-approved ai-executive-target StateDirectory and OUTSIDE
+ * personal-v1 (the domain restored from target/ backups). Never configurable
+ * from a client or a target DB snapshot. */
+export const INBOX_AI_FENCE_PRODUCTION_PATH=
+  "/var/lib/ai-executive-target/inbox-ai-consent-fence.sqlite";
 const ACTOR=/^[A-Za-z0-9_.:@-]{1,120}$/;
 const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const TICKET=/^[a-f0-9]{48}$/;
@@ -61,7 +67,8 @@ export function verifiedInboxAIFencePath(
      !path.isAbsolute(targetStagingDirectory))return null;
   try{
     const lst=lstatSync(fencePath);
-    if(!lst.isFile()||lst.isSymbolicLink()||(lst.mode&0o077)!==0)return null;
+    if(!lst.isFile()||lst.isSymbolicLink()||(lst.mode&0o077)!==0||
+       lst.uid!==process.getuid())return null;
     const actual=realpathSync(fencePath);
     const target=realpathSync(targetStagingDirectory);
     if(actual===target||actual.startsWith(target+path.sep))return null;
@@ -105,6 +112,56 @@ export function provisionInboxAIFenceSchema(db:DatabaseSync):boolean{
     try{if(db.isTransaction)db.exec("ROLLBACK");}catch{}
     return false;
   }
+}
+
+/** Explicit, owner-verified provision or read-only check. HTTP handlers must
+ * call ONLY verifiedInboxAIFencePath and read existing state. Never call this
+ * function as a side-effect of a browser request or a service restart.
+ * An already-existing file is NEVER repaired, re-created, or granted consent.
+ * Missing on any later rollout/recovery must be a hard deployment failure. */
+export function provisionInboxAIFenceFile(
+  targetStagingDirectory:string,
+  mode:"provision"|"check",
+  fencePath=INBOX_AI_FENCE_PRODUCTION_PATH,
+):boolean{
+  if((mode!=="provision"&&mode!=="check")||!path.isAbsolute(fencePath)||
+     !path.isAbsolute(targetStagingDirectory))return false;
+  try{
+    const parent=path.dirname(fencePath);
+    const ps=lstatSync(parent);
+    if(!ps.isDirectory()||ps.isSymbolicLink()||
+       ps.uid!==process.getuid()||(ps.mode&0o077)!==0||
+       realpathSync(parent)!==parent)return false;
+    const realTarget=realpathSync(targetStagingDirectory);
+    if(fencePath===realTarget||fencePath.startsWith(realTarget+path.sep))
+      return false;
+    const existing=existsSync(fencePath);
+    if(!existing&&mode!=="provision")return false;
+    // lstat catches a dangling symlink (existsSync alone would not).
+    try{if(lstatSync(fencePath).isSymbolicLink())return false;}
+    catch{if(existing)return false;}
+    if(existing&&!verifiedInboxAIFencePath(fencePath,targetStagingDirectory))
+      return false;
+    const oldUmask=process.umask(0o077);
+    let db:DatabaseSync;
+    try{db=new DatabaseSync(fencePath,{readOnly:existing});}
+    finally{process.umask(oldUmask);}
+    try{
+      if(!existing){
+        const lst=lstatSync(fencePath);
+        if(!lst.isFile()||lst.uid!==process.getuid()||(lst.mode&0o077)!==0)
+          return false;
+        db.exec("PRAGMA journal_mode=DELETE");
+        db.exec("PRAGMA synchronous=FULL");
+        if(!provisionInboxAIFenceSchema(db))return false;
+      }
+      const check=db.prepare("SELECT v FROM inbox_ai_fence_meta WHERE k='schema_version'")
+        .get() as {v:unknown}|undefined;
+      const integrity=db.prepare("PRAGMA quick_check").get() as {quick_check:unknown}|undefined;
+      return check?.v===VERSION&&integrity?.quick_check==="ok"&&
+        verifiedInboxAIFencePath(fencePath,targetStagingDirectory)!==null;
+    }finally{db.close();}
+  }catch{return false;}
 }
 
 const healthy=(db:DatabaseSync):boolean=>{
