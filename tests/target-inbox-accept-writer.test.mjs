@@ -187,6 +187,23 @@ test("C-3b canonical v27: personal Today + project + triage, Undo restores date 
     {ok:true,mode:"r2-model",issues:[]});
 });
 
+test("C-3b canonical preflight rejects tampered compound receipt metadata",()=>{
+  const fx=fixture(),command=prepare(fx);
+  assert.deepEqual(fx.authority.changeInboxSuggestedAction(fx.token,{
+    mode:"accept",command,key:fx.key,sessionTokenHash:fx.sessionHash,
+  }),{ok:true});
+  assert.equal(inspectIsolatedTargetStore({...fx.store,mode:"r2-model"}).ok,true);
+  const row=fx.db.prepare("SELECT key,value FROM metadata WHERE key LIKE 'r3:c3b:accept:v1:%'").get();
+  assert.ok(row);
+  const forged=JSON.parse(row.value);
+  forged.actor="other";
+  fx.db.prepare("UPDATE metadata SET value=? WHERE key=?")
+    .run(JSON.stringify(forged),row.key);
+  const inspected=inspectIsolatedTargetStore({...fx.store,mode:"r2-model"});
+  assert.equal(inspected.ok,false);
+  assert.ok(inspected.issues.includes("metadata_invalid"));
+});
+
 test("C-3b canonical v27: tamper and stale signed proposal cannot write",()=>{
   const fx=fixture(),cmd=prepare(fx),before=row(fx);
   const attempts=[
