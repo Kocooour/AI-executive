@@ -1,0 +1,81 @@
+"use client";
+/** Explicit actor-owner AI consent; local rules never require this toggle. */
+import {useCallback,useEffect,useState} from "react";
+import {getC3bConsent,setC3bConsent}
+  from "../../lib/target-inbox-c3b-client";
+type State={kind:"loading"|"disabled"|"error"}|
+  {kind:"ready";enabled:boolean;pending:boolean};
+export default function InboxAIConsentSettings({language="cs"}:{
+  language?:"cs"|"en";
+}){
+  const [state,setState]=useState<State>({kind:"loading"});
+  const [saving,setSaving]=useState(false);
+  const [notice,setNotice]=useState("");
+  const speak=(cs:string,en:string)=>language==="cs"?cs:en;
+  const refresh=useCallback(async(signal?:AbortSignal)=>{
+    const r=await getC3bConsent(signal);
+    if(signal?.aborted)return;
+    if(r.ok)setState({kind:"ready",...r.value});
+    else setState({kind:r.reason==="disabled"?"disabled":"error"});
+  },[]);
+  useEffect(()=>{
+    const ctrl=new AbortController();
+    void refresh(ctrl.signal);
+    return ()=>ctrl.abort();
+  },[refresh]);
+  useEffect(()=>{
+    const onVisibility=()=>{
+      if(document.visibilityState==="visible")void refresh();
+      else setState({kind:"loading"}); // never show stale consent
+    };
+    document.addEventListener("visibilitychange",onVisibility);
+    return ()=>document.removeEventListener("visibilitychange",onVisibility);
+  },[refresh]);
+  async function change(enable:boolean){
+    if(saving||state.kind!=="ready"||state.pending)return;
+    setSaving(true);setNotice("");
+    try{
+      // Explicit owner action. No auto-enabling during restore, page reload
+      // or initial rollout; the two-store ledger must agree first.
+      const r=await setC3bConsent(enable);
+      if(r.ok){
+        setState({kind:"ready",...r.value});
+        setNotice(r.value.pending?speak(
+          "Odvolání souhlasu probíhá; otevřené požadavky se dokončují nebo ruší.",
+          "Consent withdrawal is pending while in-flight requests drain.")
+          :enable?speak("Souhlas byl aktivován.","Consent enabled.")
+          :speak("Souhlas byl odvolán.","Consent withdrawn."));
+      }else{
+        setState({kind:"error"});
+        setNotice(speak("Změnu nelze bezpečně potvrdit. Ověřte aktuální stav.",
+          "The change cannot be confirmed. Recheck current consent."));
+      }
+    }finally{setSaving(false);}
+  }
+  if(state.kind==="disabled")return null;
+  return <div className="targetInboxAIConsent"
+      data-testid="target-c3b-consent-settings">
+    <h3>{speak("AI návrhy pro Inbox","AI suggestions for Inbox")}</h3>
+    <p>{speak(
+      "Bez souhlasu fungují pouze lokální pravidla. Po výslovném zapnutí se OpenAI odesílá jen název aktuálního soukromého úkolu a názvy vašich soukromých Oblastí a projektů. Žádné poznámky ani sdílená data. Ukládání odpovědí je vypnuté, poskytovatel však může uchovávat bezpečnostní záznamy.",
+      "Without consent only local rules run. Enabling sends OpenAI only the current private task title and names of your private Areas/projects, never notes or shared data. Response-object storage is disabled, but provider safety logs may still exist."
+    )}</p>
+    {state.kind==="loading"&&<p role="status">{speak(
+      "Ověřuji souhlas…","Checking consent…")}</p>}
+    {state.kind==="error"&&<p role="alert">{speak(
+      "Souhlas není dostupný. AI zůstává vypnutá.",
+      "Consent is unavailable. Remote AI remains off.")}</p>}
+    {state.kind==="ready"&&<label className="targetInboxAIConsentToggle">
+      <input type="checkbox" checked={state.enabled}
+        disabled={saving||state.pending} onChange={e=>void change(e.target.checked)}/>
+      {speak("Povolit OpenAI návrhy pro moje soukromé úkoly",
+        "Allow OpenAI suggestions for my private tasks")}
+    </label>}
+    {state.kind==="ready"&&state.pending&&<p role="status">{speak(
+      "Odvolání čeká na bezpečné dokončení rozběhnutých požadavků.",
+      "Withdrawal is pending until active requests have drained.")}</p>}
+    {notice&&<p role="status">{notice}</p>}
+    <button type="button" disabled={saving} onClick={()=>void refresh()}>
+      {speak("Ověřit aktuální souhlas","Refresh consent status")}</button>
+  </div>;
+}
