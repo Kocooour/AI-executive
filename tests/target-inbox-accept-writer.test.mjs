@@ -41,7 +41,7 @@ function fixture(){
   db.prepare(`INSERT INTO tasks(id,area_id,title)
     VALUES('captured',?,'Připravit rekonstrukce')`).run(stage.unassignedAreaId);
   db.prepare(`INSERT INTO personal_task_plans(user_id,task_id,when_on)
-    VALUES('alice','captured','2026-11-23')`).run();
+    VALUES('alice','captured','2030-01-01')`).run();
   const store={stagingDirectory:stage.directory,
     expectedRestoreGeneration:stage.restoreGeneration};
   const durable=issueDurableTargetStagingSession(store,"alice");
