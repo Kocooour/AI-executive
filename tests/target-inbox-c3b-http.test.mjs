@@ -186,6 +186,24 @@ test("C-3b HTTP: explicit consent, mock OpenAI, revoke and fail-closed fallback"
   }});
   assert.notEqual(refused.status,200);
 });
+test("C-3b HTTP: exhausting the optional AI bucket cannot rate-limit local rules",async()=>{
+  const fixed={cookie:fixedOwnerSession,"x-forwarded-for":"10.91.17.249"};
+  // Consent is explicitly revoked in the preceding test. Best mode safely
+  // falls back to local rules, but still spends its separate HTTP AI budget.
+  const best=base+"?taskId=captured";
+  for(let i=0;i<30;i++){
+    const response=await PREVIEW(new Request(best,{headers:fixed}));
+    assert.equal(response.status,200,"best-mode request before the limit");
+  }
+  const over=await PREVIEW(new Request(best,{headers:fixed}));
+  assert.equal(over.status,429,"optional AI HTTP budget exhausted");
+  const rule=await PREVIEW(new Request(
+    best+"&mode=rules",{headers:fixed}));
+  assert.equal(rule.status,200,
+    "an exhausted AI budget must not block a local signed rules preview");
+  assert.equal((await rule.json()).source,"rule");
+});
+
 test("C-3b HTTP: missing Accept becomes a durable cancel receipt; late Accept rejected",async()=>{
   const proposal=await read(preview());
   const original={commandId:randomUUID(),taskId:proposal.taskId,
