@@ -68,7 +68,7 @@ try{
       const localDay=inboxLocalDate(Date.now(),snapshot.timeZone);
       if(!localDay)fail();
       let suggestion=suggestInboxWithLocalToday(snapshot.snapshot,localDay);
-      let fence=openVerifiedInboxC3bFence(dir);
+      let fence=request.mode==="rules"?null:openVerifiedInboxC3bFence(dir);
       try{
         // AI is OFF without the independent external fence, valid consent or
         // configured OpenAI provider. Rules remain fully local and available.

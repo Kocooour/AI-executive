@@ -269,7 +269,7 @@ test("C-3b: signed rules appear before a delayed optional AI response",async({pa
     const visibleAction=await suggestion.locator(".targetInboxSuggestionHeading span")
       .innerText();
     expect(visibleAction).toContain(seeded.projectTitle);
-    expect(visibleAction).toMatch(/\\d{4}-\\d{2}-\\d{2}/);
+    expect(visibleAction).toMatch(/\d{4}-\d{2}-\d{2}/);
     await expect.poll(()=>aiStarted,{timeout:10000}).toBe(true);
     expect(aiCompleted).toBe(false,
       "a pending AI request must not prevent a visible rule Accept");
