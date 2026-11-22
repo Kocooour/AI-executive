@@ -13,7 +13,7 @@ type Witness={linearization:TargetReadLinearization;areaEpochs:HomeSummaryAreaEp
 export type C3bPreview=Witness&{
   taskId:string;token:string;why:string;changes:InboxSuggestedChanges;
   source:"rule"|"ai";restoreGeneration:string;
-  privateEpoch:number;notificationEpoch:number;
+  privateEpoch:number;notificationEpoch:number;consentEpoch:number;
 };
 export type C3bReceipt=Witness&InboxAcceptReceiptView;
 export type C3bConsentRead={enabled:boolean;pending:boolean;epoch:number;
