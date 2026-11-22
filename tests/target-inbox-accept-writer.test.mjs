@@ -92,6 +92,21 @@ const row=fx=>fx.db.prepare(`SELECT t.project_id AS projectId,
     t.triage_revision AS triageRevision,t.revision AS revision
     FROM tasks t WHERE t.id='captured'`).get();
 
+test("C-3b receipt capacity reserves an Undo for every live Accept",async()=>{
+  const {inboxCompoundLedgerHasCapacity}=await import(
+    "../lib/target-inbox-accept-writer.ts");
+  const allowed=inboxCompoundLedgerHasCapacity;
+  assert.equal(allowed(0,0,"accept"),true);
+  assert.equal(allowed(2048,2048,"accept"),false,
+    "all remaining ledger slots belong to future Undo receipts");
+  assert.equal(allowed(2048,2048,"undo"),true,
+    "a reserved Undo must be allowed even when the ledger is fully reserved");
+  assert.equal(allowed(4095,0,"accept"),false);
+  assert.equal(allowed(4095,0,"undo"),true);
+  assert.equal(allowed(4096,0,"undo"),false);
+  assert.equal(allowed(3000,3001,"undo"),false);
+});
+
 test("C-3b canonical v27: Accept move + Process is one pinned command; Undo reverses both",()=>{
   const fx=fixture(),before=row(fx),command=prepare(fx);
   const beforePlan=fx.db.prepare(`SELECT when_on,revision FROM personal_task_plans
