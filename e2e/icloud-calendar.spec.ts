@@ -36,8 +36,17 @@ test.afterAll(async ({ browser, baseURL }) => {
 
 async function openCalendarSettings(page: Page) {
   await page.goto("/?view=Settings");
-  await waitUntilSynced(page);
-  await settingsSections(page).filter({ hasText: "Kalendář" }).click();
+  // CalDAV refresh may legitimately keep a request in flight after navigation.
+  // Settings only needs the initial server snapshot and no pending local sync;
+  // the Calendar section and account controls below provide explicit UI
+  // readiness. Do not require network-wide idle for a connected calendar.
+  await expect.poll(() => page.evaluate(() => [
+    localStorage.getItem("ai-executive-server-synced"),
+    localStorage.getItem("ai-executive-pending-sync"),
+  ]), { timeout: 20_000 }).toEqual(["1", null]);
+  const calendarSection=settingsSections(page).filter({ hasText: "Kalendář" });
+  await expect(calendarSection).toBeVisible({timeout:20_000});
+  await calendarSection.click();
   const block = page.locator(".icloudCalendar");
   await expect(block.getByRole("heading", { name: "Kalendář iCloud · pouze pro čtení" })).toBeVisible();
   return block;
