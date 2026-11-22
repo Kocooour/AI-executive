@@ -952,6 +952,18 @@ R2c.5 se dodává ve dvou PR. **R2c.5a** (tento krok) je knihovna `lib/target-sy
 Autorizovaný projektový detail poskytuje samostatný náhled CAS a příkaz názvu projektu. Transakční kontrola zahrnuje aktéra, aktuální Area ACL, cílovou Oblast, restore generation, revizi a actor/project-scoped idempotenci; aktualizace projektu, záznam synchronizace a content-free neměnný audit/receipt se commitují společně. Ověření aktuální session před sdělením výsledku platí i pro replay. Při souběžných příkazech se stejnou revizí uspěje nejvýše jeden. Vše zůstává default-off stagingem, nikoli produkčním cutoverem. Detailní HTTP kontrakt, limity, obnova zálohy a explicitní nedestruktivní upgrade přesného v25 na v26 jsou v [R3-PROJECT-TITLE-BE.md](R3-PROJECT-TITLE-BE.md).
 
 
+## C-3b — návrhy Inboxu: bezpečnostní kontrakt (WIP #492)
+
+Autorizační zdroj je cílová SQLite **v jedné připnuté konzistentní snapshot transakci**: server ověří aktéra, vlastní soukromý otevřený úkol, všechna povolená soukromá Area/project jména a osobní `when_on`; nesmí přijímat seznam cílů od klienta. V27 `projects` nemá sloupec completion/status: kandidáti jsou všechny existující autorovy soukromé projekty, nikoli klientem označený „open“ podvýběr. Překročení limitu seznamu znamená bezpečné odmítnutí, ne oříznutí množiny.
+
+Pravidlová normalizace používá NFC + plný Unicode casefold + hranice slov. AI cesta je striktně OpenAI-only se `store:false`, strict JSON schema, ověřením dokončeného response/message statusu a bez vypisování promptů nebo výstupů do logu. Odpověď AI je nedůvěryhodná; smí vybrat jen právě autorizovaný jednoznačný název. Vysvětlení pro klienta vytváří server, nikoli model.
+
+Podepsaný **šifrovaný** token (AES-GCM) potvrzuje jednu přesně zobrazenou akci, aktéra, task, session hash, restore generation, consent epoch/scope, přísné revize a lokální datum/IANA zónu. Není to oprávnění k zápisu: Accept musí provést čerstvou ACL/CAS/consent kontolu a přesné změny úkolu/When/triage/auditu/receiptu v **jednom** `BEGIN IMMEDIATE`; neprovádět další inference nebo změnu zobrazované akce. Při projektu je fyzické `tasks.area_id=NULL`, zděděná `effectiveAreaId` je jen ověřovací witness. Undo musí vrátit všechny a pouze původním příkazem změněné údaje bez zásahu do cizího When.
+
+**Revokační fence** musí být mimo restore doménu cílové SQLite, trvalý a společný všem workerům. Pending dispatch se zapisuje dřív než `fetch`; potvrzení revokace vyžaduje vyprázdnění všech starších pending tiketů, bez automatického expirování „osiřelých“ tiketů. Před i po provider volání se opět kontroluje fence, target-store grant, session, ACL, scope a restore; stale výsledek se zahodí. Rate budget je společný napříč procesy. Chybějící/nepřístupný fence znamená AI off, nikoli automatické vytvoření. Prvotní grant vlastníka musí být explicitní, verzovaný a uložený v target store; záloha obnovená po revokaci nesmí povolení obnovit.
+
+**Implementační status:** [#492](https://github.com/Kocooour/AI-executive/pull/492) zatím obsahuje pouze **nepropojené** read/token/fence moduly a testy. Nejde o schválený produkční consent/dispatch/Accept/Undo protokol. Před jakýmkoli HTTP/UI zapojením je povinné provést integrační a real-store review přesně podle [#471](https://github.com/Kocooour/AI-executive/issues/471)/[#484](https://github.com/Kocooour/AI-executive/issues/484).
+
 ## C34 — Target write Origin behind Tailscale Serve / reverse proxies
 
 Target-staging write and POST-shaped preflight/receipt handlers use
