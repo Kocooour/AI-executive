@@ -308,13 +308,15 @@ export async function getC3bConsent(request:Request):Promise<Response>{
     const limited=issue(request,"consent");
     if(limited)return limited;
     const result=await readC3bConsentInChild(
-      childConfig(request,identity,base));
+      childConfig(request,identity,base),true);
     const release=verifyStagingIdentityBeforeRelease(request,identity,base);
     if(release!=="ok")return stagingIdentityRefusal(release);
     if(!result||!c3bUnchanged(base))return answer(503,"Staging unavailable");
     if(result.restoreGeneration!==base.expectedRestoreGeneration)
       return answer(409,"read_stale_reload");
-    return Response.json({enabled:result.enabled,pending:result.pending},{headers});
+    if(!result.capacity)return answer(503,"Staging unavailable");
+    return Response.json({enabled:result.enabled,pending:result.pending,
+      capacity:result.capacity},{headers});
   }catch(error){
     logStagingFailure("target-staging/inbox/c3b-consent","route_exception",error);
     return answer(503,"Staging unavailable");

@@ -7,7 +7,8 @@ import type {HomeSummaryAreaEpoch} from "./target-my-plan-home-summary";
 import type {InboxAcceptCommand,InboxAcceptReceiptQuery,InboxAcceptUndoCommand,InboxAcceptResult}
   from "./target-inbox-accept-writer";
 import type {InboxSuggestedChanges} from "./target-inbox-suggestions";
-import type {InboxAcceptReceiptView} from "./target-inbox-accept-writer";
+import type {InboxAcceptReceiptView,InboxCompoundLedgerCapacity}
+  from "./target-inbox-accept-writer";
 
 type Witness={linearization:TargetReadLinearization;areaEpochs:HomeSummaryAreaEpoch[]};
 export type C3bPreview=Witness&{
@@ -17,7 +18,7 @@ export type C3bPreview=Witness&{
 };
 export type C3bReceipt=Witness&InboxAcceptReceiptView;
 export type C3bConsentRead={enabled:boolean;pending:boolean;epoch:number;
-  restoreGeneration:string};
+  restoreGeneration:string;capacity:InboxCompoundLedgerCapacity|null};
 export type C3bConsentWrite={enabled:boolean;pending:boolean};
 const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const TASK=/^[^\u0000-\u001f\u007f]{1,512}$/u;
@@ -96,13 +97,26 @@ function parseConsent(value:unknown,read:boolean):C3bConsentRead|C3bConsentWrite
   if(!primitive(value)||value.ok!==true||typeof value.enabled!=="boolean"||
      typeof value.pending!=="boolean"||
      Object.keys(value).sort().join(",")!==(read?
-       "enabled,epoch,ok,pending,restoreGeneration":"enabled,ok,pending"))
+       "capacity,enabled,epoch,ok,pending,restoreGeneration":"enabled,ok,pending"))
     return null;
   if(!read)return {enabled:value.enabled,pending:value.pending};
-  return Number.isSafeInteger(value.epoch)&&(value.epoch as number)>=0&&
+  const cap=value.capacity;
+  const validCapacity=cap===null||(primitive(cap)&&
+    Object.keys(cap).sort().join(",")==="limit,remainingAccepts,reserved,used,warning"&&
+    Number.isSafeInteger(cap.limit)&&(cap.limit as number)>0&&
+    Number.isSafeInteger(cap.used)&&(cap.used as number)>=0&&
+    Number.isSafeInteger(cap.reserved)&&(cap.reserved as number)>=cap.used&&
+    (cap.reserved as number)<=cap.limit&&
+    Number.isSafeInteger(cap.remainingAccepts)&&
+    (cap.remainingAccepts as number)>=0&&
+    (cap.remainingAccepts as number)<=cap.limit&&
+    typeof cap.warning==="boolean");
+  return validCapacity&&Number.isSafeInteger(value.epoch)&&
+    (value.epoch as number)>=0&&
     typeof value.restoreGeneration==="string"&&UUID.test(value.restoreGeneration)
     ?{enabled:value.enabled,pending:value.pending,
-      epoch:value.epoch as number,restoreGeneration:value.restoreGeneration}:null;
+      epoch:value.epoch as number,restoreGeneration:value.restoreGeneration,
+      capacity:cap as InboxCompoundLedgerCapacity|null}:null;
 }
 const call=async(config:StagingPersonalReadConfig,body:object)=>
   runStagingWriteChild(config,"target-staging-inbox-c3b-child.mjs",JSON.stringify(body),512*1024);
@@ -133,8 +147,10 @@ export async function cancelC3bInChild(
   }
   return null;
 }
-export const readC3bConsentInChild=async(config:StagingPersonalReadConfig)=>
-  parseConsent(await call(config,{operation:"consent_read"}),true) as C3bConsentRead|null;
+export const readC3bConsentInChild=async(config:StagingPersonalReadConfig,
+  includeCapacity=false)=>
+  parseConsent(await call(config,{operation:"consent_read",includeCapacity}),
+    true) as C3bConsentRead|null;
 export const writeC3bConsentInChild=async(
   config:StagingPersonalReadConfig,mode:"grant"|"revoke",
 )=>

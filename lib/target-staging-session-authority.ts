@@ -115,7 +115,8 @@ import {writePreflightedInboxAIConsent,readTargetInboxAIConsent,
 import {writePreflightedInboxSuggestedAction,readInboxAcceptReceiptInSnapshot,
   type InboxAcceptCommand,type InboxAcceptReceiptQuery,type InboxAcceptUndoCommand,type InboxAcceptResult,
   type InboxAcceptReceiptView,cancelPreflightedInboxSuggestedAction,
-  cancelPreflightedInboxSuggestedUndo}
+  cancelPreflightedInboxSuggestedUndo,readInboxCompoundLedgerCapacity,
+  type InboxCompoundLedgerCapacity}
   from "./target-inbox-accept-writer";
 import {readAuthorizedInboxSuggestionSnapshot,
   type AuthorizedInboxSuggestionSnapshot} from "./target-inbox-suggestion-snapshot";
@@ -1264,6 +1265,19 @@ export class TargetStagingSessionAuthority {
     if(!credential)return {ok:false,reason:"unavailable"};
     return writePreflightedInboxAIConsent(this.#store,credential,
       ownerUserId,command,durableSessionTokenHash);
+  }
+
+  /** Owner-private, read-only capacity telemetry. Never release UUIDs or IDs. */
+  readInboxReceiptCapacity(actorUserId:string):InboxCompoundLedgerCapacity|null{
+    if(this.#closed)return null;
+    try{
+      const credential=this.#oneShotReadCredential(actorUserId);
+      if(!credential)return null;
+      return readPreflightedStoreSnapshot(this.#store,db=>{
+        if(verifiedActor(db,credential)!==actorUserId)return null;
+        return readInboxCompoundLedgerCapacity(db);
+      });
+    }catch{return null;}
   }
 
   /** Actor-private consent read; caller MUST live-revalidate before release. */

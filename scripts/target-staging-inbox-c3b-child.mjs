@@ -152,7 +152,8 @@ try{
       output({ok:true,...receipt,
         linearization:page.linearization,areaEpochs:page.areaEpochs});
     }else if(request.operation==="consent_read"){
-      if(actor!==owner)fail();
+      if(actor!==owner||(request.includeCapacity!==undefined&&
+         typeof request.includeCapacity!=="boolean"))fail();
       const record=authority.readInboxAIConsent(actor);
       const fence=openVerifiedInboxC3bFence(dir);
       if(!fence)fail();
@@ -161,8 +162,11 @@ try{
         const enabled=targetInboxAIConsentMatchesFence(record,grant,gen);
         const pending=Boolean(record&&!record.enabled&&grant&&!grant.active&&
           !inboxAIRevokeDrained(fence,actor,grant.epoch));
+        const capacity=request.includeCapacity
+          ?authority.readInboxReceiptCapacity(actor):null;
+        if(request.includeCapacity&&!capacity)fail();
         output({ok:true,enabled,pending,epoch:record?.epoch??0,
-          restoreGeneration:gen});
+          restoreGeneration:gen,capacity});
       }finally{fence.close();}
     }else if(request.operation==="consent_write"){
       if(actor!==owner||!["grant","revoke"].includes(request.mode))fail();

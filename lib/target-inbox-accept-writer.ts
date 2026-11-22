@@ -216,8 +216,11 @@ export function inboxCompoundLedgerHasCapacity(
     MAX_RECEIPTS-reserve;
 }
 /** No actor, task or content in these owner-side capacity diagnostics. */
+export type InboxCompoundLedgerCapacity={
+  limit:number;used:number;reserved:number;remainingAccepts:number;warning:boolean;
+};
 export function inboxCompoundLedgerCapacity(receiptRows:number,activeAccepts:number):
-  {limit:number;used:number;reserved:number;remainingAccepts:number;warning:boolean}|null{
+  InboxCompoundLedgerCapacity|null{
   if(!validEpoch(receiptRows)||!validEpoch(activeAccepts)||
      activeAccepts>receiptRows||receiptRows>MAX_RECEIPTS)return null;
   const reserved=receiptRows+activeAccepts;
@@ -225,6 +228,21 @@ export function inboxCompoundLedgerCapacity(receiptRows:number,activeAccepts:num
     remainingAccepts:Math.max(0,Math.floor(
       (MAX_RECEIPTS-C3B_RECEIPT_CANCEL_RESERVE-reserved)/2)),
     warning:reserved>=C3B_RECEIPT_WARNING_ROWS};
+}
+/** Pinned read-only receipt headroom without releasing private UUIDs/IDs. */
+export function readInboxCompoundLedgerCapacity(db:DatabaseSync):
+  InboxCompoundLedgerCapacity|null{
+  try{
+    const row=db.prepare(`SELECT COUNT(*) AS n FROM metadata WHERE
+      substr(key,1,?)=? OR substr(key,1,?)=?`)
+      .get(ACCEPT.length,ACCEPT,UNDO.length,UNDO) as {n:number};
+    const active=db.prepare(`SELECT COUNT(*) AS n FROM metadata a
+      WHERE substr(a.key,1,?)=? AND json_extract(a.value,'$.kind')='accept' AND NOT EXISTS(
+        SELECT 1 FROM metadata u
+         WHERE u.key=?||substr(a.key,?)
+      )`).get(ACCEPT.length,ACCEPT,UNDO,ACCEPT.length+1) as {n:number};
+    return inboxCompoundLedgerCapacity(row.n,active.n);
+  }catch{return null;}
 }
 const checkCapacity=(db:DatabaseSync,mode:"accept"|"undo"|"cancel"):boolean=>{
   const row=db.prepare(`SELECT COUNT(*) AS n FROM metadata WHERE
