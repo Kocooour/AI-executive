@@ -33,6 +33,7 @@ import {
   TARGET_STAGING_MAX_ATTENTION_DELIVERIES, TARGET_STAGING_MAX_DEVICE_DELIVERIES,
 } from "./target-store-bootstrap";
 import { TARGET_INBOX_MAX_RECEIPTS, TARGET_INBOX_UNDO_REBASE_PREFIX } from "./target-inbox-schema";
+import {validateC3BMetadata} from "./target-inbox-metadata-validation";
 
 export type TargetPreflightMode = "stage" | "r2-model";
 export type TargetPreflightCode =
@@ -250,6 +251,13 @@ export function inspectIsolatedTargetStore(
     try {
       const rows = all("SELECT key, value FROM metadata") as { key: unknown; value: unknown }[];
       const meta = new Map(rows.map(row => [row.key, row.value]));
+      // C-3b does not relax the deny-by-default metadata whitelist. The new
+      // four namespaces are validated for exact actor-bound hashes, bounded
+      // receipts, original/Undo lineage and versioned owner consent before
+      // they may be counted as legal metadata. No titles or payloads in logs.
+      const c3b=validateC3BMetadata(rows,(all("SELECT id FROM identities")
+        as {id:string}[]).map(x=>x.id));
+      if(!c3b.valid)fail("metadata_invalid");
       const receipts = rows.filter(row => typeof row.key === "string" &&
         row.key.startsWith(TARGET_STAGING_RECEIPT_PREFIX));
       const deleteReceipts = rows.filter(row => typeof row.key === "string" &&
@@ -471,7 +479,7 @@ export function inspectIsolatedTargetStore(
         structureRecoveryValid;
       if (rows.length !== 6 + receipts.length + deleteReceipts.length + temporalReceipts.length + dueOnReceipts.length + privateWhenReceipts.length + attentionReceipts.length + noteReceipts.length +
             notificationReceipts.length + pushTargetReceipts.length + baselineMarkers.length +
-            noteDeleteReceipts.length + lifecycleReceipts.length + projectTitleCancels.length + inboxCancels.length + tombstoneCancels.length + undoRebases.length + privateTaskCreateReceipts.length + privateTaskCreateRecoveries.length + privateTaskCreateCancels.length + structureReceipts.length + structureRecoveries.length + structureCancels.length ||
+            noteDeleteReceipts.length + lifecycleReceipts.length + projectTitleCancels.length + inboxCancels.length + tombstoneCancels.length + undoRebases.length + privateTaskCreateReceipts.length + privateTaskCreateRecoveries.length + privateTaskCreateCancels.length + structureReceipts.length + structureRecoveries.length + structureCancels.length + c3b.count ||
           receipts.length > TARGET_STAGING_MAX_RECEIPTS ||
           deleteReceipts.length > TARGET_STAGING_MAX_RECEIPTS ||
           privateTaskCreateReceipts.length > TARGET_STAGING_MAX_RECEIPTS ||
@@ -495,6 +503,7 @@ export function inspectIsolatedTargetStore(
           lifecycleReceipts.length > TARGET_STAGING_MAX_RECEIPTS ||
           projectTitleCancels.length > TARGET_STAGING_AUDIT_MAX_EVENTS ||
           !projectTitleCancelsValid || !inboxCancelsValid || !tombstoneCancelsValid || !undoRebasesValid ||
+          (c3b.count>0&&meta.get("schema_version")!==String(TARGET_STORE_SCHEMA_VERSION)) ||
           (meta.get("schema_version") !== String(TARGET_STORE_SCHEMA_VERSION) &&
             (inboxCancels.length !== 0 || tombstoneCancels.length !== 0 || undoRebases.length !== 0)) ||
           (meta.get("schema_version") === String(TARGET_STORE_LEGACY_SCHEMA_VERSION) &&
@@ -534,7 +543,8 @@ export function inspectIsolatedTargetStore(
               row.key.startsWith(TARGET_STAGING_PROJECT_TITLE_CANCEL_PREFIX) ||
               row.key.startsWith(TARGET_STAGING_INBOX_TRIAGE_CANCEL_PREFIX) ||
                row.key.startsWith(TARGET_STAGING_INBOX_TOMBSTONE_CANCEL_PREFIX) ||
-              row.key.startsWith(TARGET_INBOX_UNDO_REBASE_PREFIX))) ||
+              row.key.startsWith(TARGET_INBOX_UNDO_REBASE_PREFIX) ||
+              c3b.prefixes.some(prefix=>row.key.startsWith(prefix)))) ||
           !isSupportedTargetSchemaVersion(meta.get("schema_version")) ||
           meta.get("activated") !== "false" || meta.get("write_protocol") !== "per-item-only" ||
           typeof meta.get("anchor_seq") !== "string" ||
