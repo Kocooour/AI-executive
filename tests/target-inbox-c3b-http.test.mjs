@@ -207,9 +207,11 @@ test("C-3b HTTP: concurrent optional previews preserve rules worker capacity",as
 
 test("C-3b HTTP: exhausting the optional AI bucket cannot rate-limit local rules",async()=>{
   const fixed={cookie:fixedOwnerSession,"x-forwarded-for":"10.91.17.249"};
-  // Consent is explicitly revoked in the preceding test. Best mode safely
-  // falls back to local rules, but still spends its separate HTTP AI budget.
-  const best=base+"?taskId=captured";
+  // The preceding concurrency test added a task, invalidating previously
+  // cached "captured" snapshots. Use the new task's current witness instead
+  // of asserting that a stale preview must succeed.
+  // Consent is revoked, so best safely falls back to local rules.
+  const best=base+"?taskId=ai-admission-test";
   for(let i=0;i<30;i++){
     const response=await PREVIEW(new Request(best,{headers:fixed}));
     assert.equal(response.status,200,"best-mode request before the limit");
