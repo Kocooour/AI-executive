@@ -60,8 +60,12 @@ const answer=(status:number,error:string)=>
   Response.json({error},{status,headers});
 const id=/^[^\u0000-\u001f\u007f]{1,512}$/u;
 const issue=(request:Request,operation:string)=>{
+  // A user with a long Inbox must still receive local rules even when the
+  // remote model is rate-limited. This is a bounded HTTP request budget, NOT
+  // the OpenAI dispatch allowance: the external cross-worker fence keeps its
+  // much stricter 3/actor-minute and 12/global-minute provider limits.
   const limited=enforceRateLimit(request,"target-staging-c3b-"+operation,
-    operation==="preview"?24:operation==="consent"?10:30,600000);
+    operation==="preview"?180:operation==="consent"?10:30,600000);
   return limited?Response.json({error:"Too many requests"},{status:429,
     headers:{...headers,"retry-after":String(limited.retryAfter)}}):null;
 };
