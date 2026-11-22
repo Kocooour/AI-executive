@@ -117,6 +117,26 @@ export function validateC3BMetadata(
          Buffer.byteLength(row.value,"utf8")>MAX_BYTES||
          !HEX.test(row.key.slice(C3B_UNDO_PREFIX.length)))return invalid;
       const x:unknown=JSON.parse(row.value);
+      if(object(x)&&x.kind==="undo_cancelled"){
+        if(!keys(x,
+          "actor,cancelledAtMs,commandId,kind,restoreGeneration,taskId,undoOfCommandId,v")||
+          x.v!==1||typeof x.actor!=="string"||!actors.has(x.actor)||
+          typeof x.taskId!=="string"||!optionalId(x.taskId)||
+          typeof x.commandId!=="string"||!UUID.test(x.commandId)||
+          typeof x.undoOfCommandId!=="string"||!UUID.test(x.undoOfCommandId)||
+          x.commandId.toLowerCase()===x.undoOfCommandId.toLowerCase()||
+          typeof x.restoreGeneration!=="string"||!UUID.test(x.restoreGeneration)||
+          !epoch(x.cancelledAtMs)||(x.cancelledAtMs as number)<=0||
+          row.key!==entryKey(C3B_UNDO_PREFIX,x.actor,x.undoOfCommandId))
+          return invalid;
+        const orig=accepted.get(entryKey(C3B_ACCEPT_PREFIX,x.actor,x.undoOfCommandId));
+        if(!orig||orig.taskId!==x.taskId||
+           orig.restoreGeneration!==x.restoreGeneration||
+           (orig.committedAtMs as number)>(x.cancelledAtMs as number)||
+           usedOriginals.has(row.key))return invalid;
+        usedOriginals.add(row.key);
+        continue;
+      }
       if(!object(x)||!keys(x,
         "actor,commandId,committedAtMs,digest,kind,restoreGeneration,taskId,undoOfCommandId,v")||
         x.v!==1||x.kind!=="undo"||
