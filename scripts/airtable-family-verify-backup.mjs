@@ -41,12 +41,13 @@ export async function verifyBackup(folder) {
       if (recordKeys.has(key)) throw new Error('Duplicate source record');
       recordKeys.add(key);
       if (!record.fields || typeof record.fields !== 'object') throw new Error('Missing record fields');
-      for (const value of Object.values(record.fields)) {
+      for (const [fieldName, value] of Object.entries(record.fields)) {
         if (!Array.isArray(value)) continue;
         for (const element of value) {
           if (element && ATT_ID.test(element.id ?? '')) {
             const fieldFiles = manifest.files.filter(f =>
-              f.source === source.name && f.recordId === record.id && f.id === element.id);
+              f.source === source.name && f.recordId === record.id &&
+              f.fieldName === fieldName && f.id === element.id);
             if (fieldFiles.length !== 1) throw new Error('Missing or duplicated attachment manifest entry');
           }
         }
