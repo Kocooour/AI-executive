@@ -4,7 +4,7 @@ import {parseStagingTargetInboxPage} from "./target-staging-read-process";
 import {runStagingWriteChild} from "./target-staging-title-http-process";
 import type {TargetReadLinearization} from "./target-task-read-model";
 import type {HomeSummaryAreaEpoch} from "./target-my-plan-home-summary";
-import type {InboxAcceptCommand,InboxAcceptUndoCommand,InboxAcceptResult}
+import type {InboxAcceptCommand,InboxAcceptReceiptQuery,InboxAcceptUndoCommand,InboxAcceptResult}
   from "./target-inbox-accept-writer";
 import type {InboxSuggestedChanges} from "./target-inbox-suggestions";
 import type {InboxAcceptReceiptView} from "./target-inbox-accept-writer";
@@ -112,7 +112,8 @@ export const acceptC3bInChild=async(config:StagingPersonalReadConfig,command:Inb
   parseWrite(await call(config,{operation:"accept",command}));
 export const undoC3bInChild=async(config:StagingPersonalReadConfig,command:InboxAcceptUndoCommand)=>
   parseWrite(await call(config,{operation:"undo",command}));
-export const receiptC3bInChild=async(config:StagingPersonalReadConfig,command:InboxAcceptCommand)=>
+export const receiptC3bInChild=async(config:StagingPersonalReadConfig,
+  command:InboxAcceptCommand|InboxAcceptReceiptQuery)=>
   parseReceipt(await call(config,{operation:"receipt",command}));
 export const readC3bConsentInChild=async(config:StagingPersonalReadConfig)=>
   parseConsent(await call(config,{operation:"consent_read"}),true) as C3bConsentRead|null;
