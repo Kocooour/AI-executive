@@ -98,7 +98,7 @@ Nezavádět nový veřejně dostupný bezautentizační endpoint, přímý pří
 | DOC-08 | Není veřejný přístup; před R5 neumí cizí aktér získat obsah přes API, hledání, Context Resolver, náhled ani citaci. Po R5 mají přístup pouze členové autorizované společné Oblasti. |
 | DOC-09 | Manuálně opravené metadata zůstanou zachovány po opakované extrakci; novější a zrušená verze dokumentu se rozlišují. |
 | DOC-10 | Bez zvláštního opt-in nejde dokumentový obsah do externí AI, automatického e-mailového importu ani do profilů HumanWiki. |
-| DOC-11 | Nový import přidá do **nové `Rodina / Dokumenty`** dokument a binární přílohu; stávající záznamy, výběrové hodnoty a poznámky čtyř původních bází nezmění. Mobilní Zkratka neobsahuje Airtable API token. |
+| DOC-11 | Nový import přidá do **nové `Rodina / Dokumenty`** dokument a binární přílohu; stávající záznamy, výběrové hodnoty a poznámky **tří migrovaných zdrojů** nezmění a samostatné `Rekonstrukce Světice` se nedotkne. Mobilní Zkratka neobsahuje Airtable API token. |
 | DOC-12 | Lumi otevře aktuální přílohu i po expiraci dřívější Airtable download URL, bezpečně obnoví autorizovaný přístup; výpadek API přizná místo smyšleného odkazu. |
 | DOC-13 | Export ze **tří** migrovaných bází, konsolidace do `Rodina` a pozdější přenos do Lumi zachová každý záznam, přílohu a vazbu uvnitř `Rodina` (počty + SHA-256), UUID, metadata i ruční opravy; opakování je idempotentní. Původní rekonstrukce zůstává beze změny. |
 | DOC-14 | Po kontrolovaném přepnutí z Airtable do Lumi funguje stejná iPhone Zkratka a stejná uživatelská otázka/citace; žádná původní příloha se nemaže bez výslovného rozhodnutí. |
