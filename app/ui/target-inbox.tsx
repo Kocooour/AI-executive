@@ -18,6 +18,9 @@ import {
   type InboxClientCommand,type InboxClientPage,type InboxClientFailure,
 } from "../../lib/target-inbox-client";
 import type {TargetInboxItem} from "../../lib/target-inbox-client-types";
+import TargetInboxC3b,{type C3bOutcome} from "./target-inbox-c3b";
+import {acceptC3b,undoC3b,receiptC3b,type C3bUndo}
+  from "../../lib/target-inbox-c3b-client";
 import "./target-inbox.css";
 
 type Language="cs"|"en";
@@ -164,6 +167,15 @@ export default function TargetInbox({language="cs",taskDetail=false}:{language?:
   const runtime=useTargetRuntime(),generation=useTargetGeneration();
   const [recoveredGeneration,setRecoveredGeneration]=useState("");
   const [recoveryFailed,setRecoveryFailed]=useState(false);
+  const [c3bOutcome,setC3bOutcome]=useState<
+    (C3bOutcome&{undoCommand?:C3bUndo})|null>(null);
+  const onC3bOutcome=useCallback((outcome:C3bOutcome)=>{
+    setC3bOutcome(outcome);
+    if(outcome.status==="committed"){
+      emitTargetChange({kind:"task",id:outcome.command.taskId,change:"updated"});
+      reload();
+    }
+  },[reload]);
   useEffect(()=>{
     if(!runtime?.known()||runtime.generation()!==generation)return;
     const ok=restoreInboxDecision(runtime,generation);
@@ -183,11 +195,50 @@ export default function TargetInbox({language="cs",taskDetail=false}:{language?:
       inboxDecisionSnapshot(runtime,generation)?.command.commandId===command.commandId),
     [runtime,generation]);
   const speak=(cs:string,en:string)=>language==="cs"?cs:en;
+  const c3bVerify=useCallback(async()=>{
+    const current=c3bOutcome;
+    if(!current)return;
+    const result=await receiptC3b(current.command);
+    if(result.ok&&result.value.status==="committed"){
+      onC3bOutcome({command:current.command,
+        status:"committed",next:result.value.next});
+    }else if(result.ok&&result.value.status==="undone"){
+      setC3bOutcome(null);
+      emitTargetChange({kind:"task",id:current.command.taskId,change:"updated"});
+      reload();
+    }else if(result.ok===false&&result.reason==="signed-out"){
+      setC3bOutcome(null);revoke();
+    }
+  },[c3bOutcome,onC3bOutcome,reload,revoke]);
+  const c3bRetry=useCallback(async()=>{
+    const current=c3bOutcome;
+    if(!current||current.status!=="uncertain")return;
+    await acceptC3b(current.command);
+    await c3bVerify();
+  },[c3bOutcome,c3bVerify]);
+  const c3bUndo=useCallback(async()=>{
+    const current=c3bOutcome;
+    if(!current||current.status!=="committed"||!current.next)return;
+    const original=current.command;
+    const command:C3bUndo={commandId:crypto.randomUUID(),
+      undoOfCommandId:original.commandId,taskId:original.taskId,
+      restoreGeneration:original.restoreGeneration,...current.next};
+    setC3bOutcome({...current,undoCommand:command,status:"uncertain"});
+    await undoC3b(command);
+    const checked=await receiptC3b(original);
+    if(checked.ok&&checked.value.status==="undone"){
+      setC3bOutcome(null);
+      emitTargetChange({kind:"task",id:original.taskId,change:"updated"});
+      reload();
+    }
+  },[c3bOutcome,reload]);
   // Runtime generation rotation and explicit security clear retire the
   // tab-scoped command even while this view is unmounted.
   useEffect(()=>{
-    if(runtime&&(gate==="signed_out"||gate==="refused"))
+    if(runtime&&(gate==="signed_out"||gate==="refused")){
       clearInboxDecision(runtime,generation);
+      setC3bOutcome(null);
+    }
   },[runtime,generation,gate]);
   const confirm=useCallback(async(
     command:InboxClientCommand,title:string,processId:string,
@@ -337,6 +388,15 @@ export default function TargetInbox({language="cs",taskDetail=false}:{language?:
   // An unresolved command survives navigating away and back. In every phase,
   // hide rows/count and block fresh UUIDs until the original receipt is settled.
   const unresolved=decision&&["sending","verifying","uncertain","not-recorded"].includes(decision.stage);
+  if(c3bOutcome?.status==="uncertain")return <section className="targetInbox"
+    data-testid="target-c3b-uncertain" aria-live="polite">
+    <p role="alert">{speak("Ověřuji původní příkaz. Úkoly zůstávají skryté do potvrzení výsledku.",
+      "Checking the original command. Rows remain hidden until its receipt is confirmed.")}</p>
+    <button type="button" onClick={()=>void c3bVerify()}>
+      {speak("Ověřit původní příkaz","Verify original receipt")}</button>
+    {!c3bOutcome.undoCommand&&<button type="button" onClick={()=>void c3bRetry()}>
+      {speak("Opakovat pouze původní příkaz","Retry only the original command")}</button>}
+  </section>;
   if(recoveryFailed)return <section className="targetInbox" data-testid="target-inbox-recovery-error">
     <p role="alert">{speak(
       "Nelze bezpečně obnovit původní příkaz. Zápisy jsou zablokované, aby nedošlo k duplicitě.",
@@ -409,6 +469,15 @@ export default function TargetInbox({language="cs",taskDetail=false}:{language?:
         <button type="button" onClick={()=>{setDecision(null);reload();}}>
           {speak("Zavřít a obnovit","Close and refresh")}</button>}
     </div>}
+    {c3bOutcome?.status==="committed"&&<div
+      className="targetInboxDecision" data-testid="target-c3b-committed" role="status">
+      <span>{speak("Návrh byl přijat a úkol zpracován.",
+        "Suggestion accepted and task processed.")}</span>
+      {c3bOutcome.next&&<button type="button" onClick={()=>void c3bUndo()}>
+        {speak("Vrátit změny (Undo)","Undo changes")}</button>}
+      <button type="button" onClick={()=>setC3bOutcome(null)}>
+        {speak("Zavřít","Close")}</button>
+    </div>}
     {page.items.length===0&&<p role="status">
       {speak("Žádné úkoly nečekají na zpracování.","No tasks await processing.")}</p>}
     <ul className="targetInboxList">
@@ -421,6 +490,10 @@ export default function TargetInbox({language="cs",taskDetail=false}:{language?:
           :<strong>{item.title}</strong>}
           {item.status==="completed"&&<span className="targetInboxCompleted">
             {speak("Dokončeno, čeká na zpracování","Completed, awaiting processing")}</span>}
+          {item.status==="open"&&item.canProcess&&
+            <TargetInboxC3b item={item} restoreGeneration={page.restoreGeneration}
+              language={language} disabled={Boolean(unresolved)||Boolean(c3bOutcome)}
+              onOutcome={onC3bOutcome} onRevoked={revoke}/>}
         </div>
         {item.canProcess&&<button type="button"
           disabled={inFlight.current||Boolean(unresolved)||
