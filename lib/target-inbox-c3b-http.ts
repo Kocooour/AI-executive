@@ -16,7 +16,7 @@ import {targetProtocolRefusal,legacySnapshotRefusal}
 import {c3bEnabled,c3bWriteEnabled,c3bConfig,c3bUnchanged,
   inboxC3bActionKey,inboxC3bOwnerCookieBinding,openVerifiedInboxC3bFence}
   from "./target-inbox-c3b-runtime";
-import {readInboxAIFenceGrant} from "./target-inbox-ai-consent-fence";
+import {materializeInboxAIUnderFence} from "./target-inbox-ai-consent-fence";
 import {INBOX_AI_DATA_SCOPE_VERSION} from "./target-inbox-ai-consent";
 import {previewC3bInChild,acceptC3bInChild,undoC3bInChild,
   receiptC3bInChild,cancelC3bInChild,readC3bConsentInChild,writeC3bConsentInChild,
@@ -160,25 +160,23 @@ export async function getC3bPreview(request:Request):Promise<Response>{
         return answer(503,"Staging unavailable");
       }
       try{
-        fence.exec("BEGIN IMMEDIATE");
-        const grant=readInboxAIFenceGrant(fence,base.ownerUserId);
-        if(!grant?.active||grant.epoch!==result.consentEpoch||
-           grant.restoreGeneration!==base.expectedRestoreGeneration.toLowerCase()||
-           grant.dataScopeVersion!==INBOX_AI_DATA_SCOPE_VERSION||
-           !c3bUnchanged(base)){
+        const response=materializeInboxAIUnderFence(fence,
+          base.ownerUserId,base.expectedRestoreGeneration,
+          INBOX_AI_DATA_SCOPE_VERSION,result.consentEpoch,()=>{
+            if(!c3bUnchanged(base))return null;
+            // Synchronously seal the final response body while revoke is
+            // still excluded by the shared external SQLite write lock.
+            return Response.json({taskId:result.taskId,why:result.why,
+              token:result.token,changes:result.changes,source:result.source,
+              restoreGeneration:result.restoreGeneration},{headers});
+          });
+        if(!response){
           if(cacheKey)previews.delete(cacheKey);
           return answer(409,"read_stale_reload");
         }
-        // No await between the final persistent epoch check and body creation.
-        const response=Response.json({taskId:result.taskId,why:result.why,
-          token:result.token,changes:result.changes,source:result.source,
-          restoreGeneration:result.restoreGeneration},{headers});
         if(!cached)rememberPreview(cacheKey,result);
         return response;
-      }finally{
-        try{if(fence.isTransaction)fence.exec("ROLLBACK");}catch{}
-        fence.close();
-      }
+      }finally{fence.close();}
     }
     // Local rules have no OpenAI data or consent requirement.
     if(!cached)rememberPreview(cacheKey,result);
