@@ -174,6 +174,7 @@ export default function TargetInbox({language="cs",taskDetail=false}:{language?:
     next:C3bOutcome["next"];undoCommand?:C3bUndo;
   };
   const [c3bOutcome,setC3bOutcome]=useState<C3bLocalOutcome|null>(null);
+  const [c3bUndoNotice,setC3bUndoNotice]=useState(false);
   const c3bClear=useCallback(()=>{
     persistC3bRecovery(null);
     if(!inboxDecisionSnapshot(runtime,generation))setInboxUncertain(null);
@@ -230,7 +231,9 @@ export default function TargetInbox({language="cs",taskDetail=false}:{language?:
     if(!current||!runtime?.known()||runtime.generation()!==generation)return;
     const result=await receiptC3b(current.command);
     if(result.ok===true&&(result.value.status==="undone"||
-        result.value.status==="cancelled")){
+        result.value.status==="cancelled"||
+        result.value.status==="undo_cancelled")){
+      setC3bUndoNotice(result.value.status==="undo_cancelled");
       c3bClear();setC3bOutcome(null);
       emitTargetChange({kind:"task",id:current.command.taskId,change:"updated"});
       reload();
@@ -271,6 +274,26 @@ export default function TargetInbox({language="cs",taskDetail=false}:{language?:
     }
     // Any failed/unknown cancellation retains the same UUID and lockout.
   },[c3bOutcome,runtime,generation,c3bClear,reload,onC3bOutcome,revoke]);
+  const c3bCancelUndo=useCallback(async(undoCommand?:C3bUndo)=>{
+    const current=c3bOutcome;
+    const command=undoCommand??current?.undoCommand;
+    if(!command||!runtime?.known()||runtime.generation()!==generation)return;
+    // A 409 is not definitive: the old Undo could still be in flight.
+    // Only this pinned SQLite tombstone can prove that no late Undo can
+    // subsequently change a newer task. It shares the original Undo slot.
+    const result=await cancelC3b(command);
+    if(!runtime.known()||runtime.generation()!==generation)return;
+    if(result.ok&&["undone","undo_cancelled"].includes(result.value.status)){
+      c3bClear();setC3bOutcome(null);
+      setC3bUndoNotice(result.value.status==="undo_cancelled");
+      emitTargetChange({kind:"task",id:command.taskId,change:"updated"});
+      reload();
+    }else if(result.ok===false&&result.reason==="signed-out"){
+      c3bClear();setC3bOutcome(null);revoke();
+    }
+    // A transient 503/429 or unknown result is never proof of cancellation.
+    // Preserve original UUID and block new writes until the terminal receipt.
+  },[c3bOutcome,runtime,generation,c3bClear,reload,revoke]);
   const c3bRetry=useCallback(async()=>{
     const current=c3bOutcome;
     if(!current||current.status!=="uncertain"||
@@ -281,9 +304,13 @@ export default function TargetInbox({language="cs",taskDetail=false}:{language?:
   const c3bRetryUndo=useCallback(async()=>{
     const current=c3bOutcome;
     if(!current||current.status!=="uncertain"||!current.undoCommand)return;
-    await undoC3b(current.undoCommand);
-    await c3bVerify();
-  },[c3bOutcome,c3bVerify]);
+    const attempt=await undoC3b(current.undoCommand);
+    if(attempt.ok===false&&attempt.reason==="stale"){
+      await c3bCancelUndo(current.undoCommand);
+    }else{
+      await c3bVerify();
+    }
+  },[c3bOutcome,c3bVerify,c3bCancelUndo]);
   const c3bUndo=useCallback(async()=>{
     const current=c3bOutcome;
     if(!current||current.status!=="committed"||!current.next)return;
@@ -292,14 +319,19 @@ export default function TargetInbox({language="cs",taskDetail=false}:{language?:
       undoOfCommandId:original.commandId,taskId:original.taskId,
       restoreGeneration:original.restoreGeneration,...current.next};
     if(!c3bPending({...current,undoCommand:command,status:"uncertain"}))return;
-    await undoC3b(command);
+    const attempt=await undoC3b(command);
+    // A definite 409/CAS refusal is not enough to retire an uncertain UUID:
+    // serialize a server-side terminal Undo cancellation against late writes.
+    if(attempt.ok===false&&attempt.reason==="stale"){
+      await c3bCancelUndo(command);return;
+    }
     const checked=await receiptC3b(original);
     if(checked.ok===true&&checked.value.status==="undone"){
       c3bClear();setC3bOutcome(null);
       emitTargetChange({kind:"task",id:original.taskId,change:"updated"});
       reload();
     }
-  },[c3bOutcome,c3bPending,c3bClear,reload]);
+  },[c3bOutcome,c3bPending,c3bClear,reload,c3bCancelUndo]);
   // Runtime generation rotation and explicit security clear retire the
   // tab-scoped command even while this view is unmounted.
   useEffect(()=>{
@@ -467,9 +499,12 @@ export default function TargetInbox({language="cs",taskDetail=false}:{language?:
       onClick={()=>void c3bCancel()}>
       {speak("Bezpečně ukončit původní Přijmout",
         "Safely cancel original Accept")}</button>}
-    {c3bOutcome.undoCommand?<button type="button"
-      onClick={()=>void c3bRetryUndo()}>
-      {speak("Opakovat původní Undo","Retry original Undo")}</button>:
+    {c3bOutcome.undoCommand?<div className="targetInboxDecision">
+      <button type="button" onClick={()=>void c3bRetryUndo()}>
+        {speak("Opakovat původní Undo","Retry original Undo")}</button>
+      <button type="button" onClick={()=>void c3bCancelUndo()}>
+        {speak("Bezpečně ukončit původní Undo","Safely cancel original Undo")}</button>
+    </div>:
       ("token" in c3bOutcome.command)&&<button type="button"
         onClick={()=>void c3bRetry()}>
         {speak("Opakovat pouze původní příkaz","Retry only the original command")}</button>}
@@ -555,6 +590,9 @@ export default function TargetInbox({language="cs",taskDetail=false}:{language?:
       <button type="button" onClick={()=>setC3bOutcome(null)}>
         {speak("Zavřít","Close")}</button>
     </div>}
+    {c3bUndoNotice&&<p role="status" data-testid="target-c3b-undo-cancelled">
+      {speak("Undo bylo bezpečně ukončeno; původní Přijmout zůstává a pozdější změny nebyly přepsány.",
+        "Undo was cancelled safely. The original Accept remains and later edits were not overwritten.")}</p>}
     {page.items.length===0&&<p role="status">
       {speak("Žádné úkoly nečekají na zpracování.","No tasks await processing.")}</p>}
     <ul className="targetInboxList">
