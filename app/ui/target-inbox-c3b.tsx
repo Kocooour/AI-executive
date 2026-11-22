@@ -20,6 +20,7 @@ export default function TargetInboxC3b({item,restoreGeneration,
   const runtime=useTargetRuntime(),generation=useTargetGeneration();
   const root=useRef<HTMLDivElement|null>(null);
   const [visible,setVisible]=useState(false);
+  const [fetchKey,setFetchKey]=useState(0);
   const [suggestion,setSuggestion]=useState<C3bProposal|null>(null);
   const [status,setStatus]=useState<"idle"|"loading"|"ready"|"off"|"failed"|"sending">("idle");
   const [expanded,setExpanded]=useState(false);
@@ -36,10 +37,14 @@ export default function TargetInboxC3b({item,restoreGeneration,
     observer.observe(el);
     return ()=>observer.disconnect();
   },[]);
-  const reload=useCallback(()=>setStatus("idle"),[]);
+  const reload=useCallback(()=>{
+    setSuggestion(null);
+    setStatus("idle");
+    setFetchKey(n=>n+1);
+  },[]);
   useEffect(()=>{
     if(!visible||disabled||!runtime?.known()||
-       runtime.generation()!==generation||status!=="idle")return;
+       runtime.generation()!==generation)return;
     const abort=new AbortController();
     setStatus("loading");
     void fetchC3bProposal(item.id,abort.signal).then(result=>{
@@ -57,7 +62,8 @@ export default function TargetInboxC3b({item,restoreGeneration,
       }
     });
     return ()=>abort.abort();
-  },[visible,disabled,runtime,generation,item.id,restoreGeneration,status,onRevoked]);
+  },[visible,disabled,runtime,generation,item.id,restoreGeneration,
+    fetchKey,onRevoked]);
   async function accept(){
     if(disabled||!suggestion||status!=="ready"||
        !runtime?.known()||runtime.generation()!==generation)return;
