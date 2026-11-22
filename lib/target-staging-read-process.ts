@@ -62,6 +62,8 @@ export interface StagingPersonalReadConfig {
    * ownerUserId. The raw token never reaches a child process.
    */
   sessionTokenHash?: string;
+  /** C-3b only: server HMAC of a VERIFIED owner cookie, never raw cookie. */
+  c3bOwnerCookieBinding?: string;
   noteSyncSecret?: string;
 }
 
