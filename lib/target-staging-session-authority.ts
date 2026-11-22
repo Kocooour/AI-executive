@@ -113,7 +113,7 @@ import {writePreflightedInboxAIConsent,readTargetInboxAIConsent,
   type InboxConsentCommand,type InboxConsentResult,type TargetInboxAIConsent}
   from "./target-inbox-ai-consent";
 import {writePreflightedInboxSuggestedAction,readInboxAcceptReceiptInSnapshot,
-  type InboxAcceptCommand,type InboxAcceptUndoCommand,type InboxAcceptResult,
+  type InboxAcceptCommand,type InboxAcceptReceiptQuery,type InboxAcceptUndoCommand,type InboxAcceptResult,
   type InboxAcceptReceiptView}
   from "./target-inbox-accept-writer";
 import {readAuthorizedInboxSuggestionSnapshot,
@@ -1216,7 +1216,7 @@ export class TargetStagingSessionAuthority {
 
   /** Read-only recovery for an uncertain C-3b Accept, never a new write. */
   readInboxSuggestionReceipt(
-    actorUserId:string,command:InboxAcceptCommand,
+    actorUserId:string,command:InboxAcceptCommand|InboxAcceptReceiptQuery,
   ):InboxAcceptReceiptView|null{
     if(this.#closed)return null;
     try{
