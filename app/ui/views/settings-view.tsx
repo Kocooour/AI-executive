@@ -7,6 +7,7 @@ import { localizeServerError } from "../../../lib/server-errors";
 import { pluralText } from "../../../lib/plural";
 import { ICloudCalendarSettings } from "./icloud-calendar-settings";
 import { GmailAccountsSettings } from "./gmail-settings";
+import InboxAIConsentSettings from "../target-inbox-ai-consent-settings";
 
 const settingsTabLabels: Record<string, string> = {
   general: "settingsGeneral", workspace: "workspace", access: "access", notifications: "settingsNotifications",
@@ -180,6 +181,9 @@ export function SettingsView({ app }: { app: LumiApp }) {
                     ))}
                   </select>
                 </label>
+              </section>
+              <section hidden={settingsSection !== "general"}>
+                <InboxAIConsentSettings language={language}/>
               </section>
               <section hidden={settingsSection !== "general"}>
                 <h2>{tr("installApp")}</h2>
