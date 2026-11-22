@@ -101,6 +101,8 @@ test("only the runtime (and its server route) reference the session endpoint; no
     "app/ui/target-overview.tsx",
     // C-3a: lazily loaded target Inbox is an independently gated runtime consumer.
     "app/ui/target-inbox.tsx",
+    // C-3b private suggestion is a gated subview, not a second runtime.
+    "app/ui/target-inbox-c3b.tsx",
     // R3-FE-3: the lazily loaded scope lists and the gate hook.
     "app/ui/target-scope-lists.tsx","app/ui/use-target-gate.ts",
     // R3-FE-4a: the lazily loaded authorized detail panel and the compact sidebar project list.

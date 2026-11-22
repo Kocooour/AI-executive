@@ -63,7 +63,12 @@ for(const width of [390,1280]){
     const consent=page.getByTestId("target-c3b-consent-settings");
     await expect(consent).toBeVisible({timeout:25000});
     const toggle=consent.getByRole("checkbox");
-    await expect(toggle).not.toBeChecked();
+    // The viewport cases share isolated SQLite; never inherit an earlier
+    // interrupted run\u0027s owner grant without an explicit revoke.
+    if(await toggle.isChecked()){
+      await toggle.uncheck();
+      await expect(toggle).not.toBeChecked({timeout:15000});
+    }
     await toggle.check();
     await expect(toggle).toBeChecked({timeout:15000});
 

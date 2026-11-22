@@ -89,6 +89,14 @@ function routes(dir = directory) {
 // expressions: a newly discovered handler must prove 401 until its precise
 // release gate has been reviewed and explicitly classified.
 const disabledRoutes = new Map([
+  // New C-3b routes are separately gated OFF in personal-v1. When enabled,
+  // the session/origin matrix still must prove 401/403.
+  ["GET inbox/c3b", "AI_EXECUTIVE_TARGET_STAGING_HTTP_C3B_ENABLED"],
+  ["GET inbox/c3b/consent", "AI_EXECUTIVE_TARGET_STAGING_HTTP_C3B_ENABLED"],
+  ["POST inbox/c3b/accept", "AI_EXECUTIVE_TARGET_STAGING_HTTP_C3B_ENABLED"],
+  ["POST inbox/c3b/consent", "AI_EXECUTIVE_TARGET_STAGING_HTTP_C3B_ENABLED"],
+  ["POST inbox/c3b/receipt", "AI_EXECUTIVE_TARGET_STAGING_HTTP_C3B_ENABLED"],
+  ["POST inbox/c3b/undo", "AI_EXECUTIVE_TARGET_STAGING_HTTP_C3B_ENABLED"],
   ["GET attention", "AI_EXECUTIVE_TARGET_STAGING_HTTP_ATTENTION_ENABLED"],
   ["GET attention/command", "AI_EXECUTIVE_TARGET_STAGING_HTTP_ATTENTION_ENABLED"],
   ["PATCH attention/command", "AI_EXECUTIVE_TARGET_STAGING_HTTP_ATTENTION_ENABLED"],

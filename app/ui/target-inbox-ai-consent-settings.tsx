@@ -34,7 +34,10 @@ export default function InboxAIConsentSettings({language="cs"}:{
   },[refresh]);
   async function change(enable:boolean){
     if(saving||state.kind!=="ready"||state.pending)return;
+    // Reflect the explicit user intent in the controlled checkbox while POST
+    // is pending. On failure, render a conservative unknown-state error.
     setSaving(true);setNotice("");
+    setState({kind:"ready",enabled:enable,pending:false});
     try{
       // Explicit owner action. No auto-enabling during restore, page reload
       // or initial rollout; the two-store ledger must agree first.

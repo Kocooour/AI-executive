@@ -88,6 +88,7 @@ export const TARGET_PERSONAL_V1_REQUIRED_SETTINGS:readonly {readonly name:string
 export const TARGET_PERSONAL_V1_NOT_SETTINGS:readonly {readonly name:string;readonly reason:string}[]=[
   {name:"AI_EXECUTIVE_TARGET_STAGING_DIAGNOSTICS",reason:"Synthetic stress-test diagnostics only, not a deployment setting."},
   {name:"AI_EXECUTIVE_TARGET_STAGING_SESSION_HASH",reason:"Passed by the server to its own read child only."},
+  {name:"AI_EXECUTIVE_TARGET_STAGING_C3B_OWNER_COOKIE_BINDING",reason:"HMAC of a server-verified owner session cookie passed only to the isolated C-3b child; not a deploy setting or browser-supplied identity."},
   {name:"AI_EXECUTIVE_TARGET_STAGING_INBOX_PROOF_KEY",reason:"Child-only Inbox command proof key derived from AI_EXECUTIVE_SESSION_SECRET; never operator-configured or an application session signing secret."},
   {name:"AI_EXECUTIVE_TARGET_STAGING_PROJECT_TITLE_PROOF_KEY",reason:"Child-only key derived from AI_EXECUTIVE_SESSION_SECRET; not set by operators."},
   {name:"AI_EXECUTIVE_TARGET_STAGING_NOTE_SYNC_SECRET",reason:"Belongs to the excluded note-sync feature."},
