@@ -195,3 +195,40 @@ test("C-3b HTTP: missing Accept becomes a durable cancel receipt; late Accept re
   assert.equal(db.prepare("SELECT triage_state AS t FROM tasks WHERE id='captured'")
     .get().t,"unprocessed");
 });
+
+
+test("C-3b P1 HTTP: a stale Undo is terminally cancelled, no late Undo or partial rewrite",async()=>{
+  db.prepare("INSERT INTO tasks(id,area_id,title) VALUES (?,?,?)")
+    .run("stale-undo",fixture.unassignedAreaId,"Připravit Rekonstrukce dnes");
+  const p=await read(preview("stale-undo"));
+  const command={commandId:randomUUID(),taskId:p.taskId,
+    restoreGeneration:p.restoreGeneration,token:p.token,
+    displayedWhy:p.why,displayedChanges:p.changes};
+  await read(post(ACCEPT,"accept",{command}));
+  const receipt=await read(post(RECEIPT,"receipt",{command:{
+    commandId:command.commandId,taskId:command.taskId,
+    restoreGeneration:command.restoreGeneration,
+  }}));
+  assert.equal(receipt.status,"committed");
+  assert.ok(receipt.next);
+  const undo={commandId:randomUUID(),undoOfCommandId:command.commandId,
+    taskId:command.taskId,restoreGeneration:command.restoreGeneration,
+    ...receipt.next};
+  db.prepare("UPDATE tasks SET title='Změněné zadání' WHERE id='stale-undo'").run();
+  const denied=await post(UNDO,"undo",{command:undo});
+  assert.equal(denied.status,409,"a newer edit must block Undo");
+  const cancelled=await read(post(CANCEL,"cancel",{command:undo}));
+  assert.equal(cancelled.status,"undo_cancelled");
+  assert.equal((await read(post(CANCEL,"cancel",{command:undo}))).status,
+    "undo_cancelled","retry after reload must remain terminal");
+  const query={commandId:command.commandId,taskId:command.taskId,
+    restoreGeneration:command.restoreGeneration};
+  assert.equal((await read(post(RECEIPT,"receipt",{command:query}))).status,
+    "undo_cancelled");
+  assert.equal((await post(UNDO,"undo",{command:undo})).status,409,
+    "late original Undo must lose the receipt lock");
+  assert.deepEqual(db.prepare(`SELECT title,triage_state AS state,project_id AS projectId
+    FROM tasks WHERE id='stale-undo'`).get(),{
+    title:"Změněné zadání",state:"processed",projectId:"project:c3b:home",
+  });
+});
