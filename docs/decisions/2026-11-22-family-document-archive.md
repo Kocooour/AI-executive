@@ -1,6 +1,6 @@
 # Rodinný archiv dokumentů pro Lumi — zadání a návrh řešení (2026-11-22)
 
-**Stav:** vlastníkem potvrzený produktový směr včetně **etapy 1: nová konsolidovaná Airtable base Rodina**, následně migrace do Lumi; **návrh technického provedení**, zatím **neimplementováno / nenasazeno**. Tento dokument neaktivuje nový zdroj dat, import skutečných dokumentů, R5 ani žádnou produkční integraci. Technické detaily a zavedení podléhají navazujícímu issue, bezpečnostnímu review a release branám. Navazuje na [PRODUCT](../PRODUCT.md), [ARCHITECTURE](../ARCHITECTURE.md), [ROADMAP](../ROADMAP.md) [rodinnou HumanWiki](2026-11-20-humanwiki-personal-family-memory.md) a [sjednocení Airtable](2026-11-22-unified-family-airtable.md).
+**Stav:** vlastníkem potvrzený produktový směr včetně **etapy 1: nová konsolidovaná Airtable base Rodina**, následně migrace do Lumi; **návrh technického provedení**, zatím **neimplementováno / nenasazeno**. Tento dokument neaktivuje nový zdroj dat, import skutečných dokumentů, R5 ani žádnou produkční integraci. Technické detaily a zavedení podléhají navazujícímu issue, bezpečnostnímu review a release branám. Navazuje na [PRODUCT](../PRODUCT.md), [ARCHITECTURE](../ARCHITECTURE.md), [ROADMAP](../ROADMAP.md), [rodinnou HumanWiki](2026-11-20-humanwiki-personal-family-memory.md) a [sjednocení Airtable](2026-11-22-unified-family-airtable.md).
 
 ## 1. Produktový cíl a schválená zjednodušení
 
