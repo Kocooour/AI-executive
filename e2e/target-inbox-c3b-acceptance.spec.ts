@@ -71,9 +71,9 @@ for(const width of [390,1280]){
     const before=Number((await count(page).textContent())?.trim());
     expect(before).toBeGreaterThan(0);
     const suggestion=await locateRow(page,seeded.taskId);
-    await expect(suggestion.getByRole("button",{name:"Proč?"}))
+    await expect(suggestion.getByRole("button",{name:"Proč tento návrh?"}))
       .toBeVisible({timeout:25000});
-    await suggestion.getByRole("button",{name:"Proč?"}).click();
+    await suggestion.getByRole("button",{name:"Proč tento návrh?"}).click();
     await expect(suggestion.locator(".targetInboxSuggestionWhy")).toBeVisible();
     const why=await suggestion.locator(".targetInboxSuggestionWhy").innerText();
     expect(why.length).toBeGreaterThan(8);
@@ -135,7 +135,7 @@ for(const width of [390,1280]){
     expect(confirmation.status()).toBe(201);
     const taskId=(confirmation.request().postDataJSON() as {taskId:string}).taskId;
     const captured=await locateRow(page,taskId);
-    await expect(captured.getByRole("button",{name:"Proč?"}))
+    await expect(captured.getByRole("button",{name:"Proč tento návrh?"}))
       .toBeVisible({timeout:25000});
     await captured.getByRole("button",{name:"Přijmout"}).click();
     await expect.poll(()=>readTask(taskId).task?.triageState).toBe("processed");
