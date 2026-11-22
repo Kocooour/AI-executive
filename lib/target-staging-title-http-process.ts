@@ -111,6 +111,7 @@ async function run(config: StagingPersonalReadConfig, scriptName: string,
             AI_EXECUTIVE_DATA_DIR: process.env.AI_EXECUTIVE_DATA_DIR || "",
             AI_EXECUTIVE_TARGET_STAGING_HTTP_ENABLED: process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_ENABLED || "",
             AI_EXECUTIVE_TARGET_STAGING_HTTP_INBOX_ENABLED: process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_INBOX_ENABLED || "",
+            AI_EXECUTIVE_TARGET_STAGING_HTTP_C3B_ENABLED: process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_C3B_ENABLED || "",
             AI_EXECUTIVE_TARGET_STAGING_HTTP_INBOX_WRITE_ENABLED: process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_INBOX_WRITE_ENABLED || "",
             AI_EXECUTIVE_TARGET_STAGING_HTTP_WRITE_ENABLED: process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_WRITE_ENABLED || "",
             AI_EXECUTIVE_TARGET_STAGING_HTTP_PROJECT_TITLE_WRITE_ENABLED: process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_PROJECT_TITLE_WRITE_ENABLED || "",
@@ -142,6 +143,11 @@ async function run(config: StagingPersonalReadConfig, scriptName: string,
             ...(scriptName.startsWith("target-staging-inbox-")
               ? {AI_EXECUTIVE_TARGET_STAGING_INBOX_PROOF_KEY:inboxWorkerProofKey()||""}
               : {}),
+            // Only the C-3b private child may ever see the OpenAI credential.
+            // Its own actor-private two-store consent gate still protects fetch.
+            ...(scriptName==="target-staging-inbox-c3b-child.mjs"
+              ? {OPENAI_API_KEY:process.env.OPENAI_API_KEY||"",
+                 OPENAI_MODEL:process.env.OPENAI_MODEL||""}:{}),
           },
         });
       } catch { resolve(null); return; }
