@@ -1,6 +1,6 @@
 /** C-3b bounded actor-scoped child. No private content in argv/stderr. */
 import path from "node:path";
-import {randomUUID} from "node:crypto";
+import {createHmac} from "node:crypto";
 import {TargetStagingSessionAuthority}
   from "../lib/target-staging-session-authority.ts";
 import {resolveChildActor} from "./target-staging-child-actor.mjs";
@@ -147,10 +147,29 @@ try{
           if(previous?.enabled&&
              targetInboxAIConsentMatchesFence(previous,external,gen)){
             output({ok:true,enabled:true,pending:false});}
-          else if(previous?.enabled)fail();
+          else if(previous?.enabled){
+            // Partial first rollout: target grant may have committed before
+            // the external grant. An explicit retry can finish ONLY the same
+            // first decision; an already revoked fence denies replay.
+            if(previous.epoch!==1||
+               previous.ownerDecision!==INBOX_FIRST_OWNER_DECISION||
+               !recordExplicitInboxAIGrant(fence,actor,owner,gen,
+                 INBOX_AI_DATA_SCOPE_VERSION,INBOX_FIRST_OWNER_DECISION)||
+               !targetInboxAIConsentMatchesFence(previous,
+                 readInboxAIFenceGrant(fence,actor),gen))fail();
+            output({ok:true,enabled:true,pending:false});
+          }
           else{
             const epoch=(previous?.epoch??0)+1;
-            const decision=previous?randomUUID():INBOX_FIRST_OWNER_DECISION;
+            // Stable owner-action ID for a given revoked epoch: retrying a
+            // partial two-store grant does not invent a new decision or re-
+            // grant a historical epoch after a later revoke.
+            const decision=previous
+              ?createHmac("sha256",key).update(JSON.stringify([
+                "lumi:c3b:explicit-consent-decision:v1",actor,gen,
+                previous.epoch,previous.ownerDecision,
+              ])).digest("hex").slice(0,48)
+              :INBOX_FIRST_OWNER_DECISION;
             // Initial grant first records target, regrant first records fence.
             // Until BOTH commit, an outbound AI call cannot be authorized.
             if(previous&&!recordExplicitInboxAIGrant(
