@@ -141,7 +141,8 @@ export function validateC3BMetadata(
         (x.decisionSource!=="2026-11-19:#471"&&
          x.decisionSource!=="settings:explicit")||
         !epoch(x.updatedAtMs)||(x.updatedAtMs as number)<=0)return invalid;
-      const h=rows.find(r=>r.key===decisionKey(x.actorUserId,x.ownerDecision));
+      const key=decisionKey(x.actorUserId as string,x.ownerDecision as string);
+      const h=rows.find(r=>r.key===key);
       if(!h||typeof h.value!=="string"||!/^[1-9]\d{0,15}$/.test(h.value)||
          Number(h.value)>(x.epoch as number))return invalid;
     }
