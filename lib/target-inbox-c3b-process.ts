@@ -43,17 +43,21 @@ const changesValid=(x:unknown):x is InboxSuggestedChanges=>{
 };
 function parsePreview(value:unknown):C3bPreview|null{
   if(!primitive(value)||Object.keys(value).sort().join(",")!==
-    "areaEpochs,changes,linearization,ok,restoreGeneration,source,taskId,token,why"||
+    "areaEpochs,changes,linearization,notificationEpoch,ok,privateEpoch,restoreGeneration,source,taskId,token,why"||
     value.ok!==true||typeof value.taskId!=="string"||!TASK.test(value.taskId)||
     typeof value.token!=="string"||!/^c3b1\.[A-Za-z0-9_-]{48,8192}$/.test(value.token)||
     typeof value.why!=="string"||value.why.length>512||!value.why.trim()||
     (value.source!=="rule"&&value.source!=="ai")||
     typeof value.restoreGeneration!=="string"||!UUID.test(value.restoreGeneration)||
-    !changesValid(value.changes))return null;
+    !changesValid(value.changes)||
+    !Number.isSafeInteger(value.privateEpoch)||!Number.isSafeInteger(value.notificationEpoch)||
+    (value.privateEpoch as number)<0||(value.notificationEpoch as number)<0)return null;
   const w=witness(value);
   return w?{...w,taskId:value.taskId,token:value.token,
     why:value.why,changes:value.changes,source:value.source,
-    restoreGeneration:value.restoreGeneration}:null;
+    restoreGeneration:value.restoreGeneration,
+    privateEpoch:value.privateEpoch as number,
+    notificationEpoch:value.notificationEpoch as number}:null;
 }
 function parseWrite(value:unknown):InboxAcceptResult|null{
   if(!primitive(value))return null;
