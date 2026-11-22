@@ -114,23 +114,19 @@ export async function getC3bPreview(request:Request):Promise<Response>{
     const cached=cacheKey?previews.get(cacheKey):undefined;
     if(cached&&cached.expiry<=Date.now()&&cacheKey)previews.delete(cacheKey);
     const liveCache=cached&&cached.expiry>Date.now()?cached.result:null;
-    // On uncached optional AI work, keep one shared child slot free for rules
-    // and critical receipt/Undo operations. Reject additional AI requests
-    // without ever consuming a rules slot or its HTTP rate bucket.
-    if(mode!=="rules"&&!liveCache&&aiPreviewInFlight)
+    // Reserve the optional AI lane through the FINAL consent/ACL/fence
+    // release, not merely the initial provider child: otherwise another
+    // provider child can overlap our post-provider consent read and consume
+    // both slots of the shared subprocess pool, starving local rules.
+    // Cached AI previews still need this lane for their live release check.
+    const aiSlot=mode!=="rules";
+    if(aiSlot&&aiPreviewInFlight)
       return Response.json({error:"Too many requests"},{status:429,headers});
-    let result:C3bPreview|null=liveCache;
-    if(!result){
-      const aiSlot=mode!=="rules";
-      if(aiSlot)aiPreviewInFlight=true;
-      try{
-        result=await previewC3bInChild(childConfig(request,identity,base),taskId,
-          mode==="rules"?"rules":"best");
-      }finally{
-        if(aiSlot)aiPreviewInFlight=false;
-      }
-    }
-    const released=result
+    if(aiSlot)aiPreviewInFlight=true;
+    try{
+      const result:C3bPreview|null=liveCache??await previewC3bInChild(
+        childConfig(request,identity,base),taskId,mode==="rules"?"rules":"best");
+      const released=result
       ?verifyStagingReadBeforeRelease(request,identity,base,base.ownerUserId,
         result.linearization,undefined,undefined,undefined,undefined,
         undefined,{scope:"global-all",areas:result.areaEpochs},
@@ -207,6 +203,9 @@ export async function getC3bPreview(request:Request):Promise<Response>{
     return Response.json({taskId:result.taskId,why:result.why,
       token:result.token,changes:result.changes,source:result.source,
       restoreGeneration:result.restoreGeneration},{headers});
+    }finally{
+      if(aiSlot)aiPreviewInFlight=false;
+    }
   }catch(error){
     logStagingFailure("target-staging/inbox/c3b-preview","route_exception",error);
     return answer(503,"Staging unavailable");
