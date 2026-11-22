@@ -105,11 +105,11 @@ function parseConsent(value:unknown,read:boolean):C3bConsentRead|C3bConsentWrite
     Object.keys(cap).sort().join(",")==="limit,remainingAccepts,reserved,used,warning"&&
     Number.isSafeInteger(cap.limit)&&(cap.limit as number)>0&&
     Number.isSafeInteger(cap.used)&&(cap.used as number)>=0&&
-    Number.isSafeInteger(cap.reserved)&&(cap.reserved as number)>=cap.used&&
-    (cap.reserved as number)<=cap.limit&&
+    Number.isSafeInteger(cap.reserved)&&(cap.reserved as number)>=(cap.used as number)&&
+    (cap.reserved as number)<=(cap.limit as number)&&
     Number.isSafeInteger(cap.remainingAccepts)&&
     (cap.remainingAccepts as number)>=0&&
-    (cap.remainingAccepts as number)<=cap.limit&&
+    (cap.remainingAccepts as number)<=(cap.limit as number)&&
     typeof cap.warning==="boolean");
   return validCapacity&&Number.isSafeInteger(value.epoch)&&
     (value.epoch as number)>=0&&
