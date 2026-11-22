@@ -9,52 +9,76 @@ function patch(...changes) {
     "@@ -1,1 +1,1 @@", ...changes].join("\n");
 }
 
-test("P2: config-only note-editor profile change selects all note-edit browser matrix jobs", () => {
+test("P2: a config-only note editor branch edit still runs the legacy/combined/4b matrix", () => {
   assert.deepEqual(selectBrowserProfiles(patch(
     '-        ...(noteEditProfile==="4b" ? {} : {AI_EXECUTIVE_TARGET_UI_NOTE_EDIT_ENABLED: "true"}),',
     '+        ...(noteEditProfile==="combined" ? {} : {AI_EXECUTIVE_TARGET_UI_NOTE_EDIT_ENABLED: "true"}),'
-  )), ["note_edit"]);
+  )), BROWSER_PROFILES);
 });
 
-test("config-only private capture switch selects its owning browser suite", () => {
+test("P2: a cross-feature insertion cannot bypass private-task browser acceptance", () => {
+  // This insertion is in the privateTaskCreateTest object but only mentions
+  // inboxAcceptanceTest. Matching only changed-line names would select Inbox
+  // and falsely skip the private-task Quick Capture regression.
+  assert.deepEqual(selectBrowserProfiles(patch(
+    '+        ...(!inboxAcceptanceTest ? { AI_EXECUTIVE_TARGET_UI_PRIVATE_TASK_CREATE_ENABLED: "false" } : {}),'
+  )), BROWSER_PROFILES);
+});
+
+test("changed private task opt-in default may activate other browser suites; fail closed", () => {
   assert.deepEqual(selectBrowserProfiles(patch(
     '-const privateTaskCreateTest = process.env.LUMI_PRIVATE_TASK_CREATE_E2E === "true";',
     '+const privateTaskCreateTest = process.env.LUMI_PRIVATE_TASK_CREATE_E2E !== "false";'
-  )), ["task_create"]);
-});
-
-test("mixed independent feature edits select union of owning jobs", () => {
-  assert.deepEqual(selectBrowserProfiles(patch(
-    "-const noteEditProfile = something;",
-    "+const noteEditProfile = somethingElse;",
-    "-const inboxAcceptanceTest = oldValue;",
-    "+const inboxAcceptanceTest = newValue;"
-  )), ["inbox", "note_edit"]);
-});
-
-test("unknown global Playwright/server changes run every focused browser profile", () => {
-  assert.deepEqual(selectBrowserProfiles(patch(
-    "-  workers: 1,",
-    "+  workers: 4,"
   )), BROWSER_PROFILES);
+});
+
+test("unrecognized, mixed, and newly added config logic always run all profiles", () => {
+  for (const diff of [
+    patch("-  workers: 1,", "+  workers: 4,"),
+    patch("-const noteEditProfile = old;", "+const noteEditProfile = next;"),
+    patch("-const inboxAcceptanceTest = old;", "+const inboxAcceptanceTest = next;"),
+    patch("-const noteEditProfile = old;", "+const noteEditProfile = next;",
+      "+  use: { storageState: 'shared.json' },"),
+    patch("+  process.env.UNRELATED = 'true';"),
+    patch("-  // previous comment", "+  // edited comment"),
+    patch("-const noteEditProfile = process.env.LUMI_TARGET_NOTE_EDIT_PROFILE ?? 'legacy';",
+      "+const noteEditProfile = process.env.LUMI_TARGET_NOTE_EDIT_PROFILE ?? 'combined';"),
+    "",
+  ]) {
+    assert.deepEqual(selectBrowserProfiles(diff), BROWSER_PROFILES);
+  }
+});
+
+test("only an unchanged feature opt-in with a simple default-string edit is scoped", () => {
   assert.deepEqual(selectBrowserProfiles(patch(
-    "-const noteEditProfile = old;",
-    "+const noteEditProfile = next;",
-    "+  use: { storageState: 'shared.json' },"
+    '-const noteEditProfile = process.env.LUMI_TARGET_NOTE_EDIT_PROFILE ?? "legacy";',
+    '+const noteEditProfile = process.env.LUMI_TARGET_NOTE_EDIT_PROFILE ?? "combined";'
+  )), ["note_edit"]);
+  assert.deepEqual(selectBrowserProfiles(patch(
+    '-const mainTitleSearchMode = process.env.LUMI_TARGET_MAIN_SEARCH_MODE ?? "on";',
+    '+const mainTitleSearchMode = process.env.LUMI_TARGET_MAIN_SEARCH_MODE ?? "off";'
+  )), ["main_title"]);
+});
+
+test("multiple independent safe edits fail closed instead of inferring semantics", () => {
+  assert.deepEqual(selectBrowserProfiles(patch(
+    '-const noteEditProfile = process.env.LUMI_TARGET_NOTE_EDIT_PROFILE ?? "legacy";',
+    '+const noteEditProfile = process.env.LUMI_TARGET_NOTE_EDIT_PROFILE ?? "combined";',
+    '-const mainTitleSearchMode = process.env.LUMI_TARGET_MAIN_SEARCH_MODE ?? "on";',
+    '+const mainTitleSearchMode = process.env.LUMI_TARGET_MAIN_SEARCH_MODE ?? "off";'
   )), BROWSER_PROFILES);
-  assert.deepEqual(selectBrowserProfiles(""), BROWSER_PROFILES);
+  const twoHunks = [
+    "diff --git a/playwright.config.ts b/playwright.config.ts",
+    "--- a/playwright.config.ts", "+++ b/playwright.config.ts",
+    '@@ -1,1 +1,1 @@',
+    '-const noteEditProfile = process.env.LUMI_TARGET_NOTE_EDIT_PROFILE ?? "legacy";',
+    '@@ -20,1 +20,1 @@',
+    '+const noteEditProfile = process.env.LUMI_TARGET_NOTE_EDIT_PROFILE ?? "combined";'
+  ].join("\n");
+  assert.deepEqual(selectBrowserProfiles(twoHunks), BROWSER_PROFILES);
 });
 
-test("comments do not inflate scoped profile selection", () => {
-  assert.deepEqual(selectBrowserProfiles(patch(
-    "- // Legacy helper comment",
-    "+ // Updated helper comment",
-    "-const inboxAcceptanceTest = oldValue;",
-    "+const inboxAcceptanceTest = newValue;"
-  )), ["inbox"]);
-});
-
-test("config impact workflow calls all affected existing scoped workflows", () => {
+test("config impact workflow retains all affected existing reusable workflows", () => {
   const workflow = readFileSync(".github/workflows/playwright-config-impact-browser.yml", "utf8");
   assert.match(workflow, /playwright\.config\.ts/);
   assert.match(workflow, /ci-playwright-config-scope\.mjs --github-output/);

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
-// Fail-closed PR impact selection for changes to the shared Playwright config.
-// Independent feature workflows retain their normal path-scoped PR triggers.
-// If changed executable lines cannot be classified, run ALL affected profiles.
+// Fail-closed PR impact selection for the shared Playwright config.
+// Matching a variable name in an arbitrary changed expression is NOT proof
+// that the enclosing feature owns the change (cross-feature references exist).
 import { execFileSync } from "node:child_process";
 import { appendFileSync } from "node:fs";
 
@@ -12,47 +12,42 @@ export const BROWSER_PROFILES = [
   "task_preview", "title_preview",
 ];
 
-// Only isolated feature switches can be categorized safely by their changed
-// lines. Shared server config, fixtures, testMatch, webServer, security/auth,
-// global browser options, unknown/new flags, etc. deliberately select ALL.
-// Values below are NOT globs or claims of test coverage by unrelated sentinels.
-const KNOWN_SWITCHES = [
-  [/\b(?:noteEditProfile|noteEditRecoveryTest|LUMI_TARGET_NOTE_EDIT_PROFILE|LUMI_TARGET_NOTE_EDIT_E2E)\b/, ["note_edit"]],
-  [/\b(?:mainTitleSearchTest|mainTitleSearchMode|LUMI_TARGET_MAIN_SEARCH_E2E|LUMI_TARGET_MAIN_SEARCH_MODE)\b/, ["main_title"]],
-  [/\b(?:titleSearchPreviewTest|LUMI_TITLE_SEARCH_PREVIEW_E2E)\b/, ["title_preview"]],
-  [/\b(?:taskPreviewTest|LUMI_TASK_PREVIEW_E2E)\b/, ["task_preview"]],
-  [/\b(?:notePreviewTest|LUMI_NOTE_PREVIEW_E2E)\b/, ["note_preview"]],
-  [/\b(?:targetDetailEditRaceTest|LUMI_TARGET_DETAIL_EDITS_E2E)\b/, ["detail_races"]],
-  [/\b(?:privateNoteAreasTest|LUMI_PRIVATE_NOTE_AREAS_E2E)\b/, ["note_areas"]],
-  [/\b(?:privateNoteCreateTest|LUMI_PRIVATE_NOTE_CREATE_E2E)\b/, ["note_create"]],
-  [/\b(?:privateTaskCreateTest|LUMI_PRIVATE_TASK_CREATE_E2E)\b/, ["task_create"]],
-  [/\b(?:globalCaptureTest|LUMI_TARGET_GLOBAL_CAPTURE_E2E)\b/, ["global_capture"]],
-  [/\b(?:projectTitleRecoveryTest|LUMI_TARGET_PROJECT_TITLE_E2E)\b/, ["project_title"]],
-  [/\b(?:inboxAcceptanceTest|LUMI_TARGET_INBOX_E2E)\b/, ["inbox"]],
-  // The retained personal acceptance sentinel already runs for any config edit.
-  [/\b(?:personalAcceptanceTest|LUMI_TARGET_PERSONAL_ACCEPTANCE_E2E)\b/, []],
+// These two defaults are inert unless their *own* opt-in test flag is true.
+// Every other executable edit, including a changed feature guard, added object
+// property, comment-only edit or a line mentioning another known feature flag,
+// is ambiguous without checking the surrounding TypeScript scope: run ALL.
+// Keep this allowlist small; do not match arbitrary variable occurrences.
+const ISOLATED_PROFILE_DEFAULTS = [
+  {
+    profile: "note_edit",
+    declaration: /^const noteEditProfile = process\.env\.LUMI_TARGET_NOTE_EDIT_PROFILE \?\? "(?:legacy|combined|4b)";$/,
+  },
+  {
+    profile: "main_title",
+    declaration: /^const mainTitleSearchMode = process\.env\.LUMI_TARGET_MAIN_SEARCH_MODE \?\? "(?:on|off)";$/,
+  },
 ];
-
-function changedExecutableLines(patch) {
-  return patch.split("\n")
-    .filter((line) => /^[+-]/.test(line) && !/^(?:\+\+\+|---)/.test(line))
-    .map((line) => line.slice(1).trim())
-    .filter((line) => line && !/^(?:\/\/|\/\*|\*|\*\/)/.test(line));
-}
 
 export function selectBrowserProfiles(patch) {
   if (typeof patch !== "string" || !patch.trim() || patch.includes("Binary files ")) {
-    return [...BROWSER_PROFILES]; // No config diff (selector itself changed): fail closed.
+    return [...BROWSER_PROFILES];
   }
-  const lines = changedExecutableLines(patch);
-  if (!lines.length) return []; // Comment/whitespace-only change: 3 sentinels remain.
-  const selected = new Set();
-  for (const line of lines) {
-    const rules = KNOWN_SWITCHES.filter(([pattern]) => pattern.test(line));
-    if (!rules.length) return [...BROWSER_PROFILES]; // Unknown/global edit.
-    for (const [, profiles] of rules) for (const profile of profiles) selected.add(profile);
+  // Only a single contiguous old/new declaration replacement is provably
+  // isolated without a TS parser. Extra hunks/lines, comments, deletions or
+  // additions are deliberately fail-closed, never guessed from variable names.
+  const hunks = patch.split("\n").filter((line) => line.startsWith("@@ ")).length;
+  const changed = patch.split("\n").filter((line) =>
+    /^[+-]/.test(line) && !/^(?:---|\+\+\+)/.test(line));
+  if (hunks !== 1 || changed.length !== 2
+    || !changed[0].startsWith("-") || !changed[1].startsWith("+")) {
+    return [...BROWSER_PROFILES];
   }
-  return BROWSER_PROFILES.filter((profile) => selected.has(profile));
+  const before = changed[0].slice(1);
+  const after = changed[1].slice(1);
+  for (const { profile, declaration } of ISOLATED_PROFILE_DEFAULTS) {
+    if (declaration.test(before) && declaration.test(after)) return [profile];
+  }
+  return [...BROWSER_PROFILES];
 }
 
 function main() {
