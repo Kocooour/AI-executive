@@ -102,9 +102,12 @@ export default function TargetInboxC3b({item,restoreGeneration,
   const moving=Boolean(changes&&(changes.projectId!=="unchanged"||
     changes.taskAreaId!=="unchanged"));
   const scheduling=Boolean(changes&&changes.whenOn!=="unchanged");
-  const summary=moving&&scheduling
-    ?speak("Zařadit a naplánovat","Classify and schedule")
-    :moving?speak("Zařadit úkol","Classify task")
+  // The destination is not merely an explanation behind "Why?". Show the
+  // server-committed target name (present in the signed Why) AND the exact day
+  // before the one-click Accept, including combined project+Today actions.
+  const summary=moving
+    ?suggestion!.why+(scheduling?
+      " "+speak("Osobní plán: ","Personal plan: ")+changes!.whenOn:"")
     :scheduling?speak("Naplánovat na ","Schedule for ")+changes!.whenOn
     :speak("Ponechat umístění a zpracovat","Keep placement and process");
   return <div ref={root} className="targetInboxSuggestion"
