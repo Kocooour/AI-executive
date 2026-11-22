@@ -1,5 +1,6 @@
 name: Focused R3 private note creation browser
 on:
+  workflow_call:
   pull_request:
     paths:
       - ".github/workflows/r3-private-note-create-browser.yml"
@@ -21,7 +22,6 @@ on:
       - "e2e/target-private-note-create.spec.ts"
       - "e2e/auth.setup.ts"
       - "e2e/fixtures.ts"
-      - "playwright.config.ts"
   workflow_dispatch:
 permissions:
   contents: read

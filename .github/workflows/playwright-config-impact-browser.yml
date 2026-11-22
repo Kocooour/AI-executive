@@ -1,0 +1,123 @@
+name: Focused browser profiles for Playwright configuration changes
+on:
+  pull_request:
+    paths:
+      - "playwright.config.ts"
+permissions:
+  contents: read
+concurrency:
+  group: lumi-playwright-config-impact-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+jobs:
+  scope:
+    name: Classify shared Playwright config change (fail closed)
+    runs-on: ubuntu-24.04
+    outputs:
+      main_title: ${{ steps.detect.outputs.main_title }}
+      humanwiki: ${{ steps.detect.outputs.humanwiki }}
+      mobile_more: ${{ steps.detect.outputs.mobile_more }}
+      note_preview: ${{ steps.detect.outputs.note_preview }}
+      detail_races: ${{ steps.detect.outputs.detail_races }}
+      global_capture: ${{ steps.detect.outputs.global_capture }}
+      inbox: ${{ steps.detect.outputs.inbox }}
+      note_edit: ${{ steps.detect.outputs.note_edit }}
+      note_areas: ${{ steps.detect.outputs.note_areas }}
+      note_create: ${{ steps.detect.outputs.note_create }}
+      task_create: ${{ steps.detect.outputs.task_create }}
+      project_title: ${{ steps.detect.outputs.project_title }}
+      task_preview: ${{ steps.detect.outputs.task_preview }}
+      title_preview: ${{ steps.detect.outputs.title_preview }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - name: Select owning browser profiles
+        id: detect
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: node scripts/ci-playwright-config-scope.mjs --github-output
+  main-title:
+    needs: scope
+    if: needs.scope.outputs.main_title == 'true'
+    uses: ./.github/workflows/focused-r3-main-title-search-browser.yml
+    permissions:
+      contents: read
+  humanwiki:
+    needs: scope
+    if: needs.scope.outputs.humanwiki == 'true'
+    uses: ./.github/workflows/humanwiki-context-source-status-browser.yml
+    permissions:
+      contents: read
+  mobile-more:
+    needs: scope
+    if: needs.scope.outputs.mobile_more == 'true'
+    uses: ./.github/workflows/mobile-more-preview-browser.yml
+    permissions:
+      contents: read
+  note-preview:
+    needs: scope
+    if: needs.scope.outputs.note_preview == 'true'
+    uses: ./.github/workflows/note-preview-browser.yml
+    permissions:
+      contents: read
+  detail-races:
+    needs: scope
+    if: needs.scope.outputs.detail_races == 'true'
+    uses: ./.github/workflows/r3-detail-edit-races-browser.yml
+    permissions:
+      contents: read
+  global-capture:
+    needs: scope
+    if: needs.scope.outputs.global_capture == 'true'
+    uses: ./.github/workflows/r3-global-private-capture-browser.yml
+    permissions:
+      contents: read
+  inbox:
+    needs: scope
+    if: needs.scope.outputs.inbox == 'true'
+    uses: ./.github/workflows/r3-inbox-acceptance-browser.yml
+    permissions:
+      contents: read
+  note-edit:
+    needs: scope
+    if: needs.scope.outputs.note_edit == 'true'
+    uses: ./.github/workflows/r3-note-edit-recovery-browser.yml
+    permissions:
+      contents: read
+  note-areas:
+    needs: scope
+    if: needs.scope.outputs.note_areas == 'true'
+    uses: ./.github/workflows/r3-private-note-areas-browser.yml
+    permissions:
+      contents: read
+  note-create:
+    needs: scope
+    if: needs.scope.outputs.note_create == 'true'
+    uses: ./.github/workflows/r3-private-note-create-browser.yml
+    permissions:
+      contents: read
+  task-create:
+    needs: scope
+    if: needs.scope.outputs.task_create == 'true'
+    uses: ./.github/workflows/r3-private-task-create-browser.yml
+    permissions:
+      contents: read
+  project-title:
+    needs: scope
+    if: needs.scope.outputs.project_title == 'true'
+    uses: ./.github/workflows/r3-project-title-recovery-browser.yml
+    permissions:
+      contents: read
+  task-preview:
+    needs: scope
+    if: needs.scope.outputs.task_preview == 'true'
+    uses: ./.github/workflows/task-preview-browser.yml
+    permissions:
+      contents: read
+  title-preview:
+    needs: scope
+    if: needs.scope.outputs.title_preview == 'true'
+    uses: ./.github/workflows/title-search-preview-browser.yml
+    permissions:
+      contents: read

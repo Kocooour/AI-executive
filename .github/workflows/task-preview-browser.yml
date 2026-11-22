@@ -1,6 +1,7 @@
 name: Scoped UI-09f task-preview browser
 
 on:
+  workflow_call:
   pull_request:
     paths:
       - "app/target-staging/tasks/**"
@@ -10,14 +11,13 @@ on:
       - "app/ui/target-staging-task-preview.tsx"
       - "lib/target-staging-task-preview-client.ts"
       - "e2e/task-preview-ui09f*.spec.ts"
-      - "playwright.config.ts"
       - ".github/workflows/task-preview-browser.yml"
 
 permissions:
   contents: read
 
 concurrency:
-  group: ui09f-browser-${{ github.event.pull_request.number }}
+  group: ui09f-browser-${{ github.event.pull_request.number }}-${{ github.workflow }}
   cancel-in-progress: true
 
 jobs:

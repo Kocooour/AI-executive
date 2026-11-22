@@ -3,6 +3,7 @@ name: Focused R3 project title session recovery browser
 # Only synthetic, targeted browser acceptance of the real main-app project
 # editor. Never dispatches the full release Browser E2E suite.
 on:
+  workflow_call:
   pull_request:
     paths:
       - ".github/workflows/r3-project-title-recovery-browser.yml"
@@ -24,14 +25,13 @@ on:
       - "e2e/target-project-title-session-recovery.spec.ts"
       - "e2e/fixtures.ts"
       - "e2e/auth.setup.ts"
-      - "playwright.config.ts"
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: lumi-r3-project-title-recovery-${{ github.event.pull_request.number || github.sha }}
+  group: lumi-r3-project-title-recovery-${{ github.event.pull_request.number || github.sha }}-${{ github.workflow }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:

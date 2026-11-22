@@ -1,5 +1,6 @@
 name: Focused R3 private task Quick Capture browser
 on:
+  workflow_call:
   pull_request:
     paths:
       - ".github/workflows/r3-private-task-create-browser.yml"
@@ -12,7 +13,6 @@ on:
       - "lib/target-detail-route.ts"
       - "lib/target-ui-config.ts"
       - "e2e/target-private-task-create.spec.ts"
-      - "playwright.config.ts"
   workflow_dispatch:
 permissions:
   contents: read

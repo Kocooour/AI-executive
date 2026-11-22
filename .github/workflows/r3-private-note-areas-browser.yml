@@ -3,6 +3,7 @@ name: Focused R3 private note Area chooser browser
 # One actor-private read-only UI flow in an isolated synthetic Chromium server.
 # This is NOT the full pre-production Browser E2E suite.
 on:
+  workflow_call:
   pull_request:
     paths:
       - ".github/workflows/r3-private-note-areas-browser.yml"
@@ -20,12 +21,11 @@ on:
       - "e2e/target-private-note-areas.spec.ts"
       - "e2e/auth.setup.ts"
       - "e2e/fixtures.ts"
-      - "playwright.config.ts"
   workflow_dispatch:
 permissions:
   contents: read
 concurrency:
-  group: lumi-r3-private-note-area-${{ github.event.pull_request.number || github.sha }}
+  group: lumi-r3-private-note-area-${{ github.event.pull_request.number || github.sha }}-${{ github.workflow }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
   chromium:

@@ -3,6 +3,7 @@ name: Focused Lumi mobile More preview
 # Preview navigation is disabled in ordinary production builds. This narrow
 # browser check compiles with that preview on; it is NOT the full release E2E.
 on:
+  workflow_call:
   pull_request:
     paths:
       - ".github/workflows/mobile-more-preview-browser.yml"
@@ -15,14 +16,13 @@ on:
       - "e2e/mobile-navigation-v1.spec.ts"
       - "e2e/fixtures.ts"
       - "e2e/auth.setup.ts"
-      - "playwright.config.ts"
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: lumi-mobile-more-browser-${{ github.event.pull_request.number || github.sha }}
+  group: lumi-mobile-more-browser-${{ github.event.pull_request.number || github.sha }}-${{ github.workflow }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
