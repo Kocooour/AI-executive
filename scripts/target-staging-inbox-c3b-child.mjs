@@ -132,8 +132,12 @@ try{
       if(!request.command||typeof request.command!=="object")fail();
       const issued=authority.issueWritable(actor);
       if(!issued)fail();
-      const terminal=authority.cancelInboxSuggestedAction(
-        issued.sessionToken,request.command,binding);
+      const terminal=Object.prototype.hasOwnProperty.call(
+        request.command,"undoOfCommandId")
+        ?authority.cancelInboxSuggestedUndo(
+          issued.sessionToken,request.command,binding)
+        :authority.cancelInboxSuggestedAction(
+          issued.sessionToken,request.command,binding);
       const page=storePage();
       if(!terminal||!page)fail();
       output({ok:true,...terminal,
