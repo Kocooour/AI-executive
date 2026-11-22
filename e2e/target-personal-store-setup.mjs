@@ -27,6 +27,25 @@ if (!path.basename(run).startsWith("lumi-e2e-")) fail("the run dir must be a lum
 const { bootstrapIsolatedTargetStore } = await import("../lib/target-store-bootstrap.ts");
 const stage = bootstrapIsolatedTargetStore({ stagingDirectory: path.join(runDir, "target-store"), ownerUserId: owner });
 
+// Only the explicitly opted-in C-3b real-store browser suite gets a separate
+// independent, disposable consent fence. Never use or alter the fixed
+// /var/lib/ai-executive-target production fence. Initial consent is OFF.
+if(process.env.LUMI_TARGET_INBOX_C3B_E2E==="true"){
+  const {provisionInboxAIFenceSchema,verifiedInboxAIFencePath}
+    =await import("../lib/target-inbox-ai-consent-fence.ts");
+  const fencePath=path.join(runDir,"inbox-ai-consent-fence.sqlite");
+  const previous=process.umask(0o077);
+  let fence;
+  try{fence=new DatabaseSync(fencePath);}
+  finally{process.umask(previous);}
+  try{
+    if(!provisionInboxAIFenceSchema(fence)||
+       verifiedInboxAIFencePath(fencePath,stage.directory)!==fencePath)
+      fail("C-3b external test consent fence invalid");
+  }finally{fence.close();}
+}
+
+
 // Distinct project/task fixtures per viewport AND per spec: each real-store
 // acceptance mutates titles, so parallel or sequential specs must not collide.
 const seed = { areaId: "area:e2e:rodina", areaTitle: "Rodina",
