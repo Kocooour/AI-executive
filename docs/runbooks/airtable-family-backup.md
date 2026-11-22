@@ -19,7 +19,13 @@ node scripts/airtable-family-backup.mjs --output /private/encrypted-disk/rodina-
 
 Skript načte všechny stránky tabulek `Auto/Události`, `Dokumenty/Dokumenty`, `Nákupy/Nákupy`, stáhne všechny jejich přílohy, ověří počet bajtů a vypočte SHA-256. Do manifestu nikdy nezapisuje časově omezené podepsané download URL. Přílohy ukládá pod jejich ověřená Airtable attachment ID (nikoli pod potenciálně nebezpečný původní název souboru). Výstupní soubory mají omezená lokální oprávnění.
 
-Úspěch je určen **přítomností souboru `COMPLETE`**, který zaznamenává hash `manifest.json` a kontrolní počty. Při jakékoliv chybě skript končí neúspěchem a nemá `COMPLETE`; **částečná záloha není dovolena jako vstup migrace**. Pro nový pokus použijte nový prázdný adresář; příčinu selhání opravte, starou nekompletní složku pro audit uchovejte nebo bezpečně zlikvidujte až dle schválené retenční politiky.
+Úspěch exportu je označen souborem `COMPLETE`, který zaznamenává hash `manifest.json` a kontrolní počty. **Nezávisle ověřte celou zálohu druhým nástrojem:**
+
+```bash
+node scripts/airtable-family-verify-backup.mjs --input /private/encrypted-disk/rodina-backup-20261122
+```
+
+Ověření znovu spočítá SHA-256 a bajty všech originálů, kontroluje počty/manifest, pole zdrojových záznamů, přesné soubory a jejich identitu, bez síťového provozu. **Dokud neprojde kontrola `verify`, export se nepovažuje za použitelný.** Při jakékoliv chybě skript exportu končí neúspěchem a nemá `COMPLETE`; **částečná záloha není dovolena jako vstup migrace**. Pro nový pokus použijte nový prázdný adresář; příčinu selhání opravte, starou nekompletní složku pro audit uchovejte nebo bezpečně zlikvidujte až dle schválené retenční politiky.
 
 ## Brána před importem
 
@@ -37,5 +43,5 @@ Nástroj je **výhradně read-only exportér**. Neprovádí nahrání, OCR, změ
 Pro ověření čistě syntetické logiky:
 
 ```bash
-node --test tests/airtable-family-backup.test.mjs
+node --test tests/airtable-family-backup.test.mjs tests/airtable-family-verify-backup.test.mjs
 ```
