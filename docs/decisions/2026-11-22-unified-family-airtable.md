@@ -15,9 +15,12 @@ Rekonstrukce není povinnou součástí nové base, její oddělení je dlouhodo
 
 ### Limity Airtable Free — ověřeno 2026-11-22
 
-Podle oficiálního Airtable: **1 000 záznamů na base (součet tabulek), 1 GB příloh na base, 1 000 API volání na workspace za měsíc, maximálně 5 požadavků za sekundu na base**. Tedy oddělením rekonstrukce získáme samostatný datový a přílohový limit pro každou z obou bází, ale **nikoliv další API rozpočet, pokud jsou ve stejném workspace**.
+Podle oficiálního Airtable: **1 000 záznamů na base (součet tabulek), 1 GB příloh na base, 1 000 API volání na workspace za měsíc, maximálně 5 požadavků za sekundu na base**. Tedy oddělením rekonstrukce získáme samostatný datový a přílohový limit pro každou z obou bází, ale **nikoliv další API rozpočet, pokud jsou ve stejném workspace**. Free má navíc **100 běhů automatizací na workspace měsíčně** a akce **Run a script není dostupná**; OCR a klasifikace proto musí probíhat mimo Airtable (externí worker), ne v Airtable skriptech/na jeden dokument spouštěné automatizaci.
 
 - [Airtable — Workspace settings, limity](https://support.airtable.com/articles/9157745778-Airtable-workspace-settings-overview)
+- [Airtable — API limit management](https://support.airtable.com/articles/7735693959-Managing-API-call-limits-in-Airtable)
+- [Airtable — automation limits](https://support.airtable.com/articles/3669392397-Getting-started-with-Airtable-automations)
+- [Airtable — attachment API upload limits](https://support.airtable.com/articles/1744327578-Using-Omni-AI-in-Airtable)
 - [Airtable — Getting started with sync](https://support.airtable.com/articles/2849803278-Getting-started-with-Airtable-sync) (neexistuje přímý link mezi bázemi)
 - [Airtable — Linking records across synced bases](https://support.airtable.com/articles/3175509073-Linking-records-across-synced-bases-in-Airtable) (Team+)
 
@@ -31,9 +34,9 @@ Podle oficiálního Airtable: **1 000 záznamů na base (součet tabulek), 1 GB 
 | **Rodina — tři migrované zdroje** | **222** | **246** | **170,7 MiB** |
 | `Rekonstrukce Světice` — 8 tabulek | **352** | **nebylo inventarizováno** | **nebylo inventarizováno** |
 
-Počty jsou snapshot, nikoliv trvalá kapacita. U `Rodina` přibydou nové záznamy pro položky majetku, auta a dokumenty převzaté z příloh událostí/nákupů; cílový počet tedy **nebude automaticky 222**. Přesto je značná rezerva pod 1 000 záznamy. Velikosti souborů jsou součtem dostupných `size` metadat 246 příloh, **ne potvrzená fakturace storage**; zohlednit budoucí nové soubory i případné duplikáty při převodu. Kapacitu celé existující `Rekonstrukce Světice` nutno zkontrolovat samostatně, nikoliv dovozovat z počtu záznamů.
+Počty jsou snapshot, nikoliv trvalá kapacita. U `Rodina` přibydou nové záznamy pro položky majetku, auta a dokumenty převzaté z příloh událostí/nákupů; cílový počet tedy **nebude automaticky 222**. Přesto je značná rezerva pod 1 000 záznamy. Velikosti souborů jsou součtem dostupných `size` metadat 246 příloh, **ne potvrzená fakturace storage**; zohlednit budoucí nové soubory i případné duplikáty při převodu. Kapacitu celé existující `Rekonstrukce Světice` nutno zkontrolovat samostatně, nikoliv dovozovat z počtu záznamů. **Zjištěno minimálně 3 přílohy nad 5 MB** (v původních Dokumentech a Nákupy), které nelze nahrát běžným přímým Airtable **Upload Attachment API** bez alternativní metody. Přímý upload v tomto API má limit **5 MB na soubor**; vysoký limit běžného attachment pole nelze zaměňovat s limitem upload endpointu.
 
-**Speciální omezení:** 1 000 API volání na workspace/měsíc může být kritičtější než počet záznamů. Dát přednost dávkovým čtením a zápisům, minimalizaci polling intervalu, lokálnímu OCR před odesláním, krátkým cache a auditovanému rozpočtu API volání; plánovat jednorázovou migraci s rezervou pro obnovu a opravy. Po dosažení kvóty selhat čitelně, ne tiše ztratit import. Nekoncipovat periodické oboustranné synchronizace na vysoké frekvenci.
+**Speciální omezení:** 1 000 API volání na workspace/měsíc může být kritičtější než počet záznamů. Dát přednost dávkovým čtením a zápisům (Web API typicky max. 10 záznamů na batch), minimalizaci polling intervalu, lokálnímu OCR před odesláním, krátkým cache a auditovanému rozpočtu API volání; plánovat jednorázovou migraci s rezervou pro obnovu a opravy. Ve Workspace settings ověřit **skutečnou volnou kvótu** před startem; čtení schématu/metadata API také kvótu spotřebovává. Po dosažení kvóty 429 selhat čitelně, ne tiše ztratit import; navázat po obnově kvóty. Nekoncipovat periodické oboustranné synchronizace na vysoké frekvenci a **nespoléhat na Airtable automations nebo Run a script pro OCR**.
 
 ## 2. Jednoduchá struktura nové base `Rodina`
 
@@ -55,6 +58,8 @@ Počty jsou snapshot, nikoliv trvalá kapacita. U `Rodina` přibydou nové zázn
 
 **Události**: `Datum`, odkaz na `Majetek`, `Stav`, `Tachometr`, `Servis`, `Kategorie`, `Poznámky`, odkaz na `Dokumenty`. Nevytvářet prázdné nebo umělé hodnoty při přenosu.
 
+**Povinná strategie pro přílohy > 5 MB:** pro každou migrovanou i nově přidanou přílohu vyhodnotit velikost **před pokusem o upload**. Do 5 MB lze využít ověřený přímý Airtable Upload Attachment API; pro větší originály zvolit otestovaný způsob, jímž Airtable načte soubor z **krátkodobého, náhodného, HTTPS podepsaného URL** vydaného z kontrolovaného úložiště, nebo pro výjimku bezpečné ruční nahrání do Airtable. U migrace ze starého Airtable může takový zdrojový odkaz vycházet z právě získaného expirovaného download URL. Nikdy nezveřejňovat dokumenty na neomezeně přístupné URL, nikdy neužívat staré expirující URL jako trvalou referenci, nikdy automaticky nesnižovat kvalitu/velikost originálu ani jej neodmazat před ověřením binární shody (SHA-256). Pokud nelze soubor bezpečně přenést, **zařadit do fronty jako `needs_review` a zablokovat úplné dokončení migrace**, ne ztratit jej nebo falešně potvrdit. Upload metodiku, dostupnost podepsaných URL pro Airtable a limit testovat před plným importem.
+
 **U všech tabulek**: skrytá technická pole nebo zabezpečený manifest pro stabilní `uuid`, původní source base/table/record ID, příslušná stará field/attachment ID, hash, čas importu, stav ověření a opravy; související UUID používá budoucí Lumi. Starý autonumber je **`Původní ID`**, nikoliv primární migrační klíč. Cílové Airtable record ID je technické a může se při migraci do Lumi změnit.
 
 ## 3. Vztahy a zpětná kompatibilita
@@ -71,7 +76,7 @@ Počty jsou snapshot, nikoliv trvalá kapacita. U `Rodina` přibydou nové zázn
 2. **Obnovitelný export originálních tří bází**: všech záznamů, zdrojových hodnot a **binárních příloh** s SHA-256, velikostmi, časem a lokální mapou zdrojových Airtable ID. Běžné CSV s krátkodobými download URL není záloha souborů.
 3. **Předběžný kapacitní a API rozpočet** pro novou `Rodina`: očekávaný počet nových objektů (včetně 246 příloh) + rezerva pro nové dokumenty, zkontrolovat součet dat oproti 1 GB a plán API operací proti 1 000 za workspace/měsíc. Případná duplicitní příloha nebo nedostatek API kvóty **zastavuje**, nesmí vést ke ztrátě původního souboru.
 4. **Vytvořit novou base `Rodina`** se třemi tabulkami a bezpečnými obousměrnými linky; nedotknout se `Rekonstrukce Světice`.
-5. **Syntetický test + malý vzorek**: otestovat import dokumentů a příloh, zachování poznámek, `Záruka do`, identitu vozidel, obnovu a znovuzískání aktuálních attachment URL.
+5. **Syntetický test + malý vzorek**: otestovat import dokumentů a příloh **pod i nad 5 MB**, zachování binární shody a přístupu bez trvalého veřejného URL, poznámek, `Záruka do`, identity vozidel, obnovu a znovuzískání aktuálních attachment URL.
 6. **Dvouprůchodový import**: nejprve cílové záznamy a migrace příloh s manifestem, potom relace podle `source → target UUID`; opakování je idempotentní.
 7. **Rekonsiliace** původních tří tabulek: jejich zdrojové počty, každý přenesený binární soubor/velikost/hash, ruční poznámky, vzorce a relevantní select hodnoty; všechny rozdíly zaznamenat před cutoverem.
 8. **Cutover a rollback**: doplnit změny vzniklé během importu nebo dočasně zastavit zápisy do tří zdrojů; teprve po ověření přeorientovat ingest/Zkratky/Lumi na **`Rodina`**, původní tři báze prozatím ponechat read-only. **Rekonstrukce Světice zůstane aktivní a na stejné adrese.** Bez automatického mazání či resetu původních bází.
@@ -92,11 +97,11 @@ Počty jsou snapshot, nikoliv trvalá kapacita. U `Rodina` přibydou nové zázn
 |---|---|
 | UNI-01 | Ověřený export/záloha všech tří zdrojových bází včetně binárních příloh; stávající `Rekonstrukce Světice` zůstává beze změny. |
 | UNI-02 | Nová `Rodina` se 3 tabulkami zachovává všech 222 původních záznamů přes stabilní mapování a případné nově potřebné objekty majetku/dokumentů se přidávají transparentně, bez duplikátů. |
-| UNI-03 | Každá ze 246 snapshot příloh (skutečný počet v čase cutoveru ověřit znovu) má v cíli ověřený binární originál a manifest s SHA-256; bez trvalých expirovaných URL. |
+| UNI-03 | Každá ze 246 snapshot příloh (počet v čase cutoveru ověřit znovu), včetně nejméně tří nad 5 MB, má v cíli **binárně ověřený originál se SHA-256**; přenos nad limitem přímého upload endpointu používá zabezpečenou alternativu, ne neomezené veřejné URL, kompresi nebo ztrátu souboru. |
 | UNI-04 | Existujících 8 tabulek rekonstrukce a všechny původní `linked records` mají totožný stav před i po migračním cutoveru tří jiných bází. |
 | UNI-05 | Původní výpočet `Záruka do` a ruční poznámky byly zachovány, cizí/nedoložená data se nedoplňují odhadem. |
 | UNI-06 | Dokument/účtenku lze propojit s majetkem a událostí v rámci `Rodina` bez duplicitního fyzického PDF. |
-| UNI-07 | Systém bezpečně hlídá 1 000 záznamů a 1 GB příloh na base a sdílenou měsíční kvótu API volání ve workspace. Výpadek/kvóta vede k dohledatelnému importu čekajícímu ve frontě. |
+| UNI-07 | Systém bezpečně hlídá 1 000 záznamů a 1 GB příloh na base a sdílenou měsíční kvótu 1 000 API volání ve workspace; limity jsou ověřeny před migrací, 429 vede k dohledatelnému čekajícímu importu. OCR neběží jako Airtable Run a script ani jako neudržitelná per-document Airtable automatizace (Free: 100 běhů/měsíc). |
 | UNI-08 | iPhone bez další aplikace uloží sken → worker zpracuje → `Rodina / Dokumenty` jej bezpečně zpřístupní → Lumi jej umí citovat. |
 | UNI-09 | Lumi umí přečíst autorizovaná data z oddělené `Rekonstrukce Světice` bez Airtable cross-base syncu/linku; neodhalí cizí data a při nedostupnosti oznámí omezení. |
 | UNI-10 | Pozdější přechod na Lumi zachová soubory/metadata/UUID/vazby a nevyžaduje předčasnou migraci rekonstrukce ani změnu iOS Zkratky. |
