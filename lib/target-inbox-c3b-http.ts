@@ -1,5 +1,8 @@
 /** C-3b default-off authenticated HTTP shell. Never release an ACL witness. */
 import {createHmac} from "node:crypto";
+import {requestCookie,sessionCookieName} from "./auth";
+import type {StagingHttpIdentity} from "./target-staging-http-identity";
+import type {StagingPersonalReadConfig} from "./target-staging-read-process";
 import {HttpInputError,enforceRateLimit,readJsonBody,requireTargetSameOrigin}
   from "./http-security";
 import {logStagingFailure} from "./target-staging-failure-log";
@@ -11,7 +14,7 @@ import {resolveStagingHttpIdentity,stagingAnchorRefusal,
 import {targetProtocolRefusal,legacySnapshotRefusal}
   from "./target-staging-write-contract";
 import {c3bEnabled,c3bWriteEnabled,c3bConfig,c3bUnchanged,
-  inboxC3bActionKey}
+  inboxC3bActionKey,inboxC3bOwnerCookieBinding}
   from "./target-inbox-c3b-runtime";
 import {previewC3bInChild,acceptC3bInChild,undoC3bInChild,
   receiptC3bInChild,readC3bConsentInChild,writeC3bConsentInChild,
@@ -21,6 +24,13 @@ import type {InboxAcceptCommand,InboxAcceptReceiptQuery,InboxAcceptUndoCommand}
   from "./target-inbox-accept-writer";
 
 const headers={"cache-control":"no-store"};
+const childConfig=(request:Request,identity:StagingHttpIdentity,
+  config:StagingPersonalReadConfig):StagingPersonalReadConfig=>({
+  ...config,...stagingChildSessionConfig(identity),
+  ...(identity.kind==="owner"?{c3bOwnerCookieBinding:
+    inboxC3bOwnerCookieBinding(requestCookie(request,sessionCookieName)??"",
+      config.ownerUserId,config.expectedRestoreGeneration)??undefined}:{}),
+});
 // Memory-only, never persisted or logged. Every hit is STILL checked against
 // live ACL, plan/timezone, actor session and (for AI) BOTH consent stores.
 // A 15-second TTL prevents bursty repeated provider calls without retaining
@@ -89,7 +99,7 @@ export async function getC3bPreview(request:Request):Promise<Response>{
     const cached=cacheKey?previews.get(cacheKey):undefined;
     if(cached&&cached.expiry<=Date.now()&&cacheKey)previews.delete(cacheKey);
     const result=cached&&cached.expiry>Date.now()?cached.result
-      :await previewC3bInChild({...base,...stagingChildSessionConfig(identity)},taskId);
+      :await previewC3bInChild(childConfig(request,identity,base),taskId);
     const released=result
       ?verifyStagingReadBeforeRelease(request,identity,base,base.ownerUserId,
         result.linearization,undefined,undefined,undefined,undefined,
@@ -110,8 +120,8 @@ export async function getC3bPreview(request:Request):Promise<Response>{
       // A confirmed revoke may interleave with a finished provider promise
       // BEFORE HTTP releases the body. Re-read both durable stores from a
       // freshly authenticated child; never publish a stale AI suggestion.
-      const current=await readC3bConsentInChild({
-        ...base,...stagingChildSessionConfig(identity)});
+      const current=await readC3bConsentInChild(
+        childConfig(request,identity,base));
       const last=verifyStagingIdentityBeforeRelease(request,identity,base);
       if(last!=="ok")return stagingIdentityRefusal(last);
       if(!current||!current.enabled||current.pending||
@@ -165,9 +175,9 @@ export async function postC3b(
     const before=verifyStagingIdentityBeforeRelease(request,identity,base);
     if(before!=="ok")return stagingIdentityRefusal(before);
     if(!c3bUnchanged(base,operation!=="receipt"))return answer(503,"Staging unavailable");
-    const childConfig={...base,...stagingChildSessionConfig(identity)};
+    const actorChild=childConfig(request,identity,base);
     if(operation==="consent"){
-      const reply=await writeC3bConsentInChild(childConfig,
+      const reply=await writeC3bConsentInChild(actorChild,
         obj.enabled?"grant":"revoke");
       const after=verifyStagingIdentityBeforeRelease(request,identity,base);
       if(after!=="ok")return stagingIdentityRefusal(after);
@@ -177,7 +187,7 @@ export async function postC3b(
         pending:reply.pending},{status:reply.pending?202:200,headers});
     }
     if(operation==="receipt"){
-      const reply=await receiptC3bInChild(childConfig,
+      const reply=await receiptC3bInChild(actorChild,
         obj.command as InboxAcceptCommand|InboxAcceptReceiptQuery);
       const release=reply
         ?verifyStagingReadBeforeRelease(request,identity,base,base.ownerUserId,
@@ -191,8 +201,8 @@ export async function postC3b(
       return Response.json({ok:true,status:reply.status,next:reply.next},{headers});
     }
     const reply=operation==="accept"
-      ?await acceptC3bInChild(childConfig,obj.command as InboxAcceptCommand)
-      :await undoC3bInChild(childConfig,obj.command as InboxAcceptUndoCommand);
+      ?await acceptC3bInChild(actorChild,obj.command as InboxAcceptCommand)
+      :await undoC3bInChild(actorChild,obj.command as InboxAcceptUndoCommand);
     // A committed write cannot safely be reclassified as uncommitted
     // after a lost response; receipt reconciliation preserves UUID.
     const after=verifyStagingIdentityBeforeRelease(request,identity,base);
@@ -222,8 +232,8 @@ export async function getC3bConsent(request:Request):Promise<Response>{
     if(new URL(request.url).search!=="")return answer(400,"Invalid request");
     const limited=issue(request,"consent");
     if(limited)return limited;
-    const result=await readC3bConsentInChild({
-      ...base,...stagingChildSessionConfig(identity)});
+    const result=await readC3bConsentInChild(
+      childConfig(request,identity,base));
     const release=verifyStagingIdentityBeforeRelease(request,identity,base);
     if(release!=="ok")return stagingIdentityRefusal(release);
     if(!result||!c3bUnchanged(base))return answer(503,"Staging unavailable");
