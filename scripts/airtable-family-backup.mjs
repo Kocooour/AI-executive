@@ -4,10 +4,10 @@
 import { createHash } from 'node:crypto';
 import { createWriteStream } from 'node:fs';
 import { mkdir, unlink, writeFile, rename } from 'node:fs/promises';
-import { resolve, join } from 'node:path';
+import { resolve, join, dirname, sep } from 'node:path';
 import { Readable, Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
-import { pathToFileURL } from 'node:url';
+import { pathToFileURL, fileURLToPath } from 'node:url';
 
 const API_ROOT = 'https://api.airtable.com/v0';
 const SOURCE_TABLES = [
@@ -87,6 +87,15 @@ export function buildBackupManifest(sources, files) {
       bytes: files.reduce((sum, item) => sum + item.bytes, 0),
     },
   };
+}
+
+export function validateOutputDirectory(output, repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')) {
+  if (!output) throw new Error('Pass --output /absolute/path/outside/repository');
+  const outDir = resolve(output);
+  if (outDir === repoRoot || outDir.startsWith(repoRoot + sep)) {
+    throw new Error('Refusing to store private family data inside the public Git repository');
+  }
+  return outDir;
 }
 
 export function validateSourceConfiguration(env) {
@@ -176,10 +185,8 @@ async function downloadFile(file, outputDir) {
 }
 
 async function execute({ output, env = process.env } = {}) {
-  if (!output) throw new Error('Pass --output /absolute/path/outside/repository');
   const sources = validateSourceConfiguration(env);
-  const outDir = resolve(output);
-  if (outDir === resolve('.') || outDir === resolve('..')) throw new Error('Choose a new private output directory');
+  const outDir = validateOutputDirectory(output);
   await mkdir(outDir, { recursive: false, mode: 0o700 });
   await mkdir(join(outDir, 'attachments'), { mode: 0o700 });
   const meter = { calls: 0 };
