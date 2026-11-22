@@ -1,4 +1,5 @@
 /** C-3b default-off authenticated HTTP shell. Never release an ACL witness. */
+import {createHmac} from "node:crypto";
 import {HttpInputError,enforceRateLimit,readJsonBody,requireTargetSameOrigin}
   from "./http-security";
 import {logStagingFailure} from "./target-staging-failure-log";
@@ -9,15 +10,42 @@ import {resolveStagingHttpIdentity,stagingAnchorRefusal,
   from "./target-staging-http-identity";
 import {targetProtocolRefusal,legacySnapshotRefusal}
   from "./target-staging-write-contract";
-import {c3bEnabled,c3bWriteEnabled,c3bConfig,c3bUnchanged}
+import {c3bEnabled,c3bWriteEnabled,c3bConfig,c3bUnchanged,
+  inboxC3bActionKey}
   from "./target-inbox-c3b-runtime";
 import {previewC3bInChild,acceptC3bInChild,undoC3bInChild,
-  receiptC3bInChild,readC3bConsentInChild,writeC3bConsentInChild}
+  receiptC3bInChild,readC3bConsentInChild,writeC3bConsentInChild,
+  type C3bPreview}
   from "./target-inbox-c3b-process";
 import type {InboxAcceptCommand,InboxAcceptReceiptQuery,InboxAcceptUndoCommand}
   from "./target-inbox-accept-writer";
 
 const headers={"cache-control":"no-store"};
+// Memory-only, never persisted or logged. Every hit is STILL checked against
+// live ACL, plan/timezone, actor session and (for AI) BOTH consent stores.
+// A 15-second TTL prevents bursty repeated provider calls without retaining
+// private titles, prompts or AI responses on disk.
+const previews=new Map<string,{expiry:number;result:C3bPreview}>();
+const CACHE_TTL_MS=15_000,MAX_CACHE=48;
+function previewCacheKey(request:Request,
+  identity:{kind:"owner"}|{kind:"session";tokenHash:string},
+  actor:string,taskId:string,generation:string):string|null{
+  const key=inboxC3bActionKey();
+  if(!key)return null;
+  const session=identity.kind==="owner"?
+    request.headers.get("cookie")??"":identity.tokenHash;
+  return createHmac("sha256",key).update(JSON.stringify([
+    "lumi:c3b:preview-cache:v1",identity.kind,session,
+    actor,taskId,generation,
+  ])).digest("hex");
+}
+function rememberPreview(key:string|null,result:C3bPreview):void{
+  if(!key)return;
+  for(const [k,v] of previews)if(v.expiry<=Date.now())previews.delete(k);
+  if(previews.size>=MAX_CACHE)previews.delete(previews.keys().next().value!);
+  previews.set(key,{expiry:Date.now()+CACHE_TTL_MS,result});
+}
+
 const answer=(status:number,error:string)=>
   Response.json({error},{status,headers});
 const id=/^[^\u0000-\u001f\u007f]{1,512}$/u;
@@ -56,8 +84,12 @@ export async function getC3bPreview(request:Request):Promise<Response>{
     if(!taskId||!id.test(taskId))return answer(400,"Invalid request");
     const limited=issue(request,"preview");
     if(limited)return limited;
-    const result=await previewC3bInChild({
-      ...base,...stagingChildSessionConfig(identity)},taskId);
+    const cacheKey=previewCacheKey(request,identity,base.ownerUserId,
+      taskId,base.expectedRestoreGeneration);
+    const cached=cacheKey?previews.get(cacheKey):undefined;
+    if(cached&&cached.expiry<=Date.now()&&cacheKey)previews.delete(cacheKey);
+    const result=cached&&cached.expiry>Date.now()?cached.result
+      :await previewC3bInChild({...base,...stagingChildSessionConfig(identity)},taskId);
     const released=result
       ?verifyStagingReadBeforeRelease(request,identity,base,base.ownerUserId,
         result.linearization,undefined,undefined,undefined,undefined,
@@ -66,9 +98,11 @@ export async function getC3bPreview(request:Request):Promise<Response>{
         {notificationEpoch:result.notificationEpoch})
       :verifyStagingIdentityBeforeRelease(request,identity,base);
     if(released!=="ok"&&released!=="stale")return stagingIdentityRefusal(released);
-    if(!c3bUnchanged(base)||released==="stale")
+    if(!c3bUnchanged(base)||released==="stale"){
+      if(cacheKey)previews.delete(cacheKey);
       return answer(released==="stale"?409:503,
         released==="stale"?"read_stale_reload":"Staging unavailable");
+    }
     if(!result||result.taskId!==taskId||
        result.restoreGeneration!==base.expectedRestoreGeneration)
       return answer(503,"Staging unavailable");
@@ -81,10 +115,13 @@ export async function getC3bPreview(request:Request):Promise<Response>{
       const last=verifyStagingIdentityBeforeRelease(request,identity,base);
       if(last!=="ok")return stagingIdentityRefusal(last);
       if(!current||!current.enabled||current.pending||
-         current.epoch!==result.consentEpoch||!c3bUnchanged(base))
+         current.epoch!==result.consentEpoch||!c3bUnchanged(base)){
+        if(cacheKey)previews.delete(cacheKey);
         return answer(409,"read_stale_reload");
+      }
     }
     // All ACL, session, candidate, epoch and linearization proofs stay internal.
+    if(!cached)rememberPreview(cacheKey,result);
     return Response.json({taskId:result.taskId,why:result.why,
       token:result.token,changes:result.changes,source:result.source,
       restoreGeneration:result.restoreGeneration},{headers});
@@ -135,6 +172,7 @@ export async function postC3b(
       const after=verifyStagingIdentityBeforeRelease(request,identity,base);
       if(after!=="ok")return stagingIdentityRefusal(after);
       if(!reply||!c3bUnchanged(base,true))return answer(503,"Staging unavailable");
+      previews.clear(); // explicit consent/revoke invalidates every actor cache
       return Response.json({ok:true,enabled:reply.enabled,
         pending:reply.pending},{status:reply.pending?202:200,headers});
     }
@@ -162,6 +200,7 @@ export async function postC3b(
     if(!c3bUnchanged(base,true))return answer(503,"Staging unavailable");
     if(reply?.ok===false&&reply.reason==="session_revoked")
       return stagingUnauthorizedRefusal(request,identity,base);
+    if(reply?.ok===true)previews.clear();
     return writeResult(reply);
   }catch(error){
     if(error instanceof HttpInputError)return answer(error.status,error.message);
