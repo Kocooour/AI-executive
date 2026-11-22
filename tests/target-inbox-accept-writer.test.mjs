@@ -290,3 +290,59 @@ test("C-3b: actor timezone revision is verified in same write transaction",()=>{
   assert.deepEqual(actual,{ok:false,reason:"stale_revision"});
   assert.deepEqual(row(fx),before);
 });
+test("C-3b recovery: lost Accept -> reload/query-only UUID -> durable terminal cancellation",()=>{
+  const fx=fixture(),command=prepare(fx),before=row(fx);
+  const query={commandId:command.commandId,taskId:command.taskId,
+    restoreGeneration:command.restoreGeneration};
+  assert.deepEqual(fx.authority.readInboxSuggestionReceipt("alice",query),
+    {status:"not_recorded",next:null});
+  const cancel=()=>fx.authority.cancelInboxSuggestedAction(
+    fx.token,query,fx.sessionHash);
+  assert.deepEqual(cancel(),{status:"cancelled",next:null});
+  assert.deepEqual(cancel(),{status:"cancelled",next:null},
+    "terminal cancellation is idempotent after a reload or worker restart");
+  assert.deepEqual(fx.authority.readInboxSuggestionReceipt("alice",query),
+    {status:"cancelled",next:null});
+  assert.deepEqual(fx.authority.changeInboxSuggestedAction(fx.token,{
+    mode:"accept",command,key:fx.key,sessionTokenHash:fx.sessionHash,
+  }),{ok:false,reason:"idempotency_conflict"},
+    "late original Accept cannot commit after the terminal marker");
+  assert.deepEqual(row(fx),before);
+  assert.deepEqual(inspectIsolatedTargetStore({...fx.store,mode:"r2-model"}),
+    {ok:true,mode:"r2-model",issues:[]});
+  // A later explicit suggestion can use a fresh UUID once cancellation is terminal.
+  const fresh=prepare(fx);
+  assert.deepEqual(fx.authority.changeInboxSuggestedAction(fx.token,{
+    mode:"accept",command:fresh,key:fx.key,sessionTokenHash:fx.sessionHash,
+  }),{ok:true});
+});
+
+test("C-3b recovery: committed Accept wins the pinned lock before cancellation",()=>{
+  const fx=fixture(),command=prepare(fx),query={
+    commandId:command.commandId,taskId:command.taskId,
+    restoreGeneration:command.restoreGeneration,
+  };
+  assert.deepEqual(fx.authority.changeInboxSuggestedAction(fx.token,{
+    mode:"accept",command,key:fx.key,sessionTokenHash:fx.sessionHash,
+  }),{ok:true});
+  const cancel=fx.authority.cancelInboxSuggestedAction(
+    fx.token,query,fx.sessionHash);
+  assert.equal(cancel?.status,"committed");
+  assert.ok(cancel?.next,"winner must retain CAS for Undo");
+  assert.equal(row(fx).state,"processed");
+  assert.equal(fx.authority.readInboxSuggestionReceipt("alice",query)?.status,
+    "committed","must not replace committed receipt with cancellation");
+});
+
+test("C-3b recovery: revoked actor session cannot cancel another UUID",()=>{
+  const fx=fixture(),command=prepare(fx),query={
+    commandId:command.commandId,taskId:command.taskId,
+    restoreGeneration:command.restoreGeneration,
+  };
+  assert.equal(revokeDurableTargetStagingSession(
+    fx.store,fx.durable.sessionId).ok,true);
+  assert.equal(fx.authority.cancelInboxSuggestedAction(
+    fx.token,query,fx.sessionHash),null);
+  assert.deepEqual(fx.authority.readInboxSuggestionReceipt("alice",query),
+    {status:"not_recorded",next:null});
+});

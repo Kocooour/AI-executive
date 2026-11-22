@@ -216,7 +216,8 @@ export async function postC3b(
         :verifyStagingIdentityBeforeRelease(request,identity,base);
       if(release!=="ok"&&release!=="stale")return stagingIdentityRefusal(release);
       if(release==="stale")return answer(409,"read_stale_reload");
-      if(!reply||!c3bUnchanged(base))return answer(503,"Staging unavailable");
+      if(!reply||!c3bUnchanged(base,operation==="cancel"))
+        return answer(503,"Staging unavailable");
       if(reply.status==="conflict")return answer(409,"Idempotency conflict");
       return Response.json({ok:true,status:reply.status,next:reply.next},{headers});
     }

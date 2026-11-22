@@ -40,6 +40,7 @@ const {createSessionToken,sessionCookieName}=
   await import("./support/owner-session-test-cookie.mjs");
 const {GET:PREVIEW}=await import("../app/api/target-staging/inbox/c3b/route.ts");
 const {POST:ACCEPT}=await import("../app/api/target-staging/inbox/c3b/accept/route.ts");
+const {POST:CANCEL}=await import("../app/api/target-staging/inbox/c3b/cancel/route.ts");
 const {POST:UNDO}=await import("../app/api/target-staging/inbox/c3b/undo/route.ts");
 const {POST:RECEIPT}=await import("../app/api/target-staging/inbox/c3b/receipt/route.ts");
 const {GET:CONSENT,POST:CONSENT_WRITE}=
@@ -173,4 +174,24 @@ test("C-3b HTTP: explicit consent, mock OpenAI, revoke and fail-closed fallback"
     displayedWhy:ai.why,displayedChanges:ai.changes,
   }});
   assert.notEqual(refused.status,200);
+});
+test("C-3b HTTP: missing Accept becomes a durable cancel receipt; late Accept rejected",async()=>{
+  const proposal=await read(preview());
+  const original={commandId:randomUUID(),taskId:proposal.taskId,
+    restoreGeneration:proposal.restoreGeneration,token:proposal.token,
+    displayedWhy:proposal.why,displayedChanges:proposal.changes};
+  const query={commandId:original.commandId,taskId:original.taskId,
+    restoreGeneration:original.restoreGeneration};
+  assert.equal((await read(post(RECEIPT,"receipt",{command:query}))).status,
+    "not_recorded");
+  assert.equal((await read(post(CANCEL,"cancel",{command:query}))).status,
+    "cancelled");
+  assert.equal((await read(post(CANCEL,"cancel",{command:query}))).status,
+    "cancelled","cancel is safe to retry with same actor UUID");
+  assert.equal((await read(post(RECEIPT,"receipt",{command:query}))).status,
+    "cancelled");
+  const late=await post(ACCEPT,"accept",{command:original});
+  assert.equal(late.status,409,"original immutable command is fenced forever");
+  assert.equal(db.prepare("SELECT triage_state AS t FROM tasks WHERE id='captured'")
+    .get().t,"unprocessed");
 });

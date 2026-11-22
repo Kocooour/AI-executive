@@ -185,3 +185,31 @@ for(const width of [390,1280]){
     }
   });
 }
+
+test("C-3b 390px: lost response -> reload -> query-only cancellation terminates UUID",async({page})=>{
+  test.setTimeout(120_000);
+  if(!store)throw Error("C-3b needs isolated store");
+  await page.setViewportSize({width:390,height:844});
+  await openInbox(page);
+  const task=store.seed.c3bProjects["390"];
+  const suggestion=await locateRow(page,task.taskId);
+  await expect(suggestion.getByRole("button",{name:"Přijmout"}))
+    .toBeVisible({timeout:25000});
+  // Reject transport BEFORE it reaches the target store, producing a
+  // never-recorded original UUID that intentionally loses its signed body.
+  await page.route("**/api/target-staging/inbox/c3b/accept",
+    route=>route.abort("failed"));
+  await suggestion.getByRole("button",{name:"Přijmout"}).click();
+  await expect(page.getByTestId("target-c3b-uncertain"))
+    .toBeVisible({timeout:25000});
+  await page.reload();
+  await expect(page.getByTestId("target-c3b-uncertain"))
+    .toBeVisible({timeout:25000});
+  await page.getByRole("button",{name:"Bezpečně ukončit původní Přijmout"})
+    .click();
+  await expect(page.getByTestId("target-c3b-uncertain"))
+    .toHaveCount(0,{timeout:25000});
+  await page.unroute("**/api/target-staging/inbox/c3b/accept");
+  await locateRow(page,task.taskId);
+  expect(readTask(task.taskId).task?.triageState).toBe("unprocessed");
+});
