@@ -343,4 +343,3 @@ available, keep the service stopped and roll forward to fixed C-3b-aware code.
 migration or modification. C-3b only writes its metadata after an explicit
 authenticated command. This rollout does NOT authorize production activation
 of unfinished Inbox suggestion HTTP/UI or any real outbound OpenAI request.
-
