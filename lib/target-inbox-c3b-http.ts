@@ -14,7 +14,7 @@ import {c3bEnabled,c3bWriteEnabled,c3bConfig,c3bUnchanged}
 import {previewC3bInChild,acceptC3bInChild,undoC3bInChild,
   receiptC3bInChild,readC3bConsentInChild,writeC3bConsentInChild}
   from "./target-inbox-c3b-process";
-import type {InboxAcceptCommand,InboxAcceptUndoCommand}
+import type {InboxAcceptCommand,InboxAcceptReceiptQuery,InboxAcceptUndoCommand}
   from "./target-inbox-accept-writer";
 
 const headers={"cache-control":"no-store"};
@@ -139,7 +139,8 @@ export async function postC3b(
         pending:reply.pending},{status:reply.pending?202:200,headers});
     }
     if(operation==="receipt"){
-      const reply=await receiptC3bInChild(childConfig,obj.command as InboxAcceptCommand);
+      const reply=await receiptC3bInChild(childConfig,
+        obj.command as InboxAcceptCommand|InboxAcceptReceiptQuery);
       const release=reply
         ?verifyStagingReadBeforeRelease(request,identity,base,base.ownerUserId,
           reply.linearization,undefined,undefined,undefined,undefined,
