@@ -11,6 +11,9 @@ export type C3bAccept={
   commandId:string;taskId:string;restoreGeneration:string;
   token:string;displayedWhy:string;displayedChanges:C3bChanges;
 };
+export type C3bReceiptQuery={
+  commandId:string;taskId:string;restoreGeneration:string;
+};
 export type C3bUndo={
   commandId:string;undoOfCommandId:string;taskId:string;
   restoreGeneration:string;expectedTaskRevision:number;
@@ -100,7 +103,7 @@ const parseReceipt=(x:unknown):C3bReceipt|null=>{
   return {status:x.status as C3bReceipt["status"],
     next:x.next as C3bReceipt["next"]};
 };
-export const receiptC3b=(command:C3bAccept)=>
+export const receiptC3b=(command:C3bAccept|C3bReceiptQuery)=>
   post("receipt",{command},parseReceipt);
 /** Consent never loads a cached response, and never calls another AI provider. */
 export async function getC3bConsent(signal?:AbortSignal):
