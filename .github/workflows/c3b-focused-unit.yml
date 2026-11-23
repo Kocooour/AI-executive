@@ -6,6 +6,10 @@ on:
       - "lib/target-inbox-accept-writer.ts"
       - "lib/target-inbox-metadata-validation.ts"
       - "lib/target-inbox-c3b*"
+      - "lib/target-inbox-c3b-client.ts"
+      - "app/ui/target-inbox.tsx"
+      - "app/ui/target-inbox-c3b.tsx"
+      - "tests/target-inbox-c3b-client.test.mjs"
       - "lib/target-staging-session-authority.ts"
       - "scripts/target-staging-inbox-c3b-child.mjs"
       - "app/api/target-staging/inbox/c3b/**"
@@ -30,4 +34,4 @@ jobs:
       - name: Install locked dependencies
         run: pnpm install --frozen-lockfile
       - name: Canonical Accept/cancel/Undo, HTTP security and consent
-        run: node --experimental-loader ./tests/ts-loader.mjs --test tests/target-inbox-accept-writer.test.mjs tests/target-inbox-c3b-http.test.mjs tests/target-inbox-ai-consent.test.mjs
+        run: node --experimental-loader ./tests/ts-loader.mjs --test tests/target-inbox-accept-writer.test.mjs tests/target-inbox-c3b-http.test.mjs tests/target-inbox-ai-consent.test.mjs tests/target-inbox-c3b-client.test.mjs
