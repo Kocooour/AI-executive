@@ -6,6 +6,7 @@
  * dates, so never include values in errors, logs or an HTTP response.
  */
 import {createHash} from "node:crypto";
+import type {DatabaseSync} from "node:sqlite";
 
 export const C3B_ACCEPT_PREFIX="r3:c3b:accept:v1:";
 export const C3B_UNDO_PREFIX="r3:c3b:undo:v1:";
@@ -192,4 +193,15 @@ export function validateC3BMetadata(
     }
     return {valid:true,count:list.length,prefixes:PREFIXES};
   }catch{return invalid;}
+}
+
+/** Validate the final C-3b rows inside the SAME pinned write transaction.
+ * Never commit a receipt that would make later canonical preflight fail. */
+export function validateC3BMetadataBeforeCommit(db:DatabaseSync):boolean{
+  try{
+    const rows=db.prepare("SELECT key,value FROM metadata WHERE key LIKE 'r3:c3b:%' ORDER BY key").all() as
+      {key:unknown;value:unknown}[];
+    const ids=db.prepare("SELECT id FROM identities ORDER BY id").all() as {id:string}[];
+    return validateC3BMetadata(rows,ids.map(x=>x.id)).valid;
+  }catch{return false;}
 }
