@@ -621,6 +621,9 @@ if [ "$profile_needs_check" = 1 ]; then
       die "cilovy adresar nema vlastnika ai-executive a rezim 0700"
   fi
 fi
+if [ "$FIRST_CONSENT_RECOVERY" = 1 ] && [ "$TARGET_PROFILE" != personal-v1 ]; then
+  die "obnova prvniho souhlasu vyzaduje schvaleny profil personal-v1"
+fi
 # Reject weakened sandboxing also for legacy-only/off deployments.
 verify_loaded_write_sandbox ||
   die "systemd sandbox nedovoluje zapis do ciloveho uloziste, ProtectSystem=strict nebo StateDirectoryMode=0700"
