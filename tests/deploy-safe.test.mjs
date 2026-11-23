@@ -1116,6 +1116,10 @@ test("C-3b first-grant failure leaves service stopped after verified backup", {t
     assert.notEqual(result.status,0);
     assert.match(result.output,/prvni souhlas Inbox AI nebyl bezpecne zapsan/);
     assert.equal(result.service,"inactive");
+    assert.equal(result.head,newSha,
+      "first fence attempt must retain consent-aware code for explicit recovery");
+    assert.equal(result.events.includes("reset"),false,
+      "do not reset to a pre-C-3b binary while target consent may be written");
     assert.ok(result.backups.length===1);
     assert.equal(result.events.some(x=>x.startsWith("start-")),false);
     assert.equal(result.events.includes("c3b-provision"),true);
@@ -1130,6 +1134,8 @@ test("C-3b interrupted first grant: only explicit stopped recovery can finish", 
     const first=f.execute();
     assert.notEqual(first.status,0);
     assert.equal(first.service,"inactive");
+    assert.equal(first.head,newSha,
+      "failed first grant must retain consent-aware code for stopped recovery");
     assert.ok(existsSync(proof),"root-owned original first-rollout proof persists");
     assert.ok(existsSync(fence));
     assert.equal(first.events.filter(x=>x==="c3b-first-grant").length,1);
