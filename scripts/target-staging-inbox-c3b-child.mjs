@@ -7,7 +7,7 @@ import {resolveChildActor} from "./target-staging-child-actor.mjs";
 import {readTitleCommand} from "./target-staging-title-stdin.mjs";
 import {inboxC3bActionKey,inboxC3bSessionBinding,openVerifiedInboxC3bFence,
   c3bEnabled,c3bWriteEnabled} from "../lib/target-inbox-c3b-runtime.ts";
-import {inboxLocalDate,sealInboxDisplayedAction}
+import {inboxLocalDate,sealInboxDisplayedAction,unsealInboxDisplayedAction}
   from "../lib/target-inbox-suggestion-commitment.ts";
 import {suggestInboxWithLocalToday}
   from "../lib/target-inbox-suggestions.ts";
@@ -121,8 +121,19 @@ try{
       if(!request.command||typeof request.command!=="object")fail();
       const issued=authority.issueWritable(actor);
       if(!issued)fail();
-      const fence=request.operation==="accept"
-        ?openVerifiedInboxC3bFence(dir):null;
+      // A rule-only Accept must NEVER seize the external consent lock.
+      // The signed commitment (not the caller) decides if AI was used.
+      const committed=request.operation==="accept"
+        ?unsealInboxDisplayedAction(request.command.token,key,{
+          actorUserId:actor,taskId:request.command.taskId,
+          sessionTokenHash:binding,restoreGeneration:gen,
+          displayedChanges:request.command.displayedChanges,
+          displayedWhy:request.command.displayedWhy,
+        }):null;
+      if(request.operation==="accept"&&!committed)fail();
+      const requiresFence=committed?.suggestion.source==="ai";
+      const fence=requiresFence?openVerifiedInboxC3bFence(dir):null;
+      if(requiresFence&&!fence)fail();
       try{
         const work=request.operation==="accept"
           ?{mode:"accept",command:request.command,key,

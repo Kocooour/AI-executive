@@ -373,11 +373,49 @@ export function endInboxAIDispatch(
   db:DatabaseSync,ticket:InboxAIFenceTicket,
 ):boolean{
   if(!ticket||!TICKET.test(ticket.id)||!ACTOR.test(ticket.actorUserId))return false;
-  const outcome=immediate(db,()=>{
-    const permitted=inboxAIDispatchStillAllowed(db,ticket);
-    const result=db.prepare("DELETE FROM inbox_ai_fence_pending WHERE ticket=? AND actor=? AND epoch=?")
-      .run(ticket.id,ticket.actorUserId,ticket.epoch);
-    return result.changes===1&&permitted;
+  // A concurrent Accept may retain the fence's exclusive lock until its
+  // target commit. Retry briefly instead of orphaning a pending ticket after
+  // one 200ms SQLITE_BUSY. Never retry a completed false/revoked outcome.
+  for(let attempt=0;attempt<4;attempt++){
+    const outcome=immediate(db,()=>{
+      const permitted=inboxAIDispatchStillAllowed(db,ticket);
+      const result=db.prepare("DELETE FROM inbox_ai_fence_pending WHERE ticket=? AND actor=? AND epoch=?")
+        .run(ticket.id,ticket.actorUserId,ticket.epoch);
+      return result.changes===1&&permitted;
+    });
+    if(outcome!==null)return outcome===true;
+  }
+  return false;
+}
+
+/**
+ * Operator-only orphan reconciliation. MUST be called with the ai-executive
+ * systemd service confirmed INACTIVE. Never expose as HTTP or run at startup.
+ * Advance the revocation epoch BEFORE deleting any stale ticket; therefore
+ * even an unexpectedly late old provider result can never be released.
+ */
+export function reconcileStoppedInboxAIOrphans(
+  db:DatabaseSync,actorUserId:string,expectedEpoch:number,
+  nowMs=Date.now(),minimumAgeMs=30_000,
+):{epoch:number;cleared:number}|null{
+  if(!ACTOR.test(actorUserId)||!validEpoch(expectedEpoch)||
+     !validTime(nowMs)||minimumAgeMs<25_000||minimumAgeMs>600_000)
+    return null;
+  return immediate(db,()=>{
+    const grant=grantRow(db,actorUserId);
+    if(!grant||grant.epoch!==expectedEpoch||
+       !Number.isSafeInteger(grant.epoch+1))return null;
+    const pending=db.prepare(
+      "SELECT created_at_ms AS createdAt FROM inbox_ai_fence_pending WHERE actor=?"
+    ).all(actorUserId) as {createdAt:number}[];
+    if(pending.length===0||pending.some(x=>
+      !validTime(x.createdAt)||nowMs-x.createdAt<minimumAgeMs))return null;
+    const epoch=grant.epoch+1;
+    db.prepare("UPDATE inbox_ai_fence_grants SET active=0,epoch=? WHERE actor=?")
+      .run(epoch,actorUserId);
+    const cleared=db.prepare("DELETE FROM inbox_ai_fence_pending WHERE actor=?")
+      .run(actorUserId);
+    return cleared.changes===pending.length
+      ?{epoch,cleared:cleared.changes}:null;
   });
-  return outcome===true;
 }
