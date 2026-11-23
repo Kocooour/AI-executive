@@ -361,8 +361,15 @@ entrypoint can safely verify both stores. It preserves a root-only, mode 0600 pr
 is written only after successful first-time provisioning, *before* the first
 grant, and records the owner, restore generation and device/inode of that
 specific external fence, including its SHA-256 content digest before
-any grant. Successful grant and read-only two-store `--check`
-remove it **before the first service start**.
+any grant. **Every successful read-only two-store `--check`**, including a
+later ordinary `--recover-stopped` following a transient check failure,
+validates and retires an existing proof **before service start**. The recorded
+SHA-256 is the hash of the *original empty* fence, not the later granted DB;
+when retiring it, the script validates the root ownership/mode, owner,
+generation, original device/inode and a well-formed original digest, alongside
+the current successful two-store check. An untrusted or mismatched proof
+stops deployment without deleting the evidence or starting the service.
+If the first grant was attempted but its proof is missing, startup is refused.
 
 The ordinary deploy and ordinary `--recover-stopped` modes MUST NOT grant
 consent. Only after the operator has checked the original verified backup,
