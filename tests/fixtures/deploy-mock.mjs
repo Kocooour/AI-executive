@@ -354,6 +354,10 @@ switch (name) {
       // tests intentionally do not advertise this module in either commit.
       if (["firstrolloutunhealthy", "firstrolloutpartialcopy"].includes(scenario) &&
           args[2] === target + ":lib/owner-session-revocation.ts") break;
+      if (scenario.startsWith("targetc3b") &&
+          args[2] === target + ":lib/target-inbox-ai-consent-fence.ts") break;
+      if (scenario.startsWith("targetc3b") && get("head")===target &&
+          args[2] === before + ":lib/target-inbox-ai-consent-fence.ts") break;
       process.exit(1);
     } else if (verb === "merge" && args[1] === "--ff-only") {
       set("head", target); log("merge");
@@ -547,6 +551,48 @@ switch (name) {
       log("target-inbox-upgraded");
       console.log(JSON.stringify({ ok: true, status: "upgraded" }));
       break;
+    }
+    if (scenario.startsWith("targetc3b") && exec === "env" &&
+        rest[0] === "AI_EXECUTIVE_DATA_DIR=" + path.join(root, "var/lib/ai-executive") &&
+        rest.includes(path.join(app,"scripts/target-inbox-ai-fence-provision.mjs"))) {
+      const i=rest.indexOf(path.join(app,"scripts/target-inbox-ai-fence-provision.mjs"));
+      const mode=rest[i+1],tail=rest.slice(i+2);
+      const expectedDir=path.join(root,"var/lib/ai-executive-target/personal-v1");
+      const fence=path.join(root,"var/lib/ai-executive-target/inbox-ai-consent-fence.sqlite");
+      const targetGrant=stateFile("c3b-target-grant"),grant=stateFile("c3b-fence-grant");
+      if(get("service")!=="inactive"||tail[0]!=="--directory"||
+         tail[1]!==expectedDir)process.exit(9);
+      if(mode!=="--provision" && (tail.length!==6||tail[2]!=="--owner"||
+          tail[3]!=="owner-01"||tail[4]!=="--generation"||
+          tail[5]!=="2a10b529-66a4-4790-a600-a27f2d996a0f"))process.exit(9);
+      if(mode==="--first-grant" && !rest.includes("LUMI_INBOX_AI_FIRST_ROLLOUT=1"))
+        process.exit(9);
+      if(mode==="--provision"){
+        if(fs.existsSync(fence))process.exit(1);
+        fs.writeFileSync(fence,"synthetic durable fence",{mode:0o600});
+        log("c3b-provision");
+        break;
+      }
+      if(!fs.existsSync(fence))process.exit(1);
+      if(mode==="--first-grant"){
+        log("c3b-first-grant");
+        if(fs.existsSync(targetGrant)&&get("c3b-target-grant")!=="on:1")process.exit(1);
+        if(fs.existsSync(grant)&&get("c3b-fence-grant")!=="on:1")process.exit(1);
+        set("c3b-target-grant","on:1");
+        if(scenario==="targetc3bgrantfail")process.exit(1);
+        set("c3b-fence-grant","on:1");
+        break;
+      }
+      if(mode==="--check"){
+        log("c3b-check");
+        if(!fs.existsSync(targetGrant)||!fs.existsSync(grant)||
+            get("c3b-target-grant")!==get("c3b-fence-grant")){
+          console.error("synthetic mismatched owner consent");
+          process.exit(1);
+        }
+        break;
+      }
+      process.exit(8);
     }
     if (exec === "test") {
       const file = rest[1], mode = rest[0];

@@ -54,6 +54,8 @@ function sandbox(scenario) {
     if (scenario === "targetinvalid") {
       for (const name of Object.keys(all).slice(1)) delete all[name];
     }
+    if (scenario === "targetc3bmissingflag")
+      delete all.AI_EXECUTIVE_TARGET_STAGING_HTTP_C3B_ENABLED;
     writeFileSync(envfile, [
       ...Object.entries(all).map(([key, value]) => key + "=" + value),
       "AI_EXECUTIVE_TARGET_STAGING_DIRECTORY=" + targetDirectory,
@@ -129,7 +131,10 @@ function sandbox(scenario) {
   // C-3a: the reviewed checkout ships the explicit Inbox schema upgrade CLI.
   if (scenario.startsWith("target") && scenario !== "targetinboxmissing")
     copyFileSync(path.join(repo, "scripts/target-staging-upgrade-inbox.mjs"),
-      path.join(app, "scripts/target-staging-upgrade-inbox.mjs"));
+      path.join(app, "scripts/target-staging-upgrade-inbox.mjs")); 
+  if (scenario.startsWith("targetc3b"))
+    copyFileSync(path.join(repo, "scripts/target-inbox-ai-fence-provision.mjs"),
+      path.join(app, "scripts/target-inbox-ai-fence-provision.mjs"));
 
   const sqlite = new DatabaseSync(path.join(data, "store.sqlite"));
   try {
@@ -224,6 +229,12 @@ function sandbox(scenario) {
   }
   assert.ok(script.includes("/usr/bin/node"), "check data script still uses Node");
   script = script.replaceAll("/usr/bin/node", process.execPath);
+  if (scenario.startsWith("targetc3b")) {
+    const literal = "INBOX_AI_FENCE_PATH=/var/lib/ai-executive-target/inbox-ai-consent-fence.sqlite";
+    assert.equal(script.split(literal).length, 2);
+    script = script.replace(literal, "INBOX_AI_FENCE_PATH=" +
+      JSON.stringify(path.join(root,"var/lib/ai-executive-target/inbox-ai-consent-fence.sqlite")));
+  }
   if (scenario.startsWith("target")) {
     // Only the exact canonical target path is rewritten in the synthetic sandbox.
     const literal = '[ "$TARGET_DIRECTORY" = /var/lib/ai-executive-target/personal-v1 ]';
@@ -1032,4 +1043,89 @@ test("C-3b production fence stays in approved StateDirectory, never restored ove
   assert.match(runbook,/443c17df6376c8e886150d45bcc6bcb2457b2a94/);
   assert.match(runbook,/pre-C-3b-write/);
   assert.match(runbook,/leave the latest external fence in place/);
+});
+
+test("C-3b first rollout grants once, later deploys check without re-grant", {timeout:110000},()=>{
+  const f=sandbox("targetc3bfirst");
+  try{
+    const first=f.execute();
+    assert.equal(first.status,0,first.output);
+    assert.equal(first.service,"active");
+    assert.equal(first.events.filter(x=>x==="c3b-provision").length,1);
+    assert.equal(first.events.filter(x=>x==="c3b-first-grant").length,1);
+    assert.equal(first.events.filter(x=>x==="c3b-check").length,1);
+    assert.equal(readFileSync(path.join(f.root,"state/c3b-target-grant"),"utf8"),"on:1");
+    assert.equal(readFileSync(path.join(f.root,"state/c3b-fence-grant"),"utf8"),"on:1");
+    const later=f.execute();
+    assert.equal(later.status,0,later.output);
+    assert.equal(later.service,"active");
+    assert.equal(later.events.filter(x=>x==="c3b-first-grant").length,1,
+      "a later deploy must check only; never implicitly re-grant");
+    assert.equal(later.events.filter(x=>x==="c3b-check").length,2);
+  }finally{f.cleanup();}
+});
+test("C-3b owner revoke is durable across another deploy", {timeout:110000},()=>{
+  const f=sandbox("targetc3brevoked");
+  try{
+    assert.equal(f.execute().status,0);
+    writeFileSync(path.join(f.root,"state/c3b-target-grant"),"off:2");
+    writeFileSync(path.join(f.root,"state/c3b-fence-grant"),"off:2");
+    const later=f.execute();
+    assert.equal(later.status,0,later.output);
+    assert.equal(later.events.filter(x=>x==="c3b-first-grant").length,1);
+    assert.equal(readFileSync(path.join(f.root,"state/c3b-fence-grant"),"utf8"),"off:2");
+  }finally{f.cleanup();}
+});
+test("C-3b older restored target cannot replay a revoked external fence", {timeout:110000},()=>{
+  const f=sandbox("targetc3brestore");
+  try{
+    assert.equal(f.execute().status,0);
+    writeFileSync(path.join(f.root,"state/c3b-target-grant"),"off:2");
+    writeFileSync(path.join(f.root,"state/c3b-fence-grant"),"off:2");
+    // Restore the original target snapshot but keep the latest outside fence.
+    writeFileSync(path.join(f.root,"state/c3b-target-grant"),"on:1");
+    const later=f.execute();
+    assert.notEqual(later.status,0);
+    assert.match(later.output,/nesouhlasici nebo chybejici C-3b souhlas/);
+    assert.equal(later.service,"inactive");
+    assert.equal(later.events.filter(x=>x==="c3b-first-grant").length,1);
+    assert.equal(readFileSync(path.join(f.root,"state/c3b-fence-grant"),"utf8"),"off:2");
+  }finally{f.cleanup();}
+});
+test("C-3b first-grant failure leaves service stopped after verified backup", {timeout:60000},()=>{
+  const f=sandbox("targetc3bgrantfail");
+  try{
+    const result=f.execute();
+    assert.notEqual(result.status,0);
+    assert.match(result.output,/prvni souhlas Inbox AI nebyl bezpecne zapsan/);
+    assert.equal(result.service,"inactive");
+    assert.ok(result.backups.length===1);
+    assert.equal(result.events.some(x=>x.startsWith("start-")),false);
+    assert.equal(result.events.includes("c3b-provision"),true);
+    assert.equal(result.events.includes("c3b-first-grant"),true);
+  }finally{f.cleanup();}
+});
+test("C-3b missing mandatory env flag fails before service stop", {timeout:60000},()=>{
+  const f=sandbox("targetc3bmissingflag");
+  try{
+    const result=f.execute();
+    assert.notEqual(result.status,0);
+    assert.match(result.output,/neplatny nebo castecny profil/);
+    assert.equal(result.service,"active");
+    assert.equal(result.events.includes("stop"),false);
+    assert.deepEqual(result.backups,[]);
+  }finally{f.cleanup();}
+});
+test("C-3b pre-existing ungranted fence may not be silently granted", {timeout:60000},()=>{
+  const f=sandbox("targetc3bpreexisting");
+  try{
+    const file=path.join(f.root,"var/lib/ai-executive-target/inbox-ai-consent-fence.sqlite");
+    writeFileSync(file,"preexisting placeholder",{mode:0o600});
+    const result=f.execute();
+    assert.notEqual(result.status,0);
+    assert.match(result.output,/nesouhlasici nebo chybejici C-3b souhlas/);
+    assert.equal(result.service,"inactive");
+    assert.equal(result.events.includes("c3b-first-grant"),false);
+    assert.equal(readFileSync(file,"utf8"),"preexisting placeholder");
+  }finally{f.cleanup();}
 });
