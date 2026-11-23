@@ -291,6 +291,23 @@ above; this fix does not authorize a direct production change.
 
 ### C-3b consent fence outside restore and rollback after first write (PR #492)
 
+**Operator env change BEFORE the first deploy:** add the single required line
+`AI_EXECUTIVE_TARGET_STAGING_HTTP_C3B_ENABLED=true` to the root-owned
+`/etc/ai-executive/ai-executive.env` alongside the rest of the complete
+`personal-v1` profile. An older env without it is an invalid partial profile:
+`deploy-safe.sh` refuses it before service stop. No separate activation PR
+or post-deploy manual first consent is required. Without `OPENAI_API_KEY`,
+Inbox uses deterministic local rules, not a failing remote provider.
+
+**Revocation/rollback:** The Settings switch may revoke consent and later
+re-grant only after a fresh explicit owner action. Neither a later deploy,
+service restart, restore of `target/`, nor a missing first-grant row can grant
+again. Keep the newest outside-restore fence even when restoring an older
+target backup. A mismatch stops deployment; fix only through an explicitly
+reviewed operator procedure, never by deleting receipts/decisions or restoring
+an older fence.
+
+
 **Approved production location:** `/var/lib/ai-executive-target/inbox-ai-consent-fence.sqlite`.
 This is inside the existing `StateDirectory=ai-executive-target` under
 `ProtectSystem=strict`, but strictly **outside** the restorable
@@ -306,12 +323,21 @@ then (on the *first* reviewed C-3b code rollout only) runs
 `scripts/target-inbox-ai-fence-provision.mjs --provision --directory
 /var/lib/ai-executive-target/personal-v1` **as ai-executive**. It then
 always runs the same command with `--check` before starting the service.
-Provisioning initializes schema only, **never grants consent**.
-An already-existing file is verified read-only, never repaired or replaced.
-Missing, symlinked, wrong-owner/mode or corrupt fence aborts the deploy;
-later deploys **must not recreate** it. Runtime must be fail-closed when this
-fence is missing or mismatched. The first owner grant is a separate explicit
-approved action at actual C-3b release, not a deploy script side effect.
+Only on the **first reviewed C-3b rollout with a missing external fence**, the
+owner-approved deployment then calls `--first-grant` with the configured owner
+and restore generation. The command journals one `inbox_consent` grant in the
+canonical pinned target v27 write path, then records the same first decision,
+epoch 1 and scope `c3b:v1` in the separate fence. It emits no private data.
+The final `--check --directory ... --owner <ID> --generation <UUID>`
+requires **strict agreement of both durable stores** (including a matching
+disabled/revoked state). On subsequent deployments only `--check` runs:
+no new grant, repair or reset of decision history is ever automatic.
+A crash between target and fence commits means AI stays disabled and the
+service stays stopped until operator-reviewed recovery; no old code may
+restart on the updated target. A missing, symlinked, wrong-owner/mode,
+corrupt or mismatched fence aborts the deploy. A missing fence after the
+first rollout is never recreated, and a revoked owner remains revoked.
+The original owner decision is #471, reconfirmed in #492 on 2026-11-23.
 
 **Backup and restore:** if an existing fence is present at deploy time, the
 root-only deployment archive includes a byte-for-byte diagnostic copy and
@@ -340,9 +366,11 @@ available, keep the service stopped and roll forward to fixed C-3b-aware code.
 **Compatibility control:** a current, untouched production v27 store with no
 `r3:c3b:*` metadata must continue to pass
 `target-store-provision.mjs --check` and the read-only preflight without
-migration or modification. C-3b only writes its metadata after an explicit
-authenticated command. This rollout does NOT authorize production activation
-of unfinished Inbox suggestion HTTP/UI or any real outbound OpenAI request.
+migration or modification. C-3b now writes owner consent during the explicitly approved first
+deployment (decision 2026-11-23), using the standard pinned target journal.
+The owner-approved activation MUST still pass exact-SHA tests, release QA
+and deployment authorization. An unmodified v27 store remains read-compatible
+before that deployment.
 
 
 ### C-3b durable Inbox receipt capacity (owner maintenance)

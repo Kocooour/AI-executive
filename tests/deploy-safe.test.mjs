@@ -131,7 +131,7 @@ function sandbox(scenario) {
   // C-3a: the reviewed checkout ships the explicit Inbox schema upgrade CLI.
   if (scenario.startsWith("target") && scenario !== "targetinboxmissing")
     copyFileSync(path.join(repo, "scripts/target-staging-upgrade-inbox.mjs"),
-      path.join(app, "scripts/target-staging-upgrade-inbox.mjs")); 
+      path.join(app, "scripts/target-staging-upgrade-inbox.mjs"));
   if (scenario.startsWith("targetc3b"))
     copyFileSync(path.join(repo, "scripts/target-inbox-ai-fence-provision.mjs"),
       path.join(app, "scripts/target-inbox-ai-fence-provision.mjs"));

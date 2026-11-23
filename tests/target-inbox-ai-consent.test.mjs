@@ -21,6 +21,8 @@ const {provisionInboxAIFenceSchema,recordExplicitInboxAIGrant,
   readInboxAIFenceGrant,revokeInboxAIConsent}=
   await import("../lib/target-inbox-ai-consent-fence.ts");
 const {inspectIsolatedTargetStore}=await import("../lib/target-store-preflight.ts");
+const {checkFirstDeployInboxAIConsent,grantFirstDeployInboxAIConsent}=
+  await import("../lib/target-inbox-ai-first-deploy.ts");
 const stages=[];
 function fixture(){
   const stage=bootstrapIsolatedTargetStore({
@@ -142,4 +144,61 @@ test("C-3b clean production v27 remains backward compatible without metadata wri
     {ok:true,mode:"r2-model",issues:[]});
   assert.equal(x.authority.readInboxAIConsent("alice"),null,
     "read-only check never writes consent namespaces");
+});
+
+test("C-3b first deploy: single authorized durable grant and idempotent repeat",()=>{
+  const x=fixture();
+  assert.equal(checkFirstDeployInboxAIConsent(x.authority,x.fence,"alice",
+    x.stage.restoreGeneration),false,"unprovisioned consent is not active");
+  assert.equal(grantFirstDeployInboxAIConsent(x.authority,x.fence,"bob",
+    x.stage.restoreGeneration),false,"unowned actor must never be granted");
+  assert.equal(grantFirstDeployInboxAIConsent(x.authority,x.fence,"alice",
+    randomUUID()),false,"restore generation must match");
+  assert.equal(grantFirstDeployInboxAIConsent(x.authority,x.fence,"alice",
+    x.stage.restoreGeneration),true);
+  assert.equal(checkFirstDeployInboxAIConsent(x.authority,x.fence,"alice",
+    x.stage.restoreGeneration),true);
+  const first=x.authority.readInboxAIConsent("alice");
+  assert.equal(first.epoch,1);
+  assert.equal(first.enabled,true);
+  assert.equal(first.ownerDecision,INBOX_FIRST_OWNER_DECISION);
+  assert.equal(grantFirstDeployInboxAIConsent(x.authority,x.fence,"alice",
+    x.stage.restoreGeneration),true,"same first decision is read-only replay");
+  assert.deepEqual(x.authority.readInboxAIConsent("alice"),first,
+    "idempotent retry must not rewrite target metadata or its epoch");
+  assert.equal(x.fence.prepare("SELECT COUNT(*) AS n FROM inbox_ai_fence_decisions").get().n,1);
+  assert.deepEqual(inspectIsolatedTargetStore({...x.store,mode:"r2-model"}),
+    {ok:true,mode:"r2-model",issues:[]});
+});
+test("C-3b later deploy: matching revoke stays off and first decision never re-grants",()=>{
+  const x=fixture();
+  assert.equal(grantFirstDeployInboxAIConsent(x.authority,x.fence,"alice",
+    x.stage.restoreGeneration),true);
+  assert.deepEqual(revokeInboxAIConsent(x.fence,"alice"),{epoch:2,drained:true});
+  assert.equal(checkFirstDeployInboxAIConsent(x.authority,x.fence,"alice",
+    x.stage.restoreGeneration),false,"a half-finished revoke must stop a deploy");
+  assert.equal(grantFirstDeployInboxAIConsent(x.authority,x.fence,"alice",
+    x.stage.restoreGeneration),false,"fence revocation blocks first decision replay");
+  const written=x.authority.changeInboxAIConsent(x.token,"alice",
+    cmd(x,"revoke",2,INBOX_FIRST_OWNER_DECISION));
+  assert.equal(written.ok,true);
+  assert.equal(checkFirstDeployInboxAIConsent(x.authority,x.fence,"alice",
+    x.stage.restoreGeneration),true,"matching disabled state permits deploy");
+  assert.equal(grantFirstDeployInboxAIConsent(x.authority,x.fence,"alice",
+    x.stage.restoreGeneration),false,"a later deploy cannot re-enable consent");
+  assert.equal(x.fence.prepare("SELECT COUNT(*) AS n FROM inbox_ai_fence_decisions").get().n,1);
+});
+test("C-3b partially written first deploy fails closed without prior fence history",()=>{
+  const x=fixture();
+  // Simulate target's pinned consent commit surviving while the external
+  // coordinator failed before its fence decision commit.
+  const grant=x.authority.changeInboxAIConsent(x.token,"alice",
+    cmd(x,"grant",1,INBOX_FIRST_OWNER_DECISION));
+  assert.equal(grant.ok,true);
+  assert.equal(checkFirstDeployInboxAIConsent(x.authority,x.fence,"alice",
+    x.stage.restoreGeneration),false);
+  assert.equal(grantFirstDeployInboxAIConsent(x.authority,x.fence,"alice",
+    x.stage.restoreGeneration),true,"only a pristine first-rollout fence can finish");
+  assert.equal(checkFirstDeployInboxAIConsent(x.authority,x.fence,"alice",
+    x.stage.restoreGeneration),true);
 });

@@ -4,6 +4,8 @@
 
 **Plán aktualizován 2026-11-17: Release 0 a milník A dokončeny; milník B/R4 produkčně aktivován pro jednoho vlastníka se soukromými Oblastmi na `513db740b4b4096a98b793ccef1684ddfd4b7e4f`. Nový milník C (#466) sjednocuje navigaci pouze nad cílovými daty.** Tento oddíl je platný plán; vše pod ním je historický záznam iterací. [Rozhodnutí vlastníka o rozsahu](decisions/2026-11-12-rozsah-prvniho-releasu.md): první release cílového modelu je **jeden uživatel a soukromé Oblasti**; sdílení a pozvánky jsou R5, HumanWiki H1-real je pozastaveno do [#400](https://github.com/Kocooour/AI-executive/issues/400).
 
+**C-3b rozhodnutí 2026-11-23 (PR #492):** povinný příznak `AI_EXECUTIVE_TARGET_STAGING_HTTP_C3B_ENABLED=true` v `personal-v1`; první souhlas OpenAI se při ověřeném deployi s vypnutou službou zapíše do target v27 a externí revokační fence. Všechny pozdější deploye jen ověřují shodu, nikdy znovu neudělují odvolaný souhlas. Bez API klíče platí pouze místní pravidla. Před produkčním nasazením znovu ověřit CI přesného SHA a bezpečné release brány.
+
 **Stav:** R0–R3 dokončeno. R4 aktivováno 2026-11-17 v produkčním profilu `personal-v1` a v1 shellu se schválením vlastníka a release důkazy v [#388](https://github.com/Kocooour/AI-executive/issues/388#issuecomment-6960733063). Profil `off` nadále zůstává kompatibilní; C-1 nemění data, schéma ani produkční příznaky. Historické technické poznámky níže popisují dobový stav, nikoli současné blokátory.
 
 | Milník | Jeden akceptační test | Rozpočet | Stav |
