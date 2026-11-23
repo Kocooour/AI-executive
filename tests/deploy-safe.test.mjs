@@ -1056,6 +1056,8 @@ test("C-3b first rollout grants once, later deploys check without re-grant", {ti
     assert.equal(first.events.filter(x=>x==="c3b-check").length,1);
     assert.equal(readFileSync(path.join(f.root,"state/c3b-target-grant"),"utf8"),"on:1");
     assert.equal(readFileSync(path.join(f.root,"state/c3b-fence-grant"),"utf8"),"on:1");
+    // Follow-up deployment must have a NEW fast-forward target SHA.
+    writeFileSync(path.join(f.root,"state/next-target"),"1");
     const later=f.execute();
     assert.equal(later.status,0,later.output);
     assert.equal(later.service,"active");
@@ -1070,6 +1072,8 @@ test("C-3b owner revoke is durable across another deploy", {timeout:110000},()=>
     assert.equal(f.execute().status,0);
     writeFileSync(path.join(f.root,"state/c3b-target-grant"),"off:2");
     writeFileSync(path.join(f.root,"state/c3b-fence-grant"),"off:2");
+    // Follow-up deployment must have a NEW fast-forward target SHA.
+    writeFileSync(path.join(f.root,"state/next-target"),"1");
     const later=f.execute();
     assert.equal(later.status,0,later.output);
     assert.equal(later.events.filter(x=>x==="c3b-first-grant").length,1);
@@ -1084,6 +1088,8 @@ test("C-3b older restored target cannot replay a revoked external fence", {timeo
     writeFileSync(path.join(f.root,"state/c3b-fence-grant"),"off:2");
     // Restore the original target snapshot but keep the latest outside fence.
     writeFileSync(path.join(f.root,"state/c3b-target-grant"),"on:1");
+    // Follow-up deployment must have a NEW fast-forward target SHA.
+    writeFileSync(path.join(f.root,"state/next-target"),"1");
     const later=f.execute();
     assert.notEqual(later.status,0);
     assert.match(later.output,/nesouhlasici nebo chybejici C-3b souhlas/);
