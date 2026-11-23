@@ -170,11 +170,14 @@ export default function TargetInbox({language="cs",taskDetail=false}:{language?:
   const [recoveredGeneration,setRecoveredGeneration]=useState("");
   const [recoveryFailed,setRecoveryFailed]=useState(false);
   type C3bLocalOutcome={
-    command:C3bAccept|C3bReceiptQuery;status:"committed"|"uncertain";
+    command:C3bAccept|C3bReceiptQuery;status:"sending"|"committed"|"uncertain";
     next:C3bOutcome["next"];undoCommand?:C3bUndo;
   };
   const [c3bOutcome,setC3bOutcome]=useState<C3bLocalOutcome|null>(null);
   const [c3bUndoNotice,setC3bUndoNotice]=useState(false);
+  const [c3bStaleNotice,setC3bStaleNotice]=useState(false);
+  const [c3bUndoneNotice,setC3bUndoneNotice]=useState(false);
+  const lastFocusedCommit=useRef("");
   const c3bClear=useCallback(()=>{
     persistC3bRecovery(null);
     if(!inboxDecisionSnapshot(runtime,generation))setInboxUncertain(null);
@@ -194,13 +197,29 @@ export default function TargetInbox({language="cs",taskDetail=false}:{language?:
   },[runtime,generation]);
   const onC3bOutcome=useCallback((outcome:C3bOutcome):boolean=>{
     if(!runtime?.known()||runtime.generation()!==generation)return false;
-    if(outcome.status==="uncertain")return c3bPending(outcome);
+    setC3bUndoNotice(false);setC3bStaleNotice(false);
+    setC3bUndoneNotice(false);
+    if(outcome.status==="sending"||outcome.status==="uncertain")
+      return c3bPending(outcome);
     c3bClear();
     setC3bOutcome(outcome);
     emitTargetChange({kind:"task",id:outcome.command.taskId,change:"updated"});
     reload();
     return true;
   },[runtime,generation,c3bPending,c3bClear,reload]);
+  const onC3bStale=useCallback(()=>{
+    c3bClear();setC3bOutcome(null);setC3bStaleNotice(true);reload();
+  },[c3bClear,reload]);
+  // The accepted row unmounts; focus the remaining Undo action once visible.
+  useEffect(()=>{
+    if(c3bOutcome?.status!=="committed"||!page||
+       lastFocusedCommit.current===c3bOutcome.command.commandId)return;
+    const button=document.querySelector<HTMLElement>(
+      '[data-testid="target-c3b-committed"] button');
+    if(button){
+      button.focus();lastFocusedCommit.current=c3bOutcome.command.commandId;
+    }
+  },[c3bOutcome,page]);
   useEffect(()=>{
     if(!runtime?.known()||runtime.generation()!==generation)return;
     const recovered=readC3bRecovery(generation);
@@ -489,6 +508,11 @@ export default function TargetInbox({language="cs",taskDetail=false}:{language?:
   // An unresolved command survives navigating away and back. In every phase,
   // hide rows/count and block fresh UUIDs until the original receipt is settled.
   const unresolved=decision&&["sending","verifying","uncertain","not-recorded"].includes(decision.stage);
+  if(c3bOutcome?.status==="sending")return <section className="targetInbox"
+    data-testid="target-c3b-sending">
+    <p role="status">{speak("Odesílám návrh a ověřuji potvrzení…",
+      "Sending suggestion and checking the receipt…")}</p>
+  </section>;
   if(c3bOutcome?.status==="uncertain")return <section className="targetInbox"
     data-testid="target-c3b-uncertain" aria-live="polite">
     <p role="alert">{speak("Ověřuji původní příkaz. Úkoly zůstávají skryté do potvrzení výsledku.",
