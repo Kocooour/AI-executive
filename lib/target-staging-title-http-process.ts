@@ -24,7 +24,9 @@ function isOptionalC3bChild(scriptName:string,input:string):boolean{
   if(scriptName!=="target-staging-inbox-c3b-child.mjs")return false;
   // All callers construct this operation field server-side, before the
   // optional task ID. Invalid/unrecognized commands are never prioritized.
-  return /^\\{"operation":"(?:preview|consent_read)"(?:,|\\})/.test(input);
+  return input.startsWith('{"operation":"preview",')||
+    input.startsWith('{"operation":"consent_read",')||
+    input==='{"operation":"consent_read"}';
 }
 async function acquireOptionalC3b():Promise<boolean>{
   if(!optionalC3bActive&&optionalC3bWaiters.length===0){
