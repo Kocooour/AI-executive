@@ -242,6 +242,33 @@ test("C-3b partially written first deploy fails closed without prior fence histo
     x.stage.restoreGeneration),true);
 });
 
+test("C-3b first consent recovery requires no prior fence activity, even rate budgets",()=>{
+  const x=fixture();
+  // A partially provisioned file with any evidence of provider activity is
+  // NOT equivalent to a never-used first rollout. Recovery must not grant.
+  x.fence.prepare("INSERT INTO inbox_ai_fence_budgets(bucket_key,minute,hits) VALUES(?,?,?)")
+    .run("g",1,1);
+  assert.equal(grantFirstDeployInboxAIConsent(x.authority,x.fence,"alice",
+    x.stage.restoreGeneration),false);
+  assert.equal(x.authority.readInboxAIConsent("alice"),null,
+    "refused recovery must not mutate target consent");
+  assert.equal(readInboxAIFenceGrant(x.fence,"alice"),null);
+});
+
+test("C-3b first consent recovery rejects revoked target even if fence history is empty",()=>{
+  const x=fixture();
+  const on=x.authority.changeInboxAIConsent(x.token,"alice",
+    cmd(x,"grant",1,INBOX_FIRST_OWNER_DECISION));
+  assert.equal(on.ok,true);
+  const off=x.authority.changeInboxAIConsent(x.token,"alice",
+    cmd(x,"revoke",2,INBOX_FIRST_OWNER_DECISION));
+  assert.equal(off.ok,true);
+  assert.equal(grantFirstDeployInboxAIConsent(x.authority,x.fence,"alice",
+    x.stage.restoreGeneration),false,
+    "even an empty replacement fence cannot regrant a target that records revoke");
+  assert.equal(x.authority.readInboxAIConsent("alice").enabled,false);
+});
+
 test("C-3b partial external regrant then revoke monotonically catches up target",()=>{
   const x=fixture(),first=cmd(x,"grant",1,INBOX_FIRST_OWNER_DECISION);
   assert.equal(x.authority.changeInboxAIConsent(x.token,"alice",first).ok,true);
