@@ -38,6 +38,9 @@ const {bootstrapIsolatedTargetStore}=await import("../lib/target-store-bootstrap
 const {provisionInboxAIFenceSchema}=await import("../lib/target-inbox-ai-consent-fence.ts");
 const {createSessionToken,sessionCookieName}=
   await import("./support/owner-session-test-cookie.mjs");
+const {GET:C3A_INBOX}=await import("../app/api/target-staging/inbox/route.ts");
+const {POST:C3A_RECEIPT}=await import("../app/api/target-staging/inbox/receipt/route.ts");
+const {issueInboxClientCommandId}=await import("../lib/target-inbox-client.ts");
 const {GET:PREVIEW}=await import("../app/api/target-staging/inbox/c3b/route.ts");
 const {POST:ACCEPT}=await import("../app/api/target-staging/inbox/c3b/accept/route.ts");
 const {POST:CANCEL}=await import("../app/api/target-staging/inbox/c3b/cancel/route.ts");
@@ -121,6 +124,51 @@ test("C-3b HTTP: default-off, unauthenticated, CSRF, read-only foreign actor",as
     limit:65536,used:0,reserved:0,remainingAccepts:32256,warning:false,
   },"owner receives numeric headroom without receipt IDs");
 });
+test("C-3b optional preview+consent cannot starve a C-3a original receipt",async()=>{
+  // This reproduces the C-3a real-browser regression: both optional C-3b
+  // operations previously occupied the two shared write-child slots, making
+  // an unrelated Process/Undo receipt fail immediately with HTTP 503.
+  const inboxResponse=await C3A_INBOX(new Request(
+    "http://localhost:3001/api/target-staging/inbox?limit=50",
+    {headers:hdr()}));
+  assert.equal(inboxResponse.status,200);
+  const page=await inboxResponse.json();
+  const item=page.items.find(x=>x.id==="captured");
+  assert.ok(item?.canProcess&&item.expectedRevision);
+  const fields={
+    taskId:item.id,mode:"process",undoOfCommandId:null,
+    expectedRevision:item.expectedRevision,
+    expectedTriageRevision:item.triageRevision,
+    writeAreaId:item.effectiveAreaId,
+    restoreGeneration:page.restoreGeneration,
+  };
+  const commandId=await issueInboxClientCommandId(fields);
+  assert.ok(commandId);
+  const command={commandId,...fields};
+  const rule=preview();
+  const consentRead=consent();
+  // The optional calls enter the shared server runner before the C-3a
+  // actor-bound read-only status. Both optional calls must finish safely,
+  // but they must not consume the C-3a reserved child capacity.
+  const receipt=C3A_RECEIPT(new Request(
+    "http://localhost:3001/api/target-staging/inbox/receipt",{
+      method:"POST",
+      headers:{...hdr(),origin:"http://localhost:3001",
+        "content-type":"application/json","x-lumi-target-protocol":"1"},
+      body:JSON.stringify(command),
+    }));
+  const [ruleReply,consentReply,receiptReply]=await Promise.all([
+    rule,consentRead,receipt,
+  ]);
+  assert.equal(ruleReply.status,200);
+  assert.equal(consentReply.status,200);
+  assert.equal(receiptReply.status,200,
+    "C-3a receipt must remain available during C-3b optional work");
+  const result=await receiptReply.json();
+  assert.equal(result.status,"not_recorded");
+  assert.equal(result.next,null);
+});
+
 test("C-3b HTTP: rule Accept+Today+project/triage receipt, single atomic Undo",async()=>{
   const p=await read(preview());
   const command={commandId:randomUUID(),taskId:p.taskId,
