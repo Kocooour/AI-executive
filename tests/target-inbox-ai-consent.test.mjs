@@ -202,3 +202,37 @@ test("C-3b partially written first deploy fails closed without prior fence histo
   assert.equal(checkFirstDeployInboxAIConsent(x.authority,x.fence,"alice",
     x.stage.restoreGeneration),true);
 });
+
+test("C-3b partial external regrant then revoke monotonically catches up target",()=>{
+  const x=fixture(),first=cmd(x,"grant",1,INBOX_FIRST_OWNER_DECISION);
+  assert.equal(x.authority.changeInboxAIConsent(x.token,"alice",first).ok,true);
+  assert.ok(recordExplicitInboxAIGrant(x.fence,"alice","alice",
+    x.stage.restoreGeneration,INBOX_AI_DATA_SCOPE_VERSION,INBOX_FIRST_OWNER_DECISION));
+  assert.equal(revokeInboxAIConsent(x.fence,"alice").epoch,2);
+  assert.equal(x.authority.changeInboxAIConsent(x.token,"alice",
+    cmd(x,"revoke",2,INBOX_FIRST_OWNER_DECISION)).ok,true);
+  // The external fence can commit regrant while the target writer fails.
+  assert.ok(recordExplicitInboxAIGrant(x.fence,"alice","alice",
+    x.stage.restoreGeneration,INBOX_AI_DATA_SCOPE_VERSION,"settings-regrant-partial"));
+  assert.equal(readInboxAIFenceGrant(x.fence,"alice").epoch,3);
+  assert.equal(targetInboxAIConsentMatchesFence(
+    x.authority.readInboxAIConsent("alice"),
+    readInboxAIFenceGrant(x.fence,"alice"),x.stage.restoreGeneration),false);
+  assert.equal(revokeInboxAIConsent(x.fence,"alice").epoch,4);
+  const repaired=x.authority.changeInboxAIConsent(x.token,"alice",
+    cmd(x,"revoke",4,INBOX_FIRST_OWNER_DECISION));
+  assert.equal(repaired.ok,true);
+  assert.equal(repaired.record.enabled,false);
+  assert.equal(repaired.record.epoch,4);
+  assert.equal(targetInboxAIConsentMatchesFence(repaired.record,
+    readInboxAIFenceGrant(x.fence,"alice"),x.stage.restoreGeneration),false,
+    "the repaired state is OFF, not another implicit grant");
+  assert.deepEqual(inspectIsolatedTargetStore({...x.store,mode:"r2-model"}),
+    {ok:true,mode:"r2-model",issues:[]});
+  // A future explicit owner regrant can now use a new decision and epoch.
+  const decision="settings-regrant-after-repair";
+  assert.equal(recordExplicitInboxAIGrant(x.fence,"alice","alice",
+    x.stage.restoreGeneration,INBOX_AI_DATA_SCOPE_VERSION,decision).epoch,5);
+  assert.equal(x.authority.changeInboxAIConsent(x.token,"alice",
+    cmd(x,"grant",5,decision)).ok,true);
+});
