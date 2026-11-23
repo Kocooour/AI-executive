@@ -1,25 +1,29 @@
 "use client";
 /** C-3b: only mounted for actor-private editable Inbox rows.
  * Never retain titles, suggestions or model output in browser storage. */
-import {useCallback,useEffect,useRef,useState} from "react";
+import {useCallback,useEffect,useId,useRef,useState} from "react";
 import type {TargetInboxItem} from "../../lib/target-inbox-client-types";
-import {fetchC3bProposal,getC3bConsent,acceptC3b,receiptC3b,
+import {fetchC3bProposal,getC3bConsent,acceptC3b,cancelC3b,receiptC3b,
   type C3bProposal,type C3bAccept,type C3bReceipt,
   C3B_CONSENT_CHANGED}
   from "../../lib/target-inbox-c3b-client";
 import {useTargetGeneration,useTargetRuntime} from "./target-data-provider";
 
 export type C3bOutcome={
-  command:C3bAccept;status:"committed"|"uncertain";
+  command:C3bAccept;status:"sending"|"committed"|"uncertain";
   next:C3bReceipt["next"];
 };
 type Props={item:TargetInboxItem;restoreGeneration:string;
   language:"cs"|"en";disabled:boolean;
-  onOutcome:(outcome:C3bOutcome)=>boolean;onRevoked:()=>void};
+  onOutcome:(outcome:C3bOutcome)=>boolean;onRevoked:()=>void;
+  onStale:()=>void};
 export default function TargetInboxC3b({item,restoreGeneration,
-  language,disabled,onOutcome,onRevoked}:Props){
+  language,disabled,onOutcome,onRevoked,onStale}:Props){
   const runtime=useTargetRuntime(),generation=useTargetGeneration();
   const root=useRef<HTMLDivElement|null>(null);
+  const whyId=useId();
+  const acceptInFlight=useRef(false);
+  const lastBlur=useRef<number|null>(null);
   const pendingPreview=useRef<AbortController|null>(null);
   const pendingAI=useRef<AbortController|null>(null);
   // Parent wake/refusal handlers can be refreshed without retriggering the
@@ -32,6 +36,7 @@ export default function TargetInboxC3b({item,restoreGeneration,
   const [alternative,setAlternative]=useState<C3bProposal|null>(null);
   const [aiBusy,setAiBusy]=useState(false);
   const [aiNotice,setAiNotice]=useState<"off"|"failed"|null>(null);
+  const [aiConsentEnabled,setAiConsentEnabled]=useState(false);
   const [status,setStatus]=useState<"idle"|"loading"|"ready"|"off"|"failed"|"sending">("idle");
   const [expanded,setExpanded]=useState(false);
   const speak=(cs:string,en:string)=>language==="cs"?cs:en;
@@ -57,10 +62,18 @@ export default function TargetInboxC3b({item,restoreGeneration,
       pendingPreview.current?.abort();
       pendingAI.current?.abort();pendingAI.current=null;
       setAiBusy(false);setAiNotice(null);
-      setSuggestion(null);setAlternative(null);setStatus("idle");setFetchKey(n=>n+1);
+      setSuggestion(null);setAlternative(null);
+      setAiConsentEnabled(false);setStatus("idle");setFetchKey(n=>n+1);
+    };
+    const blurred=()=>{lastBlur.current=Date.now();};
+    const awakened=()=>{
+      if(lastBlur.current!==null&&Date.now()-lastBlur.current>=60_000)
+        changed();
+      lastBlur.current=null;
     };
     window.addEventListener(C3B_CONSENT_CHANGED,changed);
-    window.addEventListener("focus",changed);
+    window.addEventListener("blur",blurred);
+    window.addEventListener("focus",awakened);
     let channel:BroadcastChannel|null=null;
     try{
       if(typeof BroadcastChannel!=="undefined"){
@@ -70,7 +83,8 @@ export default function TargetInboxC3b({item,restoreGeneration,
     }catch{}
     return ()=>{
       window.removeEventListener(C3B_CONSENT_CHANGED,changed);
-      window.removeEventListener("focus",changed);
+      window.removeEventListener("blur",blurred);
+      window.removeEventListener("focus",awakened);
       channel?.close();
     };
   },[]);
@@ -79,6 +93,7 @@ export default function TargetInboxC3b({item,restoreGeneration,
     setSuggestion(null);
     setAlternative(null);
     setAiBusy(false);setAiNotice(null);
+    setAiConsentEnabled(false);
     setStatus("idle");
     setFetchKey(n=>n+1);
   },[]);
