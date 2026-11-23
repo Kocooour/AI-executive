@@ -1,18 +1,18 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { chmodSync, linkSync, mkdtempSync, readFileSync, rmSync, statSync,
-  symlinkSync, writeFileSync } from "node:fs";
+import { linkSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import test from "node:test";
+import test, { after } from "node:test";
 import { fileURLToPath } from "node:url";
-import { KNOWN_TABLES, inventoryCopy } from "../scripts/archive-purge-inventory.mjs";
+import { KNOWN_TABLES, inventoryCopy, inventoryDatabase } from "../scripts/archive-purge-inventory.mjs";
 import { classifiedTables } from "../lib/backup-scope.ts";
 
 // Do not attach fixtures to the app's normal runtime store.
 const testRoot = mkdtempSync(path.join(tmpdir(), "lumi-archive-test-"));
+after(() => rmSync(testRoot, { recursive: true, force: true }));
 process.env.AI_EXECUTIVE_DATA_DIR = path.join(testRoot, "no-live-data");
 const { applySchema } = await import("../lib/server-store.ts");
 const repo = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
@@ -20,11 +20,17 @@ const script = path.join(repo, "scripts/archive-purge-inventory.mjs");
 const secret = "PRIVATE_ARCHIVE_TITLE_NEVER_PRINT";
 const quote = (name) => '"' + name.replaceAll('"', '""') + '"';
 
-function attestation(file, filename) {
+function schemaReference(file) {
+  const db = new DatabaseSync(file, { readOnly: true });
+  try { return inventoryDatabase(db).schemaDigest; }
+  finally { db.close(); }
+}
+function attestation(file, filename, referenceSchemaSha256) {
   const buf = readFileSync(file);
   writeFileSync(filename, JSON.stringify({
     format: "lumi-archive-isolated-copy-v1", method: "sqlite-backup",
     consistent: true, sourceStoreIdentity: "a".repeat(64),
+    referenceSchemaSha256,
     sha256: createHash("sha256").update(buf).digest("hex"),
     bytes: buf.length,
   }), { mode: 0o600 });
@@ -82,10 +88,11 @@ function createFixture() {
   } finally {
     db.close();
   }
-  attestation(file, manifest);
+  const baselineSchema = schemaReference(file);
+  attestation(file, manifest, baselineSchema);
   return {
     file, manifest,
-    refresh: () => attestation(file, manifest),
+    refresh: () => attestation(file, manifest, baselineSchema),
     cleanup: () => rmSync(dir, { recursive: true, force: true }),
   };
 }
@@ -179,7 +186,7 @@ test("unknown table and trigger names never enter JSON or stderr", () => {
     const db = new DatabaseSync(f.file);
     try {
       db.exec("CREATE TABLE " + quote(secret) + "(id TEXT)");
-      db.exec("CREATE TRIGGER " + quote(secret) + "_trigger AFTER INSERT ON push_subscriptions BEGIN SELECT 1; END");
+      db.exec("CREATE TRIGGER " + quote(secret + "_trigger") + " AFTER INSERT ON push_subscriptions BEGIN SELECT 1; END");
     } finally { db.close(); }
     f.refresh();
     const report = inventoryCopy(f.file, f.manifest);
@@ -204,6 +211,22 @@ test("deleted required trigger is classified as schema drift", () => {
     const report = inventoryCopy(f.file, f.manifest);
     assert.ok(report.missingTriggerCount > 0);
     assert.ok(report.blockers.includes("missing-triggers"));
+    assert.equal(report.inventoryComplete, false);
+  } finally { f.cleanup(); }
+});
+
+test("a same-name trigger with a changed body fails the trusted schema digest", () => {
+  const f = createFixture();
+  try {
+    const db = new DatabaseSync(f.file);
+    try {
+      db.exec("DROP TRIGGER mail_workspace_deleted");
+      db.exec("CREATE TRIGGER mail_workspace_deleted AFTER DELETE ON entities BEGIN SELECT 1; END");
+    } finally { db.close(); }
+    f.refresh();
+    const report = inventoryCopy(f.file, f.manifest);
+    assert.equal(report.missingTriggerCount, 0);
+    assert.ok(report.blockers.includes("schema-manifest-drift"));
     assert.equal(report.inventoryComplete, false);
   } finally { f.cleanup(); }
 });
