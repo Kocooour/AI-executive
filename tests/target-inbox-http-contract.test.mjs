@@ -106,6 +106,23 @@ test("C-3a: C-3b capacity pressure retries only the read-only original receipt",
   }finally{globalThis.fetch=original;}
 });
 
+test("C-3a: 429 honors receipt Retry-After instead of exhausting the rate bucket",async()=>{
+  const original=globalThis.fetch;
+  let receiptReads=0;
+  globalThis.fetch=async()=>{
+    receiptReads++;
+    return Response.json({error:"Too many requests"},{status:429,
+      headers:{"retry-after":"600"}});
+  };
+  try{
+    // Keep the actor-bound original command unresolved for manual verification
+    // after the server's 10-minute limit. Never repeat Process/Undo writes.
+    assert.deepEqual(await verifyInboxCommand(command),
+      {ok:false,reason:"unavailable"});
+    assert.equal(receiptReads,1,"a 600-second Retry-After cannot fit the 12-second command deadline");
+  }finally{globalThis.fetch=original;}
+});
+
 test("C-3a: authorization refusal and stale receipt never trigger a retry",async()=>{
   const original=globalThis.fetch;
   try{
