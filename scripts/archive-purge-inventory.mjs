@@ -110,7 +110,7 @@ function workspaceRefs(db, table) {
     "SELECT 1 FROM entities e WHERE json_valid(e.payload) " +
     "AND json_extract(e.payload, '$.type') = 'workspace' " +
     "AND json_extract(e.payload, '$.workspaceId') = t.workspace_id" +
-    ")) THEN 1 ELSE 0 END), 0) AS linked FROM " + quote(table) + " t"
+    ") THEN 1 ELSE 0 END), 0) AS linked FROM " + quote(table) + " t"
   ).get();
   return { total: Number(row.total), linkedToLegacyWorkspace: Number(row.linked),
     withoutMatchingLegacyWorkspace: Number(row.total) - Number(row.linked) };
