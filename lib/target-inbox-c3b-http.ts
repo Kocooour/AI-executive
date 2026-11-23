@@ -3,6 +3,8 @@ import {createHmac} from "node:crypto";
 import {requestCookie,sessionCookieName} from "./auth";
 import type {StagingHttpIdentity} from "./target-staging-http-identity";
 import type {StagingPersonalReadConfig} from "./target-staging-read-process";
+import {verifyDurableTargetStagingSessionLiveCoded}
+  from "./target-staging-durable-session";
 import {HttpInputError,enforceRateLimit,readJsonBody,requireTargetSameOrigin}
   from "./http-security";
 import {logStagingFailure} from "./target-staging-failure-log";
@@ -81,12 +83,22 @@ const writeResult=(result:Awaited<ReturnType<typeof acceptC3bInChild>>)=>{
   if(result.ok===true)
     return Response.json(result.replayed?{ok:true,replayed:true}:{ok:true},{headers});
   if(result.reason==="invalid_request")return answer(400,"Invalid request");
-  if(result.reason==="unavailable")return answer(404,"Not found");
+  if(result.reason==="unavailable")return answer(503,"Staging unavailable");
   if(["stale_revision","idempotency_conflict","resync_required"]
     .includes(result.reason))return answer(409,"Revision conflict");
   if(result.reason==="session_revoked")return answer(401,"Authentication required");
   return answer(503,"Staging unavailable");
 };
+// A consent read or write is owner-only, independent of CSRF/admission.
+const ownerConsentDenied=(identity:StagingHttpIdentity,
+  base:StagingPersonalReadConfig):Response|null=>{
+  if(identity.kind==="owner")return null;
+  const live=verifyDurableTargetStagingSessionLiveCoded(base,identity.tokenHash);
+  if(live.ok===false)return answer(live.reason==="unavailable"?503:401,
+    live.reason==="unavailable"?"Staging unavailable":"Authentication required");
+  return live.userId===base.ownerUserId?null:answer(403,"Forbidden");
+};
+
 export async function getC3bPreview(request:Request):Promise<Response>{
   if(!c3bEnabled())return answer(404,"Not found");
   const anchor=stagingAnchorRefusal(request,true);
@@ -240,6 +252,8 @@ export async function postC3b(
     const obj=body as Record<string,unknown>;
     if(operation==="consent"){
       if(!c3bWriteEnabled())return answer(404,"Not found");
+      const denied=ownerConsentDenied(identity,base);
+      if(denied)return denied;
       if(Object.keys(obj).join(",")!=="enabled"||typeof obj.enabled!=="boolean")
         return answer(400,"Invalid request");
     }else if(Object.keys(obj).join(",")!=="command"||
@@ -305,6 +319,8 @@ export async function getC3bConsent(request:Request):Promise<Response>{
   if(!base)return answer(503,"Staging unavailable");
   const admitted=admitStagingIdentity(request,identity,base);
   if(admitted)return admitted;
+  const denied=ownerConsentDenied(identity,base);
+  if(denied)return denied;
   try{
     if(new URL(request.url).search!=="")return answer(400,"Invalid request");
     const limited=issue(request,"consent-read");

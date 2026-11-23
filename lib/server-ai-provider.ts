@@ -142,7 +142,7 @@ export async function completeInboxOpenAIOnly(
         ],
         text:{format:{type:"json_schema",name:"lumi_inbox_choice",strict:true,
           schema:INBOX_AI_RESPONSE_SCHEMA}},
-        max_output_tokens:350,
+        max_output_tokens:2000,
       }),
       signal,
     });
