@@ -152,7 +152,9 @@ export function writePreflightedInboxAIConsent(
          ctx.db.prepare("SELECT 1 FROM metadata WHERE key=?")
            .get(historyKey(actor,c.ownerDecision)))return denied();
     }else{
-      if(!prior||!prior.enabled||c.epoch!==prior.epoch+1||
+      // Only an epoch increase toward a REVOKED state is permitted. A partial
+      // fence regrant/revoke can advance farther than the stale target epoch.
+      if(!prior||c.epoch<=prior.epoch||
          c.ownerDecision!==prior.ownerDecision)return denied();
     }
     if(!ctx.stillPinned()||!ctx.noSidecars())return denied();

@@ -226,7 +226,9 @@ try{
           const revoked=revokeInboxAIConsent(fence,actor);
           if(!revoked)fail();
           let record=previous;
-          if(record?.enabled){
+          // Reconcile a newer fence revoke, including a prior target OFF epoch.
+          // This path can only disable consent; it never issues a new grant.
+          if(record&&record.epoch<revoked.epoch){
             const result=authority.changeInboxAIConsent(
               issued.sessionToken,actor,{mode:"revoke",epoch:revoked.epoch,
                 restoreGeneration:gen,ownerDecision:record.ownerDecision,
