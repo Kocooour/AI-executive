@@ -37,7 +37,7 @@ const MAX_TS=9007199254740000;
 
 export type InboxAIFenceGrant={
   actorUserId:string;restoreGeneration:string;dataScopeVersion:string;
-  epoch:number;active:boolean;
+  epoch:number;active:boolean;ownerDecision:string;
 };
 export type InboxAIFenceTicket={
   id:string;actorUserId:string;epoch:number;
@@ -206,7 +206,8 @@ export function recordExplicitInboxAIGrant(
          existing.owner_decision!==decisionId)return null;
       return {actorUserId,epoch:existing.epoch,active:true,
         restoreGeneration:existing.restore_generation,
-        dataScopeVersion:existing.scope_version};
+        dataScopeVersion:existing.scope_version,
+        ownerDecision:existing.owner_decision};
     }
     // A revoked principal must ONLY be re-granted after a DISTINCT new
     // explicit owner decision. All prior decisions are immutable and
@@ -233,7 +234,8 @@ export function recordExplicitInboxAIGrant(
     db.prepare("INSERT INTO inbox_ai_fence_decisions(actor,decision,epoch) VALUES(?,?,?)")
       .run(actorUserId,decisionId,epoch);
     return {actorUserId,epoch,active:true,
-      restoreGeneration:restoreGeneration.toLowerCase(),dataScopeVersion};
+      restoreGeneration:restoreGeneration.toLowerCase(),dataScopeVersion,
+      ownerDecision:decisionId};
   });
 }
 export function readInboxAIFenceGrant(
@@ -243,9 +245,11 @@ export function readInboxAIFenceGrant(
   try{
     const r=grantRow(db,actorUserId);
     return r&&validEpoch(r.epoch)&&r.epoch>0&&(r.active===0||r.active===1)&&
-      UUID.test(r.restore_generation)&&validScope(r.scope_version)
+      UUID.test(r.restore_generation)&&validScope(r.scope_version)&&
+      validScope(r.owner_decision)
       ?{actorUserId,epoch:r.epoch,active:r.active===1,
-        restoreGeneration:r.restore_generation,dataScopeVersion:r.scope_version}
+        restoreGeneration:r.restore_generation,dataScopeVersion:r.scope_version,
+        ownerDecision:r.owner_decision}
       :null;
   }catch{return null;}
 }
