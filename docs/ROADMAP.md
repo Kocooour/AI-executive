@@ -6,6 +6,8 @@
 
 **C-3b rozhodnutí 2026-11-23 (PR #492):** povinný příznak `AI_EXECUTIVE_TARGET_STAGING_HTTP_C3B_ENABLED=true` v `personal-v1`; první souhlas OpenAI se při ověřeném deployi s vypnutou službou zapíše do target v27 a externí revokační fence. Všechny pozdější deploye jen ověřují shodu, nikdy znovu neudělují odvolaný souhlas. Bez API klíče platí pouze místní pravidla. Před produkčním nasazením znovu ověřit CI přesného SHA a bezpečné release brány.
 
+**Milník D — odstranění legacy Archivu ([#501](https://github.com/Kocooour/AI-executive/issues/501)):** vlastník 2026-11-23 potvrdil, že C-3b [PR #492](https://github.com/Kocooour/AI-executive/pull/492) je produkčně nasazené. Implementace **zahájena ve větvi `feat/501-archive-retirement-d1`** jako D-1 (pouze čtecí inventura izolované legacy SQLite, testy a [operátorský postup](MILESTONE-D-ARCHIVE-RUNBOOK.md)). Rozpočet **1–2 PR**: D-1 bezpečný purge engine + externí guard + invarianty; D-2 UI/klientské fences + E2E. **Neexistuje schválený ani provedený produkční purge.** Aktuální cílová data se nemění; odstranění starých cílových testovacích dat je odložené a samostatně schvalované [#503](https://github.com/Kocooour/AI-executive/issues/503).
+
 **Stav:** R0–R3 dokončeno. R4 aktivováno 2026-11-17 v produkčním profilu `personal-v1` a v1 shellu se schválením vlastníka a release důkazy v [#388](https://github.com/Kocooour/AI-executive/issues/388#issuecomment-6960733063). Profil `off` nadále zůstává kompatibilní; C-1 nemění data, schéma ani produkční příznaky. Historické technické poznámky níže popisují dobový stav, nikoli současné blokátory.
 
 | Milník | Jeden akceptační test | Rozpočet | Stav |
