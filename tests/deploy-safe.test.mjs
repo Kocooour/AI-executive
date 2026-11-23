@@ -1127,6 +1127,77 @@ test("C-3b first-grant failure leaves service stopped after verified backup", {t
     assert.equal(result.events.includes("c3b-first-grant"),true);
   }finally{f.cleanup();}
 });
+test("C-3b P2: ordinary stopped recovery retires proof after committed first grant", {timeout:180000},()=>{
+  const f=sandbox("targetc3bcheckfailonce");
+  try{
+    const proof=path.join(f.backups,".inbox-ai-first-consent-pending");
+    const first=f.execute();
+    assert.notEqual(first.status,0);
+    assert.match(first.output,/nesouhlasici nebo chybejici C-3b souhlas/);
+    assert.equal(first.service,"inactive");
+    assert.equal(first.head,newSha,"keep consent-aware checkout");
+    assert.ok(existsSync(proof),"proof persisted across transient post-grant check failure");
+    assert.equal(readFileSync(path.join(f.root,"state/c3b-target-grant"),"utf8"),"on:1");
+    assert.equal(readFileSync(path.join(f.root,"state/c3b-fence-grant"),"utf8"),"on:1");
+    assert.equal(first.events.filter(x=>x==="c3b-first-grant").length,1);
+
+    const recovered=f.execute({recovery:true});
+    assert.equal(recovered.status,0,recovered.output);
+    assert.equal(recovered.service,"active");
+    assert.equal(recovered.head,newSha);
+    assert.equal(recovered.events.filter(x=>x==="c3b-provision").length,1);
+    assert.equal(recovered.events.filter(x=>x==="c3b-first-grant").length,1,
+      "ordinary stopped recovery must never grant again");
+    assert.equal(recovered.events.filter(x=>x==="c3b-check").length,2);
+    assert.equal(recovered.events.filter(x=>x==="c3b-proof-absent-at-start").length,1,
+      "the original proof must be retired BEFORE service start");
+    assert.equal(existsSync(proof),false);
+  }finally{f.cleanup();}
+});
+
+test("C-3b P2: malformed or untrusted stale proof fails closed on ordinary recovery", {timeout:180000},()=>{
+  for(const attack of ["corrupt","world-readable"]){
+    const f=sandbox("targetc3bcheckfailonce");
+    try{
+      const proof=path.join(f.backups,".inbox-ai-first-consent-pending");
+      assert.notEqual(f.execute().status,0);
+      assert.ok(existsSync(proof));
+      if(attack==="corrupt")writeFileSync(proof,"unrelated-proof\n");
+      else chmodSync(proof,0o644);
+      const denied=f.execute({recovery:true});
+      assert.notEqual(denied.status,0,attack);
+      assert.match(denied.output,attack==="corrupt"
+        ?/doklad prvniho souhlasu neodpovida puvodni databazi/
+        :/neduveryhodny doklad prvniho souhlasu/);
+      assert.equal(denied.service,"inactive");
+      assert.equal(denied.events.some(x=>x==="c3b-proof-absent-at-start"),false);
+      assert.equal(denied.events.filter(x=>x==="c3b-first-grant").length,1);
+      assert.equal(existsSync(proof),true,"suspicious proof is kept for investigation");
+    }finally{f.cleanup();}
+  }
+});
+
+test("C-3b P2: ordinary recovery retires stale proof without reversing a revoke", {timeout:110000},()=>{
+  const f=sandbox("targetc3bcheckfailonce");
+  try{
+    const proof=path.join(f.backups,".inbox-ai-first-consent-pending");
+    assert.notEqual(f.execute().status,0);
+    assert.ok(existsSync(proof));
+    // Independent operator revocation advances both stores while the service
+    // is stopped. Neither the proof nor an ordinary recovery may re-grant.
+    writeFileSync(path.join(f.root,"state/c3b-target-grant"),"off:2");
+    writeFileSync(path.join(f.root,"state/c3b-fence-grant"),"off:2");
+    const result=f.execute({recovery:true});
+    assert.equal(result.status,0,result.output);
+    assert.equal(result.service,"active");
+    assert.equal(result.events.filter(x=>x==="c3b-first-grant").length,1);
+    assert.equal(result.events.filter(x=>x==="c3b-proof-absent-at-start").length,1);
+    assert.equal(readFileSync(path.join(f.root,"state/c3b-target-grant"),"utf8"),"off:2");
+    assert.equal(readFileSync(path.join(f.root,"state/c3b-fence-grant"),"utf8"),"off:2");
+    assert.equal(existsSync(proof),false);
+  }finally{f.cleanup();}
+});
+
 test("C-3b interrupted first grant: only explicit stopped recovery can finish", {timeout:180000},()=>{
   const f=sandbox("targetc3bgrantfail");
   try{
