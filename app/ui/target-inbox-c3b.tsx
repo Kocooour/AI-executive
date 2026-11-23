@@ -234,14 +234,22 @@ export default function TargetInboxC3b({item,restoreGeneration,
   const moving=Boolean(changes&&(changes.projectId!=="unchanged"||
     changes.taskAreaId!=="unchanged"));
   const scheduling=Boolean(changes&&changes.whenOn!=="unchanged");
-  // The destination is not merely an explanation behind "Why?". Show the
-  // server-committed target name (present in the signed Why) AND the exact day
-  // before the one-click Accept, including combined project+Today actions.
-  const summary=moving
-    ?suggestion!.why+(scheduling?
-      " "+speak("Osobní plán: ","Personal plan: ")+changes!.whenOn:"")
-    :scheduling?speak("Naplánovat na ","Schedule for ")+changes!.whenOn
-    :speak("Ponechat umístění a zpracovat","Keep placement and process");
+  const placement=changes?.projectId!=="unchanged"
+    ?speak("Přesunout do projektu ","Move to project ")+(suggestion?.actionTargetName??"")
+    :changes?.taskAreaId!=="unchanged"&&changes?.taskAreaId!==null
+      ?speak("Přesunout do Oblasti ","Move to Area ")+(suggestion?.actionTargetName??"")
+      :speak("Ponechat umístění a zpracovat","Keep placement and process");
+  // Format the signed day in the selected UI language; never show raw ISO.
+  const day=changes&&changes.whenOn!=="unchanged"
+    ?new Date(changes.whenOn+"T12:00:00Z"):null;
+  const localized=day&&Number.isFinite(day.getTime())
+    ?new Intl.DateTimeFormat(language==="cs"?"cs-CZ":"en-GB",{
+      day:"numeric",month:"numeric",year:"numeric",timeZone:"UTC",
+    }).format(day):null;
+  const summary=scheduling&&localized
+    ?(moving?placement+" · ":"")+
+      speak("Naplánovat na ","Schedule for ")+localized
+    :placement;
   return <div ref={root} className="targetInboxSuggestion"
       data-testid={"target-c3b-suggestion-"+item.id}>
     {status==="ready"&&suggestion&&<>
@@ -250,18 +258,19 @@ export default function TargetInboxC3b({item,restoreGeneration,
         {suggestion.source==="ai"&&<small data-testid="target-c3b-ai-selected">
           {speak("AI návrh","AI suggestion")}</small>}
         <button type="button" aria-expanded={expanded}
-          onClick={()=>setExpanded(x=>!x)}
+          aria-controls={whyId} onClick={()=>setExpanded(x=>!x)}
           aria-label={speak("Proč tento návrh?","Why this suggestion?")}>
           {speak("Proč?","Why?")}
         </button>
-        <button type="button" disabled={disabled||status!=="ready"}
+        <button type="button" disabled={disabled||status!=="ready"||acceptInFlight.current}
+          aria-label={speak("Přijmout návrh pro úkol: ","Accept suggestion for task: ")+item.title}
           onClick={()=>void accept()}>
           {speak("Přijmout","Accept")}
         </button>
       </div>
-      {expanded&&<p className="targetInboxSuggestionWhy">
-        {suggestion.why}</p>}
-      {!alternative&&suggestion.source==="rule"&&<button type="button"
+      <p id={whyId} hidden={!expanded} className="targetInboxSuggestionWhy">
+        {suggestion.why}</p>
+      {aiConsentEnabled&&!alternative&&suggestion.source==="rule"&&<button type="button"
         disabled={disabled||aiBusy} onClick={()=>void requestAI()}>
         {aiBusy?speak("Ověřuji alternativu AI…","Checking AI alternative…"):
           speak("Získat alternativu AI","Get AI alternative")}
