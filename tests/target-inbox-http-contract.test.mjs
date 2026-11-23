@@ -15,7 +15,9 @@ const linearization={actorUserId:"alice",areas:[{
 }]};
 const item={id:"task-1",title:"Inbox entry",status:"completed",triageRevision:0,
   taskRevision:2,effectiveAreaId:epoch.areaId,canProcess:true,
-  expectedRevision:"a".repeat(64)};
+  // Completed Inbox items cannot receive a C-3b suggestion even if their
+  // C-3a Process action remains authorized.
+  canSuggest:false,expectedRevision:"a".repeat(64)};
 const raw={ok:true,items:[item],count:1,nextCursor:null,
   areaEpochs:[epoch],linearization};
 const command={commandId:randomUUID(),taskId:item.id,mode:"process",
@@ -40,6 +42,9 @@ test("C-3a: worker parser binds actor/Area witness; browser never sees it",()=>{
     items:[{...item,expectedRevision:null}]},50),null);
   assert.equal(parseStagingTargetInboxPage({...raw,
     items:[{...item,canProcess:false,expectedRevision:null}]},50)!==null,true);
+  assert.equal(parseStagingTargetInboxPage({...raw,
+    items:[{...item,canSuggest:true}]},50),null,
+    "completed Inbox item cannot gain AI suggestion permission");
 });
 
 test("C-3a: receipt proof and Process/Undo responses are exact, not caller-shaped",()=>{

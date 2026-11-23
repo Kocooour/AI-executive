@@ -56,23 +56,33 @@ export function settingsSections(page: Page) {
   return page.getByRole("navigation", { name: "Sekce nastavení" }).getByRole("button");
 }
 
-// Every scenario starts with an empty browser, so the app first takes the server copy.
-// Wait until that has settled, nothing is waiting to be sent and the loads that follow it
-// (attention, day plan) are finished: a scenario that ends the session next would otherwise
-// have one of those refused first.
+// Synchronization is proved by the acknowledged server snapshot and absence
+// of pending local writes, NOT by the absence of every read-only fetch. Target,
+// calendar, attention and work-session reads may be triggered independently;
+// a long-poll or late read must not strand auth/restore browser tests.
 export async function waitUntilSynced(page: Page) {
   await expect.poll(() => page.evaluate(() => [localStorage.getItem("ai-executive-server-synced"), localStorage.getItem("ai-executive-pending-sync")]),
     { timeout: 20_000 }).toEqual(["1", null]);
-  await waitUntilQuiet(page);
+  // Still require in-flight mutations to drain; tests that need a particular
+  // read response must explicitly assert the resulting UI/data.
+  await waitUntilQuiet(page,500,request=>request.method()!=="GET");
 }
 
-// Waits until the page has had no request in flight for `quietMs`. A request that was already
-// running when this starts is not known here; its end still counts as activity.
-export async function waitUntilQuiet(page: Page, quietMs = 500) {
+// Wait for tracked request activity to settle. Filtering is optional: callers
+// that require global quiescence retain the full read+write contract. A request
+// already running when tracking starts is unknown; its completion still counts.
+export async function waitUntilQuiet(page: Page, quietMs = 500,
+  track:(request:Request)=>boolean=()=>true) {
   const inFlight = new Set<Request>();
   let lastChange = Date.now();
-  const started = (request: Request) => { inFlight.add(request); lastChange = Date.now(); };
-  const ended = (request: Request) => { inFlight.delete(request); lastChange = Date.now(); };
+  const started = (request: Request) => {
+    if(!track(request))return;
+    inFlight.add(request); lastChange = Date.now();
+  };
+  const ended = (request: Request) => {
+    if(!inFlight.has(request))return;
+    inFlight.delete(request); lastChange = Date.now();
+  };
   page.on("request", started);
   page.on("requestfinished", ended);
   page.on("requestfailed", ended);
