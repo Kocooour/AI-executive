@@ -110,6 +110,45 @@ test("C-3b consent: external revoke immediately disables AI even with stale targ
     randomUUID()),false,"old DB consent does not survive a new restore generation");
 });
 
+test("C-3b P1: active same-epoch grants with different owner decisions fail closed",()=>{
+  const x=fixture(),gen=x.stage.restoreGeneration,scope=INBOX_AI_DATA_SCOPE_VERSION;
+  const first=cmd(x,"grant",1,INBOX_FIRST_OWNER_DECISION);
+  assert.equal(x.authority.changeInboxAIConsent(x.token,"alice",first).ok,true);
+  assert.ok(recordExplicitInboxAIGrant(x.fence,"alice","alice",gen,scope,
+    INBOX_FIRST_OWNER_DECISION));
+  assert.equal(revokeInboxAIConsent(x.fence,"alice").epoch,2);
+  assert.equal(x.authority.changeInboxAIConsent(x.token,"alice",
+    cmd(x,"revoke",2,INBOX_FIRST_OWNER_DECISION)).ok,true);
+
+  // Model a partial two-store regrant through two VALID privileged writers.
+  // Matching actor/epoch/scope/generation must not substitute for the
+  // explicit owner decision whose identity each store independently records.
+  const external=recordExplicitInboxAIGrant(x.fence,"alice","alice",gen,scope,
+    "external-decision-B");
+  assert.ok(external);
+  assert.equal(external.epoch,3);
+  assert.equal(external.ownerDecision,"external-decision-B");
+  const internal=x.authority.changeInboxAIConsent(x.token,"alice",
+    cmd(x,"grant",3,"target-decision-C"));
+  assert.equal(internal.ok,true);
+  assert.equal(internal.record.enabled,true);
+  assert.equal(internal.record.epoch,external.epoch);
+  assert.notEqual(internal.record.ownerDecision,external.ownerDecision);
+  assert.equal(targetInboxAIConsentMatchesFence(internal.record,external,gen),false,
+    "AI dispatch/Accept and consent reads must reject mismatched owner decisions");
+  assert.equal(targetInboxAIConsentMatchesFence(internal.record,
+    readInboxAIFenceGrant(x.fence,"alice"),gen),false,
+    "the independently re-read persistent fence must also reject mismatch");
+  assert.equal(checkFirstDeployInboxAIConsent(x.authority,x.fence,"alice",gen),false,
+    "deployment's strict active-grant check must agree with live authorization");
+  assert.equal(targetInboxAIConsentMatchesFence(internal.record,
+    {...external,ownerDecision:"target-decision-C"},gen),true,
+    "matching owner decision remains authorized with all other evidence equal");
+  assert.equal(targetInboxAIConsentMatchesFence(internal.record,
+    {...external,ownerDecision:undefined},gen),false,
+    "a malformed/missing decision must fail closed");
+});
+
 test("C-3b target preflight rejects tampered consent record",()=>{
   const x=fixture(),first=cmd(x,"grant",1,INBOX_FIRST_OWNER_DECISION);
   assert.equal(x.authority.changeInboxAIConsent(x.token,"alice",first).ok,true);
