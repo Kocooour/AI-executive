@@ -199,6 +199,7 @@ export async function getC3bPreview(request:Request):Promise<Response>{
             // Synchronously seal the final response body while revoke is
             // still excluded by the shared external SQLite write lock.
             return Response.json({taskId:result.taskId,why:result.why,
+              actionTargetName:result.actionTargetName,
               token:result.token,changes:result.changes,source:result.source,
               restoreGeneration:result.restoreGeneration},{headers});
           });
@@ -213,6 +214,7 @@ export async function getC3bPreview(request:Request):Promise<Response>{
     // Local rules have no OpenAI data or consent requirement.
     if(!cached)rememberPreview(cacheKey,result);
     return Response.json({taskId:result.taskId,why:result.why,
+              actionTargetName:result.actionTargetName,
       token:result.token,changes:result.changes,source:result.source,
       restoreGeneration:result.restoreGeneration},{headers});
     }finally{
