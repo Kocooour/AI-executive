@@ -332,6 +332,14 @@ The final `--check --directory ... --owner <ID> --generation <UUID>`
 requires **strict agreement of both durable stores** (including a matching
 disabled/revoked state). On subsequent deployments only `--check` runs:
 no new grant, repair or reset of decision history is ever automatic.
+For an **OFF/OFF** state only, a partial failed re-grant followed by a
+confirmed revoke can leave the target's older owner-decision ID different
+from the external fence's latest re-grant decision. A later read-only deploy
+check permits this exact case only when both stores are disabled, their
+epochs/generation/scope agree, and the target decision is in the fence's
+immutable history at or before that epoch. An enabled grant still requires
+the current decision IDs to match. No check repairs, rewrites or re-grants
+either store; stale epochs and restored older ON snapshots remain blocked.
 A crash between target and fence commits means AI stays disabled and the
 service stays stopped until operator-reviewed recovery; no old code may
 restart on the updated target. A missing, symlinked, wrong-owner/mode,
