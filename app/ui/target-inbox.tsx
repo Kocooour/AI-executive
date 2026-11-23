@@ -614,9 +614,24 @@ export default function TargetInbox({language="cs",taskDetail=false}:{language?:
       <button type="button" onClick={()=>setC3bOutcome(null)}>
         {speak("Zavřít","Close")}</button>
     </div>}
-    {c3bUndoNotice&&<p role="status" data-testid="target-c3b-undo-cancelled">
+    {c3bUndoNotice&&<div role="status" data-testid="target-c3b-undo-cancelled">
       {speak("Undo bylo bezpečně ukončeno; původní Přijmout zůstává a pozdější změny nebyly přepsány.",
-        "Undo was cancelled safely. The original Accept remains and later edits were not overwritten.")}</p>}
+        "Undo was cancelled safely. The original Accept remains and later edits were not overwritten.")}
+      <button type="button" onClick={()=>setC3bUndoNotice(false)}>
+        {speak("Zavřít","Close")}</button>
+    </div>}
+    {c3bStaleNotice&&<div role="status" data-testid="target-c3b-stale">
+      {speak("Návrh se mezitím změnil. Inbox byl znovu načten.",
+        "The suggestion changed in the meantime. Inbox has been reloaded.")}
+      <button type="button" onClick={()=>setC3bStaleNotice(false)}>
+        {speak("Zavřít","Close")}</button>
+    </div>}
+    {c3bUndoneNotice&&<div role="status" data-testid="target-c3b-undone">
+      {speak("Změny byly vráceny (Undo).",
+        "Changes were undone successfully.")}
+      <button type="button" onClick={()=>setC3bUndoneNotice(false)}>
+        {speak("Zavřít","Close")}</button>
+    </div>
     {page.items.length===0&&<p role="status">
       {speak("Žádné úkoly nečekají na zpracování.","No tasks await processing.")}</p>}
     <ul className="targetInboxList">
@@ -631,8 +646,10 @@ export default function TargetInbox({language="cs",taskDetail=false}:{language?:
             {speak("Dokončeno, čeká na zpracování","Completed, awaiting processing")}</span>}
           {item.canSuggest&&
             <TargetInboxC3b item={item} restoreGeneration={page.restoreGeneration}
-              language={language} disabled={Boolean(unresolved)||Boolean(c3bOutcome)}
-              onOutcome={onC3bOutcome} onRevoked={revoke}/>}
+              language={language} disabled={Boolean(unresolved)||
+                (c3bOutcome?.status==="committed"&&
+                 c3bOutcome.command.taskId===item.id)}
+              onOutcome={onC3bOutcome} onStale={onC3bStale} onRevoked={revoke}/>}
         </div>
         {item.canProcess&&<button type="button"
           disabled={inFlight.current||Boolean(unresolved)||
