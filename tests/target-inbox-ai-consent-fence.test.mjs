@@ -71,6 +71,24 @@ test("C-3b fence: two workers see explicit initial grant and shared pending/revo
   }finally{x.close();}
 });
 
+test("C-3b fence: corrupt or missing persisted owner decision fails closed",()=>{
+  const x=fixture();
+  try{
+    const first=grant(x.db);
+    assert.equal(first.ownerDecision,"owner-approved-v1");
+    const old=x.db.prepare("SELECT owner_decision AS decision FROM inbox_ai_fence_grants WHERE actor=?")
+      .get("owner");
+    assert.equal(old.decision,"owner-approved-v1");
+    x.db.prepare("UPDATE inbox_ai_fence_grants SET owner_decision=? WHERE actor=?")
+      .run("invalid decision with spaces","owner");
+    assert.equal(readInboxAIFenceGrant(x.db2,"owner"),null,
+      "read must not erase or silently accept corrupt owner-decision metadata");
+    x.db.prepare("UPDATE inbox_ai_fence_grants SET owner_decision=? WHERE actor=?")
+      .run(old.decision,"owner");
+    assert.equal(readInboxAIFenceGrant(x.db2,"owner").ownerDecision,old.decision);
+  }finally{x.close();}
+});
+
 test("C-3b fence: scope/restore mismatch and a missing fence fail closed",()=>{
   const x=fixture();
   try{
@@ -225,6 +243,7 @@ test("operator-only orphan reconciliation refuses live tickets and advances revo
     assert.deepEqual(readInboxAIFenceGrant(x.db,"owner"),{
       actorUserId:"owner",epoch:2,active:false,
       restoreGeneration:GEN,dataScopeVersion:SCOPE,
+      ownerDecision:"owner-approved-v1",
     });
     assert.equal(inboxAIDispatchStillAllowed(x.db,ticket),false);
     assert.equal(endInboxAIDispatch(x.db,ticket),false);
