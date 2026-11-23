@@ -911,14 +911,33 @@ if [ "$TARGET_PROFILE" = personal-v1 ] &&
     --directory "$TARGET_DIRECTORY" --owner "$TARGET_OWNER" \
     --generation "$TARGET_GENERATION" ||
     die "nesouhlasici nebo chybejici C-3b souhlas a revokacni fence"
-  if [ "$INBOX_AI_FENCE_FIRST_ROLLOUT" = 1 ] ||
-     [ "$FIRST_CONSENT_RECOVERY" = 1 ]; then
-    # Consent has been durably checked in BOTH stores. Remove the root proof
-    # before the service can ever start; never retain a replay capability.
+  # A previous first rollout may have committed BOTH grants, then failed
+  # at --check before retiring its one-time recovery proof. Even an ordinary
+  # --recover-stopped (or a later deploy) MUST retire that proof before start.
+  # The stored SHA-256 describes the ORIGINAL empty fence, so it intentionally
+  # differs from the current granted DB; validate its structure and the same
+  # owner/generation/device/inode instead of comparing to the live DB digest.
+  if [ -e "$INBOX_AI_FIRST_CONSENT_PROOF" ] ||
+     [ -L "$INBOX_AI_FIRST_CONSENT_PROOF" ]; then
     test -f "$INBOX_AI_FIRST_CONSENT_PROOF" &&
       test ! -L "$INBOX_AI_FIRST_CONSENT_PROOF" &&
-      rm -- "$INBOX_AI_FIRST_CONSENT_PROOF" ||
+      test "$(stat -c %u "$INBOX_AI_FIRST_CONSENT_PROOF")" = 0 &&
+      test "$(stat -c %a "$INBOX_AI_FIRST_CONSENT_PROOF")" = 600 ||
+      die "neduveryhodny doklad prvniho souhlasu"
+    proof_prefix="v1:$TARGET_OWNER:$TARGET_GENERATION:$(stat -c '%d:%i' "$INBOX_AI_FENCE_PATH"):"
+    proof_contents="$(cat -- "$INBOX_AI_FIRST_CONSENT_PROOF")" ||
+      die "nelze precist doklad prvniho souhlasu"
+    proof_digest="${proof_contents#"$proof_prefix"}"
+    [ "$proof_digest" != "$proof_contents" ] &&
+      [[ "$proof_digest" =~ ^[0-9a-f]{64}$ ]] ||
+      die "doklad prvniho souhlasu neodpovida puvodni databazi"
+    rm -- "$INBOX_AI_FIRST_CONSENT_PROOF" ||
       die "nelze zneplatnit doklad prvniho souhlasu"
+  elif [ "$INBOX_AI_FENCE_FIRST_ROLLOUT" = 1 ] ||
+       [ "$FIRST_CONSENT_RECOVERY" = 1 ]; then
+    # An explicitly attempted first grant must not start without retiring
+    # its proof; a missing one may mean a concurrent or malicious mutation.
+    die "chybi doklad prvniho souhlasu pred jeho zneplatnenim"
   fi
 fi
 
