@@ -230,11 +230,11 @@ export default function TargetInbox({language="cs",taskDetail=false,
         const result=await getC3bConsent(ctrl.signal);
         if(ctrl.signal.aborted||!runtime.known()||
            runtime.generation()!==generation)return;
-        if(result.ok){
+        if(result.ok===true){
           setC3bConsentEnabled(result.value.enabled&&!result.value.pending);
           return;
         }
-        if(result.reason==="signed-out"){
+        if(result.ok===false&&result.reason==="signed-out"){
           // Owner-only consent returns 403 to a valid non-owner; this must
           // hide the AI control, not revoke their authorized private Inbox.
           // A genuinely expired session is confirmed by the runtime itself.
