@@ -665,7 +665,7 @@ export default function TargetInbox({language="cs",taskDetail=false,
         "Changes were undone successfully.")}
       <button type="button" onClick={()=>setC3bUndoneNotice(false)}>
         {speak("Zavřít","Close")}</button>
-    </div>
+    </div>}
     {page.items.length===0&&<p role="status">
       {speak("Žádné úkoly nečekají na zpracování.","No tasks await processing.")}</p>}
     <ul className="targetInboxList">
