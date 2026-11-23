@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync } from "node:fs";
+import { chmodSync, linkSync, mkdtempSync, readFileSync, rmSync, statSync,
+  symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -9,144 +11,245 @@ import { fileURLToPath } from "node:url";
 import { KNOWN_TABLES, inventoryCopy } from "../scripts/archive-purge-inventory.mjs";
 import { classifiedTables } from "../lib/backup-scope.ts";
 
+// Do not attach fixtures to the app's normal runtime store.
+const testRoot = mkdtempSync(path.join(tmpdir(), "lumi-archive-test-"));
+process.env.AI_EXECUTIVE_DATA_DIR = path.join(testRoot, "no-live-data");
+const { applySchema } = await import("../lib/server-store.ts");
 const repo = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const script = path.join(repo, "scripts/archive-purge-inventory.mjs");
 const secret = "PRIVATE_ARCHIVE_TITLE_NEVER_PRINT";
+const quote = (name) => '"' + name.replaceAll('"', '""') + '"';
 
-function quote(name) {
-  return '"' + name.replaceAll('"', '""') + '"';
+function attestation(file, filename) {
+  const buf = readFileSync(file);
+  writeFileSync(filename, JSON.stringify({
+    format: "lumi-archive-isolated-copy-v1", method: "sqlite-backup",
+    consistent: true, sourceStoreIdentity: "a".repeat(64),
+    sha256: createHash("sha256").update(buf).digest("hex"),
+    bytes: buf.length,
+  }), { mode: 0o600 });
 }
 
-function fixture() {
-  const dir = mkdtempSync(path.join(tmpdir(), "lumi-archive-inventory-"));
+function createFixture() {
+  const dir = mkdtempSync(path.join(testRoot, "copy-"));
   const file = path.join(dir, "isolated.sqlite");
+  const manifest = path.join(dir, "copy-attestation.json");
   const db = new DatabaseSync(file);
   try {
-    // The fixture must cover every table in the actual legacy schema classification.
-    for (const table of KNOWN_TABLES) {
-      const special = {
-        entities: "id TEXT PRIMARY KEY, payload TEXT NOT NULL, updated_at INTEGER NOT NULL",
-        work_sessions: "id TEXT PRIMARY KEY, state TEXT, workspace_id TEXT, task_id TEXT",
-        work_session_intervals: "id TEXT PRIMARY KEY, workspace_id TEXT, task_id TEXT",
-        work_session_events: "id TEXT PRIMARY KEY, workspace_id TEXT, task_id TEXT",
-        attention_states: "id TEXT PRIMARY KEY, workspace_id TEXT, subject_id TEXT",
-        notification_deliveries: "id TEXT PRIMARY KEY, entity_id TEXT",
-        calendar_sources: "id TEXT PRIMARY KEY, workspace_id TEXT",
-        context_claims: "id TEXT PRIMARY KEY, workspace_id TEXT",
-      };
-      db.exec("CREATE TABLE " + quote(table) + " (" + (special[table] || "id TEXT PRIMARY KEY") + ")");
-    }
+    // Real legacy schema and named migrations, not a test-only table sketch.
+    applySchema(db);
     const entity = db.prepare("INSERT INTO entities(id,payload,updated_at) VALUES(?,?,?)");
     entity.run("workspace:personal", JSON.stringify({
       id: "workspace:personal", type: "workspace", title: secret, workspaceId: "personal",
     }), 1);
-    entity.run("task:archive", JSON.stringify({
-      id: "task:archive", type: "task", title: secret, content: secret,
+    for (const kind of ["task", "note", "project"]) {
+      entity.run(kind + ":archived", JSON.stringify({
+        id: kind + ":archived", type: kind, title: secret,
+        content: secret, workspaceId: "personal",
+      }), 1);
+    }
+    entity.run("area:archived", JSON.stringify({
+      id: "area:archived", type: "area", title: secret, workspaceId: "personal",
     }), 1);
-    entity.run("note:archive", JSON.stringify({
-      id: "note:archive", type: "note", title: secret, content: secret,
-    }), 1);
-    db.exec("INSERT INTO work_sessions VALUES ('session-1','running','personal','task:archive')");
-    db.exec("INSERT INTO work_sessions VALUES ('session-2','completed','personal','task:elsewhere')");
-    db.exec("INSERT INTO work_session_intervals VALUES ('interval-1','personal','task:archive')");
-    db.exec("INSERT INTO work_session_events VALUES ('event-1','personal','task:archive')");
-    db.exec("INSERT INTO attention_states VALUES ('attention-1','personal','task:archive')");
-    db.exec("INSERT INTO notification_deliveries VALUES ('notice-1','task:archive')");
-    db.exec("INSERT INTO calendar_sources VALUES ('calendar-1','personal')");
-    db.exec("INSERT INTO context_claims VALUES ('claim-1','personal')");
+    const s = db.prepare(
+      "INSERT INTO work_sessions(id,workspace_id,task_id,state,revision,accumulated_ms," +
+      "running_since,started_at,completed_at,created_at,updated_at) " +
+      "VALUES(?,?,?,?,?,?,?,?,?,?,?)"
+    );
+    s.run("session:running", "personal", "task:archived", "running", 1, 0, 1, 1, null, 1, 1);
+    s.run("session:completed", "personal", "task:other-store", "completed", 1, 10,
+      null, 1, 10, 1, 10);
+    db.prepare("INSERT INTO work_session_intervals(id,session_id,workspace_id,task_id,started_at,created_at) VALUES(?,?,?,?,?,?)")
+      .run("interval:1", "session:running", "personal", "task:archived", 1, 1);
+    db.prepare("INSERT INTO work_session_events(id,session_id,workspace_id,task_id,action,to_state,revision,created_at) VALUES(?,?,?,?,?,?,?,?)")
+      .run("event:1", "session:running", "personal", "task:archived", "start", "running", 1, 1);
+    const att = db.prepare(
+      "INSERT INTO attention_states(workspace_id,attention_key,subject_id,rule_id," +
+      "state,source_fingerprint,changed_at) VALUES(?,?,?,?,?,?,?)"
+    );
+    att.run("personal", "task", "task:archived", "rule", "active", "hash", 1);
+    att.run("personal", "note", "note:archived", "rule", "active", "hash", 1);
+    const notif = db.prepare(
+      "INSERT INTO notification_deliveries(delivery_key,entity_id,reminder_at,status," +
+      "last_attempt_at) VALUES(?,?,?,?,?)"
+    );
+    notif.run("delivery:task", "task:archived", "2026-01-01", "pending", 1);
+    notif.run("delivery:project", "project:archived", "2026-01-01", "pending", 1);
+    db.prepare(
+      "INSERT INTO calendar_sources(id,workspace_id,provider,label,encrypted_url,status," +
+      "created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)"
+    ).run("source:one", "personal", "ical", "calendar", "encrypted", "active", 1, 1);
   } finally {
     db.close();
   }
-  return { dir, file, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
+  attestation(file, manifest);
+  return {
+    file, manifest,
+    refresh: () => attestation(file, manifest),
+    cleanup: () => rmSync(dir, { recursive: true, force: true }),
+  };
 }
 
-test("inventory table contract stays aligned with the backup schema classification", () => {
+function cli(f) {
+  return spawnSync(process.execPath,
+    [script, "--db-copy", f.file, "--manifest", f.manifest], { encoding: "utf8" });
+}
+
+test("inventory contract includes every real schema table and classified backup table", () => {
   assert.deepEqual([...KNOWN_TABLES].sort(), [...classifiedTables()].sort());
-  assert.equal(new Set(KNOWN_TABLES).size, KNOWN_TABLES.length);
+  const f = createFixture();
+  try {
+    const report = inventoryCopy(f.file, f.manifest);
+    assert.deepEqual(report.missingTables, []);
+    assert.equal(report.unknownTableCount, 0);
+    assert.equal(report.missingTriggerCount, 0, "real migrations must create expected triggers");
+    assert.equal(report.unknownTriggerCount, 0);
+    assert.deepEqual(report.invalidColumns, []);
+    assert.equal(report.inventoryComplete, true);
+  } finally { f.cleanup(); }
 });
 
-test("read-only inventory counts all categories and logical references without item content", () => {
-  const f = fixture();
+test("isolated real-schema inventory reports running/deleted-task matrix without private content", () => {
+  const f = createFixture();
   try {
-    const report = inventoryCopy(f.file);
-    assert.equal(report.format, "lumi-archive-inventory-v1");
-    assert.equal(report.diagnosticOnly, true);
+    const report = inventoryCopy(f.file, f.manifest);
+    assert.equal(report.format, "lumi-archive-inventory-v2");
     assert.equal(report.destructiveActionsAllowed, false);
-    assert.equal(report.inventoryComplete, true);
-    assert.equal(report.integrityOk, true);
-    assert.deepEqual(report.missingTables, []);
-    assert.deepEqual(report.unknownTables, []);
+    assert.equal(report.copyHashMatched, true);
     assert.equal(report.entityCounts.task, 1);
     assert.equal(report.entityCounts.note, 1);
-    assert.equal(report.entityCounts.workspace, 1);
-    assert.deepEqual(report.sessionsByState, { running: 1, completed: 1 });
-    assert.deepEqual(report.taskLinks.work_sessions, {
-      total: 2, linkedToLegacy: 1, withoutMatchingLegacy: 1,
-    });
-    assert.deepEqual(report.workspaceLinks.calendar_sources, {
-      total: 1, linkedToLegacyWorkspace: 1, withoutMatchingLegacyWorkspace: 0,
-    });
-    assert.equal(report.derivedLinks.attention_states.linkedToLegacy, 1);
-    assert.equal(report.derivedLinks.notification_deliveries.linkedToLegacy, 1);
+    assert.equal(report.entityCounts.project, 1);
+    assert.deepEqual(report.sessionsByState.running,
+      { total: 1, linkedToArchiveTask: 1, notMatchedInArchive: 0 });
+    assert.deepEqual(report.sessionsByState.completed,
+      { total: 1, linkedToArchiveTask: 0, notMatchedInArchive: 1 });
+    assert.deepEqual(report.taskLinks.work_sessions,
+      { total: 2, linkedToArchive: 1, notMatchedInArchive: 1 });
+    assert.deepEqual(report.workspaceLinks.calendar_sources,
+      { total: 1, linkedToLegacyWorkspace: 1, withoutMatchingLegacyWorkspace: 0 });
+    assert.equal(report.derivedLinks.attention_states.linkedToArchive, 2);
+    assert.equal(report.derivedLinks.notification_deliveries.linkedToArchive, 2);
     assert.equal(JSON.stringify(report).includes(secret), false);
     assert.equal(JSON.stringify(report).includes(f.file), false);
-    const proc = spawnSync(process.execPath, [script, "--db-copy", f.file], { encoding: "utf8" });
+    const proc = cli(f);
     assert.equal(proc.status, 0, proc.stderr);
-    assert.equal(proc.stdout.includes(secret), false);
-    assert.equal(proc.stdout.includes(f.file), false);
-    assert.equal(proc.stderr.includes(secret), false);
     assert.equal(JSON.parse(proc.stdout).inventoryComplete, true);
-  } finally {
-    f.cleanup();
-  }
+    for (const output of [proc.stdout, proc.stderr]) {
+      assert.equal(output.includes(secret), false);
+      assert.equal(output.includes(f.file), false);
+    }
+  } finally { f.cleanup(); }
 });
 
-test("invalid JSON and unfamiliar tables fail classification closed without leaking payloads", () => {
-  const f = fixture();
+test("inverting running/completed task references changes per-state dependency matrix", () => {
+  const f = createFixture();
   try {
     const db = new DatabaseSync(f.file);
     try {
-      db.prepare("INSERT INTO entities(id,payload,updated_at) VALUES(?,?,?)")
-        .run("task:broken", "invalid-json " + secret, 1);
-      db.exec("CREATE TABLE new_unclassified_table(id TEXT)");
-    } finally {
-      db.close();
-    }
-    const report = inventoryCopy(f.file);
+      db.exec("UPDATE work_sessions SET task_id='task:other-store' WHERE id='session:running'");
+      db.exec("UPDATE work_sessions SET task_id='task:archived' WHERE id='session:completed'");
+    } finally { db.close(); }
+    f.refresh();
+    const matrix = inventoryCopy(f.file, f.manifest).sessionsByState;
+    assert.equal(matrix.running.linkedToArchiveTask, 0);
+    assert.equal(matrix.completed.linkedToArchiveTask, 1);
+  } finally { f.cleanup(); }
+});
+
+test("missing required task column fails closed, despite all table names being present", () => {
+  const f = createFixture();
+  try {
+    const db = new DatabaseSync(f.file);
+    try {
+      db.exec("DROP TABLE work_session_intervals");
+      db.exec("CREATE TABLE work_session_intervals(id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, session_id TEXT NOT NULL)");
+    } finally { db.close(); }
+    f.refresh();
+    const report = inventoryCopy(f.file, f.manifest);
     assert.equal(report.inventoryComplete, false);
-    assert.equal(report.malformedEntityRows, 1);
-    assert.deepEqual(report.unknownTables, ["new_unclassified_table"]);
-    assert.ok(report.blockers.includes("malformed-entities"));
-    assert.ok(report.blockers.includes("unclassified-schema-tables"));
+    assert.ok(report.invalidColumns.includes("work_session_intervals.task_id"));
+    assert.ok(report.blockers.includes("invalid-schema-columns"));
+    assert.deepEqual(report.taskLinks, {});
+  } finally { f.cleanup(); }
+});
+
+test("unknown table and trigger names never enter JSON or stderr", () => {
+  const f = createFixture();
+  try {
+    const db = new DatabaseSync(f.file);
+    try {
+      db.exec("CREATE TABLE " + quote(secret) + "(id TEXT)");
+      db.exec("CREATE TRIGGER " + quote(secret) + "_trigger AFTER INSERT ON push_subscriptions BEGIN SELECT 1; END");
+    } finally { db.close(); }
+    f.refresh();
+    const report = inventoryCopy(f.file, f.manifest);
+    assert.equal(report.inventoryComplete, false);
+    assert.equal(report.unknownTableCount, 1);
+    assert.equal(report.unknownTriggerCount, 1);
     assert.equal(JSON.stringify(report).includes(secret), false);
-    const proc = spawnSync(process.execPath, [script, "--db-copy", f.file], { encoding: "utf8" });
+    const proc = cli(f);
     assert.equal(proc.status, 1);
     assert.equal(proc.stdout.includes(secret), false);
     assert.equal(proc.stderr.includes(secret), false);
-  } finally {
-    f.cleanup();
-  }
+  } finally { f.cleanup(); }
 });
 
-test("CLI rejects --apply, relative paths, symlinks and configured live data directory", () => {
-  const f = fixture();
+test("deleted required trigger is classified as schema drift", () => {
+  const f = createFixture();
+  try {
+    const db = new DatabaseSync(f.file);
+    try { db.exec("DROP TRIGGER mail_workspace_deleted"); }
+    finally { db.close(); }
+    f.refresh();
+    const report = inventoryCopy(f.file, f.manifest);
+    assert.ok(report.missingTriggerCount > 0);
+    assert.ok(report.blockers.includes("missing-triggers"));
+    assert.equal(report.inventoryComplete, false);
+  } finally { f.cleanup(); }
+});
+
+test("malformed entity payload stays private and fails classification closed", () => {
+  const f = createFixture();
+  try {
+    const db = new DatabaseSync(f.file);
+    try { db.prepare("INSERT INTO entities(id,payload,updated_at) VALUES(?,?,?)")
+      .run("task:corrupt", secret + "-invalid-json", 1); }
+    finally { db.close(); }
+    f.refresh();
+    const report = inventoryCopy(f.file, f.manifest);
+    assert.equal(report.malformedEntityRows, 1);
+    assert.equal(report.inventoryComplete, false);
+    assert.equal(JSON.stringify(report).includes(secret), false);
+  } finally { f.cleanup(); }
+});
+
+test("CLI refuses --apply, hardlink alias, symlinks, sidecars, missing/stale manifest", () => {
+  const f = createFixture();
   try {
     const proc = spawnSync(process.execPath, [script, "--apply", f.file], { encoding: "utf8" });
     assert.equal(proc.status, 2);
     assert.equal(proc.stdout, "");
-    assert.throws(() => inventoryCopy("isolated.sqlite"));
-    const link = path.join(f.dir, "copy-link.sqlite");
-    symlinkSync(f.file, link);
-    assert.throws(() => inventoryCopy(link));
-    const originalDir = process.env.AI_EXECUTIVE_DATA_DIR;
-    process.env.AI_EXECUTIVE_DATA_DIR = f.dir;
-    try {
-      assert.throws(() => inventoryCopy(f.file), /live-database-refused/);
-    } finally {
-      if (originalDir === undefined) delete process.env.AI_EXECUTIVE_DATA_DIR;
-      else process.env.AI_EXECUTIVE_DATA_DIR = originalDir;
-    }
-  } finally {
-    f.cleanup();
-  }
+    assert.throws(() => inventoryCopy("relative.sqlite", f.manifest));
+    assert.throws(() => inventoryCopy(f.file));
+    const alias = path.join(path.dirname(f.file), "hardlink.sqlite");
+    linkSync(f.file, alias);
+    assert.throws(() => inventoryCopy(alias, f.manifest), /unsafe-file/);
+    rmSync(alias);
+    const symlink = path.join(path.dirname(f.file), "link.sqlite");
+    symlinkSync(f.file, symlink);
+    assert.throws(() => inventoryCopy(symlink, f.manifest));
+    rmSync(symlink);
+    const wal = f.file + "-wal";
+    writeFileSync(wal, "uncheckpointed");
+    assert.throws(() => inventoryCopy(f.file, f.manifest), /sqlite-sidecars-refused/);
+    rmSync(wal);
+    symlinkSync(f.manifest, f.file + "-shm");
+    assert.throws(() => inventoryCopy(f.file, f.manifest), /sqlite-sidecars-refused/);
+    rmSync(f.file + "-shm");
+    const original = readFileSync(f.manifest, "utf8");
+    writeFileSync(f.manifest, JSON.stringify({ ...JSON.parse(original), sha256: "0".repeat(64) }));
+    assert.throws(() => inventoryCopy(f.file, f.manifest), /manifest-mismatch/);
+    writeFileSync(f.manifest, original);
+    assert.equal(inventoryCopy(f.file, f.manifest).copyHashMatched, true);
+  } finally { f.cleanup(); }
 });
