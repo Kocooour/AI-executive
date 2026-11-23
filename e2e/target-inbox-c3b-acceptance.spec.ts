@@ -275,6 +275,10 @@ for(const width of [390,1280]){
     const changedTitle="Novější zadání "+randomUUID().slice(0,8);
     const edited=new DatabaseSync(path.join(store.directory,"lumi-target.sqlite"));
     try{
+      // A real-store Next worker may briefly hold BEGIN IMMEDIATE. This
+      // synthetic competing writer waits for a bounded lock instead of
+      // spuriously failing with SQLITE_BUSY on slower CI runners.
+      edited.exec("PRAGMA busy_timeout=5000");
       edited.prepare("UPDATE tasks SET title=? WHERE id=?")
         .run(changedTitle,taskId);
     }finally{edited.close();}
