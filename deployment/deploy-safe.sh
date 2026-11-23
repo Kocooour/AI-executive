@@ -812,10 +812,10 @@ if [ "$TARGET_PROFILE" = personal-v1 ]; then
     die "cilove uloziste po migraci neni aktualni schema Inbox"
 fi
 
-# New C-3b fence is provisioned exactly once after a verified backup,
-# quiesced v27 check, and while the service is stopped. NO owner grant here.
-# Missing / tampered fence on future deployments is a hard fail: never
-# regenerate revoked decisions after a restore or rollback.
+# New C-3b fence AND the owner-approved first consent grant are written
+# only during the FIRST reviewed missing-fence rollout, after the verified
+# archive and quiesced v27 upgrade. Later deploys only CHECK both stores:
+# never regenerate a revoked decision after restore, crash, or rollback.
 if [ "$TARGET_PROFILE" = personal-v1 ] &&
    git cat-file -e "$TARGET:lib/target-inbox-ai-consent-fence.ts" 2>/dev/null; then
   test -f "$APP/scripts/target-inbox-ai-fence-provision.mjs" ||
@@ -826,18 +826,28 @@ if [ "$TARGET_PROFILE" = personal-v1 ] &&
     [ "$INBOX_AI_FENCE_FIRST_ROLLOUT" = 1 ] ||
       die "chybi drive provisionovana revokacni historie; automaticky neobnovovat"
     INBOX_AI_FENCE_PROVISION_ATTEMPTED=1
-    echo "=== JEDNORAZOVE PROVISIONING CONSENT FENCE (BEZ GRANTU) ==="
+    echo "=== JEDNORAZOVA INICIALIZACE CONSENT FENCE A SOUHLASU ==="
     runuser -u ai-executive -- env AI_EXECUTIVE_DATA_DIR="$DATA" /usr/bin/node \
       --experimental-loader "$APP/scripts/target-staging-ts-loader.mjs" \
       "$APP/scripts/target-inbox-ai-fence-provision.mjs" --provision \
       --directory "$TARGET_DIRECTORY" ||
       die "inicializace externi consent fence selhala"
+    # Owner decision #471/#492 authorizes ONE first-deploy grant, not
+    # subsequent re-consent. This command is never called on later deploys.
+    runuser -u ai-executive -- env AI_EXECUTIVE_DATA_DIR="$DATA" \
+      LUMI_INBOX_AI_FIRST_ROLLOUT=1 /usr/bin/node \
+      --experimental-loader "$APP/scripts/target-staging-ts-loader.mjs" \
+      "$APP/scripts/target-inbox-ai-fence-provision.mjs" --first-grant \
+      --directory "$TARGET_DIRECTORY" --owner "$TARGET_OWNER" \
+      --generation "$TARGET_GENERATION" ||
+      die "prvni souhlas Inbox AI nebyl bezpecne zapsan do obou ulozist"
   fi
   runuser -u ai-executive -- env AI_EXECUTIVE_DATA_DIR="$DATA" /usr/bin/node \
     --experimental-loader "$APP/scripts/target-staging-ts-loader.mjs" \
     "$APP/scripts/target-inbox-ai-fence-provision.mjs" --check \
-    --directory "$TARGET_DIRECTORY" ||
-    die "externi consent fence chybi nebo je poskozen"
+    --directory "$TARGET_DIRECTORY" --owner "$TARGET_OWNER" \
+    --generation "$TARGET_GENERATION" ||
+    die "nesouhlasici nebo chybejici C-3b souhlas a revokacni fence"
 fi
 
 echo "=== START A PROVOZNI KONTROLY ==="

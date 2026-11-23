@@ -9,8 +9,10 @@
  * Vše/Osobní/Sdílené scopes for projects and notes, task/project/note details, edits
  * (task title/status/When/delete, note edit/delete, project title incl. reauth recovery),
  * main title search, private note Areas chooser + private note create, private task create,
- * C-3a Inbox (read, explicit Process/Undo; requires target schema v27, upgraded only by deploy-safe.sh). */
+ * C-3a Inbox and C-3b suggestions (first-deploy consent grant requires the
+ * separate fence and owner-approved, verified deploy-safe.sh migration). */
 export const TARGET_PERSONAL_V1_PROFILE=[
+  "AI_EXECUTIVE_TARGET_STAGING_HTTP_C3B_ENABLED",
   "AI_EXECUTIVE_TARGET_STAGING_HTTP_ENABLED",
   "AI_EXECUTIVE_TARGET_STAGING_HTTP_GLOBAL_NOTES_ENABLED",
   "AI_EXECUTIVE_TARGET_STAGING_HTTP_GLOBAL_PROJECTS_ENABLED",
@@ -57,7 +59,6 @@ export const TARGET_PERSONAL_V1_EXCLUDED:readonly {readonly flag:string;readonly
   {flag:"AI_EXECUTIVE_TARGET_STAGING_GLOBAL_INDEX_CLIENT_PREVIEW_ENABLED",reason:"Client preview page, not the main app."},
   {flag:"AI_EXECUTIVE_TARGET_STAGING_HTTP_ATTENTION_ENABLED",reason:"Attention is out of scope for the personal daily loop."},
   {flag:"AI_EXECUTIVE_TARGET_STAGING_HTTP_ATTENTION_WRITE_ENABLED",reason:"Attention lifecycle writes are out of scope."},
-  {flag:"AI_EXECUTIVE_TARGET_STAGING_HTTP_C3B_ENABLED",reason:"C-3b requires separate owner approval and exact-head C-3b acceptance; C-3a personal-v1 activation must not enable it."},
   {flag:"AI_EXECUTIVE_TARGET_STAGING_HTTP_GLOBAL_COMBINED_ENABLED",reason:"Combined index feeds only the preview page; the main app uses per-kind indexes."},
   {flag:"AI_EXECUTIVE_TARGET_STAGING_HTTP_GLOBAL_TASKS_ENABLED",reason:"Task index is not consumed by the main app UI; tasks come from My Plan."},
 
