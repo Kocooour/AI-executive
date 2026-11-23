@@ -5,6 +5,7 @@ export type C3bChanges={
 };
 export type C3bProposal={
   taskId:string;token:string;why:string;changes:C3bChanges;
+  actionTargetName:string|null;
   source:"rule"|"ai";restoreGeneration:string;
 };
 export type C3bAccept={
@@ -43,10 +44,15 @@ const status=(n:number):C3bFailure=>n===401||n===403?"signed-out":
   n===404?"disabled":n===409?"stale":n===429?"rate-limited":"unavailable";
 export function parseC3bProposal(raw:unknown):C3bProposal|null{
   if(!object(raw)||Object.keys(raw).sort().join(",")!==
-      "changes,restoreGeneration,source,taskId,token,why"||
+      "actionTargetName,changes,restoreGeneration,source,taskId,token,why"||
      typeof raw.taskId!=="string"||!TASK.test(raw.taskId)||
      typeof raw.token!=="string"||!/^c3b1\.[A-Za-z0-9_-]{48,8192}$/.test(raw.token)||
      typeof raw.why!=="string"||!raw.why.trim()||raw.why.length>512||
+     (raw.actionTargetName!==null&&
+       (typeof raw.actionTargetName!=="string"||
+        !raw.actionTargetName.trim()||
+        raw.actionTargetName.trim()!==raw.actionTargetName||
+        raw.actionTargetName.length>512))||
      (raw.source!=="rule"&&raw.source!=="ai")||
      typeof raw.restoreGeneration!=="string"||!uuid.test(raw.restoreGeneration)||
      !validChanges(raw.changes))return null;
