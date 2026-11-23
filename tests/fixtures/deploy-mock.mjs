@@ -359,9 +359,11 @@ switch (name) {
           args[2] === target + ":lib/owner-session-revocation.ts") break;
       if (scenario.startsWith("targetc3b") &&
           args[2] === target + ":lib/target-inbox-ai-consent-fence.ts") break;
-      if (scenario.startsWith("targetc3b") && get("head")===target &&
-          [before, "b".repeat(40)].some(sha =>
-            args[2] === sha + ":lib/target-inbox-ai-consent-fence.ts")) break;
+      // On the subsequent B -> C deploy the previous B commit already
+      // contains the consent fence. A (before first rollout) never did.
+      if (scenario.startsWith("targetc3b") &&
+          fs.existsSync(stateFile("next-target")) &&
+          args[2] === "b".repeat(40) + ":lib/target-inbox-ai-consent-fence.ts") break;
       process.exit(1);
     } else if (verb === "merge" && args[1] === "--ff-only") {
       set("head", target); log("merge");
