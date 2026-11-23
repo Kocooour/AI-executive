@@ -41,7 +41,7 @@ INBOX_AI_FENCE_FIRST_ROLLOUT=0
 FIRST_CONSENT_RECOVERY=0
 INBOX_AI_FENCE_PATH=/var/lib/ai-executive-target/inbox-ai-consent-fence.sqlite
 # Root-owned, non-restorable first-rollout proof. Its owner/generation and
-# device+inode bind explicit recovery to the SAME fence provisioned by THIS
+# device+inode+SHA-256 bind explicit recovery to the SAME fence provisioned by THIS
 # first rollout, not any later empty replacement after a revoke.
 INBOX_AI_FIRST_CONSENT_PROOF="$BACKUP_DIR/.inbox-ai-first-consent-pending"
 PROFILE_TMP=""
@@ -870,7 +870,7 @@ if [ "$TARGET_PROFILE" = personal-v1 ] &&
     # Persist the provenance BEFORE first grant; preserve on failure. Never
     # create this proof for a previously existing, possibly revoked fence.
     ( umask 077; set -C; printf '%s\n' \
-      "v1:$TARGET_OWNER:$TARGET_GENERATION:$(stat -c '%d:%i' "$INBOX_AI_FENCE_PATH")" \
+      "v1:$TARGET_OWNER:$TARGET_GENERATION:$(stat -c '%d:%i' "$INBOX_AI_FENCE_PATH"):$(sha256sum -- "$INBOX_AI_FENCE_PATH" | awk '{print $1}')" \
       > "$INBOX_AI_FIRST_CONSENT_PROOF" ) ||
       die "nelze bezpecne zapsat doklad prvni inicializace fence"
     # Owner decision #471/#492 authorizes ONE first-deploy grant, not
@@ -891,7 +891,7 @@ if [ "$TARGET_PROFILE" = personal-v1 ] &&
       test "$(stat -c %u "$INBOX_AI_FIRST_CONSENT_PROOF")" = 0 &&
       test "$(stat -c %a "$INBOX_AI_FIRST_CONSENT_PROOF")" = 600 &&
       test "$(cat "$INBOX_AI_FIRST_CONSENT_PROOF")" = \
-        "v1:$TARGET_OWNER:$TARGET_GENERATION:$(stat -c '%d:%i' "$INBOX_AI_FENCE_PATH")" ||
+        "v1:$TARGET_OWNER:$TARGET_GENERATION:$(stat -c '%d:%i' "$INBOX_AI_FENCE_PATH"):$(sha256sum -- "$INBOX_AI_FENCE_PATH" | awk '{print $1}')" ||
       die "chybi platny puvodni doklad nedokonceneho prvniho nasazeni"
     # Explicit stopped-service owner recovery. Never create a missing fence.
     # The privileged writer refuses any prior external decision, grant,
