@@ -74,7 +74,7 @@ export default function InboxAIConsentSettings({language="cs"}:{
   if(state.kind==="disabled")return null;
   return <div className="targetInboxAIConsent"
       data-testid="target-c3b-consent-settings">
-    <h3>{speak("AI návrhy pro Inbox","AI suggestions for Inbox")}</h3>
+    <h2>{speak("AI návrhy pro Inbox","AI suggestions for Inbox")}</h2>
     <p>{speak(
       "Bez souhlasu fungují pouze lokální pravidla. Po výslovném zapnutí se OpenAI odesílá jen název aktuálního soukromého úkolu a názvy vašich soukromých Oblastí a projektů. Žádné poznámky ani sdílená data. Ukládání odpovědí je vypnuté, poskytovatel však může uchovávat bezpečnostní záznamy.",
       "Without consent only local rules run. Enabling sends OpenAI only the current private task title and names of your private Areas/projects, never notes or shared data. Response-object storage is disabled, but provider safety logs may still exist."
@@ -102,8 +102,8 @@ export default function InboxAIConsentSettings({language="cs"}:{
       </p>
       {state.capacity.warning&&<p role="alert"
         data-testid="target-c3b-receipt-capacity-warning">
-        {speak("Historie potvrzení dosáhla 75 % kapacity. Naplánujte bezpečné rozšíření bez mazání záznamů podle provozního návodu.",
-          "Receipt ledger reached 75% capacity. Plan a nondestructive capacity expansion using the operator runbook.")}
+        {speak("Historie potvrzení se blíží kapacitě. Některé nové návrhy nemusí jít přijmout; starší potvrzení a možnost Undo zůstávají zachovány.",
+          "Confirmation history is nearly full. Some new suggestions may not be accepted; existing confirmations and Undo remain available.")}
       </p>}
     </>}
     {state.kind==="ready"&&state.pending&&<p role="status">{speak(

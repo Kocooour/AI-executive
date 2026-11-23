@@ -14,7 +14,8 @@
   overflow-wrap:anywhere}
 .targetInboxMore{align-self:flex-start}
 @media(max-width:480px){.targetInboxRow{align-items:flex-start;flex-wrap:wrap}
-  .targetInboxRow button{margin-left:auto}}
+  /* Keep Why?/Accept grouped: only the standalone Process button aligns right. */
+  .targetInboxRow>button{margin-left:auto}}
 
 .targetInboxDetailLink{border:0;background:none;color:inherit;font:inherit;font-weight:600;text-align:left;padding:0;min-height:32px;cursor:pointer;overflow-wrap:anywhere}
 .targetInboxDetailLink:hover{text-decoration:underline}
