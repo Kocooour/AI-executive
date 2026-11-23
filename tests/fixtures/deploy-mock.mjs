@@ -32,6 +32,10 @@ switch (name) {
     process.exit(8);
   case "stat":
     if (args[0] === "-c" && args[1] === "%u") { console.log("0"); break; }
+    if (args[0] === "-c" && args[1] === "%d:%i") {
+      const st=fs.statSync(args[args.length-1]);
+      console.log(st.dev+":"+st.ino); break;
+    }
     if (args[0] === "-c" && args[1] === "%a") {
       console.log((fs.statSync(args[args.length - 1]).mode & 0o777).toString(8));
       break;
@@ -362,8 +366,15 @@ switch (name) {
       // On the subsequent B -> C deploy the previous B commit already
       // contains the consent fence. A (before first rollout) never did.
       if (scenario.startsWith("targetc3b") &&
-          fs.existsSync(stateFile("next-target")) &&
+          get("head") === "b".repeat(40) &&
           args[2] === "b".repeat(40) + ":lib/target-inbox-ai-consent-fence.ts") break;
+      // The existing owner-cookie cutoff is already live on the C-3b
+      // first rollout. Only the explicit stopped-recovery fixture needs to
+      // model the otherwise unrelated, already-provisioned cutoff.
+      if (scenario.startsWith("targetc3b") &&
+          process.env.LUMI_TEST_RECOVERY_MODE === "true" &&
+          [get("head"),target].some(sha =>
+            args[2] === sha + ":lib/owner-session-revocation.ts")) break;
       process.exit(1);
     } else if (verb === "merge" && args[1] === "--ff-only") {
       set("head", target); log("merge");
@@ -489,6 +500,13 @@ switch (name) {
   case "runuser": {
     if (args[0] !== "-u" || args[1] !== "ai-executive" || args[2] !== "--") process.exit(8);
     const exec = args[3], rest = args.slice(4);
+    if (scenario.startsWith("targetc3b") && exec === "env" &&
+        rest.includes(path.join(app,"scripts/owner-session-revocation-init.mjs"))) {
+      log("owner-cutoff-check");
+      const cutoff=path.join(root,"var/lib/ai-executive/owner-session-valid-from.sqlite");
+      if (!fs.existsSync(cutoff) || !rest.includes("--check")) process.exit(1);
+      break;
+    }
     if (scenario === "mailsnapshoterror" && get("head") === target &&
         rest[0] === "-" && rest[1] === dbFile) {
       console.error("simulated read-only Gmail snapshot error");
@@ -585,7 +603,9 @@ switch (name) {
         if(fs.existsSync(targetGrant)&&get("c3b-target-grant")!=="on:1")process.exit(1);
         if(fs.existsSync(grant)&&get("c3b-fence-grant")!=="on:1")process.exit(1);
         set("c3b-target-grant","on:1");
-        if(scenario==="targetc3bgrantfail")process.exit(1);
+        if(scenario==="targetc3bgrantfail" && !fs.existsSync(stateFile("grantfail-once"))){
+          set("grantfail-once","1");process.exit(1);
+        }
         set("c3b-fence-grant","on:1");
         break;
       }
