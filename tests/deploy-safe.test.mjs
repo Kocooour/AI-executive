@@ -1171,6 +1171,13 @@ test("C-3b interrupted first grant: replaced or missing fence cannot recover", {
     const fence=path.join(f.root,"var/lib/ai-executive-target/inbox-ai-consent-fence.sqlite");
     const proof=path.join(f.backups,".inbox-ai-first-consent-pending");
     assert.ok(existsSync(proof));
+    // Even in-place replacement retains device+inode; SHA-256 must catch it.
+    writeFileSync(fence,"synthetic modified fence in same inode");
+    const inPlace=f.execute({recovery:true,firstConsentRecovery:true});
+    assert.notEqual(inPlace.status,0);
+    assert.match(inPlace.output,/chybi platny puvodni doklad/);
+    assert.equal(inPlace.service,"inactive");
+    writeFileSync(fence,"synthetic durable fence");
     rmSync(fence);
     writeFileSync(fence,"synthetic replaced empty fence",{mode:0o600});
     const result=f.execute({recovery:true,firstConsentRecovery:true});
