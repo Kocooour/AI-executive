@@ -3,7 +3,7 @@
  *
  * This is only ONE side of the two-store consent contract. A remote call is
  * allowed exclusively when this record AND the separate outside-restore
- * fence agree on actor, enabled, epoch, scope and restore generation.
+ * fence agree on actor, enabled, epoch, owner decision, scope and restore generation.
  *
  * Initial owner-only grant is never executed during import/startup or as a
  * side effect of a read. The operator must explicitly invoke a privileged
@@ -95,7 +95,7 @@ export function readTargetInboxAIConsent(
 }
 export function targetInboxAIConsentMatchesFence(
   target:TargetInboxAIConsent|null,
-  fence:{actorUserId:string;active:boolean;epoch:number;
+  fence:{actorUserId:string;active:boolean;epoch:number;ownerDecision:string;
     restoreGeneration:string;dataScopeVersion:string}|null,
   generation:string,
 ):boolean{
@@ -104,6 +104,9 @@ export function targetInboxAIConsentMatchesFence(
     target.restoreGeneration===generation.toLowerCase()&&
     fence.restoreGeneration===generation.toLowerCase()&&
     target.epoch===fence.epoch&&
+    // Matching epochs alone are insufficient after partial external regrants.
+    // Never send AI data or accept AI proposals on different owner decisions.
+    target.ownerDecision===fence.ownerDecision&&
     target.dataScopeVersion===fence.dataScopeVersion&&
     target.dataScopeVersion===SCOPE);
 }
