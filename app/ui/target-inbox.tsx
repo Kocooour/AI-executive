@@ -234,7 +234,16 @@ export default function TargetInbox({language="cs",taskDetail=false,
           setC3bConsentEnabled(result.value.enabled&&!result.value.pending);
           return;
         }
-        if(result.reason==="signed-out"){revoke();return;}
+        if(result.reason==="signed-out"){
+          // Owner-only consent returns 403 to a valid non-owner; this must
+          // hide the AI control, not revoke their authorized private Inbox.
+          // A genuinely expired session is confirmed by the runtime itself.
+          const fresh=await runtime.refresh();
+          if(ctrl.signal.aborted)return;
+          if(fresh!=="ok"||!runtime.known()||
+             runtime.generation()!==generation)revoke();
+          return;
+        }
         if(attempt<2)await new Promise<void>(resolve=>
           setTimeout(resolve,200*(attempt+1)));
       }
