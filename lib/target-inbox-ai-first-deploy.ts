@@ -1,11 +1,13 @@
 /**
  * Privileged first-rollout C-3b consent coordinator. NEVER call from a request,
  * startup, store restore, or normal deployment. Only the explicit reviewed
- * deploy-safe.sh first-fence-rollout stage may invoke this code.
+ * deploy-safe.sh first-fence-rollout stage OR explicit stopped-service
+ * --recover-first-consent may invoke this code, never a regular redeploy.
  *
  * The target's canonical pinned writer journals the owner grant first; the
  * independent non-restorable fence commits second. A crash between commits
- * leaves AI disabled. A later deploy only checks: it NEVER repairs consent.
+ * leaves AI disabled. A regular later deploy only checks: it NEVER repairs
+ * consent. Operator recovery must prove pristine independent history.
  */
 import type {DatabaseSync} from "node:sqlite";
 import {TargetStagingSessionAuthority} from "./target-staging-session-authority";
@@ -51,8 +53,9 @@ export function checkFirstDeployInboxAIConsent(
   }catch{return false;}
 }
 
-/** Called only on the FIRST missing-fence rollout. Never silently re-grants
- * a disabled or stale owner, never rewinds epoch/decision history.
+/** Called only on first rollout or operator-approved recovery of its aborted
+ * first grant. Never silently re-grants a disabled/stale owner, and never
+ * rewinds even one historical grant, revoke, pending ticket or dispatch budget.
  */
 export function grantFirstDeployInboxAIConsent(
   authority:TargetStagingSessionAuthority,db:DatabaseSync,
@@ -74,9 +77,11 @@ export function grantFirstDeployInboxAIConsent(
     const history=db.prepare(
       "SELECT (SELECT COUNT(*) FROM inbox_ai_fence_grants) AS grants, "+
       "(SELECT COUNT(*) FROM inbox_ai_fence_decisions) AS decisions, "+
-      "(SELECT COUNT(*) FROM inbox_ai_fence_pending) AS pending",
-    ).get() as {grants:number;decisions:number;pending:number};
-    if(history.grants!==0||history.decisions!==0||history.pending!==0)return false;
+      "(SELECT COUNT(*) FROM inbox_ai_fence_pending) AS pending, "+
+      "(SELECT COUNT(*) FROM inbox_ai_fence_budgets) AS budgets",
+    ).get() as {grants:number;decisions:number;pending:number;budgets:number};
+    if(history.grants!==0||history.decisions!==0||
+       history.pending!==0||history.budgets!==0)return false;
     if(!prior){
       const issued=authority.issueWritable(owner);
       if(!issued)return false;
