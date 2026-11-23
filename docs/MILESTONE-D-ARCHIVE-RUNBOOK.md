@@ -26,23 +26,49 @@ with the service and all writers stopped. Preserve SQLite WAL consistency:
 never invent a backup by copying only store.sqlite while an uncheckpointed WAL
 exists. Keep owner data and filenames off CI/GitHub.
 
-Example, on an isolated *synthetic* fixture or correctly snapshotted copy:
+The scanner accepts only a **self-contained SQLite backup** without WAL/SHM
+sidecars. A matching private operator attestation is mandatory. Its format is
+lumi-archive-isolated-copy-v1, with method="sqlite-backup",
+consistent=true, sourceStoreIdentity (64-character SHA-256 representing the
+approved source identity), sha256 of the isolated database file, bytes of that
+file, and referenceSchemaSha256 (approved current-schema DDL digest). Only
+the reviewed, stopped-service backup/rehearsal process may issue this
+attestation; **do not fabricate "consistent=true" from an arbitrary file**.
+The scanner can verify file identity, schema and hashes; it cannot prove
+that the human-controlled source/backup attestation is truthful.
 
-    node scripts/archive-purge-inventory.mjs --db-copy /tmp/lumi-d-review/store.sqlite
+Example, on a disposable synthetic fixture or externally attested copy:
 
-The command refuses the canonical /var/lib/ai-executive directory and the
-AI_EXECUTIVE_DATA_DIR path, and rejects symlinks to the input file. It may
-touch SQLite -shm on its input even with readOnly:true, so do not point it at
-an active store. It emits JSON with **counts only**: entity kinds, every table,
-work-session task references, workspace-linked rows, attention/notification
-references, SQLite integrity status and unfamiliar/missing schema tables.
-It never prints item IDs, titles, note bodies or paths.
+    node scripts/archive-purge-inventory.mjs \
+      --db-copy /tmp/lumi-d-review/store.sqlite \
+      --manifest /tmp/lumi-d-review/verified-provenance.json
 
-An inventory with inventoryComplete:true means only that the count scanner saw
-the currently classified tables and valid JSON/SQLite. It is **NOT** evidence
-that protected data can be deleted or that all logical dependencies are safe.
-Review the dependency matrix from #501 and run true protected-table identity
-checks, restore rehearsal and synthetic end-to-end acceptance separately.
+The tool refuses direct input from /var/lib/ai-executive or the configured
+AI_EXECUTIVE_DATA_DIR, symlinks, hardlinked databases, and input copies with
+SQLite -wal/-shm files (including symlinks). It verifies a SHA-256 bound to the
+independent manifest both before and after scanning, and compares the full
+table/index/trigger DDL digest to the approved reference. A changed trigger
+body, missing required column, missing trigger or unknown schema name fails
+closed. The same-name schema hash requires a **trusted baseline**; refreshing
+the manifest from an unreviewed corrupted schema is NOT validation.
+
+Output is content-free: only approved table names and field names appear,
+alongside counts, integrity results, full DDL fingerprint, workspace logical
+references and running/paused/completed session-to-Archive-task links.
+Unknown table/trigger names (which can themselves contain private text)
+are reported by **count**, never printed. Unmatched references may refer
+to other stores and are NOT automatically classified as lost. Derived
+attention/notification references include tasks, notes, projects, Areas and
+workspaces. No row IDs, titles, bodies, private file paths or secret values
+are emitted.
+
+An inventory with inventoryComplete:true means only that the scanner saw
+the expected tables, required columns/triggers and approved DDL on a
+checksum-matched **operator-attested isolated copy** with valid JSON/SQLite.
+It is not a destructive preflight and does not prove that the original
+source was properly backed up. The independent operator must verify backup
+consistency/provenance, protected-table identity, rollback rehearsal and
+the #501 dependency matrix before any later --apply mechanism is designed.
 
 The entire D-1 operator implementation remains **pending**:
 
