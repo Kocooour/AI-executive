@@ -1149,8 +1149,10 @@ test("C-3b P2: ordinary stopped recovery retires proof after committed first gra
     assert.equal(recovered.events.filter(x=>x==="c3b-first-grant").length,1,
       "ordinary stopped recovery must never grant again");
     assert.equal(recovered.events.filter(x=>x==="c3b-check").length,2);
-    assert.equal(recovered.events.filter(x=>x==="c3b-proof-absent-at-start").length,1,
-      "the original proof must be retired BEFORE service start");
+    assert.equal(recovered.events.filter(x=>x==="start-b").length,2,
+      "deployment must retain both service starts around the offline store check");
+    assert.equal(recovered.events.filter(x=>x==="c3b-proof-absent-at-start").length,2,
+      "the original proof must be retired BEFORE BOTH service starts");
     assert.equal(existsSync(proof),false);
   }finally{f.cleanup();}
 });
@@ -1191,7 +1193,10 @@ test("C-3b P2: ordinary recovery retires stale proof without reversing a revoke"
     assert.equal(result.status,0,result.output);
     assert.equal(result.service,"active");
     assert.equal(result.events.filter(x=>x==="c3b-first-grant").length,1);
-    assert.equal(result.events.filter(x=>x==="c3b-proof-absent-at-start").length,1);
+    assert.equal(result.events.filter(x=>x==="start-b").length,2,
+      "the revoked-state recovery must retain both service starts");
+    assert.equal(result.events.filter(x=>x==="c3b-proof-absent-at-start").length,2,
+      "the proof must be absent before both service starts");
     assert.equal(readFileSync(path.join(f.root,"state/c3b-target-grant"),"utf8"),"off:2");
     assert.equal(readFileSync(path.join(f.root,"state/c3b-fence-grant"),"utf8"),"off:2");
     assert.equal(existsSync(proof),false);
