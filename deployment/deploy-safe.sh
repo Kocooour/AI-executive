@@ -40,6 +40,10 @@ INBOX_AI_FENCE_FIRST_ROLLOUT=0
 # Explicit operator recovery of an interrupted FIRST consent, never ordinary deploy.
 FIRST_CONSENT_RECOVERY=0
 INBOX_AI_FENCE_PATH=/var/lib/ai-executive-target/inbox-ai-consent-fence.sqlite
+# Root-owned, non-restorable first-rollout proof. Its owner/generation and
+# device+inode bind explicit recovery to the SAME fence provisioned by THIS
+# first rollout, not any later empty replacement after a revoke.
+INBOX_AI_FIRST_CONSENT_PROOF="$BACKUP_DIR/.inbox-ai-first-consent-pending"
 PROFILE_TMP=""
 PROFILE_TOOL=""
 ENV_BASELINE_SHA=""
@@ -843,6 +847,9 @@ if [ "$TARGET_PROFILE" = personal-v1 ] &&
   if [ ! -e "$INBOX_AI_FENCE_PATH" ] && [ ! -L "$INBOX_AI_FENCE_PATH" ]; then
     [ "$INBOX_AI_FENCE_FIRST_ROLLOUT" = 1 ] ||
       die "chybi drive provisionovana revokacni historie; automaticky neobnovovat"
+    [ ! -e "$INBOX_AI_FIRST_CONSENT_PROOF" ] &&
+      [ ! -L "$INBOX_AI_FIRST_CONSENT_PROOF" ] ||
+      die "neocekavany zaznam nedokonceneho prvniho souhlasu"
     INBOX_AI_FENCE_PROVISION_ATTEMPTED=1
     echo "=== JEDNORAZOVA INICIALIZACE CONSENT FENCE A SOUHLASU ==="
     runuser -u ai-executive -- env AI_EXECUTIVE_DATA_DIR="$DATA" /usr/bin/node \
@@ -850,6 +857,12 @@ if [ "$TARGET_PROFILE" = personal-v1 ] &&
       "$APP/scripts/target-inbox-ai-fence-provision.mjs" --provision \
       --directory "$TARGET_DIRECTORY" ||
       die "inicializace externi consent fence selhala"
+    # Persist the provenance BEFORE first grant; preserve on failure. Never
+    # create this proof for a previously existing, possibly revoked fence.
+    ( umask 077; set -C; printf '%s\n' \
+      "v1:$TARGET_OWNER:$TARGET_GENERATION:$(stat -c '%d:%i' "$INBOX_AI_FENCE_PATH")" \
+      > "$INBOX_AI_FIRST_CONSENT_PROOF" ) ||
+      die "nelze bezpecne zapsat doklad prvni inicializace fence"
     # Owner decision #471/#492 authorizes ONE first-deploy grant, not
     # subsequent re-consent. This command is never called on later deploys.
     runuser -u ai-executive -- env AI_EXECUTIVE_DATA_DIR="$DATA" \
@@ -860,6 +873,16 @@ if [ "$TARGET_PROFILE" = personal-v1 ] &&
       --generation "$TARGET_GENERATION" ||
       die "prvni souhlas Inbox AI nebyl bezpecne zapsan do obou ulozist"
   elif [ "$FIRST_CONSENT_RECOVERY" = 1 ]; then
+    # A pristine SQLite file alone is NOT proof of a never-revoked consent:
+    # an old fence could have been replaced. This root-owned marker pins the
+    # exact owner/generation AND physical file created by the failed rollout.
+    test -f "$INBOX_AI_FIRST_CONSENT_PROOF" &&
+      test ! -L "$INBOX_AI_FIRST_CONSENT_PROOF" &&
+      test "$(stat -c %u "$INBOX_AI_FIRST_CONSENT_PROOF")" = 0 &&
+      test "$(stat -c %a "$INBOX_AI_FIRST_CONSENT_PROOF")" = 600 &&
+      test "$(cat "$INBOX_AI_FIRST_CONSENT_PROOF")" = \
+        "v1:$TARGET_OWNER:$TARGET_GENERATION:$(stat -c '%d:%i' "$INBOX_AI_FENCE_PATH")" ||
+      die "chybi platny puvodni doklad nedokonceneho prvniho nasazeni"
     # Explicit stopped-service owner recovery. Never create a missing fence.
     # The privileged writer refuses any prior external decision, grant,
     # pending ticket, or target state other than the initial epoch 1.
@@ -878,6 +901,15 @@ if [ "$TARGET_PROFILE" = personal-v1 ] &&
     --directory "$TARGET_DIRECTORY" --owner "$TARGET_OWNER" \
     --generation "$TARGET_GENERATION" ||
     die "nesouhlasici nebo chybejici C-3b souhlas a revokacni fence"
+  if [ "$INBOX_AI_FENCE_FIRST_ROLLOUT" = 1 ] ||
+     [ "$FIRST_CONSENT_RECOVERY" = 1 ]; then
+    # Consent has been durably checked in BOTH stores. Remove the root proof
+    # before the service can ever start; never retain a replay capability.
+    test -f "$INBOX_AI_FIRST_CONSENT_PROOF" &&
+      test ! -L "$INBOX_AI_FIRST_CONSENT_PROOF" &&
+      rm -- "$INBOX_AI_FIRST_CONSENT_PROOF" ||
+      die "nelze zneplatnit doklad prvniho souhlasu"
+  fi
 fi
 
 echo "=== START A PROVOZNI KONTROLY ==="
