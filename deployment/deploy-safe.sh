@@ -356,6 +356,13 @@ on_exit() {
     echo "Sluzba zustava zastavena, bez automatickeho rollbacku a navratu k predchozi autentizaci." >&2
     echo "Oprav a nasad verzi s kontrolou revokace, nebo pred rucnim spustenim stare verze rotuj AI_EXECUTIVE_SESSION_SECRET." >&2
     exit "$rc"
+  elif [ "$INBOX_AI_FENCE_PROVISION_ATTEMPTED" = 1 ]; then
+    # The first C-3b fence may now exist, with a partial epoch-1 target
+    # consent. Never reset the checkout to pre-C-3b code: explicit recovery
+    # requires a consent-aware PREV and the exact original durable fence.
+    echo "BEZPECNOSTNI BLOKACE: nedokonceny prvni Inbox AI consent rollout." >&2
+    echo "Consent-aware kod zustava na disku; sluzba zustava zastavena. Bez automatickeho rollbacku." >&2
+    exit "$rc"
   fi
   if [ "$CHANGED" = 1 ]; then
     echo "Vracim pouze kod na $PREV; produkcni data neobnovuji." >&2
