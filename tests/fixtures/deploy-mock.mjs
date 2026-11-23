@@ -335,6 +335,14 @@ switch (name) {
           /^AI_EXECUTIVE_TARGET_[A-Z0-9_]+_ENABLED=true$/.test(line)).length;
         log("start-with-target-flags:" + enabled);
       }
+      if (scenario === "targetc3bcheckfailonce" && get("head") === target) {
+        const proof=path.join(root,"var/backups/ai-executive/.inbox-ai-first-consent-pending");
+        if (fs.existsSync(proof)) {
+          console.error("first-consent recovery proof survived into service start");
+          process.exit(93);
+        }
+        log("c3b-proof-absent-at-start");
+      }
       if (scenario.startsWith("target") && get("head") === target) set("target-started", "1");
       set("service", "active"); log("start-" + get("head").slice(0,1)); break;
     }
@@ -614,6 +622,12 @@ switch (name) {
         if(!fs.existsSync(targetGrant)||!fs.existsSync(grant)||
             get("c3b-target-grant")!==get("c3b-fence-grant")){
           console.error("synthetic mismatched owner consent");
+          process.exit(1);
+        }
+        if (scenario==="targetc3bcheckfailonce" &&
+            !fs.existsSync(stateFile("c3b-transient-check-failed"))) {
+          set("c3b-transient-check-failed","1");
+          console.error("synthetic transient --check failure AFTER both durable grants");
           process.exit(1);
         }
         break;
