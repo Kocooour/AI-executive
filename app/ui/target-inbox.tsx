@@ -264,13 +264,14 @@ export default function TargetInbox({language="cs",taskDetail=false}:{language?:
         result.value.status==="cancelled"||
         result.value.status==="undo_cancelled")){
       setC3bUndoNotice(result.value.status==="undo_cancelled");
-      c3bClear();setC3bOutcome(null);
+      setC3bUndoneNotice(result.value.status==="undone");
+      c3bClear();c3bOutcomeRef.current=null;setC3bOutcome(null);
       emitTargetChange({kind:"task",id:current.command.taskId,change:"updated"});
       reload();
     }else if(result.ok===true&&result.value.status==="committed"&&
       !current.undoCommand){
       onC3bOutcome({command:current.command as C3bAccept,
-        status:"committed",next:result.value.next});
+        status:"committed",next:result.value.next,title:current.title});
     }else if(result.ok===false&&result.reason==="signed-out"){
       c3bClear();setC3bOutcome(null);revoke();
     }
@@ -298,7 +299,8 @@ export default function TargetInbox({language="cs",taskDetail=false}:{language?:
       onC3bOutcome({command:original.command as C3bAccept,
         status:"committed",next:cancelled.value.next});
     }else if(cancelled.ok&&cancelled.value.status==="undone"){
-      c3bClear();setC3bOutcome(null);reload();
+      c3bClear();c3bOutcomeRef.current=null;setC3bOutcome(null);
+      setC3bUndoneNotice(true);reload();
     }else if(cancelled.ok===false&&cancelled.reason==="signed-out"){
       c3bClear();setC3bOutcome(null);revoke();
     }
@@ -639,7 +641,9 @@ export default function TargetInbox({language="cs",taskDetail=false}:{language?:
         "Suggestion accepted and task processed.")}</span>
       {c3bOutcome.next&&<button type="button" onClick={()=>void c3bUndo()}>
         {speak("Vrátit změny (Undo)","Undo changes")}</button>}
-      <button type="button" onClick={()=>setC3bOutcome(null)}>
+      <button type="button" onClick={()=>{
+        c3bOutcomeRef.current=null;setC3bOutcome(null);
+      }}>
         {speak("Zavřít","Close")}</button>
     </div>}
     {c3bUndoNotice&&<div role="status" data-testid="target-c3b-undo-cancelled">
