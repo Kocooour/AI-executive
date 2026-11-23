@@ -360,7 +360,8 @@ switch (name) {
       if (scenario.startsWith("targetc3b") &&
           args[2] === target + ":lib/target-inbox-ai-consent-fence.ts") break;
       if (scenario.startsWith("targetc3b") && get("head")===target &&
-          args[2] === before + ":lib/target-inbox-ai-consent-fence.ts") break;
+          [before, "b".repeat(40)].some(sha =>
+            args[2] === sha + ":lib/target-inbox-ai-consent-fence.ts")) break;
       process.exit(1);
     } else if (verb === "merge" && args[1] === "--ff-only") {
       set("head", target); log("merge");
