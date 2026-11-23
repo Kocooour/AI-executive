@@ -166,33 +166,61 @@ export async function cancelInboxCommand(command:InboxClientCommand):Promise<Inb
     });
   }catch{return {ok:false,reason:"unavailable"};}
 }
+/** Receipt-only retry: a C-3b optional preview may briefly occupy the
+ * staging child pool while C-3a recovers a lost Process/Undo. Never retry a
+ * write, allocate a new UUID, or treat an unverified result as terminal.
+ * Only transient transport/5xx/429 failures are retried; an authenticated
+ * 401/403, stale 409 or feature-off 404 is returned immediately. */
 export async function verifyInboxCommand(
   command:InboxClientCommand,
 ):Promise<InboxClientReceipt>{
   if(!validCommand(command))return {ok:false,reason:"unavailable"};
   try{
     return await commandDeadline<InboxClientReceipt>(async signal=>{
-    const response=await postCommand("/api/target-staging/inbox/receipt",command,signal,true);
-    if(!response.ok)return {ok:false,reason:failure(response.status)};
-    const body:unknown=await response.json();
-    if(!body||typeof body!=="object"||Array.isArray(body))return {ok:false,reason:"unavailable"};
-    const x=body as Record<string,unknown>;
-    if(Object.keys(x).sort().join(",")!=="next,ok,status"||x.ok!==true||
-        (x.status!=="committed"&&x.status!=="not_recorded"&&x.status!=="cancelled"))
+      for(let attempt=0;attempt<4;attempt++){
+        let response:Response|null=null;
+        try{
+          response=await postCommand("/api/target-staging/inbox/receipt",
+            command,signal,true);
+        }catch{/* read-only transport failure, not evidence of missing write */}
+        if(response?.ok){
+          const body:unknown=await response.json();
+          if(!body||typeof body!=="object"||Array.isArray(body))
+            return {ok:false,reason:"unavailable"};
+          const x=body as Record<string,unknown>;
+          if(Object.keys(x).sort().join(",")!=="next,ok,status"||x.ok!==true||
+              (x.status!=="committed"&&x.status!=="not_recorded"&&x.status!=="cancelled"))
+            return {ok:false,reason:"unavailable"};
+          let next:Extract<InboxClientReceipt,{ok:true}>["next"]=null;
+          if(x.next!==null){
+            if((x.status!=="committed"&&
+                  !(x.status==="cancelled"&&command.mode==="undo"))||
+                !x.next||typeof x.next!=="object"||Array.isArray(x.next))
+              return {ok:false,reason:"unavailable"};
+            const n=x.next as Record<string,unknown>;
+            if(Object.keys(n).sort().join(",")!=="expectedRevision,triageRevision,writeAreaId"||
+                typeof n.expectedRevision!=="string"||!cas.test(n.expectedRevision)||
+                !safe(n.triageRevision)||!id(n.writeAreaId))
+              return {ok:false,reason:"unavailable"};
+            next={expectedRevision:n.expectedRevision,
+              triageRevision:n.triageRevision as number,writeAreaId:n.writeAreaId as string};
+          }
+          return {ok:true,status:x.status,next};
+        }
+        if(response&&![429,500,502,503,504].includes(response.status))
+          return {ok:false,reason:failure(response.status)};
+        if(attempt===3)return {ok:false,reason:"unavailable"};
+        await new Promise<void>((resolve,reject)=>{
+          if(signal.aborted){reject(new Error("Receipt deadline"));return;}
+          const onAbort=()=>{clearTimeout(timer);reject(new Error("Receipt deadline"));};
+          const timer=setTimeout(()=>{
+            signal.removeEventListener("abort",onAbort);resolve();
+          },150*(attempt+1));
+          signal.addEventListener("abort",onAbort,{once:true});
+          if(signal.aborted)onAbort();
+        });
+      }
       return {ok:false,reason:"unavailable"};
-    let next:Extract<InboxClientReceipt,{ok:true}>["next"]=null;
-    if(x.next!==null){
-      if((x.status!=="committed"&&!(x.status==="cancelled"&&command.mode==="undo"))||
-          !x.next||typeof x.next!=="object"||Array.isArray(x.next))
-        return {ok:false,reason:"unavailable"};
-      const n=x.next as Record<string,unknown>;
-      if(Object.keys(n).sort().join(",")!=="expectedRevision,triageRevision,writeAreaId"||
-          typeof n.expectedRevision!=="string"||!cas.test(n.expectedRevision)||
-          !safe(n.triageRevision)||!id(n.writeAreaId))return {ok:false,reason:"unavailable"};
-      next={expectedRevision:n.expectedRevision,triageRevision:n.triageRevision as number,
-        writeAreaId:n.writeAreaId as string};
-    }
-    return {ok:true,status:x.status,next};
     });
   }catch{return {ok:false,reason:"unavailable"};}
 }
