@@ -330,8 +330,11 @@ canonical pinned target v27 write path, then records the same first decision,
 epoch 1 and scope `c3b:v1` in the separate fence. It emits no private data.
 The final `--check --directory ... --owner <ID> --generation <UUID>`
 requires **strict agreement of both durable stores** (including a matching
-disabled/revoked state). On subsequent deployments only `--check` runs:
+disabled/revoked state). On subsequent **ordinary** deployments only `--check` runs:
 no new grant, repair or reset of decision history is ever automatic.
+The only exception is an explicitly owner-approved `--recover-stopped
+--recover-first-consent` after a documented incomplete first grant, subject
+to the original root-owned proof and empty consent/revocation history below.
 For an **OFF/OFF** state only, a partial failed re-grant followed by a
 confirmed revoke can leave the target's older owner-decision ID different
 from the external fence's latest re-grant decision. A later read-only deploy
@@ -347,6 +350,48 @@ corrupt or mismatched fence aborts the deploy. A missing fence after the
 first rollout is never recreated, and a revoked owner remains revoked.
 The original owner decision is #471, reconfirmed in #492 on 2026-11-23.
 
+**Interrupted first grant — stopped-service recovery (P2).** When the
+first reviewed C-3b rollout has already created
+`/var/lib/ai-executive-target/inbox-ai-consent-fence.sqlite`, but
+`--first-grant` fails before both stores agree, the deployment leaves the
+service **stopped** and preserves a root-only, mode 0600 proof at
+`/var/backups/ai-executive/.inbox-ai-first-consent-pending`. This proof
+is written only after successful first-time provisioning, *before* the first
+grant, and records the owner, restore generation and device/inode of that
+specific external fence. Successful grant and read-only two-store `--check`
+remove it **before the first service start**.
+
+The ordinary deploy and ordinary `--recover-stopped` modes MUST NOT grant
+consent. Only after the operator has checked the original verified backup,
+confirmed the first grant was interrupted, confirmed that the protected
+external fence file has **not been replaced**, and confirmed the service and
+all workers are stopped, the operator may explicitly run the reviewed SHA's
+deploy script with `--recover-stopped --recover-first-consent`:
+
+```bash
+TARGET_SHA=<reviewed-40-character-main-sha>
+sudo bash -c 'set -Eeuo pipefail; cd /opt/ai-executive; target="$1"; [[ "$target" =~ ^[0-9a-f]{40}$ ]]; git fetch --no-tags origin main; test "$(git rev-parse FETCH_HEAD)" = "$target"; git show "$target:deployment/deploy-safe.sh" | bash -s -- "$target" --recover-stopped --recover-first-consent' _ "$TARGET_SHA"
+```
+
+This path requires **all** the ordinary stopped-recovery protections
+(unchanged persistent owner-session cutoff, exact SHA, verified backup,
+read-only target checks and the original environment), a consent-aware
+previous checkout, the original private existing fence, the valid root-owned
+proof with matching owner/generation/device+inode, and an independently
+verified empty fence grant/decision/pending/**budget** history. The target
+consent must be absent or exactly the original enabled epoch-1 decision
+`owner-2026-11-19-issue-471`. A prior revoke, foreign decision, partial
+regrant, stale generation, used provider budget, missing/corrupt proof,
+missing/replaced fence or damaged history is a **hard stop**, never an
+opportunity to recreate the DB or infer a new owner approval.
+
+If provisioning itself failed before the proof was durably recorded,
+or the proof cannot establish continuity of the original file, **do not**
+manufacture a new proof or delete old history. Follow a separate approved
+incident recovery. An empty database by itself is not evidence that no
+grant/revoke has ever occurred. This recovery does not authorize a production
+release without the usual exact-SHA tests and owner sign-off.
+
 **Backup and restore:** if an existing fence is present at deploy time, the
 root-only deployment archive includes a byte-for-byte diagnostic copy and
 checksum `inbox-ai-consent-fence.sqlite`; this archive is **not** an
@@ -356,7 +401,8 @@ Any restore-generation or consent-epoch mismatch disables AI, requiring a
 new explicit owner decision. Never copy an older fence from the archive over
 a newer revoked fence: that would replay consent. Keep any crash/orphaned
 pending dispatch tickets until manual safe reconciliation, not automatic
-TTL deletion. Do not write new grants during recovery or restart.
+TTL deletion. Never write a grant during ordinary recovery or restart.
+The tightly scoped, proof-bound **first-grant-only** exception is below.
 
 **Older code rollback:** C-3b introduces target metadata namespaces
 `r3:c3b:*` and journal kind `inbox_consent`. Once **any C-3b
