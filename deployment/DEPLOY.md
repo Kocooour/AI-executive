@@ -358,7 +358,8 @@ service **stopped** and preserves a root-only, mode 0600 proof at
 `/var/backups/ai-executive/.inbox-ai-first-consent-pending`. This proof
 is written only after successful first-time provisioning, *before* the first
 grant, and records the owner, restore generation and device/inode of that
-specific external fence. Successful grant and read-only two-store `--check`
+specific external fence, including its SHA-256 content digest before
+any grant. Successful grant and read-only two-store `--check`
 remove it **before the first service start**.
 
 The ordinary deploy and ordinary `--recover-stopped` modes MUST NOT grant
@@ -377,7 +378,7 @@ This path requires **all** the ordinary stopped-recovery protections
 (unchanged persistent owner-session cutoff, exact SHA, verified backup,
 read-only target checks and the original environment), a consent-aware
 previous checkout, the original private existing fence, the valid root-owned
-proof with matching owner/generation/device+inode, and an independently
+proof with matching owner/generation/device+inode/SHA-256, and an independently
 verified empty fence grant/decision/pending/**budget** history. The target
 consent must be absent or exactly the original enabled epoch-1 decision
 `owner-2026-11-19-issue-471`. A prior revoke, foreign decision, partial
