@@ -14,7 +14,10 @@ const dbFile = path.join(root, "var/lib/ai-executive/store.sqlite");
 const state = path.join(root, "state");
 const scenario = process.env.LUMI_TEST_SCENARIO;
 const before = "a".repeat(40);
-const target = "b".repeat(40);
+// Deploy follow-up tests can advance from the first reviewed commit B to
+// distinct commit C. PREV==TARGET is deliberately forbidden in production.
+const target = scenario.startsWith("targetc3b") &&
+  fs.existsSync(path.join(state,"next-target")) ? "c".repeat(40) : "b".repeat(40);
 const stateFile = (f) => path.join(state, f);
 const get = (f) => fs.readFileSync(stateFile(f), "utf8").trim();
 const set = (f,v) => fs.writeFileSync(stateFile(f), String(v));
