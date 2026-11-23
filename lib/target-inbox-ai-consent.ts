@@ -21,6 +21,7 @@ import {withPinnedTargetStagingWrite} from "./target-staging-pinned-write";
 import {lookupLiveTargetStagingSession,isTargetStagingSessionTokenHash}
   from "./target-staging-durable-session";
 import {targetStoreRestoreGeneration} from "./target-task-write-preflight";
+import {validateC3BMetadataBeforeCommit} from "./target-inbox-metadata-validation";
 
 const USER=/^[A-Za-z0-9_.:@-]{1,120}$/;
 const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -176,6 +177,7 @@ export function writePreflightedInboxAIConsent(
         .run(historyKey(actor,c.ownerDecision),String(c.epoch));
     if(!sessionLive()||!ctx.stillPinned())
       return {ok:false,reason:"session_revoked"};
+    if(!validateC3BMetadataBeforeCommit(ctx.db))return failed();
     if(!ctx.commit({kind:"inbox_consent",payload:{}}))return failed();
     return {ok:true,record};
   },denied,failed);
