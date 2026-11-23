@@ -143,6 +143,10 @@ test("the profile switches every myPlan/scopes/details/edits field on",()=>{
   assert.deepEqual(config.creates,{projects:true,projectTasks:true});
 });
 
+test("C-3b is a mandatory personal-v1 flag",()=>{
+  assert.ok(TARGET_PERSONAL_V1_PROFILE.includes("AI_EXECUTIVE_TARGET_STAGING_HTTP_C3B_ENABLED"));
+  assert.ok(!excluded.includes("AI_EXECUTIVE_TARGET_STAGING_HTTP_C3B_ENABLED"));
+});
 test("the other UI gates evaluate enabled under the profile",()=>{
   assert.equal(targetMainTitleSearchEnabled(env),true);
   assert.equal(targetPrivateNoteAreaUiEnabled(env),true);
@@ -159,7 +163,9 @@ test("removing any single profile flag turns at least one gate or route off (no 
     targetPrivateNoteAreaUiEnabled(e),targetPrivateNoteCreateUiEnabled(e),
     targetPrivateTaskCreateUiEnabled(e),targetPrivateProjectCreateUiEnabled(e),
     targetProjectTaskCreateUiEnabled(e),targetProjectTitleEditUiEnabled(e),targetNoteEditUiEnabled(e),
-    targetHomeSummaryEnabled(e),targetInboxUiEnabled(e)]);
+    targetHomeSummaryEnabled(e),targetInboxUiEnabled(e),
+    e.AI_EXECUTIVE_TARGET_STAGING_HTTP_C3B_ENABLED==="true" &&
+      targetInboxUiEnabled(e)]);
   const base=gates(env);
   for(const flag of TARGET_PERSONAL_V1_PROFILE){
     const reduced={...env};delete reduced[flag];
