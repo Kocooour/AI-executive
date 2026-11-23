@@ -790,7 +790,12 @@ test("C-3a: committed Process receipt recovers after Area move, with no stale Un
   await processAction(page,movedTask.taskTitle).click();
   await expect(page.getByTestId("target-inbox-uncertain")).toBeVisible({timeout:15000});
   expect(commands).toBe(1);
-  await expect.poll(()=>receipts,{timeout:15000}).toBeGreaterThan(0);
+  // Finish all four deliberately failed *read-only* receipt attempts before
+  // changing the task and unblocking the route. An in-flight retry could
+  // otherwise auto-resolve the original Process and remove this button.
+  await expect.poll(()=>receipts,{timeout:15000}).toBe(4);
+  await expect(page.getByRole("button",{name:"Ověřit původní příkaz"}))
+    .toBeVisible();
 
   const db=new DatabaseSync(path.join(store.directory,"lumi-target.sqlite"));
   let moved=false;
@@ -855,7 +860,11 @@ test("C-3a: real Process receipt unlocks after authorized tombstone; never Undo 
   await page.route("**/api/target-staging/inbox/receipt",blockedReceipt);
   await processAction(page,deletedTask.taskTitle).click();
   await expect(page.getByTestId("target-inbox-uncertain")).toBeVisible({timeout:15000});
-  await expect.poll(()=>receipts,{timeout:15000}).toBeGreaterThan(0);
+  // Keep every injected 503 in place until the automatic receipt retry
+  // has exhausted its bounded four attempts and recovery is user-controlled.
+  await expect.poll(()=>receipts,{timeout:15000}).toBe(4);
+  await expect(page.getByRole("button",{name:"Ověřit původní příkaz"}))
+    .toBeVisible();
   expect(commands).toBe(1);
 
   // Run the genuine, pinned delete writer in the same isolated child-process
