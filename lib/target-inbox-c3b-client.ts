@@ -58,7 +58,25 @@ export function parseC3bProposal(raw:unknown):C3bProposal|null{
      !validChanges(raw.changes))return null;
   return raw as unknown as C3bProposal;
 }
+// Local rules use at most one browser-initiated staging child at a time.
+// The shared staging worker pool has only two slots: reserve the other for
+// actor-authorized Inbox detail reads, even when dozens of rows intersect
+// on a long list. Waiting previews are abortable before issuing HTTP.
+let rulesPreviewTail:Promise<void>=Promise.resolve();
 export async function fetchC3bProposal(taskId:string,signal?:AbortSignal,
+  mode:"rules"|"best"="best"):
+  Promise<C3bResponse<C3bProposal>>{
+  if(mode!=="rules")return fetchC3bProposalNow(taskId,signal,mode);
+  const preceding=rulesPreviewTail;
+  let release!:()=>void;
+  rulesPreviewTail=new Promise<void>(resolve=>{release=resolve;});
+  try{
+    await preceding;
+    if(signal?.aborted)return {ok:false,reason:"unavailable"};
+    return await fetchC3bProposalNow(taskId,signal,mode);
+  }finally{release();}
+}
+async function fetchC3bProposalNow(taskId:string,signal?:AbortSignal,
   mode:"rules"|"best"="best"):
   Promise<C3bResponse<C3bProposal>>{
   if(!TASK.test(taskId))return {ok:false,reason:"unavailable"};
