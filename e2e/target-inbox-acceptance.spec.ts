@@ -370,6 +370,7 @@ test("C-3a: lost Process + concurrent title edit cancels old UUID and unlocks fr
   await page.setViewportSize({width:1280,height:844});
   const seeded=store.seed.projects["390"];
   const db=new DatabaseSync(path.join(store.directory,"lumi-target.sqlite"));
+  db.exec("PRAGMA busy_timeout=5000");
   const originalTitle=(db.prepare("SELECT title FROM tasks WHERE id=?")
     .get(seeded.taskId) as {title:string}).title;
   const receiptsBefore=(db.prepare("SELECT COUNT(*) AS n FROM task_triage_receipts WHERE task_id=?")
@@ -855,6 +856,7 @@ test("C-3a: real Process receipt unlocks after authorized tombstone; never Undo 
   ],{cwd:process.cwd(),stdio:["ignore","pipe","inherit"]}).toString());
   expect(deletion).toEqual({ok:true});
   const db=new DatabaseSync(path.join(store.directory,"lumi-target.sqlite"));
+  db.exec("PRAGMA busy_timeout=5000");
   try{
     expect(db.prepare("SELECT 1 FROM tasks WHERE id=?").get(deletedTask.taskId))
       .toBeUndefined();
