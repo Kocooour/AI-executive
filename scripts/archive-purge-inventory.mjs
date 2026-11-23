@@ -170,6 +170,12 @@ export function inventoryDatabase(db) {
   const triggerDigest = createHash("sha256").update(JSON.stringify(triggers
     .map((r) => [r.name, r.tbl_name, r.sql]).sort((a,b) => a[0].localeCompare(b[0]))))
     .digest("hex");
+  // Full DDL digest covers columns, constraints, indexes and same-name altered triggers.
+  // Must be compared against an independently approved schema reference in the manifest.
+  const schemaDigest = createHash("sha256").update(JSON.stringify(db.prepare(
+    "SELECT type,name,tbl_name,sql FROM sqlite_master " +
+    "WHERE name NOT LIKE 'sqlite_%' ORDER BY type,name"
+  ).all())).digest("hex");
 
   const entityCounts = Object.fromEntries(ENTITY_KINDS.map((kind) => [kind, 0]));
   let malformedEntityRows = 0, unrecognizedEntityRows = 0;
@@ -215,7 +221,7 @@ export function inventoryDatabase(db) {
     entityCounts, malformedEntityRows, unrecognizedEntityRows, tableCounts,
     sessionsByState, taskLinks, workspaceLinks, derivedLinks,
     missingTables, unknownTableCount, invalidColumns, missingTriggerCount,
-    unknownTriggerCount, triggerDigest, blockers, inventoryComplete: blockers.length === 0,
+    unknownTriggerCount, triggerDigest, schemaDigest, blockers, inventoryComplete: blockers.length === 0,
   };
 }
 function readManifest(file) {
@@ -225,6 +231,7 @@ function readManifest(file) {
       manifest.method !== "sqlite-backup" || manifest.consistent !== true ||
       !/^[0-9a-f]{64}$/.test(manifest.sourceStoreIdentity || "") ||
       !/^[0-9a-f]{64}$/.test(manifest.sha256 || "") ||
+      !/^[0-9a-f]{64}$/.test(manifest.referenceSchemaSha256 || "") ||
       !Number.isSafeInteger(manifest.bytes) || manifest.bytes <= 0) {
     throw new Error("invalid-manifest");
   }
@@ -250,6 +257,10 @@ export function inventoryCopy(file, manifestFile) {
   try {
     db.exec("PRAGMA query_only=ON");
     const result = inventoryDatabase(db);
+    if (result.schemaDigest !== manifest.referenceSchemaSha256) {
+      result.blockers.push("schema-manifest-drift");
+      result.inventoryComplete = false;
+    }
     const after = statSync(s.file);
     if (after.dev !== s.dev || after.ino !== s.ino ||
         after.nlink !== 1 || after.size !== s.bytes ||
@@ -257,7 +268,12 @@ export function inventoryCopy(file, manifestFile) {
       throw new Error("snapshot-changed");
     }
     return { ...result, copyHashMatched: true, provenance: "operator-attested" };
-  } finally { db.close(); }
+  } finally {
+    db.close();
+    if (pathExists(s.file + "-wal") || pathExists(s.file + "-shm")) {
+      throw new Error("sqlite-sidecars-refused");
+    }
+  }
 }
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   if (process.argv.length !== 6 || process.argv[2] !== "--db-copy" ||
