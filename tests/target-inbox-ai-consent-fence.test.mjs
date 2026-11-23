@@ -9,6 +9,7 @@ import {
   readInboxAIFenceGrant,revokeInboxAIConsent,inboxAIRevokeDrained,
   beginInboxAIDispatch,inboxAIDispatchStillAllowed,endInboxAIDispatch,
   verifiedInboxAIFencePath,materializeInboxAIUnderFence,
+  reconcileStoppedInboxAIOrphans,
 } from "../lib/target-inbox-ai-consent-fence.ts";
 
 const GEN="123e4567-e89b-42d3-a456-426614174000",SCOPE="c3b:v1";
@@ -205,5 +206,30 @@ test("C-3b P1: final AI preview body and remote revoke share one SQLite lineariz
     assert.equal(bodies,1);
     assert.equal(materializeInboxAIUnderFence(x.db,"owner",GEN,
       "c3b:altered",1,()=>{throw Error("must not execute");}),null);
+  }finally{x.close();}
+});
+
+test("operator-only orphan reconciliation refuses live tickets and advances revoked epoch",()=>{
+  const x=fixture();
+  try{
+    const registered=grant(x.db);
+    const ticket=beginInboxAIDispatch(x.db,"owner",GEN,SCOPE,baseTime);
+    assert.ok(ticket);
+    assert.equal(reconcileStoppedInboxAIOrphans(x.db,"owner",registered.epoch,
+      baseTime+10_000),null,"unexpired ticket must remain protected");
+    assert.equal(reconcileStoppedInboxAIOrphans(x.db,"owner",registered.epoch+1,
+      baseTime+40_000),null,"stale expected epoch may not reconcile");
+    const cleared=reconcileStoppedInboxAIOrphans(x.db2,"owner",registered.epoch,
+      baseTime+40_000);
+    assert.deepEqual(cleared,{epoch:2,cleared:1});
+    assert.deepEqual(readInboxAIFenceGrant(x.db,"owner"),{
+      actorUserId:"owner",epoch:2,active:false,
+      restoreGeneration:GEN,dataScopeVersion:SCOPE,
+    });
+    assert.equal(inboxAIDispatchStillAllowed(x.db,ticket),false);
+    assert.equal(endInboxAIDispatch(x.db,ticket),false);
+    assert.equal(inboxAIRevokeDrained(x.db,"owner",2),true);
+    assert.equal(reconcileStoppedInboxAIOrphans(x.db,"owner",2,
+      baseTime+50_000),null,"reconciliation never fabricates a ticket");
   }finally{x.close();}
 });

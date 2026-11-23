@@ -428,3 +428,35 @@ receipt count and original receipt outcomes in an isolated restored copy.
 Do not code-only rollback to a lower ceiling once new receipts exceed it;
 roll forward with compatible code. Never recycle, reset, truncate or
 re-key receipt history.
+
+
+**Nouzové vypořádání osiřelých AI požadavků (P2):** Pokud revokace po
+pádu workeru trvale čeká na starý ticket, nikdy jej automaticky nemažte při
+startu ani z webového požadavku. Nejprve bezpečně zastavte systémovou službu
+`ai-executive` a ověřte její stav `inactive` (včetně všech child workerů).
+Až po uplynutí nejméně 30 s od vzniku všech zbývajících ticketů může
+autorizovaný operátor jako uživatel `ai-executive` výslovně spustit:
+
+```sh
+sudo systemctl stop ai-executive
+sudo systemctl show -p ActiveState --value ai-executive
+sudo -u ai-executive env LUMI_INBOX_AI_RECONCILE=1 \
+  /usr/bin/node --experimental-loader \
+  /opt/ai-executive/scripts/target-staging-ts-loader.mjs \
+  /opt/ai-executive/scripts/target-inbox-ai-reconcile.mjs \
+  --reconcile-stopped \
+  --directory /var/lib/ai-executive-target/personal-v1 \
+  --owner '<ověřené OWNER_USER_ID>' \
+  --generation '<ověřené RESTORE_GENERATION UUID>' \
+  --expected-epoch '<aktuální fence epoch>'
+```
+
+Před spuštěním zvolte přesné hodnoty z ověřeného produkčního profilu a
+nezávislé fence; nikdy je neodvozujte z browseru ani z obnovené zálohy.
+Příkaz odmítá běžící/neznámý stav služby a příliš mladé požadavky,
+zvyšuje revokační epochu a přes canonical pinned journal zapisuje
+odpovídající **vypnutý** cílový souhlas. Pokud druhý zápis selže,
+služba musí zůstat zastavená pro ruční nápravu. Po úspěchu znovu ověřte
+shodu obou databází `--check`, teprve pak připravte samostatně schválený
+restart. Neobnovujte starou fence z target backupu a nikdy neprovádějte
+automatické opětovné udělení souhlasu.
