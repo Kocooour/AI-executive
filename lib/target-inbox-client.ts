@@ -169,8 +169,10 @@ export async function cancelInboxCommand(command:InboxClientCommand):Promise<Inb
 /** Receipt-only retry: a C-3b optional preview may briefly occupy the
  * staging child pool while C-3a recovers a lost Process/Undo. Never retry a
  * write, allocate a new UUID, or treat an unverified result as terminal.
- * Only transient transport/5xx/429 failures are retried; an authenticated
- * 401/403, stale 409 or feature-off 404 is returned immediately. */
+ * Only transient transport/5xx failures are retried. A rate-limited 429
+ * must honor Retry-After: do not burn the exhausted bucket with a rapid
+ * automatic retry. Keep the original UUID uncertain for later verification.
+ * Authenticated 401/403, stale 409 and feature-off 404 return immediately. */
 export async function verifyInboxCommand(
   command:InboxClientCommand,
 ):Promise<InboxClientReceipt>{
@@ -207,12 +209,14 @@ export async function verifyInboxCommand(
           }
           return {ok:true,status:x.status,next};
         }
-        if(response&&![429,500,502,503,504].includes(response.status))
+        // 429 has a Retry-After window (up to the server's 10-minute
+        // bucket), which this short deadline cannot honor. Never spin on it.
+        if(response&&!([500,502,503,504].includes(response.status)))
           return {ok:false,reason:failure(response.status)};
         if(attempt===3)return {ok:false,reason:"unavailable"};
         await new Promise<void>((resolve,reject)=>{
-          if(signal.aborted){reject(new Error("Receipt deadline"));return;}
-          const onAbort=()=>{clearTimeout(timer);reject(new Error("Receipt deadline"));};
+          if(signal.aborted){reject(new Error());return;}
+          const onAbort=()=>{clearTimeout(timer);reject(new Error());};
           const timer=setTimeout(()=>{
             signal.removeEventListener("abort",onAbort);resolve();
           },150*(attempt+1));
