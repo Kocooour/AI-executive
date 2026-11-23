@@ -40,7 +40,13 @@ export function checkFirstDeployInboxAIConsent(
     const historical=db.prepare(
       "SELECT epoch FROM inbox_ai_fence_decisions WHERE actor=? AND decision=?",
     ).get(owner,target.ownerDecision) as {epoch:number}|undefined;
-    return current?.decision===target.ownerDecision&&
+    // The fence retains its latest *grant* decision even after revocation.
+    // A failed intermediate regrant can leave an older target decision while
+    // both stores are OFF at the same later revoke epoch. Require the target
+    // decision to exist in the immutable external history, but only require
+    // exact current-decision equality while consent is ON. This is read-only:
+    // never turn an OFF state into a new grant during deploy or restore.
+    return (!target.enabled||current?.decision===target.ownerDecision)&&
       historical!==undefined&&historical.epoch<=target.epoch;
   }catch{return false;}
 }
