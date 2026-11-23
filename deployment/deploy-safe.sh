@@ -37,6 +37,8 @@ TARGET_SCHEMA_UPGRADE_ATTEMPTED=0
 # rollback to old consent-unaware code or recreation of prior grant history.
 INBOX_AI_FENCE_PROVISION_ATTEMPTED=0
 INBOX_AI_FENCE_FIRST_ROLLOUT=0
+# Explicit operator recovery of an interrupted FIRST consent, never ordinary deploy.
+FIRST_CONSENT_RECOVERY=0
 INBOX_AI_FENCE_PATH=/var/lib/ai-executive-target/inbox-ai-consent-fence.sqlite
 PROFILE_TMP=""
 PROFILE_TOOL=""
@@ -93,10 +95,14 @@ env_file_unchanged() {
 
 # Explicit opt-in after a failed first rollout has left the service stopped.
 # Never interpret a stopped service as permission to recover automatically.
-if [ "$#" -eq 2 ] && [ "$2" = "--recover-stopped" ]; then
+if [ "$#" -eq 3 ] && [ "$2" = "--recover-stopped" ] &&
+   [ "$3" = "--recover-first-consent" ]; then
+  RECOVERY_MODE=1
+  FIRST_CONSENT_RECOVERY=1
+elif [ "$#" -eq 2 ] && [ "$2" = "--recover-stopped" ]; then
   RECOVERY_MODE=1
 else
-  [ "$#" -eq 1 ] || die "pouziti: deploy-safe.sh <target-sha> [--recover-stopped]"
+  [ "$#" -eq 1 ] || die "pouziti: deploy-safe.sh <target-sha> [--recover-stopped [--recover-first-consent]]"
 fi
 
 # A root build can leave .next/BUILD_ID mode 0600. Never make the build world-writable.
@@ -524,6 +530,18 @@ if git cat-file -e "$TARGET:lib/owner-session-revocation.ts" 2>/dev/null &&
    ! git cat-file -e "$PREV:lib/owner-session-revocation.ts" 2>/dev/null; then
   OWNER_SESSION_FIRST_ROLLOUT=1
 fi
+# Consent recovery is narrower than stopped-service recovery and may only
+# touch a trusted PRE-EXISTING fence from a consent-aware checked-out release.
+if [ "$FIRST_CONSENT_RECOVERY" = 1 ]; then
+  git cat-file -e "$PREV:lib/target-inbox-ai-consent-fence.ts" 2>/dev/null ||
+    die "obnova prvniho souhlasu vyzaduje jiz nasazeny consent-aware kod"
+  git cat-file -e "$TARGET:lib/target-inbox-ai-consent-fence.ts" 2>/dev/null ||
+    die "obnova prvniho souhlasu vyzaduje consent-aware cil"
+  [ "$INBOX_AI_FENCE_FIRST_ROLLOUT" = 0 ] ||
+    die "obnova prvniho souhlasu neni nova inicializace fence"
+  test -f "$INBOX_AI_FENCE_PATH" && test ! -L "$INBOX_AI_FENCE_PATH" ||
+    die "obnova prvniho souhlasu nesmi vytvorit chybejici fence"
+fi
 git diff --quiet "$PREV" "$TARGET" -- deployment/ai-executive.service || die "systemd jednotka se zmenila"
 # Fail before stopping, even when the main env file appears to be off:
 # a second loaded file or manager-global target flag can activate it.
@@ -841,6 +859,18 @@ if [ "$TARGET_PROFILE" = personal-v1 ] &&
       --directory "$TARGET_DIRECTORY" --owner "$TARGET_OWNER" \
       --generation "$TARGET_GENERATION" ||
       die "prvni souhlas Inbox AI nebyl bezpecne zapsan do obou ulozist"
+  elif [ "$FIRST_CONSENT_RECOVERY" = 1 ]; then
+    # Explicit stopped-service owner recovery. Never create a missing fence.
+    # The privileged writer refuses any prior external decision, grant,
+    # pending ticket, or target state other than the initial epoch 1.
+    echo "=== VYSLOVNE SCHVALENA OBNOVA NEDOKONCENEHO PRVNIHO SOUHLASU ==="
+    runuser -u ai-executive -- env AI_EXECUTIVE_DATA_DIR="$DATA" \
+      LUMI_INBOX_AI_FIRST_ROLLOUT=1 /usr/bin/node \
+      --experimental-loader "$APP/scripts/target-staging-ts-loader.mjs" \
+      "$APP/scripts/target-inbox-ai-fence-provision.mjs" --first-grant \
+      --directory "$TARGET_DIRECTORY" --owner "$TARGET_OWNER" \
+      --generation "$TARGET_GENERATION" ||
+      die "obnova prvniho souhlasu odmitnuta: historie uz existuje nebo stav neni bezpecny"
   fi
   runuser -u ai-executive -- env AI_EXECUTIVE_DATA_DIR="$DATA" /usr/bin/node \
     --experimental-loader "$APP/scripts/target-staging-ts-loader.mjs" \
