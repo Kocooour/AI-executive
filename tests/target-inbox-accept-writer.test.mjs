@@ -435,3 +435,60 @@ test("C-3b P1: successful Undo wins before a racing cancellation",()=>{
     fx.token,undo,fx.sessionHash),{status:"undone",next:null});
   assert.equal(row(fx).state,"unprocessed");
 });
+
+test("C-3b P1: backwards wall clock cannot corrupt a committed Undo",()=>{
+  const fx=fixture(),cmd=prepare(fx);
+  assert.deepEqual(fx.authority.changeInboxSuggestedAction(fx.token,{
+    mode:"accept",command:cmd,key:fx.key,sessionTokenHash:fx.sessionHash,
+  }),{ok:true});
+  const accepted=fx.authority.readInboxSuggestionReceipt("alice",cmd);
+  const original=JSON.parse(fx.db.prepare(
+    "SELECT value FROM metadata WHERE key LIKE 'r3:c3b:accept:v1:%'").get().value);
+  const undo={commandId:randomUUID(),undoOfCommandId:cmd.commandId,
+    taskId:"captured",restoreGeneration:fx.stage.restoreGeneration,...accepted.next};
+  const clock=Date.now;
+  try{
+    Date.now=()=>original.committedAtMs-20;
+    assert.deepEqual(fx.authority.changeInboxSuggestedAction(fx.token,{
+      mode:"undo",command:undo,sessionTokenHash:fx.sessionHash,
+    }),{ok:true});
+  }finally{Date.now=clock;}
+  const record=JSON.parse(fx.db.prepare(
+    "SELECT value FROM metadata WHERE key LIKE 'r3:c3b:undo:v1:%'").get().value);
+  assert.ok(record.committedAtMs>=original.committedAtMs);
+  assert.deepEqual(inspectIsolatedTargetStore({...fx.store,mode:"r2-model"}),
+    {ok:true,mode:"r2-model",issues:[]});
+});
+test("C-3b P1: backwards wall clock cannot corrupt terminal Undo cancellation",()=>{
+  const fx=fixture(),cmd=prepare(fx);
+  assert.deepEqual(fx.authority.changeInboxSuggestedAction(fx.token,{
+    mode:"accept",command:cmd,key:fx.key,sessionTokenHash:fx.sessionHash,
+  }),{ok:true});
+  const accepted=fx.authority.readInboxSuggestionReceipt("alice",cmd);
+  const original=JSON.parse(fx.db.prepare(
+    "SELECT value FROM metadata WHERE key LIKE 'r3:c3b:accept:v1:%'").get().value);
+  const undo={commandId:randomUUID(),undoOfCommandId:cmd.commandId,
+    taskId:"captured",restoreGeneration:fx.stage.restoreGeneration,...accepted.next};
+  const clock=Date.now;
+  try{
+    Date.now=()=>original.committedAtMs-20;
+    assert.deepEqual(fx.authority.cancelInboxSuggestedUndo(
+      fx.token,undo,fx.sessionHash),{status:"undo_cancelled",next:null});
+  }finally{Date.now=clock;}
+  const record=JSON.parse(fx.db.prepare(
+    "SELECT value FROM metadata WHERE key LIKE 'r3:c3b:undo:v1:%'").get().value);
+  assert.ok(record.cancelledAtMs>=original.committedAtMs);
+  assert.deepEqual(inspectIsolatedTargetStore({...fx.store,mode:"r2-model"}),
+    {ok:true,mode:"r2-model",issues:[]});
+});
+test("C-3b P1: rejected task ID with trailing space never poisons metadata",()=>{
+  const fx=fixture();
+  const invalid={commandId:randomUUID(),taskId:"captured ",
+    restoreGeneration:fx.stage.restoreGeneration};
+  assert.equal(fx.authority.cancelInboxSuggestedAction(
+    fx.token,invalid,fx.sessionHash),null);
+  assert.equal(fx.db.prepare(
+    "SELECT COUNT(*) AS n FROM metadata WHERE key LIKE 'r3:c3b:%'").get().n,0);
+  assert.deepEqual(inspectIsolatedTargetStore({...fx.store,mode:"r2-model"}),
+    {ok:true,mode:"r2-model",issues:[]});
+});
