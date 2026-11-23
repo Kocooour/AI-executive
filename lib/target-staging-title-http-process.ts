@@ -11,6 +11,47 @@ const REVISION = /^[a-f0-9]{64}$/;
 const MAX_OUTPUT = 1024;
 const TIMEOUT_MS = 20_000;
 let active = 0;
+// C-3b rule previews and consent status are OPTIONAL reads, despite using
+// the shared staging *write* child runner. Without admission control, a
+// preview and its consent poll fill both slots and a C-3a Process/Undo or
+// receipt gets an immediate 503, stranding the original UUID. Reserve one
+// slot for actual commands/recovery and serve optional reads fairly.
+const OPTIONAL_C3B_WAIT_MS = 3_000;
+const MAX_OPTIONAL_C3B_WAITERS = 16;
+let optionalC3bActive = false;
+const optionalC3bWaiters:Array<()=>void>=[];
+function isOptionalC3bChild(scriptName:string,input:string):boolean{
+  if(scriptName!=="target-staging-inbox-c3b-child.mjs")return false;
+  // All callers construct this operation field server-side, before the
+  // optional task ID. Invalid/unrecognized commands are never prioritized.
+  return /^\\{"operation":"(?:preview|consent_read)"(?:,|\\})/.test(input);
+}
+async function acquireOptionalC3b():Promise<boolean>{
+  if(!optionalC3bActive&&optionalC3bWaiters.length===0){
+    optionalC3bActive=true;return true;
+  }
+  if(optionalC3bWaiters.length>=MAX_OPTIONAL_C3B_WAITERS)return false;
+  return new Promise<boolean>(resolve=>{
+    let settled=false;
+    const grant=()=>{
+      if(settled)return;
+      settled=true;clearTimeout(timer);resolve(true);
+    };
+    const timer=setTimeout(()=>{
+      if(settled)return;
+      settled=true;
+      const index=optionalC3bWaiters.indexOf(grant);
+      if(index>=0)optionalC3bWaiters.splice(index,1);
+      resolve(false);
+    },OPTIONAL_C3B_WAIT_MS);
+    optionalC3bWaiters.push(grant);
+  });
+}
+function releaseOptionalC3b():void{
+  const next=optionalC3bWaiters.shift();
+  if(next)next(); // hand off the reserved optional slot without overtaking
+  else optionalC3bActive=false;
+}
 
 type Preview = { ok: true; snapshotRevision: string } |
   { ok: false; reason: "unavailable" | "stale_revision" };
@@ -94,10 +135,14 @@ function parseStatus(value: unknown): Status | null {
 
 async function run(config: StagingPersonalReadConfig, scriptName: string,
   input: string, maxOutput = MAX_OUTPUT): Promise<unknown | null> {
-  if (active >= 2 || Buffer.byteLength(input) > 192 * 1024) return null;
-  active++;
+  if (Buffer.byteLength(input) > 192 * 1024) return null;
+  const optionalC3b=isOptionalC3bChild(scriptName,input);
+  if(optionalC3b&&!await acquireOptionalC3b())return null;
   try {
-    return await new Promise<unknown | null>(resolve => {
+    if(active>=2)return null;
+    active++;
+    try {
+      return await new Promise<unknown | null>(resolve => {
       const cwd = process.cwd();
       let child: ReturnType<typeof spawn>;
       try {
@@ -182,8 +227,9 @@ async function run(config: StagingPersonalReadConfig, scriptName: string,
       });
       child.stdin.on("error", () => { failed = true; child.kill("SIGKILL"); });
       child.stdin.end(input);
-    });
-  } finally { active--; }
+      });
+    } finally {active--;}
+  } finally {if(optionalC3b)releaseOptionalC3b();}
 }
 
 /** Shared bounded-child runner for sibling staging write commands (membership). */
