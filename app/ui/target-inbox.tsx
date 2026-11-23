@@ -20,7 +20,8 @@ import {
 } from "../../lib/target-inbox-client";
 import type {TargetInboxItem} from "../../lib/target-inbox-client-types";
 import TargetInboxC3b,{type C3bOutcome} from "./target-inbox-c3b";
-import {acceptC3b,undoC3b,receiptC3b,cancelC3b,persistC3bRecovery,readC3bRecovery,
+import {getC3bConsent,C3B_CONSENT_CHANGED,
+  acceptC3b,undoC3b,receiptC3b,cancelC3b,persistC3bRecovery,readC3bRecovery,
   type C3bUndo,type C3bReceiptQuery,type C3bAccept}
   from "../../lib/target-inbox-c3b-client";
 import "./target-inbox.css";
@@ -182,6 +183,67 @@ export default function TargetInbox({language="cs",taskDetail=false,
   const [c3bStaleNotice,setC3bStaleNotice]=useState(false);
   const [c3bUndoneNotice,setC3bUndoneNotice]=useState(false);
   const lastFocusedCommit=useRef("");
+  // One ephemeral consent read per Inbox/session refresh, not per visible row.
+  // Failure stays OFF; every optional AI click still checks the durable stores.
+  const [c3bConsentEnabled,setC3bConsentEnabled]=useState(false);
+  const [c3bConsentVersion,setC3bConsentVersion]=useState(0);
+  const consentBlur=useRef<number|null>(null);
+  const consentAllowed=Boolean(suggestionsEnabled&&page?.items.some(x=>x.canSuggest));
+  useEffect(()=>{
+    if(!suggestionsEnabled)return;
+    const changed=()=>{
+      setC3bConsentEnabled(false);
+      setC3bConsentVersion(v=>v+1);
+    };
+    const blurred=()=>{consentBlur.current=Date.now();};
+    const focused=()=>{
+      if(consentBlur.current!==null&&Date.now()-consentBlur.current>=60_000)
+        changed();
+      consentBlur.current=null;
+    };
+    window.addEventListener(C3B_CONSENT_CHANGED,changed);
+    window.addEventListener("blur",blurred);
+    window.addEventListener("focus",focused);
+    let channel:BroadcastChannel|null=null;
+    try{
+      if(typeof BroadcastChannel!=="undefined"){
+        channel=new BroadcastChannel(C3B_CONSENT_CHANGED);
+        channel.onmessage=changed;
+      }
+    }catch{}
+    return ()=>{
+      window.removeEventListener(C3B_CONSENT_CHANGED,changed);
+      window.removeEventListener("blur",blurred);
+      window.removeEventListener("focus",focused);
+      channel?.close();
+    };
+  },[suggestionsEnabled]);
+  useEffect(()=>{
+    setC3bConsentEnabled(false);
+    if(!consentAllowed||!page||!runtime?.known()||
+       runtime.generation()!==generation)return;
+    const ctrl=new AbortController();
+    void (async()=>{
+      // Read-only retries are bounded. A busy shared child does not make an
+      // otherwise consented owner permanently lose the optional button.
+      for(let attempt=0;attempt<3;attempt++){
+        const result=await getC3bConsent(ctrl.signal);
+        if(ctrl.signal.aborted||!runtime.known()||
+           runtime.generation()!==generation)return;
+        if(result.ok){
+          setC3bConsentEnabled(result.value.enabled&&!result.value.pending);
+          return;
+        }
+        if(result.reason==="signed-out"){revoke();return;}
+        if(attempt<2)await new Promise<void>(resolve=>
+          setTimeout(resolve,200*(attempt+1)));
+      }
+    })();
+    return ()=>ctrl.abort();
+    // A page refresh, consent toggle or runtime generation retires old grants.
+    // Do not tie this effect to the page object's render identity.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[consentAllowed,page?.restoreGeneration,runtime,generation,c3bConsentVersion]);
   const c3bClear=useCallback(()=>{
     persistC3bRecovery(null);
     if(!inboxDecisionSnapshot(runtime,generation))setInboxUncertain(null);
@@ -680,7 +742,8 @@ export default function TargetInbox({language="cs",taskDetail=false,
             {speak("Dokončeno, čeká na zpracování","Completed, awaiting processing")}</span>}
           {suggestionsEnabled&&item.canSuggest&&
             <TargetInboxC3b item={item} restoreGeneration={page.restoreGeneration}
-              language={language} disabled={Boolean(unresolved)||
+              language={language} aiConsentEnabled={c3bConsentEnabled}
+              disabled={Boolean(unresolved)||
                 (c3bOutcome?.status==="committed"&&
                  c3bOutcome.command.taskId===item.id)}
               onOutcome={onC3bOutcome} onStale={onC3bStale} onRevoked={revoke}/>}
