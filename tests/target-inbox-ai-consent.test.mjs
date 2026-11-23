@@ -224,6 +224,12 @@ test("C-3b partial external regrant then revoke monotonically catches up target"
   assert.equal(repaired.ok,true);
   assert.equal(repaired.record.enabled,false);
   assert.equal(repaired.record.epoch,4);
+  assert.equal(checkFirstDeployInboxAIConsent(x.authority,x.fence,"alice",
+    x.stage.restoreGeneration),true,
+    "a later deploy must accept matching OFF epochs with an older historic decision");
+  assert.equal(grantFirstDeployInboxAIConsent(x.authority,x.fence,"alice",
+    x.stage.restoreGeneration),false,
+    "a disabled recovered state never authorizes a first-rollout grant");
   assert.equal(targetInboxAIConsentMatchesFence(repaired.record,
     readInboxAIFenceGrant(x.fence,"alice"),x.stage.restoreGeneration),false,
     "the repaired state is OFF, not another implicit grant");
