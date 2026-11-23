@@ -387,9 +387,21 @@ test("C-3a: lost Process + concurrent title edit cancels old UUID and unlocks fr
       else await route.continue();
     };
     await page.route("**/api/target-staging/inbox/triage",dropFirst);
+    // A C-3b preview/consent child can briefly occupy capacity while the
+    // C-3a Process response is lost. The ORIGINAL receipt must be retried
+    // read-only; never retry Process or invent another actor-bound UUID.
+    let receiptReads=0;
+    const transientReceipt=async(route:Route)=>{
+      receiptReads++;
+      if(receiptReads===1)await route.fulfill({status:503,contentType:"application/json",
+        body:'{"error":"Staging unavailable"}'});
+      else await route.continue();
+    };
+    await page.route("**/api/target-staging/inbox/receipt",transientReceipt);
     await processAction(page,seeded.taskTitle).click();
     await expect(page.getByRole("button",{name:"Opakovat původní příkaz"}))
       .toBeVisible({timeout:15000});
+    expect(receiptReads).toBeGreaterThanOrEqual(2);
     const witness=(await page.evaluate(()=>
       sessionStorage.getItem("lumi:target-inbox-command:v1")))!;
     const original=JSON.parse(witness) as {command:{commandId:string;taskId:string}};
@@ -435,6 +447,7 @@ test("C-3a: lost Process + concurrent title edit cancels old UUID and unlocks fr
     await page.getByRole("button",{name:"Vrátit do Inboxu (Undo)"}).click();
     await findInboxRow(page,seeded.taskId);
   }finally{
+    await page.unroute("**/api/target-staging/inbox/receipt");
     if(changed)db.prepare("UPDATE tasks SET title=? WHERE id=?")
       .run(originalTitle,seeded.taskId);
     db.close();
