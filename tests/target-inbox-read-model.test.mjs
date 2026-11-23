@@ -134,3 +134,22 @@ test("triage trigger prevents bypassing independent state and revision",()=>{
   db.prepare("UPDATE tasks SET triage_state='unprocessed',triage_revision=triage_revision+1,triaged_at=NULL WHERE id='a-private'").run();
   assert.equal(page("alice").count,3);
 });
+
+
+test("C-3b P2: only editable open PRIVATE Inbox rows can load suggestions",()=>{
+  const alice=page("alice");
+  const bob=page("bob");
+  assert.equal(alice.items.find(r=>r.id==="a-private").canSuggest,false,
+    "completed private task must not invoke C-3b");
+  assert.equal(bob.items.find(r=>r.id==="b-private").canSuggest,true);
+  for(const actor of ["alice","bob","cara"]){
+    const result=page(actor);
+    for(const row of result.items.filter(r=>r.effectiveAreaId==="team-area")){
+      assert.equal(row.canSuggest,false,
+        "shared editor/viewer must never cause a private-only AI preview");
+    }
+  }
+  db.prepare("UPDATE tasks SET status='open',completed_at_ms=NULL WHERE id='a-private'").run();
+  assert.equal(page("alice").items.find(r=>r.id==="a-private").canSuggest,true);
+  db.prepare("UPDATE tasks SET status='completed',completed_at_ms=200 WHERE id='a-private'").run();
+});

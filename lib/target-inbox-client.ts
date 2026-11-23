@@ -60,12 +60,13 @@ export function parseInboxClientPage(raw:unknown,limit:number):InboxClientPage|n
   for(const x of v.items){
     if(!x||typeof x!=="object"||Array.isArray(x))return null;
     const t=x as Record<string,unknown>;
-    if(Object.keys(t).sort().join(",")!=="canProcess,effectiveAreaId,expectedRevision,id,status,taskRevision,title,triageRevision"||
+    if(Object.keys(t).sort().join(",")!=="canProcess,canSuggest,effectiveAreaId,expectedRevision,id,status,taskRevision,title,triageRevision"||
         !id(t.id)||!id(t.effectiveAreaId)||typeof t.title!=="string"||
         !t.title.trim()||new TextEncoder().encode(t.title).length>4096||
         !safe(t.taskRevision)||!safe(t.triageRevision)||
         (t.status!=="open"&&t.status!=="completed")||
-        typeof t.canProcess!=="boolean"||
+        typeof t.canProcess!=="boolean"||typeof t.canSuggest!=="boolean"||
+        (t.canSuggest&&(!t.canProcess||t.status!=="open"))||
         (t.canProcess?typeof t.expectedRevision!=="string"||!cas.test(t.expectedRevision):
           t.expectedRevision!==null))return null;
     items.push(t as unknown as TargetInboxItem);
@@ -165,33 +166,65 @@ export async function cancelInboxCommand(command:InboxClientCommand):Promise<Inb
     });
   }catch{return {ok:false,reason:"unavailable"};}
 }
+/** Receipt-only retry: a C-3b optional preview may briefly occupy the
+ * staging child pool while C-3a recovers a lost Process/Undo. Never retry a
+ * write, allocate a new UUID, or treat an unverified result as terminal.
+ * Only transient transport/5xx failures are retried. A rate-limited 429
+ * must honor Retry-After: do not burn the exhausted bucket with a rapid
+ * automatic retry. Keep the original UUID uncertain for later verification.
+ * Authenticated 401/403, stale 409 and feature-off 404 return immediately. */
 export async function verifyInboxCommand(
   command:InboxClientCommand,
 ):Promise<InboxClientReceipt>{
   if(!validCommand(command))return {ok:false,reason:"unavailable"};
   try{
     return await commandDeadline<InboxClientReceipt>(async signal=>{
-    const response=await postCommand("/api/target-staging/inbox/receipt",command,signal,true);
-    if(!response.ok)return {ok:false,reason:failure(response.status)};
-    const body:unknown=await response.json();
-    if(!body||typeof body!=="object"||Array.isArray(body))return {ok:false,reason:"unavailable"};
-    const x=body as Record<string,unknown>;
-    if(Object.keys(x).sort().join(",")!=="next,ok,status"||x.ok!==true||
-        (x.status!=="committed"&&x.status!=="not_recorded"&&x.status!=="cancelled"))
+      for(let attempt=0;attempt<4;attempt++){
+        let response:Response|null=null;
+        try{
+          response=await postCommand("/api/target-staging/inbox/receipt",
+            command,signal,true);
+        }catch{/* read-only transport failure, not evidence of missing write */}
+        if(response?.ok){
+          const body:unknown=await response.json();
+          if(!body||typeof body!=="object"||Array.isArray(body))
+            return {ok:false,reason:"unavailable"};
+          const x=body as Record<string,unknown>;
+          if(Object.keys(x).sort().join(",")!=="next,ok,status"||x.ok!==true||
+              (x.status!=="committed"&&x.status!=="not_recorded"&&x.status!=="cancelled"))
+            return {ok:false,reason:"unavailable"};
+          let next:Extract<InboxClientReceipt,{ok:true}>["next"]=null;
+          if(x.next!==null){
+            if((x.status!=="committed"&&
+                  !(x.status==="cancelled"&&command.mode==="undo"))||
+                !x.next||typeof x.next!=="object"||Array.isArray(x.next))
+              return {ok:false,reason:"unavailable"};
+            const n=x.next as Record<string,unknown>;
+            if(Object.keys(n).sort().join(",")!=="expectedRevision,triageRevision,writeAreaId"||
+                typeof n.expectedRevision!=="string"||!cas.test(n.expectedRevision)||
+                !safe(n.triageRevision)||!id(n.writeAreaId))
+              return {ok:false,reason:"unavailable"};
+            next={expectedRevision:n.expectedRevision,
+              triageRevision:n.triageRevision as number,writeAreaId:n.writeAreaId as string};
+          }
+          return {ok:true,status:x.status,next};
+        }
+        // 429 has a Retry-After window (up to the server's 10-minute
+        // bucket), which this short deadline cannot honor. Never spin on it.
+        if(response&&!([500,502,503,504].includes(response.status)))
+          return {ok:false,reason:failure(response.status)};
+        if(attempt===3)return {ok:false,reason:"unavailable"};
+        await new Promise<void>((resolve,reject)=>{
+          if(signal.aborted){reject(new Error());return;}
+          const onAbort=()=>{clearTimeout(timer);reject(new Error());};
+          const timer=setTimeout(()=>{
+            signal.removeEventListener("abort",onAbort);resolve();
+          },150*(attempt+1));
+          signal.addEventListener("abort",onAbort,{once:true});
+          if(signal.aborted)onAbort();
+        });
+      }
       return {ok:false,reason:"unavailable"};
-    let next:Extract<InboxClientReceipt,{ok:true}>["next"]=null;
-    if(x.next!==null){
-      if((x.status!=="committed"&&!(x.status==="cancelled"&&command.mode==="undo"))||
-          !x.next||typeof x.next!=="object"||Array.isArray(x.next))
-        return {ok:false,reason:"unavailable"};
-      const n=x.next as Record<string,unknown>;
-      if(Object.keys(n).sort().join(",")!=="expectedRevision,triageRevision,writeAreaId"||
-          typeof n.expectedRevision!=="string"||!cas.test(n.expectedRevision)||
-          !safe(n.triageRevision)||!id(n.writeAreaId))return {ok:false,reason:"unavailable"};
-      next={expectedRevision:n.expectedRevision,triageRevision:n.triageRevision as number,
-        writeAreaId:n.writeAreaId as string};
-    }
-    return {ok:true,status:x.status,next};
     });
   }catch{return {ok:false,reason:"unavailable"};}
 }

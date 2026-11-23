@@ -176,6 +176,14 @@ Akceptace: český online dotaz s odlišnou formulací lze ověřit otevřením 
 **UX akceptace:** z opakovaného importu vznikne jediný viditelný návrh s původními speaker roles a více korektně označenými zdroji; hypotéza napsaná AI se nesmí objevit jako potvrzené osobní tvrzení; samostatné review/freshness/conflict štítky neztrácejí kombinace; protichůdný termín se neupraví bez potvrzení; člověk může opravit fakt na stránce a novou odpověď Lumi lze dohledat ke stejné revizi; změna Vše/Osobní/Sdílené nebo identity nepropustí text, počty ani odkazy cizí Oblasti; chybějící export či odpojený Gmail je pravdivě označen a nevyvolá falešný pocit úplné znalosti.
 
 
+### C-3b — návrhy Lumi v cílovém Inboxu (schválené chování, vývoj)
+
+Řádek **Inboxu** zůstává přístupný na mobilu i desktopu: název, bezpečný návrh, jednoduché `Proč?`, tlačítka **Přijmout** a **Zpracovat**. `Přijmout` musí potvrdit **přesně zobrazenou** akci, nikoli další či přepočtené doporučení. Výsledkem je zpracovaný úkol, který zmizí z Inboxu a objeví se ve správném cílovém pohledu; dostupné Undo atomicky vrací původní When/projekt/Oblast a triage, pokud nedošlo k mezilehlé změně. Stav nejasného výsledku ověřuje původní receipt. Chyby session/ACL/restore skrývají návrh, název i count; neukazovat starý cache obsah. Žádné přeskupení čtyř spodních mobilních záložek.
+
+V **Nastavení** je přepínač `AI návrhy pro Inbox` s jasným rozlišením lokálních pravidel a soukromého volání OpenAI. První souhlas je podle rozhodnutí vlastníka 2026-11-23 aktivní již od prvního ověřeného C-3b nasazení, zaznamenaný ve dvou oddělených úložištích; další deploy/restart/restore jej nikdy znovu neudělí. Revokace ihned znemožní nové žádosti, rozběhnuté požadavky přeruší, kde to jde, a zneplatní staré návrhy/tokeny; opětovný souhlas je nový explicitní akt. AI `reason` se nikdy nezobrazuje přímo jako `Proč?`. Testy musí pokrýt 390/1280 px, klávesnici, live-region a reload/logout.
+
+**Stav:** [draft #492](https://github.com/Kocooour/AI-executive/pull/492) již zahrnuje responzivní Inbox návrh s přesným „Proč?“/Přijmout/Undo, live-region a skryté staré řádky při nejistém výsledku, včetně pouze originálního UUID po reloadu. V Nastavení je explicitní přepínač souhlasu s OpenAI, jeho pending revokace a srozumitelné rozlišení místních pravidel. Uživatel nesmí vidět interní tokeny, jména jiného aktéra ani staré count; spodní menu má původní čtyři položky. **C-3b je nyní součástí profilu `personal-v1`; přesné nové SHA musí před release projít 390/1280 px browser a bezpečnostní QA. PR zůstává draft do konečného review.**
+
 ### C-3a — Inbox vs. archivní LegacyInbox (#483)
 
 - Po výslovném zapnutí kompletního osobního v1 profilu je primární položkou **Inbox** nad cílovými úkoly, s oprávněným počtem nezpracovaných. **Archiv → Inbox** vede samostatnou adresou `?view=LegacyInbox` na stará read-only data; běžná navigace mimo v1 profil zůstává nezměněna.

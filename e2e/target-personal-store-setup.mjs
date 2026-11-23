@@ -27,12 +27,31 @@ if (!path.basename(run).startsWith("lumi-e2e-")) fail("the run dir must be a lum
 const { bootstrapIsolatedTargetStore } = await import("../lib/target-store-bootstrap.ts");
 const stage = bootstrapIsolatedTargetStore({ stagingDirectory: path.join(runDir, "target-store"), ownerUserId: owner });
 
+// Only the explicitly opted-in C-3b real-store browser suite gets a separate
+// independent, disposable consent fence. Never use or alter the fixed
+// /var/lib/ai-executive-target production fence. Initial consent is OFF.
+if(process.env.LUMI_TARGET_INBOX_C3B_E2E==="true"){
+  const {provisionInboxAIFenceSchema,verifiedInboxAIFencePath}
+    =await import("../lib/target-inbox-ai-consent-fence.ts");
+  const fencePath=path.join(runDir,"inbox-ai-consent-fence.sqlite");
+  const previous=process.umask(0o077);
+  let fence;
+  try{fence=new DatabaseSync(fencePath);}
+  finally{process.umask(previous);}
+  try{
+    if(!provisionInboxAIFenceSchema(fence)||
+       verifiedInboxAIFencePath(fencePath,stage.directory)!==fencePath)
+      fail("C-3b external test consent fence invalid");
+  }finally{fence.close();}
+}
+
+
 // Distinct project/task fixtures per viewport AND per spec: each real-store
 // acceptance mutates titles, so parallel or sequential specs must not collide.
 const seed = { areaId: "area:e2e:rodina", areaTitle: "Rodina",
   createAreaId: "area:e2e:create:private", createAreaTitle: "Tvoření",
   createLargeProjectId: "project:e2e:create:paginated",
-  projects: {}, searchProjects: {}, revokeProjects: {} };
+  projects: {}, searchProjects: {}, revokeProjects: {}, c3bProjects:{} };
 for (const width of ["390", "1280"]) {
   seed.projects[width] = {
     projectId: `project:e2e:${width}`, projectTitle: `Seed Projekt ${width}`,
@@ -42,6 +61,13 @@ for (const width of ["390", "1280"]) {
     projectId: `project:e2e:search:${width}`, projectTitle: `Seed Projekt Search ${width}`,
     taskId: `task:e2e:search:${width}`, taskTitle: `Seed úkol Search ${width}`,
   };
+  if(process.env.LUMI_TARGET_INBOX_C3B_E2E==="true")
+    seed.c3bProjects[width]={
+      projectId:seed.projects[width].projectId,
+      projectTitle:seed.projects[width].projectTitle,
+      taskId:"0-c3b:"+width,
+      taskTitle:"Dnes připravit "+seed.projects[width].projectTitle,
+    };
   seed.revokeProjects[width] = {
     adminId: `owner:e2e:revoke:${width}`,
     workspaceId: `workspace:e2e:revoke:${width}`,
@@ -63,6 +89,11 @@ try {
   // A newly-created UUID must still be openable without fetching all pages.
   db.prepare("INSERT INTO projects(id,area_id,title) VALUES (?,?,?)")
     .run(seed.createLargeProjectId,seed.createAreaId,"A/3 paginated project");
+  if(process.env.LUMI_TARGET_INBOX_C3B_E2E==="true"){
+    const create=db.prepare("INSERT INTO tasks(id,area_id,title) VALUES (?,?,?)");
+    for(const entry of Object.values(seed.c3bProjects))
+      create.run(entry.taskId,seed.createAreaId,entry.taskTitle);
+  }
   const insertExistingTask=db.prepare("INSERT INTO tasks(id,project_id,title) VALUES (?,?,?)");
   for(let i=0;i<35;i++)
     insertExistingTask.run("0-create:"+String(i).padStart(3,"0"),

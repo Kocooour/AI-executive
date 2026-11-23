@@ -10,7 +10,8 @@ import {emitTargetChange,subscribeTargetChange,subscribeInboxDecision,inboxDecis
   inboxSecurityVersion,type InboxDecision} from "../../lib/target-data-invalidation";
 import {detailIdOk} from "../../lib/target-detail-route";
 import {detailRowKey,openTargetDetail} from "./target-detail-state";
-import {inboxUncertainSnapshot,subscribeInboxUncertain} from "../../lib/target-data-invalidation";
+import {inboxUncertainSnapshot,subscribeInboxUncertain,setInboxUncertain}
+  from "../../lib/target-data-invalidation";
 import {refusalBudgetFor} from "../../lib/target-refusal-budget";
 import {
   fetchTargetInbox,sendInboxCommand,verifyInboxCommand,cancelInboxCommand,
@@ -18,6 +19,11 @@ import {
   type InboxClientCommand,type InboxClientPage,type InboxClientFailure,
 } from "../../lib/target-inbox-client";
 import type {TargetInboxItem} from "../../lib/target-inbox-client-types";
+import TargetInboxC3b,{type C3bOutcome} from "./target-inbox-c3b";
+import {getC3bConsent,C3B_CONSENT_CHANGED,
+  acceptC3b,undoC3b,receiptC3b,cancelC3b,persistC3bRecovery,readC3bRecovery,
+  type C3bUndo,type C3bReceiptQuery,type C3bAccept}
+  from "../../lib/target-inbox-c3b-client";
 import "./target-inbox.css";
 
 type Language="cs"|"en";
@@ -159,13 +165,153 @@ function useInbox(limit:number){
   },[page,key,limit,revoke,runtime,generation,markHidden]);
   return {page,loading,signedOut,gate:gate.kind,reload,loadMore,revoke,retry};
 }
-export default function TargetInbox({language="cs",taskDetail=false}:{language?:Language;taskDetail?:boolean}){
+export default function TargetInbox({language="cs",taskDetail=false,
+  suggestionsEnabled=false}:{language?:Language;taskDetail?:boolean;
+  suggestionsEnabled?:boolean}){
   const {page,loading,signedOut,gate,reload,loadMore,revoke,retry}=useInbox(50);
   const runtime=useTargetRuntime(),generation=useTargetGeneration();
   const [recoveredGeneration,setRecoveredGeneration]=useState("");
   const [recoveryFailed,setRecoveryFailed]=useState(false);
+  type C3bLocalOutcome={
+    command:C3bAccept|C3bReceiptQuery;status:"sending"|"committed"|"uncertain";
+    next:C3bOutcome["next"];undoCommand?:C3bUndo;title?:string;
+  };
+  const [c3bOutcome,setC3bOutcome]=useState<C3bLocalOutcome|null>(null);
+  const c3bOutcomeRef=useRef<C3bLocalOutcome|null>(null);
+  const [c3bCommittedHistory,setC3bCommittedHistory]=useState<C3bLocalOutcome[]>([]);
+  const [c3bUndoNotice,setC3bUndoNotice]=useState(false);
+  const [c3bStaleNotice,setC3bStaleNotice]=useState(false);
+  const [c3bUndoneNotice,setC3bUndoneNotice]=useState(false);
+  const lastFocusedCommit=useRef("");
+  // One ephemeral consent read per Inbox/session refresh, not per visible row.
+  // Failure stays OFF; every optional AI click still checks the durable stores.
+  const [c3bConsentEnabled,setC3bConsentEnabled]=useState(false);
+  const [c3bConsentVersion,setC3bConsentVersion]=useState(0);
+  const consentBlur=useRef<number|null>(null);
+  const consentAllowed=Boolean(suggestionsEnabled&&page?.items.some(x=>x.canSuggest));
+  useEffect(()=>{
+    if(!suggestionsEnabled)return;
+    const changed=()=>{
+      setC3bConsentEnabled(false);
+      setC3bConsentVersion(v=>v+1);
+    };
+    const blurred=()=>{consentBlur.current=Date.now();};
+    const focused=()=>{
+      if(consentBlur.current!==null&&Date.now()-consentBlur.current>=60_000)
+        changed();
+      consentBlur.current=null;
+    };
+    window.addEventListener(C3B_CONSENT_CHANGED,changed);
+    window.addEventListener("blur",blurred);
+    window.addEventListener("focus",focused);
+    let channel:BroadcastChannel|null=null;
+    try{
+      if(typeof BroadcastChannel!=="undefined"){
+        channel=new BroadcastChannel(C3B_CONSENT_CHANGED);
+        channel.onmessage=changed;
+      }
+    }catch{}
+    return ()=>{
+      window.removeEventListener(C3B_CONSENT_CHANGED,changed);
+      window.removeEventListener("blur",blurred);
+      window.removeEventListener("focus",focused);
+      channel?.close();
+    };
+  },[suggestionsEnabled]);
+  useEffect(()=>{
+    setC3bConsentEnabled(false);
+    if(!consentAllowed||!page||!runtime?.known()||
+       runtime.generation()!==generation)return;
+    const ctrl=new AbortController();
+    void (async()=>{
+      // Read-only retries are bounded. A busy shared child does not make an
+      // otherwise consented owner permanently lose the optional button.
+      for(let attempt=0;attempt<3;attempt++){
+        const result=await getC3bConsent(ctrl.signal);
+        if(ctrl.signal.aborted||!runtime.known()||
+           runtime.generation()!==generation)return;
+        if(result.ok===true){
+          setC3bConsentEnabled(result.value.enabled&&!result.value.pending);
+          return;
+        }
+        if(result.ok===false&&result.reason==="signed-out"){
+          // Owner-only consent returns 403 to a valid non-owner; this must
+          // hide the AI control, not revoke their authorized private Inbox.
+          // A genuinely expired session is confirmed by the runtime itself.
+          const fresh=await runtime.refresh();
+          if(ctrl.signal.aborted)return;
+          if(fresh!=="ok"||!runtime.known()||
+             runtime.generation()!==generation)revoke();
+          return;
+        }
+        if(attempt<2)await new Promise<void>(resolve=>
+          setTimeout(resolve,200*(attempt+1)));
+      }
+    })();
+    return ()=>ctrl.abort();
+    // A page refresh, consent toggle or runtime generation retires old grants.
+    // Do not tie this effect to the page object's render identity.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[consentAllowed,page?.restoreGeneration,runtime,generation,c3bConsentVersion]);
+  const c3bClear=useCallback(()=>{
+    persistC3bRecovery(null);
+    if(!inboxDecisionSnapshot(runtime,generation))setInboxUncertain(null);
+  },[runtime,generation]);
+  const c3bPending=useCallback((next:C3bLocalOutcome):boolean=>{
+    if(!runtime?.known()||runtime.generation()!==generation)return false;
+    const command=next.command;
+    const saved=persistC3bRecovery({version:1,generation,
+      command:{commandId:command.commandId,taskId:command.taskId,
+        restoreGeneration:command.restoreGeneration},
+      undo:next.undoCommand??null,
+    });
+    if(!saved){setRecoveryFailed(true);return false;}
+    // A second task's Accept must not discard the first task's Undo.
+    const prior=c3bOutcomeRef.current;
+    if(prior?.status==="committed"&&prior.next&&
+       prior.command.commandId!==next.command.commandId)
+      setC3bCommittedHistory(items=>items.some(x=>
+        x.command.commandId===prior.command.commandId)?items:[...items,prior]);
+    c3bOutcomeRef.current=next;
+    setInboxUncertain(generation);
+    setC3bOutcome(next);
+    return true;
+  },[runtime,generation]);
+  const onC3bOutcome=useCallback((outcome:C3bOutcome):boolean=>{
+    if(!runtime?.known()||runtime.generation()!==generation)return false;
+    setC3bUndoNotice(false);setC3bStaleNotice(false);
+    setC3bUndoneNotice(false);
+    if(outcome.status==="sending"||outcome.status==="uncertain")
+      return c3bPending(outcome);
+    c3bClear();
+    c3bOutcomeRef.current=outcome;
+    setC3bOutcome(outcome);
+    emitTargetChange({kind:"task",id:outcome.command.taskId,change:"updated"});
+    reload();
+    return true;
+  },[runtime,generation,c3bPending,c3bClear,reload]);
+  const onC3bStale=useCallback(()=>{
+    c3bClear();c3bOutcomeRef.current=null;
+    setC3bOutcome(null);setC3bStaleNotice(true);reload();
+  },[c3bClear,reload]);
+  // The accepted row unmounts; focus the remaining Undo action once visible.
+  useEffect(()=>{
+    if(c3bOutcome?.status!=="committed"||!page||
+       lastFocusedCommit.current===c3bOutcome.command.commandId)return;
+    const button=document.querySelector<HTMLElement>(
+      '[data-testid="target-c3b-committed"] button');
+    if(button){
+      button.focus();lastFocusedCommit.current=c3bOutcome.command.commandId;
+    }
+  },[c3bOutcome,page]);
   useEffect(()=>{
     if(!runtime?.known()||runtime.generation()!==generation)return;
+    const recovered=readC3bRecovery(generation);
+    if(recovered){
+      setInboxUncertain(generation);
+      setC3bOutcome({command:recovered.command,status:"uncertain",next:null,
+        ...(recovered.undo?{undoCommand:recovered.undo}:{})});
+    }
     const ok=restoreInboxDecision(runtime,generation);
     setRecoveryFailed(!ok);
     if(ok)setRecoveredGeneration(generation);
@@ -183,12 +329,128 @@ export default function TargetInbox({language="cs",taskDetail=false}:{language?:
       inboxDecisionSnapshot(runtime,generation)?.command.commandId===command.commandId),
     [runtime,generation]);
   const speak=(cs:string,en:string)=>language==="cs"?cs:en;
+  const c3bVerify=useCallback(async()=>{
+    const current=c3bOutcome;
+    if(!current||!runtime?.known()||runtime.generation()!==generation)return;
+    const result=await receiptC3b(current.command);
+    if(result.ok===true&&(result.value.status==="undone"||
+        result.value.status==="cancelled"||
+        result.value.status==="undo_cancelled")){
+      setC3bUndoNotice(result.value.status==="undo_cancelled");
+      setC3bUndoneNotice(result.value.status==="undone");
+      c3bClear();c3bOutcomeRef.current=null;setC3bOutcome(null);
+      emitTargetChange({kind:"task",id:current.command.taskId,change:"updated"});
+      reload();
+    }else if(result.ok===true&&result.value.status==="committed"&&
+      !current.undoCommand){
+      onC3bOutcome({command:current.command as C3bAccept,
+        status:"committed",next:result.value.next,title:current.title});
+    }else if(result.ok===false&&result.reason==="signed-out"){
+      c3bClear();setC3bOutcome(null);revoke();
+    }
+    // If an Undo may be in flight, a still-committed Accept is NOT terminal
+    // evidence that Undo cannot commit later; retain the exact UUID.
+  },[c3bOutcome,runtime,generation,onC3bOutcome,c3bClear,reload,revoke]);
+  const c3bCancel=useCallback(async()=>{
+    const original=c3bOutcome;
+    if(!original||original.status!=="uncertain"||
+       original.undoCommand||!runtime?.known()||
+       runtime.generation()!==generation)return;
+    // Same pinned target write lock as Accept: whichever commits first wins.
+    const cancelled=await cancelC3b({
+      commandId:original.command.commandId,
+      taskId:original.command.taskId,
+      restoreGeneration:original.command.restoreGeneration,
+    });
+    if(!runtime.known()||runtime.generation()!==generation)return;
+    if(cancelled.ok&&cancelled.value.status==="cancelled"){
+      c3bClear();setC3bOutcome(null);
+      emitTargetChange({kind:"task",id:original.command.taskId,
+        change:"updated"});
+      reload();
+    }else if(cancelled.ok&&cancelled.value.status==="committed"){
+      onC3bOutcome({command:original.command as C3bAccept,
+        status:"committed",next:cancelled.value.next});
+    }else if(cancelled.ok&&cancelled.value.status==="undone"){
+      c3bClear();c3bOutcomeRef.current=null;setC3bOutcome(null);
+      setC3bUndoneNotice(true);reload();
+    }else if(cancelled.ok===false&&cancelled.reason==="signed-out"){
+      c3bClear();setC3bOutcome(null);revoke();
+    }
+    // Any failed/unknown cancellation retains the same UUID and lockout.
+  },[c3bOutcome,runtime,generation,c3bClear,reload,onC3bOutcome,revoke]);
+  const c3bCancelUndo=useCallback(async(undoCommand?:C3bUndo)=>{
+    const current=c3bOutcome;
+    const command=undoCommand??current?.undoCommand;
+    if(!command||!runtime?.known()||runtime.generation()!==generation)return;
+    // A 409 is not definitive: the old Undo could still be in flight.
+    // Only this pinned SQLite tombstone can prove that no late Undo can
+    // subsequently change a newer task. It shares the original Undo slot.
+    const result=await cancelC3b(command);
+    if(!runtime.known()||runtime.generation()!==generation)return;
+    if(result.ok&&["undone","undo_cancelled"].includes(result.value.status)){
+      c3bClear();c3bOutcomeRef.current=null;setC3bOutcome(null);
+      setC3bUndoNotice(result.value.status==="undo_cancelled");
+      setC3bUndoneNotice(result.value.status==="undone");
+      emitTargetChange({kind:"task",id:command.taskId,change:"updated"});
+      reload();
+    }else if(result.ok===false&&result.reason==="signed-out"){
+      c3bClear();setC3bOutcome(null);revoke();
+    }
+    // A transient 503/429 or unknown result is never proof of cancellation.
+    // Preserve original UUID and block new writes until the terminal receipt.
+  },[c3bOutcome,runtime,generation,c3bClear,reload,revoke]);
+  const c3bRetry=useCallback(async()=>{
+    const current=c3bOutcome;
+    if(!current||current.status!=="uncertain"||
+       !("token" in current.command))return;
+    await acceptC3b(current.command);
+    await c3bVerify();
+  },[c3bOutcome,c3bVerify]);
+  const c3bRetryUndo=useCallback(async()=>{
+    const current=c3bOutcome;
+    if(!current||current.status!=="uncertain"||!current.undoCommand)return;
+    const attempt=await undoC3b(current.undoCommand);
+    if(attempt.ok===false&&attempt.reason==="stale"){
+      await c3bCancelUndo(current.undoCommand);
+    }else{
+      await c3bVerify();
+    }
+  },[c3bOutcome,c3bVerify,c3bCancelUndo]);
+  const c3bUndo=useCallback(async(selected?:C3bLocalOutcome)=>{
+    const current=selected??c3bOutcome;
+    if(!current||current.status!=="committed"||!current.next)return;
+    const original=current.command;
+    const command:C3bUndo={commandId:crypto.randomUUID(),
+      undoOfCommandId:original.commandId,taskId:original.taskId,
+      restoreGeneration:original.restoreGeneration,...current.next};
+    if(!c3bPending({...current,undoCommand:command,status:"uncertain"}))return;
+    if(selected)setC3bCommittedHistory(h=>h.filter(x=>
+      x.command.commandId!==selected.command.commandId));
+    const attempt=await undoC3b(command);
+    // A definite 409/CAS refusal is not enough to retire an uncertain UUID:
+    // serialize a server-side terminal Undo cancellation against late writes.
+    if(attempt.ok===false&&attempt.reason==="stale"){
+      await c3bCancelUndo(command);return;
+    }
+    const checked=await receiptC3b(original);
+    if(checked.ok===true&&checked.value.status==="undone"){
+      c3bClear();c3bOutcomeRef.current=null;setC3bOutcome(null);
+      setC3bUndoneNotice(true);setC3bUndoNotice(false);
+      emitTargetChange({kind:"task",id:original.taskId,change:"updated"});
+      reload();
+    }
+  },[c3bOutcome,c3bPending,c3bClear,reload,c3bCancelUndo]);
   // Runtime generation rotation and explicit security clear retire the
   // tab-scoped command even while this view is unmounted.
   useEffect(()=>{
-    if(runtime&&(gate==="signed_out"||gate==="refused"))
+    if(runtime&&(gate==="signed_out"||gate==="refused")){
       clearInboxDecision(runtime,generation);
-  },[runtime,generation,gate]);
+      c3bClear();
+      c3bOutcomeRef.current=null;
+      setC3bOutcome(null);setC3bCommittedHistory([]);
+    }
+  },[runtime,generation,gate,c3bClear]);
   const confirm=useCallback(async(
     command:InboxClientCommand,title:string,processId:string,
   )=>{
@@ -337,6 +599,31 @@ export default function TargetInbox({language="cs",taskDetail=false}:{language?:
   // An unresolved command survives navigating away and back. In every phase,
   // hide rows/count and block fresh UUIDs until the original receipt is settled.
   const unresolved=decision&&["sending","verifying","uncertain","not-recorded"].includes(decision.stage);
+  if(c3bOutcome?.status==="sending")return <section className="targetInbox"
+    data-testid="target-c3b-sending">
+    <p role="status">{speak("Odesílám návrh a ověřuji potvrzení…",
+      "Sending suggestion and checking the receipt…")}</p>
+  </section>;
+  if(c3bOutcome?.status==="uncertain")return <section className="targetInbox"
+    data-testid="target-c3b-uncertain" aria-live="polite">
+    <p role="alert">{speak("Ověřuji původní příkaz. Úkoly zůstávají skryté do potvrzení výsledku.",
+      "Checking the original command. Rows remain hidden until its receipt is confirmed.")}</p>
+    <button type="button" onClick={()=>void c3bVerify()}>
+      {speak("Ověřit původní příkaz","Verify original receipt")}</button>
+    {!c3bOutcome.undoCommand&&<button type="button"
+      onClick={()=>void c3bCancel()}>
+      {speak("Bezpečně ukončit původní Přijmout",
+        "Safely cancel original Accept")}</button>}
+    {c3bOutcome.undoCommand?<div className="targetInboxDecision">
+      <button type="button" onClick={()=>void c3bRetryUndo()}>
+        {speak("Opakovat původní Undo","Retry original Undo")}</button>
+      <button type="button" onClick={()=>void c3bCancelUndo()}>
+        {speak("Bezpečně ukončit původní Undo","Safely cancel original Undo")}</button>
+    </div>:
+      ("token" in c3bOutcome.command)&&<button type="button"
+        onClick={()=>void c3bRetry()}>
+        {speak("Opakovat pouze původní příkaz","Retry only the original command")}</button>}
+  </section>;
   if(recoveryFailed)return <section className="targetInbox" data-testid="target-inbox-recovery-error">
     <p role="alert">{speak(
       "Nelze bezpečně obnovit původní příkaz. Zápisy jsou zablokované, aby nedošlo k duplicitě.",
@@ -409,6 +696,47 @@ export default function TargetInbox({language="cs",taskDetail=false}:{language?:
         <button type="button" onClick={()=>{setDecision(null);reload();}}>
           {speak("Zavřít a obnovit","Close and refresh")}</button>}
     </div>}
+    {c3bCommittedHistory.map(previous=><div
+      key={previous.command.commandId}
+      className="targetInboxDecision" role="status"
+      data-testid={"target-c3b-committed-"+previous.command.taskId}>
+      <span>{speak("Přijatý návrh: ","Accepted suggestion: ")}
+        {previous.title??previous.command.taskId}</span>
+      {previous.next&&<button type="button" onClick={()=>void c3bUndo(previous)}>
+        {speak("Vrátit změny (Undo)","Undo changes")}</button>}
+      <button type="button" onClick={()=>setC3bCommittedHistory(h=>
+        h.filter(x=>x.command.commandId!==previous.command.commandId))}>
+        {speak("Zavřít","Close")}</button>
+    </div>)}
+    {c3bOutcome?.status==="committed"&&<div
+      className="targetInboxDecision" data-testid="target-c3b-committed" role="status">
+      <span>{speak("Návrh byl přijat a úkol zpracován.",
+        "Suggestion accepted and task processed.")}</span>
+      {c3bOutcome.next&&<button type="button" onClick={()=>void c3bUndo()}>
+        {speak("Vrátit změny (Undo)","Undo changes")}</button>}
+      <button type="button" onClick={()=>{
+        c3bOutcomeRef.current=null;setC3bOutcome(null);
+      }}>
+        {speak("Zavřít","Close")}</button>
+    </div>}
+    {c3bUndoNotice&&<div role="status" data-testid="target-c3b-undo-cancelled">
+      {speak("Undo bylo bezpečně ukončeno; původní Přijmout zůstává a pozdější změny nebyly přepsány.",
+        "Undo was cancelled safely. The original Accept remains and later edits were not overwritten.")}
+      <button type="button" onClick={()=>setC3bUndoNotice(false)}>
+        {speak("Zavřít","Close")}</button>
+    </div>}
+    {c3bStaleNotice&&<div role="status" data-testid="target-c3b-stale">
+      {speak("Návrh se mezitím změnil. Inbox byl znovu načten.",
+        "The suggestion changed in the meantime. Inbox has been reloaded.")}
+      <button type="button" onClick={()=>setC3bStaleNotice(false)}>
+        {speak("Zavřít","Close")}</button>
+    </div>}
+    {c3bUndoneNotice&&<div role="status" data-testid="target-c3b-undone">
+      {speak("Změny byly vráceny (Undo).",
+        "Changes were undone successfully.")}
+      <button type="button" onClick={()=>setC3bUndoneNotice(false)}>
+        {speak("Zavřít","Close")}</button>
+    </div>}
     {page.items.length===0&&<p role="status">
       {speak("Žádné úkoly nečekají na zpracování.","No tasks await processing.")}</p>}
     <ul className="targetInboxList">
@@ -421,6 +749,13 @@ export default function TargetInbox({language="cs",taskDetail=false}:{language?:
           :<strong>{item.title}</strong>}
           {item.status==="completed"&&<span className="targetInboxCompleted">
             {speak("Dokončeno, čeká na zpracování","Completed, awaiting processing")}</span>}
+          {suggestionsEnabled&&item.canSuggest&&
+            <TargetInboxC3b item={item} restoreGeneration={page.restoreGeneration}
+              language={language} aiConsentEnabled={c3bConsentEnabled}
+              disabled={Boolean(unresolved)||
+                (c3bOutcome?.status==="committed"&&
+                 c3bOutcome.command.taskId===item.id)}
+              onOutcome={onC3bOutcome} onStale={onC3bStale} onRevoked={revoke}/>}
         </div>
         {item.canProcess&&<button type="button"
           disabled={inFlight.current||Boolean(unresolved)||

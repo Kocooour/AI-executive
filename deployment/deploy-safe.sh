@@ -33,6 +33,17 @@ TARGET_GENERATION=""
 # Set only once the explicit C-3a v26 -> v27 Inbox upgrade has been invoked on
 # the quiesced store after the verified archive. Earlier code cannot read v27.
 TARGET_SCHEMA_UPGRADE_ATTEMPTED=0
+# One-time outside-restore consent fence. A partial attempt never authorizes
+# rollback to old consent-unaware code or recreation of prior grant history.
+INBOX_AI_FENCE_PROVISION_ATTEMPTED=0
+INBOX_AI_FENCE_FIRST_ROLLOUT=0
+# Explicit operator recovery of an interrupted FIRST consent, never ordinary deploy.
+FIRST_CONSENT_RECOVERY=0
+INBOX_AI_FENCE_PATH=/var/lib/ai-executive-target/inbox-ai-consent-fence.sqlite
+# Root-owned, non-restorable first-rollout proof. Its owner/generation and
+# device+inode+SHA-256 bind explicit recovery to the SAME fence provisioned by THIS
+# first rollout, not any later empty replacement after a revoke.
+INBOX_AI_FIRST_CONSENT_PROOF="$BACKUP_DIR/.inbox-ai-first-consent-pending"
 PROFILE_TMP=""
 PROFILE_TOOL=""
 ENV_BASELINE_SHA=""
@@ -88,10 +99,14 @@ env_file_unchanged() {
 
 # Explicit opt-in after a failed first rollout has left the service stopped.
 # Never interpret a stopped service as permission to recover automatically.
-if [ "$#" -eq 2 ] && [ "$2" = "--recover-stopped" ]; then
+if [ "$#" -eq 3 ] && [ "$2" = "--recover-stopped" ] &&
+   [ "$3" = "--recover-first-consent" ]; then
+  RECOVERY_MODE=1
+  FIRST_CONSENT_RECOVERY=1
+elif [ "$#" -eq 2 ] && [ "$2" = "--recover-stopped" ]; then
   RECOVERY_MODE=1
 else
-  [ "$#" -eq 1 ] || die "pouziti: deploy-safe.sh <target-sha> [--recover-stopped]"
+  [ "$#" -eq 1 ] || die "pouziti: deploy-safe.sh <target-sha> [--recover-stopped [--recover-first-consent]]"
 fi
 
 # A root build can leave .next/BUILD_ID mode 0600. Never make the build world-writable.
@@ -341,6 +356,13 @@ on_exit() {
     echo "Sluzba zustava zastavena, bez automatickeho rollbacku a navratu k predchozi autentizaci." >&2
     echo "Oprav a nasad verzi s kontrolou revokace, nebo pred rucnim spustenim stare verze rotuj AI_EXECUTIVE_SESSION_SECRET." >&2
     exit "$rc"
+  elif [ "$INBOX_AI_FENCE_PROVISION_ATTEMPTED" = 1 ]; then
+    # The first C-3b fence may now exist, with a partial epoch-1 target
+    # consent. Never reset the checkout to pre-C-3b code: explicit recovery
+    # requires a consent-aware PREV and the exact original durable fence.
+    echo "BEZPECNOSTNI BLOKACE: nedokonceny prvni Inbox AI consent rollout." >&2
+    echo "Consent-aware kod zustava na disku; sluzba zustava zastavena. Bez automatickeho rollbacku." >&2
+    exit "$rc"
   fi
   if [ "$CHANGED" = 1 ]; then
     echo "Vracim pouze kod na $PREV; produkcni data neobnovuji." >&2
@@ -379,7 +401,8 @@ on_exit() {
     echo "BEZPECNOSTNI BLOKACE: neuspesna aktivace personal-v1; restart s ponechanym .env je zakazan." >&2
     echo "Kod byl pripadne vracen; ani legacy, ani cilova data nebyla obnovena nebo smazana." >&2
     echo "Sluzba zustava zastavena. Operator musi explicitne vypnout cilove prepinace, overit profil off a schvalit samostatny postup obnovy." >&2
-    if [ "$TARGET_SCHEMA_UPGRADE_ATTEMPTED" = 1 ]; then
+    if [ "$TARGET_SCHEMA_UPGRADE_ATTEMPTED" = 1 ] ||
+     [ "$INBOX_AI_FENCE_PROVISION_ATTEMPTED" = 1 ]; then
       echo "Cilove uloziste mohlo byt migrovano na schema v27 (Inbox); predchozi kod v27 necte." >&2
       echo "Navrat na v26 je mozny jen schvalenou obnovou adresare target/ z overene zalohy: ${BACKUP:-nevytvorena}" >&2
     fi
@@ -510,9 +533,25 @@ fi
 # The only automatic initial provisioning allowed is a real first code rollout.
 # Never recreate missing revocation history during a subsequent deploy/restart.
 OWNER_SESSION_FIRST_ROLLOUT=0
+if git cat-file -e "$TARGET:lib/target-inbox-ai-consent-fence.ts" 2>/dev/null &&
+   ! git cat-file -e "$PREV:lib/target-inbox-ai-consent-fence.ts" 2>/dev/null; then
+  INBOX_AI_FENCE_FIRST_ROLLOUT=1
+fi
 if git cat-file -e "$TARGET:lib/owner-session-revocation.ts" 2>/dev/null &&
    ! git cat-file -e "$PREV:lib/owner-session-revocation.ts" 2>/dev/null; then
   OWNER_SESSION_FIRST_ROLLOUT=1
+fi
+# Consent recovery is narrower than stopped-service recovery and may only
+# touch a trusted PRE-EXISTING fence from a consent-aware checked-out release.
+if [ "$FIRST_CONSENT_RECOVERY" = 1 ]; then
+  git cat-file -e "$PREV:lib/target-inbox-ai-consent-fence.ts" 2>/dev/null ||
+    die "obnova prvniho souhlasu vyzaduje jiz nasazeny consent-aware kod"
+  git cat-file -e "$TARGET:lib/target-inbox-ai-consent-fence.ts" 2>/dev/null ||
+    die "obnova prvniho souhlasu vyzaduje consent-aware cil"
+  [ "$INBOX_AI_FENCE_FIRST_ROLLOUT" = 0 ] ||
+    die "obnova prvniho souhlasu neni nova inicializace fence"
+  test -f "$INBOX_AI_FENCE_PATH" && test ! -L "$INBOX_AI_FENCE_PATH" ||
+    die "obnova prvniho souhlasu nesmi vytvorit chybejici fence"
 fi
 git diff --quiet "$PREV" "$TARGET" -- deployment/ai-executive.service || die "systemd jednotka se zmenila"
 # Fail before stopping, even when the main env file appears to be off:
@@ -589,6 +628,9 @@ if [ "$profile_needs_check" = 1 ]; then
       die "cilovy adresar nema vlastnika ai-executive a rezim 0700"
   fi
 fi
+if [ "$FIRST_CONSENT_RECOVERY" = 1 ] && [ "$TARGET_PROFILE" != personal-v1 ]; then
+  die "obnova prvniho souhlasu vyzaduje schvaleny profil personal-v1"
+fi
 # Reject weakened sandboxing also for legacy-only/off deployments.
 verify_loaded_write_sandbox ||
   die "systemd sandbox nedovoluje zapis do ciloveho uloziste, ProtectSystem=strict nebo StateDirectoryMode=0700"
@@ -650,6 +692,15 @@ run_target_inbox_upgrade() {
     "$APP/scripts/target-staging-upgrade-inbox.mjs" "$1" \
     --directory "$TARGET_DIRECTORY" --generation "$TARGET_GENERATION"
 }
+# External consent state is NOT inside target/personal-v1. A verified
+# pre-existing fence is archived for incident investigation only: NEVER
+# auto-restore that potentially stale snapshot over a newer revoke.
+if [ "$TARGET_PROFILE" = personal-v1 ] && [ -e "$INBOX_AI_FENCE_PATH" ]; then
+  test -f "$INBOX_AI_FENCE_PATH" && test ! -L "$INBOX_AI_FENCE_PATH" &&
+    test "$(stat -c %u "$INBOX_AI_FENCE_PATH")" = "$(id -u ai-executive)" &&
+    test "$(stat -c %a "$INBOX_AI_FENCE_PATH")" = 600 ||
+    die "externi consent fence neni duveryhodny"
+fi
 if [ "$TARGET_PROFILE" = personal-v1 ]; then
   verify_target_store || die "cilovy preflight: neshoda vlastnika, generace nebo integrity"
 fi
@@ -659,6 +710,9 @@ fi
   cp -a "$ENVFILE" "$BACKUP/env"
   if [ "$TARGET_PROFILE" = personal-v1 ]; then
     cp -a "$TARGET_DIRECTORY" "$BACKUP/target"
+    if [ -f "$INBOX_AI_FENCE_PATH" ]; then
+      cp -a "$INBOX_AI_FENCE_PATH" "$BACKUP/inbox-ai-consent-fence.sqlite"
+    fi
   fi
 )
 cmp "$DATA/store.sqlite" "$BACKUP/data/store.sqlite"
@@ -674,6 +728,10 @@ diff -qr --exclude=store.sqlite-shm -- "$DATA" "$BACKUP/data" ||
 if [ "$TARGET_PROFILE" = personal-v1 ]; then
   diff -qr -- "$TARGET_DIRECTORY" "$BACKUP/target" ||
     die "cilova zaloha obsahuje neodpovidajici nebo chybejici soubory"
+  if [ -f "$INBOX_AI_FENCE_PATH" ]; then
+    cmp "$INBOX_AI_FENCE_PATH" "$BACKUP/inbox-ai-consent-fence.sqlite" ||
+      die "zaloha souhlasu se neshoduje se zdrojem"
+  fi
   # The backup is only safe to use if the *same* owner and restore
   # generation still match the operator-approved env. A self-consistent
   # but substituted target would pass --check without this comparison.
@@ -703,8 +761,11 @@ NODE
   umask 077
   cd "$BACKUP"
   if [ "$TARGET_PROFILE" = personal-v1 ]; then
-    find data env target -type f ! -name '*-shm' -print0 |
-      sort -z | xargs -0 sha256sum > SHA256SUMS
+    find data env target -type f ! -name '*-shm' -print0 | sort -z |
+      xargs -0 sha256sum > SHA256SUMS
+    if [ -f inbox-ai-consent-fence.sqlite ]; then
+      sha256sum inbox-ai-consent-fence.sqlite >> SHA256SUMS
+    fi
   else
     find data env -type f ! -name '*-shm' -print0 |
       sort -z | xargs -0 sha256sum > SHA256SUMS
@@ -781,6 +842,103 @@ if [ "$TARGET_PROFILE" = personal-v1 ]; then
     die "migrace ciloveho schematu Inbox selhala"
   run_target_inbox_upgrade --check ||
     die "cilove uloziste po migraci neni aktualni schema Inbox"
+fi
+
+# New C-3b fence AND the owner-approved first consent grant are written
+# only during the FIRST reviewed missing-fence rollout, after the verified
+# archive and quiesced v27 upgrade. Later deploys only CHECK both stores:
+# never regenerate a revoked decision after restore, crash, or rollback.
+if [ "$TARGET_PROFILE" = personal-v1 ] &&
+   git cat-file -e "$TARGET:lib/target-inbox-ai-consent-fence.ts" 2>/dev/null; then
+  test -f "$APP/scripts/target-inbox-ai-fence-provision.mjs" ||
+    die "chybi overeny prikaz consent fence"
+  ! systemctl is-active --quiet "$SERVICE" ||
+    die "consent fence se nesmi inicializovat za behu"
+  if [ ! -e "$INBOX_AI_FENCE_PATH" ] && [ ! -L "$INBOX_AI_FENCE_PATH" ]; then
+    [ "$INBOX_AI_FENCE_FIRST_ROLLOUT" = 1 ] ||
+      die "chybi drive provisionovana revokacni historie; automaticky neobnovovat"
+    [ ! -e "$INBOX_AI_FIRST_CONSENT_PROOF" ] &&
+      [ ! -L "$INBOX_AI_FIRST_CONSENT_PROOF" ] ||
+      die "neocekavany zaznam nedokonceneho prvniho souhlasu"
+    INBOX_AI_FENCE_PROVISION_ATTEMPTED=1
+    echo "=== JEDNORAZOVA INICIALIZACE CONSENT FENCE A SOUHLASU ==="
+    runuser -u ai-executive -- env AI_EXECUTIVE_DATA_DIR="$DATA" /usr/bin/node \
+      --experimental-loader "$APP/scripts/target-staging-ts-loader.mjs" \
+      "$APP/scripts/target-inbox-ai-fence-provision.mjs" --provision \
+      --directory "$TARGET_DIRECTORY" ||
+      die "inicializace externi consent fence selhala"
+    # Persist the provenance BEFORE first grant; preserve on failure. Never
+    # create this proof for a previously existing, possibly revoked fence.
+    ( umask 077; set -C; printf '%s\n' \
+      "v1:$TARGET_OWNER:$TARGET_GENERATION:$(stat -c '%d:%i' "$INBOX_AI_FENCE_PATH"):$(sha256sum -- "$INBOX_AI_FENCE_PATH" | awk '{print $1}')" \
+      > "$INBOX_AI_FIRST_CONSENT_PROOF" ) ||
+      die "nelze bezpecne zapsat doklad prvni inicializace fence"
+    # Owner decision #471/#492 authorizes ONE first-deploy grant, not
+    # subsequent re-consent. This command is never called on later deploys.
+    runuser -u ai-executive -- env AI_EXECUTIVE_DATA_DIR="$DATA" \
+      LUMI_INBOX_AI_FIRST_ROLLOUT=1 /usr/bin/node \
+      --experimental-loader "$APP/scripts/target-staging-ts-loader.mjs" \
+      "$APP/scripts/target-inbox-ai-fence-provision.mjs" --first-grant \
+      --directory "$TARGET_DIRECTORY" --owner "$TARGET_OWNER" \
+      --generation "$TARGET_GENERATION" ||
+      die "prvni souhlas Inbox AI nebyl bezpecne zapsan do obou ulozist"
+  elif [ "$FIRST_CONSENT_RECOVERY" = 1 ]; then
+    # A pristine SQLite file alone is NOT proof of a never-revoked consent:
+    # an old fence could have been replaced. This root-owned marker pins the
+    # exact owner/generation AND physical file created by the failed rollout.
+    test -f "$INBOX_AI_FIRST_CONSENT_PROOF" &&
+      test ! -L "$INBOX_AI_FIRST_CONSENT_PROOF" &&
+      test "$(stat -c %u "$INBOX_AI_FIRST_CONSENT_PROOF")" = 0 &&
+      test "$(stat -c %a "$INBOX_AI_FIRST_CONSENT_PROOF")" = 600 &&
+      test "$(cat "$INBOX_AI_FIRST_CONSENT_PROOF")" = \
+        "v1:$TARGET_OWNER:$TARGET_GENERATION:$(stat -c '%d:%i' "$INBOX_AI_FENCE_PATH"):$(sha256sum -- "$INBOX_AI_FENCE_PATH" | awk '{print $1}')" ||
+      die "chybi platny puvodni doklad nedokonceneho prvniho nasazeni"
+    # Explicit stopped-service owner recovery. Never create a missing fence.
+    # The privileged writer refuses any prior external decision, grant,
+    # pending ticket, or target state other than the initial epoch 1.
+    echo "=== VYSLOVNE SCHVALENA OBNOVA NEDOKONCENEHO PRVNIHO SOUHLASU ==="
+    runuser -u ai-executive -- env AI_EXECUTIVE_DATA_DIR="$DATA" \
+      LUMI_INBOX_AI_FIRST_ROLLOUT=1 /usr/bin/node \
+      --experimental-loader "$APP/scripts/target-staging-ts-loader.mjs" \
+      "$APP/scripts/target-inbox-ai-fence-provision.mjs" --first-grant \
+      --directory "$TARGET_DIRECTORY" --owner "$TARGET_OWNER" \
+      --generation "$TARGET_GENERATION" ||
+      die "obnova prvniho souhlasu odmitnuta: historie uz existuje nebo stav neni bezpecny"
+  fi
+  runuser -u ai-executive -- env AI_EXECUTIVE_DATA_DIR="$DATA" /usr/bin/node \
+    --experimental-loader "$APP/scripts/target-staging-ts-loader.mjs" \
+    "$APP/scripts/target-inbox-ai-fence-provision.mjs" --check \
+    --directory "$TARGET_DIRECTORY" --owner "$TARGET_OWNER" \
+    --generation "$TARGET_GENERATION" ||
+    die "nesouhlasici nebo chybejici C-3b souhlas a revokacni fence"
+  # A previous first rollout may have committed BOTH grants, then failed
+  # at --check before retiring its one-time recovery proof. Even an ordinary
+  # --recover-stopped (or a later deploy) MUST retire that proof before start.
+  # The stored SHA-256 describes the ORIGINAL empty fence, so it intentionally
+  # differs from the current granted DB; validate its structure and the same
+  # owner/generation/device/inode instead of comparing to the live DB digest.
+  if [ -e "$INBOX_AI_FIRST_CONSENT_PROOF" ] ||
+     [ -L "$INBOX_AI_FIRST_CONSENT_PROOF" ]; then
+    test -f "$INBOX_AI_FIRST_CONSENT_PROOF" &&
+      test ! -L "$INBOX_AI_FIRST_CONSENT_PROOF" &&
+      test "$(stat -c %u "$INBOX_AI_FIRST_CONSENT_PROOF")" = 0 &&
+      test "$(stat -c %a "$INBOX_AI_FIRST_CONSENT_PROOF")" = 600 ||
+      die "neduveryhodny doklad prvniho souhlasu"
+    proof_prefix="v1:$TARGET_OWNER:$TARGET_GENERATION:$(stat -c '%d:%i' "$INBOX_AI_FENCE_PATH"):"
+    proof_contents="$(cat -- "$INBOX_AI_FIRST_CONSENT_PROOF")" ||
+      die "nelze precist doklad prvniho souhlasu"
+    proof_digest="${proof_contents#"$proof_prefix"}"
+    [ "$proof_digest" != "$proof_contents" ] &&
+      [[ "$proof_digest" =~ ^[0-9a-f]{64}$ ]] ||
+      die "doklad prvniho souhlasu neodpovida puvodni databazi"
+    rm -- "$INBOX_AI_FIRST_CONSENT_PROOF" ||
+      die "nelze zneplatnit doklad prvniho souhlasu"
+  elif [ "$INBOX_AI_FENCE_FIRST_ROLLOUT" = 1 ] ||
+       [ "$FIRST_CONSENT_RECOVERY" = 1 ]; then
+    # An explicitly attempted first grant must not start without retiring
+    # its proof; a missing one may mean a concurrent or malicious mutation.
+    die "chybi doklad prvniho souhlasu pred jeho zneplatnenim"
+  fi
 fi
 
 echo "=== START A PROVOZNI KONTROLY ==="

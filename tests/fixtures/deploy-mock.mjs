@@ -14,7 +14,10 @@ const dbFile = path.join(root, "var/lib/ai-executive/store.sqlite");
 const state = path.join(root, "state");
 const scenario = process.env.LUMI_TEST_SCENARIO;
 const before = "a".repeat(40);
-const target = "b".repeat(40);
+// Deploy follow-up tests can advance from the first reviewed commit B to
+// distinct commit C. PREV==TARGET is deliberately forbidden in production.
+const target = scenario.startsWith("targetc3b") &&
+  fs.existsSync(path.join(state,"next-target")) ? "c".repeat(40) : "b".repeat(40);
 const stateFile = (f) => path.join(state, f);
 const get = (f) => fs.readFileSync(stateFile(f), "utf8").trim();
 const set = (f,v) => fs.writeFileSync(stateFile(f), String(v));
@@ -29,6 +32,10 @@ switch (name) {
     process.exit(8);
   case "stat":
     if (args[0] === "-c" && args[1] === "%u") { console.log("0"); break; }
+    if (args[0] === "-c" && args[1] === "%d:%i") {
+      const st=fs.statSync(args[args.length-1]);
+      console.log(st.dev+":"+st.ino); break;
+    }
     if (args[0] === "-c" && args[1] === "%a") {
       console.log((fs.statSync(args[args.length - 1]).mode & 0o777).toString(8));
       break;
@@ -328,6 +335,14 @@ switch (name) {
           /^AI_EXECUTIVE_TARGET_[A-Z0-9_]+_ENABLED=true$/.test(line)).length;
         log("start-with-target-flags:" + enabled);
       }
+      if (scenario === "targetc3bcheckfailonce" && get("head") === target) {
+        const proof=path.join(root,"var/backups/ai-executive/.inbox-ai-first-consent-pending");
+        if (fs.existsSync(proof)) {
+          console.error("first-consent recovery proof survived into service start");
+          process.exit(93);
+        }
+        log("c3b-proof-absent-at-start");
+      }
       if (scenario.startsWith("target") && get("head") === target) set("target-started", "1");
       set("service", "active"); log("start-" + get("head").slice(0,1)); break;
     }
@@ -354,6 +369,20 @@ switch (name) {
       // tests intentionally do not advertise this module in either commit.
       if (["firstrolloutunhealthy", "firstrolloutpartialcopy"].includes(scenario) &&
           args[2] === target + ":lib/owner-session-revocation.ts") break;
+      if (scenario.startsWith("targetc3b") &&
+          args[2] === target + ":lib/target-inbox-ai-consent-fence.ts") break;
+      // On the subsequent B -> C deploy the previous B commit already
+      // contains the consent fence. A (before first rollout) never did.
+      if (scenario.startsWith("targetc3b") &&
+          get("head") === "b".repeat(40) &&
+          args[2] === "b".repeat(40) + ":lib/target-inbox-ai-consent-fence.ts") break;
+      // The existing owner-cookie cutoff is already live on the C-3b
+      // first rollout. Only the explicit stopped-recovery fixture needs to
+      // model the otherwise unrelated, already-provisioned cutoff.
+      if (scenario.startsWith("targetc3b") &&
+          process.env.LUMI_TEST_RECOVERY_MODE === "true" &&
+          [get("head"),target].some(sha =>
+            args[2] === sha + ":lib/owner-session-revocation.ts")) break;
       process.exit(1);
     } else if (verb === "merge" && args[1] === "--ff-only") {
       set("head", target); log("merge");
@@ -479,6 +508,13 @@ switch (name) {
   case "runuser": {
     if (args[0] !== "-u" || args[1] !== "ai-executive" || args[2] !== "--") process.exit(8);
     const exec = args[3], rest = args.slice(4);
+    if (scenario.startsWith("targetc3b") && exec === "env" &&
+        rest.includes(path.join(app,"scripts/owner-session-revocation-init.mjs"))) {
+      log("owner-cutoff-check");
+      const cutoff=path.join(root,"var/lib/ai-executive/owner-session-valid-from.sqlite");
+      if (!fs.existsSync(cutoff) || !rest.includes("--check")) process.exit(1);
+      break;
+    }
     if (scenario === "mailsnapshoterror" && get("head") === target &&
         rest[0] === "-" && rest[1] === dbFile) {
       console.error("simulated read-only Gmail snapshot error");
@@ -547,6 +583,56 @@ switch (name) {
       log("target-inbox-upgraded");
       console.log(JSON.stringify({ ok: true, status: "upgraded" }));
       break;
+    }
+    if (scenario.startsWith("targetc3b") && exec === "env" &&
+        rest[0] === "AI_EXECUTIVE_DATA_DIR=" + path.join(root, "var/lib/ai-executive") &&
+        rest.includes(path.join(app,"scripts/target-inbox-ai-fence-provision.mjs"))) {
+      const i=rest.indexOf(path.join(app,"scripts/target-inbox-ai-fence-provision.mjs"));
+      const mode=rest[i+1],tail=rest.slice(i+2);
+      const expectedDir=path.join(root,"var/lib/ai-executive-target/personal-v1");
+      const fence=path.join(root,"var/lib/ai-executive-target/inbox-ai-consent-fence.sqlite");
+      const targetGrant=stateFile("c3b-target-grant"),grant=stateFile("c3b-fence-grant");
+      if(get("service")!=="inactive"||tail[0]!=="--directory"||
+         tail[1]!==expectedDir)process.exit(9);
+      if(mode!=="--provision" && (tail.length!==6||tail[2]!=="--owner"||
+          tail[3]!=="owner-01"||tail[4]!=="--generation"||
+          tail[5]!=="2a10b529-66a4-4790-a600-a27f2d996a0f"))process.exit(9);
+      if(mode==="--first-grant" && !rest.includes("LUMI_INBOX_AI_FIRST_ROLLOUT=1"))
+        process.exit(9);
+      if(mode==="--provision"){
+        if(fs.existsSync(fence))process.exit(1);
+        fs.writeFileSync(fence,"synthetic durable fence",{mode:0o600});
+        log("c3b-provision");
+        break;
+      }
+      if(!fs.existsSync(fence))process.exit(1);
+      if(mode==="--first-grant"){
+        log("c3b-first-grant");
+        if(fs.existsSync(targetGrant)&&get("c3b-target-grant")!=="on:1")process.exit(1);
+        if(fs.existsSync(grant)&&get("c3b-fence-grant")!=="on:1")process.exit(1);
+        set("c3b-target-grant","on:1");
+        if(scenario==="targetc3bgrantfail" && !fs.existsSync(stateFile("grantfail-once"))){
+          set("grantfail-once","1");process.exit(1);
+        }
+        set("c3b-fence-grant","on:1");
+        break;
+      }
+      if(mode==="--check"){
+        log("c3b-check");
+        if(!fs.existsSync(targetGrant)||!fs.existsSync(grant)||
+            get("c3b-target-grant")!==get("c3b-fence-grant")){
+          console.error("synthetic mismatched owner consent");
+          process.exit(1);
+        }
+        if (scenario==="targetc3bcheckfailonce" &&
+            !fs.existsSync(stateFile("c3b-transient-check-failed"))) {
+          set("c3b-transient-check-failed","1");
+          console.error("synthetic transient --check failure AFTER both durable grants");
+          process.exit(1);
+        }
+        break;
+      }
+      process.exit(8);
     }
     if (exec === "test") {
       const file = rest[1], mode = rest[0];

@@ -1,3 +1,6 @@
+import {parseInboxAIChoice,validInboxAIAllowedInput} from "./target-inbox-suggestions";
+import type {InboxAIAllowedInput,InboxAIChoice} from "./target-inbox-suggestions";
+
 export interface ServerAIResult {
   message: string;
   provider: "hermes" | "openai" | "local";
@@ -70,4 +73,97 @@ export async function completeServerAI(prompt: string): Promise<ServerAIResult |
   }
   if (lastError) throw lastError;
   return null;
+}
+
+
+/**
+ * C-3b OPENAI-ONLY primitive, deliberately NOT wired to any route or UI.
+ *
+ * SECURITY: the future caller MUST hold the shared consent/dispatch fence
+ * before invoking this function, then revalidate ACL, consent epoch and restore
+ * generation before using its result. This low-level function is not consent
+ * management, an authorization mechanism, a cache, or a suggestion token.
+ *
+ * Unlike completeServerAI(), this can NEVER dispatch to Hermes/local. It does
+ * not log private content or keep the AI response after returning. Explicit store:false disables response-object storage; it does not guarantee
+ * zero provider-side safety/abuse retention. Disclose provider policy in docs.
+ */
+/** Alias to the shared, privacy-limited Inbox suggestion contract. */
+export type InboxOpenAIOnlyInput = InboxAIAllowedInput;
+export type InboxOpenAIOnlyChoice = InboxAIChoice;
+
+const INBOX_AI_TIMEOUT_MS = 8_000;
+
+const INBOX_AI_RESPONSE_SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  required: ["action","targetName","reason"],
+  properties: {
+    action: {type: "string",enum:["keep","area","project"]},
+    targetName: {type:["string","null"]},
+    reason: {type:"string"},
+  },
+} as const;
+
+/**
+ * Caller-owned AbortSignal + independent ~8s cap. A failed OpenAI call returns
+ * null; the caller's ONLY fallback is its local deterministic rule engine.
+ * This function intentionally never calls completeServerAI().
+ */
+export async function completeInboxOpenAIOnly(
+  input: InboxOpenAIOnlyInput,
+  callerSignal: AbortSignal,
+): Promise<InboxOpenAIOnlyChoice | null> {
+  if (!validInboxAIAllowedInput(input) || !(callerSignal instanceof AbortSignal) ||
+      callerSignal.aborted) return null;
+  const key = process.env.OPENAI_API_KEY?.trim();
+  if (!key) return null;
+  const signal = AbortSignal.any([callerSignal,AbortSignal.timeout(INBOX_AI_TIMEOUT_MS)]);
+  if (signal.aborted) return null;
+  try {
+    const response = await fetch("https://api.openai.com/v1/responses", {
+      method:"POST",
+      headers: {
+        "content-type":"application/json",
+        authorization:"Bearer " + key,
+      },
+      body:JSON.stringify({
+        model:process.env.OPENAI_MODEL || "gpt-5-mini",
+        // One-shot classification: do not persist response objects at OpenAI.
+        // This does NOT guarantee zero provider-side abuse/safety logs.
+        store:false,
+        input:[
+          {role:"system",content:"Classify the task against the listed private Area or open private project NAMES only. Return keep/area/project and an exact supplied targetName, or null for keep. Never invent names. Return only the prescribed JSON."},
+          {role:"user",content:JSON.stringify({
+            taskTitle:input.taskTitle,
+            privateAreaNames:input.privateAreaNames,
+            privateOpenProjectNames:input.privateOpenProjectNames,
+          })},
+        ],
+        text:{format:{type:"json_schema",name:"lumi_inbox_choice",strict:true,
+          schema:INBOX_AI_RESPONSE_SCHEMA}},
+        max_output_tokens:2000,
+      }),
+      signal,
+    });
+    if (!response.ok || signal.aborted) return null;
+    const data = await response.json();
+    // HTTP 200 is not completion: an incomplete/cancelled/failed Responses
+    // object may still contain a syntactically valid output_text fragment.
+    // Fail closed on missing/unknown state, partial messages and ambiguity.
+    if (signal.aborted || !data || data.status !== "completed" ||
+        !Array.isArray(data.output)) return null;
+    const messages = data.output.filter((item: any) => item?.type === "message");
+    if (messages.length !== 1) return null;
+    const message = messages[0];
+    if (message.status !== "completed" || message.role !== "assistant" ||
+        !Array.isArray(message.content) || message.content.length !== 1 ||
+        message.content[0]?.type !== "output_text" ||
+        typeof message.content[0].text !== "string") return null;
+    if (signal.aborted) return null;
+    return parseInboxAIChoice(message.content[0].text.trim(),input);
+  } catch {
+    // Do not log provider error bodies: they can include task/Area/project names.
+    return null;
+  }
 }

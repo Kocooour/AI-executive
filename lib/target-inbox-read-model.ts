@@ -20,6 +20,8 @@ export type TargetInboxItem = {
   taskRevision: number;
   effectiveAreaId: string;
   canProcess: boolean;
+  /** Only actor-owned private open tasks can receive a C-3b proposal. */
+  canSuggest: boolean;
   /** Actor-authorized CAS witness, never a capability. Viewers receive null. */
   expectedRevision: string | null;
 };
@@ -122,7 +124,7 @@ export function readAuthorizedTargetInboxPage(
         id: row.id, title: row.title, status: row.status,
         triageRevision: row.triageRevision, taskRevision: row.taskRevision,
         effectiveAreaId: row.effectiveAreaId,
-        canProcess, expectedRevision,
+        canProcess, canSuggest:canProcess&&row.areaKind==="private"&&row.status==="open", expectedRevision,
       });
     }
     return {items, count: count.n,

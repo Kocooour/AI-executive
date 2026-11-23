@@ -89,6 +89,7 @@ function routes(dir = directory) {
 // expressions: a newly discovered handler must prove 401 until its precise
 // release gate has been reviewed and explicitly classified.
 const disabledRoutes = new Map([
+  // C-3b is enabled in personal-v1 and must obey 401/403 like all handlers.
   ["GET attention", "AI_EXECUTIVE_TARGET_STAGING_HTTP_ATTENTION_ENABLED"],
   ["GET attention/command", "AI_EXECUTIVE_TARGET_STAGING_HTTP_ATTENTION_ENABLED"],
   ["PATCH attention/command", "AI_EXECUTIVE_TARGET_STAGING_HTTP_ATTENTION_ENABLED"],

@@ -63,7 +63,7 @@ export type TargetEditsProps = TargetUiEdits;
 export type TargetCreatesProps = { projects:boolean; projectTasks:boolean };
 export type TargetMyPlanProps = { enabled: boolean; statusWrite: boolean; whenWrite: boolean };
 
-export function LumiAppRoot({ targetHomeSummary = false, targetInboxRead = false, targetMyPlan, targetScopes, targetDetails, targetEdits, targetCreates, targetNoteEdit = false, targetProjectEdit = false, targetPrivateNoteAreas = false, targetPrivateNoteCreate = false, targetPrivateTaskCreate = false, targetSearch = false, humanWikiSourceStatusEnabled = false }: { targetHomeSummary?:boolean; targetInboxRead?:boolean; targetMyPlan?: TargetMyPlanProps; targetScopes?: TargetScopesProps; targetDetails?: TargetDetailsProps; targetEdits?: TargetEditsProps; targetCreates?: TargetCreatesProps; targetNoteEdit?: boolean; targetProjectEdit?: boolean; targetPrivateNoteAreas?: boolean; targetPrivateNoteCreate?: boolean; targetPrivateTaskCreate?: boolean; targetSearch?: boolean; humanWikiSourceStatusEnabled?: boolean } = {}) {
+export function LumiAppRoot({ targetHomeSummary = false, targetInboxRead = false, targetInboxC3b = false, targetMyPlan, targetScopes, targetDetails, targetEdits, targetCreates, targetNoteEdit = false, targetProjectEdit = false, targetPrivateNoteAreas = false, targetPrivateNoteCreate = false, targetPrivateTaskCreate = false, targetSearch = false, humanWikiSourceStatusEnabled = false }: { targetHomeSummary?:boolean; targetInboxRead?:boolean; targetInboxC3b?:boolean; targetMyPlan?: TargetMyPlanProps; targetScopes?: TargetScopesProps; targetDetails?: TargetDetailsProps; targetEdits?: TargetEditsProps; targetCreates?: TargetCreatesProps; targetNoteEdit?: boolean; targetProjectEdit?: boolean; targetPrivateNoteAreas?: boolean; targetPrivateNoteCreate?: boolean; targetPrivateTaskCreate?: boolean; targetSearch?: boolean; humanWikiSourceStatusEnabled?: boolean } = {}) {
   // Owner decision 2026-11-09: with target scopes on, the single global scope governs the
   // sidebar projects, the inspector and quick capture (see docs/R3-FE-04A-DETAILS.md).
   const scopesOn = Boolean(targetScopes?.enabled);
@@ -344,7 +344,8 @@ export function LumiAppRoot({ targetHomeSummary = false, targetInboxRead = false
             onCreated={closeAreaChooser} />}
           <CalendarView app={app} eventsOnly={shellNavigation.personalV1} />
           {!targetOverview && <HomeView app={app} />}
-          {targetInboxActive && <TargetInbox language={language} taskDetail={detailGates.task} />}
+          {targetInboxActive && <TargetInbox language={language} taskDetail={detailGates.task}
+             suggestionsEnabled={targetInboxC3b} />}
           {targetOverview && <TargetOverview kind={view==="Home"?"home":"upcoming"}
             language={language} taskDetail={detailGates.task} />}
           {view === "Today" && !targetPlan && <TodayTop app={app} />}

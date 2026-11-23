@@ -287,3 +287,240 @@ authenticated owner session; a refused, unlisted `Origin` must still yield
 403. Do not use a production write as an automated CI probe. Perform the
 normal exact-SHA release gate and owner-controlled deployment procedure
 above; this fix does not authorize a direct production change.
+
+
+### C-3b consent fence outside restore and rollback after first write (PR #492)
+
+**Operator env change BEFORE the first deploy:** add the single required line
+`AI_EXECUTIVE_TARGET_STAGING_HTTP_C3B_ENABLED=true` to the root-owned
+`/etc/ai-executive/ai-executive.env` alongside the rest of the complete
+`personal-v1` profile. An older env without it is an invalid partial profile:
+`deploy-safe.sh` refuses it before service stop. No separate activation PR
+or post-deploy manual first consent is required. Without `OPENAI_API_KEY`,
+Inbox uses deterministic local rules, not a failing remote provider.
+
+**Revocation/rollback:** The Settings switch may revoke consent and later
+re-grant only after a fresh explicit owner action. Neither a later deploy,
+service restart, restore of `target/`, nor a missing first-grant row can grant
+again. Keep the newest outside-restore fence even when restoring an older
+target backup. A mismatch stops deployment; fix only through an explicitly
+reviewed operator procedure, never by deleting receipts/decisions or restoring
+an older fence.
+
+
+**Approved production location:** `/var/lib/ai-executive-target/inbox-ai-consent-fence.sqlite`.
+This is inside the existing `StateDirectory=ai-executive-target` under
+`ProtectSystem=strict`, but strictly **outside** the restorable
+`/var/lib/ai-executive-target/personal-v1` target store. There is no new
+systemd `ReadWritePaths`, no change to the unit sandbox, and no HTTP-created
+SQLite file. The standalone fence contains only actor/decision IDs, revocation
+epochs, pending cross-process dispatch tickets and budgets; no private task
+titles, AI prompts or responses. It is owned by `ai-executive`, mode 0600.
+
+**Deployment step:** after the verified backup and while the service is
+stopped, `deploy-safe.sh` performs the C-3a idempotent v27 check/upgrade,
+then (on the *first* reviewed C-3b code rollout only) runs
+`scripts/target-inbox-ai-fence-provision.mjs --provision --directory
+/var/lib/ai-executive-target/personal-v1` **as ai-executive**. It then
+always runs the same command with `--check` before starting the service.
+Only on the **first reviewed C-3b rollout with a missing external fence**, the
+owner-approved deployment then calls `--first-grant` with the configured owner
+and restore generation. The command journals one `inbox_consent` grant in the
+canonical pinned target v27 write path, then records the same first decision,
+epoch 1 and scope `c3b:v1` in the separate fence. It emits no private data.
+The final `--check --directory ... --owner <ID> --generation <UUID>`
+requires **strict agreement of both durable stores** (including a matching
+disabled/revoked state). On subsequent **ordinary** deployments only `--check` runs:
+no new grant, repair or reset of decision history is ever automatic.
+The only exception is an explicitly owner-approved `--recover-stopped
+--recover-first-consent` after a documented incomplete first grant, subject
+to the original root-owned proof and empty consent/revocation history below.
+For an **OFF/OFF** state only, a partial failed re-grant followed by a
+confirmed revoke can leave the target's older owner-decision ID different
+from the external fence's latest re-grant decision. A later read-only deploy
+check permits this exact case only when both stores are disabled, their
+epochs/generation/scope agree, and the target decision is in the fence's
+immutable history at or before that epoch. An enabled grant still requires
+the current decision IDs to match. No check repairs, rewrites or re-grants
+either store; stale epochs and restored older ON snapshots remain blocked.
+A crash between target and fence commits means AI stays disabled and the
+service stays stopped until operator-reviewed recovery; no old code may
+restart on the updated target. A missing, symlinked, wrong-owner/mode,
+corrupt or mismatched fence aborts the deploy. A missing fence after the
+first rollout is never recreated, and a revoked owner remains revoked.
+The original owner decision is #471, reconfirmed in #492 on 2026-11-23.
+
+**Interrupted first grant — stopped-service recovery (P2).** When the
+first reviewed C-3b rollout has already created
+`/var/lib/ai-executive-target/inbox-ai-consent-fence.sqlite`, but
+`--first-grant` fails before both stores agree, the deployment leaves the
+service **stopped** and deliberately retains the **consent-aware checkout**
+(no code-only rollback to a version lacking C-3b), so the reviewed recovery
+entrypoint can safely verify both stores. It preserves a root-only, mode 0600 proof at
+`/var/backups/ai-executive/.inbox-ai-first-consent-pending`. This proof
+is written only after successful first-time provisioning, *before* the first
+grant, and records the owner, restore generation and device/inode of that
+specific external fence, including its SHA-256 content digest before
+any grant. **Every successful read-only two-store `--check`**, including a
+later ordinary `--recover-stopped` following a transient check failure,
+validates and retires an existing proof **before service start**. The recorded
+SHA-256 is the hash of the *original empty* fence, not the later granted DB;
+when retiring it, the script validates the root ownership/mode, owner,
+generation, original device/inode and a well-formed original digest, alongside
+the current successful two-store check. An untrusted or mismatched proof
+stops deployment without deleting the evidence or starting the service.
+If the first grant was attempted but its proof is missing, startup is refused.
+
+The ordinary deploy and ordinary `--recover-stopped` modes MUST NOT grant
+consent. Only after the operator has checked the original verified backup,
+confirmed the first grant was interrupted, confirmed that the protected
+external fence file has **not been replaced**, and confirmed the service and
+all workers are stopped, the operator may explicitly run the reviewed SHA's
+deploy script with `--recover-stopped --recover-first-consent`:
+
+```bash
+TARGET_SHA=<reviewed-40-character-main-sha>
+sudo bash -c 'set -Eeuo pipefail; cd /opt/ai-executive; target="$1"; [[ "$target" =~ ^[0-9a-f]{40}$ ]]; git fetch --no-tags origin main; test "$(git rev-parse FETCH_HEAD)" = "$target"; git show "$target:deployment/deploy-safe.sh" | bash -s -- "$target" --recover-stopped --recover-first-consent' _ "$TARGET_SHA"
+```
+
+This path requires **all** the ordinary stopped-recovery protections
+(unchanged persistent owner-session cutoff, exact SHA, verified backup,
+read-only target checks and the original environment), a consent-aware
+previous checkout, the original private existing fence, the valid root-owned
+proof with matching owner/generation/device+inode/SHA-256, and an independently
+verified empty fence grant/decision/pending/**budget** history. The target
+consent must be absent or exactly the original enabled epoch-1 decision
+`owner-2026-11-19-issue-471`. A prior revoke, foreign decision, partial
+regrant, stale generation, used provider budget, missing/corrupt proof,
+missing/replaced fence or damaged history is a **hard stop**, never an
+opportunity to recreate the DB or infer a new owner approval.
+
+If provisioning itself failed before the proof was durably recorded,
+or the proof cannot establish continuity of the original file, **do not**
+manufacture a new proof or delete old history. Follow a separate approved
+incident recovery. An empty database by itself is not evidence that no
+grant/revoke has ever occurred. This recovery does not authorize a production
+release without the usual exact-SHA tests and owner sign-off.
+
+**Backup and restore:** if an existing fence is present at deploy time, the
+root-only deployment archive includes a byte-for-byte diagnostic copy and
+checksum `inbox-ai-consent-fence.sqlite`; this archive is **not** an
+authorized restore source for the fence. On restoring older
+`target/` from backup, **leave the latest external fence in place**.
+Any restore-generation or consent-epoch mismatch disables AI, requiring a
+new explicit owner decision. Never copy an older fence from the archive over
+a newer revoked fence: that would replay consent. Keep any crash/orphaned
+pending dispatch tickets until manual safe reconciliation, not automatic
+TTL deletion. Never write a grant during ordinary recovery or restart.
+The tightly scoped, proof-bound **first-grant-only** exception is below.
+
+**Older code rollback:** C-3b introduces target metadata namespaces
+`r3:c3b:*` and journal kind `inbox_consent`. Once **any C-3b
+metadata/journal write** has happened, older code such as
+`443c17df6376c8e886150d45bcc6bcb2457b2a94` cannot safely read the
+current v27 target, even though the schema version number is unchanged.
+Rolling back **code only** is insufficient. Stop the service; restore
+`target/` only from a verified **pre-C-3b-write** archive with explicit
+owner approval and matching integrity/generation checks. Keep the latest
+external fence outside this restoration and verify AI remains disabled until
+reconsent. Never downgrade live SQLite schema, erase C-3b metadata manually,
+overwrite the fence, or silently roll back consent. If a safe archive is not
+available, keep the service stopped and roll forward to fixed C-3b-aware code.
+
+**Compatibility control:** a current, untouched production v27 store with no
+`r3:c3b:*` metadata must continue to pass
+`target-store-provision.mjs --check` and the read-only preflight without
+migration or modification. C-3b now writes owner consent during the explicitly approved first
+deployment (decision 2026-11-23), using the standard pinned target journal.
+The owner-approved activation MUST still pass exact-SHA tests, release QA
+and deployment authorization. An unmodified v27 store remains read-compatible
+before that deployment.
+
+
+### C-3b durable Inbox receipt capacity (owner maintenance)
+
+The canonical C-3b metadata receipt limit is **65,536 rows** (raised from
+4,096), reserving one future Undo slot for every active Accept. Thus a
+pure Accept workload supports 32,256 new decisions before its bounded limit;
+already completed Undo consumes only its reserved slot. A separate 1,024-slot emergency reserve protects terminal cancellation after new
+Accept admission is exhausted. Permanent terminal cancellations consume rows. The writer and canonical read-only preflight
+share `C3B_RECEIPT_MAX_ROWS`, so a partially upgraded application fails closed.
+
+**Read-only capacity inspection** against a stopped, backed-up target SQLite
+store (never output metadata values or private IDs):
+
+```sql
+SELECT COUNT(*) AS receipts FROM metadata
+WHERE key LIKE 'r3:c3b:accept:v1:%' OR key LIKE 'r3:c3b:undo:v1:%';
+SELECT COUNT(*) AS active_accepts FROM metadata AS a
+WHERE a.key LIKE 'r3:c3b:accept:v1:%'
+  AND json_extract(a.value,'$.kind')='accept'
+  AND NOT EXISTS (SELECT 1 FROM metadata AS u WHERE
+    u.key='r3:c3b:undo:v1:' || substr(a.key,length('r3:c3b:accept:v1:')+1));
+```
+
+At **49,152 reserved slots (75%)**, schedule a reviewed, nondestructive
+capacity upgrade, increasing *both* writer and preflight limits, with
+verified backups and exact-SHA test/restart acceptance. Reservation =
+`receipts + active_accepts`. No automatic expiry or deletion of accepted,
+undone or cancelled UUIDs: the immutable history prevents replay and supports
+old Undo. New Accepts stop before the emergency cancellation reserve is consumed; receipts
+and already reserved Undo stay valid, and cancellation remains available while
+emergency slots exist,
+and manual Inbox triage remains available. Never reset the ledger, discard
+old tombstones, bypass preflight or silently shrink historical records.
+
+
+**Operator-visible headroom (C-3b Settings):** the authenticated owner-only
+`GET /api/target-staging/inbox/c3b/consent` now includes exact numeric
+`capacity.{used,reserved,limit,remainingAccepts,warning}` from an independently
+pinned, read-only canonical database snapshot. Settings renders a visible 75%
+warning without exposing receipt keys, UUIDs, task IDs or private content.
+The server's frequent post-AI-release consent check skips these expensive
+headroom calculations; they are only retrieved on an explicit Settings or
+consent-refresh read. This is a human-visible owner warning, NOT an
+always-on notification or automated destructive maintenance operation.
+
+**Grow-only upgrade rehearsal:** before any future capacity expansion, take
+verified pre-upgrade backups. Test canonical validation with **more than the
+old 4,096 immutable tombstones**, verify no old UUID can be accepted after
+cancellation, and reject any ledger above the new bound. Increase writer and
+read-only preflight limits in the same reviewed release while preserving the
+1,024 terminal-cancel reserve and one Undo per active Accept. Run exact-SHA
+C-3b real-store/owner/restore acceptance and verify both the complete
+receipt count and original receipt outcomes in an isolated restored copy.
+Do not code-only rollback to a lower ceiling once new receipts exceed it;
+roll forward with compatible code. Never recycle, reset, truncate or
+re-key receipt history.
+
+
+**Nouzové vypořádání osiřelých AI požadavků (P2):** Pokud revokace po
+pádu workeru trvale čeká na starý ticket, nikdy jej automaticky nemažte při
+startu ani z webového požadavku. Nejprve bezpečně zastavte systémovou službu
+`ai-executive` a ověřte její stav `inactive` (včetně všech child workerů).
+Až po uplynutí nejméně 30 s od vzniku všech zbývajících ticketů může
+autorizovaný operátor jako uživatel `ai-executive` výslovně spustit:
+
+```sh
+sudo systemctl stop ai-executive
+sudo systemctl show -p ActiveState --value ai-executive
+sudo -u ai-executive env LUMI_INBOX_AI_RECONCILE=1 \
+  /usr/bin/node --experimental-loader \
+  /opt/ai-executive/scripts/target-staging-ts-loader.mjs \
+  /opt/ai-executive/scripts/target-inbox-ai-reconcile.mjs \
+  --reconcile-stopped \
+  --directory /var/lib/ai-executive-target/personal-v1 \
+  --owner '<ověřené OWNER_USER_ID>' \
+  --generation '<ověřené RESTORE_GENERATION UUID>' \
+  --expected-epoch '<aktuální fence epoch>'
+```
+
+Před spuštěním zvolte přesné hodnoty z ověřeného produkčního profilu a
+nezávislé fence; nikdy je neodvozujte z browseru ani z obnovené zálohy.
+Příkaz odmítá běžící/neznámý stav služby a příliš mladé požadavky,
+zvyšuje revokační epochu a přes canonical pinned journal zapisuje
+odpovídající **vypnutý** cílový souhlas. Pokud druhý zápis selže,
+služba musí zůstat zastavená pro ruční nápravu. Po úspěchu znovu ověřte
+shodu obou databází `--check`, teprve pak připravte samostatně schválený
+restart. Neobnovujte starou fence z target backupu a nikdy neprovádějte
+automatické opětovné udělení souhlasu.

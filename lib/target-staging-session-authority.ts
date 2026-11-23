@@ -1,3 +1,4 @@
+import type {DatabaseSync} from "node:sqlite";
 import {createPreflightedPrivateStructure,cancelPreflightedPrivateStructureCreate,
   validPrivateStructureCreateCommand,
   type PrivateStructureKind,type PrivateStructureCreateCommand,
@@ -108,6 +109,17 @@ import type {TargetNoteCreateRecovery} from "./target-note-create-status";
 import type { TargetNoteDeleteCommandStatus } from "./target-note-delete-command-status";
 import { validTargetTaskTitleEditPreviewRequest,targetTaskWriteRevision } from "./target-task-write-preflight";
 import {issueTargetInboxRevision} from "./target-inbox-command-identity";
+import {writePreflightedInboxAIConsent,readTargetInboxAIConsent,
+  type InboxConsentCommand,type InboxConsentResult,type TargetInboxAIConsent}
+  from "./target-inbox-ai-consent";
+import {writePreflightedInboxSuggestedAction,readInboxAcceptReceiptInSnapshot,
+  type InboxAcceptCommand,type InboxAcceptReceiptQuery,type InboxAcceptUndoCommand,type InboxAcceptResult,
+  type InboxAcceptReceiptView,cancelPreflightedInboxSuggestedAction,
+  cancelPreflightedInboxSuggestedUndo,readInboxCompoundLedgerCapacity,
+  type InboxCompoundLedgerCapacity}
+  from "./target-inbox-accept-writer";
+import {readAuthorizedInboxSuggestionSnapshot,
+  type AuthorizedInboxSuggestionSnapshot} from "./target-inbox-suggestion-snapshot";
 import { writePreflightedTargetTaskTitle, validTargetStagingTaskTitleWriteRequest } from "./target-task-staging-writer";
 import {
   writePreflightedTemporalTaskStatus, validTargetStagingTemporalStatusCommand,
@@ -471,6 +483,28 @@ export class TargetStagingSessionAuthority {
       const credential=this.#oneShotReadCredential(actorUserId);
       return credential?readPreflightedTargetInboxPage(this.#store,credential,
         {limit,afterTaskId}):null;
+    }catch{return null;}
+  }
+
+  /**
+   * C-3b private suggestions: the actor is resolved by trusted server session
+   * issuance (never from untrusted HTTP payload), then checked INSIDE the
+   * canonical preflighted SQLite snapshot. This core-only method must NOT
+   * release titles or candidate names to HTTP without a separate live ACL,
+   * session, restore and consent revalidation.
+   */
+  readPrivateInboxSuggestionSnapshot(
+    actorUserId:string,taskId:string,
+  ):AuthorizedInboxSuggestionSnapshot|null {
+    if(this.#closed)return null;
+    try{
+      const credential=this.#oneShotReadCredential(actorUserId);
+      if(!credential)return null;
+      return readPreflightedStoreSnapshot(this.#store,db=>{
+        if(verifiedActor(db,credential)!==actorUserId)return null;
+        return readAuthorizedInboxSuggestionSnapshot(
+          db,actorUserId,taskId,this.#store.expectedRestoreGeneration);
+      });
     }catch{return null;}
   }
 
@@ -1162,6 +1196,101 @@ export class TargetStagingSessionAuthority {
       return {ok:false,reason:"invalid_request"};
     return writePreflightedTargetInboxTriage(
       this.#store,credential,command,durableSessionTokenHash);
+  }
+
+  /**
+   * C-3b private Inbox Accept/Undo. Default-off internal writer method, not
+   * an HTTP capability. A trusted caller must provide its server-derived
+   * durable session hash (never from the body). AI actions remain rejected by
+   * the writer until the external consent/revoke barrier is fully wired.
+   */
+  changeInboxSuggestedAction(
+    sessionToken:string,
+    work:{mode:"accept";command:InboxAcceptCommand;
+      key:Uint8Array;sessionTokenHash:string;fenceDb?:DatabaseSync}|
+         {mode:"undo";command:InboxAcceptUndoCommand;
+      sessionTokenHash:string},
+  ):InboxAcceptResult{
+    const credential=this.#credential(sessionToken,true);
+    if(!credential)return {ok:false,reason:"unavailable"};
+    return writePreflightedInboxSuggestedAction(this.#store,credential,work);
+  }
+
+  /** Durable terminal UUID fence on a lost/uncertain C-3b Accept. */
+  cancelInboxSuggestedAction(
+    sessionToken:string,command:InboxAcceptReceiptQuery,
+    sessionTokenHash:string,
+  ):InboxAcceptReceiptView|null{
+    const credential=this.#credential(sessionToken,true);
+    return credential
+      ?cancelPreflightedInboxSuggestedAction(
+        this.#store,credential,command,sessionTokenHash)
+      :null;
+  }
+
+  /** Irreversible rejection fence for an uncertain or stale C-3b Undo. */
+  cancelInboxSuggestedUndo(
+    sessionToken:string,command:InboxAcceptUndoCommand,
+    sessionTokenHash:string,
+  ):InboxAcceptReceiptView|null{
+    const credential=this.#credential(sessionToken,true);
+    return credential
+      ?cancelPreflightedInboxSuggestedUndo(
+        this.#store,credential,command,sessionTokenHash)
+      :null;
+  }
+
+  /** Read-only recovery for an uncertain C-3b Accept, never a new write. */
+  readInboxSuggestionReceipt(
+    actorUserId:string,command:InboxAcceptCommand|InboxAcceptReceiptQuery,
+  ):InboxAcceptReceiptView|null{
+    if(this.#closed)return null;
+    try{
+      const credential=this.#oneShotReadCredential(actorUserId);
+      if(!credential)return null;
+      return readPreflightedStoreSnapshot(this.#store,db=>{
+        if(verifiedActor(db,credential)!==actorUserId)return null;
+        return readInboxAcceptReceiptInSnapshot(db,actorUserId,command);
+      });
+    }catch{return null;}
+  }
+
+  /** Owner-only target-store AI consent; caller must first coordinate the
+   * external non-restore fence. Not connected to any public HTTP route. */
+  changeInboxAIConsent(
+    sessionToken:string,ownerUserId:string,command:InboxConsentCommand,
+    durableSessionTokenHash?:string,
+  ):InboxConsentResult{
+    const credential=this.#credential(sessionToken,true);
+    if(!credential)return {ok:false,reason:"unavailable"};
+    return writePreflightedInboxAIConsent(this.#store,credential,
+      ownerUserId,command,durableSessionTokenHash);
+  }
+
+  /** Owner-private, read-only capacity telemetry. Never release UUIDs or IDs. */
+  readInboxReceiptCapacity(actorUserId:string):InboxCompoundLedgerCapacity|null{
+    if(this.#closed)return null;
+    try{
+      const credential=this.#oneShotReadCredential(actorUserId);
+      if(!credential)return null;
+      return readPreflightedStoreSnapshot(this.#store,db=>{
+        if(verifiedActor(db,credential)!==actorUserId)return null;
+        return readInboxCompoundLedgerCapacity(db);
+      });
+    }catch{return null;}
+  }
+
+  /** Actor-private consent read; caller MUST live-revalidate before release. */
+  readInboxAIConsent(actorUserId:string):TargetInboxAIConsent|null{
+    if(this.#closed)return null;
+    try{
+      const credential=this.#oneShotReadCredential(actorUserId);
+      if(!credential)return null;
+      return readPreflightedStoreSnapshot(this.#store,db=>{
+        if(verifiedActor(db,credential)!==actorUserId)return null;
+        return readTargetInboxAIConsent(db,actorUserId);
+      });
+    }catch{return null;}
   }
 
   /** C-3a: irrevocably fence an unresolved actor UUID or confirm a prior commit. */

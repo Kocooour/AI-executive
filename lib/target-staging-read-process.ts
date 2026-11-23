@@ -62,6 +62,8 @@ export interface StagingPersonalReadConfig {
    * ownerUserId. The raw token never reaches a child process.
    */
   sessionTokenHash?: string;
+  /** C-3b only: server HMAC of a VERIFIED owner cookie, never raw cookie. */
+  c3bOwnerCookieBinding?: string;
   noteSyncSecret?: string;
 }
 
@@ -2697,13 +2699,15 @@ export function parseStagingTargetInboxPage(value:unknown,limit:number):TargetIn
   for(const entry of v.items){
     if(!entry||typeof entry!=="object"||Array.isArray(entry))return null;
     const t=entry as Record<string,unknown>;
-    if(Object.keys(t).sort().join(",")!=="canProcess,effectiveAreaId,expectedRevision,id,status,taskRevision,title,triageRevision"||
+    if(Object.keys(t).sort().join(",")!=="canProcess,canSuggest,effectiveAreaId,expectedRevision,id,status,taskRevision,title,triageRevision"||
         !id(t.id)||typeof t.title!=="string"||!t.title.trim()||
         Buffer.byteLength(t.title,"utf8")>4096||
         !id(t.effectiveAreaId)||!areaKinds.has(t.effectiveAreaId as string)||
         (t.status!=="open"&&t.status!=="completed")||
         !safe(t.taskRevision)||!safe(t.triageRevision)||
-        typeof t.canProcess!=="boolean"||
+        typeof t.canProcess!=="boolean"||typeof t.canSuggest!=="boolean"||
+        (t.canSuggest!==(t.canProcess===true&&t.status==="open"&&
+          areaKinds.get(t.effectiveAreaId as string)==="private"))||
         (t.canProcess?typeof t.expectedRevision!=="string"||
           !REVISION.test(t.expectedRevision):t.expectedRevision!==null))return null;
     if(items.length&&Buffer.compare(Buffer.from(items[items.length-1].id),
@@ -2713,7 +2717,7 @@ export function parseStagingTargetInboxPage(value:unknown,limit:number):TargetIn
     items.push({id:t.id as string,title:t.title as string,status:t.status as "open"|"completed",
       taskRevision:t.taskRevision as number,triageRevision:t.triageRevision as number,
       effectiveAreaId:t.effectiveAreaId as string,canProcess:t.canProcess as boolean,
-      expectedRevision:t.expectedRevision as string|null});
+      canSuggest:t.canSuggest as boolean,expectedRevision:t.expectedRevision as string|null});
   }
   if(v.nextCursor!==null&&
       (!items.length||v.nextCursor!==items[items.length-1].id||items.length!==limit))return null;

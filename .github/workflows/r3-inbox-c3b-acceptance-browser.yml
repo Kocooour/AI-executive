@@ -1,0 +1,75 @@
+name: C-3b Inbox suggestions real-store browser acceptance
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/r3-inbox-c3b-acceptance-browser.yml"
+      - "app/ui/target-inbox*"
+      - "app/ui/views/settings-view.tsx"
+      - "app/api/target-staging/inbox/c3b/**"
+      - "lib/target-inbox-c3b*"
+      - "lib/target-inbox-suggestion*"
+      - "lib/target-inbox-accept-writer.ts"
+      - "lib/target-inbox-ai-consent*"
+      - "lib/target-staging-title-http-process.ts"
+      - "lib/target-inbox-read-model.ts"
+      - "lib/target-inbox-client.ts"
+      - "lib/target-data-invalidation.ts"
+      - "lib/server-ai-provider.ts"
+      - "e2e/fixtures.ts"
+      - "e2e/helpers.ts"
+      - "scripts/target-staging-inbox-c3b-child.mjs"
+      - "e2e/target-inbox-c3b-acceptance.spec.ts"
+      - "e2e/target-personal-store-setup.mjs"
+      - "playwright.config.ts"
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  chromium:
+    name: C-3b ${{ matrix.viewport }}px real SQLite + mocked OpenAI
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        viewport: [390, 1280]
+    timeout-minutes: 30
+    env:
+      CI: "true"
+      NEXT_TELEMETRY_DISABLED: "1"
+      NEXT_PUBLIC_LUMI_DESIGN_V1_PREVIEW: "1"
+      E2E_SKIP_BUILD: "1"
+      E2E_PORT: "3147"
+      LUMI_TARGET_INBOX_E2E: "true"
+      LUMI_TARGET_INBOX_C3B_E2E: "true"
+      # Isolate consent, actor session and provider budgets across viewports.
+      LUMI_TARGET_C3B_VIEWPORT: "${{ matrix.viewport }}"
+    steps:
+      - name: Checkout exact PR head
+        uses: actions/checkout@v5
+      - name: Install pnpm
+        uses: pnpm/action-setup@v5
+        with:
+          version: 10.20.0
+      - name: Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+          cache: pnpm
+      - name: Locked dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Build isolated target app
+        run: pnpm build
+      - name: Chromium
+        run: bash scripts/ci-install-chromium.sh
+      - name: Run C-3b full 390/1280 real-store mock AI acceptance
+        run: pnpm exec playwright test e2e/target-inbox-c3b-acceptance.spec.ts --project=desktop
+      - name: Upload failure evidence
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: lumi-c3b-inbox-acceptance-${{ matrix.viewport }}
+          path: |
+            test-results/
+            playwright-report/
+          retention-days: 7
+          if-no-files-found: ignore

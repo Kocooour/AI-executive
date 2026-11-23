@@ -88,6 +88,7 @@ const globalCaptureTest = process.env.LUMI_TARGET_GLOBAL_CAPTURE_E2E === "true";
 // Single end-to-end acceptance: browser -> real route handlers -> real isolated target SQLite, every personal flag on.
 const personalAcceptanceTest = process.env.LUMI_TARGET_PERSONAL_ACCEPTANCE_E2E === "true";
 const inboxAcceptanceTest = process.env.LUMI_TARGET_INBOX_E2E === "true";
+const c3bAcceptanceTest=process.env.LUMI_TARGET_INBOX_C3B_E2E==="true"&&inboxAcceptanceTest;
 // Workers legitimately inherit LUMI_E2E_RUN_DIR and LUMI_E2E_TARGET_STORE from the first load; a caller-supplied pair is
 // still validated: the store must be exactly <run dir>/target-store with a UUID restore generation and the fixed owner.
 const personalStore = (personalAcceptanceTest || inboxAcceptanceTest) ? (() => {
@@ -122,7 +123,7 @@ export default defineConfig({
     // The webServer env below is run-wide: real-store opt-in must only run
     // these five isolated acceptance specs, never other tests.
     { name: "desktop", use: { ...devices["Desktop Chrome"], storageState: sessionFile }, dependencies: ["setup"],
-      ...(personalAcceptanceTest || inboxAcceptanceTest ? { testMatch: /(?:target-personal-(?:acceptance|my-plan|search-open|create|bfcache|native-bfcache)|target-inbox-acceptance)\.spec\.ts/ } : {}) },
+      ...(personalAcceptanceTest || inboxAcceptanceTest ? { testMatch: /(?:target-personal-(?:acceptance|my-plan|search-open|create|bfcache|native-bfcache)|target-inbox-(?:acceptance|c3b-acceptance))\.spec\.ts/ } : {}) },
   ],
   webServer: {
     command: `${process.env.E2E_SKIP_BUILD ? "" : "pnpm build && "}pnpm start --port ${port} --hostname 127.0.0.1`,
@@ -291,6 +292,11 @@ export default defineConfig({
         AI_EXECUTIVE_TARGET_STAGING_HTTP_INBOX_ENABLED: "true",
         AI_EXECUTIVE_TARGET_STAGING_HTTP_INBOX_WRITE_ENABLED: "true",
       } : {}),
+      ...(c3bAcceptanceTest?{
+        // Explicit isolated C-3b browser opt-in, not a personal-v1 profile flag.
+        AI_EXECUTIVE_TARGET_STAGING_HTTP_C3B_ENABLED:"true",
+        LUMI_TARGET_INBOX_C3B_E2E:"true",
+      }:{}),
       AI_EXECUTIVE_PASSWORD_HASH: passwordHash,
       AI_EXECUTIVE_SESSION_SECRET: sessionSecret,
       AI_EXECUTIVE_DATA_DIR: path.join(runDir, "data"),

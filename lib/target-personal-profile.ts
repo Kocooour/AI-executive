@@ -9,8 +9,10 @@
  * Vše/Osobní/Sdílené scopes for projects and notes, task/project/note details, edits
  * (task title/status/When/delete, note edit/delete, project title incl. reauth recovery),
  * main title search, private note Areas chooser + private note create, private task create,
- * C-3a Inbox (read, explicit Process/Undo; requires target schema v27, upgraded only by deploy-safe.sh). */
+ * C-3a Inbox and C-3b suggestions (first-deploy consent grant requires the
+ * separate fence and owner-approved, verified deploy-safe.sh migration). */
 export const TARGET_PERSONAL_V1_PROFILE=[
+  "AI_EXECUTIVE_TARGET_STAGING_HTTP_C3B_ENABLED",
   "AI_EXECUTIVE_TARGET_STAGING_HTTP_ENABLED",
   "AI_EXECUTIVE_TARGET_STAGING_HTTP_GLOBAL_NOTES_ENABLED",
   "AI_EXECUTIVE_TARGET_STAGING_HTTP_GLOBAL_PROJECTS_ENABLED",
@@ -87,6 +89,7 @@ export const TARGET_PERSONAL_V1_REQUIRED_SETTINGS:readonly {readonly name:string
 export const TARGET_PERSONAL_V1_NOT_SETTINGS:readonly {readonly name:string;readonly reason:string}[]=[
   {name:"AI_EXECUTIVE_TARGET_STAGING_DIAGNOSTICS",reason:"Synthetic stress-test diagnostics only, not a deployment setting."},
   {name:"AI_EXECUTIVE_TARGET_STAGING_SESSION_HASH",reason:"Passed by the server to its own read child only."},
+  {name:"AI_EXECUTIVE_TARGET_STAGING_C3B_OWNER_COOKIE_BINDING",reason:"HMAC of a server-verified owner session cookie passed only to the isolated C-3b child; not a deploy setting or browser-supplied identity."},
   {name:"AI_EXECUTIVE_TARGET_STAGING_INBOX_PROOF_KEY",reason:"Child-only Inbox command proof key derived from AI_EXECUTIVE_SESSION_SECRET; never operator-configured or an application session signing secret."},
   {name:"AI_EXECUTIVE_TARGET_STAGING_PROJECT_TITLE_PROOF_KEY",reason:"Child-only key derived from AI_EXECUTIVE_SESSION_SECRET; not set by operators."},
   {name:"AI_EXECUTIVE_TARGET_STAGING_NOTE_SYNC_SECRET",reason:"Belongs to the excluded note-sync feature."},

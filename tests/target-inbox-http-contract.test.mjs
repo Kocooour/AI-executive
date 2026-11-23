@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import {test} from "node:test";
 import {parseStagingTargetInboxPage} from "../lib/target-staging-read-process.ts";
 import {parseInboxWriteReply,parseInboxReceiptReply} from "../lib/target-inbox-http-process.ts";
-import {parseInboxClientPage} from "../lib/target-inbox-client.ts";
+import {parseInboxClientPage,verifyInboxCommand} from "../lib/target-inbox-client.ts";
 import {targetInboxUiEnabled} from "../lib/target-ui-config.ts";
 import {validTargetInboxTriageCommand} from "../lib/target-inbox-triage-writer.ts";
 import {randomUUID} from "node:crypto";
@@ -15,7 +15,9 @@ const linearization={actorUserId:"alice",areas:[{
 }]};
 const item={id:"task-1",title:"Inbox entry",status:"completed",triageRevision:0,
   taskRevision:2,effectiveAreaId:epoch.areaId,canProcess:true,
-  expectedRevision:"a".repeat(64)};
+  // Completed Inbox items cannot receive a C-3b suggestion even if their
+  // C-3a Process action remains authorized.
+  canSuggest:false,expectedRevision:"a".repeat(64)};
 const raw={ok:true,items:[item],count:1,nextCursor:null,
   areaEpochs:[epoch],linearization};
 const command={commandId:randomUUID(),taskId:item.id,mode:"process",
@@ -40,6 +42,9 @@ test("C-3a: worker parser binds actor/Area witness; browser never sees it",()=>{
     items:[{...item,expectedRevision:null}]},50),null);
   assert.equal(parseStagingTargetInboxPage({...raw,
     items:[{...item,canProcess:false,expectedRevision:null}]},50)!==null,true);
+  assert.equal(parseStagingTargetInboxPage({...raw,
+    items:[{...item,canSuggest:true}]},50),null,
+    "completed Inbox item cannot gain AI suggestion permission");
 });
 
 test("C-3a: receipt proof and Process/Undo responses are exact, not caller-shaped",()=>{
@@ -78,4 +83,57 @@ test("C-3a: all read/write/UI gates default off; no partial promotion",()=>{
     assert.equal(targetInboxUiEnabled({...flags,[key]:undefined}),false,key);
   }
   assert.equal(targetInboxUiEnabled({}),false);
+});
+
+test("C-3a: C-3b capacity pressure retries only the read-only original receipt",async()=>{
+  const original=globalThis.fetch;
+  const calls=[];
+  globalThis.fetch=async(input,init)=>{
+    assert.equal(String(input),"/api/target-staging/inbox/receipt");
+    assert.equal(init.method,"POST");
+    const sent=JSON.parse(init.body);
+    calls.push(sent);
+    if(calls.length<3)
+      return Response.json({error:"Staging unavailable"},{status:503});
+    return Response.json({ok:true,status:"not_recorded",next:null});
+  };
+  try{
+    assert.deepEqual(await verifyInboxCommand(command),
+      {ok:true,status:"not_recorded",next:null});
+    assert.equal(calls.length,3);
+    assert.ok(calls.every(x=>JSON.stringify(x)===JSON.stringify(command)),
+      "only a read-only receipt may be retried, with identical original UUID and CAS");
+  }finally{globalThis.fetch=original;}
+});
+
+test("C-3a: 429 honors receipt Retry-After instead of exhausting the rate bucket",async()=>{
+  const original=globalThis.fetch;
+  let receiptReads=0;
+  globalThis.fetch=async()=>{
+    receiptReads++;
+    return Response.json({error:"Too many requests"},{status:429,
+      headers:{"retry-after":"600"}});
+  };
+  try{
+    // Keep the actor-bound original command unresolved for manual verification
+    // after the server's 10-minute limit. Never repeat Process/Undo writes.
+    assert.deepEqual(await verifyInboxCommand(command),
+      {ok:false,reason:"unavailable"});
+    assert.equal(receiptReads,1,"a 600-second Retry-After cannot fit the 12-second command deadline");
+  }finally{globalThis.fetch=original;}
+});
+
+test("C-3a: authorization refusal and stale receipt never trigger a retry",async()=>{
+  const original=globalThis.fetch;
+  try{
+    for(const [status,reason] of [[403,"signed-out"],[409,"stale"],[404,"feature-off"]]){
+      let calls=0;
+      globalThis.fetch=async()=>{
+        calls++;
+        return Response.json({error:"refused"},{status});
+      };
+      assert.deepEqual(await verifyInboxCommand(command),{ok:false,reason});
+      assert.equal(calls,1,"do not retry permanent refusal "+status);
+    }
+  }finally{globalThis.fetch=original;}
 });

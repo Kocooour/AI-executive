@@ -370,6 +370,7 @@ test("C-3a: lost Process + concurrent title edit cancels old UUID and unlocks fr
   await page.setViewportSize({width:1280,height:844});
   const seeded=store.seed.projects["390"];
   const db=new DatabaseSync(path.join(store.directory,"lumi-target.sqlite"));
+  db.exec("PRAGMA busy_timeout=5000");
   const originalTitle=(db.prepare("SELECT title FROM tasks WHERE id=?")
     .get(seeded.taskId) as {title:string}).title;
   const receiptsBefore=(db.prepare("SELECT COUNT(*) AS n FROM task_triage_receipts WHERE task_id=?")
@@ -386,9 +387,21 @@ test("C-3a: lost Process + concurrent title edit cancels old UUID and unlocks fr
       else await route.continue();
     };
     await page.route("**/api/target-staging/inbox/triage",dropFirst);
+    // A C-3b preview/consent child can briefly occupy capacity while the
+    // C-3a Process response is lost. The ORIGINAL receipt must be retried
+    // read-only; never retry Process or invent another actor-bound UUID.
+    let receiptReads=0;
+    const transientReceipt=async(route:Route)=>{
+      receiptReads++;
+      if(receiptReads===1)await route.fulfill({status:503,contentType:"application/json",
+        body:'{"error":"Staging unavailable"}'});
+      else await route.continue();
+    };
+    await page.route("**/api/target-staging/inbox/receipt",transientReceipt);
     await processAction(page,seeded.taskTitle).click();
     await expect(page.getByRole("button",{name:"Opakovat původní příkaz"}))
       .toBeVisible({timeout:15000});
+    expect(receiptReads).toBeGreaterThanOrEqual(2);
     const witness=(await page.evaluate(()=>
       sessionStorage.getItem("lumi:target-inbox-command:v1")))!;
     const original=JSON.parse(witness) as {command:{commandId:string;taskId:string}};
@@ -434,6 +447,7 @@ test("C-3a: lost Process + concurrent title edit cancels old UUID and unlocks fr
     await page.getByRole("button",{name:"Vrátit do Inboxu (Undo)"}).click();
     await findInboxRow(page,seeded.taskId);
   }finally{
+    await page.unroute("**/api/target-staging/inbox/receipt");
     if(changed)db.prepare("UPDATE tasks SET title=? WHERE id=?")
       .run(originalTitle,seeded.taskId);
     db.close();
@@ -776,7 +790,12 @@ test("C-3a: committed Process receipt recovers after Area move, with no stale Un
   await processAction(page,movedTask.taskTitle).click();
   await expect(page.getByTestId("target-inbox-uncertain")).toBeVisible({timeout:15000});
   expect(commands).toBe(1);
-  await expect.poll(()=>receipts,{timeout:15000}).toBeGreaterThan(0);
+  // Finish all four deliberately failed *read-only* receipt attempts before
+  // changing the task and unblocking the route. An in-flight retry could
+  // otherwise auto-resolve the original Process and remove this button.
+  await expect.poll(()=>receipts,{timeout:15000}).toBe(4);
+  await expect(page.getByRole("button",{name:"Ověřit původní příkaz"}))
+    .toBeVisible();
 
   const db=new DatabaseSync(path.join(store.directory,"lumi-target.sqlite"));
   let moved=false;
@@ -841,7 +860,11 @@ test("C-3a: real Process receipt unlocks after authorized tombstone; never Undo 
   await page.route("**/api/target-staging/inbox/receipt",blockedReceipt);
   await processAction(page,deletedTask.taskTitle).click();
   await expect(page.getByTestId("target-inbox-uncertain")).toBeVisible({timeout:15000});
-  await expect.poll(()=>receipts,{timeout:15000}).toBeGreaterThan(0);
+  // Keep every injected 503 in place until the automatic receipt retry
+  // has exhausted its bounded four attempts and recovery is user-controlled.
+  await expect.poll(()=>receipts,{timeout:15000}).toBe(4);
+  await expect(page.getByRole("button",{name:"Ověřit původní příkaz"}))
+    .toBeVisible();
   expect(commands).toBe(1);
 
   // Run the genuine, pinned delete writer in the same isolated child-process
@@ -855,6 +878,7 @@ test("C-3a: real Process receipt unlocks after authorized tombstone; never Undo 
   ],{cwd:process.cwd(),stdio:["ignore","pipe","inherit"]}).toString());
   expect(deletion).toEqual({ok:true});
   const db=new DatabaseSync(path.join(store.directory,"lumi-target.sqlite"));
+  db.exec("PRAGMA busy_timeout=5000");
   try{
     expect(db.prepare("SELECT 1 FROM tasks WHERE id=?").get(deletedTask.taskId))
       .toBeUndefined();
