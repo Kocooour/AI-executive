@@ -109,9 +109,20 @@ try{
           ?(verified.consent?.epoch??0):0,
         dataScopeVersion:INBOX_AI_DATA_SCOPE_VERSION,suggestion,
       },key);
+      const changes=suggestion.changes;
+      // Display only the name from the verified actor-private candidate set.
+      // Never use the provider's reason to label a committed destination.
+      const actionTargetName=changes.projectId!=="unchanged"
+        ?p.snapshot.privateOpenProjects.find(q=>q.id===changes.projectId)?.name??null
+        :changes.taskAreaId!=="unchanged"&&changes.taskAreaId!==null
+          ?p.snapshot.privateAreas.find(q=>q.id===changes.taskAreaId)?.name??null
+          :null;
+      if((changes.projectId!=="unchanged"||
+          changes.taskAreaId!=="unchanged"&&changes.taskAreaId!==null)&&
+         !actionTargetName)fail();
       const page=storePage();
       if(!sealed||!page)fail();
-      output({ok:true,taskId:request.taskId,token:sealed,
+      output({ok:true,actionTargetName,taskId:request.taskId,token:sealed,
         why:suggestion.why,changes:suggestion.changes,source:suggestion.source,
         restoreGeneration:gen,linearization:page.linearization,
         areaEpochs:page.areaEpochs,privateEpoch:p.personalPlanEpoch,
