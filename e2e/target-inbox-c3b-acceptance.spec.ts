@@ -17,8 +17,11 @@ const store=JSON.parse(process.env.LUMI_E2E_TARGET_STORE||"null") as {
 }|null;
 const readTask=(id:string)=>{
   if(!store)throw Error("missing isolated SQLite");
+  // The app's pinned BEGIN IMMEDIATE writer may briefly hold the SQLite
+  // rollback-journal lock while this test observes Accept/Undo. Bound the
+  // read-only probe's lock wait; never mutate the database from the test.
   const db=new DatabaseSync(path.join(store.directory,"lumi-target.sqlite"),
-    {readOnly:true});
+    {readOnly:true,timeout:2000});
   try{
     const task=db.prepare(`SELECT id,project_id AS projectId,area_id AS areaId,
       triage_state AS triageState FROM tasks WHERE id=?`).get(id) as
