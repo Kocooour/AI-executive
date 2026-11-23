@@ -251,7 +251,9 @@ function sandbox(scenario) {
     LUMI_TEST_LOCK_FILE: lockFile,
   };
   function execute({ recovery = false } = {}) {
-    const result = spawnSync("bash", ["-c", script, "--", newSha, ...(recovery ? ["--recover-stopped"] : [])], {
+    const deployTarget = scenario.startsWith("targetc3b") &&
+      existsSync(path.join(state, "next-target")) ? "c".repeat(40) : newSha;
+    const result = spawnSync("bash", ["-c", script, "--", deployTarget, ...(recovery ? ["--recover-stopped"] : [])], {
       cwd: root, env: {
         ...env,
         ...(scenario === "offoperatorflag"
