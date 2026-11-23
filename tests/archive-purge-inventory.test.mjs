@@ -235,9 +235,16 @@ test("malformed entity payload stays private and fails classification closed", (
   const f = createFixture();
   try {
     const db = new DatabaseSync(f.file);
-    try { db.prepare("INSERT INTO entities(id,payload,updated_at) VALUES(?,?,?)")
-      .run("task:corrupt", secret + "-invalid-json", 1); }
-    finally { db.close(); }
+    try {
+      // The real semantic outbox trigger correctly rejects invalid JSON on INSERT.
+      // Temporarily suspend it to model pre-migration corruption on disk.
+      const ddl = db.prepare("SELECT sql FROM sqlite_master WHERE name = ?")
+        .get("semantic_outbox_entities_insert").sql;
+      db.exec("DROP TRIGGER semantic_outbox_entities_insert");
+      db.prepare("INSERT INTO entities(id,payload,updated_at) VALUES(?,?,?)")
+        .run("task:corrupt", secret + "-invalid-json", 1);
+      db.exec(ddl);
+    } finally { db.close(); }
     f.refresh();
     const report = inventoryCopy(f.file, f.manifest);
     assert.equal(report.malformedEntityRows, 1);
