@@ -34,11 +34,13 @@ import {readTargetInboxAIConsent,targetInboxAIConsentMatchesFence}
   from "./target-inbox-ai-consent";
 import {readInboxAIFenceGrant} from "./target-inbox-ai-consent-fence";
 import {C3B_RECEIPT_MAX_ROWS,C3B_RECEIPT_WARNING_ROWS,
-  C3B_RECEIPT_CANCEL_RESERVE}
+  C3B_RECEIPT_CANCEL_RESERVE,validateC3BMetadataBeforeCommit}
   from "./target-inbox-metadata-validation";
 
 const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const TASK=/^[^\u0000-\u001f\u007f]{1,512}$/u;
+const validTask=(v:unknown):v is string=>
+  typeof v==="string"&&TASK.test(v)&&v.trim()===v;
 const HEX=/^[a-f0-9]{64}$/;
 const ACCEPT="r3:c3b:accept:v1:";
 const UNDO="r3:c3b:undo:v1:";
@@ -59,7 +61,7 @@ const validReceiptQuery=(value:unknown):value is InboxAcceptReceiptQuery=>{
     "commandId,restoreGeneration,taskId"&&
     typeof x.commandId==="string"&&UUID.test(x.commandId)&&
     typeof x.restoreGeneration==="string"&&UUID.test(x.restoreGeneration)&&
-    typeof x.taskId==="string"&&TASK.test(x.taskId);
+    validTask(x.taskId);
 };
 export type InboxAcceptUndoCommand={
   commandId:string;undoOfCommandId:string;taskId:string;
@@ -104,7 +106,7 @@ const validateAccept=(c:unknown):c is InboxAcceptCommand=>{
   return Object.keys(x).sort().join(",")===
     "commandId,displayedChanges,displayedWhy,restoreGeneration,taskId,token"&&
     typeof x.commandId==="string"&&UUID.test(x.commandId)&&
-    typeof x.taskId==="string"&&TASK.test(x.taskId)&&
+    validTask(x.taskId)&&
     typeof x.restoreGeneration==="string"&&UUID.test(x.restoreGeneration)&&
     typeof x.token==="string"&&x.token.length<=8192&&x.token.length>0&&
     typeof x.displayedWhy==="string"&&x.displayedWhy.length<=512&&
@@ -119,7 +121,7 @@ const validateUndo=(c:unknown):c is InboxAcceptUndoCommand=>{
     typeof x.commandId==="string"&&UUID.test(x.commandId)&&
     typeof x.undoOfCommandId==="string"&&UUID.test(x.undoOfCommandId)&&
     x.commandId.toLowerCase()!==x.undoOfCommandId.toLowerCase()&&
-    typeof x.taskId==="string"&&TASK.test(x.taskId)&&
+    validTask(x.taskId)&&
     typeof x.restoreGeneration==="string"&&UUID.test(x.restoreGeneration)&&
     validEpoch(x.expectedTaskRevision)&&validEpoch(x.expectedTriageRevision)&&
     validEpoch(x.expectedPrivateEpoch)&&
@@ -174,7 +176,7 @@ const readCancelReceipt=(db:DatabaseSync,key:string):CancelReceipt|null=>{
     return Object.keys(v).sort().join(",")===
       "actor,cancelledAtMs,commandId,kind,restoreGeneration,taskId,v"&&
       v.v===1&&v.kind==="cancelled"&&typeof v.actor==="string"&&
-      typeof v.taskId==="string"&&TASK.test(v.taskId)&&
+      validTask(v.taskId)&&
       typeof v.commandId==="string"&&UUID.test(v.commandId)&&
       typeof v.restoreGeneration==="string"&&UUID.test(v.restoreGeneration)&&
       validEpoch(v.cancelledAtMs)&&(v.cancelledAtMs as number)>0
@@ -523,7 +525,8 @@ function undoLocked(db:DatabaseSync,actor:string,c:InboxAcceptUndoCommand):Inbox
     v:1,kind:"undo",actor,taskId:c.taskId,
     commandId:c.commandId.toLowerCase(),
     undoOfCommandId:c.undoOfCommandId.toLowerCase(),digest,
-    restoreGeneration:c.restoreGeneration.toLowerCase(),committedAtMs:Date.now(),
+    restoreGeneration:c.restoreGeneration.toLowerCase(),
+    committedAtMs:Math.max(Date.now(),original.committedAtMs),
   });
   return {ok:true};
 }
@@ -670,7 +673,7 @@ function cancelUndoLocked(db:DatabaseSync,actor:string,
     return {view:current,inserted:false};
   }
   if(!checkCapacity(db,"undo"))return null;
-  const cancelledAtMs=Date.now();
+  const cancelledAtMs=Math.max(Date.now(),original.committedAtMs);
   if(!validEpoch(cancelledAtMs)||cancelledAtMs<=0)return null;
   storeReceipt(db,receiptKey(UNDO,actor,command.undoOfCommandId),{
     v:1,kind:"undo_cancelled",actor,taskId:command.taskId,
@@ -694,7 +697,8 @@ export function cancelPreflightedInboxSuggestedUndo(
     const result=cancelUndoLocked(ctx.db,actor,command);
     if(!result)return null;
     if(!result.inserted)return result.view;
-    if(!sessionIsLive(ctx.db,actor,sessionTokenHash)||!ctx.stillPinned())
+    if(!sessionIsLive(ctx.db,actor,sessionTokenHash)||!ctx.stillPinned()||
+       !validateC3BMetadataBeforeCommit(ctx.db))
       return null;
     if(!ctx.commit({kind:"task_triage",payload:{}}))return null;
     return result.view;
@@ -715,7 +719,8 @@ export function cancelPreflightedInboxSuggestedAction(
     const result=cancelLocked(ctx.db,actor,command);
     if(!result)return null;
     if(!result.inserted)return result.view;
-    if(!sessionIsLive(ctx.db,actor,sessionTokenHash)||!ctx.stillPinned())
+    if(!sessionIsLive(ctx.db,actor,sessionTokenHash)||!ctx.stillPinned()||
+       !validateC3BMetadataBeforeCommit(ctx.db))
       return null;
     if(!ctx.commit({kind:"task_triage",payload:{}}))return null;
     return result.view;
@@ -761,6 +766,7 @@ export function writePreflightedInboxSuggestedAction(
     if(!result.ok||result.replayed)return result;
     if(!sessionIsLive(ctx.db,actor,work.sessionTokenHash)||
        !ctx.stillPinned())return bad("session_revoked");
+    if(!validateC3BMetadataBeforeCommit(ctx.db))return bad("write_failed");
     if(!ctx.commit({kind:"task_triage",payload:{}}))return bad("write_failed");
     return result;
   },()=>bad("unavailable"),()=>bad("write_failed"));
