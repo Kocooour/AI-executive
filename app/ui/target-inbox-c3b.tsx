@@ -10,7 +10,7 @@ import {fetchC3bProposal,getC3bConsent,acceptC3b,cancelC3b,receiptC3b,
 import {useTargetGeneration,useTargetRuntime} from "./target-data-provider";
 
 export type C3bOutcome={
-  command:C3bAccept;status:"sending"|"committed"|"uncertain";
+  command:C3bAccept;title?:string;status:"sending"|"committed"|"uncertain";
   next:C3bReceipt["next"];
 };
 type Props={item:TargetInboxItem;restoreGeneration:string;
@@ -198,7 +198,7 @@ export default function TargetInboxC3b({item,restoreGeneration,
       };
       // Persist original UUID before dispatch, but a normal pending write
       // displays a polite "sending" status, never recovery alert controls.
-      if(!onOutcome({command,status:"sending",next:null}))return;
+      if(!onOutcome({command,title:item.title,status:"sending",next:null}))return;
       pendingAI.current?.abort();pendingAI.current=null;
       setAiBusy(false);setAlternative(null);
       setStatus("sending");
@@ -210,7 +210,7 @@ export default function TargetInboxC3b({item,restoreGeneration,
       const checked=await receiptC3b(command);
       if(!runtime.known()||runtime.generation()!==generation)return;
       if(checked.ok&&checked.value.status==="committed"){
-        onOutcome({command,status:"committed",next:checked.value.next});
+        onOutcome({command,title:item.title,status:"committed",next:checked.value.next});
         return;
       }
       // 409 is not proof against late commit. Atomically cancel the ORIGINAL
@@ -223,11 +223,11 @@ export default function TargetInboxC3b({item,restoreGeneration,
           onStale();return;
         }
         if(cancelled.ok&&cancelled.value.status==="committed"){
-          onOutcome({command,status:"committed",next:cancelled.value.next});
+          onOutcome({command,title:item.title,status:"committed",next:cancelled.value.next});
           return;
         }
       }
-      onOutcome({command,status:"uncertain",next:null});
+      onOutcome({command,title:item.title,status:"uncertain",next:null});
     }finally{acceptInFlight.current=false;}
   }
   const changes=suggestion?.changes;
