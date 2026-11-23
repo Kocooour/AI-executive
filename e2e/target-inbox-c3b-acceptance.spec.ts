@@ -379,3 +379,32 @@ test("C-3b 390px: lost response -> reload -> query-only cancellation terminates 
   await locateRow(page,task.taskId);
   expect(readTask(task.taskId).task?.triageState).toBe("unprocessed");
 });
+
+test("C-3b 390px: stale Accept 409 plus pinned cancellation unlocks Inbox",async({page})=>{
+  test.setTimeout(90_000);
+  if(process.env.LUMI_TARGET_C3B_VIEWPORT==="1280")test.skip();
+  if(!store)throw Error("C-3b needs isolated store");
+  await page.setViewportSize({width:390,height:844});
+  await openInbox(page);
+  const seeded=store.seed.c3bProjects["390"];
+  const suggestion=await locateRow(page,seeded.taskId);
+  await expect(suggestion.getByRole("button",{name:/Přijmout/}))
+    .toBeVisible({timeout:25000});
+  // A stale HTTP response is not proof that a late writer cannot commit.
+  // The client must check the original receipt and atomically cancel its UUID.
+  await page.route("**/api/target-staging/inbox/c3b/accept",route=>
+    route.fulfill({status:409,contentType:"application/json",
+      body:JSON.stringify({error:"Revision conflict"})}));
+  const cancel=page.waitForResponse(r=>r.request().method()==="POST"&&
+    new URL(r.url()).pathname==="/api/target-staging/inbox/c3b/cancel");
+  await suggestion.getByRole("button",{name:/Přijmout/}).click();
+  const terminal=await cancel;
+  expect(terminal.status()).toBe(200);
+  expect(await terminal.json()).toMatchObject({ok:true,status:"cancelled"});
+  await expect(page.getByTestId("target-c3b-stale")).toBeVisible({timeout:25000});
+  await expect(page.getByTestId("target-c3b-uncertain")).toHaveCount(0);
+  await expect(count(page)).toBeVisible();
+  await page.unroute("**/api/target-staging/inbox/c3b/accept");
+  await locateRow(page,seeded.taskId);
+  expect(readTask(seeded.taskId).task?.triageState).toBe("unprocessed");
+});
