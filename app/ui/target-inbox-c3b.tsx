@@ -131,8 +131,24 @@ export default function TargetInboxC3b({item,restoreGeneration,
     };
   },[visible,disabled,runtime,generation,item.id,restoreGeneration,
     fetchKey]);
+  // Read durable consent after local rules become visible. The optional AI
+  // button is absent while the owner has revoked or not granted consent.
+  useEffect(()=>{
+    if(!visible||disabled||status!=="ready"||
+       suggestion?.source!=="rule"||!runtime?.known()||
+       runtime.generation()!==generation)return;
+    const ctrl=new AbortController();
+    void getC3bConsent(ctrl.signal).then(result=>{
+      if(ctrl.signal.aborted||!runtime.known()||
+         runtime.generation()!==generation)return;
+      setAiConsentEnabled(Boolean(result.ok&&result.value.enabled&&
+        !result.value.pending));
+      if(result.ok===false&&result.reason==="signed-out")revoked.current();
+    });
+    return ()=>ctrl.abort();
+  },[visible,disabled,status,suggestion?.source,runtime,generation,fetchKey]);
   async function requestAI(){
-    if(disabled||!suggestion||status!=="ready"||aiBusy||
+    if(disabled||!aiConsentEnabled||!suggestion||status!=="ready"||aiBusy||
        pendingAI.current||alternative||suggestion.source==="ai"||
        !runtime?.known()||runtime.generation()!==generation)return;
     const ctrl=new AbortController();
@@ -170,36 +186,49 @@ export default function TargetInboxC3b({item,restoreGeneration,
     }
   }
   async function accept(){
-    if(disabled||!suggestion||status!=="ready"||
+    if(acceptInFlight.current||disabled||!suggestion||status!=="ready"||
        !runtime?.known()||runtime.generation()!==generation)return;
-    const command:C3bAccept={
-      commandId:crypto.randomUUID(),taskId:item.id,
-      restoreGeneration:suggestion.restoreGeneration,
-      token:suggestion.token,displayedWhy:suggestion.why,
-      displayedChanges:suggestion.changes,
-    };
-    // The original UUID must be saved without private text BEFORE dispatch.
-    // Refuse the write if the tab recovery witness cannot be persisted.
-    if(!onOutcome({command,status:"uncertain",next:null}))return;
-    pendingAI.current?.abort();pendingAI.current=null;
-    setAiBusy(false);setAlternative(null);
-    setStatus("sending");
-    const sent=await acceptC3b(command);
-    if(!runtime.known()||runtime.generation()!==generation)return;
-    if(sent.ok===false&&sent.reason==="signed-out"){
-      setSuggestion(null);onRevoked();return;
-    }
-    // A network error, 409 or a stale HTTP release does NOT prove a
-    // pinned write did not commit. Always check the ORIGINAL receipt.
-    const checked=await receiptC3b(command);
-    if(!runtime.known()||runtime.generation()!==generation)return;
-    if(checked.ok&&checked.value.status==="committed"){
-      onOutcome({command,status:"committed",next:checked.value.next});
-      return;
-    }
-    onOutcome({command,status:"uncertain",next:null});
-    if(checked.ok&&checked.value.status==="not_recorded")
-      setStatus("failed");
+    acceptInFlight.current=true;
+    try{
+      const command:C3bAccept={
+        commandId:crypto.randomUUID(),taskId:item.id,
+        restoreGeneration:suggestion.restoreGeneration,
+        token:suggestion.token,displayedWhy:suggestion.why,
+        displayedChanges:suggestion.changes,
+      };
+      // Persist original UUID before dispatch, but a normal pending write
+      // displays a polite "sending" status, never recovery alert controls.
+      if(!onOutcome({command,status:"sending",next:null}))return;
+      pendingAI.current?.abort();pendingAI.current=null;
+      setAiBusy(false);setAlternative(null);
+      setStatus("sending");
+      const sent=await acceptC3b(command);
+      if(!runtime.known()||runtime.generation()!==generation)return;
+      if(sent.ok===false&&sent.reason==="signed-out"){
+        setSuggestion(null);onRevoked();return;
+      }
+      const checked=await receiptC3b(command);
+      if(!runtime.known()||runtime.generation()!==generation)return;
+      if(checked.ok&&checked.value.status==="committed"){
+        onOutcome({command,status:"committed",next:checked.value.next});
+        return;
+      }
+      // 409 is not proof against late commit. Atomically cancel the ORIGINAL
+      // UUID only after an initial not_recorded receipt.
+      if(sent.ok===false&&sent.reason==="stale"&&checked.ok&&
+         checked.value.status==="not_recorded"){
+        const cancelled=await cancelC3b({commandId:command.commandId,
+          taskId:command.taskId,restoreGeneration:command.restoreGeneration});
+        if(cancelled.ok&&cancelled.value.status==="cancelled"){
+          onStale();return;
+        }
+        if(cancelled.ok&&cancelled.value.status==="committed"){
+          onOutcome({command,status:"committed",next:cancelled.value.next});
+          return;
+        }
+      }
+      onOutcome({command,status:"uncertain",next:null});
+    }finally{acceptInFlight.current=false;}
   }
   const changes=suggestion?.changes;
   const moving=Boolean(changes&&(changes.projectId!=="unchanged"||
