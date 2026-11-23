@@ -278,7 +278,8 @@ function sandbox(scenario) {
       events: readFileSync(path.join(state, "events"), "utf8").trim().split("\n"),
       head: readFileSync(path.join(state, "head"), "utf8").trim(),
       service: readFileSync(path.join(state, "service"), "utf8").trim(),
-      backups: readdirSync(backups),
+      // The separate root-only first-consent recovery proof is not an archive.
+      backups: readdirSync(backups).filter(name=>name.startsWith("deploy-")),
     };
   }
   return {
