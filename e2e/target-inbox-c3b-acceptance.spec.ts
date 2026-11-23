@@ -69,9 +69,8 @@ test("C-3b: signed rules appear before a delayed optional AI response",async({pa
   await expect(withoutGrant.getByRole("button",{name:"Přijmout"}))
     .toBeVisible({timeout:25000});
   expect(unconsentedAIRequests).toBe(0);
-  await withoutGrant.getByRole("button",{name:"Získat alternativu AI"}).click();
-  await expect(withoutGrant.getByText("AI návrhy nejsou povoleny v Nastavení."))
-    .toBeVisible({timeout:20000});
+  await expect(withoutGrant.getByRole("button",{name:"Získat alternativu AI"}))
+    .toHaveCount(0);
   expect(unconsentedAIRequests,
     "the browser must refuse an OpenAI request until durable consent is enabled").toBe(0);
   // The check only authorizes a model request after an explicit Settings
@@ -110,7 +109,7 @@ test("C-3b: signed rules appear before a delayed optional AI response",async({pa
     const visibleAction=await suggestion.locator(".targetInboxSuggestionHeading span")
       .innerText();
     expect(visibleAction).toContain(seeded.projectTitle);
-    expect(visibleAction).toMatch(/\d{4}-\d{2}-\d{2}/);
+    expect(visibleAction).toMatch(/\d{1,2}\.\s?\d{1,2}\.\s?\d{4}/);
     // No second request is allowed just because a row came into view.
     expect(aiStarted).toBe(false);
     await suggestion.getByRole("button",{name:"Získat alternativu AI"}).click();
@@ -176,7 +175,7 @@ for(const width of [390,1280]){
     // BEFORE clicking Why or Accept (not hidden behind an explanation).
     const visibleAction=await suggestion.locator(".targetInboxSuggestionHeading span").innerText();
     expect(visibleAction).toContain(seeded.projectTitle);
-    expect(visibleAction).toMatch(/\d{4}-\d{2}-\d{2}/);
+    expect(visibleAction).toMatch(/\d{1,2}\.\s?\d{1,2}\.\s?\d{4}/);
     await suggestion.getByRole("button",{name:"Proč tento návrh?"}).click();
     await expect(suggestion.locator(".targetInboxSuggestionWhy")).toBeVisible();
     const why=await suggestion.locator(".targetInboxSuggestionWhy").innerText();
