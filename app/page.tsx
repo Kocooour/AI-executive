@@ -22,6 +22,9 @@ export default function Page() {
   // list or the plan, so they are no consumer either.
   const targetSearch=Boolean(config)&&targetMainTitleSearchEnabled(process.env);
   const targetInbox=Boolean(config)&&targetInboxUiEnabled(process.env);
+  // Render no per-row C-3b GETs when the server flag is disabled.
+  const targetInboxC3b=targetInbox&&
+    process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_C3B_ENABLED==="true";
   const targetData = targetDataNeeded(config)||targetSearch;
   // H1-real.9: both server-only opt-ins are required to mount the owner-only
   // Context source status; never expose this feature merely because the
@@ -30,6 +33,6 @@ export default function Page() {
     process.env.AI_EXECUTIVE_HUMANWIKI_SOURCE_WITNESS_UI_ENABLED === "true" &&
     process.env.AI_EXECUTIVE_HUMANWIKI_SOURCE_WITNESS_STATUS_ENABLED === "true";
   return targetData
-    ? <TargetDataProvider><LumiAppRoot targetHomeSummary={Boolean(config)&&targetHomeSummaryEnabled(process.env)} targetInboxRead={targetInbox} targetMyPlan={config?.myPlan} targetScopes={config?.scopes} targetDetails={config?.details} targetEdits={config?.edits} targetCreates={config?.creates} targetNoteEdit={Boolean(config?.details.note) && targetNoteEditUiEnabled(process.env)} targetProjectEdit={Boolean(config?.details.project) && targetProjectTitleEditUiEnabled(process.env)} targetPrivateNoteAreas={Boolean(config?.scopes.notes)&&targetPrivateNoteAreaUiEnabled(process.env)} targetPrivateNoteCreate={Boolean(config?.scopes.notes)&&targetPrivateNoteCreateUiEnabled(process.env)} targetPrivateTaskCreate={Boolean(config?.scopes.notes&&config?.myPlan.enabled&&config?.details.task)&&targetPrivateTaskCreateUiEnabled(process.env)} targetSearch={targetSearch} humanWikiSourceStatusEnabled={humanWikiSourceStatusEnabled} /></TargetDataProvider>
+    ? <TargetDataProvider><LumiAppRoot targetHomeSummary={Boolean(config)&&targetHomeSummaryEnabled(process.env)} targetInboxRead={targetInbox} targetInboxC3b={targetInboxC3b} targetMyPlan={config?.myPlan} targetScopes={config?.scopes} targetDetails={config?.details} targetEdits={config?.edits} targetCreates={config?.creates} targetNoteEdit={Boolean(config?.details.note) && targetNoteEditUiEnabled(process.env)} targetProjectEdit={Boolean(config?.details.project) && targetProjectTitleEditUiEnabled(process.env)} targetPrivateNoteAreas={Boolean(config?.scopes.notes)&&targetPrivateNoteAreaUiEnabled(process.env)} targetPrivateNoteCreate={Boolean(config?.scopes.notes)&&targetPrivateNoteCreateUiEnabled(process.env)} targetPrivateTaskCreate={Boolean(config?.scopes.notes&&config?.myPlan.enabled&&config?.details.task)&&targetPrivateTaskCreateUiEnabled(process.env)} targetSearch={targetSearch} humanWikiSourceStatusEnabled={humanWikiSourceStatusEnabled} /></TargetDataProvider>
     : <LumiAppRoot humanWikiSourceStatusEnabled={humanWikiSourceStatusEnabled} />;
 }

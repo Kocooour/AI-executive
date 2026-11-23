@@ -164,7 +164,9 @@ function useInbox(limit:number){
   },[page,key,limit,revoke,runtime,generation,markHidden]);
   return {page,loading,signedOut,gate:gate.kind,reload,loadMore,revoke,retry};
 }
-export default function TargetInbox({language="cs",taskDetail=false}:{language?:Language;taskDetail?:boolean}){
+export default function TargetInbox({language="cs",taskDetail=false,
+  suggestionsEnabled=false}:{language?:Language;taskDetail?:boolean;
+  suggestionsEnabled?:boolean}){
   const {page,loading,signedOut,gate,reload,loadMore,revoke,retry}=useInbox(50);
   const runtime=useTargetRuntime(),generation=useTargetGeneration();
   const [recoveredGeneration,setRecoveredGeneration]=useState("");
@@ -676,7 +678,7 @@ export default function TargetInbox({language="cs",taskDetail=false}:{language?:
           :<strong>{item.title}</strong>}
           {item.status==="completed"&&<span className="targetInboxCompleted">
             {speak("Dokončeno, čeká na zpracování","Completed, awaiting processing")}</span>}
-          {item.canSuggest&&
+          {suggestionsEnabled&&item.canSuggest&&
             <TargetInboxC3b item={item} restoreGeneration={page.restoreGeneration}
               language={language} disabled={Boolean(unresolved)||
                 (c3bOutcome?.status==="committed"&&
