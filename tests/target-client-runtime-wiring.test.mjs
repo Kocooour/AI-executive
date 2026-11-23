@@ -38,7 +38,10 @@ test("the server page mounts the provider only behind the flag and reads it per 
   assert.match(page,/const targetSearch=Boolean\(config\)&&targetMainTitleSearchEnabled\(process\.env\);/);
   assert.match(page,/const targetInbox=Boolean\(config\)&&targetInboxUiEnabled\(process\.env\);/);
   assert.match(page,/const targetData = targetDataNeeded\(config\)\|\|targetSearch;/);
-  assert.match(page,/targetData\s*\n?\s*\?\s*<TargetDataProvider><LumiAppRoot targetHomeSummary=\{Boolean\(config\)&&targetHomeSummaryEnabled\(process\.env\)\} targetInboxRead=\{targetInbox\} targetMyPlan=\{config\?\.myPlan\} targetScopes=\{config\?\.scopes\} targetDetails=\{config\?\.details\} targetEdits=\{config\?\.edits\}/);
+  // C-3b is a separate server-gated prop; a one-line JSX assertion must
+  // validate its semantics without depending on an old prop adjacency.
+  assert.match(page,/const targetInboxC3b=targetInbox&&\s*process\.env\.AI_EXECUTIVE_TARGET_STAGING_HTTP_C3B_ENABLED==="true"/);
+  assert.match(page,/targetData\s*\n?\s*\?\s*<TargetDataProvider><LumiAppRoot targetHomeSummary=\{Boolean\(config\)&&targetHomeSummaryEnabled\(process\.env\)\} targetInboxRead=\{targetInbox\} targetInboxC3b=\{targetInboxC3b\} targetMyPlan=\{config\?\.myPlan\} targetScopes=\{config\?\.scopes\} targetDetails=\{config\?\.details\} targetEdits=\{config\?\.edits\}/);
   assert.match(page,/targetNoteEdit=\{Boolean\(config\?\.details\.note\) && targetNoteEditUiEnabled\(process\.env\)\}/);
   assert.match(page,/targetProjectEdit=\{Boolean\(config\?\.details\.project\) && targetProjectTitleEditUiEnabled\(process\.env\)\}/);
   assert.match(page,/targetPrivateNoteAreas=\{Boolean\(config\?\.scopes\.notes\)&&targetPrivateNoteAreaUiEnabled\(process\.env\)\}/);
