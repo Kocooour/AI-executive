@@ -14,11 +14,11 @@ export type C3bOutcome={
   next:C3bReceipt["next"];
 };
 type Props={item:TargetInboxItem;restoreGeneration:string;
-  language:"cs"|"en";disabled:boolean;
+  language:"cs"|"en";disabled:boolean;aiConsentEnabled:boolean;
   onOutcome:(outcome:C3bOutcome)=>boolean;onRevoked:()=>void;
   onStale:()=>void};
 export default function TargetInboxC3b({item,restoreGeneration,
-  language,disabled,onOutcome,onRevoked,onStale}:Props){
+  language,disabled,aiConsentEnabled,onOutcome,onRevoked,onStale}:Props){
   const runtime=useTargetRuntime(),generation=useTargetGeneration();
   const root=useRef<HTMLDivElement|null>(null);
   const whyId=useId();
@@ -36,7 +36,6 @@ export default function TargetInboxC3b({item,restoreGeneration,
   const [alternative,setAlternative]=useState<C3bProposal|null>(null);
   const [aiBusy,setAiBusy]=useState(false);
   const [aiNotice,setAiNotice]=useState<"off"|"failed"|null>(null);
-  const [aiConsentEnabled,setAiConsentEnabled]=useState(false);
   const [status,setStatus]=useState<"idle"|"loading"|"ready"|"off"|"failed"|"sending">("idle");
   const [expanded,setExpanded]=useState(false);
   const speak=(cs:string,en:string)=>language==="cs"?cs:en;
@@ -63,7 +62,7 @@ export default function TargetInboxC3b({item,restoreGeneration,
       pendingAI.current?.abort();pendingAI.current=null;
       setAiBusy(false);setAiNotice(null);
       setSuggestion(null);setAlternative(null);
-      setAiConsentEnabled(false);setStatus("idle");setFetchKey(n=>n+1);
+      setStatus("idle");setFetchKey(n=>n+1);
     };
     const blurred=()=>{lastBlur.current=Date.now();};
     const awakened=()=>{
@@ -93,7 +92,6 @@ export default function TargetInboxC3b({item,restoreGeneration,
     setSuggestion(null);
     setAlternative(null);
     setAiBusy(false);setAiNotice(null);
-    setAiConsentEnabled(false);
     setStatus("idle");
     setFetchKey(n=>n+1);
   },[]);
@@ -131,22 +129,8 @@ export default function TargetInboxC3b({item,restoreGeneration,
     };
   },[visible,disabled,runtime,generation,item.id,restoreGeneration,
     fetchKey]);
-  // Read durable consent after local rules become visible. The optional AI
-  // button is absent while the owner has revoked or not granted consent.
-  useEffect(()=>{
-    if(!visible||disabled||status!=="ready"||
-       suggestion?.source!=="rule"||!runtime?.known()||
-       runtime.generation()!==generation)return;
-    const ctrl=new AbortController();
-    void getC3bConsent(ctrl.signal).then(result=>{
-      if(ctrl.signal.aborted||!runtime.known()||
-         runtime.generation()!==generation)return;
-      setAiConsentEnabled(Boolean(result.ok&&result.value.enabled&&
-        !result.value.pending));
-      if(result.ok===false&&result.reason==="signed-out")revoked.current();
-    });
-    return ()=>ctrl.abort();
-  },[visible,disabled,status,suggestion?.source,runtime,generation,fetchKey]);
+  // One session-scoped durable consent read is owned by the Inbox parent.
+  // Rows receive only the boolean, never launch their own consent children.
   async function requestAI(){
     if(disabled||!aiConsentEnabled||!suggestion||status!=="ready"||aiBusy||
        pendingAI.current||alternative||suggestion.source==="ai"||
