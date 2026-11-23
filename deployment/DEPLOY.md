@@ -354,7 +354,9 @@ The original owner decision is #471, reconfirmed in #492 on 2026-11-23.
 first reviewed C-3b rollout has already created
 `/var/lib/ai-executive-target/inbox-ai-consent-fence.sqlite`, but
 `--first-grant` fails before both stores agree, the deployment leaves the
-service **stopped** and preserves a root-only, mode 0600 proof at
+service **stopped** and deliberately retains the **consent-aware checkout**
+(no code-only rollback to a version lacking C-3b), so the reviewed recovery
+entrypoint can safely verify both stores. It preserves a root-only, mode 0600 proof at
 `/var/backups/ai-executive/.inbox-ai-first-consent-pending`. This proof
 is written only after successful first-time provisioning, *before* the first
 grant, and records the owner, restore generation and device/inode of that
