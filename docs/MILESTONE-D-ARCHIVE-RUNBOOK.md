@@ -43,11 +43,15 @@ Example, on a disposable synthetic fixture or externally attested copy:
       --db-copy /tmp/lumi-d-review/store.sqlite \
       --manifest /tmp/lumi-d-review/verified-provenance.json
 
-The tool refuses direct input from /var/lib/ai-executive or the configured
-AI_EXECUTIVE_DATA_DIR, including a configuration path or parent directory that
-is itself a symlink. The configured protected root must be an existing,
-resolvable directory or inventory fails closed. It also rejects input-file
-symlinks, hardlinked databases, and input copies with
+The tool refuses live input from **both** /var/lib/ai-executive (legacy)
+and **/var/lib/ai-executive-target** (including personal-v1), regardless of
+environment overrides. It additionally refuses the configured
+AI_EXECUTIVE_DATA_DIR and any supplied AI_EXECUTIVE_TARGET_DIRECTORY or
+AI_EXECUTIVE_TARGET_DATA_DIR. Every existing root is physically canonicalized,
+including symlinked parent directories. Configured protected roots must exist
+and be resolvable or inventory fails closed. This check occurs **before any
+SQLite open**, even when an operator manifest appears valid. The tool also
+rejects input-file symlinks, hardlinked databases, and input copies with
 SQLite -wal/-shm files (including symlinks). It verifies a SHA-256 bound to the
 independent manifest both before and after scanning, and compares the full
 table/index/trigger DDL digest to the approved reference. A changed trigger
