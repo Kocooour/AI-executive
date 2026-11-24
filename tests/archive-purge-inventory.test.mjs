@@ -369,6 +369,98 @@ test("malformed entity payload stays private and fails classification closed", (
   } finally { f.cleanup(); }
 });
 
+test("malformed legacy relation JSON fails closed without revealing private payload", () => {
+  const f = createFixture();
+  try {
+    const db = new DatabaseSync(f.file);
+    try {
+      // The production legacy schema deliberately has no JSON constraint
+      // on relations.payload, and readSnapshot() parses it unconditionally.
+      db.prepare("INSERT INTO relations(id,payload,created_at) VALUES(?,?,?)")
+        .run("relation:corrupt", secret + "-invalid-json", 1);
+    } finally { db.close(); }
+    f.refresh();
+    const report = inventoryCopy(f.file, f.manifest);
+    assert.equal(report.malformedRelationRows, 1);
+    assert.equal(report.invalidRelationShapeRows, 0);
+    assert.equal(report.inventoryComplete, false);
+    assert.ok(report.blockers.includes("malformed-relations"));
+    assert.deepEqual(report.derivedLinks, {});
+    assert.equal(JSON.stringify(report).includes(secret), false);
+    const proc = cli(f);
+    assert.equal(proc.status, 1, proc.stderr);
+    assert.equal(proc.stdout.includes(secret), false);
+    assert.equal(proc.stderr.includes(secret), false);
+  } finally { f.cleanup(); }
+});
+
+test("syntactically valid but structurally broken relations also fail closed", () => {
+  const f = createFixture();
+  try {
+    const db = new DatabaseSync(f.file);
+    try {
+      const stmt = db.prepare("INSERT INTO relations(id,payload,created_at) VALUES(?,?,?)");
+      stmt.run("relation:scalar", JSON.stringify(secret), 1);
+      stmt.run("relation:missing-fields", JSON.stringify({ id: "relation:missing-fields" }), 1);
+    } finally { db.close(); }
+    f.refresh();
+    const report = inventoryCopy(f.file, f.manifest);
+    assert.equal(report.malformedRelationRows, 0);
+    assert.equal(report.invalidRelationShapeRows, 2);
+    assert.ok(report.blockers.includes("invalid-relation-shapes"));
+    assert.equal(report.inventoryComplete, false);
+    assert.equal(JSON.stringify(report).includes(secret), false);
+  } finally { f.cleanup(); }
+});
+
+test("both copy and manifest paths are protected before manifest parsing", () => {
+  const f = createFixture();
+  const targetDir = path.join(testRoot, "synthetic-protected-manifest");
+  const alias = path.join(testRoot, "configured-target-manifest-alias");
+  const protectedManifest = path.join(targetDir, "fake-manifest.json");
+  const oldTarget = process.env.AI_EXECUTIVE_TARGET_DIRECTORY;
+  try {
+    mkdirSync(targetDir);
+    // This would throw SyntaxError if the path guard were after JSON.parse.
+    writeFileSync(protectedManifest, secret + "-not-valid-json");
+    symlinkSync(targetDir, alias, "dir");
+    process.env.AI_EXECUTIVE_TARGET_DIRECTORY = alias;
+    assert.throws(() => inventoryCopy(f.file, protectedManifest), /live-database-refused/);
+    // The same applies when the copy itself is protected.
+    assert.throws(() => inventoryCopy(protectedManifest, f.manifest), /live-database-refused/);
+    const proc = spawnSync(process.execPath,
+      [script, "--db-copy", f.file, "--manifest", protectedManifest], {
+        encoding: "utf8", env: { ...process.env },
+      });
+    assert.equal(proc.status, 2);
+    assert.equal(proc.stdout, "");
+    assert.equal(proc.stderr.includes(secret), false);
+  } finally {
+    if (oldTarget === undefined) delete process.env.AI_EXECUTIVE_TARGET_DIRECTORY;
+    else process.env.AI_EXECUTIVE_TARGET_DIRECTORY = oldTarget;
+    rmSync(alias, { force: true });
+    rmSync(targetDir, { recursive: true, force: true });
+    f.cleanup();
+  }
+});
+
+test("oversized manifest and same-inode manifest are rejected before reading", () => {
+  const f = createFixture();
+  const largeManifest = path.join(path.dirname(f.file), "too-large-manifest.json");
+  try {
+    writeFileSync(largeManifest, "x".repeat(64 * 1024 + 1));
+    assert.throws(() => inventoryCopy(f.file, largeManifest), /manifest-size-refused/);
+    assert.throws(() => inventoryCopy(f.file, f.file), /manifest-must-be-separate/);
+    const proc = spawnSync(process.execPath,
+      [script, "--db-copy", f.file, "--manifest", largeManifest], {
+        encoding: "utf8",
+      });
+    assert.equal(proc.status, 2);
+    assert.equal(proc.stdout, "");
+    assert.equal(proc.stderr.includes("x".repeat(20)), false);
+  } finally { f.cleanup(); }
+});
+
 test("CLI refuses --apply, hardlink alias, symlinks, sidecars, missing/stale manifest", () => {
   const f = createFixture();
   try {
