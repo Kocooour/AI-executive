@@ -44,7 +44,10 @@ Example, on a disposable synthetic fixture or externally attested copy:
       --manifest /tmp/lumi-d-review/verified-provenance.json
 
 The tool refuses direct input from /var/lib/ai-executive or the configured
-AI_EXECUTIVE_DATA_DIR, symlinks, hardlinked databases, and input copies with
+AI_EXECUTIVE_DATA_DIR, including a configuration path or parent directory that
+is itself a symlink. The configured protected root must be an existing,
+resolvable directory or inventory fails closed. It also rejects input-file
+symlinks, hardlinked databases, and input copies with
 SQLite -wal/-shm files (including symlinks). It verifies a SHA-256 bound to the
 independent manifest both before and after scanning, and compares the full
 table/index/trigger DDL digest to the approved reference. A changed trigger
@@ -59,8 +62,14 @@ Unknown table/trigger names (which can themselves contain private text)
 are reported by **count**, never printed. Unmatched references may refer
 to other stores and are NOT automatically classified as lost. Derived
 attention/notification references include tasks, notes, projects, Areas and
-workspaces. No row IDs, titles, bodies, private file paths or secret values
-are emitted.
+workspaces. Protected HumanWiki `context_subjects.canonical_entity_id`
+links are counted separately, distinguishing null (intentionally unlinked),
+links to archived entities and non-null links not matched in this Archive.
+`note_revisions.note_id` ownership is counted as a note dependency.
+Workspace IDs are collected once from archived workspace entities, then
+matched against aggregated distinct `workspace_id` groups from protected
+tables; the scanner does not perform an unindexed JSON entity scan per row.
+No row IDs, titles, bodies, private file paths or secret values are emitted.
 
 An inventory with inventoryComplete:true means only that the scanner saw
 the expected tables, required columns/triggers and approved DDL on a
