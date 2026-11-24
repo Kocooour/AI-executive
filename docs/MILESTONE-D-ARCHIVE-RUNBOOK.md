@@ -49,14 +49,19 @@ environment overrides. It additionally refuses the configured
 AI_EXECUTIVE_DATA_DIR and any supplied AI_EXECUTIVE_TARGET_DIRECTORY or
 AI_EXECUTIVE_TARGET_DATA_DIR. Every existing root is physically canonicalized,
 including symlinked parent directories. Configured protected roots must exist
-and be resolvable or inventory fails closed. This check occurs **before any
-SQLite open**, even when an operator manifest appears valid. The tool also
+and be resolvable or inventory fails closed. **Both** --db-copy and --manifest
+are validated against all protected roots before reading either file or opening
+SQLite. The manifest is constrained to **64 KiB maximum** and read via a
+single descriptor with inode/size validation; an oversized, replaced or
+protected manifest fails closed. The tool also
 rejects input-file symlinks, hardlinked databases, and input copies with
 SQLite -wal/-shm files (including symlinks). It verifies a SHA-256 bound to the
 independent manifest both before and after scanning, and compares the full
 table/index/trigger DDL digest to the approved reference. A changed trigger
 body, missing required column, missing trigger or unknown schema name fails
-closed. The same-name schema hash requires a **trusted baseline**; refreshing
+closed. Malformed JSON payloads in both `entities` and `relations`, or
+relations missing required ID/workspace/source/target/type fields, are reported
+by count and block inventory completion without exposing the payload. The same-name schema hash requires a **trusted baseline**; refreshing
 the manifest from an unreviewed corrupted schema is NOT validation.
 
 Output is content-free: only approved table names and field names appear,
