@@ -47,16 +47,21 @@ function createFixture() {
     applySchema(db);
     const entity = db.prepare("INSERT INTO entities(id,payload,updated_at) VALUES(?,?,?)");
     entity.run("workspace:personal", JSON.stringify({
-      id: "workspace:personal", type: "workspace", title: secret, workspaceId: "personal",
+      id: "workspace:personal", type: "workspace", title: secret,
+      status: "active", workspaceId: "personal", properties: {},
+      createdAt: 1, updatedAt: 1,
     }), 1);
     for (const kind of ["task", "note", "project"]) {
       entity.run(kind + ":archived", JSON.stringify({
         id: kind + ":archived", type: kind, title: secret,
-        content: secret, workspaceId: "personal",
+        content: secret, status: "active", workspaceId: "personal",
+        properties: {}, createdAt: 1, updatedAt: 1,
       }), 1);
     }
     entity.run("area:archived", JSON.stringify({
-      id: "area:archived", type: "area", title: secret, workspaceId: "personal",
+      id: "area:archived", type: "area", title: secret,
+      status: "active", workspaceId: "personal", properties: {},
+      createdAt: 1, updatedAt: 1,
     }), 1);
     db.prepare("INSERT INTO relations(id,payload,created_at) VALUES(?,?,?)")
       .run("relation:valid", JSON.stringify({
@@ -149,7 +154,10 @@ test("isolated real-schema inventory reports running/deleted-task matrix without
     assert.equal(report.entityCounts.task, 1);
     assert.equal(report.entityCounts.note, 1);
     assert.equal(report.entityCounts.project, 1);
+    assert.equal(report.invalidEntityShapeRows, 0);
+    assert.equal(report.mismatchedEntityIdRows, 0);
     assert.equal(report.tableCounts.relations, 1);
+    assert.equal(report.mismatchedRelationIdRows, 0);
     assert.equal(report.malformedRelationRows, 0);
     assert.equal(report.invalidRelationShapeRows, 0);
     assert.deepEqual(report.sessionsByState.running,
@@ -419,6 +427,97 @@ test("syntactically valid but structurally broken relations also fail closed", (
     assert.ok(report.blockers.includes("invalid-relation-shapes"));
     assert.equal(report.inventoryComplete, false);
     assert.equal(JSON.stringify(report).includes(secret), false);
+  } finally { f.cleanup(); }
+});
+
+test("entity with missing or mistyped required fields blocks inventory without exposing payload", () => {
+  const f = createFixture();
+  try {
+    const db = new DatabaseSync(f.file);
+    try {
+      // A syntactically valid, known-type entity can still be malformed.
+      const put = db.prepare("INSERT INTO entities(id,payload,updated_at) VALUES(?,?,?)");
+      put.run("task:missing-fields", JSON.stringify({
+        id: "task:missing-fields", type: "task", title: secret,
+        workspaceId: "personal", createdAt: 1, updatedAt: 1,
+        // No status or properties — the prior checker incorrectly accepted this.
+      }), 1);
+      put.run("note:bad-types", JSON.stringify({
+        id: "note:bad-types", type: "note", title: 123,
+        status: "active", workspaceId: "personal", properties: [],
+        createdAt: "not-a-number", updatedAt: false,
+      }), 1);
+    } finally { db.close(); }
+    f.refresh();
+    const report = inventoryCopy(f.file, f.manifest);
+    assert.equal(report.malformedEntityRows, 0);
+    assert.equal(report.unrecognizedEntityRows, 0);
+    assert.equal(report.invalidEntityShapeRows, 2);
+    assert.equal(report.mismatchedEntityIdRows, 0);
+    assert.ok(report.blockers.includes("invalid-entity-shapes"));
+    assert.equal(report.inventoryComplete, false);
+    assert.deepEqual(report.derivedLinks, {});
+    assert.equal(JSON.stringify(report).includes(secret), false);
+    const proc = cli(f);
+    assert.equal(proc.status, 1, proc.stderr);
+    assert.equal(proc.stdout.includes(secret), false);
+    assert.equal(proc.stderr.includes(secret), false);
+  } finally { f.cleanup(); }
+});
+
+test("different row and payload entity ids fail closed without exposing either id", () => {
+  const f = createFixture();
+  const mismatchedId = "PRIVATE_ENTITY_PAYLOAD_ID_NEVER_PRINT";
+  try {
+    const db = new DatabaseSync(f.file);
+    try {
+      db.prepare("INSERT INTO entities(id,payload,updated_at) VALUES(?,?,?)")
+        .run("task:stored-row", JSON.stringify({
+          id: mismatchedId, type: "task", title: secret, status: "active",
+          workspaceId: "personal", properties: {}, createdAt: 1, updatedAt: 1,
+        }), 1);
+    } finally { db.close(); }
+    f.refresh();
+    const report = inventoryCopy(f.file, f.manifest);
+    assert.equal(report.invalidEntityShapeRows, 0);
+    assert.equal(report.mismatchedEntityIdRows, 1);
+    assert.equal(report.inventoryComplete, false);
+    assert.ok(report.blockers.includes("mismatched-entity-ids"));
+    assert.equal(JSON.stringify(report).includes(mismatchedId), false);
+    assert.equal(JSON.stringify(report).includes(secret), false);
+    const proc = cli(f);
+    assert.equal(proc.status, 1, proc.stderr);
+    assert.equal(proc.stdout.includes(mismatchedId), false);
+    assert.equal(proc.stderr.includes(mismatchedId), false);
+  } finally { f.cleanup(); }
+});
+
+test("different row and payload relation ids fail closed without exposing either id", () => {
+  const f = createFixture();
+  const mismatchedId = "PRIVATE_RELATION_PAYLOAD_ID_NEVER_PRINT";
+  try {
+    const db = new DatabaseSync(f.file);
+    try {
+      db.prepare("INSERT INTO relations(id,payload,created_at) VALUES(?,?,?)")
+        .run("relation:stored-row", JSON.stringify({
+          id: mismatchedId, workspaceId: "personal",
+          sourceEntityId: "task:archived", targetEntityId: "note:archived",
+          relationType: "related", createdAt: 1,
+        }), 1);
+    } finally { db.close(); }
+    f.refresh();
+    const report = inventoryCopy(f.file, f.manifest);
+    assert.equal(report.invalidRelationShapeRows, 0);
+    assert.equal(report.mismatchedRelationIdRows, 1);
+    assert.equal(report.inventoryComplete, false);
+    assert.ok(report.blockers.includes("mismatched-relation-ids"));
+    assert.deepEqual(report.derivedLinks, {});
+    assert.equal(JSON.stringify(report).includes(mismatchedId), false);
+    assert.equal(JSON.stringify(report).includes(secret), false);
+    const proc = cli(f);
+    assert.equal(proc.status, 1, proc.stderr);
+    assert.equal(proc.stdout.includes(mismatchedId), false);
+    assert.equal(proc.stderr.includes(mismatchedId), false);
   } finally { f.cleanup(); }
 });
 
