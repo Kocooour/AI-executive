@@ -58,6 +58,12 @@ function createFixture() {
     entity.run("area:archived", JSON.stringify({
       id: "area:archived", type: "area", title: secret, workspaceId: "personal",
     }), 1);
+    db.prepare("INSERT INTO relations(id,payload,created_at) VALUES(?,?,?)")
+      .run("relation:valid", JSON.stringify({
+        id: "relation:valid", workspaceId: "personal",
+        sourceEntityId: "note:archived", targetEntityId: "project:archived",
+        relationType: "belongs_to", createdAt: 1,
+      }), 1);
     const s = db.prepare(
       "INSERT INTO work_sessions(id,workspace_id,task_id,state,revision,accumulated_ms," +
       "running_since,started_at,completed_at,created_at,updated_at) " +
@@ -143,6 +149,9 @@ test("isolated real-schema inventory reports running/deleted-task matrix without
     assert.equal(report.entityCounts.task, 1);
     assert.equal(report.entityCounts.note, 1);
     assert.equal(report.entityCounts.project, 1);
+    assert.equal(report.tableCounts.relations, 1);
+    assert.equal(report.malformedRelationRows, 0);
+    assert.equal(report.invalidRelationShapeRows, 0);
     assert.deepEqual(report.sessionsByState.running,
       { total: 1, linkedToArchiveTask: 1, notMatchedInArchive: 0 });
     assert.deepEqual(report.sessionsByState.completed,
