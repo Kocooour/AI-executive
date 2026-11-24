@@ -212,7 +212,8 @@ export function inventoryDatabase(db) {
 
   const entityCounts = Object.fromEntries(ENTITY_KINDS.map((kind) => [kind, 0]));
   let malformedEntityRows = 0, unrecognizedEntityRows = 0;
-  let malformedRelationRows = 0, invalidRelationShapeRows = 0;
+  let invalidEntityShapeRows = 0, mismatchedEntityIdRows = 0;
+  let malformedRelationRows = 0, invalidRelationShapeRows = 0, mismatchedRelationIdRows = 0;
   const canInspect = missingTables.length === 0 && invalidColumns.length === 0;
   if (canInspect) {
     malformedEntityRows = Number(db.prepare(
@@ -223,6 +224,31 @@ export function inventoryDatabase(db) {
     // blocking inventory defect, not a clean archive.
     malformedRelationRows = Number(db.prepare(
       "SELECT COUNT(*) AS count FROM relations WHERE NOT json_valid(payload)"
+    ).get().count);
+    // The stored payload is a real Entity, not merely JSON with an allowed
+    // kind. Check every mandatory field in lib/db.ts without reading its
+    // private values into JavaScript or writing them to diagnostics.
+    invalidEntityShapeRows = Number(db.prepare(
+      "SELECT COUNT(*) AS count FROM entities WHERE " +
+      "CASE WHEN json_valid(payload) THEN " +
+      "(json_type(payload) IS NOT 'object' OR " +
+      "json_type(payload, '$.id') IS NOT 'text' OR " +
+      "json_type(payload, '$.type') IS NOT 'text' OR " +
+      "json_type(payload, '$.title') IS NOT 'text' OR " +
+      "json_type(payload, '$.status') IS NOT 'text' OR " +
+      "json_type(payload, '$.workspaceId') IS NOT 'text' OR " +
+      "json_type(payload, '$.properties') IS NOT 'object' OR " +
+      "COALESCE(json_type(payload, '$.createdAt') IN ('integer', 'real'), 0) = 0 OR " +
+      "COALESCE(json_type(payload, '$.updatedAt') IN ('integer', 'real'), 0) = 0) " +
+      "ELSE 0 END"
+    ).get().count);
+    // A mismatched SQLite identity would be read back under the JSON id,
+    // while purge/delete would operate on the SQL primary key.
+    mismatchedEntityIdRows = Number(db.prepare(
+      "SELECT COUNT(*) AS count FROM entities WHERE " +
+      "CASE WHEN json_valid(payload) THEN " +
+      "(json_type(payload, '$.id') IS 'text' AND " +
+      "json_extract(payload, '$.id') IS NOT id) ELSE 0 END"
     ).get().count);
     invalidRelationShapeRows = Number(db.prepare(
       "SELECT COUNT(*) AS count FROM relations WHERE " +
@@ -235,6 +261,12 @@ export function inventoryDatabase(db) {
       "json_type(payload, '$.relationType') IS NOT 'text') " +
       "ELSE 0 END"
     ).get().count);
+    mismatchedRelationIdRows = Number(db.prepare(
+      "SELECT COUNT(*) AS count FROM relations WHERE " +
+      "CASE WHEN json_valid(payload) THEN " +
+      "(json_type(payload, '$.id') IS 'text' AND " +
+      "json_extract(payload, '$.id') IS NOT id) ELSE 0 END"
+    ).get().count);
     for (const row of db.prepare(
       "SELECT json_extract(payload, '$.type') AS kind, COUNT(*) AS count " +
       "FROM entities WHERE json_valid(payload) GROUP BY kind"
@@ -246,7 +278,9 @@ export function inventoryDatabase(db) {
   const taskLinks = {}, workspaceLinks = {}, derivedLinks = {};
   let sessionsByState = {};
   if (canInspect && malformedEntityRows === 0 && unrecognizedEntityRows === 0 &&
-      malformedRelationRows === 0 && invalidRelationShapeRows === 0) {
+      invalidEntityShapeRows === 0 && mismatchedEntityIdRows === 0 &&
+      malformedRelationRows === 0 && invalidRelationShapeRows === 0 &&
+      mismatchedRelationIdRows === 0) {
     for (const table of TASK_TABLES) taskLinks[table] = refCount(db, table, "task_id", ["task"]);
     const workspaceIds = legacyWorkspaceIds(db);
     for (const table of WORKSPACE_TABLES) workspaceLinks[table] = workspaceRefs(db, table, workspaceIds);
@@ -270,13 +304,18 @@ export function inventoryDatabase(db) {
   if (unknownTriggerCount) blockers.push("unclassified-triggers");
   if (malformedEntityRows) blockers.push("malformed-entities");
   if (unrecognizedEntityRows) blockers.push("unknown-entity-types");
+  if (invalidEntityShapeRows) blockers.push("invalid-entity-shapes");
+  if (mismatchedEntityIdRows) blockers.push("mismatched-entity-ids");
   if (malformedRelationRows) blockers.push("malformed-relations");
   if (invalidRelationShapeRows) blockers.push("invalid-relation-shapes");
+  if (mismatchedRelationIdRows) blockers.push("mismatched-relation-ids");
   return {
     format: "lumi-archive-inventory-v2", diagnosticOnly: true,
     destructiveActionsAllowed: false, integrityOk, foreignKeyViolations,
     entityCounts, malformedEntityRows, unrecognizedEntityRows,
-    malformedRelationRows, invalidRelationShapeRows, tableCounts,
+    invalidEntityShapeRows, mismatchedEntityIdRows,
+    malformedRelationRows, invalidRelationShapeRows, mismatchedRelationIdRows,
+    tableCounts,
     sessionsByState, taskLinks, workspaceLinks, derivedLinks,
     missingTables, unknownTableCount, invalidColumns, missingTriggerCount,
     unknownTriggerCount, triggerDigest, schemaDigest, blockers, inventoryComplete: blockers.length === 0,
