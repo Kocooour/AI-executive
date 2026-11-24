@@ -271,22 +271,30 @@ export function inventoryCopy(file, manifestFile) {
   const s = standalone(file);
   if (!manifestFile || !path.isAbsolute(manifestFile)) throw new Error("manifest-required");
   const manifest = readManifest(manifestFile);
-  // realpath on the configured directory is essential: path.resolve alone
-  // does not follow an alias of the parent directory. Fail closed when that
-  // configured root is missing, unreadable or no longer a directory.
+  // Refuse ALL live stores before opening SQLite, including the canonical
+  // personal-v1 target. The static target root is pinned by deploy-safe.sh;
+  // env-supplied aliases are additional guards, never replacements.
+  // Resolve every existing root physically so a symlinked parent cannot
+  // redirect a protected store to an apparently different path.
   const protectedDirs = [];
-  for (const [index, entry] of ["/var/lib/ai-executive", process.env.AI_EXECUTIVE_DATA_DIR]
-    .entries()) {
-    if (!entry) continue;
-    const declared = path.resolve(entry);
+  const roots = [
+    { directory: "/var/lib/ai-executive", required: false },
+    { directory: "/var/lib/ai-executive-target", required: false },
+    { directory: process.env.AI_EXECUTIVE_DATA_DIR, required: true },
+    { directory: process.env.AI_EXECUTIVE_TARGET_DIRECTORY, required: true },
+    { directory: process.env.AI_EXECUTIVE_TARGET_DATA_DIR, required: true },
+  ];
+  for (const { directory, required } of roots) {
+    if (!directory) continue;
+    const declared = path.resolve(directory);
     protectedDirs.push(declared);
     try {
       if (!statSync(declared).isDirectory()) throw new Error("invalid-protected-root");
       protectedDirs.push(realpathSync(declared));
     } catch (error) {
-      // A missing conventional root is normal on developer machines; the
-      // configured data root is required evidence and must always resolve.
-      if (index !== 0 || error?.code !== "ENOENT" || pathExists(declared)) {
+      // Conventional roots can be absent on developer machines. But a
+      // configured live root must always resolve; dangling aliases refuse.
+      if (required || error?.code !== "ENOENT" || pathExists(declared)) {
         throw new Error("protected-directory-unverified");
       }
     }
