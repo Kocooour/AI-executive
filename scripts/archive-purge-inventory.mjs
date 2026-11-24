@@ -3,7 +3,7 @@
 // The manifest binds bytes to an operator attestation; it does NOT prove the
 // backup process was trustworthy. This script has no destructive command.
 import { createHash } from "node:crypto";
-import { closeSync, lstatSync, openSync, readFileSync, readSync, realpathSync, statSync } from "node:fs";
+import { closeSync, fstatSync, lstatSync, openSync, readSync, realpathSync, statSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { DatabaseSync } from "node:sqlite";
@@ -28,6 +28,7 @@ export const KNOWN_TABLES = Object.freeze([
 export const PROTECTED_STORE_ROOTS = Object.freeze([
   "/var/lib/ai-executive", "/var/lib/ai-executive-target",
 ]);
+const MAX_MANIFEST_BYTES = 64 * 1024;
 const ENTITY_KINDS = ["task", "note", "project", "area", "workspace"];
 const WORKSPACE_TABLES = [
   "attention_states", "attention_history", "calendar_sources", "calendar_events",
@@ -211,10 +212,28 @@ export function inventoryDatabase(db) {
 
   const entityCounts = Object.fromEntries(ENTITY_KINDS.map((kind) => [kind, 0]));
   let malformedEntityRows = 0, unrecognizedEntityRows = 0;
+  let malformedRelationRows = 0, invalidRelationShapeRows = 0;
   const canInspect = missingTables.length === 0 && invalidColumns.length === 0;
   if (canInspect) {
     malformedEntityRows = Number(db.prepare(
       "SELECT COUNT(*) AS count FROM entities WHERE NOT json_valid(payload)"
+    ).get().count);
+    // SQLite has no JSON CHECK constraint on the legacy relations table.
+    // readSnapshot() JSON.parse()s every relation; an invalid one is a
+    // blocking inventory defect, not a clean archive.
+    malformedRelationRows = Number(db.prepare(
+      "SELECT COUNT(*) AS count FROM relations WHERE NOT json_valid(payload)"
+    ).get().count);
+    invalidRelationShapeRows = Number(db.prepare(
+      "SELECT COUNT(*) AS count FROM relations WHERE " +
+      "CASE WHEN json_valid(payload) THEN " +
+      "(json_type(payload) <> 'object' OR " +
+      "json_type(payload, '$.id') <> 'text' OR " +
+      "json_type(payload, '$.workspaceId') <> 'text' OR " +
+      "json_type(payload, '$.sourceEntityId') <> 'text' OR " +
+      "json_type(payload, '$.targetEntityId') <> 'text' OR " +
+      "json_type(payload, '$.relationType') <> 'text') " +
+      "ELSE 0 END"
     ).get().count);
     for (const row of db.prepare(
       "SELECT json_extract(payload, '$.type') AS kind, COUNT(*) AS count " +
@@ -226,7 +245,8 @@ export function inventoryDatabase(db) {
   }
   const taskLinks = {}, workspaceLinks = {}, derivedLinks = {};
   let sessionsByState = {};
-  if (canInspect && malformedEntityRows === 0 && unrecognizedEntityRows === 0) {
+  if (canInspect && malformedEntityRows === 0 && unrecognizedEntityRows === 0 &&
+      malformedRelationRows === 0 && invalidRelationShapeRows === 0) {
     for (const table of TASK_TABLES) taskLinks[table] = refCount(db, table, "task_id", ["task"]);
     const workspaceIds = legacyWorkspaceIds(db);
     for (const table of WORKSPACE_TABLES) workspaceLinks[table] = workspaceRefs(db, table, workspaceIds);
@@ -250,18 +270,45 @@ export function inventoryDatabase(db) {
   if (unknownTriggerCount) blockers.push("unclassified-triggers");
   if (malformedEntityRows) blockers.push("malformed-entities");
   if (unrecognizedEntityRows) blockers.push("unknown-entity-types");
+  if (malformedRelationRows) blockers.push("malformed-relations");
+  if (invalidRelationShapeRows) blockers.push("invalid-relation-shapes");
   return {
     format: "lumi-archive-inventory-v2", diagnosticOnly: true,
     destructiveActionsAllowed: false, integrityOk, foreignKeyViolations,
-    entityCounts, malformedEntityRows, unrecognizedEntityRows, tableCounts,
+    entityCounts, malformedEntityRows, unrecognizedEntityRows,
+    malformedRelationRows, invalidRelationShapeRows, tableCounts,
     sessionsByState, taskLinks, workspaceLinks, derivedLinks,
     missingTables, unknownTableCount, invalidColumns, missingTriggerCount,
     unknownTriggerCount, triggerDigest, schemaDigest, blockers, inventoryComplete: blockers.length === 0,
   };
 }
-function readManifest(file) {
-  const s = standalone(file);
-  const manifest = JSON.parse(readFileSync(s.file, "utf8"));
+function readManifest(info) {
+  // Never read a manifest with uncontrolled length. Use a single descriptor
+  // and verify inode/size BEFORE reading bytes: path changes or symlink swaps
+  // must not redirect this parser into a live or oversized file.
+  if (info.bytes <= 0 || info.bytes > MAX_MANIFEST_BYTES) throw new Error("manifest-size-refused");
+  const fd = openSync(info.file, "r");
+  let manifest;
+  try {
+    const current = fstatSync(fd);
+    if (!current.isFile() || current.nlink !== 1 ||
+        current.dev !== info.dev || current.ino !== info.ino ||
+        current.size !== info.bytes || current.size > MAX_MANIFEST_BYTES) {
+      throw new Error("manifest-file-changed");
+    }
+    const bytes = Buffer.alloc(current.size);
+    let used = 0;
+    while (used < bytes.length) {
+      const size = readSync(fd, bytes, used, bytes.length - used, used);
+      if (size === 0) throw new Error("manifest-truncated");
+      used += size;
+    }
+    // A growing file must not be accepted as a complete manifest.
+    if (readSync(fd, Buffer.alloc(1), 0, 1, used) !== 0) {
+      throw new Error("manifest-grown");
+    }
+    manifest = JSON.parse(bytes.toString("utf8"));
+  } finally { closeSync(fd); }
   if (manifest.format !== "lumi-archive-isolated-copy-v1" ||
       manifest.method !== "sqlite-backup" || manifest.consistent !== true ||
       !/^[0-9a-f]{64}$/.test(manifest.sourceStoreIdentity || "") ||
@@ -273,14 +320,12 @@ function readManifest(file) {
   return manifest;
 }
 export function inventoryCopy(file, manifestFile) {
+  // Resolve both paths and refuse protected roots BEFORE opening or reading
+  // either file. These checks cover both the legacy and canonical target
+  // production stores, as well as runtime-configured aliases.
   const s = standalone(file);
   if (!manifestFile || !path.isAbsolute(manifestFile)) throw new Error("manifest-required");
-  const manifest = readManifest(manifestFile);
-  // Refuse ALL live stores before opening SQLite, including the canonical
-  // personal-v1 target. The static target root is pinned by deploy-safe.sh;
-  // env-supplied aliases are additional guards, never replacements.
-  // Resolve every existing root physically so a symlinked parent cannot
-  // redirect a protected store to an apparently different path.
+  const manifestInfo = standalone(manifestFile);
   const protectedDirs = [];
   const roots = [
     ...PROTECTED_STORE_ROOTS.map((directory) => ({ directory, required: false })),
@@ -296,16 +341,19 @@ export function inventoryCopy(file, manifestFile) {
       if (!statSync(declared).isDirectory()) throw new Error("invalid-protected-root");
       protectedDirs.push(realpathSync(declared));
     } catch (error) {
-      // Conventional roots can be absent on developer machines. But a
-      // configured live root must always resolve; dangling aliases refuse.
       if (required || error?.code !== "ENOENT" || pathExists(declared)) {
         throw new Error("protected-directory-unverified");
       }
     }
   }
-  if (protectedDirs.some((dir) => s.file === dir || s.file.startsWith(dir + path.sep))) {
+  if ([s.file, manifestInfo.file].some((filePath) =>
+    protectedDirs.some((dir) => filePath === dir || filePath.startsWith(dir + path.sep)))) {
     throw new Error("live-database-refused");
   }
+  if (manifestInfo.dev === s.dev && manifestInfo.ino === s.ino) {
+    throw new Error("manifest-must-be-separate");
+  }
+  const manifest = readManifest(manifestInfo);
   // Including a dangling symlink. Do not silently omit uncheckpointed WAL data.
   if (pathExists(s.file + "-wal") || pathExists(s.file + "-shm")) {
     throw new Error("sqlite-sidecars-refused");
