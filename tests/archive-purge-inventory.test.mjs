@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { linkSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { linkSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -14,6 +14,7 @@ import { classifiedTables } from "../lib/backup-scope.ts";
 const testRoot = mkdtempSync(path.join(tmpdir(), "lumi-archive-test-"));
 after(() => rmSync(testRoot, { recursive: true, force: true }));
 process.env.AI_EXECUTIVE_DATA_DIR = path.join(testRoot, "no-live-data");
+mkdirSync(process.env.AI_EXECUTIVE_DATA_DIR);
 const { applySchema } = await import("../lib/server-store.ts");
 const repo = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const script = path.join(repo, "scripts/archive-purge-inventory.mjs");
@@ -85,6 +86,22 @@ function createFixture() {
       "INSERT INTO calendar_sources(id,workspace_id,provider,label,encrypted_url,status," +
       "created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)"
     ).run("source:one", "personal", "ical", "calendar", "encrypted", "active", 1, 1);
+    const humanWiki = db.prepare(
+      "INSERT INTO context_subjects(id,workspace_id,subject_type,canonical_entity_id," +
+      "display_title,created_at,updated_at) VALUES(?,?,?,?,?,?,?)"
+    );
+    humanWiki.run("subject:task", "personal", "task", "task:archived", secret, 1, 1);
+    humanWiki.run("subject:project", "personal", "project", "project:archived", secret, 1, 1);
+    humanWiki.run("subject:unlinked", "personal", "person", null, secret, 1, 1);
+    humanWiki.run("subject:external", "personal", "task", "task:other-store", secret, 1, 1);
+    const revision = db.prepare(
+      "INSERT INTO note_revisions(id,note_id,workspace_id,revision,title,content," +
+      "content_sha256,origin,store_revision,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)"
+    );
+    revision.run("rev:archive", "note:archived", "personal", 1, secret,
+      secret, "a".repeat(64), "test", 1, 1);
+    revision.run("rev:external", "note:other-store", "personal", 1, secret,
+      secret, "b".repeat(64), "test", 1, 1);
   } finally {
     db.close();
   }
@@ -136,6 +153,13 @@ test("isolated real-schema inventory reports running/deleted-task matrix without
       { total: 1, linkedToLegacyWorkspace: 1, withoutMatchingLegacyWorkspace: 0 });
     assert.equal(report.derivedLinks.attention_states.linkedToArchive, 2);
     assert.equal(report.derivedLinks.notification_deliveries.linkedToArchive, 2);
+    assert.deepEqual(report.derivedLinks.context_subjects, {
+      total: 4, nullReferences: 1, nonNullReferences: 3,
+      linkedToArchive: 2, notMatchedInArchive: 1,
+    });
+    assert.deepEqual(report.derivedLinks.note_revisions, {
+      total: 2, linkedToArchive: 1, notMatchedInArchive: 1,
+    });
     assert.equal(JSON.stringify(report).includes(secret), false);
     assert.equal(JSON.stringify(report).includes(f.file), false);
     const proc = cli(f);
@@ -146,6 +170,52 @@ test("isolated real-schema inventory reports running/deleted-task matrix without
       assert.equal(output.includes(f.file), false);
     }
   } finally { f.cleanup(); }
+});
+
+test("workspace-link inventory scales by distinct workspace, not entities per row", () => {
+  const f = createFixture();
+  try {
+    const db = new DatabaseSync(f.file);
+    try {
+      // A large protected table with just two distinct workspaces. The old
+      // correlated query parsed/scanned all entities once for each row.
+      const insert = db.prepare(
+        "INSERT INTO context_commands(workspace_id,idempotency_key,request_hash," +
+        "result_payload,created_at) VALUES(?,?,?,?,?)"
+      );
+      for (let i = 0; i < 3000; i++) {
+        insert.run(i % 2 === 0 ? "personal" : "external",
+          "command:" + i, "hash", "{}", 1);
+      }
+      const plan = db.prepare(
+        "EXPLAIN QUERY PLAN SELECT workspace_id, COUNT(*) FROM context_commands GROUP BY workspace_id"
+      ).all().map((row) => String(row.detail)).join(" ");
+      assert.doesNotMatch(plan, /CORRELATED SCALAR SUBQUERY|SCAN e\\b/i);
+    } finally { db.close(); }
+    f.refresh();
+    const report = inventoryCopy(f.file, f.manifest);
+    assert.equal(report.inventoryComplete, true);
+    assert.deepEqual(report.workspaceLinks.context_commands, {
+      total: 3000, linkedToLegacyWorkspace: 1500, withoutMatchingLegacyWorkspace: 1500,
+    });
+  } finally { f.cleanup(); }
+});
+
+test("symlinked protected data root resolves to physical directory and refuses live copy", () => {
+  const f = createFixture();
+  const oldRoot = process.env.AI_EXECUTIVE_DATA_DIR;
+  const alias = path.join(testRoot, "configured-root-alias");
+  try {
+    symlinkSync(path.dirname(f.file), alias, "dir");
+    process.env.AI_EXECUTIVE_DATA_DIR = alias;
+    assert.throws(() => inventoryCopy(f.file, f.manifest), /live-database-refused/);
+    process.env.AI_EXECUTIVE_DATA_DIR = path.join(testRoot, "root-does-not-exist");
+    assert.throws(() => inventoryCopy(f.file, f.manifest), /protected-directory-unverified/);
+  } finally {
+    process.env.AI_EXECUTIVE_DATA_DIR = oldRoot;
+    rmSync(alias);
+    f.cleanup();
+  }
 });
 
 test("inverting running/completed task references changes per-state dependency matrix", () => {
