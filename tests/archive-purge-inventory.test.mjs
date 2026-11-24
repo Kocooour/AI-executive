@@ -7,7 +7,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import test, { after } from "node:test";
 import { fileURLToPath } from "node:url";
-import { KNOWN_TABLES, inventoryCopy, inventoryDatabase } from "../scripts/archive-purge-inventory.mjs";
+import { KNOWN_TABLES, PROTECTED_STORE_ROOTS, inventoryCopy, inventoryDatabase } from "../scripts/archive-purge-inventory.mjs";
 import { classifiedTables } from "../lib/backup-scope.ts";
 
 // Do not attach fixtures to the app's normal runtime store.
@@ -213,6 +213,52 @@ test("symlinked protected data root resolves to physical directory and refuses l
     assert.throws(() => inventoryCopy(f.file, f.manifest), /protected-directory-unverified/);
   } finally {
     process.env.AI_EXECUTIVE_DATA_DIR = oldRoot;
+    rmSync(alias);
+    f.cleanup();
+  }
+});
+
+test("target store is always a protected root, independent of runtime settings", () => {
+  assert.deepEqual([...PROTECTED_STORE_ROOTS], [
+    "/var/lib/ai-executive", "/var/lib/ai-executive-target",
+  ]);
+  assert.equal(
+    path.resolve("/var/lib/ai-executive-target/personal-v1/target.sqlite")
+      .startsWith(PROTECTED_STORE_ROOTS[1] + path.sep), true,
+  );
+});
+
+test("target-root aliases refuse access before the database or its sidecars are opened", () => {
+  const f = createFixture();
+  const alias = path.join(testRoot, "target-personal-v1-alias");
+  const oldDirectory = process.env.AI_EXECUTIVE_TARGET_DIRECTORY;
+  const oldDataDir = process.env.AI_EXECUTIVE_TARGET_DATA_DIR;
+  try {
+    // The synthetic database remains a valid legacy fixture; a mistaken
+    // target path must be rejected on path alone, not by schema mismatch.
+    symlinkSync(path.dirname(f.file), alias, "dir");
+    process.env.AI_EXECUTIVE_TARGET_DIRECTORY = alias;
+    assert.throws(() => inventoryCopy(f.file, f.manifest), /live-database-refused/);
+    const deniedCli = cli(f);
+    assert.equal(deniedCli.status, 2);
+    assert.equal(deniedCli.stdout, "");
+    delete process.env.AI_EXECUTIVE_TARGET_DIRECTORY;
+
+    process.env.AI_EXECUTIVE_TARGET_DATA_DIR = alias;
+    assert.throws(() => inventoryCopy(f.file, f.manifest), /live-database-refused/);
+    // The guard must precede all SQLite sidecar checks/open attempts.
+    const wal = f.file + "-wal";
+    writeFileSync(wal, "do-not-open");
+    assert.throws(() => inventoryCopy(f.file, f.manifest), /live-database-refused/);
+    assert.equal(readFileSync(wal, "utf8"), "do-not-open");
+    rmSync(wal);
+    process.env.AI_EXECUTIVE_TARGET_DATA_DIR = path.join(testRoot, "target-missing");
+    assert.throws(() => inventoryCopy(f.file, f.manifest), /protected-directory-unverified/);
+  } finally {
+    if (oldDirectory === undefined) delete process.env.AI_EXECUTIVE_TARGET_DIRECTORY;
+    else process.env.AI_EXECUTIVE_TARGET_DIRECTORY = oldDirectory;
+    if (oldDataDir === undefined) delete process.env.AI_EXECUTIVE_TARGET_DATA_DIR;
+    else process.env.AI_EXECUTIVE_TARGET_DATA_DIR = oldDataDir;
     rmSync(alias);
     f.cleanup();
   }
