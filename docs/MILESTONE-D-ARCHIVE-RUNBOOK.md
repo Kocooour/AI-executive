@@ -59,10 +59,15 @@ SQLite -wal/-shm files (including symlinks). It verifies a SHA-256 bound to the
 independent manifest both before and after scanning, and compares the full
 table/index/trigger DDL digest to the approved reference. A changed trigger
 body, missing required column, missing trigger or unknown schema name fails
-closed. Malformed JSON payloads in both `entities` and `relations`, or
-relations missing required ID/workspace/source/target/type fields, are reported
-by count and block inventory completion without exposing the payload. The same-name schema hash requires a **trusted baseline**; refreshing
-the manifest from an unreviewed corrupted schema is NOT validation.
+closed. Malformed JSON payloads in both `entities` and `relations` are
+reported by count and block completion. Valid JSON must also match the legacy
+`Entity` and `Relation` mandatory field types: for entities, ID/type/title/
+status/workspace, object properties, and numeric creation/update timestamps;
+for relations, ID/workspace/source/target/type. The payload ID must equal its
+SQLite primary-key ID in **both** tables. These shape and identity problems
+are counted separately, block completion and never expose private row values.
+The same-name schema hash requires a **trusted baseline**; refreshing the
+manifest from an unreviewed corrupted schema is NOT validation.
 
 Output is content-free: only approved table names and field names appear,
 alongside counts, integrity results, full DDL fingerprint, workspace logical
