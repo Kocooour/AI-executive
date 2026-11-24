@@ -23,6 +23,11 @@ export const KNOWN_TABLES = Object.freeze([
   "work_session_commands", "ai_proposals", "calendar_events",
   "semantic_index_outbox", "mail_oauth_pending",
 ]);
+// Neither protected root may ever be replaced by an environment override.
+// The target root contains the production personal-v1 store (deploy-safe.sh).
+export const PROTECTED_STORE_ROOTS = Object.freeze([
+  "/var/lib/ai-executive", "/var/lib/ai-executive-target",
+]);
 const ENTITY_KINDS = ["task", "note", "project", "area", "workspace"];
 const WORKSPACE_TABLES = [
   "attention_states", "attention_history", "calendar_sources", "calendar_events",
@@ -278,8 +283,7 @@ export function inventoryCopy(file, manifestFile) {
   // redirect a protected store to an apparently different path.
   const protectedDirs = [];
   const roots = [
-    { directory: "/var/lib/ai-executive", required: false },
-    { directory: "/var/lib/ai-executive-target", required: false },
+    ...PROTECTED_STORE_ROOTS.map((directory) => ({ directory, required: false })),
     { directory: process.env.AI_EXECUTIVE_DATA_DIR, required: true },
     { directory: process.env.AI_EXECUTIVE_TARGET_DIRECTORY, required: true },
     { directory: process.env.AI_EXECUTIVE_TARGET_DATA_DIR, required: true },
