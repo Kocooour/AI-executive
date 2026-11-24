@@ -36,7 +36,8 @@ const WORKSPACE_TABLES = [
 const TASK_TABLES = ["work_sessions", "work_session_intervals", "work_session_events"];
 const ENTITY_REFERENCES = {
   attention_states: "subject_id", notification_deliveries: "entity_id",
-  ai_action_history: "entity_id",
+  ai_action_history: "entity_id", context_subjects: "canonical_entity_id",
+  note_revisions: "note_id",
 };
 const REQUIRED_COLUMNS = {
   entities: { id: "TEXT", payload: "TEXT!", updated_at: "INTEGER!" },
@@ -49,6 +50,7 @@ const REQUIRED_COLUMNS = {
   notification_deliveries: { entity_id: "TEXT!" },
   ai_action_history: { entity_id: "TEXT!", workspace_id: "TEXT!" },
   context_subjects: { canonical_entity_id: "TEXT", workspace_id: "TEXT!" },
+  note_revisions: { note_id: "TEXT!", workspace_id: "TEXT!" },
   metadata: { key: "TEXT", value: "TEXT!" },
 };
 const EXPECTED_TRIGGERS = Object.freeze([
@@ -103,17 +105,42 @@ function refCount(db, table, column, types) {
   return { total: Number(row.total), linkedToArchive: Number(row.linked),
     notMatchedInArchive: Number(row.total) - Number(row.linked) };
 }
-function workspaceRefs(db, table) {
-  // The internal entity id need not equal "workspace:" + workspace_id.
-  const row = db.prepare(
-    "SELECT COUNT(*) AS total, COALESCE(SUM(CASE WHEN EXISTS (" +
-    "SELECT 1 FROM entities e WHERE json_valid(e.payload) " +
-    "AND json_extract(e.payload, '$.type') = 'workspace' " +
-    "AND json_extract(e.payload, '$.workspaceId') = t.workspace_id" +
-    ") THEN 1 ELSE 0 END), 0) AS linked FROM " + quote(table) + " t"
-  ).get();
-  return { total: Number(row.total), linkedToLegacyWorkspace: Number(row.linked),
-    withoutMatchingLegacyWorkspace: Number(row.total) - Number(row.linked) };
+function nullableCanonicalRefs(db) {
+  // A null canonical id is a legitimate unlinked HumanWiki subject, not a
+  // dangling Archive reference. Report it distinctly from non-null misses.
+  const refs = refCount(db, "context_subjects", "canonical_entity_id", ENTITY_KINDS);
+  const absent = Number(db.prepare(
+    "SELECT COUNT(*) AS count FROM context_subjects WHERE canonical_entity_id IS NULL"
+  ).get().count);
+  return { total: refs.total, nullReferences: absent,
+    nonNullReferences: refs.total - absent, linkedToArchive: refs.linkedToArchive,
+    notMatchedInArchive: refs.total - absent - refs.linkedToArchive };
+}
+function legacyWorkspaceIds(db) {
+  // Compute canonical workspace identities ONCE. No repeated entity/JSON scan
+  // for each row of the potentially large calendar/mail/context tables.
+  const rows = db.prepare(
+    "SELECT DISTINCT json_extract(payload, '$.workspaceId') AS workspace_id " +
+    "FROM entities WHERE json_valid(payload) " +
+    "AND json_extract(payload, '$.type') = 'workspace'"
+  ).all();
+  return new Set(rows.map(row => row.workspace_id).filter(value => value != null));
+}
+function workspaceRefs(db, table, workspaceIds) {
+  // Aggregate each protected table by distinct workspace instead of executing
+  // an unindexed correlated JSON subquery once per row. No IDs leave the process.
+  const rows = db.prepare(
+    "SELECT workspace_id, COUNT(*) AS count FROM " + quote(table) +
+    " GROUP BY workspace_id"
+  ).all();
+  let total = 0, linked = 0;
+  for (const row of rows) {
+    const quantity = Number(row.count);
+    total += quantity;
+    if (workspaceIds.has(row.workspace_id)) linked += quantity;
+  }
+  return { total, linkedToLegacyWorkspace: linked,
+    withoutMatchingLegacyWorkspace: total - linked };
 }
 function sessionMatrix(db) {
   const matrix = {};
@@ -196,9 +223,12 @@ export function inventoryDatabase(db) {
   let sessionsByState = {};
   if (canInspect && malformedEntityRows === 0 && unrecognizedEntityRows === 0) {
     for (const table of TASK_TABLES) taskLinks[table] = refCount(db, table, "task_id", ["task"]);
-    for (const table of WORKSPACE_TABLES) workspaceLinks[table] = workspaceRefs(db, table);
+    const workspaceIds = legacyWorkspaceIds(db);
+    for (const table of WORKSPACE_TABLES) workspaceLinks[table] = workspaceRefs(db, table, workspaceIds);
     for (const [table, col] of Object.entries(ENTITY_REFERENCES)) {
-      derivedLinks[table] = refCount(db, table, col, ENTITY_KINDS);
+      derivedLinks[table] = table === "context_subjects"
+        ? nullableCanonicalRefs(db)
+        : refCount(db, table, col, table === "note_revisions" ? ["note"] : ENTITY_KINDS);
     }
     sessionsByState = sessionMatrix(db);
   }
@@ -241,8 +271,26 @@ export function inventoryCopy(file, manifestFile) {
   const s = standalone(file);
   if (!manifestFile || !path.isAbsolute(manifestFile)) throw new Error("manifest-required");
   const manifest = readManifest(manifestFile);
-  const protectedDirs = ["/var/lib/ai-executive", process.env.AI_EXECUTIVE_DATA_DIR]
-    .filter(Boolean).map((dir) => path.resolve(dir));
+  // realpath on the configured directory is essential: path.resolve alone
+  // does not follow an alias of the parent directory. Fail closed when that
+  // configured root is missing, unreadable or no longer a directory.
+  const protectedDirs = [];
+  for (const [index, entry] of ["/var/lib/ai-executive", process.env.AI_EXECUTIVE_DATA_DIR]
+    .entries()) {
+    if (!entry) continue;
+    const declared = path.resolve(entry);
+    protectedDirs.push(declared);
+    try {
+      if (!statSync(declared).isDirectory()) throw new Error("invalid-protected-root");
+      protectedDirs.push(realpathSync(declared));
+    } catch (error) {
+      // A missing conventional root is normal on developer machines; the
+      // configured data root is required evidence and must always resolve.
+      if (index !== 0 || error?.code !== "ENOENT" || pathExists(declared)) {
+        throw new Error("protected-directory-unverified");
+      }
+    }
+  }
   if (protectedDirs.some((dir) => s.file === dir || s.file.startsWith(dir + path.sep))) {
     throw new Error("live-database-refused");
   }
