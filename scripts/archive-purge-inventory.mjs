@@ -228,11 +228,11 @@ export function inventoryDatabase(db) {
       "SELECT COUNT(*) AS count FROM relations WHERE " +
       "CASE WHEN json_valid(payload) THEN " +
       "(json_type(payload) <> 'object' OR " +
-      "json_type(payload, '$.id') <> 'text' OR " +
-      "json_type(payload, '$.workspaceId') <> 'text' OR " +
-      "json_type(payload, '$.sourceEntityId') <> 'text' OR " +
-      "json_type(payload, '$.targetEntityId') <> 'text' OR " +
-      "json_type(payload, '$.relationType') <> 'text') " +
+      "json_type(payload, '$.id') IS NOT 'text' OR " +
+      "json_type(payload, '$.workspaceId') IS NOT 'text' OR " +
+      "json_type(payload, '$.sourceEntityId') IS NOT 'text' OR " +
+      "json_type(payload, '$.targetEntityId') IS NOT 'text' OR " +
+      "json_type(payload, '$.relationType') IS NOT 'text') " +
       "ELSE 0 END"
     ).get().count);
     for (const row of db.prepare(
