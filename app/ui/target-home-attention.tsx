@@ -47,6 +47,13 @@ export function TargetHomeAttention({language,openable,onRefusal,generation}:{
   const [expanded,setExpanded]=useState(false);
   const [busy,setBusy]=useState(false);
   const [notice,setNotice]=useState("");
+  // Feedback is transient; an empty attention section must disappear even
+  // after the final mutation. Undo has its own independent lifetime.
+  useEffect(()=>{
+    if(!notice)return;
+    const timer=window.setTimeout(()=>setNotice(""),8_000);
+    return ()=>window.clearTimeout(timer);
+  },[notice]);
   const [undo,setUndo]=useState<HomeAttentionUndo|null>(null);
   const [picker,setPicker]=useState<string|null>(null);
   const [custom,setCustom]=useState("");
@@ -73,7 +80,11 @@ export function TargetHomeAttention({language,openable,onRefusal,generation}:{
   // Routine verified polls and data invalidation never cancel a write or
   // discard its confirmed Undo. Defer read until the command/receipt settles.
   const revalidate=useCallback(()=>{
-    if(actionRef.current){refreshPending.current=true;return;}
+    if(actionRef.current){
+      // Do not cancel an original write/receipt. Its phases have independent
+      // deadlines; remove potentially stale titles now, then re-read when done.
+      refreshPending.current=true;setState({kind:"loading"});return;
+    }
     reload();
   },[reload]);
   useTargetTick(revalidate);
@@ -116,9 +127,10 @@ export function TargetHomeAttention({language,openable,onRefusal,generation}:{
     try{
       const result=await readMoreHomeAttention(state.page,controller.signal);
       if(controller.signal.aborted||!live())return;
-      if(result.status==="ok"){setState({kind:"ready",page:result.page});setExpanded(true);}
-      else {setUndo(null);reload();if(result.status==="unauthorized")onRefusal();}
-    }finally{finish(controller);}
+      if(result.status==="ok"&&!refreshPending.current){setState({kind:"ready",page:result.page});setExpanded(true);}
+      else if(result.status!=="ok"){setUndo(null);reload();if(result.status==="unauthorized")onRefusal();}
+    }catch{if(!controller.signal.aborted)reload();}
+    finally{finish(controller);}
   }
   async function hide(item:AttentionItem,action:"snooze"|"dismiss",until:number|null){
     if(state.kind!=="ready")return;
@@ -158,7 +170,7 @@ export function TargetHomeAttention({language,openable,onRefusal,generation}:{
     <button type="button" onClick={reload}>{t.retry}</button></section>;
   const {page}=state;
   if(page.explanationLanguage!==language||!page.explanations)return <p role="status">{t.loading}</p>;
-  if(!page.items.length&&!notice&&!undo)return null;
+  if(!page.items.length&&!undo)return notice?<p role="status" aria-live="polite">{notice}</p>:null;
   const items=expanded?page.items:page.items.slice(0,HOME_ATTENTION_LIMIT);
   const explanations=new Map(page.explanations.map(x=>[x.attentionKey,x]));
   return <section className="targetOverviewSection targetHomeAttention" data-testid="target-home-attention"
