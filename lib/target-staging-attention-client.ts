@@ -34,6 +34,7 @@ export type AttentionPreview={
   expectedRevision:string;expectedAttentionEpoch:number;
   expectedStateRevision:number|null;writeAreaId:string;restoreGeneration:string;
   lifecycle:AttentionLifecycle;snoozedUntilMs:number|null;
+  expectedHideEpoch?:number|null;
 };
 export type AttentionCommand={
   commandId:string;taskId:string;ruleId:AttentionRuleId;occurrenceOn:string;
@@ -261,10 +262,10 @@ export function appendAttentionPage(
   return {...next,items:[...previous.items,...next.items],
     ...(previous.explanations&&next.explanations?{explanations:[...previous.explanations,...next.explanations]}:{})};
 }
-export function parseAttentionPreview(raw:unknown):AttentionPreview|null{
+export function parseAttentionPreview(raw:unknown,includeHideEpoch=false):AttentionPreview|null{
   if(!obj(raw)||!exact(raw,["expectedRevision","expectedAttentionEpoch",
     "expectedStateRevision","writeAreaId","restoreGeneration","lifecycle",
-    "snoozedUntilMs"])||
+    "snoozedUntilMs",...(includeHideEpoch?["expectedHideEpoch"]:[])])||
     typeof raw.expectedRevision!=="string"||!revisionPattern.test(raw.expectedRevision)||
     !epoch(raw.expectedAttentionEpoch)||!optionalEpoch(raw.expectedStateRevision)||
     typeof raw.writeAreaId!=="string"||!areaPattern.test(raw.writeAreaId)||
@@ -276,8 +277,13 @@ export function parseAttentionPreview(raw:unknown):AttentionPreview|null{
   }else if(raw.snoozedUntilMs!==null)return null;
   // A stored lifecycle always has a state row; only "active" may lack one.
   if(lifecycle!=="active"&&raw.expectedStateRevision===null)return null;
+  if(includeHideEpoch&&(lifecycle==="active"?(!epoch(raw.expectedHideEpoch)||
+    raw.expectedHideEpoch<raw.expectedAttentionEpoch+(raw.expectedStateRevision===null?1:2)||
+    raw.expectedHideEpoch>raw.expectedAttentionEpoch+(raw.expectedStateRevision===null?2:3)):
+    raw.expectedHideEpoch!==null))return null;
   return {expectedRevision:raw.expectedRevision,
     expectedAttentionEpoch:raw.expectedAttentionEpoch,
+    ...(includeHideEpoch?{expectedHideEpoch:raw.expectedHideEpoch as number|null}:{}),
     expectedStateRevision:raw.expectedStateRevision as number|null,
     writeAreaId:raw.writeAreaId,restoreGeneration:raw.restoreGeneration,
     lifecycle,snoozedUntilMs:raw.snoozedUntilMs as number|null};
@@ -462,7 +468,7 @@ export async function fetchAttentionCommandPreview(
   try{
     const raw=await boundedJson(response,MAX_SMALL_BYTES,signal);
     if(signal?.aborted)return {status:"aborted"};
-    const preview=parseAttentionPreview(raw);
+    const preview=parseAttentionPreview(raw,sourceRevision!==undefined);
     return preview?{status:"ok",preview}:{status:"invalid_response"};
   }catch{return {status:signal?.aborted?"aborted":"invalid_response"};}
 }
