@@ -8,6 +8,21 @@ import { seeded, signIn } from "./helpers";
 setup("sign in and seed synthetic data", async ({ page }) => {
   await page.goto("/");
   await signIn(page);
+  // #501: the full personal-v1 acceptance suite deliberately starts with a
+  // purged legacy Archive. This shared setup previously reintroduced test
+  // entities via PUT /api/store *after* the purge preflight and before the
+  // browser case could inspect it. Do not seed the retired Archive for this
+  // profile; the isolated target store has its own independent seeded data.
+  // The off-mode and all other legacy E2E setups are intentionally unchanged.
+  if (process.env.LUMI_TARGET_PERSONAL_ACCEPTANCE_E2E === "true") {
+    const result = await page.evaluate(async () => {
+      const response = await fetch("/api/store", { cache: "no-store" });
+      if (!response.ok) return { status: response.status, count: -1 };
+      const snapshot = await response.json() as { entities: unknown[] };
+      return { status: response.status, count: snapshot.entities.length };
+    });
+    expect(result).toEqual({ status: 200, count: 0 });
+  } else {
   const result = await page.evaluate(async (names) => {
     const snapshot = await fetch("/api/store", { cache: "no-store" }).then((response) => response.json());
     const now = Date.now();
@@ -26,6 +41,7 @@ setup("sign in and seed synthetic data", async ({ page }) => {
     return saved.status;
   }, seeded);
   expect(result).toBe(200);
+  }
   // Only the session cookie is kept: every scenario starts with an empty browser (no local copy and
   // no sync marks), the way a newly opened browser with a valid session would.
   const { cookies } = await page.context().storageState();
