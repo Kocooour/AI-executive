@@ -47,21 +47,11 @@ function fixture(backup = true) {
   db.prepare("INSERT INTO work_sessions(id,workspace_id,task_id,state,revision," +
     "accumulated_ms,running_since,started_at,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)")
     .run("session:test", "personal", "task:old", "completed", 1, 100, null, 1, 1, 1);
-  const mailInfo = db.prepare("PRAGMA table_info(mail_accounts)").all();
-  assert.ok(mailInfo.length, "real schema must include protected mail accounts");
-  const values = mailInfo.map(col => {
-    const name = String(col.name).toLowerCase();
-    const type = String(col.type).toUpperCase();
-    if (name === "provider") return "gmail";
-    if (name === "status") return "active";
-    if (name === "workspace_id") return "personal";
-    if (type.includes("BLOB")) return Buffer.from([3, 4, 5]);
-    if (type.includes("INT") || type.includes("REAL")) return 1;
-    return "synthetic-" + name;
-  });
-  const fields = mailInfo.map(col => '"' + String(col.name).replaceAll('"', '""') + '"');
-  db.prepare("INSERT INTO mail_accounts(" + fields.join(",") + ") VALUES(" +
-    fields.map(() => "?").join(",") + ")").run(...values);
+  db.prepare(
+    "INSERT INTO mail_accounts(id,provider,workspace_id,email," +
+    "encrypted_refresh_token,created_at,updated_at) VALUES(?,?,?,?,?,?,?)"
+  ).run("mail:test", "gmail", "personal", "test@example.invalid",
+    "synthetic-encrypted-token", 1, 1);
   const protectedTables = ["passkey_credentials", "mail_accounts",
     "calendar_sources", "work_sessions", "metadata", "semantic_index_outbox"];
   const protectedRows = Object.fromEntries(protectedTables.map(table =>
