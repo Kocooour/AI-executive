@@ -16,9 +16,10 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  pr-checks:
-    # Stable required status name for PR merge gates.
-    name: PR Checks
+  pr-static:
+    # Typecheck, privileged ownership regression and production build. The unit
+    # suite runs in parallel shards below; "PR Checks" aggregates both.
+    name: PR static checks
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-24.04
     timeout-minutes: 45
@@ -83,10 +84,6 @@ jobs:
           grep -Fxq '# fail 0' "$tap_output"
           grep -Fxq '# skipped 0' "$tap_output"
 
-      - name: Focused PR unit tests (including ACL/security when affected)
-        if: steps.scope.outputs.code == 'true'
-        run: node scripts/ci-pr-tests.mjs --test
-
       - name: Production build
         if: steps.scope.outputs.code == 'true'
         run: pnpm build
@@ -94,6 +91,71 @@ jobs:
       - name: Next router HTTP integration smoke (auth-sensitive PRs)
         if: steps.scope.outputs.code == 'true' && steps.scope.outputs.router_smoke == 'true'
         run: node --experimental-loader ./tests/ts-loader.mjs scripts/target-staging-next-smoke.mjs
+
+  pr-unit:
+    # #493: the same conservative selection, split into disjoint shards that run
+    # in parallel. Every selected file runs exactly once across all shards.
+    name: PR unit tests (shard ${{ matrix.shard }}/5)
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4, 5]
+    env:
+      CI: "true"
+      NEXT_TELEMETRY_DISABLED: "1"
+      BASE_SHA: ${{ github.event.pull_request.base.sha }}
+      HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+    steps:
+      - name: Checkout PR integrated code
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Determine PR test scope
+        id: scope
+        run: node scripts/ci-pr-tests.mjs --scope
+
+      - name: Install pnpm
+        if: steps.scope.outputs.code == 'true'
+        uses: pnpm/action-setup@v5
+        with:
+          version: 10.20.0
+
+      - name: Set up Node.js
+        if: steps.scope.outputs.code == 'true'
+        uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+          cache: pnpm
+
+      - name: Install locked dependencies
+        if: steps.scope.outputs.code == 'true'
+        run: pnpm install --frozen-lockfile
+
+      - name: Focused PR unit tests (including ACL/security when affected)
+        if: steps.scope.outputs.code == 'true'
+        run: node scripts/ci-pr-tests.mjs --test --shard ${{ matrix.shard }}/5
+
+  pr-checks:
+    # Stable required status name for PR merge gates: green only when the static
+    # checks AND every unit-test shard succeeded (a skipped or cancelled part fails).
+    name: PR Checks
+    if: always() && github.event_name == 'pull_request'
+    needs: [pr-static, pr-unit]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Require static checks and all unit shards
+        env:
+          STATIC_RESULT: ${{ needs.pr-static.result }}
+          UNIT_RESULT: ${{ needs.pr-unit.result }}
+        run: |
+          echo "static=$STATIC_RESULT unit=$UNIT_RESULT"
+          test "$STATIC_RESULT" = success
+          test "$UNIT_RESULT" = success
 
   main-regression:
     name: Main Regression

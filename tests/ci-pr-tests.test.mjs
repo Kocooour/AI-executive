@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { chooseTests, needsCodeChecks, needsNextRouterSmoke } from "../scripts/ci-pr-tests.mjs";
+import { chooseTests, needsCodeChecks, needsNextRouterSmoke, parseShard, shardTests } from "../scripts/ci-pr-tests.mjs";
 
 const available = [
   "tests/server-errors.test.mjs",
@@ -140,6 +140,43 @@ test("P2: unknown workflow changes conservatively run the full unit suite", () =
   const out = chooseTests([".github/workflows/new-job.yml"], available);
   assert.equal(out.full, true);
   assert.equal(out.selected.length, available.length);
+});
+
+test("#493: a browser workflow change selects every workflow-reading test, not the full suite", () => {
+  const sources = {
+    "tests/browser-e2e-workflow.test.mjs": 'readFileSync(".github/workflows/browser-e2e.yml")',
+    "tests/view-url.test.mjs": "import x from '../lib/view-url.ts'",
+  };
+  const out = chooseTests([".github/workflows/note-preview-browser.yml"], available, sources);
+  assert.equal(out.full, false);
+  assert.ok(out.selected.includes("tests/browser-e2e-workflow.test.mjs"));
+  assert.ok(out.selected.includes("tests/view-url.test.mjs"), "core smoke stays");
+  assert.ok(out.selected.length < available.length);
+});
+
+test("#493: PR Checks workflow itself still forces the complete suite", () => {
+  const out = chooseTests([".github/workflows/pr-checks.yml"], available, {
+    "tests/browser-e2e-workflow.test.mjs": ".github/workflows",
+  });
+  assert.equal(out.full, true);
+});
+
+test("#493: shards are disjoint, complete, deterministic and isolate the slow deploy suite", () => {
+  const files = [...available, "tests/deploy-safe.test.mjs"].filter((v, i, a) => a.indexOf(v) === i);
+  const size = (file) => file.length * 100;
+  const shards = [1, 2, 3, 4].map((index) => shardTests(files, index, 4, size));
+  const union = shards.flat();
+  assert.equal(union.length, files.length, "no file runs twice");
+  assert.deepEqual([...union].sort(), [...files].sort(), "every file runs once");
+  const deployShard = shards.find((shard) => shard.includes("tests/deploy-safe.test.mjs"));
+  assert.deepEqual(deployShard, ["tests/deploy-safe.test.mjs"], "slow suite gets its own shard");
+  assert.deepEqual(shardTests(files, 2, 4, size), shards[1], "deterministic");
+  assert.deepEqual(shardTests(files, 1, 1, size), [...files].sort());
+  assert.throws(() => shardTests(files, 5, 4, size));
+  assert.throws(() => shardTests(files, 0, 4, size));
+  assert.deepEqual(parseShard(["node", "x", "--test", "--shard", "3/4"]), { index: 3, count: 4 });
+  assert.equal(parseShard(["node", "x", "--test"]), null);
+  assert.throws(() => parseShard(["--shard", "x/4"]));
 });
 
 test("deployment script changes select the full deployment safety regressions", () => {

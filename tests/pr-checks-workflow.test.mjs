@@ -30,9 +30,25 @@ test("PR Checks requires the privileged ownership test, even if its file is miss
     assert.ok(block.includes("grep -Fxq '" + line + "' \"$tap_output\""),
       "CI must fail when the expected TAP count is absent: " + line);
   }
-  assert.ok(prJob.indexOf("      - name: Typecheck") < prJob.indexOf("      - name: Privileged R4 ownership regression"));
-  assert.ok(prJob.indexOf("      - name: Privileged R4 ownership regression") < prJob.indexOf("      - name: Focused PR unit tests"));
-  assert.ok(prJob.indexOf("      - name: Focused PR unit tests") < prJob.indexOf("      - name: Production build"));
+  // #493: static checks (typecheck → privileged → build) and the sharded unit
+  // suite are separate jobs; the stable "PR Checks" job requires both.
+  const staticJob=prJob.split("\n  pr-static:\n")[1]?.split("\n  pr-unit:\n")[0];
+  const unitJob=prJob.split("\n  pr-unit:\n")[1]?.split("\n  pr-checks:\n")[0];
+  const gateJob=prJob.split("\n  pr-checks:\n")[1];
+  assert.ok(staticJob&&unitJob&&gateJob,"pr-static, pr-unit and pr-checks jobs in this order");
+  assert.ok(staticJob.includes("      - name: Privileged R4 ownership regression\n"),"privileged test is a static gate");
+  assert.ok(staticJob.indexOf("      - name: Typecheck") < staticJob.indexOf("      - name: Privileged R4 ownership regression"));
+  assert.ok(staticJob.indexOf("      - name: Privileged R4 ownership regression") < staticJob.indexOf("      - name: Production build"));
+  assert.match(unitJob,/shard: \[1, 2, 3, 4, 5\]/);
+  assert.match(unitJob,/fail-fast: false/);
+  assert.match(unitJob,/run: node scripts\/ci-pr-tests\.mjs --test --shard \$\{\{ matrix\.shard \}\}\/5/);
+  assert.match(unitJob,/name: PR unit tests \(shard \$\{\{ matrix\.shard \}\}\/5\)/);
+  assert.match(gateJob,/^    name: PR Checks$/m);
+  assert.match(gateJob,/^    if: always\(\) && github\.event_name == 'pull_request'$/m);
+  assert.match(gateJob,/^    needs: \[pr-static, pr-unit\]$/m);
+  assert.match(gateJob,/test "\$STATIC_RESULT" = success/);
+  assert.match(gateJob,/test "\$UNIT_RESULT" = success/);
+  assert.equal((workflow.match(/^    name: PR Checks$/gm)||[]).length,1,"exactly one stable PR Checks status");
 
   const regression = readFileSync(path.join(repo, rootTest), "utf8");
   assert.match(regression, /test\("privileged --check rejects foreign-owned directory and each companion"/);
