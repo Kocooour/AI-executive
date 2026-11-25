@@ -662,6 +662,13 @@ function ensureDefaultWorkspace(database: DatabaseSync) {
     .prepare("SELECT 1 FROM entities WHERE id = ?")
     .get("workspace:personal");
   if (exists) return;
+  // #501: the operator intentionally deletes every legacy Archive entity,
+  // including this workspace. A previously used store has a positive
+  // revision even when all its rows were purged. Do not silently re-create
+  // test-only Archive data on the first restart after purge. A truly new
+  // store still receives its original default workspace on first start.
+  // This uses existing revision metadata, without a new marker or write.
+  if (Number(readMetadata(database, "revision")) > 0) return;
   const now = Date.now();
   const workspace = defaultWorkspaceEntity(now);
   database
