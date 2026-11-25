@@ -17,13 +17,34 @@ type Failure = {status: AttentionFailure};
 type PageResult = {status:"ok";page:AttentionPage}|Failure;
 type ActionResult = {status:"ok"}|Failure;
 
+export const HOME_ATTENTION_PHASE_MS=12_000;
+/** A fresh deadline per read/preview/PATCH/receipt. A PATCH timeout does not
+ * abort the parent identity signal: the exact original receipt gets its own
+ * bounded attempt. Never trust a late adapter result or retry a mutation. */
+async function boundedPhase<T>(parent:AbortSignal|undefined,timeout:AttentionFailure,
+  operation:(signal:AbortSignal)=>Promise<T>):Promise<T|Failure>{
+  if(parent?.aborted)return {status:"aborted"};
+  const controller=new AbortController();
+  let stop:(result:Failure)=>void=()=>{};
+  const stopped=new Promise<Failure>(resolve=>{stop=resolve;});
+  const abort=()=>{stop({status:"aborted"});controller.abort();};
+  parent?.addEventListener("abort",abort,{once:true});
+  const timer=setTimeout(()=>{stop({status:timeout});controller.abort();},HOME_ATTENTION_PHASE_MS);
+  try{
+    if(parent?.aborted){abort();return {status:"aborted"};}
+    return await Promise.race([stopped,operation(controller.signal)]);
+  }finally{
+    clearTimeout(timer);parent?.removeEventListener("abort",abort);
+  }
+}
+
 /** Never accept another area scope, even when a caller has a wider My Plan scope. */
 export async function readHomeAttention(
   signal?:AbortSignal, fetchImpl:typeof fetch=targetAppFetch,explain?:AttentionExplanationLanguage,
 ):Promise<PageResult>{
-  return fetchAttentionPage({
-    areaFilter:"personal",view:"active",limit:HOME_ATTENTION_LIMIT,signal,explain,
-  },fetchImpl);
+  return boundedPhase(signal,"unavailable",phase=>fetchAttentionPage({
+    areaFilter:"personal",view:"active",limit:HOME_ATTENTION_LIMIT,signal:phase,explain,
+  },fetchImpl));
 }
 
 export async function readMoreHomeAttention(
@@ -33,10 +54,10 @@ export async function readMoreHomeAttention(
     !previous.hasMore||!previous.nextCursor||
     previous.items.some(item=>item.areaKind!=="private"))
     return {status:"invalid"};
-  const next=await fetchAttentionPage({
+  const next=await boundedPhase(signal,"unavailable",phase=>fetchAttentionPage({
     areaFilter:"personal",view:"active",limit:HOME_ATTENTION_LIMIT,
-    cursor:previous.nextCursor,signal,explain:previous.explanationLanguage,
-  },fetchImpl);
+    cursor:previous.nextCursor,signal:phase,explain:previous.explanationLanguage,
+  },fetchImpl));
   if(next.status!=="ok")return next;
   const page=appendAttentionPage(previous,next.page);
   return page?{status:"ok",page}:{status:"stale"};
@@ -67,7 +88,8 @@ export async function changeHomeAttention(
       (snoozedUntilMs as number)<=0):snoozedUntilMs!==null))
     return {status:"invalid"};
   const target={taskId:item.taskId,ruleId:item.ruleId,occurrenceOn:item.relevantOn};
-  const result=await fetchAttentionCommandPreview({...target,sourceRevision:item.sourceRevision,signal},fetchImpl);
+  const result=await boundedPhase(signal,"unavailable",phase=>
+    fetchAttentionCommandPreview({...target,sourceRevision:item.sourceRevision,signal:phase},fetchImpl));
   if(result.status!=="ok")return result;
   if(signal.aborted)return {status:"aborted"};
   const preview=result.preview;
@@ -94,13 +116,13 @@ export async function changeHomeAttention(
 
 async function commitHomeAttention(command:AttentionCommand,signal:AbortSignal,
   fetchImpl:typeof fetch):Promise<ActionResult>{
-  const sent=await sendAttentionCommand(command,signal,fetchImpl);
+  const sent=await boundedPhase(signal,"uncertain",phase=>sendAttentionCommand(command,phase,fetchImpl));
   if(sent.status==="ok")return signal.aborted?{status:"aborted"}:{status:"ok"};
   if(sent.status!=="uncertain")return sent;
   if(signal.aborted)return {status:"uncertain"};
   // Only the exact original command's receipt can prove a commit. A missing
   // receipt is not proof of rollback; require an authorized reload.
-  const receipt=await fetchAttentionCommandReceipt(command,signal,fetchImpl);
+  const receipt=await boundedPhase(signal,"uncertain",phase=>fetchAttentionCommandReceipt(command,phase,fetchImpl));
   if(signal.aborted)return {status:"uncertain"};
   if(receipt.status==="ok"&&receipt.receipt==="committed")return {status:"ok"};
   if(receipt.status==="unauthorized")return {status:"unauthorized"};
@@ -121,7 +143,8 @@ export async function undoHomeAttention(
   if(!Number.isSafeInteger(expectedEpoch)||expectedEpoch<minimum||
     expectedEpoch>minimum+(original.ruleId==="deadline_overdue"?1:0))return {status:"invalid"};
   const target={taskId:original.taskId,ruleId:original.ruleId,occurrenceOn:original.occurrenceOn};
-  const result=await fetchAttentionCommandPreview({...target,signal},fetchImpl);
+  const result=await boundedPhase(signal,"unavailable",phase=>
+    fetchAttentionCommandPreview({...target,signal:phase},fetchImpl));
   if(result.status!=="ok")return result;
   if(signal.aborted)return {status:"aborted"};
   const p=result.preview;
