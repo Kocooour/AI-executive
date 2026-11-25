@@ -48,7 +48,16 @@ function fixture(width:number){
     db.prepare("UPDATE area_members SET role='editor' WHERE area_id=? AND user_id=?").run(foreign.areaId,store.ownerUserId);
     put.run(prefix+"shared",foreign.areaId,"E1 shared "+width,day(now-20*DAY),store.ownerUserId);
   }finally{db.close();}
-  return {now,setClock,titles};
+  const completeConcurrent=(index:number)=>{
+    // Simulate another device's committed completion in this disposable store,
+    // without waiting behind the browser's intentionally stalled read queue.
+    const db=new DatabaseSync(path.join(store.directory,"lumi-target.sqlite"));
+    try{
+      db.exec("PRAGMA foreign_keys=ON; PRAGMA busy_timeout=3000");
+      expect(db.prepare("UPDATE tasks SET status='completed',completed_at_ms=? WHERE id=? AND status='open'").run(now,prefix+index).changes).toBe(1);
+    }finally{db.close();}
+  };
+  return {now,setClock,titles,completeConcurrent};
 }
 const panel=(page:Page)=>page.getByTestId("target-home-attention");
 const items=(page:Page)=>panel(page).getByTestId("target-home-attention-item");
@@ -66,7 +75,7 @@ for(const width of [390,1280]){
   test("E-1 real Home lifecycle and privacy at "+width,async({page})=>{
     test.skip(mode!=="true","attention enabled run");
     test.setTimeout(180_000);
-    const {now,setClock,titles}=fixture(width);
+    const {now,setClock,titles,completeConcurrent}=fixture(width);
     await page.setViewportSize({width,height:844});
     await page.clock.install({time:new Date(now)});
     const firstRead=page.waitForResponse(r=>isPath(r.url(),"/api/target-staging/attention")&&r.status()===200);
@@ -159,6 +168,29 @@ for(const width of [390,1280]){
     await expect(detail).toHaveCount(0);
     await expect(row(page,titles[1])).toHaveCount(0);
     await expect(row(page,titles[4])).toBeVisible();
+    // Hold a preview with no HTTP response. A concurrently completed task
+    // must disappear when the verified poll runs; the expired preview must
+    // not dispatch a mutation, and the surviving rows must be usable again.
+    let heldPreview=0,unexpectedPatch=0;
+    const previewPattern=/\/api\/target-staging\/attention\/command\?.*$/;
+    const holdPreview=async(route:Route)=>{
+      heldPreview++;
+      // Never fulfill: the application deadline must cancel this request.
+    };
+    const countPatch=(request:import("@playwright/test").Request)=>{
+      if(request.method()==="PATCH"&&isPath(request.url(),"/api/target-staging/attention/command"))unexpectedPatch++;
+    };
+    await page.route(previewPattern,holdPreview);
+    page.on("request",countPatch);
+    try{
+      await row(page,titles[2]).getByRole("button",{name:"Skrýt",exact:true}).click();
+      await expect.poll(()=>heldPreview).toBe(1);
+      completeConcurrent(3);
+      await poll(page);
+      await expect(row(page,titles[3])).toHaveCount(0);
+      await expect(row(page,titles[2]).getByRole("button",{name:"Skrýt",exact:true})).toBeEnabled();
+      expect(unexpectedPatch).toBe(0);
+    }finally{page.off("request",countPatch);await page.unroute(previewPattern,holdPreview);}
     // Keep a real acknowledged command outstanding while revoking the
     // current session. The mounted panel must disappear BEFORE a page reload;
     // releasing that old response must not resurrect private rows or Undo.
