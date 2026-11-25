@@ -460,8 +460,6 @@ for(const width of [390,1280]){
 }
 
 
-// GET /api/store excludes lifecycle tables. Compare relevant legacy SQLite rows
-// directly as well, so an unintended Attention/session/action write is detected.
 // #501 (2026-11-25): Archive navigation is gone on both layouts. The
 // browser is authenticated against the same real isolated personal-v1 store
 // used by the existing acceptance suite. The offline/legacy profile is separate.
@@ -470,7 +468,7 @@ for (const width of [390, 1280]) {
     test.setTimeout(90_000);
     if (!store) throw new Error("Requires the real isolated target store");
     await page.setViewportSize({ width, height: 844 });
-    for (const retired of ["LegacyHome", "LegacyInbox", "LegacyUpcoming", "Today",
+    for (const retired of ["LegacyHome", "LegacyInbox", "LegacyUpcoming", "LegacyObsolete", "Archive", "Today",
       "Overdue", "Anytime", "Someday", "Completed", "Areas", "Context"]) {
       await page.goto("/?view=" + retired);
       await expect(page.getByTestId("target-my-plan")).toBeVisible();
