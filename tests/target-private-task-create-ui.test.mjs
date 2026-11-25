@@ -185,7 +185,7 @@ test("a reopened modal observes the original pending POST and can check its rece
   const receipt=await checkTrackedPrivateTaskCreate(rt,gen,
     new AbortController().signal,async()=> "committed");
   assert.equal(receipt,"committed");
-  assert.deepEqual(events[1],{generation:gen,confirmedTaskId:cmd.taskId});
+  assert.deepEqual(events[1],{generation:gen,confirmedTaskId:cmd.taskId,source:"receipt"});
   assert.deepEqual(privateTaskCreateMarker(gen),{kind:"clear"});
   unsubscribe();
 }));
@@ -194,7 +194,7 @@ test("server success announces only exact confirmed task ID, once, to active run
   const dispose=subscribePrivateTaskCreate(rt,gen,change=>events.push(change));
   const result=await runPrivateTaskCreate(rt,gen,cmd,async()=> "saved");
   assert.equal(result,"saved");
-  assert.deepEqual(events,[{generation:gen,confirmedTaskId:cmd.taskId}]);
+  assert.deepEqual(events,[{generation:gen,confirmedTaskId:cmd.taskId,source:"post"}]);
   assert.equal(events[0].title,undefined);
   assert.deepEqual(privateTaskCreateMarker(gen),{kind:"clear"});
   dispose();
@@ -252,8 +252,8 @@ test("reload UUID recovery never unlocks on not_recorded or refusal; committed d
   assert.equal(await recoverPrivateTaskCreate(reload,gen,signal,check),"committed");
   assert.deepEqual(privateTaskCreateMarker(gen),{kind:"clear"});
   assert.equal(probes,3);
-  assert.deepEqual(events,[{generation:gen,confirmedTaskId:cmd.taskId}],
-    "the app shell receives the verified opaque navigation target after reload");
+  assert.deepEqual(events,[{generation:gen,confirmedTaskId:cmd.taskId,source:"recovery"}],
+    "the app shell receives the verified opaque navigation target after reload; no Undo source");
   unsub();
 }));
 test("main shell wiring preserves note-only default, no Search tab, distinct task consent and feedback",()=>{
@@ -268,7 +268,9 @@ test("main shell wiring preserves note-only default, no Search tab, distinct tas
   assert.match(notice,/target-private-task-created/);
   assert.match(notice,/target-private-task-open/);
   assert.match(notice,/subscribePrivateTaskCreate\(/);
-  assert.match(notice,/lastConfirmedPrivateTask\(/);
+  assert.match(notice,/lastConfirmedPrivateTaskChange\(/);
+  // #397: Undo only for this page's own confirmed command, never after reload.
+  assert.match(notice,/undoable:source==="post"\|\|source==="receipt"/);
   assert.match(notice,/openTargetDetail\(\{kind:"task"/);
   assert.match(root,/taskCaptureReady&&<TargetPrivateTaskCreatedNotice/);
   assert.doesNotMatch(root,/target-data-provider|useTargetRuntime|useTargetGeneration/);

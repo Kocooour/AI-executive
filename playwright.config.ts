@@ -123,7 +123,7 @@ export default defineConfig({
     // The webServer env below is run-wide: real-store opt-in must only run
     // these five isolated acceptance specs, never other tests.
     { name: "desktop", use: { ...devices["Desktop Chrome"], storageState: sessionFile }, dependencies: ["setup"],
-      ...(personalAcceptanceTest || inboxAcceptanceTest ? { testMatch: /(?:target-personal-(?:acceptance|my-plan|search-open|create|bfcache|native-bfcache)|target-inbox-(?:acceptance|c3b-acceptance))\.spec\.ts/ } : {}) },
+      ...(personalAcceptanceTest || inboxAcceptanceTest ? { testMatch: /(?:target-personal-(?:acceptance|my-plan|search-open|create|capture-undo|bfcache|native-bfcache)|target-inbox-(?:acceptance|c3b-acceptance))\.spec\.ts/ } : {}) },
   ],
   webServer: {
     command: `${process.env.E2E_SKIP_BUILD ? "" : "pnpm build && "}pnpm start --port ${port} --hostname 127.0.0.1`,

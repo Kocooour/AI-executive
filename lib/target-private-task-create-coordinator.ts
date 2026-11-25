@@ -21,18 +21,27 @@ type Entry={generation:string;command:PrivateTaskCreateCommand;
 const entries=new WeakMap<Runtime,Entry>();
 // Subscribers belong to the authenticated runtime, not the transient modal.
 // Only a positive, exact server confirmation carries an opaque task ID.
-export type TaskCreateChange={generation:string;confirmedTaskId:string|null};
+/** `source` says how this page learned of the commit. Only a confirmation of
+ * this page's own command ("post"/"receipt") may offer an immediate Undo; a
+ * reload "recovery" may arrive long after creation and never offers Undo. */
+export type TaskCreateSource="post"|"receipt"|"recovery";
+export type TaskCreateChange={generation:string;confirmedTaskId:string|null;source?:TaskCreateSource};
 const observers=new WeakMap<Runtime,Set<(change:TaskCreateChange)=>void>>();
 // A dynamically loaded observer may subscribe after a very fast server
 // confirmation. Retain only the latest opaque ID in this runtime's memory;
 // never persist an ID, title or Area or cross an auth-generation boundary.
-const lastConfirmed=new WeakMap<Runtime,{generation:string;taskId:string}>();
+const lastConfirmed=new WeakMap<Runtime,{generation:string;taskId:string;source:TaskCreateSource}>();
 export function lastConfirmedPrivateTask(
   runtime:Runtime,generation:string,
 ):string|null{
+  return lastConfirmedPrivateTaskChange(runtime,generation)?.taskId??null;
+}
+export function lastConfirmedPrivateTaskChange(
+  runtime:Runtime,generation:string,
+):{taskId:string;source:TaskCreateSource}|null{
   if(!runtime.known()||runtime.generation()!==generation)return null;
   const last=lastConfirmed.get(runtime);
-  return last?.generation===generation?last.taskId:null;
+  return last?.generation===generation?{taskId:last.taskId,source:last.source}:null;
 }
 export function subscribePrivateTaskCreate(
   runtime:Runtime,generation:string,listener:(change:TaskCreateChange)=>void,
@@ -46,7 +55,8 @@ export function subscribePrivateTaskCreate(
 function notify(runtime:Runtime,change:TaskCreateChange):void{
   if(!runtime.known()||runtime.generation()!==change.generation)return;
   if(change.confirmedTaskId)
-    lastConfirmed.set(runtime,{generation:change.generation,taskId:change.confirmedTaskId});
+    lastConfirmed.set(runtime,{generation:change.generation,taskId:change.confirmedTaskId,
+      source:change.source??"recovery"});
   for(const listener of [...(observers.get(runtime)??[])])
     try{listener(change);}catch{/* A UI listener must not affect the write. */}
 }
@@ -138,7 +148,7 @@ export async function runPrivateTaskCreate(
     if(outcome==="saved"&&runtime.known()&&runtime.generation()===generation&&
       confirm(generation,command.commandId)){
       entries.delete(runtime);unregister();
-      notify(runtime,{generation,confirmedTaskId:command.taskId});
+      notify(runtime,{generation,confirmedTaskId:command.taskId,source:"post"});
     }else{
       entry.phase="uncertain";
       notify(runtime,{generation,confirmedTaskId:null});
@@ -159,7 +169,7 @@ export async function checkTrackedPrivateTaskCreate(
   if(receipt==="committed"&&!signal.aborted&&runtime.known()&&
     runtime.generation()===generation&&confirm(generation,entry.command.commandId,true)){
     entries.delete(runtime);entry.unregister();
-    notify(runtime,{generation,confirmedTaskId:entry.command.taskId});
+    notify(runtime,{generation,confirmedTaskId:entry.command.taskId,source:"receipt"});
   }
   return receipt;
 }
@@ -178,7 +188,7 @@ export async function recoverPrivateTaskCreate(
   if(typeof receipt==="object"&&receipt.status==="committed"&&
     !signal.aborted&&runtime.known()&&runtime.generation()===generation&&
     confirm(generation,marker.commandId,true)){
-    notify(runtime,{generation,confirmedTaskId:receipt.taskId});
+    notify(runtime,{generation,confirmedTaskId:receipt.taskId,source:"recovery"});
     return "committed";
   }
   // A response whose marker could not be positively cleared is NOT success.
