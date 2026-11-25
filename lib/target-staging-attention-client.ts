@@ -20,11 +20,15 @@ export type AttentionItem={
   lifecycle:AttentionLifecycle;snoozedUntilMs:number|null;
   lifecycleRevision:number|null;
 };
+export type AttentionExplanation={attentionKey:string;reason:string;why:string};
+export type AttentionExplanationLanguage="cs"|"en";
 export type AttentionPage={
   items:AttentionItem[];hasMore:boolean;nextCursor:string|null;
   areaFilter:AttentionAreaFilter;view:AttentionView;timeZone:string;
   evaluationDate:string;soonThroughDate:string|null;evaluatedAtMs:number;
   attentionEpoch:number;
+  explanationLanguage?:AttentionExplanationLanguage;
+  explanations?:AttentionExplanation[];
 };
 export type AttentionPreview={
   expectedRevision:string;expectedAttentionEpoch:number;
@@ -185,12 +189,14 @@ function parseItem(
  * and everything that disagrees with the request the page was fetched for. */
 export function parseAttentionPage(
   raw:unknown,params:{areaFilter:AttentionAreaFilter;view:AttentionView;
-    limit:number},
+    limit:number;explain?:AttentionExplanationLanguage},
 ):AttentionPage|null{
   if(!FILTERS.includes(params.areaFilter)||!VIEWS.includes(params.view)||
     !validLimit(params.limit))return null;
+  if(params.explain!==undefined&&(!["cs","en"].includes(params.explain)||params.areaFilter!=="personal"||params.view!=="active"))return null;
   if(!obj(raw)||!exact(raw,["items","hasMore","nextCursor","areaFilter","view",
-    "timeZone","evaluationDate","soonThroughDate","evaluatedAtMs","attentionEpoch"])||
+    "timeZone","evaluationDate","soonThroughDate","evaluatedAtMs","attentionEpoch",
+    ...(params.explain===undefined?[]:["explanationLanguage","explanations"])])||
     raw.areaFilter!==params.areaFilter||raw.view!==params.view||
     // R2d.4k: the zone is the server-side PROFILE zone, display-only here.
     !validAttentionTimeZone(raw.timeZone)||!Array.isArray(raw.items)||
@@ -214,10 +220,23 @@ export function parseAttentionPage(
     seen.add(item.taskId+"\0"+item.ruleId);areas.set(item.areaId,item.areaKind);
     items.push(item);
   }
+  let explanations:AttentionExplanation[]|undefined;
+  if(params.explain!==undefined){
+    if(raw.explanationLanguage!==params.explain||!Array.isArray(raw.explanations)||raw.explanations.length!==items.length)return null;
+    explanations=[];
+    for(let i=0;i<items.length;i++){
+      const x=raw.explanations[i];
+      if(!obj(x)||!exact(x,["attentionKey","reason","why"])||x.attentionKey!==items[i].attentionKey||
+        typeof x.reason!=="string"||!x.reason||x.reason.length>512||
+        typeof x.why!=="string"||!x.why||x.why.length>1024)return null;
+      explanations.push({attentionKey:items[i].attentionKey,reason:x.reason,why:x.why});
+    }
+  }
   return {items,hasMore:raw.hasMore,nextCursor:raw.nextCursor as string|null,
     areaFilter:params.areaFilter,view:params.view,timeZone:raw.timeZone as string,
     evaluationDate,soonThroughDate,
-    evaluatedAtMs:raw.evaluatedAtMs,attentionEpoch:raw.attentionEpoch};
+    evaluatedAtMs:raw.evaluatedAtMs,attentionEpoch:raw.attentionEpoch,
+    ...(explanations?{explanationLanguage:params.explain,explanations}:{})};
 }
 /** Continuation must keep the pinned instant, window and epoch, never re-use a
  * cursor and never repeat or reorder a row. Pure; returns null on any breach. */
@@ -231,13 +250,16 @@ export function appendAttentionPage(
     previous.evaluationDate!==next.evaluationDate||
     previous.soonThroughDate!==next.soonThroughDate||
     previous.attentionEpoch!==next.attentionEpoch||
+    previous.explanationLanguage!==next.explanationLanguage||
+    Boolean(previous.explanations)!==Boolean(next.explanations)||
     (next.hasMore&&next.nextCursor===previous.nextCursor))return null;
   const seen=new Set(previous.items.map(i=>i.taskId+"\0"+i.ruleId));
   if(next.items.some(i=>seen.has(i.taskId+"\0"+i.ruleId))||
     (previous.items.length>0&&next.items.length>0&&
       !attentionItemBefore(previous.items[previous.items.length-1],next.items[0])))
     return null;
-  return {...next,items:[...previous.items,...next.items]};
+  return {...next,items:[...previous.items,...next.items],
+    ...(previous.explanations&&next.explanations?{explanations:[...previous.explanations,...next.explanations]}:{})};
 }
 export function parseAttentionPreview(raw:unknown):AttentionPreview|null{
   if(!obj(raw)||!exact(raw,["expectedRevision","expectedAttentionEpoch",
@@ -380,16 +402,18 @@ const writeInit=(command:AttentionCommand,method:"PATCH"|"POST",
  * are never client inputs. */
 export async function fetchAttentionPage(
   params:{areaFilter:AttentionAreaFilter;view:AttentionView;
-    limit:number;cursor?:string;signal?:AbortSignal},
+    limit:number;cursor?:string;signal?:AbortSignal;explain?:AttentionExplanationLanguage},
   fetchImpl:typeof fetch=fetch,
 ):Promise<AttentionPageResult>{
-  const {areaFilter,view,limit,cursor,signal}=params;
+  const {areaFilter,view,limit,cursor,signal,explain}=params;
   if(!FILTERS.includes(areaFilter)||!VIEWS.includes(view)||
     !validLimit(limit)||
-    (cursor!==undefined&&!validCursor(cursor)))return {status:"invalid"};
+    (cursor!==undefined&&!validCursor(cursor))||
+    (explain!==undefined&&(!["cs","en"].includes(explain)||areaFilter!=="personal"||view!=="active")))return {status:"invalid"};
   if(signal?.aborted)return {status:"aborted"};
   const query=new URLSearchParams({areaFilter,view,limit:String(limit)});
   if(cursor!==undefined)query.set("cursor",cursor);
+  if(explain!==undefined)query.set("explain",explain);
   let response:Response;
   try{
     const received=await fetchUntilAbort(
@@ -407,7 +431,7 @@ export async function fetchAttentionPage(
   try{
     const raw=await boundedJson(response,MAX_PAGE_BYTES,signal);
     if(signal?.aborted)return {status:"aborted"};
-    const page=parseAttentionPage(raw,{areaFilter,view,limit});
+    const page=parseAttentionPage(raw,{areaFilter,view,limit,explain});
     return page?{status:"ok",page}:{status:"invalid_response"};
   }catch{return {status:signal?.aborted?"aborted":"invalid_response"};}
 }
