@@ -127,6 +127,15 @@ jobs:
         run: |
           set -o pipefail
           pnpm exec playwright test e2e/target-personal-native-bfcache.spec.ts --project=desktop 2>&1 | tee -a "$RUNNER_TEMP/lumi-personal-browser.log"
+      - name: E-1 native Chromium Back privacy (390/1280)
+        if: ${{ !cancelled() && steps.build.outcome == 'success' && steps.chromium.outcome == 'success' }}
+        env:
+          LUMI_TARGET_PERSONAL_ACCEPTANCE_E2E: "false"
+          LUMI_TARGET_ATTENTION_E2E: "true"
+          LUMI_TARGET_ATTENTION_NATIVE_E2E: "true"
+        run: |
+          set -o pipefail
+          pnpm exec playwright test e2e/target-personal-native-bfcache.spec.ts --project=desktop 2>&1 | tee -a "$RUNNER_TEMP/lumi-personal-browser.log"
       - name: No My Plan child-page unavailability in real-store server logs
         if: always()
         run: |
