@@ -296,9 +296,6 @@ export function LumiAppRoot({ targetHomeSummary = false, targetInboxRead = false
           </p>
         )}
         <div className="content">
-          {archiveView && <h2 className="targetArchivePageHeading" data-testid="target-archive-heading">
-            {language==="cs"?"Archiv (stará data, jen pro čtení)":"Archive (old data, read-only)"}
-          </h2>}
           {legacyReadOnly && (
             <p className="navigationUnavailableNotice legacyReadOnlyNotice" role="status" data-testid="legacy-read-only-notice">
               {legacyMyPlanAvailable ? detailCopy[language].legacyReadOnlyNotice
