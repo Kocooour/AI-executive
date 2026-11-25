@@ -160,3 +160,54 @@ test("Expired snooze replacement expects two lifecycle epoch increments before U
   const good=recorder(()=>json(preview(hidden)),()=>json({ok:true}));
   assert.equal((await undoHomeAttention(original,signal(),good.fetcher)).status,"ok");
 });
+
+test("Home explanation is required for requested language and bound to exact ordered candidates",async()=>{
+  const data=page();
+  const key=data.items[0].attentionKey;
+  const explanation={attentionKey:key,reason:"Po termínu · 1. 11. 2026",why:"Zdroj: termín úkolu. Vyhodnoceno: 8. 11. 2026 (Europe/Prague)."};
+  const decorated={...data,explanationLanguage:"cs",explanations:[explanation]};
+  const good=recorder(()=>json(decorated));
+  const r=await readHomeAttention(signal(),good.fetcher,"cs");
+  assert.equal(r.status,"ok");
+  assert.equal(new URL(good.calls[0].url,"https://example.invalid").searchParams.get("explain"),"cs");
+  assert.deepEqual(r.page.explanations,[explanation]);
+  for(const bad of [data,{...decorated,explanationLanguage:"en"},
+    {...decorated,explanations:[]},{...decorated,explanations:[{...explanation,attentionKey:"tatt1:"+"b".repeat(64)}]},
+    {...decorated,explanations:[{...explanation,title:"private extra"}]},
+    {...decorated,explanations:[{...explanation,why:""}]}]){
+    const mock=recorder(()=>json(bad));
+    assert.equal((await readHomeAttention(signal(),mock.fetcher,"cs")).status,"invalid_response");
+  }
+});
+
+test("Server explanation derives source and time from pinned candidate without title or foreign data",async()=>{
+  const {explainAttention}=await import("../lib/target-attention-explanation.ts");
+  const epoch=Date.parse("2026-11-08T07:00:00Z");
+  for(const [rule,cs,en] of [
+    ["deadline_overdue","Po termínu","Overdue"],
+    ["deadline_soon","Blíží se termín","Due soon"],
+    ["planned_date_passed","Propadlé Kdy","Planned day passed"]]){
+    const candidate=item({reasonCode:rule,ruleId:rule,title:"DO NOT COPY"});
+    for(const [language,reason] of [["cs",cs],["en",en]]){
+      const result=explainAttention(candidate,epoch,"Europe/Prague",language);
+      assert.ok(result.reason.startsWith(reason));
+      assert.match(result.why,/Europe\/Prague/);
+      assert.match(result.why,/08:00|8:00/);
+      assert.doesNotMatch(JSON.stringify(result),/DO NOT COPY/);
+      assert.equal(result.attentionKey,candidate.attentionKey);
+      assert.deepEqual(Object.keys(result).sort(),["attentionKey","reason","why"]);
+    }
+  }
+});
+
+test("Expanded Home page preserves locale and each explanation through cursor append",async()=>{
+  const items=Array.from({length:5},(_,i)=>item({taskId:"task-"+i,attentionKey:"tatt1:"+"a".repeat(63)+i}));
+  const decorate=p=>({...p,explanationLanguage:"cs",explanations:p.items.map(i=>({attentionKey:i.attentionKey,reason:"Po termínu",why:"Zdroj: termín úkolu"}))});
+  const first=decorate(page(items,{hasMore:true,nextCursor:"a.b"}));
+  const next=decorate(page([item({taskId:"task-9",attentionKey:"tatt1:"+"a".repeat(63)+"9"})]));
+  const mock=recorder(()=>json(next));
+  const r=await readMoreHomeAttention(first,signal(),mock.fetcher);
+  assert.equal(r.status,"ok");
+  assert.equal(r.page.explanations.length,6);
+  assert.equal(new URL(mock.calls[0].url,"https://example.invalid").searchParams.get("explain"),"cs");
+});
