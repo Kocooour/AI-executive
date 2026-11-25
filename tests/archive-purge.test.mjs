@@ -126,3 +126,26 @@ test("fresh installation still seeds its default workspace on first server start
     assert.equal(db.prepare("SELECT COUNT(*) AS n FROM entities WHERE id='workspace:personal'").get().n,1);
   } finally { db.close(); }
 });
+
+test("zero-valued existing revision is not mistaken for a fresh database after purge", () => {
+  const f = fixture();
+  const first = new DatabaseSync(f.dbPath);
+  try {
+    first.prepare("UPDATE metadata SET value='0' WHERE key='revision'").run();
+  } finally { first.close(); }
+  const result = run(f);
+  assert.ok(Object.values(result.after).every(count => count === 0));
+  execFileSync(process.execPath, [
+    "--experimental-loader","./scripts/target-staging-ts-loader.mjs",
+    "--input-type=module","-e",
+    "import { getDatabase } from './lib/server-store.ts'; getDatabase().close();",
+  ], { cwd: process.cwd(), env: { ...process.env,
+    AI_EXECUTIVE_DATA_DIR: path.dirname(f.dbPath) },
+    stdio: ["ignore","pipe","pipe"], timeout: 20_000 });
+  const db = new DatabaseSync(f.dbPath, { readOnly: true });
+  try {
+    for(const table of ARCHIVE_TABLES) {
+      assert.equal(db.prepare('SELECT COUNT(*) AS n FROM "' + table + '"').get().n, 0);
+    }
+  } finally { db.close(); }
+});
