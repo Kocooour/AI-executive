@@ -44,6 +44,8 @@ export async function readMoreHomeAttention(
 
 /** One displayed occurrence and its exact page witness. The caller must
  * discard these on session, generation, privacy or scope changes. */
+export type HomeAttentionUndo={command:AttentionCommand;expectedHideEpoch:number};
+
 export type HomeAttentionWitness={
   item:AttentionItem;
   attentionEpoch:number;
@@ -55,7 +57,7 @@ export async function changeHomeAttention(
   snoozedUntilMs:number|null,
   signal:AbortSignal,
   fetchImpl:typeof fetch=targetAppFetch,
-  onCommitted?:(command:AttentionCommand)=>void,
+  onCommitted?:(undo:HomeAttentionUndo)=>void,
 ):Promise<ActionResult>{
   const {item,attentionEpoch}=witness;
   if(signal.aborted)return {status:"aborted"};
@@ -85,7 +87,8 @@ export async function changeHomeAttention(
     writeAreaId:preview.writeAreaId,restoreGeneration:preview.restoreGeneration,
   };
   const outcome=await commitHomeAttention(command,signal,fetchImpl);
-  if(outcome.status==="ok"&&!signal.aborted)onCommitted?.(command);
+  if(outcome.status==="ok"&&!signal.aborted&&action!=="restore"&&typeof preview.expectedHideEpoch==="number")
+    onCommitted?.({command,expectedHideEpoch:preview.expectedHideEpoch});
   return outcome;
 }
 
@@ -104,24 +107,24 @@ async function commitHomeAttention(command:AttentionCommand,signal:AbortSignal,
   return {status:"uncertain"};
 }
 
-/** Conservative Undo of one confirmed hide. State row revision resets to zero
- * on every insert, so it alone is not a witness. Require the exact original
- * task CAS, store generation and minimum resulting actor epoch. If overdue
- * hygiene removed an old soon row, the epoch can advance further; refuse Undo
- * rather than guessing whether another action intervened. */
+/** Undo of one confirmed hide. The exact post-command actor epoch was
+ * predicted in the same pinned preview as the write CAS. It includes expired
+ * snooze replacement and obsolete soon-row hygiene. Any other lifecycle
+ * mutation, task CAS change or restore generation change refuses Undo. */
 export async function undoHomeAttention(
-  original:AttentionCommand,signal:AbortSignal,fetchImpl:typeof fetch=targetAppFetch,
+  undo:HomeAttentionUndo,signal:AbortSignal,fetchImpl:typeof fetch=targetAppFetch,
 ):Promise<ActionResult>{
   if(signal.aborted)return {status:"aborted"};
+  const {command:original,expectedHideEpoch:expectedEpoch}=undo;
   if(original.action!=="dismiss"&&original.action!=="snooze")return {status:"invalid"};
+  const minimum=original.expectedAttentionEpoch+(original.expectedStateRevision===null?1:2);
+  if(!Number.isSafeInteger(expectedEpoch)||expectedEpoch<minimum||
+    expectedEpoch>minimum+(original.ruleId==="deadline_overdue"?1:0))return {status:"invalid"};
   const target={taskId:original.taskId,ruleId:original.ruleId,occurrenceOn:original.occurrenceOn};
   const result=await fetchAttentionCommandPreview({...target,signal},fetchImpl);
   if(result.status!=="ok")return result;
   if(signal.aborted)return {status:"aborted"};
   const p=result.preview;
-  // A prior active row with a revision is an expired snooze: writer deletes it
-  // and inserts the new hidden row in the same transaction.
-  const expectedEpoch=original.expectedAttentionEpoch+(original.expectedStateRevision===null?1:2);
   if(p.expectedAttentionEpoch!==expectedEpoch||p.expectedStateRevision!==0||
     p.expectedRevision!==original.expectedRevision||p.writeAreaId!==original.writeAreaId||
     p.restoreGeneration!==original.restoreGeneration||
