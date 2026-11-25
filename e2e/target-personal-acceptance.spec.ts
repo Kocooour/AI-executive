@@ -6,6 +6,9 @@
  * session witness; it never substitutes task/summary data or ACL decisions.
  * Synthetic data, default-off: only LUMI_TARGET_PERSONAL_ACCEPTANCE_E2E=true runs it. */
 import {test,expect} from "./fixtures";
+import {signIn} from "./helpers";
+import {createHash} from "node:crypto";
+import {DatabaseSync} from "node:sqlite";
 import { request as upstreamRequest } from "node:http";
 import { createServer as createHttpsServer } from "node:https";
 import { execFileSync } from "node:child_process";
@@ -92,6 +95,69 @@ const clientState=(page:Page)=>page.evaluate(async()=>{
     db.close();
   }
   return JSON.stringify(dump).slice(0,4_000_000);
+});
+
+// #501: ONE synthetic, connected E2E from operator purge to the *real*
+// server boot and authenticated browser in both responsive layouts. The
+// preflight is executed by playwright.config.ts BEFORE its webServer starts,
+// inside the SAME throwaway legacy data directory that Next subsequently uses.
+// The target personal-v1 SQLite store remains separate and untouched.
+test("#501: dry-run, purge, real restart, login/settings, protected rows, second zero at 390/1280",async({page})=>{
+  test.setTimeout(150_000);
+  const runDir=process.env.LUMI_E2E_RUN_DIR;
+  if(!runDir||!store)throw new Error("Requires the isolated #501 preflight and target store");
+  const witness=JSON.parse(readFileSync(path.join(runDir,"archive-purge-preflight.json"),"utf8")) as {
+    databasePath:string;protectedTables:string[];protectedBefore:Record<string,string>;
+    firstBefore:Record<string,number>;afterApply:Record<string,number>;
+    afterStartup:Record<string,number>;secondBefore:Record<string,number>;
+    secondAfter:Record<string,number>;
+  };
+  expect(witness.firstBefore.entities).toBeGreaterThan(0);
+  for(const counts of [witness.afterApply,witness.afterStartup,witness.secondBefore,witness.secondAfter])
+    expect(Object.values(counts).every(value=>value===0)).toBe(true);
+  for(const width of [390,1280]){
+    await page.setViewportSize({width,height:844});
+    // Authenticate afresh after purge; a pre-existing owner fixture cookie
+    // would test only session reuse, not the actual login UI.
+    await page.context().clearCookies();
+    await page.goto("/?view=MyPlanPreview&scope=personal");
+    await expect(page.locator('.authCard input[type="password"]')).toBeVisible();
+    await signIn(page);
+    await expect(page.getByTestId("target-my-plan")).toBeVisible();
+    await page.goto("/?view=LegacyInbox&scope=personal");
+    await expect(page.getByTestId("target-my-plan")).toBeVisible();
+    await expect(page).toHaveURL(/view=MyPlanPreview/);
+    await expect(page.locator('[data-nav-archive="true"]')).toHaveCount(0);
+    // Live connected Gmail is a current Inbox tab, never an old Archive view.
+    await page.goto("/?view=Inbox&scope=personal");
+    await expect(page.getByTestId("target-inbox-mail-tabs")).toBeVisible();
+    await expect(page.getByTestId("target-inbox")).toBeVisible();
+    await page.locator('[data-testid="target-inbox-mail-tabs"] [data-inbox-tab="mail"]').click();
+    await expect(page.locator(".mailReader")).toBeVisible();
+    await expect(page.locator('[data-nav-archive="true"]')).toHaveCount(0);
+    if(width===390){
+      await expect(page.locator(".mobileNav [data-nav-tab]")).toHaveCount(4);
+      await page.locator('.mobileNav [data-nav-tab="More"]').click();
+      await page.locator('.mobileMore [data-nav-view="Settings"]').click();
+    }else{
+      await page.locator('.sidebarActions [data-nav-system="Settings"]').click();
+    }
+    await expect(page.locator(".settingsPanel")).toBeVisible();
+    // The legacy backing SQLite has been opened by the real Next process,
+    // not merely by a standalone raw SQLite process.
+    const db=new DatabaseSync(witness.databasePath,{readOnly:true});
+    try{
+      for(const table of ["entities","relations","tombstones","note_revisions"]){
+        const count=Number(db.prepare('SELECT COUNT(*) AS n FROM "'+table+'"').get().n);
+        expect(count,table+" must remain empty after server boot").toBe(0);
+      }
+      for(const table of witness.protectedTables){
+        const current=createHash("sha256").update(JSON.stringify(db.prepare(
+          'SELECT * FROM "'+table+'" ORDER BY rowid').all())).digest("hex");
+        expect(current,"protected table changed: "+table).toBe(witness.protectedBefore[table]);
+      }
+    }finally{db.close();}
+  }
 });
 
 for(const width of [390,1280]){
