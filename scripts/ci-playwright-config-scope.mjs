@@ -65,7 +65,9 @@ export function selectBrowserProfiles(patch) {
 
 /** GitHub workflow path glob -> RegExp, or null for syntax we do not model. */
 export function globToRegExp(glob) {
-  if (typeof glob !== "string" || !glob || /[!+{}()|\\]/.test(glob)) return null;
+  // `?` and `+` are quantifiers in GitHub filters ("zero or one" / "one or
+  // more" of the preceding character): not modelled, so never suppress.
+  if (typeof glob !== "string" || !glob || /[!+?{}()|\\]/.test(glob)) return null;
   let out = "";
   for (let i = 0; i < glob.length; i++) {
     const c = glob[i];
@@ -74,13 +76,13 @@ export function globToRegExp(glob) {
         i++;
         if (glob[i + 1] === "/") { i++; out += "(?:.*/)?"; } else out += ".*";
       } else out += "[^/]*";
-    } else if (c === "?") out += "[^/]";
-    else if (c === "[") {
+    } else if (c === "[") {
       const end = glob.indexOf("]", i + 1);
       if (end < 0) return null;
       const body = glob.slice(i + 1, end);
-      if (!/^[A-Za-z0-9_.-]+$/.test(body)) return null;
-      out += "[" + body.replace(/[-\]]/g, "\\$&") + "]";
+      // GitHub brackets: alphanumerics and ranges only.
+      if (!/^(?:[A-Za-z0-9](?:-[A-Za-z0-9])?)+$/.test(body)) return null;
+      out += "[" + body + "]";
       i = end;
     } else out += c.replace(/[.^$]/g, "\\$&");
   }
@@ -125,7 +127,12 @@ export function dispatchedWorkflows(dispatcher) {
   return map;
 }
 
+/** GitHub evaluates `paths` against only the first 300 changed files. */
+export const GITHUB_PATH_FILTER_FILE_LIMIT = 300;
+
 export function withoutDirectRuns(selected, changed, readWorkflow, dispatcher) {
+  // Beyond the limit a direct run may not start at all: never suppress.
+  if (changed.length > GITHUB_PATH_FILTER_FILE_LIMIT) return [...selected];
   const map = dispatchedWorkflows(dispatcher);
   return selected.filter((profile) => {
     const file = map[profile];
