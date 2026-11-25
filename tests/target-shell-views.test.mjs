@@ -171,8 +171,8 @@ test("D: mobile More offers only current Inbox and no Archive",()=>{
 test("C-3a: historical Gmail source follows archive alias only after complete target cutover",()=>{
   assert.equal(legacyInboxMailViewFor(false,false),"Inbox");
   assert.equal(legacyInboxMailViewFor(false,true),"Inbox","off mode stays unchanged");
-  assert.equal(legacyInboxMailViewFor(true,false),"Inbox","C-2 archive remains readable");
-  assert.equal(legacyInboxMailViewFor(true,true),"LegacyInbox");
+  assert.equal(legacyInboxMailViewFor(true,false),"Inbox","current Inbox keeps live Gmail");
+  assert.equal(legacyInboxMailViewFor(true,true),"Inbox","current target Inbox owns Gmail; LegacyInbox is retired");
 });
 
 test("D: all former Archive links redirect only in personal-v1",()=>{
