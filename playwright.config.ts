@@ -141,7 +141,7 @@ export default defineConfig({
     // The webServer env below is run-wide: real-store opt-in must only run
     // these five isolated acceptance specs, never other tests.
     { name: "desktop", use: { ...devices["Desktop Chrome"], storageState: sessionFile }, dependencies: ["setup"],
-      ...(attentionTest||attentionOffTest?{testMatch:/target-home-attention\.spec\.ts/}:personalAcceptanceTest || inboxAcceptanceTest ? { testMatch: /(?:target-personal-(?:acceptance|my-plan|search-open|create|capture-undo|bfcache|native-bfcache)|target-inbox-(?:acceptance|c3b-acceptance))\.spec\.ts/ } : {}) },
+      ...(attentionTest||attentionOffTest?{testMatch:process.env.LUMI_TARGET_ATTENTION_NATIVE_E2E==="true"?/target-personal-native-bfcache\.spec\.ts/:/target-home-attention\.spec\.ts/}:personalAcceptanceTest || inboxAcceptanceTest ? { testMatch: /(?:target-personal-(?:acceptance|my-plan|search-open|create|capture-undo|bfcache|native-bfcache)|target-inbox-(?:acceptance|c3b-acceptance))\.spec\.ts/ } : {}) },
   ],
   webServer: {
     command: `${process.env.E2E_SKIP_BUILD ? "" : "pnpm build && "}pnpm start --port ${port} --hostname 127.0.0.1`,
