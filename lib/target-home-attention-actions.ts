@@ -1,7 +1,7 @@
 /** Milestone E-1: Home's private task attention transport. The existing
  * strict staging client remains the sole HTTP transport. No persistence,
  * optimistic writes, automatic PATCH retry, or shared-Area fallback.
- * Project rules and UI activation are separate changes in this same PR. */
+ * Project rules are deferred by the owner's decision of 2026-11-25. */
 import {
   appendAttentionPage, fetchAttentionPage, fetchAttentionCommandPreview,
   sendAttentionCommand, fetchAttentionCommandReceipt,
@@ -53,6 +53,7 @@ export async function changeHomeAttention(
   snoozedUntilMs:number|null,
   signal:AbortSignal,
   fetchImpl:typeof fetch=fetch,
+  onCommitted?:(command:AttentionCommand)=>void,
 ):Promise<ActionResult>{
   const {item,attentionEpoch}=witness;
   if(signal.aborted)return {status:"aborted"};
@@ -81,6 +82,13 @@ export async function changeHomeAttention(
     expectedStateRevision:preview.expectedStateRevision,
     writeAreaId:preview.writeAreaId,restoreGeneration:preview.restoreGeneration,
   };
+  const outcome=await commitHomeAttention(command,signal,fetchImpl);
+  if(outcome.status==="ok"&&!signal.aborted)onCommitted?.(command);
+  return outcome;
+}
+
+async function commitHomeAttention(command:AttentionCommand,signal:AbortSignal,
+  fetchImpl:typeof fetch):Promise<ActionResult>{
   const sent=await sendAttentionCommand(command,signal,fetchImpl);
   if(sent.status==="ok")return signal.aborted?{status:"aborted"}:{status:"ok"};
   if(sent.status!=="uncertain")return sent;
@@ -92,4 +100,35 @@ export async function changeHomeAttention(
   if(receipt.status==="ok"&&receipt.receipt==="committed")return {status:"ok"};
   if(receipt.status==="unauthorized")return {status:"unauthorized"};
   return {status:"uncertain"};
+}
+
+/** Conservative Undo of one confirmed hide. State row revision resets to zero
+ * on every insert, so it alone is not a witness. Require the exact original
+ * task CAS, store generation and minimum resulting actor epoch. If overdue
+ * hygiene removed an old soon row, the epoch can advance further; refuse Undo
+ * rather than guessing whether another action intervened. */
+export async function undoHomeAttention(
+  original:AttentionCommand,signal:AbortSignal,fetchImpl:typeof fetch=fetch,
+):Promise<ActionResult>{
+  if(signal.aborted)return {status:"aborted"};
+  if(original.action!=="dismiss"&&original.action!=="snooze")return {status:"invalid"};
+  const target={taskId:original.taskId,ruleId:original.ruleId,occurrenceOn:original.occurrenceOn};
+  const result=await fetchAttentionCommandPreview({...target,signal},fetchImpl);
+  if(result.status!=="ok")return result;
+  if(signal.aborted)return {status:"aborted"};
+  const p=result.preview;
+  // A prior active row with a revision is an expired snooze: writer deletes it
+  // and inserts the new hidden row in the same transaction.
+  const expectedEpoch=original.expectedAttentionEpoch+(original.expectedStateRevision===null?1:2);
+  if(p.expectedAttentionEpoch!==expectedEpoch||p.expectedStateRevision!==0||
+    p.expectedRevision!==original.expectedRevision||p.writeAreaId!==original.writeAreaId||
+    p.restoreGeneration!==original.restoreGeneration||
+    p.lifecycle!==(original.action==="snooze"?"snoozed":"dismissed")||
+    p.snoozedUntilMs!==original.snoozedUntilMs)return {status:"conflict"};
+  return commitHomeAttention({
+    ...target,commandId:crypto.randomUUID(),action:"restore",snoozedUntilMs:null,
+    expectedRevision:p.expectedRevision,expectedAttentionEpoch:p.expectedAttentionEpoch,
+    expectedStateRevision:p.expectedStateRevision,writeAreaId:p.writeAreaId,
+    restoreGeneration:p.restoreGeneration,
+  },signal,fetchImpl);
 }
