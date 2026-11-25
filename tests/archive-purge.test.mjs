@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -14,12 +15,16 @@ let serial = 0;
 function fixture(backup = true) {
   const dir = path.join(root, "fixture-" + ++serial);
   mkdirSync(dir);
-  const dbPath = path.join(dir, "legacy.sqlite");
+  const dbPath = path.join(dir, "store.sqlite");
   const backupDirectory = path.join(dir, "backups");
   mkdirSync(backupDirectory);
   if (backup) mkdirSync(path.join(backupDirectory, "deploy-abcdefgh"));
   const db = new DatabaseSync(dbPath);
   applySchema(db);
+  // Existing production uses the normal revision metadata; after purge it
+  // must still be present and prevent startup from re-seeding test Archive.
+  db.prepare("INSERT INTO metadata(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value")
+    .run("revision","42");
   // The archive owns these four tables, including a historical note revision.
   db.prepare("INSERT INTO entities(id,payload,updated_at) VALUES(?,?,?)")
     .run("task:old", JSON.stringify({ id: "task:old", type: "task", title: "synthetic" }), 1);
@@ -74,6 +79,15 @@ test("dry-run, atomic apply, protected data and triggers, then zero-count second
   assert.equal(removed.foreignKeyViolations, 0);
   assert.deepEqual(removed.before, dry.before);
   assert.deepEqual(removed.after, { note_revisions: 0, relations: 0, tombstones: 0, entities: 0 });
+  // Simulate an ACTUAL server-store restart, not just reopening raw SQLite:
+  // initialiseDatabase used to recreate workspace:personal in entities.
+  execFileSync(process.execPath, [
+    "--experimental-loader","./scripts/target-staging-ts-loader.mjs",
+    "--input-type=module","-e",
+    "import { getDatabase } from './lib/server-store.ts'; getDatabase().close();",
+  ], { cwd: process.cwd(), env: { ...process.env,
+    AI_EXECUTIVE_DATA_DIR: path.dirname(f.dbPath) },
+    stdio: ["ignore","pipe","pipe"], timeout: 20_000 });
   const db = new DatabaseSync(f.dbPath, { readOnly: true });
   try {
     for (const table of ARCHIVE_TABLES)
@@ -97,4 +111,18 @@ test("refuses active service, missing backup, wrong user without deleting any ro
   const db = new DatabaseSync(f.dbPath, { readOnly: true });
   try { assert.equal(db.prepare("SELECT COUNT(*) AS n FROM entities").get().n, 2); }
   finally { db.close(); }
+});
+test("fresh installation still seeds its default workspace on first server startup", () => {
+  const dir = path.join(root, "blank-" + ++serial);
+  mkdirSync(dir);
+  execFileSync(process.execPath, [
+    "--experimental-loader","./scripts/target-staging-ts-loader.mjs",
+    "--input-type=module","-e",
+    "import { getDatabase } from './lib/server-store.ts'; getDatabase().close();",
+  ], { cwd: process.cwd(), env: { ...process.env, AI_EXECUTIVE_DATA_DIR: dir },
+    stdio: ["ignore","pipe","pipe"], timeout: 20_000 });
+  const db = new DatabaseSync(path.join(dir,"store.sqlite"), { readOnly:true });
+  try {
+    assert.equal(db.prepare("SELECT COUNT(*) AS n FROM entities WHERE id='workspace:personal'").get().n,1);
+  } finally { db.close(); }
 });
