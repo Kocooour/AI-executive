@@ -39,6 +39,16 @@ export function activeTargetViewFor(input:TargetShellInput&{view:string;planActi
     :scopeList==="project"?"Projects":scopeList==="note"?"Notes":null;
   return {scopeList,targetPlan,active};
 }
+/** D (#501): personal-v1 exposes current views only. Obsolete Archive links
+ * are redirected to My Plan by the client router; off mode is unchanged. */
+export const RETIRED_ARCHIVE_VIEWS = Object.freeze([
+  "LegacyHome", "LegacyInbox", "LegacyUpcoming", "Today", "Overdue",
+  "Anytime", "Someday", "Completed", "Areas", "Context",
+]);
+export function retiredArchiveView(view: string): boolean {
+  return RETIRED_ARCHIVE_VIEWS.includes(view);
+}
+
 /** C-1: one pure classification for every addressable shell view. Never use
  * legacy list membership/counts to decide whether a target view is current.
  * personal-v1 is an all-gates opt-in; incomplete configurations and 'off'
@@ -68,25 +78,11 @@ export type ShellNavigationInput=TargetShellInput&{
 const PERSONAL_V1_C1_PRIMARY:readonly ShellNavigationView[]=[
   "MyPlanPreview","Projects","Notes","Calendar","Search",
 ];
-const PERSONAL_V1_C1_ARCHIVE:readonly ShellNavigationView[]=[
-  "Home","Inbox","Today","Upcoming","Overdue","Anytime","Someday",
-  "Completed","Areas","Context",
-];
 const PERSONAL_V1_PRIMARY:readonly ShellNavigationView[]=[
   "MyPlanPreview","Home","Upcoming","Projects","Notes","Calendar","Search",
 ];
-const PERSONAL_V1_ARCHIVE:readonly ShellNavigationView[]=[
-  "LegacyHome","Inbox","Today","LegacyUpcoming","Overdue","Anytime","Someday",
-  "Completed","Areas","Context",
-];
-// C-3a promotes the authorized target Inbox but preserves historical tasks
-// under a separate deep-linkable archival destination. No legacy count is reused.
 const PERSONAL_V1_INBOX_PRIMARY:readonly ShellNavigationView[]=[
   "MyPlanPreview","Home","Inbox","Upcoming","Projects","Notes","Calendar","Search",
-];
-const PERSONAL_V1_INBOX_ARCHIVE:readonly ShellNavigationView[]=[
-  "LegacyHome","LegacyInbox","Today","LegacyUpcoming","Overdue","Anytime","Someday",
-  "Completed","Areas","Context",
 ];
 /** System views (Agents, Settings) remain accessible outside primary/archive. */
 export function targetShellNavigationFor(input:ShellNavigationInput):ShellNavigationModel{
@@ -95,12 +91,10 @@ export function targetShellNavigationFor(input:ShellNavigationInput):ShellNaviga
   const inboxReady=personalV1&&Boolean(input.homeRead&&input.inboxRead);
   const primary=personalV1?(inboxReady?PERSONAL_V1_INBOX_PRIMARY:
     input.homeRead?PERSONAL_V1_PRIMARY:PERSONAL_V1_C1_PRIMARY):[];
-  const archive=personalV1?(inboxReady?PERSONAL_V1_INBOX_ARCHIVE:
-    input.homeRead?PERSONAL_V1_ARCHIVE:PERSONAL_V1_C1_ARCHIVE):[];
+  const archive:readonly ShellNavigationView[]=[];
   const primarySet=new Set<string>(primary);
-  const archiveSet=new Set<string>(archive);
   const byView=Object.fromEntries(SHELL_NAVIGATION_VIEWS.map(view=>
-    [view,primarySet.has(view)?"primary":archiveSet.has(view)?"archive":"hidden"]
+    [view,primarySet.has(view)?"primary":"hidden"]
   )) as Record<ShellNavigationView,ShellNavigationPlacement>;
   return {personalV1,byView,primary,archive,
     hidden:SHELL_NAVIGATION_VIEWS.filter(view=>byView[view]==="hidden"),
