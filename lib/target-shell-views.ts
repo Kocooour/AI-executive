@@ -48,6 +48,12 @@ export const RETIRED_ARCHIVE_VIEWS = Object.freeze([
 export function retiredArchiveView(view: string): boolean {
   return RETIRED_ARCHIVE_VIEWS.includes(view);
 }
+/** Treat even unknown historic Legacy*/Archive* addresses as retired links.
+ * The active target view is never inferred from old browser-local data. */
+export function retiredArchiveAddress(search: string): boolean {
+  const view = new URLSearchParams(search).get("view");
+  return Boolean(view && (retiredArchiveView(view) || /^Legacy|^Archive/i.test(view)));
+}
 
 /** C-1: one pure classification for every addressable shell view. Never use
  * legacy list membership/counts to decide whether a target view is current.
