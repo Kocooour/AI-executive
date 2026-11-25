@@ -1,5 +1,5 @@
 
-.targetHomeAttention{min-width:0}
+.targetHomeAttention{min-width:0;width:100%;max-width:900px}
 .targetHomeAttentionReason{margin:.3rem 0;font-size:.9rem;font-weight:550;overflow-wrap:anywhere}
 .targetHomeAttentionActions{display:flex;flex-wrap:wrap;align-items:center;gap:.45rem;margin-top:.5rem;min-width:0}
 .targetHomeAttention button:not(.stagingMyPlanOpen){min-height:44px;max-width:100%;white-space:normal;overflow-wrap:anywhere}
