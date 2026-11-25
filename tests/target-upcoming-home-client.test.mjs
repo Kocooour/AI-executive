@@ -270,7 +270,14 @@ test("C-2 overview JSX unmounts cached rows on bad outcome and remounts only a f
   assert.match(ui,/const outcome=useSyncExternalStore\(/);
   assert.match(ui,/const gate=targetOverviewGate\(runtime,generation,outcome,blocked\)/);
   assert.match(ui,/if\(gate\.kind!=="ready"\)return/);
-  assert.match(ui,/return <TargetOverviewRead key=\{kind\+":"\+gate\.generation\}/);
+  // Both readers must be below the same fail-closed runtime gate, while
+  // attention is independent of the overview's ordinary data-loading branch.
+  const gate=ui.indexOf('if(gate.kind!=="ready")return');
+  const overview=ui.indexOf('<TargetOverviewRead key={kind+":"+gate.generation}');
+  const attention=ui.indexOf('<TargetHomeAttention');
+  assert.ok(gate>=0&&attention>gate&&overview>attention);
+  assert.match(ui,/<TargetHomeAttention\s+key=\{gate\.generation\+":"\+scope\}/);
+  assert.match(ui,/<TargetOverviewRead key=\{kind\+":"\+gate\.generation\}/);
   assert.match(ui,/return \(\)=>\{controller\.abort\(\);moreAbort\.current\?\.abort\(\);\};/,
     "unmount cancels both first page and pagination requests");
   // Failed and disabled outcomes cannot bypass an explicit refusal lock.
