@@ -69,7 +69,11 @@ for(const width of [390,1280]){
     const {now,setClock,titles}=fixture(width);
     await page.setViewportSize({width,height:844});
     await page.clock.install({time:new Date(now)});
+    const firstRead=page.waitForResponse(r=>isPath(r.url(),"/api/target-staging/attention")&&r.status()===200);
     await page.goto("/?view=Home&scope=personal");
+    const first=await (await firstRead).json();
+    expect(first.evaluatedAtMs).toBe(now);
+    expect(first.timeZone).toBe(zone);
     await expect(panel(page)).toBeVisible({timeout:30_000});
     await expect(items(page)).toHaveCount(5);
     await expect(items(page).locator("strong")).toHaveText(titles.slice(0,5));
@@ -163,7 +167,10 @@ for(const width of [390,1280]){
     await page.goto("/?view=Home");
     await expect(page.locator(".appShell")).toBeVisible();
     await expect(panel(page)).toHaveCount(0);
-    expect(requests).toEqual([]);
     expect((await page.request.get("/api/target-staging/attention")).status()).toBe(404);
+    await page.reload();
+    await expect(page.locator(".appShell")).toBeVisible();
+    await expect(panel(page)).toHaveCount(0);
+    expect(requests).toEqual([]);
   });
 }
