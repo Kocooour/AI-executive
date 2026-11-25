@@ -48,7 +48,7 @@ export const RETIRED_ARCHIVE_VIEWS = Object.freeze([
 export function retiredArchiveView(view: string): boolean {
   return RETIRED_ARCHIVE_VIEWS.includes(view);
 }
-/** Treat even unknown historic Legacy*/Archive* addresses as retired links.
+/** Treat unknown historic Legacy-prefixed and Archive-prefixed addresses as retired links.
  * The active target view is never inferred from old browser-local data. */
 export function retiredArchiveAddress(search: string): boolean {
   const view = new URLSearchParams(search).get("view");
