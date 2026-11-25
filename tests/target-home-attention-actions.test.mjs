@@ -1,7 +1,7 @@
 import {test} from "node:test";
 import assert from "node:assert/strict";
 import {
-  HOME_ATTENTION_LIMIT, readHomeAttention, readMoreHomeAttention, changeHomeAttention,
+  HOME_ATTENTION_LIMIT, readHomeAttention, readMoreHomeAttention, changeHomeAttention, undoHomeAttention,
 } from "../lib/target-home-attention-actions.ts";
 
 const item=(over={})=>({
@@ -89,6 +89,7 @@ test("Dismiss and snooze issue one PATCH using the server preview",async()=>{
     const {calls,fetcher}=recorder(()=>json(preview()),()=>json({ok:true}));
     assert.deepEqual(await changeHomeAttention(witness(),action,until,signal(),fetcher),{status:"ok"});
     assert.deepEqual(calls.map(c=>c.method),["GET","PATCH"]);
+    assert.equal(new URL(calls[0].url,"https://example.invalid").searchParams.get("sourceRevision"),"3");
     const command=calls[1].body;
     assert.equal(command.taskId,"task-1");
     assert.equal(command.occurrenceOn,"2026-11-01");
@@ -125,4 +126,37 @@ test("Aborted or refused preview sends no mutation",async()=>{
   const b=recorder(()=>json({},403));
   assert.equal((await changeHomeAttention(witness(),"dismiss",null,signal(),b.fetcher)).status,"unauthorized");
   assert.equal(b.calls.length,1);
+});
+
+test("Undo restores only the exact confirmed hide, rejecting newer actor or task revision",async()=>{
+  const original={
+    commandId:"223e4567-e89b-42d3-a456-426614174001",taskId:"task-1",
+    ruleId:"deadline_overdue",occurrenceOn:"2026-11-01",action:"dismiss",
+    snoozedUntilMs:null,expectedRevision:preview().expectedRevision,
+    expectedAttentionEpoch:4,expectedStateRevision:null,
+    writeAreaId:"area-private",restoreGeneration:preview().restoreGeneration,
+  };
+  const hidden={expectedAttentionEpoch:5,expectedStateRevision:0,lifecycle:"dismissed"};
+  const good=recorder(()=>json(preview(hidden)),()=>json({ok:true}));
+  assert.deepEqual(await undoHomeAttention(original,signal(),good.fetcher),{status:"ok"});
+  assert.equal(good.calls[1].body.action,"restore");
+  for(const override of [{expectedAttentionEpoch:6},{expectedRevision:"c".repeat(64)},
+    {writeAreaId:"other-area"},{restoreGeneration:"123e4567-e89b-42d3-a456-426614174999"},
+    {expectedStateRevision:1}]){
+    const stale=recorder(()=>json(preview({...hidden,...override})));
+    assert.equal((await undoHomeAttention(original,signal(),stale.fetcher)).status,"conflict");
+    assert.equal(stale.calls.length,1);
+  }
+});
+
+test("Expired snooze replacement expects two lifecycle epoch increments before Undo",async()=>{
+  const original={commandId:"223e4567-e89b-42d3-a456-426614174001",taskId:"task-1",
+    ruleId:"deadline_soon",occurrenceOn:"2026-11-09",action:"snooze",
+    snoozedUntilMs:1794100000000,expectedRevision:preview().expectedRevision,
+    expectedAttentionEpoch:4,expectedStateRevision:0,
+    writeAreaId:"area-private",restoreGeneration:preview().restoreGeneration};
+  const hidden={expectedAttentionEpoch:6,expectedStateRevision:0,lifecycle:"snoozed",
+    snoozedUntilMs:original.snoozedUntilMs};
+  const good=recorder(()=>json(preview(hidden)),()=>json({ok:true}));
+  assert.equal((await undoHomeAttention(original,signal(),good.fetcher)).status,"ok");
 });
