@@ -64,8 +64,8 @@ export async function GET(request:Request):Promise<Response>{
     const areaFilter=params.get("areaFilter")??"all";
     const view=params.get("view")??"active";
     const explain=params.get("explain");
-    if(explain!==null&&(explain!=="cs"&&explain!=="en"||areaFilter!=="personal"||view!=="active"))
-      return answer(400,"Invalid request");
+    if(explain!==null&&explain!=="cs"&&explain!=="en")return answer(400,"Invalid request");
+    if(explain!==null&&(areaFilter!=="personal"||view!=="active"))return answer(400,"Invalid request");
     if(!["all","personal","shared"].includes(areaFilter)||
       !["active","hidden"].includes(view))
       return answer(400,"Invalid request");
