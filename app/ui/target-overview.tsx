@@ -61,8 +61,8 @@ function Row({task,language,view,openable}:{task:C2Task;language:Language;
     </div>
   </li>;
 }
-function TargetOverviewRead({kind,language,generation,onRefusal,openable,attentionEnabled}:{
-  kind:Kind;language:Language;generation:string;onRefusal:()=>void;openable:boolean;attentionEnabled:boolean;
+function TargetOverviewRead({kind,language,generation,onRefusal,openable}:{
+  kind:Kind;language:Language;generation:string;onRefusal:()=>void;openable:boolean;
 }){
   const scope=useTargetScope();
   const filter:MyPlanSliceFilter=scope;
@@ -203,9 +203,6 @@ function TargetOverviewRead({kind,language,generation,onRefusal,openable,attenti
   const groups=c2SevenDayGroups(state.future.tasks,today);
   return <section className="targetOverview" data-testid={kind==="home"?"target-home":"target-upcoming"}
     data-target-source="authorized">
-    {kind==="home"&&attentionEnabled&&scope!=="shared"&&<TargetHomeAttention
-      key={generation+":"+scope} generation={generation} language={language}
-      openable={openable} onRefusal={onRefusal}/>}
     {kind==="home"&&state.summary&&<>
       <p className="targetOverviewSubtle">{language==="cs"
         ?"Souhrn vašich aktuálně dostupných cílových dat. Počty znamenají celkový počet, ne naléhavost."
@@ -250,6 +247,7 @@ export default function TargetOverview({kind,language="cs",taskDetail=false,atte
   kind:Kind;language?:Language;taskDetail?:boolean;attentionEnabled?:boolean;
 }){
   const runtime=useTargetRuntime(),generation=useTargetGeneration();
+  const scope=useTargetScope();
   const subscribe=useMemo(
     ()=>(notify:()=>void)=>runtime?runtime.subscribeOutcome(notify):()=>{},[runtime]);
   const outcome=useSyncExternalStore(
@@ -283,6 +281,16 @@ export default function TargetOverview({kind,language="cs",taskDetail=false,atte
         failure={gate.kind==="signed_out"||gate.kind==="refused"?"signed-out":"unavailable"}
         onAction={retry}/>}
   </div>;
-  return <TargetOverviewRead key={kind+":"+gate.generation} kind={kind}
-    language={language} generation={gate.generation} openable={taskDetail} onRefusal={refusal} attentionEnabled={attentionEnabled}/>;
+  // Independent readers share the verified runtime gate, not the overview's
+  // transient loading state. Ordinary polls must never destroy an in-flight
+  // attention receipt or its Undo witness. Scope and actor changes still remount.
+  return <>
+    {kind==="home"&&attentionEnabled&&scope!=="shared"&&<div className="targetOverview">
+      <TargetHomeAttention key={gate.generation+":"+scope}
+        generation={gate.generation} language={language}
+        openable={taskDetail} onRefusal={refusal}/>
+    </div>}
+    <TargetOverviewRead key={kind+":"+gate.generation} kind={kind}
+      language={language} generation={gate.generation} openable={taskDetail} onRefusal={refusal}/>
+  </>;
 }
