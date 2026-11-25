@@ -6,7 +6,7 @@ import {
   appendAttentionPage, fetchAttentionPage, fetchAttentionCommandPreview,
   sendAttentionCommand, fetchAttentionCommandReceipt,
   type AttentionPage, type AttentionItem, type AttentionAction,
-  type AttentionCommand, type AttentionFailure,
+  type AttentionCommand, type AttentionFailure, type AttentionExplanationLanguage,
 } from "./target-staging-attention-client";
 
 export const HOME_ATTENTION_LIMIT = 5;
@@ -17,10 +17,10 @@ type ActionResult = {status:"ok"}|Failure;
 
 /** Never accept another area scope, even when a caller has a wider My Plan scope. */
 export async function readHomeAttention(
-  signal?:AbortSignal, fetchImpl:typeof fetch=fetch,
+  signal?:AbortSignal, fetchImpl:typeof fetch=fetch,explain?:AttentionExplanationLanguage,
 ):Promise<PageResult>{
   return fetchAttentionPage({
-    areaFilter:"personal",view:"active",limit:HOME_ATTENTION_LIMIT,signal,
+    areaFilter:"personal",view:"active",limit:HOME_ATTENTION_LIMIT,signal,explain,
   },fetchImpl);
 }
 
@@ -33,7 +33,7 @@ export async function readMoreHomeAttention(
     return {status:"invalid"};
   const next=await fetchAttentionPage({
     areaFilter:"personal",view:"active",limit:HOME_ATTENTION_LIMIT,
-    cursor:previous.nextCursor,signal,
+    cursor:previous.nextCursor,signal,explain:previous.explanationLanguage,
   },fetchImpl);
   if(next.status!=="ok")return next;
   const page=appendAttentionPage(previous,next.page);
