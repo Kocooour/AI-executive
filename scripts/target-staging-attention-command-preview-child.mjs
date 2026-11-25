@@ -5,11 +5,11 @@ import {validTargetDueOn} from "../lib/target-task-temporal-due-on-writer.ts";
 import {resolveChildActor} from "./target-staging-child-actor.mjs";
 
 try {
-  const [taskId,ruleId,occurrenceOn,extra]=process.argv.slice(2);
+  const [taskId,ruleId,occurrenceOn,home,extra]=process.argv.slice(2);
   const stagingDirectory=process.env.AI_EXECUTIVE_TARGET_STAGING_DIRECTORY;
   const expectedRestoreGeneration=process.env.AI_EXECUTIVE_TARGET_STAGING_RESTORE_GENERATION;
   const ownerUserId=process.env.AI_EXECUTIVE_TARGET_STAGING_OWNER_USER_ID;
-  if(extra!==undefined||typeof taskId!=="string"||!taskId||
+  if(extra!==undefined||(home!==undefined&&home!=="home")||typeof taskId!=="string"||!taskId||
      Buffer.byteLength(taskId,"utf8")>4096||taskId.includes("\0")||
      !taskId.isWellFormed()||
      !["deadline_overdue","deadline_soon","planned_date_passed"].includes(ruleId)||
@@ -31,7 +31,7 @@ try {
     if(!identity)throw new Error("unauthorized");
     // Server clock decides whether a snooze has expired.
     const preview=authority.previewAttentionCommand(
-      identity.actor,taskId,ruleId,occurrenceOn,Date.now());
+      identity.actor,taskId,ruleId,occurrenceOn,Date.now(),home==="home");
     process.stdout.write(JSON.stringify(preview
       ?{ok:true,...preview}:{ok:false,reason:"inaccessible"}));
   }finally{authority.close();}
