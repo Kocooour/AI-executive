@@ -284,7 +284,7 @@ export function Sidebar({ app, navigation, targetPlan = false, onTargetCapture }
               <span aria-hidden="true"><ViewIcon name="Agents" /></span> {tr("Agents")}
             </button>
           )}
-          <button
+          <button data-nav-system="Settings"
             className={view === "Settings" ? "active" : ""}
             onClick={(event) => navigateToView("Settings", event.currentTarget)}
           >
