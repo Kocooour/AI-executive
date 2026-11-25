@@ -203,24 +203,6 @@ export function Sidebar({ app, navigation, targetPlan = false, onTargetCapture }
             Areas/Notes/filters remain reachable without crossing 25+ project
             rows. Legacy keeps its old order and collapsed More control. */}
         <div className="sidebarScroll">
-        {personalV1 && navigation && (
-          <section className="targetArchiveSection" data-testid="target-archive-sidebar"
-            aria-labelledby="target-archive-sidebar-heading">
-            <h2 id="target-archive-sidebar-heading">
-              {language==="cs"?"Archiv (stará data, jen pro čtení)":"Archive (old data, read-only)"}
-            </h2>
-            <p>{language==="cs"
-              ?"Původní položky nejsou součástí aktuálního plánu. Zde je můžete pouze zobrazit."
-              :"Historical items are not part of your current plan. They can only be viewed here."}</p>
-            <div className="secondaryNav" role="navigation"
-              aria-label={language==="cs"?"Archivní pohledy":"Archived views"}>
-              {navigation.archive.map(x=><button key={x} type="button"
-                className={view===x&&!(x==="Today"&&app.mobilePlanPreviewActive)?"active":""} data-nav-view={x}
-                data-nav-archive="true" aria-current={view===x&&!(x==="Today"&&app.mobilePlanPreviewActive)?"page":undefined}
-                onClick={event=>navigateToView(x,event.currentTarget)}>{tr(x==="LegacyHome"?"Home":x==="LegacyUpcoming"?"Upcoming":x==="LegacyInbox"?"Inbox":x)}</button>)}
-            </div>
-          </section>
-        )}
         {!personalV1 && mobileDesignV1Preview && (
           <div className="secondaryNav" id="sidebar-secondary-views" role="navigation"
             aria-label={tr("moreViews")} data-desktop-v1-direct-views>
