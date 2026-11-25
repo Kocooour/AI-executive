@@ -7,9 +7,9 @@ import {useTargetRuntime} from "./target-data-provider";
 import {openTargetDetail} from "./target-detail-state";
 import {targetAppFetch} from "../../lib/target-app-fetch";
 import {detailIdOk} from "../../lib/target-detail-route";
-import {readHomeAttention,readMoreHomeAttention,changeHomeAttention,undoHomeAttention,HOME_ATTENTION_LIMIT}
+import {readHomeAttention,readMoreHomeAttention,changeHomeAttention,undoHomeAttention,HOME_ATTENTION_LIMIT,type HomeAttentionUndo}
   from "../../lib/target-home-attention-actions";
-import type {AttentionPage,AttentionItem,AttentionCommand} from "../../lib/target-staging-attention-client";
+import type {AttentionPage,AttentionItem} from "../../lib/target-staging-attention-client";
 import "./target-home-attention.css";
 
 type Language="cs"|"en";
@@ -46,7 +46,7 @@ export function TargetHomeAttention({language,openable,onRefusal,generation}:{
   const [expanded,setExpanded]=useState(false);
   const [busy,setBusy]=useState(false);
   const [notice,setNotice]=useState("");
-  const [undo,setUndo]=useState<AttentionCommand|null>(null);
+  const [undo,setUndo]=useState<HomeAttentionUndo|null>(null);
   const [picker,setPicker]=useState<string|null>(null);
   const [custom,setCustom]=useState("");
   const heading=useRef<HTMLHeadingElement>(null);
@@ -113,7 +113,7 @@ export function TargetHomeAttention({language,openable,onRefusal,generation}:{
     const controller=start();if(!controller)return;
     setUndo(null);
     try{
-      let committed:AttentionCommand|null=null;
+      let committed:HomeAttentionUndo|null=null;
       const result=await changeHomeAttention({item,attentionEpoch:state.page.attentionEpoch},
         action,until,controller.signal,targetAppFetch,command=>{committed=command;});
       if(controller.signal.aborted||!live())return;
