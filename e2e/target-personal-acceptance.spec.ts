@@ -154,7 +154,7 @@ test("#501: dry-run, purge, real restart, login/settings, protected rows, second
     const db=new DatabaseSync(witness.databasePath,{readOnly:true});
     try{
       for(const table of ["entities","relations","tombstones","note_revisions"]){
-        const count=Number(db.prepare('SELECT COUNT(*) AS n FROM "'+table+'"').get().n);
+        const count=Number((db.prepare('SELECT COUNT(*) AS n FROM "'+table+'"').get() as {n:number}|undefined)?.n);
         expect(count,table+" must remain empty after server boot").toBe(0);
       }
       for(const table of witness.protectedTables){
