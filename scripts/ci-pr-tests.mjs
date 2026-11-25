@@ -2,7 +2,7 @@
 // Conservative, dependency-free PR test selection. Main and releases run the full suite.
 // Operates on the PR's base/head commits, not GitHub's temporary merge checkout.
 import { execFileSync, spawnSync } from "node:child_process";
-import { appendFileSync, existsSync, readFileSync, readdirSync } from "node:fs";
+import { appendFileSync, existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import path from "node:path";
 
 const BASE = process.env.BASE_SHA;
@@ -66,8 +66,10 @@ const FILE_INPUT_TESTS = [
   { path: /^\.github\/workflows\/browser-e2e\.yml$/, tests: ["tests/browser-e2e-workflow.test.mjs"] },
   { path: /^deployment\/deploy-safe\.sh$/, tests: ["tests/deploy-safe.test.mjs"] },
 ];
-// Fail closed for other changed workflow definitions, which can affect any check.
+// Other workflow definitions cannot change unit-test outcomes; only tests that
+// read workflow files can. pr-checks.yml itself stays in TOOLCHAIN (full suite).
 const OTHER_WORKFLOWS = /^\.github\/workflows\/(?!browser-e2e\.yml$)/;
+const WORKFLOW_READER = /\.github\/workflows/;
 const SENSITIVE = /^(?:lib\/(?:auth\.ts|owner-session-[^/]+\.ts|passkeys\.ts|http-security\.ts|security-|server-store\.ts|server-sync\.ts|db\.ts|data-dir\.ts|schema-migrations\.ts|backup-|mail-gmail\.ts|area-|target-|context(?:-|\.ts)|work-read-scope\.ts)|app\/api\/)/;
 
 // Build a reverse dependency graph from relative imports. Scanning the tracked
@@ -125,10 +127,17 @@ function testsDependingOn(changed, reverse, available) {
 }
 
 export function chooseTests(paths, available, sources = {}) {
-  if (paths.some((filename) => TOOLCHAIN.test(filename) || OTHER_WORKFLOWS.test(filename))) {
+  if (paths.some((filename) => TOOLCHAIN.test(filename))) {
     return { full: true, selected: [...available].sort() };
   }
   const selected = new Set(CORE);
+  if (paths.some((filename) => OTHER_WORKFLOWS.test(filename))) {
+    // Every test that inspects workflow definitions (trigger scopes, release
+    // gates, CI policy). An unknown reader pattern fails safe to the full suite.
+    const readers = available.filter((test) => WORKFLOW_READER.test(sources[test] ?? ""));
+    if (!readers.length) return { full: true, selected: [...available].sort() };
+    for (const test of readers) selected.add(test);
+  }
   for (const filename of paths) {
     if (available.includes(filename)) selected.add(filename);
   }
@@ -197,12 +206,21 @@ function main() {
       /^(?:app|lib|scripts|tests)\//.test(filename) &&
       /\.(?:tsx?|mjs|cjs|jsx?)$/.test(filename) && existsSync(filename));
   const sources = Object.fromEntries(files.map((filename) => [filename, readFileSync(filename, "utf8")]));
-  const { full, selected } = chooseTests(paths, available, sources);
-  if (!selected.length || !selected.every((path) => existsSync(path))) {
+  const { full, selected: all } = chooseTests(paths, available, sources);
+  if (!all.length || !all.every((path) => existsSync(path))) {
     throw new Error("Selected PR test list is empty or invalid");
   }
-  console.log(`PR unit tests: ${full ? "full suite" : "focused suite"} (${selected.length}/${available.length} files)`);
+  const shard = parseShard(process.argv);
+  const selected = shard
+    ? shardTests(all, shard.index, shard.count, (file) => statSync(file).size)
+    : all;
+  console.log(`PR unit tests: ${full ? "full suite" : "focused suite"} (${all.length}/${available.length} files)` +
+    (shard ? `; shard ${shard.index}/${shard.count}: ${selected.length} files` : ""));
   console.log(selected.join("\n"));
+  if (!selected.length) {
+    console.log("This shard has no selected files.");
+    return;
+  }
   // Release and rollback safety must fail early: a broad PR suite can run
   // for many minutes, obscuring which deployment invariant broke.
   // The full selected suite still runs unchanged after this first gate.
@@ -217,11 +235,41 @@ function main() {
       return;
     }
   }
+  // The early deployment gate already ran deploy-safe in full: never twice.
+  const rest = selected.filter((file) => file !== "tests/deploy-safe.test.mjs");
+  if (!rest.length) return;
   const outcome = spawnSync(process.execPath, [
-    "--experimental-loader", "./tests/ts-loader.mjs", "--test", ...selected,
+    "--experimental-loader", "./tests/ts-loader.mjs", "--test", ...rest,
   ], { stdio: "inherit", env: process.env });
   if (outcome.error) throw outcome.error;
   process.exitCode = outcome.status ?? 1;
+}
+
+/** Deterministic longest-processing-time split of the selected test files into
+ * `count` shards, weighted by file size with explicit hints for slow suites.
+ * Every file lands in exactly one shard. */
+export const SLOW_TEST_WEIGHTS = { "tests/deploy-safe.test.mjs": 10_000_000 };
+export function shardTests(selected, index, count, sizeOf) {
+  if (!Number.isInteger(count) || count < 1 || !Number.isInteger(index) || index < 1 || index > count) {
+    throw new Error("Invalid shard; expected --shard <index>/<count>");
+  }
+  const weight = (file) => SLOW_TEST_WEIGHTS[file] ?? sizeOf(file);
+  const ordered = [...selected].sort((a, b) => weight(b) - weight(a) || a.localeCompare(b));
+  const loads = Array.from({ length: count }, () => ({ total: 0, files: [] }));
+  for (const file of ordered) {
+    let target = loads[0];
+    for (const load of loads) if (load.total < target.total) target = load;
+    target.total += weight(file);
+    target.files.push(file);
+  }
+  return loads[index - 1].files.sort();
+}
+export function parseShard(argv) {
+  const at = argv.indexOf("--shard");
+  if (at < 0) return null;
+  const match = /^([1-9][0-9]*)\/([1-9][0-9]*)$/.exec(argv[at + 1] ?? "");
+  if (!match) throw new Error("Invalid shard; expected --shard <index>/<count>");
+  return { index: Number(match[1]), count: Number(match[2]) };
 }
 
 // Keep the pure selection functions importable by unit tests.
