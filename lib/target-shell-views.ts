@@ -117,6 +117,6 @@ export function targetMobileMoreCurrentViews(navigation:ShellNavigationModel):Sh
 /** #501: Gmail is live service data, not Archive. Its current reader stays
  * inside the current Inbox while old LegacyInbox addresses redirect away.
  * The off-mode Inbox continues to own the very same reader as before. */
-export function legacyInboxMailViewFor(_personalV1:boolean,_targetInboxEnabled:boolean):"Inbox"{
+export function legacyInboxMailViewFor(_personalV1:boolean,_targetInboxEnabled:boolean):"Inbox"|"LegacyInbox"{
   return "Inbox";
 }
