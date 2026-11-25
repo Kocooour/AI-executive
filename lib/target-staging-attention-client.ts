@@ -414,17 +414,17 @@ export async function fetchAttentionPage(
 
 /** Fresh CAS inputs for one occurrence, from one server snapshot. */
 export async function fetchAttentionCommandPreview(
-  params:{taskId:string;ruleId:AttentionRuleId;occurrenceOn:string;signal?:AbortSignal},
+  params:{taskId:string;ruleId:AttentionRuleId;occurrenceOn:string;sourceRevision?:number;signal?:AbortSignal},
   fetchImpl:typeof fetch=fetch,
 ):Promise<AttentionPreviewResult>{
-  const {taskId,ruleId,occurrenceOn,signal}=params;
+  const {taskId,ruleId,occurrenceOn,sourceRevision,signal}=params;
   if(!validAttentionTaskId(taskId)||!RULES.includes(ruleId)||
-    !validAttentionDate(occurrenceOn))return {status:"invalid"};
+    !validAttentionDate(occurrenceOn)||(sourceRevision!==undefined&&!epoch(sourceRevision)))return {status:"invalid"};
   if(signal?.aborted)return {status:"aborted"};
   let response:Response;
   try{
     const received=await fetchUntilAbort(()=>fetchImpl(COMMAND_URL+"?"+
-      new URLSearchParams({taskId,ruleId,occurrenceOn}),readInit(signal)),signal);
+      new URLSearchParams({taskId,ruleId,occurrenceOn,...(sourceRevision===undefined?{}:{sourceRevision:String(sourceRevision)})}),readInit(signal)),signal);
     if(received===null)return {status:"aborted"};
     response=received;
   }catch{return {status:signal?.aborted?"aborted":"unavailable"};}
