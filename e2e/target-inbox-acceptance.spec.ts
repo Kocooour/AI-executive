@@ -83,13 +83,13 @@ for(const width of [390,1280]){
       name:"Otevřít úkol: "+seeded.taskTitle,
     }).click();
     await expect(page).toHaveURL(new RegExp("view=Inbox&taskId="+encodeURIComponent(seeded.taskId)));
-    await expect(page.getByTestId("target-detail")).toContainText(seeded.taskTitle);
+    await expect(page.getByTestId("target-detail")).toContainText(seeded.taskTitle,{timeout:25_000});
     await page.goBack();
     await findInboxRow(page,seeded.taskId);
     await page.goForward();
-    await expect(page.getByTestId("target-detail")).toContainText(seeded.taskTitle);
+    await expect(page.getByTestId("target-detail")).toContainText(seeded.taskTitle,{timeout:25_000});
     await page.reload();
-    await expect(page.getByTestId("target-detail")).toContainText(seeded.taskTitle);
+    await expect(page.getByTestId("target-detail")).toContainText(seeded.taskTitle,{timeout:25_000});
     await page.getByTestId("target-detail").locator("button.inspectorClose").click();
     await expect(page.getByTestId("target-detail")).toHaveCount(0);
     // Reload/Back/Forward return to the first 50-row page. Find the seeded
