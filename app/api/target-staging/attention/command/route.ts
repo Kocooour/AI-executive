@@ -61,7 +61,7 @@ export async function GET(request:Request):Promise<Response> {
       status:429,headers:{...headers,"retry-after":String(limited.retryAfter)},
     });
     const result=await readStagingAttentionCommandPreviewInChild(
-      {...base,...stagingChildSessionConfig(identity)},taskId,ruleId,occurrenceOn);
+      {...base,...stagingChildSessionConfig(identity)},taskId,ruleId,occurrenceOn,sourceRevision!==null);
     const released=result?.ok===true
       ? verifyAttentionCommandPreviewLive(request,identity,base,result.preview)
       : verifyStagingIdentityBeforeRelease(request,identity,base);
@@ -81,6 +81,7 @@ export async function GET(request:Request):Promise<Response> {
       expectedStateRevision:p.expectedStateRevision,
       writeAreaId:p.writeAreaId,restoreGeneration:base.expectedRestoreGeneration,
       lifecycle:p.lifecycle,snoozedUntilMs:p.snoozedUntilMs,
+      ...(sourceRevision===null?{}:{expectedHideEpoch:p.expectedHideEpoch}),
     },{headers});
   }catch(error){
     logStagingFailure("target-staging/attention-command-preview","route_exception",error);
