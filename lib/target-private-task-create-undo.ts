@@ -5,7 +5,12 @@
  * existing exactly-once delete command with its read-only receipt. Undo only
  * proceeds while the task still has the exact revision observed right after
  * creation, so it never deletes a task the user has since edited, completed,
- * moved, or that someone else changed. Nothing is stored in browser storage. */
+ * moved, or that someone else changed. Nothing is stored in browser storage.
+ * The baseline is read when the notice appears, which is offered only for this
+ * page's own just-confirmed command (never after a reload recovery). A personal
+ * "Kdy" plan does not change the task revision, so it does not block Undo.
+ * Callers pass a deadline-bound signal: an abort before dispatch is "failed",
+ * after dispatch it stays "uncertain" and is resolved only via the receipt. */
 import {readStagingTaskPreview} from "./target-staging-task-preview-client";
 import {buildTaskDeleteCommand,checkTaskDeleteReceipt,dispatchTaskDelete,
   readTaskWriteContext,type TaskDeleteCommand} from "./target-staging-edit-clients";
@@ -64,10 +69,10 @@ export async function undoPrivateTaskCreate(
   if(!command)return {kind:"failed"};
   const result=await dispatchTaskDelete(command,fetchImpl,signal);
   if(result.kind==="committed")return {kind:"deleted"};
-  if(result.kind==="uncertain")return confirmPrivateTaskUndo(command,fetchImpl,signal);
-  if(result.reason==="signed-out")return {kind:"signed-out"};
+  // dispatch() already asked the receipt once: never claim "not removed" here.
+  if(result.kind==="uncertain")return {kind:"uncertain",command};
+  // Only 400/409/429 are definitive pre-commit refusals.
   if(result.reason==="conflict")return {kind:"changed"};
-  if(result.reason==="not-available")return {kind:"gone"};
   return {kind:"failed"};
 }
 
@@ -80,6 +85,6 @@ export async function confirmPrivateTaskUndo(
   // No receipt: the delete was not recorded. A later write is guarded by CAS,
   // so offering a fresh attempt cannot delete a changed task.
   if(receipt.kind==="not-recorded")return {kind:"failed"};
-  if(receipt.kind==="unknown"&&receipt.reason==="signed-out")return {kind:"signed-out"};
+  // After a dispatch even a 401 may follow a real commit: stay uncertain.
   return {kind:"uncertain",command};
 }

@@ -87,8 +87,9 @@ test("a lost response is confirmed only through the receipt and never resent",as
   assert.equal(committed.count(TASK_DELETE),0,"confirmation never deletes");
   const notRecorded=fakeServer({[TASK_DELETE_RECEIPT]:()=>json({status:"not_recorded"})});
   assert.deepEqual(await confirmPrivateTaskUndo(outcome.command,notRecorded.fetchFake,signal()),{kind:"failed"});
+  // After a dispatch even a 401 may follow a real commit: never "not removed".
   const revoked=fakeServer({[TASK_DELETE_RECEIPT]:()=>json({error:"Unauthorized"},401)});
-  assert.deepEqual(await confirmPrivateTaskUndo(outcome.command,revoked.fetchFake,signal()),{kind:"signed-out"});
+  assert.equal((await confirmPrivateTaskUndo(outcome.command,revoked.fetchFake,signal())).kind,"uncertain");
   const still=fakeServer({[TASK_DELETE_RECEIPT]:()=>json({error:"Unavailable"},503)});
   assert.equal((await confirmPrivateTaskUndo(outcome.command,still.fetchFake,signal())).kind,"uncertain");
 });
@@ -116,4 +117,31 @@ test("confirm refuses a malformed command without any request",async()=>{
   const command={...buildTaskDeleteCommand(TASK,ctx()),commandId:"not-a-uuid"};
   assert.equal((await confirmPrivateTaskUndo(command,server.fetchFake,signal())).kind,"uncertain");
   assert.equal(server.calls.length,0);
+});
+
+test("a 401 on the delete and its receipt stays uncertain, never 'not removed'",async()=>{
+  const server=fakeServer(happy({
+    [TASK_DELETE]:()=>json({error:"Unauthorized"},401),
+    [TASK_DELETE_RECEIPT]:()=>json({error:"Unauthorized"},401),
+  }));
+  const outcome=await undoPrivateTaskCreate(baseline,server.fetchFake,signal());
+  assert.equal(outcome.kind,"uncertain");
+  assert.equal(server.count(TASK_DELETE),1);
+  assert.equal(server.count(TASK_DELETE_RECEIPT),1,"no duplicate receipt read after dispatch");
+});
+
+test("a deadline before dispatch sends nothing; after dispatch it stays uncertain",async()=>{
+  const before=new AbortController();before.abort();
+  const idle=fakeServer(happy());
+  assert.deepEqual(await undoPrivateTaskCreate(baseline,idle.fetchFake,before.signal),{kind:"failed"});
+  assert.equal(idle.count(TASK_DELETE),0);
+  const during=new AbortController();
+  // Like a real fetch, the hanging request rejects once its signal aborts.
+  const hanging=fakeServer(happy({[TASK_DELETE]:({init})=>new Promise((_,reject)=>{
+    init.signal.addEventListener("abort",()=>reject(new DOMException("Aborted","AbortError")),{once:true});
+    during.abort();
+  })}));
+  const outcome=await undoPrivateTaskCreate(baseline,hanging.fetchFake,during.signal);
+  assert.equal(outcome.kind,"uncertain");
+  assert.equal(hanging.count(TASK_DELETE),1);
 });

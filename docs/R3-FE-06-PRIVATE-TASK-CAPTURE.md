@@ -79,8 +79,15 @@ autorizované smazání (`lib/target-private-task-create-undo.ts`).
 - Odesílá **právě jeden** delete příkaz se serverovým CAS; nejasný výsledek se ověřuje
   pouze read-only receiptem téhož příkazu („Ověřit znovu“), nikdy se neodesílá znovu.
   `not_recorded` dovolí nový pokus — pozdější zápis hlídá CAS.
-- Po reloadu se Undo nenabízí (úkol lze smazat v detailu). Po úspěchu se fokus přesune na
-  oznámení (role=status) a seznamy se zneplatní přes `emitTargetChange`.
+- Undo se nabízí jen pro **vlastní potvrzený příkaz této stránky** (zdroj `post`/`receipt`
+  z koordinátoru); po reloadu (`recovery`) se nenabízí — úkol lze smazat v detailu.
+- Osobní „Kdy“ (`personal_task_plans`) nemění revizi úkolu, Undo proto smaže i úkol, který
+  uživatel mezitím naplánoval; tlačítko výslovně říká „odstranit úkol“.
+- Každý požadavek má limit 15 s: vypršení před odesláním nic neodešle, po odeslání zůstane
+  stav nejistý. Výsledek starší žádosti nikdy nezmění novější oznámení. Po uplynutí 60 s se
+  Undo už nenabídne, ani po neúspěšném pokusu.
+- Po úspěchu se fokus přesune na oznámení (role=status), jen pokud uživatel mezitím fokus
+  nepřesunul jinam; seznamy se zneplatní přes `emitTargetChange`.
 
 Testy: `tests/target-private-task-create-undo.test.mjs` (CAS, změny, odhlášení, nejasný
 výsledek, receipt), real-store browser `e2e/target-personal-capture-undo.spec.ts` (390/1280:

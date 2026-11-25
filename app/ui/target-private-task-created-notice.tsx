@@ -13,7 +13,7 @@ import {writeTargetReadingScope} from "../../lib/target-reading-scope-nav";
 import {scopeFromSearch} from "../../lib/view-url";
 import {detailIdOk} from "../../lib/target-detail-route";
 import {emitTargetChange} from "../../lib/target-data-invalidation";
-import {lastConfirmedPrivateTask,subscribePrivateTaskCreate} from
+import {lastConfirmedPrivateTaskChange,subscribePrivateTaskCreate,type TaskCreateSource} from
   "../../lib/target-private-task-create-coordinator";
 
 type UndoState=
@@ -36,73 +36,102 @@ const undoMessage=(outcome:UndoOutcome,cs:boolean):string=>{
   }
 };
 
+/** One Undo/confirmation request may not hang the notice. Before dispatch an
+ * expired request is simply not sent; after dispatch it stays uncertain. */
+const UNDO_REQUEST_TIMEOUT_MS=15_000;
+type Notice={generation:string;taskId:string;undoable:boolean;deadline:number};
+
 export default function TargetPrivateTaskCreatedNotice({
   language="cs",onCreated,undoEnabled=false,
 }:{language?:"cs"|"en";onCreated:()=>void;undoEnabled?:boolean}){
   const runtime=useTargetRuntime(),generation=useTargetGeneration();
-  const [notice,setNotice]=useState<{generation:string;taskId:string}|null>(null);
+  const [notice,setNotice]=useState<Notice|null>(null);
   const [undo,setUndo]=useState<UndoState>({phase:"none"});
-  const busy=useRef(false);
+  // Every request is tied to the notice that started it; a result arriving
+  // for an older notice never changes the one currently on screen.
+  const run=useRef<{seq:number;controller:AbortController|null}>({seq:0,controller:null});
   const statusRef=useRef<HTMLDivElement|null>(null);
   const onCreatedRef=useRef(onCreated);
   onCreatedRef.current=onCreated;
   useEffect(()=>{setNotice(null);},[generation]);
-  // Undo is bound to the exact revision observed right after the confirmed
-  // CREATE, and offered only for a bounded window. No browser storage.
+  // Undo is bound to the exact revision read when this page's own CREATE was
+  // confirmed, and offered only until the notice's fixed deadline.
   useEffect(()=>{
-    setUndo({phase:"none"});busy.current=false;
-    if(!undoEnabled||!notice||notice.generation!==generation)return;
+    run.current.seq++;run.current.controller?.abort();run.current.controller=null;
+    setUndo({phase:"none"});
+    if(!undoEnabled||!notice||!notice.undoable||notice.generation!==generation)return;
     const controller=new AbortController();
     void readPrivateTaskUndoBaseline(notice.taskId,targetAppFetch,controller.signal)
       .then(result=>{
-        if(!controller.signal.aborted&&result.ok)setUndo({phase:"offered",baseline:result.baseline});
+        if(!controller.signal.aborted&&result.ok&&Date.now()<notice.deadline)
+          setUndo({phase:"offered",baseline:result.baseline});
       });
     const expire=window.setTimeout(()=>{
       setUndo(current=>current.phase==="offered"||current.phase==="failed"?{phase:"none"}:current);
-    },PRIVATE_TASK_UNDO_WINDOW_MS);
-    return ()=>{controller.abort();window.clearTimeout(expire);};
+    },Math.max(0,notice.deadline-Date.now()));
+    return ()=>{
+      controller.abort();window.clearTimeout(expire);
+      run.current.seq++;run.current.controller?.abort();run.current.controller=null;
+    };
   },[undoEnabled,notice,generation]);
-  const finish=(baseline:UndoBaseline,outcome:UndoOutcome)=>{
-    busy.current=false;
-    setUndo(outcome.kind==="failed"?{phase:"failed",baseline}:{phase:"done",outcome,baseline});
+  const start=():{seq:number;signal:AbortSignal}=>{
+    const controller=new AbortController();
+    const seq=++run.current.seq;
+    run.current.controller=controller;
+    window.setTimeout(()=>controller.abort(),UNDO_REQUEST_TIMEOUT_MS);
+    return {seq,signal:controller.signal};
+  };
+  const finish=(seq:number,baseline:UndoBaseline,outcome:UndoOutcome)=>{
     if(outcome.kind==="deleted"||outcome.kind==="gone")
       emitTargetChange({kind:"task",id:baseline.taskId,change:"deleted"});
-    window.setTimeout(()=>statusRef.current?.focus(),0);
+    if(seq!==run.current.seq||!notice||notice.taskId!==baseline.taskId)return;
+    run.current.controller=null;
+    setUndo(outcome.kind==="failed"
+      ?(Date.now()<notice.deadline?{phase:"failed",baseline}:{phase:"none"})
+      :{phase:"done",outcome,baseline});
+    window.setTimeout(()=>{
+      const active=document.activeElement;
+      if(!active||active===document.body||statusRef.current?.contains(active))
+        statusRef.current?.focus();
+    },0);
   };
   const runUndo=(baseline:UndoBaseline)=>{
-    if(busy.current||!runtime?.known()||runtime.generation()!==generation)return;
-    busy.current=true;
+    if(undo.phase==="working"||!notice||Date.now()>=notice.deadline||
+      !runtime?.known()||runtime.generation()!==generation)return;
+    const {seq,signal}=start();
     setUndo({phase:"working",baseline});
-    void undoPrivateTaskCreate(baseline,targetAppFetch,new AbortController().signal)
-      .then(outcome=>finish(baseline,outcome),()=>finish(baseline,{kind:"failed"}));
+    void undoPrivateTaskCreate(baseline,targetAppFetch,signal)
+      .then(outcome=>finish(seq,baseline,outcome),()=>finish(seq,baseline,{kind:"failed"}));
   };
   const confirmUndo=(baseline:UndoBaseline,command:Extract<UndoOutcome,{kind:"uncertain"}>["command"])=>{
-    if(busy.current)return;
-    busy.current=true;
+    if(undo.phase==="working")return;
+    const {seq,signal}=start();
     setUndo({phase:"working",baseline});
-    void confirmPrivateTaskUndo(command,targetAppFetch,new AbortController().signal)
-      .then(outcome=>finish(baseline,outcome.kind==="failed"?{kind:"failed"}:outcome),
-        ()=>finish(baseline,{kind:"uncertain",command}));
+    void confirmPrivateTaskUndo(command,targetAppFetch,signal)
+      .then(outcome=>finish(seq,baseline,outcome),
+        ()=>finish(seq,baseline,{kind:"uncertain",command}));
   };
   useEffect(()=>{
     if(!runtime?.known()||runtime.generation()!==generation)return;
     // Neither the modal nor its own .then owns completion. Only a confirmed
     // POST/exact receipt/actor-authorized reload recovery can notify this.
-    const show=(taskId:string)=>{
+    const show=(taskId:string,source:TaskCreateSource|undefined)=>{
       if(!detailIdOk(taskId))return;
-      setNotice({generation,taskId});
+      // Undo only for this page's own confirmed command, never after a reload.
+      setNotice({generation,taskId,undoable:source==="post"||source==="receipt",
+        deadline:Date.now()+PRIVATE_TASK_UNDO_WINDOW_MS});
       // Only a confirmed target CREATE may invalidate an already-open Inbox.
       // Each subscriber must re-read through its own current actor/ACL gate.
       emitTargetChange({kind:"task",id:taskId,change:"updated"});
       onCreatedRef.current();
     };
     const unsubscribe=subscribePrivateTaskCreate(runtime,generation,change=>{
-      if(change.confirmedTaskId)show(change.confirmedTaskId);
+      if(change.confirmedTaskId)show(change.confirmedTaskId,change.source);
     });
     // Dynamic chunk loading can finish after a fast HTTP 201; catch up
     // without replaying the write or trusting any browser storage.
-    const last=lastConfirmedPrivateTask(runtime,generation);
-    if(last)show(last);
+    const last=lastConfirmedPrivateTaskChange(runtime,generation);
+    if(last)show(last.taskId,last.source);
     return unsubscribe;
   },[runtime,generation]);
   if(!notice||notice.generation!==generation||
@@ -117,11 +146,11 @@ export default function TargetPrivateTaskCreatedNotice({
       :<p>{cs
         ?"Soukromý úkol byl potvrzen serverem. Zatím nemá naplánovaný den."
         :"Private task creation was confirmed. It has no scheduled day yet."}</p>}
-    {(undo.phase==="offered"||undo.phase==="failed")&&<button type="button"
-      data-testid="target-private-task-undo" onClick={()=>runUndo(undo.baseline)}>
-      {cs?"Zpět (odstranit úkol)":"Undo (remove task)"}</button>}
-    {undo.phase==="working"&&<button type="button" disabled aria-busy="true"
-      data-testid="target-private-task-undo">{cs?"Odstraňuji…":"Removing…"}</button>}
+    {(undo.phase==="offered"||undo.phase==="failed"||undo.phase==="working")&&<button type="button"
+      data-testid="target-private-task-undo" aria-disabled={undo.phase==="working"}
+      aria-busy={undo.phase==="working"}
+      onClick={()=>{if(undo.phase!=="working")runUndo(undo.baseline);}}>
+      {undo.phase==="working"?(cs?"Odstraňuji…":"Removing…"):(cs?"Zpět (odstranit úkol)":"Undo (remove task)")}</button>}
     {undo.phase==="done"&&undo.outcome.kind==="uncertain"&&<button type="button"
       data-testid="target-private-task-undo-confirm"
       onClick={()=>confirmUndo(undo.baseline,(undo.outcome as Extract<UndoOutcome,{kind:"uncertain"}>).command)}>
