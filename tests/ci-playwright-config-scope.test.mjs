@@ -179,3 +179,10 @@ test("#493: every test that touches workflow files is found by the workflow-read
       assert.match(source, /\.github\/workflows/, file + " must reference .github/workflows literally");
   }
 });
+
+test("#493: the project-title cancel route really triggers its focused workflow", async () => {
+  const { workflowPathFilters, directlyTriggered } = await import("../scripts/ci-playwright-config-scope.mjs");
+  const filters = workflowPathFilters(readFileSync(".github/workflows/r3-project-title-recovery-browser.yml", "utf8"));
+  assert.ok(directlyTriggered(["app/api/target-staging/projects/[projectId]/title/cancel/route.ts"], filters),
+    "a literal [projectId] directory must match (a bracket class would not)");
+});
