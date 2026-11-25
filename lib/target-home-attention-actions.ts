@@ -63,7 +63,7 @@ export async function changeHomeAttention(
       (snoozedUntilMs as number)<=0):snoozedUntilMs!==null))
     return {status:"invalid"};
   const target={taskId:item.taskId,ruleId:item.ruleId,occurrenceOn:item.relevantOn};
-  const result=await fetchAttentionCommandPreview({...target,signal},fetchImpl);
+  const result=await fetchAttentionCommandPreview({...target,sourceRevision:item.sourceRevision,signal},fetchImpl);
   if(result.status!=="ok")return result;
   if(signal.aborted)return {status:"aborted"};
   const preview=result.preview;
