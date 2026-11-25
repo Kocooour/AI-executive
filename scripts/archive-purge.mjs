@@ -59,10 +59,10 @@ export function purgeArchive({ dbPath = STORE, backupDirectory = BACKUPS,
     const startingChanges = changes(db);
     db.exec("BEGIN IMMEDIATE");
     try {
-      const names = ARCHIVE_TABLES.map(quote).join(",");
+      const names = ARCHIVE_TABLES.map(() => "?").join(",");
       const triggers = db.prepare(
         "SELECT name, sql FROM sqlite_master WHERE type='trigger' AND tbl_name IN (" + names + ")"
-      ).all();
+      ).all(...ARCHIVE_TABLES);
       for (const trigger of triggers) {
         if (!trigger.sql) throw new Error("unsupported-trigger");
         db.exec("DROP TRIGGER " + quote(trigger.name));
