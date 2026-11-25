@@ -100,7 +100,7 @@ jobs:
         # Each filename is explicit: Playwright CLI filters even with testMatch.
         run: |
           set -o pipefail
-          pnpm exec playwright test e2e/target-personal-acceptance.spec.ts e2e/target-personal-my-plan.spec.ts e2e/target-personal-search-open.spec.ts e2e/target-personal-create.spec.ts e2e/target-personal-capture-undo.spec.ts --project=desktop 2>&1 | tee "$RUNNER_TEMP/lumi-personal-browser.log"
+          pnpm exec playwright test e2e/target-personal-acceptance.spec.ts e2e/target-personal-my-plan.spec.ts e2e/target-personal-search-open.spec.ts e2e/target-personal-create.spec.ts e2e/target-personal-capture-undo.spec.ts --project=desktop --output=test-results/personal-acceptance 2>&1 | tee "$RUNNER_TEMP/lumi-personal-browser.log"
       - name: E-1 Home attention on real isolated SQLite (390/1280, fixed Prague clock)
         if: ${{ !cancelled() && steps.build.outcome == 'success' && steps.chromium.outcome == 'success' }}
         env:
@@ -108,7 +108,7 @@ jobs:
           LUMI_TARGET_ATTENTION_E2E: "true"
         run: |
           set -o pipefail
-          pnpm exec playwright test e2e/target-home-attention.spec.ts --project=desktop 2>&1 | tee -a "$RUNNER_TEMP/lumi-personal-browser.log"
+          pnpm exec playwright test e2e/target-home-attention.spec.ts --project=desktop --output=test-results/e1-attention 2>&1 | tee -a "$RUNNER_TEMP/lumi-personal-browser.log"
       - name: E-1 off-profile regression (390/1280)
         if: ${{ !cancelled() && steps.build.outcome == 'success' && steps.chromium.outcome == 'success' }}
         env:
@@ -116,17 +116,17 @@ jobs:
           LUMI_TARGET_ATTENTION_E2E: "off"
         run: |
           set -o pipefail
-          pnpm exec playwright test e2e/target-home-attention.spec.ts --project=desktop 2>&1 | tee -a "$RUNNER_TEMP/lumi-personal-browser.log"
+          pnpm exec playwright test e2e/target-home-attention.spec.ts --project=desktop --output=test-results/e1-off 2>&1 | tee -a "$RUNNER_TEMP/lumi-personal-browser.log"
       - name: Real Back / BFCache, full reload and uncertain POST (real SQLite, 390/1280)
         if: ${{ !cancelled() && steps.build.outcome == 'success' && steps.chromium.outcome == 'success' }}
         run: |
           set -o pipefail
-          pnpm exec playwright test e2e/target-personal-bfcache.spec.ts --project=desktop 2>&1 | tee -a "$RUNNER_TEMP/lumi-personal-browser.log"
+          pnpm exec playwright test e2e/target-personal-bfcache.spec.ts --project=desktop --output=test-results/personal-bfcache 2>&1 | tee -a "$RUNNER_TEMP/lumi-personal-browser.log"
       - name: Native Chromium BFCache witness (no Playwright disable flag)
         if: ${{ !cancelled() && steps.build.outcome == 'success' && steps.chromium.outcome == 'success' }}
         run: |
           set -o pipefail
-          pnpm exec playwright test e2e/target-personal-native-bfcache.spec.ts --project=desktop 2>&1 | tee -a "$RUNNER_TEMP/lumi-personal-browser.log"
+          pnpm exec playwright test e2e/target-personal-native-bfcache.spec.ts --project=desktop --output=test-results/personal-native-bfcache 2>&1 | tee -a "$RUNNER_TEMP/lumi-personal-browser.log"
       - name: E-1 native Chromium Back privacy (390/1280)
         if: ${{ !cancelled() && steps.build.outcome == 'success' && steps.chromium.outcome == 'success' }}
         env:
@@ -135,7 +135,7 @@ jobs:
           LUMI_TARGET_ATTENTION_NATIVE_E2E: "true"
         run: |
           set -o pipefail
-          pnpm exec playwright test e2e/target-personal-native-bfcache.spec.ts --project=desktop 2>&1 | tee -a "$RUNNER_TEMP/lumi-personal-browser.log"
+          pnpm exec playwright test e2e/target-personal-native-bfcache.spec.ts --project=desktop --output=test-results/e1-native-bfcache 2>&1 | tee -a "$RUNNER_TEMP/lumi-personal-browser.log"
       - name: No My Plan child-page unavailability in real-store server logs
         if: always()
         run: |
@@ -149,6 +149,9 @@ jobs:
             exit 1
           fi
           echo "Verified: zero my_plan_slice child_page_unavailable events in all executed personal browser runs."
+      # Playwright clears its own outputDir before each invocation. Keep every
+      # suite in a distinct child directory so later runs cannot erase earlier
+      # native evidence or failure traces. Archive the entire parent on failure too.
       - name: Upload BFCache evidence and failure traces
         if: always()
         uses: actions/upload-artifact@v6
