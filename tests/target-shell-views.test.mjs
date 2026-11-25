@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import {test} from "node:test";
-import {activeTargetViewFor,detailsActive,targetViewsFor,targetShellNavigationFor,targetMobileMoreCurrentViews,legacyInboxMailViewFor,SHELL_NAVIGATION_VIEWS} from "../lib/target-shell-views.ts";
+import {activeTargetViewFor,detailsActive,targetViewsFor,targetShellNavigationFor,targetMobileMoreCurrentViews,legacyInboxMailViewFor,retiredArchiveAddress,retiredArchiveView,SHELL_NAVIGATION_VIEWS} from "../lib/target-shell-views.ts";
 import {refusalBudgetFor} from "../lib/target-refusal-budget.ts";
 import {detailIdOk} from "../lib/target-detail-route.ts";
 import {validTaskPreviewId} from "../lib/target-staging-task-preview-client.ts";
@@ -84,17 +84,16 @@ test("ID parity: whatever the detail layer opens, every strict client and the ad
 const personalV1={scopesOn:true,projectsList:true,notesList:true,myPlan:true,
   v1Shell:true,targetSearch:true,quickCapture:true};
 
-test("C-1: personal-v1 never puts a legacy-data view in primary navigation",()=>{
+test("D: personal-v1 has no Archive navigation or legacy destinations",()=>{
   const model=targetShellNavigationFor(personalV1);
   assert.equal(model.personalV1,true);
   assert.deepEqual(model.primary,["MyPlanPreview","Projects","Notes","Calendar","Search"]);
-  assert.deepEqual(model.archive,["Home","Inbox","Today","Upcoming","Overdue","Anytime",
-    "Someday","Completed","Areas","Context"]);
+  assert.deepEqual(model.archive,[]);
   assert.equal(model.quickCapture,true);
-  assert.equal(model.byView.Today,"archive","legacy Today must not masquerade as My Plan");
+  assert.equal(model.byView.Today,"hidden","legacy Today must not masquerade as My Plan");
   assert.equal(model.byView.MyPlanPreview,"primary");
-  assert.equal(model.byView.Home,"archive");
-  assert.equal(model.byView.Upcoming,"archive");
+  assert.equal(model.byView.Home,"hidden");
+  assert.equal(model.byView.Upcoming,"hidden");
   assert.equal(model.byView.LegacyHome,"hidden");
   assert.equal(model.byView.LegacyUpcoming,"hidden");
   assert.equal(model.byView.Settings,"hidden");
@@ -120,8 +119,7 @@ test("C-2: only complete personal-v1 promotes authorized Home and Upcoming",()=>
   const fields={...personalV1,personalV1:true,homeRead:true};
   const targetNavigation=targetShellNavigationFor(fields);
   assert.deepEqual(targetNavigation.primary,["MyPlanPreview","Home","Upcoming","Projects","Notes","Calendar","Search"]);
-  assert.deepEqual(targetNavigation.archive,["LegacyHome","Inbox","Today","LegacyUpcoming","Overdue","Anytime",
-    "Someday","Completed","Areas","Context"]);
+  assert.deepEqual(targetNavigation.archive,[]);
   const views=targetViewsFor(fields);
   assert.deepEqual(views,["Projects","Notes","MyPlanPreview","Home","Upcoming"]);
   assert.equal(activeTargetViewFor({...fields,view:"Home",planActive:false}).active,"Home");
@@ -138,19 +136,18 @@ test("C-2: only complete personal-v1 promotes authorized Home and Upcoming",()=>
 });
 
 
-test("C-3a: target Inbox and LegacyInbox have distinct primary/archive addresses only behind the complete gate",()=>{
+test("D: target Inbox is primary but all Legacy destinations are removed",()=>{
   const ready={...personalV1,personalV1:true,homeRead:true,inboxRead:true};
   const nav=targetShellNavigationFor(ready);
   assert.deepEqual(nav.primary,["MyPlanPreview","Home","Inbox","Upcoming","Projects","Notes","Calendar","Search"]);
-  assert.deepEqual(nav.archive,["LegacyHome","LegacyInbox","Today","LegacyUpcoming",
-    "Overdue","Anytime","Someday","Completed","Areas","Context"]);
+  assert.deepEqual(nav.archive,[]);
   assert.equal(nav.byView.Inbox,"primary");
-  assert.equal(nav.byView.LegacyInbox,"archive");
-  assert.equal(nav.byView.LegacyHome,"archive");
+  assert.equal(nav.byView.LegacyInbox,"hidden");
+  assert.equal(nav.byView.LegacyHome,"hidden");
   assert.equal(new Set([...nav.primary,...nav.archive,...nav.hidden]).size,SHELL_NAVIGATION_VIEWS.length);
   for(const key of ["homeRead","inboxRead"]){
     const withheld=targetShellNavigationFor({...ready,[key]:false});
-    assert.equal(withheld.byView.Inbox,"archive");
+    assert.equal(withheld.byView.Inbox,"hidden");
     assert.equal(withheld.byView.LegacyInbox,"hidden");
   }
   const offNav=targetShellNavigationFor({...ready,quickCapture:false});
@@ -158,12 +155,12 @@ test("C-3a: target Inbox and LegacyInbox have distinct primary/archive addresses
   assert.equal(offNav.byView.LegacyInbox,"hidden");
 });
 
-test("C-3a: mobile More shows current Inbox exactly once, and LegacyInbox only in archive",()=>{
+test("D: mobile More offers only current Inbox and no Archive",()=>{
   const ready={...personalV1,personalV1:true,homeRead:true,inboxRead:true};
   const nav=targetShellNavigationFor(ready);
   const current=targetMobileMoreCurrentViews(nav);
   assert.deepEqual(current,["Home","Inbox","Upcoming","Notes","Search"]);
-  assert.deepEqual(nav.archive.filter(v=>v==="LegacyInbox"),["LegacyInbox"]);
+  assert.deepEqual(nav.archive,[]);
   assert.equal(current.filter(v=>v==="Inbox").length,1);
   assert.ok(!current.includes("LegacyInbox"));
   assert.equal(new Set([...current,...nav.archive]).size,current.length+nav.archive.length);
@@ -174,6 +171,21 @@ test("C-3a: mobile More shows current Inbox exactly once, and LegacyInbox only i
 test("C-3a: historical Gmail source follows archive alias only after complete target cutover",()=>{
   assert.equal(legacyInboxMailViewFor(false,false),"Inbox");
   assert.equal(legacyInboxMailViewFor(false,true),"Inbox","off mode stays unchanged");
-  assert.equal(legacyInboxMailViewFor(true,false),"Inbox","C-2 archive remains readable");
-  assert.equal(legacyInboxMailViewFor(true,true),"LegacyInbox");
+  assert.equal(legacyInboxMailViewFor(true,false),"Inbox","current Inbox keeps live Gmail");
+  assert.equal(legacyInboxMailViewFor(true,true),"Inbox","current target Inbox owns Gmail; LegacyInbox is retired");
+});
+
+test("D: all former Archive links redirect only in personal-v1",()=>{
+  for (const route of ["LegacyHome","LegacyInbox","LegacyUpcoming","Today","Overdue",
+    "Anytime","Someday","Completed","Areas","Context"])
+    assert.equal(retiredArchiveView(route),true,route);
+  for (const current of ["MyPlanPreview","Home","Inbox","Upcoming","Projects","Notes","Calendar","Search","Agents","Settings"])
+    assert.equal(retiredArchiveView(current),false,current);
+  for (const search of ["?view=LegacyHome", "?view=LegacyObsolete", "?view=Archive", "?view=Today&scope=personal"])
+    assert.equal(retiredArchiveAddress(search),true,search);
+  for (const search of ["?view=Home","?view=Notes&noteId=target","?view=Settings"])
+    assert.equal(retiredArchiveAddress(search),false,search);
+  // The router uses this classifier only when personalV1 is active;
+  // the 'off' model remains exactly as before.
+  assert.equal(targetShellNavigationFor({...personalV1,quickCapture:false}).personalV1,false);
 });

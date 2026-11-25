@@ -66,10 +66,10 @@ test("UI-03b: current secondary view receives aria-current without changing lega
   assert.match(preview, /role="navigation"/);
   assert.match(preview, /aria-current=\{view === x \? "page" : undefined\}/);
   assert.match(preview, /data-nav-view=\{x\}/);
-  // The target-only Archive uses its own selected-state and must not identify
-  // archival Today as current while the server-backed My Plan is active.
-  assert.match(sidebar, /\{personalV1 && navigation && \(/);
-  assert.match(sidebar, /data-nav-archive="true" aria-current=\{view===x&&\!\(x==="Today"&&app\.mobilePlanPreviewActive\)\?"page":undefined\}/);
+  // #501 removes the target-only Archive; legacy off-mode More retains
+  // its old behaviour and only the preview gets aria-current.
+  assert.doesNotMatch(sidebar, /data-nav-archive="true"/);
+  assert.doesNotMatch(sidebar, /target-archive-sidebar/);
   assert.doesNotMatch(legacy, /aria-current/, "preview only: no changed legacy More contract");
   assert.match(css, /\.secondaryNav button\[aria-current="page"\]/);
   assert.match(css, /background: var\(--workspace-soft\)/);
@@ -98,7 +98,7 @@ test("UI-03b: inspector and sidebar active styles remain preview-only and do not
   assert.match(nav, /NEXT_PUBLIC_LUMI_DESIGN_V1_PREVIEW === "1"/);
   assert.match(detail, /if \(!mobileDesignV1Preview\) return;/);
   assert.match(sidebar, /\{!personalV1 && mobileDesignV1Preview && \(/);
-  assert.match(sidebar, /\{personalV1 && navigation && \(/);
+  assert.doesNotMatch(sidebar, /data-nav-archive="true"/);
   assert.match(css, /@media \(min-width: 701px\)/);
   assert.match(css, /\.appShell\[data-design-system="lumi-v1"\] > aside/);
   assert.doesNotMatch(css, /\[data-current-project\].*\{[^}]*!important/s);

@@ -57,7 +57,7 @@ import { useNotifications } from "./hooks/use-notifications";
 import { useAppBadge } from "./hooks/use-app-badge";
 import { useSync } from "./hooks/use-sync";
 import { localizeServerError } from "../../lib/server-errors";
-import { legacyInboxMailViewFor } from "../../lib/target-shell-views";
+import { legacyInboxMailViewFor, retiredArchiveAddress, retiredArchiveView } from "../../lib/target-shell-views";
 import { workspaceTone } from "./workspace-tone";
 
 // All client state, effects and handlers of the Lumi app shell, moved verbatim from app/page.tsx.
@@ -524,6 +524,18 @@ export function useLumiApp(options: { targetDetails?: boolean; targetUnified?: b
   // Explicit navigation away from a project creates its own history step.
   // Back then returns to the project, including when the next view is Projects (list).
   function setView(next: string, options?: { previewMyPlan?: boolean; keepAddress?: boolean }) {
+    // #501: old Archive destinations are never renderable in personal-v1,
+    // including saved startup choices and direct old links. My Plan is
+    // internally Today + previewMyPlan; a real My Plan action is not blocked.
+    if (preferTargetPlan && retiredArchiveView(next) &&
+        !(next === "Today" && options?.previewMyPlan)) {
+      setView("Today", { previewMyPlan: true, keepAddress: true });
+      try {
+        window.history.replaceState(null, "",
+          window.location.pathname + searchWithScope("?view=MyPlanPreview", scopeFromSearch(window.location.search)));
+      } catch { /* The in-memory My Plan view remains safe. */ }
+      return;
+    }
     // Explicit navigation is not Back: never steal focus from the chosen nav control.
     pendingProjectFocusRef.current = null;
     activeProjectFocusEntryRef.current = null;
@@ -1544,7 +1556,13 @@ export function useLumiApp(options: { targetDetails?: boolean; targetUnified?: b
     }
     // An explicit ordinary view (including ?view=Today) wins over the preview.
     const addressedView = viewFromSearch(window.location.search, addressableViews);
-    if (addressedView) setView(addressedView, { keepAddress: true });
+    if (preferTargetPlan && retiredArchiveAddress(window.location.search)) {
+      setView("Today", { previewMyPlan: true, keepAddress: true });
+      try {
+        window.history.replaceState(null, "",
+          window.location.pathname + searchWithScope("?view=MyPlanPreview", scopeFromSearch(window.location.search)));
+      } catch { /* My Plan still renders when the History API is unavailable. */ }
+    } else if (addressedView) setView(addressedView, { keepAddress: true });
     setAddressReady(true);
     if (savedWorkspace) {
       setActiveWorkspaceId(savedWorkspace);
@@ -2023,12 +2041,21 @@ export function useLumiApp(options: { targetDetails?: boolean; targetUnified?: b
           destinationFocusId, window.location.search);
         activeProjectFocusEntryRef.current = destinationFocusId;
       }
-      const previewRoute = mobileDesignV1Preview &&
+      const requested = viewFromSearch(window.location.search, addressableViews);
+      const retiredAddress = preferTargetPlan && retiredArchiveAddress(window.location.search);
+      const previewRoute = (mobileDesignV1Preview &&
         ((preferTargetPlan && searchWithoutScope(window.location.search)==="") ||
           mobileV1IsPlanPreviewRoute(window.location.search) ||
-          (targetDetailsRef.current && targetViewsRef.current.includes("MyPlanPreview") && isPlanDetailSearch(window.location.search)));
+          (targetDetailsRef.current && targetViewsRef.current.includes("MyPlanPreview") && isPlanDetailSearch(window.location.search)))) ||
+        retiredAddress;
+      if (retiredAddress) {
+        try {
+          window.history.replaceState(null, "",
+            window.location.pathname + searchWithScope("?view=MyPlanPreview", scopeFromSearch(window.location.search)));
+        } catch { /* Continue with target My Plan regardless of History support. */ }
+      }
       const next = previewRoute ? "Today" :
-        viewFromSearch(window.location.search, addressableViews) || localStorage.getItem("ai-executive-startup-view") || "Home";
+        requested || localStorage.getItem("ai-executive-startup-view") || "Home";
       // Leaving a field commits what was typed in it, as closing the panel by hand would.
       if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
       setMobilePlanPreviewActive(previewRoute);

@@ -524,3 +524,40 @@ služba musí zůstat zastavená pro ruční nápravu. Po úspěchu znovu ověř
 shodu obou databází `--check`, teprve pak připravte samostatně schválený
 restart. Neobnovujte starou fence z target backupu a nikdy neprovádějte
 automatické opětovné udělení souhlasu.
+
+
+## D / #501 — odstranit testovací obsah Archivu (jednorázově)
+
+Tento krok se provádí **až po review, sloučení a nasazení PR #509**; deploy ho
+nespouští automaticky. Jde výhradně o stará testovací data v
+`/var/lib/ai-executive/store.sqlite`. Cílový `personal-v1` i poštovní,
+kalendářová, přihlašovací a ostatní provozní data se nemění.
+
+Jako root na serveru nejdříve ověř existující `/var/backups/ai-executive/deploy-*`
+zálohu (deploy-safe.sh ukládá zálohy před restartem). Je-li adresář záloh
+přístupný pouze rootovi, povol uživateli `ai-executive` **jen čtení názvů**
+záloh, nikoli jejich obsahu: `setfacl -m u:ai-executive:rx
+/var/backups/ai-executive` (podadresáře `deploy-*` zůstávají root-owned 0700).
+Operátorský skript sám odmítne aktivní službu, chybějící zálohu či jiného
+uživatele.
+
+```bash
+sudo systemctl stop ai-executive
+sudo -u ai-executive sh -c 'umask 077; /usr/bin/node /opt/ai-executive/scripts/archive-purge.mjs --dry-run'
+# Ověř počty (orientační inventura 25. 11.: 38 entit včetně pracovních prostorů
+# a 2 poznámky). Pracovní prostory (workspace) se nemažou: drží je kalendář,
+# iCloud, Gmail, agenti i pozornost; ve výstupu je uvádí `workspacesKept`.
+sudo -u ai-executive sh -c 'umask 077; /usr/bin/node /opt/ai-executive/scripts/archive-purge.mjs --apply'
+sudo -u ai-executive sh -c 'umask 077; /usr/bin/node /opt/ai-executive/scripts/archive-purge.mjs --dry-run'
+# Počty musí být 0; zkontroluj integritu a přihlášení/nastavení.
+sudo systemctl start ai-executive
+```
+
+`--apply` smaže v jedné transakci všechny entity **kromě pracovních prostorů**
+(úkoly, poznámky, projekty, Oblasti) a všechny řádky z `relations`,
+`tombstones` a `note_revisions`; zobrazí počty před/po,
+`integrity_check` a `foreign_key_check`. Při chybě transakci vrátí.
+`--dry-run` jen vypíše počty. Službu je potřeba nechat zastavenou až do
+ověření. Nové UI v `personal-v1` Archiv nenabízí; profil `off` zůstává.
+Přijaté riziko: starý offline prohlížeč může testovací data znovu odeslat;
+v takovém případě opakuj postup po zastavení služby.

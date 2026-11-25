@@ -131,7 +131,11 @@ test("unification: the legacy inspector is never rendered or opened in target vi
   assert.match(rootSource,/const targetView = scopeList !== null \|\| targetPlan \|\| targetOverview \|\| targetInboxActive \|\| \(targetSearch && view==="Search"\);/);
   assert.match(rootSource,/const targetOverview=shellNavigation\.personalV1&&targetHomeSummary&&\(view==="Home"\|\|view==="Upcoming"\);/);
   assert.match(rootSource,/const targetInboxActive=targetInboxEnabled&&view==="Inbox";/);
-  assert.match(rootSource,/\{targetInboxActive && <TargetInbox/);
+  // #501: the current target Inbox stays mounted for tasks; a separate
+  // live Gmail tab replaces retired LegacyInbox without legacy entity rows.
+  assert.match(rootSource,/\{targetInboxActive && <>/);
+  assert.match(rootSource,/<GmailReader[^>]*app=\{app\} readOnly/);
+  assert.match(rootSource,/: <TargetInbox language=\{language\}/);
   assert.match(rootSource,/: !targetOverview && !targetInboxActive && legacySearchSurfaces\.entityList/);
 
   assert.match(rootSource,/\{view==="Search" && targetSearch\s*\? <TargetMainTitleSearch query=\{app\.query\}/);

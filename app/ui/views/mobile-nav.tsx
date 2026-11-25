@@ -29,7 +29,7 @@ export function MobileNav({ app, navigation, targetPlan = false, onTargetCapture
   const tabs: readonly string[] = mobileDesignV1Preview ? mobileV1Tabs : mobileViews;
   const groups = mobileDesignV1Preview ? mobileV1MoreGroups : mobileMoreGroups;
   const secondary = personalV1 && navigation
-    ? [...navigation.archive,...targetMobileMoreCurrentViews(navigation),"Agents","Settings"]
+    ? [...targetMobileMoreCurrentViews(navigation),"Agents","Settings"]
     : mobileDesignV1Preview ? mobileV1MoreViews : moreViews;
   return (
     <>
@@ -116,24 +116,6 @@ export function MobileNav({ app, navigation, targetPlan = false, onTargetCapture
                     <span className="mobileMoreItemIcon" aria-hidden="true"><ViewIcon name={item} /></span>
                     <span>{tr(item)}</span>
                     {item==="Inbox"&&navigation.byView.Inbox==="primary"&&<TargetInboxCount />}
-                  </button>)}
-              </section>
-              <section className="mobileMoreGroup targetArchiveSection"
-                data-testid="target-archive-mobile" aria-labelledby="target-more-archive-heading">
-                <h3 id="target-more-archive-heading">
-                  {language==="cs"?"Archiv (stará data, jen pro čtení)":"Archive (old data, read-only)"}
-                </h3>
-                <p>{language==="cs"
-                  ?"Staré položky jsou oddělené od aktuálních dat a nelze je upravovat."
-                  :"Historical items are separate from current data and cannot be edited."}</p>
-                {navigation.archive.map(item=>
-                  <button key={item} type="button" className="mobileMoreItem"
-                    data-nav-view={item} data-nav-archive="true"
-                    aria-current={view===item&&!(item==="Today"&&mobilePlanPreviewActive)?"page":undefined}
-                    onClick={()=>{markMobileMoreNavigation(item);setView(item);closeDetail();setMoreOpen(false);}}>
-                    <span className="mobileMoreItemIcon" aria-hidden="true">
-                      <ViewIcon name={item==="Today"?"TodayV1":item} />
-                    </span><span>{tr(item==="LegacyHome"?"Home":item==="LegacyUpcoming"?"Upcoming":item==="LegacyInbox"?"Inbox":item)}</span>
                   </button>)}
               </section>
               <section className="mobileMoreGroup" aria-labelledby="target-more-system-heading">
