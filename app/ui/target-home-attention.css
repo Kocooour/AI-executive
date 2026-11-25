@@ -1,0 +1,10 @@
+
+.targetHomeAttention{min-width:0}
+.targetHomeAttentionReason{margin:.3rem 0;font-size:.9rem;font-weight:550;overflow-wrap:anywhere}
+.targetHomeAttentionActions{display:flex;flex-wrap:wrap;align-items:center;gap:.45rem;margin-top:.5rem;min-width:0}
+.targetHomeAttention button:not(.stagingMyPlanOpen){min-height:44px;max-width:100%;white-space:normal;overflow-wrap:anywhere}
+.targetHomeAttentionActions label{display:flex;flex-direction:column;gap:.3rem;font-size:.85rem;min-width:0;max-width:100%}
+.targetHomeAttentionActions input{min-width:0;max-width:100%;min-height:44px}
+.targetHomeAttention button:focus-visible,.targetHomeAttention input:focus-visible,.targetHomeAttention h2:focus-visible{outline:2px solid var(--v1-accent,#6051ac);outline-offset:3px}
+.targetHomeAttentionMarker{border-color:var(--v1-accent,#6051ac)}
+.targetHomeAttention [role=status]:not(:empty){margin:.5rem 0}
