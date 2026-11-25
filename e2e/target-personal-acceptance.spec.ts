@@ -157,7 +157,11 @@ test("#501: dry-run, purge, real restart, login/settings, protected rows, second
         const count=Number((db.prepare('SELECT COUNT(*) AS n FROM "'+table+'"').get() as {n:number}|undefined)?.n);
         expect(count,table+" must remain empty after server boot").toBe(0);
       }
-      for(const table of witness.protectedTables){
+      // The preflight already proved every protected table unchanged right after
+      // the purge and after a real store restart. A live, logged-in server may
+      // legitimately write its own `metadata` (revision, timestamps), so the
+      // post-login check covers credentials and integrations only.
+      for(const table of witness.protectedTables.filter(name=>name!=="metadata")){
         const current=createHash("sha256").update(JSON.stringify(db.prepare(
           'SELECT * FROM "'+table+'" ORDER BY rowid').all())).digest("hex");
         expect(current,"protected table changed: "+table).toBe(witness.protectedBefore[table]);
