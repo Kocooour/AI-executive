@@ -144,7 +144,10 @@ for(const width of [390,1280]){
     await expect(detail).toBeVisible();
     await detail.getByTestId("target-detail-edit-status-toggle").click();
     await expect(detail.getByTestId("target-detail-edit-status")).toContainText("Stav úkolu je uložen.");
-    await detail.getByRole("button",{name:"Zavřít"}).click();
+    // The same inspector control is labelled Zpět on mobile and Zavřít on desktop.
+    // Match the actual responsive control, not the desktop-only label.
+    await detail.locator("button.inspectorClose").click({timeout:10_000});
+    await expect(detail).toHaveCount(0);
     await expect(row(page,titles[1])).toHaveCount(0);
     await expect(row(page,titles[4])).toBeVisible();
     // Actual logout endpoint revokes the cookie before page revalidation.
