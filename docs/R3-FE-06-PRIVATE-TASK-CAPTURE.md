@@ -64,6 +64,28 @@ HTTP API. Testy používají pouze syntetická data, bez zapnutí produkce nebo 
    dialog bez známé aktuální identity nezačne zápis. Escape/Zavřít
    vrátí fokus na původní tlačítko/fallback FAB.
 
+## Undo potvrzeně vytvořeného úkolu (#397)
+
+Po serverem potvrzeném CREATE nabízí oznámení **„Zpět (odstranit úkol)“** po dobu **60 s**
+(`PRIVATE_TASK_UNDO_WINDOW_MS`), jen pokud je v profilu povoleno mazání úkolu v detailu
+(`targetEdits.taskDelete` a detail úkolu). Undo **není odvozeno z CREATE receiptu**: je to běžné
+autorizované smazání (`lib/target-private-task-create-undo.ts`).
+
+- Při zobrazení oznámení se jednou přečte detail úkolu a uloží se pouze v paměti jeho revize
+  (CAS token), Oblast a ID — nic do browser storage.
+- Undo znovu čte detail a write preflight; pokud se úkol mezitím **změnil** (jiná revize,
+  dokončení, přesun Oblasti nebo do sdílené Oblasti), nic neodešle a oznámí
+  „Úkol se mezitím změnil…“. Chybějící/cizí úkol či odhlášení skončí bez mazání.
+- Odesílá **právě jeden** delete příkaz se serverovým CAS; nejasný výsledek se ověřuje
+  pouze read-only receiptem téhož příkazu („Ověřit znovu“), nikdy se neodesílá znovu.
+  `not_recorded` dovolí nový pokus — pozdější zápis hlídá CAS.
+- Po reloadu se Undo nenabízí (úkol lze smazat v detailu). Po úspěchu se fokus přesune na
+  oznámení (role=status) a seznamy se zneplatní přes `emitTargetChange`.
+
+Testy: `tests/target-private-task-create-undo.test.mjs` (CAS, změny, odhlášení, nejasný
+výsledek, receipt), real-store browser `e2e/target-personal-capture-undo.spec.ts` (390/1280:
+úspěšné Undo s jedním DELETE a trvalostí po reloadu; odmítnutí po dokončení úkolu).
+
 ## Bezpečné zrušení nepotvrzeného CREATE
 
 Pokud HTTP `CREATE` vrátí `429`, `403`, jiný neúspěch nebo timeout,

@@ -16,6 +16,7 @@ on:
       - "e2e/target-personal-my-plan.spec.ts"
       - "e2e/target-personal-search-open.spec.ts"
       - "e2e/target-personal-create.spec.ts"
+      - "e2e/target-personal-capture-undo.spec.ts"
       - "e2e/target-personal-store-setup.mjs"
       - "tests/target-personal-profile.test.mjs"
       - "tests/target-app-fetch.test.mjs"
@@ -95,7 +96,7 @@ jobs:
         # Each filename is explicit: Playwright CLI filters even with testMatch.
         run: |
           set -o pipefail
-          pnpm exec playwright test e2e/target-personal-acceptance.spec.ts e2e/target-personal-my-plan.spec.ts e2e/target-personal-search-open.spec.ts e2e/target-personal-create.spec.ts --project=desktop 2>&1 | tee "$RUNNER_TEMP/lumi-personal-browser.log"
+          pnpm exec playwright test e2e/target-personal-acceptance.spec.ts e2e/target-personal-my-plan.spec.ts e2e/target-personal-search-open.spec.ts e2e/target-personal-create.spec.ts e2e/target-personal-capture-undo.spec.ts --project=desktop 2>&1 | tee "$RUNNER_TEMP/lumi-personal-browser.log"
       - name: Real Back / BFCache, full reload and uncertain POST (real SQLite, 390/1280)
         run: |
           set -o pipefail
