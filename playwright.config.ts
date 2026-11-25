@@ -50,6 +50,19 @@ if (!process.env.LUMI_E2E_RUN_DIR) {
       path.join(__dirname, "e2e", "target-personal-store-setup.mjs"), process.env.LUMI_E2E_RUN_DIR, personalOwnerUserId, "1",
     ], { cwd: __dirname, stdio: ["ignore", "pipe", "inherit"] }).toString().trim().split("\n").pop() || "";
   }
+  // #501 end-to-end: before this isolated personal-v1 server starts, seed
+  // a synthetic legacy Archive, dry-run/apply the operator purge, then run
+  // actual server-store initialization and verify a second zero-row purge.
+  // The browser checks the same legacy database after the real webServer is up.
+  if (process.env.LUMI_TARGET_PERSONAL_ACCEPTANCE_E2E === "true") {
+    execFileSync(process.execPath, [
+      "--experimental-loader", path.join(__dirname,"scripts","target-staging-ts-loader.mjs"),
+      path.join(__dirname,"e2e","archive-purge-preflight.mjs"), process.env.LUMI_E2E_RUN_DIR,
+    ], {
+      cwd: __dirname, stdio: ["ignore","pipe","inherit"],
+      env: { ...process.env, AI_EXECUTIVE_DATA_DIR: path.join(process.env.LUMI_E2E_RUN_DIR,"data") },
+    });
+  }
 }
 const runDir = process.env.LUMI_E2E_RUN_DIR;
 const passwordHash = process.env.LUMI_E2E_PASSWORD_HASH;
