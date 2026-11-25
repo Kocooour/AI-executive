@@ -5,6 +5,7 @@ import {useCallback,useEffect,useRef,useState} from "react";
 import {useTargetWake,useTargetTick} from "./use-target-revalidation";
 import {useTargetRuntime} from "./target-data-provider";
 import {openTargetDetail} from "./target-detail-state";
+import {targetAppFetch} from "../../lib/target-app-fetch";
 import {detailIdOk} from "../../lib/target-detail-route";
 import {readHomeAttention,readMoreHomeAttention,changeHomeAttention,undoHomeAttention,HOME_ATTENTION_LIMIT}
   from "../../lib/target-home-attention-actions";
@@ -73,7 +74,7 @@ export function TargetHomeAttention({language,openable,onRefusal,generation}:{
     const controller=new AbortController();
     readRef.current=controller;
     setState({kind:"loading"});
-    void readHomeAttention(controller.signal,fetch,language).then(result=>{
+    void readHomeAttention(controller.signal,targetAppFetch,language).then(result=>{
       if(controller.signal.aborted)return;
       if(result.status==="ok")setState({kind:"ready",page:result.page});
       else{setState({kind:"error"});setUndo(null);
@@ -114,7 +115,7 @@ export function TargetHomeAttention({language,openable,onRefusal,generation}:{
     try{
       let committed:AttentionCommand|null=null;
       const result=await changeHomeAttention({item,attentionEpoch:state.page.attentionEpoch},
-        action,until,controller.signal,fetch,command=>{committed=command;});
+        action,until,controller.signal,targetAppFetch,command=>{committed=command;});
       if(controller.signal.aborted||!live())return;
       if(result.status==="ok"){setUndo(committed);setNotice(t.changed);}
       else{setNotice(result.status==="uncertain"?t.uncertain:t.conflict);
