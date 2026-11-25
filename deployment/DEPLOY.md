@@ -559,4 +559,3 @@ sudo systemctl start ai-executive
 ověření. Nové UI v `personal-v1` Archiv nenabízí; profil `off` zůstává.
 Přijaté riziko: starý offline prohlížeč může testovací data znovu odeslat;
 v takovém případě opakuj postup po zastavení služby.
-
