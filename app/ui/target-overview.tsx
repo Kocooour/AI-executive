@@ -285,11 +285,9 @@ export default function TargetOverview({kind,language="cs",taskDetail=false,atte
   // transient loading state. Ordinary polls must never destroy an in-flight
   // attention receipt or its Undo witness. Scope and actor changes still remount.
   return <>
-    {kind==="home"&&attentionEnabled&&scope!=="shared"&&<div className="targetOverview">
-      <TargetHomeAttention key={gate.generation+":"+scope}
-        generation={gate.generation} language={language}
-        openable={taskDetail} onRefusal={refusal}/>
-    </div>}
+    {kind==="home"&&attentionEnabled&&scope!=="shared"&&<TargetHomeAttention
+      key={gate.generation+":"+scope} generation={gate.generation} language={language}
+      openable={taskDetail} onRefusal={refusal}/>}
     <TargetOverviewRead key={kind+":"+gate.generation} kind={kind}
       language={language} generation={gate.generation} openable={taskDetail} onRefusal={refusal}/>
   </>;
