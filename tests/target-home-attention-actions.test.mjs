@@ -1,7 +1,7 @@
 import {test} from "node:test";
 import assert from "node:assert/strict";
 import {
-  HOME_ATTENTION_LIMIT, readHomeAttention, readMoreHomeAttention, changeHomeAttention, undoHomeAttention,
+  HOME_ATTENTION_LIMIT, HOME_ATTENTION_PHASE_MS, readHomeAttention, readMoreHomeAttention, changeHomeAttention, undoHomeAttention,
 } from "../lib/target-home-attention-actions.ts";
 
 const item=(over={})=>({
@@ -227,4 +227,67 @@ test("Overdue hygiene uses the exact predicted epoch, including after ambiguous 
   const stale=recorder(()=>json(preview({expectedAttentionEpoch:7,expectedStateRevision:0,lifecycle:"dismissed"})));
   assert.equal((await undoHomeAttention(undo,signal(),stale.fetcher)).status,"conflict");
   assert.equal(stale.calls.length,1);
+});
+
+const flush=()=>new Promise(resolve=>setImmediate(resolve));
+test("Home deadlines bound a hung first read, cursor read and command preview",async t=>{
+  t.mock.timers.enable({apis:["setTimeout"]});
+  for(const run of [
+    fetcher=>readHomeAttention(signal(),fetcher),
+    fetcher=>readMoreHomeAttention(page([item()],{hasMore:true,nextCursor:"a.b"}),signal(),fetcher),
+    fetcher=>changeHomeAttention(witness(),"dismiss",null,signal(),fetcher),
+  ]){
+    let phase,calls=0;
+    const pending=run((_url,init)=>{calls++;phase=init.signal;return new Promise(()=>{});});
+    await flush();
+    assert.equal(calls,1);
+    t.mock.timers.tick(HOME_ATTENTION_PHASE_MS);
+    assert.equal((await pending).status,"unavailable");
+    assert.equal(phase.aborted,true);
+    assert.equal(calls,1);
+  }
+});
+
+test("PATCH deadline starts a fresh bounded receipt with the SAME original command",async t=>{
+  t.mock.timers.enable({apis:["setTimeout"]});
+  for(const receiptHangs of [false,true]){
+    const parent=new AbortController(),calls=[];
+    let committed;
+    const result=changeHomeAttention(witness(),"dismiss",null,parent.signal,async(url,init)=>{
+      calls.push({method:init.method,body:init.body,signal:init.signal});
+      if(init.method==="GET")return json(homePreview());
+      if(init.method==="PATCH"||receiptHangs)return new Promise(()=>{});
+      return json({status:"committed"});
+    },undo=>{committed=undo;});
+    await flush();
+    assert.deepEqual(calls.map(c=>c.method),["GET","PATCH"]);
+    t.mock.timers.tick(HOME_ATTENTION_PHASE_MS);
+    await flush();
+    assert.deepEqual(calls.map(c=>c.method),["GET","PATCH","POST"]);
+    assert.equal(calls[1].body,calls[2].body);
+    assert.equal(calls[1].signal.aborted,true);
+    assert.equal(calls[2].signal.aborted,false);
+    assert.equal(parent.signal.aborted,false);
+    if(receiptHangs)t.mock.timers.tick(HOME_ATTENTION_PHASE_MS);
+    assert.equal((await result).status,receiptHangs?"uncertain":"ok");
+    assert.equal(Boolean(committed),!receiptHangs);
+    if(receiptHangs)assert.equal(calls[2].signal.aborted,true);
+    assert.equal(calls.length,3);
+  }
+});
+
+test("Privacy boundary cancels an in-flight command and never starts a receipt or exposes Undo",async()=>{
+  const parent=new AbortController(),calls=[];
+  let committed=false;
+  const pending=changeHomeAttention(witness(),"dismiss",null,parent.signal,async(_url,init)=>{
+    calls.push(init.method);
+    if(init.method==="GET")return json(homePreview());
+    return new Promise(()=>{});
+  },()=>{committed=true;});
+  await flush();
+  assert.deepEqual(calls,["GET","PATCH"]);
+  parent.abort();
+  assert.notEqual((await pending).status,"ok");
+  assert.equal(committed,false);
+  assert.deepEqual(calls,["GET","PATCH"]);
 });
