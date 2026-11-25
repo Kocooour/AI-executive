@@ -57,7 +57,7 @@ import { useNotifications } from "./hooks/use-notifications";
 import { useAppBadge } from "./hooks/use-app-badge";
 import { useSync } from "./hooks/use-sync";
 import { localizeServerError } from "../../lib/server-errors";
-import { legacyInboxMailViewFor, retiredArchiveView } from "../../lib/target-shell-views";
+import { legacyInboxMailViewFor, retiredArchiveAddress, retiredArchiveView } from "../../lib/target-shell-views";
 import { workspaceTone } from "./workspace-tone";
 
 // All client state, effects and handlers of the Lumi app shell, moved verbatim from app/page.tsx.
@@ -1556,7 +1556,13 @@ export function useLumiApp(options: { targetDetails?: boolean; targetUnified?: b
     }
     // An explicit ordinary view (including ?view=Today) wins over the preview.
     const addressedView = viewFromSearch(window.location.search, addressableViews);
-    if (addressedView) setView(addressedView, { keepAddress: true });
+    if (preferTargetPlan && retiredArchiveAddress(window.location.search)) {
+      setView("Today", { previewMyPlan: true, keepAddress: true });
+      try {
+        window.history.replaceState(null, "",
+          window.location.pathname + searchWithScope("?view=MyPlanPreview", scopeFromSearch(window.location.search)));
+      } catch { /* My Plan still renders when the History API is unavailable. */ }
+    } else if (addressedView) setView(addressedView, { keepAddress: true });
     setAddressReady(true);
     if (savedWorkspace) {
       setActiveWorkspaceId(savedWorkspace);
@@ -2036,7 +2042,7 @@ export function useLumiApp(options: { targetDetails?: boolean; targetUnified?: b
         activeProjectFocusEntryRef.current = destinationFocusId;
       }
       const requested = viewFromSearch(window.location.search, addressableViews);
-      const retiredAddress = preferTargetPlan && retiredArchiveView(requested ?? "");
+      const retiredAddress = preferTargetPlan && retiredArchiveAddress(window.location.search);
       const previewRoute = (mobileDesignV1Preview &&
         ((preferTargetPlan && searchWithoutScope(window.location.search)==="") ||
           mobileV1IsPlanPreviewRoute(window.location.search) ||
