@@ -23,6 +23,10 @@ const preview=(over={})=>({
   restoreGeneration:"123e4567-e89b-42d3-a456-426614174000",
   lifecycle:"active",snoozedUntilMs:null,...over,
 });
+const homePreview=(over={})=>{
+  const p=preview(over);
+  return {...p,expectedHideEpoch:p.lifecycle==="active"?p.expectedAttentionEpoch+(p.expectedStateRevision===null?1:2):null};
+};
 const json=(body,status=200)=>Response.json(body,{status,headers:{"cache-control":"no-store"}});
 function recorder(...responses){
   const calls=[];
@@ -78,7 +82,7 @@ test("Lifecycle commands refuse shared or stale witnesses before PATCH",async()=
   assert.equal(shared.calls.length,0);
   for(const changed of [{expectedAttentionEpoch:5},{writeAreaId:"different"},
     {expectedStateRevision:1},{lifecycle:"dismissed",expectedStateRevision:0}]){
-    const {calls,fetcher}=recorder(()=>json(preview(changed)));
+    const {calls,fetcher}=recorder(()=>json(homePreview(changed)));
     assert.equal((await changeHomeAttention(witness(),"dismiss",null,signal(),fetcher)).status,"conflict");
     assert.deepEqual(calls.map(c=>c.method),["GET"]);
   }
@@ -86,7 +90,7 @@ test("Lifecycle commands refuse shared or stale witnesses before PATCH",async()=
 
 test("Dismiss and snooze issue one PATCH using the server preview",async()=>{
   for(const [action,until] of [["dismiss",null],["snooze",1794100000000]]){
-    const {calls,fetcher}=recorder(()=>json(preview()),()=>json({ok:true}));
+    const {calls,fetcher}=recorder(()=>json(homePreview()),()=>json({ok:true}));
     assert.deepEqual(await changeHomeAttention(witness(),action,until,signal(),fetcher),{status:"ok"});
     assert.deepEqual(calls.map(c=>c.method),["GET","PATCH"]);
     assert.equal(new URL(calls[0].url,"https://example.invalid").searchParams.get("sourceRevision"),"3");
@@ -101,7 +105,7 @@ test("Dismiss and snooze issue one PATCH using the server preview",async()=>{
 
 test("Restore requires the exact hidden witness and matching lifecycle CAS",async()=>{
   const hidden=witness({lifecycle:"dismissed",lifecycleRevision:0});
-  const {calls,fetcher}=recorder(()=>json(preview({lifecycle:"dismissed",expectedStateRevision:0})),()=>json({ok:true}));
+  const {calls,fetcher}=recorder(()=>json(homePreview({lifecycle:"dismissed",expectedStateRevision:0})),()=>json({ok:true}));
   assert.deepEqual(await changeHomeAttention(hidden,"restore",null,signal(),fetcher),{status:"ok"});
   assert.equal(calls[1].body.expectedStateRevision,0);
   assert.equal(calls[1].body.action,"restore");
@@ -109,7 +113,7 @@ test("Restore requires the exact hidden witness and matching lifecycle CAS",asyn
 
 test("Uncertain PATCH reconciles exact receipt and never retries mutation",async()=>{
   for(const receipt of ["committed","not_recorded"]){
-    const {calls,fetcher}=recorder(()=>json(preview()),()=>{throw Error("network");},()=>json({status:receipt}));
+    const {calls,fetcher}=recorder(()=>json(homePreview()),()=>{throw Error("network");},()=>json({status:receipt}));
     const result=await changeHomeAttention(witness(),"dismiss",null,signal(),fetcher);
     assert.equal(result.status,receipt==="committed"?"ok":"uncertain");
     assert.deepEqual(calls.map(c=>c.method),["GET","PATCH","POST"]);
@@ -138,13 +142,13 @@ test("Undo restores only the exact confirmed hide, rejecting newer actor or task
   };
   const hidden={expectedAttentionEpoch:5,expectedStateRevision:0,lifecycle:"dismissed"};
   const good=recorder(()=>json(preview(hidden)),()=>json({ok:true}));
-  assert.deepEqual(await undoHomeAttention(original,signal(),good.fetcher),{status:"ok"});
+  assert.deepEqual(await undoHomeAttention({command:original,expectedHideEpoch:hidden.expectedAttentionEpoch},signal(),good.fetcher),{status:"ok"});
   assert.equal(good.calls[1].body.action,"restore");
   for(const override of [{expectedAttentionEpoch:6},{expectedRevision:"c".repeat(64)},
     {writeAreaId:"other-area"},{restoreGeneration:"123e4567-e89b-42d3-a456-426614174999"},
     {expectedStateRevision:1}]){
     const stale=recorder(()=>json(preview({...hidden,...override})));
-    assert.equal((await undoHomeAttention(original,signal(),stale.fetcher)).status,"conflict");
+    assert.equal((await undoHomeAttention({command:original,expectedHideEpoch:hidden.expectedAttentionEpoch},signal(),stale.fetcher)).status,"conflict");
     assert.equal(stale.calls.length,1);
   }
 });
@@ -158,7 +162,7 @@ test("Expired snooze replacement expects two lifecycle epoch increments before U
   const hidden={expectedAttentionEpoch:6,expectedStateRevision:0,lifecycle:"snoozed",
     snoozedUntilMs:original.snoozedUntilMs};
   const good=recorder(()=>json(preview(hidden)),()=>json({ok:true}));
-  assert.equal((await undoHomeAttention(original,signal(),good.fetcher)).status,"ok");
+  assert.equal((await undoHomeAttention({command:original,expectedHideEpoch:hidden.expectedAttentionEpoch},signal(),good.fetcher)).status,"ok");
 });
 
 test("Home explanation is required for requested language and bound to exact ordered candidates",async()=>{
@@ -210,4 +214,17 @@ test("Expanded Home page preserves locale and each explanation through cursor ap
   assert.equal(r.status,"ok");
   assert.equal(r.page.explanations.length,6);
   assert.equal(new URL(mock.calls[0].url,"https://example.invalid").searchParams.get("explain"),"cs");
+});
+
+test("Overdue hygiene uses the exact predicted epoch, including after ambiguous acknowledgement",async()=>{
+  const mock=recorder(()=>json({...homePreview(),expectedHideEpoch:6}),
+    ()=>{throw Error("lost acknowledgement");},()=>json({status:"committed"}));
+  let undo;
+  assert.equal((await changeHomeAttention(witness(),"dismiss",null,signal(),mock.fetcher,x=>{undo=x;})).status,"ok");
+  assert.equal(undo.expectedHideEpoch,6);
+  const good=recorder(()=>json(preview({expectedAttentionEpoch:6,expectedStateRevision:0,lifecycle:"dismissed"})),()=>json({ok:true}));
+  assert.equal((await undoHomeAttention(undo,signal(),good.fetcher)).status,"ok");
+  const stale=recorder(()=>json(preview({expectedAttentionEpoch:7,expectedStateRevision:0,lifecycle:"dismissed"})));
+  assert.equal((await undoHomeAttention(undo,signal(),stale.fetcher)).status,"conflict");
+  assert.equal(stale.calls.length,1);
 });
