@@ -12,7 +12,15 @@ const STORE = "/var/lib/ai-executive/store.sqlite";
 const BACKUPS = "/var/backups/ai-executive";
 export const ARCHIVE_TABLES = Object.freeze(["note_revisions", "relations", "tombstones", "entities"]);
 const quote = name => '"' + name.replaceAll('"', '""') + '"';
-const count = (db, table) => Number(db.prepare("SELECT COUNT(*) AS n FROM " + quote(table)).get().n);
+// Workspace entities are structural containers, not Archive content: calendar,
+// iCloud, Gmail, agents, attention and context all resolve `workspace:personal`.
+// The purge keeps them and removes every other entity (tasks, notes, projects,
+// Areas) plus all relations, tombstones and note revisions.
+const ARCHIVE_ENTITY = "json_extract(payload,'$.type') IS NOT 'workspace'";
+const count = (db, table) => Number(db.prepare("SELECT COUNT(*) AS n FROM " + quote(table) +
+  (table === "entities" ? " WHERE " + ARCHIVE_ENTITY : "")).get().n);
+const workspaces = db => Number(db.prepare(
+  "SELECT COUNT(*) AS n FROM entities WHERE json_extract(payload,'$.type') = 'workspace'").get().n);
 const counts = db => Object.fromEntries(ARCHIVE_TABLES.map(table => [table, count(db, table)]));
 const changes = db => Number(db.prepare("SELECT total_changes() AS n").get().n);
 
@@ -50,7 +58,8 @@ export function purgeArchive({ dbPath = STORE, backupDirectory = BACKUPS,
   const db = new DatabaseSync(dbPath, { readOnly: dryRun });
   try {
     const before = counts(db);
-    if (dryRun) return { dryRun: true, before, after: before };
+    const workspacesKept = workspaces(db);
+    if (dryRun) return { dryRun: true, before, after: before, workspacesKept };
     // All work, including removal and recreation of DELETE triggers, is one
     // atomic SQLite transaction. Without suppressing those triggers,
     // deleting entities also writes semantic outbox/mail integration rows.
@@ -67,7 +76,8 @@ export function purgeArchive({ dbPath = STORE, backupDirectory = BACKUPS,
         if (!trigger.sql) throw new Error("unsupported-trigger");
         db.exec("DROP TRIGGER " + quote(trigger.name));
       }
-      for (const table of ARCHIVE_TABLES) db.exec("DELETE FROM " + quote(table));
+      for (const table of ARCHIVE_TABLES) db.exec("DELETE FROM " + quote(table) +
+        (table === "entities" ? " WHERE " + ARCHIVE_ENTITY : ""));
       for (const trigger of triggers) db.exec(trigger.sql);
       // total_changes counts changes caused by foreign-key actions and
       // triggers too, so any modification of another table aborts atomically.
@@ -75,12 +85,14 @@ export function purgeArchive({ dbPath = STORE, backupDirectory = BACKUPS,
       if (changes(db) - startingChanges !== deleted) throw new Error("unexpected-table-change");
       const after = counts(db);
       if (Object.values(after).some(n => n !== 0)) throw new Error("archive-not-empty");
+      if (workspaces(db) !== workspacesKept) throw new Error("unexpected-table-change");
       const check = integrity(db);
       if (!check.integrityOk || check.foreignKeyViolations !== 0) throw new Error("sqlite-integrity-failed");
       db.exec("COMMIT");
-      return { dryRun: false, before, after, ...check };
+      return { dryRun: false, before, after, workspacesKept, ...check };
     } catch (e) {
-      db.exec("ROLLBACK");
+      // SQLite may already have rolled back (e.g. SQLITE_FULL): keep the cause.
+      try { db.exec("ROLLBACK"); } catch { /* original error is rethrown */ }
       throw e;
     }
   } finally { db.close(); }

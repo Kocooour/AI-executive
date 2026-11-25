@@ -528,7 +528,7 @@ automatické opětovné udělení souhlasu.
 
 ## D / #501 — odstranit testovací obsah Archivu (jednorázově)
 
-Tento krok se provádí **až po review, sloučení a nasazení PR #506**; deploy ho
+Tento krok se provádí **až po review, sloučení a nasazení PR #509**; deploy ho
 nespouští automaticky. Jde výhradně o stará testovací data v
 `/var/lib/ai-executive/store.sqlite`. Cílový `personal-v1` i poštovní,
 kalendářová, přihlašovací a ostatní provozní data se nemění.
@@ -543,17 +543,19 @@ uživatele.
 
 ```bash
 sudo systemctl stop ai-executive
-sudo -u ai-executive /usr/bin/node /opt/ai-executive/scripts/archive-purge.mjs --dry-run
-# Ověř počty (38 entit a 2 poznámky byly orientační stav inventury 25. 11.;
-# smazány budou VŠECHNY aktuální řádky čtyř cílových legacy tabulek).
-sudo -u ai-executive /usr/bin/node /opt/ai-executive/scripts/archive-purge.mjs --apply
-sudo -u ai-executive /usr/bin/node /opt/ai-executive/scripts/archive-purge.mjs --dry-run
+sudo -u ai-executive sh -c 'umask 077; /usr/bin/node /opt/ai-executive/scripts/archive-purge.mjs --dry-run'
+# Ověř počty (orientační inventura 25. 11.: 38 entit včetně pracovních prostorů
+# a 2 poznámky). Pracovní prostory (workspace) se nemažou: drží je kalendář,
+# iCloud, Gmail, agenti i pozornost; ve výstupu je uvádí `workspacesKept`.
+sudo -u ai-executive sh -c 'umask 077; /usr/bin/node /opt/ai-executive/scripts/archive-purge.mjs --apply'
+sudo -u ai-executive sh -c 'umask 077; /usr/bin/node /opt/ai-executive/scripts/archive-purge.mjs --dry-run'
 # Počty musí být 0; zkontroluj integritu a přihlášení/nastavení.
 sudo systemctl start ai-executive
 ```
 
-`--apply` smaže v jedné transakci všechny řádky pouze z `entities`,
-`relations`, `tombstones` a `note_revisions`; zobrazí počty před/po,
+`--apply` smaže v jedné transakci všechny entity **kromě pracovních prostorů**
+(úkoly, poznámky, projekty, Oblasti) a všechny řádky z `relations`,
+`tombstones` a `note_revisions`; zobrazí počty před/po,
 `integrity_check` a `foreign_key_check`. Při chybě transakci vrátí.
 `--dry-run` jen vypíše počty. Službu je potřeba nechat zastavenou až do
 ověření. Nové UI v `personal-v1` Archiv nenabízí; profil `off` zůstává.

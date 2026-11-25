@@ -25,6 +25,11 @@ function fixture(backup = true) {
   // must still be present and prevent startup from re-seeding test Archive.
   db.prepare("INSERT INTO metadata(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value")
     .run("revision","42");
+  // The workspace is a structural container (calendar, iCloud, Gmail, agents,
+  // attention resolve it): the purge must keep it.
+  db.prepare("INSERT INTO entities(id,payload,updated_at) VALUES(?,?,?)")
+    .run("workspace:personal", JSON.stringify({ id: "workspace:personal", type: "workspace",
+      title: "Personal", workspaceId: "personal", status: "active", properties: {} }), 1);
   // The archive owns these four tables, including a historical note revision.
   db.prepare("INSERT INTO entities(id,payload,updated_at) VALUES(?,?,?)")
     .run("task:old", JSON.stringify({ id: "task:old", type: "task", title: "synthetic" }), 1);
@@ -65,6 +70,10 @@ function fixture(backup = true) {
   db.close();
   return { dbPath, backupDirectory, protectedTables, protectedRows, triggerSql };
 }
+const archiveRows = (db, table) => db.prepare('SELECT COUNT(*) AS n FROM "' + table + '"' +
+  (table === "entities" ? " WHERE json_extract(payload,'$.type') IS NOT 'workspace'" : "")).get().n;
+const workspaceRows = db => db.prepare(
+  "SELECT COUNT(*) AS n FROM entities WHERE id='workspace:personal'").get().n;
 const run = (f, options = {}) => purgeArchive({
   dbPath: f.dbPath, backupDirectory: f.backupDirectory,
   actor: "ai-executive", state: "inactive", ...options,
@@ -74,13 +83,14 @@ test("dry-run, atomic apply, protected data and triggers, then zero-count second
   const dry = run(f, { dryRun: true });
   assert.deepEqual(dry.before, { note_revisions: 1, relations: 1, tombstones: 1, entities: 2 });
   assert.deepEqual(dry.after, dry.before);
+  assert.equal(dry.workspacesKept, 1);
   const removed = run(f);
   assert.equal(removed.integrityOk, true);
   assert.equal(removed.foreignKeyViolations, 0);
   assert.deepEqual(removed.before, dry.before);
   assert.deepEqual(removed.after, { note_revisions: 0, relations: 0, tombstones: 0, entities: 0 });
-  // Simulate an ACTUAL server-store restart, not just reopening raw SQLite:
-  // initialiseDatabase used to recreate workspace:personal in entities.
+  assert.equal(removed.workspacesKept, 1);
+  // Simulate an ACTUAL server-store restart, not just reopening raw SQLite.
   execFileSync(process.execPath, [
     "--experimental-loader","./scripts/target-staging-ts-loader.mjs",
     "--input-type=module","-e",
@@ -90,8 +100,8 @@ test("dry-run, atomic apply, protected data and triggers, then zero-count second
     stdio: ["ignore","pipe","pipe"], timeout: 20_000 });
   const db = new DatabaseSync(f.dbPath, { readOnly: true });
   try {
-    for (const table of ARCHIVE_TABLES)
-      assert.equal(db.prepare('SELECT COUNT(*) AS n FROM "' + table + '"').get().n, 0);
+    for (const table of ARCHIVE_TABLES) assert.equal(archiveRows(db, table), 0, table);
+    assert.equal(workspaceRows(db), 1, "workspace:personal survives purge and restart");
     for (const table of f.protectedTables)
       assert.deepEqual(db.prepare('SELECT * FROM "' + table + '" ORDER BY rowid').all(),
         f.protectedRows[table], table + " must be unmodified");
@@ -109,7 +119,7 @@ test("refuses active service, missing backup, wrong user without deleting any ro
   assert.throws(() => run(f, { actor: "root" }), /operator-user-required/);
   assert.throws(() => run(f, { state: "activating" }), /service-not-stopped/);
   const db = new DatabaseSync(f.dbPath, { readOnly: true });
-  try { assert.equal(db.prepare("SELECT COUNT(*) AS n FROM entities").get().n, 2); }
+  try { assert.equal(db.prepare("SELECT COUNT(*) AS n FROM entities").get().n, 3); }
   finally { db.close(); }
 });
 test("fresh installation still seeds its default workspace on first server startup", () => {
@@ -127,25 +137,19 @@ test("fresh installation still seeds its default workspace on first server start
   } finally { db.close(); }
 });
 
-test("zero-valued existing revision is not mistaken for a fresh database after purge", () => {
+test("calendar, iCloud and Gmail workspace checks still resolve after purge and restart", async () => {
   const f = fixture();
-  const first = new DatabaseSync(f.dbPath);
-  try {
-    first.prepare("UPDATE metadata SET value='0' WHERE key='revision'").run();
-  } finally { first.close(); }
-  const result = run(f);
-  assert.ok(Object.values(result.after).every(count => count === 0));
-  execFileSync(process.execPath, [
+  run(f);
+  // The same predicate every workspace-scoped legacy API uses (calendar route,
+  // saveCalendarSource, icloud-calendar, mail-gmail, agents, attention).
+  const out = execFileSync(process.execPath, [
     "--experimental-loader","./scripts/target-staging-ts-loader.mjs",
     "--input-type=module","-e",
-    "import { getDatabase } from './lib/server-store.ts'; getDatabase().close();",
-  ], { cwd: process.cwd(), env: { ...process.env,
-    AI_EXECUTIVE_DATA_DIR: path.dirname(f.dbPath) },
-    stdio: ["ignore","pipe","pipe"], timeout: 20_000 });
-  const db = new DatabaseSync(f.dbPath, { readOnly: true });
-  try {
-    for(const table of ARCHIVE_TABLES) {
-      assert.equal(db.prepare('SELECT COUNT(*) AS n FROM "' + table + '"').get().n, 0);
-    }
-  } finally { db.close(); }
+    "import { readSnapshot, getDatabase } from './lib/server-store.ts';" +
+    "const ok = readSnapshot().entities.some(e => e.type === 'workspace' && e.workspaceId === 'personal');" +
+    "const other = readSnapshot().entities.filter(e => e.type !== 'workspace').length;" +
+    "getDatabase().close(); process.stdout.write(JSON.stringify({ ok, other }));",
+  ], { cwd: process.cwd(), env: { ...process.env, AI_EXECUTIVE_DATA_DIR: path.dirname(f.dbPath) },
+    encoding: "utf8", timeout: 20_000 });
+  assert.deepEqual(JSON.parse(out), { ok: true, other: 0 });
 });

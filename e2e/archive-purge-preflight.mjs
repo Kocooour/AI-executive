@@ -57,8 +57,12 @@ try {
 } finally { db.close(); }
 
 const protectedTables=["passkey_credentials","mail_accounts","calendar_sources","work_sessions","metadata","schema_migrations"];
+// Workspace containers are kept by the purge; count only Archive content.
 const countRows=database=>Object.fromEntries(ARCHIVE_TABLES.map(table=>[
-  table,Number(database.prepare('SELECT COUNT(*) AS n FROM "'+table+'"').get().n)]));
+  table,Number(database.prepare('SELECT COUNT(*) AS n FROM "'+table+'"'+
+    (table==="entities"?" WHERE json_extract(payload,'$.type') IS NOT 'workspace'":"")).get().n)]));
+const workspaceCount=database=>Number(database.prepare(
+  "SELECT COUNT(*) AS n FROM entities WHERE id='workspace:personal'").get().n);
 const snapshot=database=>Object.fromEntries(protectedTables.map(table=>[
   table,createHash("sha256").update(JSON.stringify(database.prepare(
     'SELECT * FROM "'+table+'" ORDER BY rowid').all())).digest("hex")]));
@@ -69,7 +73,8 @@ const readDb=fn=>{
 const protectedBefore=readDb(snapshot);
 const options={dbPath:databasePath,backupDirectory,actor:"ai-executive",state:"inactive"};
 const dry=purgeArchive({...options,dryRun:true});
-assert.deepEqual(dry.before,{note_revisions:1,relations:1,tombstones:1,entities:2});
+assert.deepEqual(dry.before,{note_revisions:1,relations:1,tombstones:1,entities:1});
+assert.equal(dry.workspacesKept,1);
 const applied=purgeArchive(options);
 assert.deepEqual(applied.before,dry.before);
 assert.ok(Object.values(applied.after).every(x=>x===0));
@@ -85,6 +90,7 @@ execFileSync(process.execPath,[
   stdio:["ignore","pipe","pipe"],timeout:20_000});
 const afterStartup=readDb(countRows);
 assert.ok(Object.values(afterStartup).every(x=>x===0),"startup must never re-seed Archive");
+assert.equal(readDb(workspaceCount),1,"workspace:personal is kept for calendar/mail/agents");
 assert.deepEqual(readDb(snapshot),protectedBefore,"startup must preserve protected tables");
 
 // A second operator execution, after startup and shutdown, remains zero.

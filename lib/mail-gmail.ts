@@ -2,7 +2,6 @@ import { createCipheriv, createDecipheriv, createHash, randomBytes, randomUUID, 
 import { ensureDailyBackup, getDatabase, readSnapshot } from "./server-store";
 import { currentRestoreGeneration } from "./restore-fence";
 import { pruneExpiredMailAccount } from "./mail-sync-retention";
-import { TARGET_PERSONAL_V1_PROFILE } from "./target-personal-profile";
 
 export const gmailScope = "https://www.googleapis.com/auth/gmail.readonly";
 const tokenUrl = "https://oauth2.googleapis.com/token";
@@ -68,15 +67,6 @@ function googleConfig() {
 }
 
 function workspaceExists(workspaceId: string) {
-  // #501: the retired Archive's workspace entity was deliberately purged.
-  // In the fully activated, authenticated single-owner personal-v1 profile,
-  // the canonical personal workspace is in the isolated target store instead.
-  // Mail credentials remain in the legacy *mail_accounts* table by design.
-  // Do not reinstate an Archive entity or broaden any other workspace scope.
-  if (workspaceId === "personal" &&
-      TARGET_PERSONAL_V1_PROFILE.every((flag) => process.env[flag] === "true")) {
-    return true;
-  }
   return workspaceId !== "all" && readSnapshot().entities.some(
     (entity) => entity.type === "workspace" && entity.workspaceId === workspaceId,
   );

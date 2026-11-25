@@ -140,6 +140,9 @@ test("#501: dry-run, purge, real restart, login/settings, protected rows, second
     expect(mail.status()).toBe(200);
     const accountList=await mail.json() as {accounts:Array<{email:string}>};
     expect(accountList.accounts.some(a=>a.email==="test@example.invalid")).toBe(true);
+    // Calendar (primary nav) and iCloud/ICS settings resolve the same workspace.
+    const calendar=await page.request.get("/api/calendar?workspaceId=personal");
+    expect(calendar.status(),"calendar API works after the purge").toBe(200);
     await expect(page.locator('[data-nav-archive="true"]')).toHaveCount(0);
     if(width===390){
       await expect(page.locator(".mobileNav [data-nav-tab]")).toHaveCount(4);
@@ -154,9 +157,12 @@ test("#501: dry-run, purge, real restart, login/settings, protected rows, second
     const db=new DatabaseSync(witness.databasePath,{readOnly:true});
     try{
       for(const table of ["entities","relations","tombstones","note_revisions"]){
-        const count=Number((db.prepare('SELECT COUNT(*) AS n FROM "'+table+'"').get() as {n:number}|undefined)?.n);
+        const count=Number((db.prepare('SELECT COUNT(*) AS n FROM "'+table+'"'+
+          (table==="entities"?" WHERE json_extract(payload,'$.type') IS NOT 'workspace'":"")).get() as {n:number}|undefined)?.n);
         expect(count,table+" must remain empty after server boot").toBe(0);
       }
+      expect(Number((db.prepare("SELECT COUNT(*) AS n FROM entities WHERE id='workspace:personal'")
+        .get() as {n:number}).n),"workspace container is kept").toBe(1);
       // The preflight already proved every protected table unchanged right after
       // the purge and after a real store restart. A live, logged-in server may
       // legitimately write its own `metadata` (revision, timestamps), so the

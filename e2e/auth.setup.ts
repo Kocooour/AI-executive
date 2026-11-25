@@ -18,8 +18,10 @@ setup("sign in and seed synthetic data", async ({ page }) => {
     const result = await page.evaluate(async () => {
       const response = await fetch("/api/store", { cache: "no-store" });
       if (!response.ok) return { status: response.status, count: -1 };
-      const snapshot = await response.json() as { entities: unknown[] };
-      return { status: response.status, count: snapshot.entities.length };
+      const snapshot = await response.json() as { entities: Array<{ type: string }> };
+      // The purge keeps only structural workspace containers.
+      return { status: response.status,
+        count: snapshot.entities.filter((entity) => entity.type !== "workspace").length };
     });
     expect(result).toEqual({ status: 200, count: 0 });
   } else {
