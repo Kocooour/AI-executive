@@ -24,6 +24,15 @@ export const targetHomeSummaryEnabled=(env:TargetUiEnv):boolean=>
   TARGET_UI_MY_PLAN_FLAGS.every(name=>env[name]==="true")&&
   env["AI_EXECUTIVE_TARGET_STAGING_HTTP_HOME_ENABLED"]==="true";
 
+/** E-1: Home task attention is default-off until the existing read AND
+ * lifecycle write routes are explicitly enabled. No separate UI flag. */
+export const targetHomeAttentionEnabled=(env:TargetUiEnv):boolean=>
+  targetHomeSummaryEnabled(env)&&[
+    "AI_EXECUTIVE_TARGET_STAGING_HTTP_WRITE_ENABLED",
+    "AI_EXECUTIVE_TARGET_STAGING_HTTP_ATTENTION_ENABLED",
+    "AI_EXECUTIVE_TARGET_STAGING_HTTP_ATTENTION_WRITE_ENABLED",
+  ].every(flag=>env[flag]==="true");
+
 /** C-3a is enabled only after BOTH live read and pinned write/receipt
  * endpoints opt in, in addition to C-2's complete target Home profile. */
 export const targetInboxUiEnabled=(env:TargetUiEnv):boolean=>
