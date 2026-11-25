@@ -5,6 +5,7 @@ import {useTargetGeneration,useTargetRuntime} from "./target-data-provider";
 import {useTargetTick,useTargetWake} from "./use-target-revalidation";
 import {useTargetScope} from "./target-scope-state";
 import {TargetDataStatus} from "./target-data-status";
+import {TargetHomeAttention} from "./target-home-attention";
 import {openTargetDetail} from "./target-detail-state";
 import {detailIdOk} from "../../lib/target-detail-route";
 import {targetOverviewGate} from "../../lib/target-my-plan-embed";
@@ -60,8 +61,8 @@ function Row({task,language,view,openable}:{task:C2Task;language:Language;
     </div>
   </li>;
 }
-function TargetOverviewRead({kind,language,generation,onRefusal,openable}:{
-  kind:Kind;language:Language;generation:string;onRefusal:()=>void;openable:boolean;
+function TargetOverviewRead({kind,language,generation,onRefusal,openable,attentionEnabled}:{
+  kind:Kind;language:Language;generation:string;onRefusal:()=>void;openable:boolean;attentionEnabled:boolean;
 }){
   const scope=useTargetScope();
   const filter:MyPlanSliceFilter=scope;
@@ -202,6 +203,9 @@ function TargetOverviewRead({kind,language,generation,onRefusal,openable}:{
   const groups=c2SevenDayGroups(state.future.tasks,today);
   return <section className="targetOverview" data-testid={kind==="home"?"target-home":"target-upcoming"}
     data-target-source="authorized">
+    {kind==="home"&&attentionEnabled&&scope!=="shared"&&<TargetHomeAttention
+      key={generation+":"+scope} generation={generation} language={language}
+      openable={openable} onRefusal={onRefusal}/>}
     {kind==="home"&&state.summary&&<>
       <p className="targetOverviewSubtle">{language==="cs"
         ?"Souhrn vašich aktuálně dostupných cílových dat. Počty znamenají celkový počet, ne naléhavost."
@@ -242,8 +246,8 @@ function TargetOverviewRead({kind,language,generation,onRefusal,openable}:{
     </section>
   </section>;
 }
-export default function TargetOverview({kind,language="cs",taskDetail=false}:{
-  kind:Kind;language?:Language;taskDetail?:boolean;
+export default function TargetOverview({kind,language="cs",taskDetail=false,attentionEnabled=false}:{
+  kind:Kind;language?:Language;taskDetail?:boolean;attentionEnabled?:boolean;
 }){
   const runtime=useTargetRuntime(),generation=useTargetGeneration();
   const subscribe=useMemo(
@@ -280,5 +284,5 @@ export default function TargetOverview({kind,language="cs",taskDetail=false}:{
         onAction={retry}/>}
   </div>;
   return <TargetOverviewRead key={kind+":"+gate.generation} kind={kind}
-    language={language} generation={gate.generation} openable={taskDetail} onRefusal={refusal}/>;
+    language={language} generation={gate.generation} openable={taskDetail} onRefusal={refusal} attentionEnabled={attentionEnabled}/>;
 }
