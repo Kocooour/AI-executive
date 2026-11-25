@@ -123,6 +123,9 @@ for(const width of [390,1280]){
     await expect(panel(page).getByRole("button",{name:"Zpět",exact:true})).toBeVisible();
     await panel(page).getByRole("button",{name:"Zpět",exact:true}).click();
     await expect(row(page,titles[0])).toBeVisible();
+    await expect(panel(page).getByText("Upozornění bylo obnoveno.")).toBeVisible();
+    await page.clock.fastForward(8_001);
+    await expect(panel(page).getByText("Upozornění bylo obnoveno.")).toHaveCount(0);
     // Real snooze through the UI; shift the isolated server clock, then
     // re-read without altering the actual stored snooze row.
     const until=Math.ceil((now+10*60_000)/60_000)*60_000;
