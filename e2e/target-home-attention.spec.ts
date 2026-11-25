@@ -90,27 +90,33 @@ for(const width of [390,1280]){
     await expect(row(page,titles[5])).toContainText("Zdroj: osobní plán");
     await panel(page).getByRole("button",{name:"Méně upozornění"}).click();
     await expect(items(page)).toHaveCount(5);
-    // Hold the acknowledged real commit while the routine session poll
-    // reloads the parent. A remount would abort and lose the exact command.
+    // Hold the acknowledged real commit across a routine session poll and
+    // the bounded PATCH deadline. Only the original receipt may establish Undo.
     let release=()=>{};const barrier=new Promise<void>(r=>{release=r;});
-    let committed=false,patches=0;
+    let committed=false,patches=0,original="";
     const pattern="**/api/target-staging/attention/command";
     const hold=async(route:Route)=>{
       if(route.request().method()!=="PATCH"){await route.continue();return;}
-      patches++;
+      patches++;original=route.request().postData()||"";
       const response=await route.fetch();
       committed=response.status()===200;
-      await barrier;await route.fulfill({response});
+      await barrier;
+      // The timed-out browser request can already have been cancelled.
+      await route.fulfill({response}).catch(()=>{});
     };
     await page.route(pattern,hold);
     try{
       await row(page,titles[0]).getByRole("button",{name:"Skrýt",exact:true}).click();
       await expect.poll(()=>committed).toBe(true);
+      const receipt=page.waitForResponse(r=>isPath(r.url(),"/api/target-staging/attention/command/receipt")&&r.status()===200);
       await poll(page);
-      release();
+      const reply=await receipt;
+      expect(reply.request().postData()).toBe(original);
+      expect(await reply.json()).toEqual({status:"committed"});
       await expect(row(page,titles[0])).toHaveCount(0);
       await expect(panel(page).getByRole("button",{name:"Zpět",exact:true})).toBeVisible();
       expect(patches).toBe(1);
+      release();
     }finally{release();await page.unroute(pattern,hold);}
     // A further successful poll after acknowledgement cannot erase Undo.
     await poll(page);
@@ -150,9 +156,38 @@ for(const width of [390,1280]){
     await expect(detail).toHaveCount(0);
     await expect(row(page,titles[1])).toHaveCount(0);
     await expect(row(page,titles[4])).toBeVisible();
-    // Actual logout endpoint revokes the cookie before page revalidation.
-    const logout=await page.evaluate(()=>fetch("/api/auth/logout",{method:"POST"}).then(r=>r.status));
-    expect(logout).toBe(200);
+    // Keep a real acknowledged command outstanding while revoking the
+    // current session. The mounted panel must disappear BEFORE a page reload;
+    // releasing that old response must not resurrect private rows or Undo.
+    let releaseRevoked=()=>{};const revokedBarrier=new Promise<void>(r=>{releaseRevoked=r;});
+    let revokedCommitted=false,lateFinished=false;
+    const holdRevoked=async(route:Route)=>{
+      if(route.request().method()!=="PATCH"){await route.continue();return;}
+      const response=await route.fetch();
+      revokedCommitted=response.status()===200;
+      await revokedBarrier;
+      try{await route.fulfill({response});}catch{/* browser cancelled the obsolete request */}
+      finally{lateFinished=true;}
+    };
+    await page.route(pattern,holdRevoked);
+    try{
+      await row(page,titles[4]).getByRole("button",{name:"Skrýt",exact:true}).click();
+      await expect.poll(()=>revokedCommitted).toBe(true);
+      await expect(panel(page)).toBeVisible();
+      const logout=await page.evaluate(()=>fetch("/api/auth/logout",{method:"POST"}).then(r=>r.status));
+      expect(logout).toBe(200);
+      const refused=page.waitForResponse(r=>isPath(r.url(),session)&&r.status()===401);
+      // Actual runtime verification, not a fabricated auth response.
+      await page.evaluate(()=>window.dispatchEvent(new Event("lumi:auth-signed-in")));
+      await refused;
+      await expect(panel(page)).toHaveCount(0);
+      for(const title of titles)await expect(page.getByText(title,{exact:true})).toHaveCount(0);
+      releaseRevoked();
+      await expect.poll(()=>lateFinished).toBe(true);
+      await expect(panel(page)).toHaveCount(0);
+      for(const title of titles)await expect(page.getByText(title,{exact:true})).toHaveCount(0);
+      await expect(panel(page).getByRole("button",{name:"Zpět",exact:true})).toHaveCount(0);
+    }finally{releaseRevoked();await page.unroute(pattern,holdRevoked);}
     await page.reload();
     await expect(page.locator('.authCard input[type="password"]')).toBeVisible();
     await expect(panel(page)).toHaveCount(0);
