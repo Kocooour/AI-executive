@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import {test} from "node:test";
-import {activeTargetViewFor,detailsActive,targetViewsFor,targetShellNavigationFor,targetMobileMoreCurrentViews,legacyInboxMailViewFor,retiredArchiveView,SHELL_NAVIGATION_VIEWS} from "../lib/target-shell-views.ts";
+import {activeTargetViewFor,detailsActive,targetViewsFor,targetShellNavigationFor,targetMobileMoreCurrentViews,legacyInboxMailViewFor,retiredArchiveAddress,retiredArchiveView,SHELL_NAVIGATION_VIEWS} from "../lib/target-shell-views.ts";
 import {refusalBudgetFor} from "../lib/target-refusal-budget.ts";
 import {detailIdOk} from "../lib/target-detail-route.ts";
 import {validTaskPreviewId} from "../lib/target-staging-task-preview-client.ts";
@@ -181,6 +181,10 @@ test("D: all former Archive links redirect only in personal-v1",()=>{
     assert.equal(retiredArchiveView(route),true,route);
   for (const current of ["MyPlanPreview","Home","Inbox","Upcoming","Projects","Notes","Calendar","Search","Agents","Settings"])
     assert.equal(retiredArchiveView(current),false,current);
+  for (const search of ["?view=LegacyHome", "?view=LegacyObsolete", "?view=Archive", "?view=Today&scope=personal"])
+    assert.equal(retiredArchiveAddress(search),true,search);
+  for (const search of ["?view=Home","?view=Notes&noteId=target","?view=Settings"])
+    assert.equal(retiredArchiveAddress(search),false,search);
   // The router uses this classifier only when personalV1 is active;
   // the 'off' model remains exactly as before.
   assert.equal(targetShellNavigationFor({...personalV1,quickCapture:false}).personalV1,false);
