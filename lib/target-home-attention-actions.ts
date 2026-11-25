@@ -9,6 +9,8 @@ import {
   type AttentionCommand, type AttentionFailure, type AttentionExplanationLanguage,
 } from "./target-staging-attention-client";
 
+import {targetAppFetch} from "./target-app-fetch";
+
 export const HOME_ATTENTION_LIMIT = 5;
 
 type Failure = {status: AttentionFailure};
@@ -17,7 +19,7 @@ type ActionResult = {status:"ok"}|Failure;
 
 /** Never accept another area scope, even when a caller has a wider My Plan scope. */
 export async function readHomeAttention(
-  signal?:AbortSignal, fetchImpl:typeof fetch=fetch,explain?:AttentionExplanationLanguage,
+  signal?:AbortSignal, fetchImpl:typeof fetch=targetAppFetch,explain?:AttentionExplanationLanguage,
 ):Promise<PageResult>{
   return fetchAttentionPage({
     areaFilter:"personal",view:"active",limit:HOME_ATTENTION_LIMIT,signal,explain,
@@ -25,7 +27,7 @@ export async function readHomeAttention(
 }
 
 export async function readMoreHomeAttention(
-  previous:AttentionPage,signal?:AbortSignal,fetchImpl:typeof fetch=fetch,
+  previous:AttentionPage,signal?:AbortSignal,fetchImpl:typeof fetch=targetAppFetch,
 ):Promise<PageResult>{
   if(previous.areaFilter!=="personal"||previous.view!=="active"||
     !previous.hasMore||!previous.nextCursor||
@@ -52,7 +54,7 @@ export async function changeHomeAttention(
   action:AttentionAction,
   snoozedUntilMs:number|null,
   signal:AbortSignal,
-  fetchImpl:typeof fetch=fetch,
+  fetchImpl:typeof fetch=targetAppFetch,
   onCommitted?:(command:AttentionCommand)=>void,
 ):Promise<ActionResult>{
   const {item,attentionEpoch}=witness;
@@ -108,7 +110,7 @@ async function commitHomeAttention(command:AttentionCommand,signal:AbortSignal,
  * hygiene removed an old soon row, the epoch can advance further; refuse Undo
  * rather than guessing whether another action intervened. */
 export async function undoHomeAttention(
-  original:AttentionCommand,signal:AbortSignal,fetchImpl:typeof fetch=fetch,
+  original:AttentionCommand,signal:AbortSignal,fetchImpl:typeof fetch=targetAppFetch,
 ):Promise<ActionResult>{
   if(signal.aborted)return {status:"aborted"};
   if(original.action!=="dismiss"&&original.action!=="snooze")return {status:"invalid"};
