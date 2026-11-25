@@ -10,6 +10,8 @@ on:
       - "lib/target-*.ts"
       - "scripts/target-staging-*.mjs"
       - "e2e/target-personal-acceptance.spec.ts"
+      - "e2e/target-home-attention.spec.ts"
+      - "e2e/attention-test-clock.cjs"
       - "e2e/target-personal-bfcache.spec.ts"
       - "e2e/target-personal-native-bfcache.spec.ts"
       - "e2e/target-personal-native-bfcache-gate.ts"
@@ -97,6 +99,20 @@ jobs:
         run: |
           set -o pipefail
           pnpm exec playwright test e2e/target-personal-acceptance.spec.ts e2e/target-personal-my-plan.spec.ts e2e/target-personal-search-open.spec.ts e2e/target-personal-create.spec.ts e2e/target-personal-capture-undo.spec.ts --project=desktop 2>&1 | tee "$RUNNER_TEMP/lumi-personal-browser.log"
+      - name: E-1 Home attention on real isolated SQLite (390/1280, fixed Prague clock)
+        env:
+          LUMI_TARGET_PERSONAL_ACCEPTANCE_E2E: "false"
+          LUMI_TARGET_ATTENTION_E2E: "true"
+        run: |
+          set -o pipefail
+          pnpm exec playwright test e2e/target-home-attention.spec.ts --project=desktop 2>&1 | tee -a "$RUNNER_TEMP/lumi-personal-browser.log"
+      - name: E-1 off-profile regression (390/1280)
+        env:
+          LUMI_TARGET_PERSONAL_ACCEPTANCE_E2E: "false"
+          LUMI_TARGET_ATTENTION_E2E: "off"
+        run: |
+          set -o pipefail
+          pnpm exec playwright test e2e/target-home-attention.spec.ts --project=desktop 2>&1 | tee -a "$RUNNER_TEMP/lumi-personal-browser.log"
       - name: Real Back / BFCache, full reload and uncertain POST (real SQLite, 390/1280)
         run: |
           set -o pipefail
