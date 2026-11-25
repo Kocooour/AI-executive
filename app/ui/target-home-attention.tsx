@@ -34,10 +34,6 @@ const labels={
     overdue:"Overdue",soon:"Due soon",passed:"Planned day passed",sourceDue:"Source: task deadline",
     sourceWhen:"Source: personal plan (When)",evaluated:"Evaluated",loading:"Loading attention items…",open:"Open task"},
 } as const;
-function dateLabel(on:string,language:Language){
-  return new Intl.DateTimeFormat(language==="cs"?"cs-CZ":"en-GB",
-    {dateStyle:"medium",timeZone:"UTC"}).format(new Date(on+"T12:00:00Z"));
-}
 
 export function TargetHomeAttention({language,openable,onRefusal,generation}:{
   language:Language;openable:boolean;onRefusal:()=>void;generation:string;
@@ -67,7 +63,7 @@ export function TargetHomeAttention({language,openable,onRefusal,generation}:{
   };
   const {markHidden}=useTargetWake({
     hide:conceal,signedOut:conceal,
-    ready(result){if(result==="unavailable"){conceal();return;}
+    ready(result){if(result==="unavailable"){conceal();markHidden();return;}
       setHidden(false);reload();},
   });
   useTargetTick(()=>{if(!actionRef.current){setUndo(null);reload();}});
@@ -76,14 +72,15 @@ export function TargetHomeAttention({language,openable,onRefusal,generation}:{
     if(document.visibilityState==="hidden"||!navigator.onLine){markHidden();conceal();return;}
     const controller=new AbortController();
     readRef.current=controller;
-    void readHomeAttention(controller.signal).then(result=>{
+    setState({kind:"loading"});
+    void readHomeAttention(controller.signal,fetch,language).then(result=>{
       if(controller.signal.aborted)return;
       if(result.status==="ok")setState({kind:"ready",page:result.page});
       else{setState({kind:"error"});setUndo(null);
         if(result.status==="unauthorized")onRefusal();}
     }).catch(()=>{if(!controller.signal.aborted)setState({kind:"error"});});
     return ()=>controller.abort();
-  },[refresh,generation,hidden,markHidden,onRefusal]);
+  },[refresh,generation,hidden,markHidden,onRefusal,language]);
   useEffect(()=>()=>{readRef.current?.abort();actionRef.current?.abort();},[]);
   useEffect(()=>{
     if(state.kind==="ready"&&focusPending.current){focusPending.current=false;heading.current?.focus();}
@@ -144,18 +141,17 @@ export function TargetHomeAttention({language,openable,onRefusal,generation}:{
   if(state.kind==="error")return <section role="status"><p>{t.error}</p>
     <button type="button" onClick={reload}>{t.retry}</button></section>;
   const {page}=state;
+  if(page.explanationLanguage!==language||!page.explanations)return <p role="status">{t.loading}</p>;
   if(!page.items.length&&!notice&&!undo)return null;
   const items=expanded?page.items:page.items.slice(0,HOME_ATTENTION_LIMIT);
-  const time=new Intl.DateTimeFormat(language==="cs"?"cs-CZ":"en-GB",
-    {dateStyle:"medium",timeStyle:"short",timeZone:page.timeZone}).format(page.evaluatedAtMs);
+  const explanations=new Map(page.explanations.map(x=>[x.attentionKey,x]));
   return <section className="targetOverviewSection targetHomeAttention" data-testid="target-home-attention"
     aria-label={t.heading}>
     <h2 tabIndex={-1} ref={heading}>{t.heading}</h2>
     <div role="status" aria-live="polite">{notice}</div>
     {undo&&<button type="button" disabled={busy} onClick={()=>void restore()}>{t.undo}</button>}
     <ul>{items.map(item=>{
-      const reason=item.reasonCode==="deadline_overdue"?t.overdue:
-        item.reasonCode==="deadline_soon"?t.soon:t.passed;
+      const explanation=explanations.get(item.attentionKey)!;
       return <li className="targetOverviewRow" key={item.attentionKey}
         data-testid="target-home-attention-item" data-rule={item.ruleId}>
         <span className="stagingMyPlanSquare targetHomeAttentionMarker" aria-hidden="true"/>
@@ -166,10 +162,9 @@ export function TargetHomeAttention({language,openable,onRefusal,generation}:{
               onClick={event=>openTargetDetail({kind:"task",id:item.taskId,view:"Home"},event.currentTarget)}>
                 <strong>{item.title}</strong></button>
             :<strong>{item.title}</strong>}
-          <p className="targetHomeAttentionReason">{reason} · {dateLabel(item.relevantOn,language)}</p>
+          <p className="targetHomeAttentionReason">{explanation.reason}</p>
           <details className="targetOverviewWhy"><summary>{t.why}</summary>
-            <p>{item.reasonCode==="planned_date_passed"?t.sourceWhen:t.sourceDue}: {dateLabel(item.relevantOn,language)}</p>
-            <p>{t.evaluated}: {time} ({page.timeZone})</p>
+            <p>{explanation.why}</p>
           </details>
           <div className="targetHomeAttentionActions">
             <button type="button" disabled={busy} aria-expanded={picker===item.attentionKey}
