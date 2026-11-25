@@ -134,6 +134,12 @@ test("#501: dry-run, purge, real restart, login/settings, protected rows, second
     await expect(page.getByTestId("target-inbox")).toBeVisible();
     await page.locator('[data-testid="target-inbox-mail-tabs"] [data-inbox-tab="mail"]').click();
     await expect(page.locator(".mailReader")).toBeVisible();
+    // The server must authorize the retained *live* account even though its
+    // old workspace entity is gone. Rendering only an empty tab is not enough.
+    const mail=await page.request.get("/api/mail/gmail?workspaceId=personal");
+    expect(mail.status()).toBe(200);
+    const accountList=await mail.json() as {accounts:Array<{email:string}>};
+    expect(accountList.accounts.some(a=>a.email==="test@example.invalid")).toBe(true);
     await expect(page.locator('[data-nav-archive="true"]')).toHaveCount(0);
     if(width===390){
       await expect(page.locator(".mobileNav [data-nav-tab]")).toHaveCount(4);
