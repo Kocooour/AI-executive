@@ -26,8 +26,8 @@ if (existsSync(databasePath)) throw new Error("synthetic-legacy-db-must-not-pree
 const db = new DatabaseSync(databasePath);
 try {
   applySchema(db);
-  db.prepare("INSERT INTO metadata(key,value) VALUES('revision','42')").run();
-  db.prepare("INSERT INTO metadata(key,value) VALUES('updatedAt','42')").run();
+  db.prepare("INSERT INTO metadata(key,value) VALUES('revision','42') ON CONFLICT(key) DO UPDATE SET value=excluded.value").run();
+  db.prepare("INSERT INTO metadata(key,value) VALUES('updatedAt','42') ON CONFLICT(key) DO UPDATE SET value=excluded.value").run();
   const insertEntity=db.prepare("INSERT INTO entities(id,payload,updated_at) VALUES(?,?,?)");
   insertEntity.run("workspace:personal", JSON.stringify({
     id:"workspace:personal", type:"workspace", title:"Synthetic",
