@@ -339,7 +339,8 @@ export function LumiAppRoot({ targetHomeSummary = false, targetInboxRead = false
               :(language==="cs"?"Oblasti pro novou poznámku":"Areas for a new note")}</button>}
           {legacySearchSurfaces.heldBack && !targetOverview && <HeldBack app={app} />}
           {taskCaptureReady&&<TargetPrivateTaskCreatedNotice language={language}
-            onCreated={closeAreaChooser} />}
+            onCreated={closeAreaChooser}
+            undoEnabled={Boolean(targetEdits?.taskDelete&&detailGates.task)} />}
           <CalendarView app={app} eventsOnly={shellNavigation.personalV1} />
           {!targetOverview && <HomeView app={app} />}
           {targetInboxActive && <>

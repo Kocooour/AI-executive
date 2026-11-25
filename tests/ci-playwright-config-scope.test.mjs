@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import test from "node:test";
 import { BROWSER_PROFILES, selectBrowserProfiles } from "../scripts/ci-playwright-config-scope.mjs";
 
@@ -108,4 +108,81 @@ test("config impact workflow retains all affected existing reusable workflows", 
       assert.match(called, /^  group: .*\$\{\{ github\.workflow \}\}/m);
     }
   }
+});
+
+test("#493: every dispatched profile maps to a workflow with a fully understood path filter", async () => {
+  const scope = await import("../scripts/ci-playwright-config-scope.mjs");
+  const dispatcher = readFileSync(".github/workflows/playwright-config-impact-browser.yml", "utf8");
+  const map = scope.dispatchedWorkflows(dispatcher);
+  assert.deepEqual(Object.keys(map).sort(), [...scope.BROWSER_PROFILES].sort());
+  for (const [profile, file] of Object.entries(map)) {
+    const filters = scope.workflowPathFilters(readFileSync(".github/workflows/" + file, "utf8"));
+    assert.ok(filters && filters.length, profile + ": path filter parsed");
+    assert.ok(filters.every((glob) => scope.globToRegExp(glob)), profile + ": every glob modelled");
+  }
+});
+
+test("#493: GitHub glob semantics: * stays in one segment, ** crosses, [] is a class", async () => {
+  const { globToRegExp } = await import("../scripts/ci-playwright-config-scope.mjs");
+  assert.ok(globToRegExp("lib/target-*.ts").test("lib/target-inbox.ts"));
+  assert.equal(globToRegExp("lib/target-*.ts").test("lib/target/inbox.ts"), false);
+  assert.ok(globToRegExp("app/api/target-staging/**").test("app/api/target-staging/a/b/route.ts"));
+  assert.ok(globToRegExp("e2e/note-preview-ui09d*.spec.ts").test("e2e/note-preview-ui09d-x.spec.ts"));
+  // Literal "[projectId]" is a character class in GitHub filters: it does NOT
+  // match the literal directory, so we must not claim a direct run for it.
+  assert.equal(globToRegExp("app/api/x/[projectId]/route.ts").test("app/api/x/[projectId]/route.ts"), false);
+  assert.ok(globToRegExp("app/api/x/[projectId]/route.ts").test("app/api/x/p/route.ts"));
+  for (const unsupported of ["!lib/a.ts", "lib/{a,b}.ts", "lib/a+.ts", "a?b", "lib/[a_b].ts", "lib/[.].ts"])
+    assert.equal(globToRegExp(unsupported), null, unsupported);
+});
+
+test("#493: a suite already triggered by its own paths is not dispatched twice; unknown filters stay dispatched", async () => {
+  const { withoutDirectRuns, workflowPathFilters, directlyTriggered } =
+    await import("../scripts/ci-playwright-config-scope.mjs");
+  const dispatcher = [
+    "    if: needs.scope.outputs.alpha == 'true'", "    uses: ./.github/workflows/alpha.yml",
+    "    if: needs.scope.outputs.beta_2 == 'true'", "    uses: ./.github/workflows/beta.yml",
+    "    if: needs.scope.outputs.gamma == 'true'", "    uses: ./.github/workflows/gamma.yml",
+  ].join("\n");
+  const files = {
+    "alpha.yml": 'on:\n  workflow_call:\n  pull_request:\n    paths:\n      - "lib/alpha-*.ts"\n      - "playwright.config.ts"\n',
+    "beta.yml": 'on:\n  pull_request:\n    paths:\n      - "lib/beta.ts"\n  workflow_dispatch:\n',
+    "gamma.yml": 'on:\n  pull_request:\n    branches: [main]\n    paths:\n      - "lib/alpha-x.ts"\n',
+  };
+  const read = (file) => files[file];
+  const changed = ["playwright.config.ts", "lib/alpha-x.ts"];
+  assert.deepEqual(withoutDirectRuns(["alpha", "beta_2", "gamma", "delta"], changed, read, dispatcher),
+    ["beta_2", "gamma", "delta"], "only alpha runs directly; unmodelled gamma and unmapped delta stay");
+  assert.equal(workflowPathFilters(files["gamma.yml"]), null);
+  assert.equal(workflowPathFilters('on:\n  pull_request:\n'), null, "no paths = unknown, keep dispatch");
+  assert.equal(directlyTriggered(["lib/beta.ts"], ["lib/{beta}.ts"]), false);
+  assert.deepEqual(withoutDirectRuns(["alpha"], changed, () => { throw Error("missing"); }, dispatcher), ["alpha"]);
+});
+
+test("#493: more than 300 changed files never suppresses a dispatch (GitHub path-filter limit)", async () => {
+  const { withoutDirectRuns, GITHUB_PATH_FILTER_FILE_LIMIT } = await import("../scripts/ci-playwright-config-scope.mjs");
+  assert.equal(GITHUB_PATH_FILTER_FILE_LIMIT, 300);
+  const dispatcher = "    if: needs.scope.outputs.alpha == 'true'\n    uses: ./.github/workflows/alpha.yml";
+  const read = () => 'on:\n  pull_request:\n    paths:\n      - "lib/alpha.ts"\n';
+  const few = ["lib/alpha.ts"];
+  const many = [...Array.from({ length: 300 }, (_, i) => "docs/f" + i + ".md"), "lib/alpha.ts"];
+  assert.deepEqual(withoutDirectRuns(["alpha"], few, read, dispatcher), []);
+  assert.deepEqual(withoutDirectRuns(["alpha"], many, read, dispatcher), ["alpha"]);
+});
+
+test("#493: every test that touches workflow files is found by the workflow-reader rule", () => {
+  // The PR selector finds workflow readers by the literal ".github/workflows";
+  // a test assembling that path in pieces would be missed, so forbid it.
+  for (const file of readdirSync("tests").filter((name) => name.endsWith(".test.mjs"))) {
+    const source = readFileSync("tests/" + file, "utf8");
+    if (/["'`]\.github["'`]/.test(source) && /workflows/.test(source))
+      assert.match(source, /\.github\/workflows/, file + " must reference .github/workflows literally");
+  }
+});
+
+test("#493: the project-title cancel route really triggers its focused workflow", async () => {
+  const { workflowPathFilters, directlyTriggered } = await import("../scripts/ci-playwright-config-scope.mjs");
+  const filters = workflowPathFilters(readFileSync(".github/workflows/r3-project-title-recovery-browser.yml", "utf8"));
+  assert.ok(directlyTriggered(["app/api/target-staging/projects/[projectId]/title/cancel/route.ts"], filters),
+    "a literal [projectId] directory must match (a bracket class would not)");
 });
