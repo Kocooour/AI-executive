@@ -26,6 +26,7 @@ import { ContextView } from "./views/context-view";
 import { AgentsView } from "./views/agents-view";
 import { SettingsView } from "./views/settings-view";
 import { EntityList } from "./views/entity-list";
+import { GmailReader } from "./views/gmail-reader";
 import { MobileNav } from "./views/mobile-nav";
 import { DesktopCaptureFab } from "./views/desktop-capture-fab";
 import { CaptureDialog } from "./views/capture-dialog";
@@ -341,8 +342,26 @@ export function LumiAppRoot({ targetHomeSummary = false, targetInboxRead = false
             onCreated={closeAreaChooser} />}
           <CalendarView app={app} eventsOnly={shellNavigation.personalV1} />
           {!targetOverview && <HomeView app={app} />}
-          {targetInboxActive && <TargetInbox language={language} taskDetail={detailGates.task}
-             suggestionsEnabled={targetInboxC3b} />}
+          {targetInboxActive && <>
+            {/* #501: preserve the LIVE Gmail reader on current Inbox after
+                removing LegacyInbox and every Archive navigation route.
+                This does not expose old legacy task rows or write APIs. */}
+            <div className="inboxTabs" role="group" aria-label={tr("inboxSource")}
+              data-testid="target-inbox-mail-tabs">
+              {(["tasks", "mail"] as const).map(tab=>(
+                <button key={tab} type="button" data-inbox-tab={tab}
+                  aria-pressed={app.inboxTab===tab}
+                  onClick={()=>{if(app.inboxTab!==tab){app.closeDetail();app.setInboxTab(tab);}}}>
+                  {tr(tab==="tasks"?"inboxTabTasks":"inboxTabMail")}
+                </button>
+              ))}
+            </div>
+            {app.inboxTab==="mail"
+              ? <GmailReader key={`${activeWorkspaceId}:${app.offlineView}:${authState}:Inbox`}
+                  app={app} readOnly />
+              : <TargetInbox language={language} taskDetail={detailGates.task}
+                  suggestionsEnabled={targetInboxC3b} />}
+          </>}
           {targetOverview && <TargetOverview kind={view==="Home"?"home":"upcoming"}
             language={language} taskDetail={detailGates.task} />}
           {view === "Today" && !targetPlan && <TodayTop app={app} />}
