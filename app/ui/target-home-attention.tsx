@@ -6,6 +6,7 @@ import {useTargetWake,useTargetTick} from "./use-target-revalidation";
 import {useTargetRuntime} from "./target-data-provider";
 import {openTargetDetail} from "./target-detail-state";
 import {targetAppFetch} from "../../lib/target-app-fetch";
+import {subscribeTargetChange} from "../../lib/target-data-invalidation";
 import {detailIdOk} from "../../lib/target-detail-route";
 import {readHomeAttention,readMoreHomeAttention,changeHomeAttention,undoHomeAttention,HOME_ATTENTION_LIMIT,type HomeAttentionUndo}
   from "../../lib/target-home-attention-actions";
@@ -53,12 +54,14 @@ export function TargetHomeAttention({language,openable,onRefusal,generation}:{
   const actionRef=useRef<AbortController|null>(null);
   const readRef=useRef<AbortController|null>(null);
   const focusPending=useRef(false);
+  const refreshPending=useRef(false);
   const reload=useCallback(()=>{setState({kind:"loading"});setExpanded(false);
     setPicker(null);setRefresh(n=>n+1);},[]);
   const live=()=>Boolean(runtime?.known()&&runtime.generation()===generation&&
     document.visibilityState!=="hidden"&&navigator.onLine);
   const conceal=()=>{
     readRef.current?.abort();actionRef.current?.abort();actionRef.current=null;
+    refreshPending.current=false;focusPending.current=false;
     setHidden(true);setState({kind:"loading"});setUndo(null);setNotice("");
     setBusy(false);setPicker(null);setExpanded(false);setCustom("");
   };
@@ -67,7 +70,14 @@ export function TargetHomeAttention({language,openable,onRefusal,generation}:{
     ready(result){if(result==="unavailable"){conceal();markHidden();return;}
       setHidden(false);reload();},
   });
-  useTargetTick(()=>{if(!actionRef.current){setUndo(null);reload();}});
+  // Routine verified polls and data invalidation never cancel a write or
+  // discard its confirmed Undo. Defer read until the command/receipt settles.
+  const revalidate=useCallback(()=>{
+    if(actionRef.current){refreshPending.current=true;return;}
+    reload();
+  },[reload]);
+  useTargetTick(revalidate);
+  useEffect(()=>subscribeTargetChange(revalidate),[revalidate]);
   useEffect(()=>{
     if(hidden)return;
     if(document.visibilityState==="hidden"||!navigator.onLine){markHidden();conceal();return;}
@@ -76,7 +86,10 @@ export function TargetHomeAttention({language,openable,onRefusal,generation}:{
     setState({kind:"loading"});
     void readHomeAttention(controller.signal,targetAppFetch,language).then(result=>{
       if(controller.signal.aborted)return;
-      if(result.status==="ok")setState({kind:"ready",page:result.page});
+      if(result.status==="ok"){
+        setState({kind:"ready",page:result.page});
+        setUndo(old=>old&&old.expectedHideEpoch!==result.page.attentionEpoch?null:old);
+      }
       else{setState({kind:"error"});setUndo(null);
         if(result.status==="unauthorized")onRefusal();}
     }).catch(()=>{if(!controller.signal.aborted)setState({kind:"error"});});
@@ -93,7 +106,9 @@ export function TargetHomeAttention({language,openable,onRefusal,generation}:{
     return controller;
   };
   const finish=(controller:AbortController)=>{
-    if(actionRef.current===controller){actionRef.current=null;setBusy(false);}
+    if(actionRef.current===controller){actionRef.current=null;setBusy(false);
+      if(refreshPending.current){refreshPending.current=false;reload();}
+    }
   };
   async function more(){
     if(state.kind!=="ready")return;
