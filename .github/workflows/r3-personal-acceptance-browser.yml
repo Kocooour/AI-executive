@@ -91,8 +91,10 @@ jobs:
       - name: Flag profile, read-queue and native BFCache evidence decision tests
         run: node --experimental-loader ./tests/ts-loader.mjs --test tests/target-personal-profile.test.mjs tests/target-app-fetch.test.mjs tests/target-personal-native-bfcache-gate.test.mjs
       - name: Build isolated UI
+        id: build
         run: pnpm build
       - name: Chromium
+        id: chromium
         run: bash scripts/ci-install-chromium.sh
       - name: 390px and desktop acceptance incl. My Plan, Search and ACL (real SQLite)
         # Each filename is explicit: Playwright CLI filters even with testMatch.
@@ -100,6 +102,7 @@ jobs:
           set -o pipefail
           pnpm exec playwright test e2e/target-personal-acceptance.spec.ts e2e/target-personal-my-plan.spec.ts e2e/target-personal-search-open.spec.ts e2e/target-personal-create.spec.ts e2e/target-personal-capture-undo.spec.ts --project=desktop 2>&1 | tee "$RUNNER_TEMP/lumi-personal-browser.log"
       - name: E-1 Home attention on real isolated SQLite (390/1280, fixed Prague clock)
+        if: ${{ !cancelled() && steps.build.outcome == 'success' && steps.chromium.outcome == 'success' }}
         env:
           LUMI_TARGET_PERSONAL_ACCEPTANCE_E2E: "false"
           LUMI_TARGET_ATTENTION_E2E: "true"
@@ -107,6 +110,7 @@ jobs:
           set -o pipefail
           pnpm exec playwright test e2e/target-home-attention.spec.ts --project=desktop 2>&1 | tee -a "$RUNNER_TEMP/lumi-personal-browser.log"
       - name: E-1 off-profile regression (390/1280)
+        if: ${{ !cancelled() && steps.build.outcome == 'success' && steps.chromium.outcome == 'success' }}
         env:
           LUMI_TARGET_PERSONAL_ACCEPTANCE_E2E: "false"
           LUMI_TARGET_ATTENTION_E2E: "off"
@@ -114,10 +118,12 @@ jobs:
           set -o pipefail
           pnpm exec playwright test e2e/target-home-attention.spec.ts --project=desktop 2>&1 | tee -a "$RUNNER_TEMP/lumi-personal-browser.log"
       - name: Real Back / BFCache, full reload and uncertain POST (real SQLite, 390/1280)
+        if: ${{ !cancelled() && steps.build.outcome == 'success' && steps.chromium.outcome == 'success' }}
         run: |
           set -o pipefail
           pnpm exec playwright test e2e/target-personal-bfcache.spec.ts --project=desktop 2>&1 | tee -a "$RUNNER_TEMP/lumi-personal-browser.log"
       - name: Native Chromium BFCache witness (no Playwright disable flag)
+        if: ${{ !cancelled() && steps.build.outcome == 'success' && steps.chromium.outcome == 'success' }}
         run: |
           set -o pipefail
           pnpm exec playwright test e2e/target-personal-native-bfcache.spec.ts --project=desktop 2>&1 | tee -a "$RUNNER_TEMP/lumi-personal-browser.log"
