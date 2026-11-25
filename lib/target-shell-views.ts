@@ -114,8 +114,9 @@ export function targetMobileMoreCurrentViews(navigation:ShellNavigationModel):Sh
     view!=="MyPlanPreview"&&view!=="Calendar"&&view!=="Projects");
 }
 
-/** Historical Gmail belongs to the former Inbox until *target* Inbox is activated.
- * Once active, new Inbox never has the old Gmail or legacy create action. */
-export function legacyInboxMailViewFor(personalV1:boolean,targetInboxEnabled:boolean):"Inbox"|"LegacyInbox"{
-  return personalV1&&targetInboxEnabled?"LegacyInbox":"Inbox";
+/** #501: Gmail is live service data, not Archive. Its current reader stays
+ * inside the current Inbox while old LegacyInbox addresses redirect away.
+ * The off-mode Inbox continues to own the very same reader as before. */
+export function legacyInboxMailViewFor(_personalV1:boolean,_targetInboxEnabled:boolean):"Inbox"{
+  return "Inbox";
 }
