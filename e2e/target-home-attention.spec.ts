@@ -156,6 +156,18 @@ for(const width of [390,1280]){
       await expect(draft).toHaveCount(0);
       await expect(firstRow.getByRole("button",{name:"Odložit",exact:true})).toBeFocused();
     }finally{page.off("request",countRead);}
+    // The morning preset is device-local, not a fixed 24-hour offset.
+    await firstRow.getByRole("button",{name:"Odložit",exact:true}).click();
+    const morning=await page.evaluate(()=>{
+      const d=new Date();d.setDate(d.getDate()+1);d.setHours(8,0,0,0);return d.getTime();
+    });
+    const morningWrite=page.waitForResponse(r=>isPath(r.url(),"/api/target-staging/attention/command")&&
+      r.request().method()==="PATCH"&&r.status()===200);
+    await firstRow.getByRole("button",{name:"Zítra 8:00",exact:true}).click();
+    expect((await morningWrite).request().postDataJSON().snoozedUntilMs).toBe(morning);
+    await expect(firstRow).toHaveCount(0,{timeout:25_000});
+    await panel(page).getByRole("button",{name:"Zpět: odložení úkolu "+titles[0],exact:true}).click();
+    await expect(firstRow).toBeVisible({timeout:25_000});
     // Hold the acknowledged real commit across a routine session poll and
     // the bounded PATCH deadline. Only the original receipt may establish Undo.
     let release=()=>{};const barrier=new Promise<void>(r=>{release=r;});
@@ -214,6 +226,13 @@ for(const width of [390,1280]){
     await page.reload();
     await expect(panel(page)).toBeVisible();
     await expect(row(page,titles[0])).toHaveCount(0);
+    // A real detail mutation emits targetChange while another snooze draft
+    // is open. Its removal is deferred until the editor is explicitly closed.
+    const otherRow=row(page,titles[2]);
+    await otherRow.getByRole("button",{name:"Odložit",exact:true}).click();
+    const otherDraft=otherRow.locator('input[type="datetime-local"]');
+    const otherValue=localInput(Math.ceil((now+25*60_000)/60_000)*60_000);
+    await otherDraft.fill(otherValue);
     await row(page,titles[1]).getByRole("button",{name:"Otevřít úkol "+titles[1]}).click();
     const detail=page.getByTestId("target-detail");
     await expect(detail).toBeVisible();
@@ -232,7 +251,11 @@ for(const width of [390,1280]){
     // Match the actual responsive control, not the desktop-only label.
     await detail.locator("button.inspectorClose").click({timeout:10_000});
     await expect(detail).toHaveCount(0);
-    await expect(row(page,titles[1])).toHaveCount(0);
+    await expect(otherDraft).toHaveValue(otherValue);
+    const afterInvalidation=page.waitForResponse(r=>isPath(r.url(),attentionPath)&&r.status()===200);
+    await otherRow.getByRole("button",{name:"Zrušit",exact:true}).click();
+    await afterInvalidation;
+    await expect(row(page,titles[1])).toHaveCount(0,{timeout:25_000});
     await expect(row(page,titles[4])).toBeVisible();
     // Hold a preview with no HTTP response. A concurrently completed task
     // must disappear when the verified poll runs; the expired preview must
