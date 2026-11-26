@@ -850,7 +850,8 @@ for(const width of [390,1280]){
     });
     let areaRequests=0,inboxWakeReads=0;
     let waking=false,taskPosts=0;
-    let firstWake:"area"|"inbox"|null=null,releaseWake=()=>{};
+    const wake:{first:"area"|"inbox"|null}={first:null};
+    let releaseWake=()=>{};
     let released=false,earlyDispatch=false;
     const barrier=new Promise<void>(resolve=>{releaseWake=()=>{released=true;resolve();};});
     // Hold whichever consumer wins the actual queue admission. The other
@@ -858,7 +859,7 @@ for(const width of [390,1280]){
     // No fixed ordering or sleep is used to manufacture the witness.
     const holdWake=async(kind:"area"|"inbox",route:import("@playwright/test").Route)=>{
       if(!waking)return route.continue();
-      if(firstWake===null){firstWake=kind;await barrier;}
+      if(wake.first===null){wake.first=kind;await barrier;}
       else if(!released)earlyDispatch=true;
       await route.continue().catch(()=>{});
     };
@@ -911,8 +912,9 @@ for(const width of [390,1280]){
       waking=true;
       await page.evaluate(()=>window.dispatchEvent(
         new PageTransitionEvent("pageshow",{persisted:false})));
-      await expect.poll(()=>firstWake,{timeout:10_000}).not.toBeNull();
-      const first=firstWake as "area"|"inbox";
+      await expect.poll(()=>wake.first,{timeout:10_000}).not.toBeNull();
+      const first=wake.first;
+      if(first!=="area"&&first!=="inbox")throw Error("Missing real wake admission witness");
       const second=first==="area"?"inbox":"area";
       // The mark comes from waiting.push in the actual queue, not from a
       // fetch mock. At this point the first CDP GET is held at the route.
