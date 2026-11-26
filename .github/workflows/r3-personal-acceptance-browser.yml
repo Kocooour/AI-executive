@@ -51,6 +51,8 @@ jobs:
       CI: "true"
       NEXT_TELEMETRY_DISABLED: "1"
       NEXT_PUBLIC_LUMI_DESIGN_V1_PREVIEW: "1"
+      # Only this isolated test build records content-free queue wait marks.
+      NEXT_PUBLIC_LUMI_E2E_QUEUE_WITNESS: "1"
       E2E_SKIP_BUILD: "1"
       E2E_PORT: "3130"
       LUMI_TARGET_PERSONAL_ACCEPTANCE_E2E: "true"
