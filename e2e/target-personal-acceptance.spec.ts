@@ -850,12 +850,24 @@ for(const width of [390,1280]){
     });
     let areaRequests=0,inboxWakeReads=0;
     let waking=false,taskPosts=0;
+    let firstWake:"area"|"inbox"|null=null,releaseWake=()=>{};
+    let released=false,earlyDispatch=false;
+    const barrier=new Promise<void>(resolve=>{releaseWake=()=>{released=true;resolve();};});
+    // Hold whichever consumer wins the actual queue admission. The other
+    // must enter the real FIFO waiting list before we let the first GET run.
+    // No fixed ordering or sleep is used to manufacture the witness.
+    const holdWake=async(kind:"area"|"inbox",route:import("@playwright/test").Route)=>{
+      if(!waking)return route.continue();
+      if(firstWake===null){firstWake=kind;await barrier;}
+      else if(!released)earlyDispatch=true;
+      await route.continue().catch(()=>{});
+    };
     await page.route("**/api/target-staging/notes/create-targets",route=>{
       areaRequests++;
       // The first GET is a real browser request, held at the HTTP route.
       // Only the app's pagehide listener/AbortController may cancel it.
       if(areaRequests===1)return;
-      return route.continue();
+      return holdWake("area",route);
     });
     // The badge always fetches /inbox?limit=1. A pathname-only glob does
     // NOT match its query string in Playwright, so that would falsely report
@@ -863,12 +875,7 @@ for(const width of [390,1280]){
     await page.route(/\/api\/target-staging\/inbox\?(?:.*)$/,async route=>{
       if(!waking)return route.continue();
       inboxWakeReads++;
-      // Both readers resume from the same wake. The shared FIFO may admit
-      // either reader first depending on which verified session resolves
-      // first. Delay the actual Inbox response; don't require one scheduler
-      // ordering as evidence of successful authorization.
-      await new Promise(resolve=>setTimeout(resolve,220));
-      await route.continue().catch(()=>{});
+      await holdWake("inbox",route);
     });
     page.on("request",request=>{
       if(request.method()==="POST"&&
@@ -896,9 +903,28 @@ for(const width of [390,1280]){
         .toBe("net::ERR_ABORTED");
       expect(original.finished).toBeUndefined();
       expect(areaRequests,"no unauthorized Area GET while hidden").toBe(1);
+      await page.evaluate(()=>{
+        performance.clearMarks("lumi-e2e:queue-wait:area");
+        performance.clearMarks("lumi-e2e:queue-wait:inbox");
+      });
+      const wakeMark=order;
       waking=true;
       await page.evaluate(()=>window.dispatchEvent(
         new PageTransitionEvent("pageshow",{persisted:false})));
+      await expect.poll(()=>firstWake,{timeout:10_000}).not.toBeNull();
+      const first=firstWake as "area"|"inbox";
+      const second=first==="area"?"inbox":"area";
+      // The mark comes from waiting.push in the actual queue, not from a
+      // fetch mock. At this point the first CDP GET is held at the route.
+      await expect.poll(()=>page.evaluate(name=>
+        performance.getEntriesByName("lumi-e2e:queue-wait:"+name,"mark").length,second),
+        {timeout:8_000,message:"other wake consumer really waits in the shared FIFO"}).toBeGreaterThan(0);
+      expect(earlyDispatch,"second consumer must not bypass the occupied queue").toBe(false);
+      await expect.poll(()=>events.some(e=>e.order>wakeMark&&e.path===(first==="area"?areaPath:inboxPath)))
+        .toBe(true);
+      expect(events.some(e=>e.order>wakeMark&&e.path===(second==="area"?areaPath:inboxPath)),
+        "queued consumer has not reached HTTP before release").toBe(false);
+      releaseWake();
       const select=page.getByTestId("target-private-task-area");
       // The only user action above was opening Capture; no Retry, Close, or
       // reopen follows the wake. The chooser must repair itself.
@@ -906,8 +932,8 @@ for(const width of [390,1280]){
         .toHaveCount(1,{timeout:25000});
       await expect.poll(()=>areaRequests).toBe(2);
       await expect.poll(()=>inboxWakeReads).toBeGreaterThan(0);
-      // CDP below independently witnesses both authorized network reads
-      // after cancellation, rather than imposing an incidental FIFO order.
+      // CDP independently verifies both real authorized GETs after the
+      // witnessed contention, without imposing an incidental FIFO order.
       const fresh=events.filter(e=>e.path===areaPath&&e.order>original.order);
       expect(fresh,"exactly one automatic replacement Area GET").toHaveLength(1);
       const replacement=fresh[0];
@@ -917,7 +943,7 @@ for(const width of [390,1280]){
       expect(replacement.failed).toBeUndefined();
       expect(replacement.disk).toBe(false);
       expect(replacement.serviceWorker).toBe(false);
-      const badge=events.filter(e=>e.path===inboxPath&&e.order>original.failed!);
+      const badge=events.filter(e=>e.path===inboxPath&&e.order>wakeMark);
       expect(badge.length,"Inbox resumes automatically during the same wake").toBeGreaterThan(0);
       await expect.poll(()=>badge.some(e=>e.status===200&&e.finished!==undefined&&e.failed===undefined),
         {timeout:15_000}).toBe(true);
@@ -928,12 +954,19 @@ for(const width of [390,1280]){
       expect(authorized.length,
         "fresh completed owner session HTTP 200 must precede Area replacement")
         .toBeGreaterThan(0);
+      const successfulBadge=badge.find(e=>e.status===200&&e.finished!==undefined&&e.failed===undefined)!;
+      expect(successfulBadge.disk).toBe(false);
+      expect(successfulBadge.serviceWorker).toBe(false);
+      expect(first==="area"?replacement.order:successfulBadge.order)
+        .toBeLessThan(first==="area"?successfulBadge.order:replacement.order);
+      expect(earlyDispatch).toBe(false);
       await expect(select).toHaveValue("");
       await select.selectOption({label:store.seed.areaTitle});
       await expect(page.getByTestId("target-private-task-form").locator("input"))
         .toHaveValue("");
       expect(taskPosts,"restoring the Area must never issue CREATE").toBe(0);
     }finally{
+      releaseWake();
       await cdp.detach();
     }
   });
