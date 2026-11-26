@@ -168,7 +168,7 @@ test("Expired snooze replacement expects two lifecycle epoch increments before U
 test("Home explanation is required for requested language and bound to exact ordered candidates",async()=>{
   const data=page();
   const key=data.items[0].attentionKey;
-  const explanation={attentionKey:key,reason:"Po termínu · 1. 11. 2026",why:"Zdroj: termín úkolu. Vyhodnoceno: 8. 11. 2026 (Europe/Prague)."};
+  const explanation={attentionKey:key,reason:"Po termínu · 1. 11. 2026",why:"Zdroj: termín úkolu. Vyhodnoceno: 8. 11. 2026."};
   const decorated={...data,explanationLanguage:"cs",explanations:[explanation]};
   const good=recorder(()=>json(decorated));
   const r=await readHomeAttention(signal(),good.fetcher,"cs");
@@ -189,13 +189,15 @@ test("Server explanation derives source and time from pinned candidate without t
   const epoch=Date.parse("2026-11-08T07:00:00Z");
   for(const [rule,cs,en] of [
     ["deadline_overdue","Po termínu","Overdue"],
-    ["deadline_soon","Blíží se termín","Due soon"],
+    ["deadline_soon","Termín do 48 hodin","Due within 48 hours"],
     ["planned_date_passed","Propadlé Kdy","Planned day passed"]]){
-    const candidate=item({reasonCode:rule,ruleId:rule,title:"DO NOT COPY"});
+    const candidate=item({reasonCode:rule,ruleId:rule,thresholdHours:rule==="deadline_soon"?48:0,title:"DO NOT COPY"});
     for(const [language,reason] of [["cs",cs],["en",en]]){
       const result=explainAttention(candidate,epoch,"Europe/Prague",language);
       assert.ok(result.reason.startsWith(reason));
-      assert.match(result.why,/Europe\/Prague/);
+      assert.doesNotMatch(result.why,/[A-Z][a-z]+\/[A-Z]/);
+      assert.doesNotMatch(result.why,/Zdroj: [^.(]+:|Source: [^.(]+:/);
+      assert.doesNotMatch(result.why,/\bUTC\b/);
       assert.match(result.why,/08:00|8:00/);
       assert.doesNotMatch(JSON.stringify(result),/DO NOT COPY/);
       assert.equal(result.attentionKey,candidate.attentionKey);
