@@ -190,8 +190,9 @@ export function TargetHomeAttention({language,openable,onRefusal,generation}:{
       const result=await readMoreHomeAttention(state.page,controller.signal);
       if(controller.signal.aborted||!live())return;
       if(result.status==="ok"){setState({kind:"ready",page:result.page});setExpanded(true);}
-      else if(result.status!=="ok"){setUndo(null);reload();if(result.status==="unauthorized")onRefusal();}
-    }catch{if(!controller.signal.aborted)reload();}
+      else{setUndo(null);setState({kind:"error"});setExpanded(false);
+        if(result.status==="unauthorized")onRefusal();}
+    }catch{if(!controller.signal.aborted){setState({kind:"error"});setUndo(null);setExpanded(false);}}
     finally{finish(controller);}
   }
   async function hide(item:AttentionItem,action:"snooze"|"dismiss",until:number|null){
@@ -275,7 +276,8 @@ export function TargetHomeAttention({language,openable,onRefusal,generation}:{
               min={localMinute(Math.floor(Date.now()/60_000)*60_000+60_000)} max={localMinute(Date.now()+30*DAY)}
               onChange={event=>setCustom(event.target.value)}/></label>
             <button type="button" disabled={busy||!custom} onClick={()=>void hide(item,"snooze",new Date(custom).getTime())}>{t.confirm}</button>
-            <button type="button" disabled={busy} onClick={closePicker}>{t.cancel}</button>
+            <button type="button" disabled={busy} onClick={event=>{const row=event.currentTarget.closest("li");closePicker();
+              row?.querySelector<HTMLButtonElement>("button[aria-expanded]")?.focus();}}>{t.cancel}</button>
           </div>}
         </div>
       </li>;
