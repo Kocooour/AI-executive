@@ -1,0 +1,10 @@
+/* E-2 task alerts panel: wraps at 390px, no horizontal scroll. */
+.targetPushSettings h3{margin:1rem 0 .4rem;font-size:1rem}
+.targetPushQuiet{display:flex;flex-wrap:wrap;gap:.6rem;align-items:flex-end;min-width:0}
+.targetPushQuiet label{display:flex;flex-direction:column;gap:.25rem;min-width:0}
+.targetPushQuiet input[type="text"]{min-width:0;width:12rem;max-width:100%}
+.targetPushQuiet button{min-height:44px}
+.targetPushDevices{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:.4rem}
+.targetPushDevices li{display:flex;align-items:center;justify-content:space-between;gap:.6rem;flex-wrap:wrap}
+.targetPushDevices button{min-height:44px}
+.targetPushSettings small{display:block}
