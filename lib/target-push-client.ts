@@ -148,3 +148,18 @@ export function base64UrlToBytes(value:string):Uint8Array<ArrayBuffer> {
   for(let i=0;i<binary.length;i++)out[i]=binary.charCodeAt(i);
   return out;
 }
+
+/** E-2: on sign-out, stop task alerts on THIS device. Unsubscribing the browser's
+ * target push subscription ends delivery at the push service itself; the next
+ * pass then sees 404/410 and revokes the device. Best effort, bounded, never throws. */
+export async function silenceTargetPushOnThisDevice(timeoutMs=3000):Promise<void> {
+  if(typeof window==="undefined"||!("serviceWorker" in navigator)||!("PushManager" in window))return;
+  const work=(async()=>{
+    const config=await readTargetPushConfig();
+    if(config.ok===false||!config.value.publicKey)return;
+    const registration=await navigator.serviceWorker.getRegistration();
+    const subscription=await registration?.pushManager.getSubscription();
+    if(subscription&&subscribedWithKey(subscription,config.value.publicKey))await subscription.unsubscribe();
+  })().catch(()=>undefined);
+  await Promise.race([work,new Promise<void>(resolve=>setTimeout(resolve,timeoutMs))]);
+}

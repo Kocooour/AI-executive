@@ -54,6 +54,7 @@ import { useBackups } from "./hooks/use-backups";
 import { usePasskeys } from "./hooks/use-passkeys";
 import { useSignIn } from "./hooks/use-sign-in";
 import { useNotifications } from "./hooks/use-notifications";
+import { silenceTargetPushOnThisDevice } from "../../lib/target-push-client";
 import { useAppBadge } from "./hooks/use-app-badge";
 import { useSync } from "./hooks/use-sync";
 import { localizeServerError } from "../../lib/server-errors";
@@ -1831,6 +1832,8 @@ export function useLumiApp(options: { targetDetails?: boolean; targetUnified?: b
         postToTabs({ type: "sign-out-cancelled", from: tabId.current });
         return;
       }
+      // E-2: no task alert may reach this device after sign-out (bounded, best effort).
+      await silenceTargetPushOnThisDevice();
       const result = await runSignOut({
         version: () => localDataVersion.current,
         sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),

@@ -4,6 +4,7 @@ import { existsSync, mkdtempSync, realpathSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { defineConfig, devices } from "@playwright/test";
+import { generateVAPIDKeys } from "web-push";
 import { targetPersonalV1Env } from "./lib/target-personal-profile";
 
 // Browser tests run against a production build of this checkout with its own port, data
@@ -19,6 +20,10 @@ const attentionMode=process.env.LUMI_TARGET_ATTENTION_E2E;
 const attentionTest=attentionMode==="true";
 const attentionOffTest=attentionMode==="off";
 if(attentionMode&&!attentionTest&&!attentionOffTest)throw Error("Invalid E-1 test mode");
+// E-2: real target push to a loopback fake push service, on top of the isolated
+// E-1 store and fixed clock. Never a real push service, device or key.
+const pushTest=process.env.LUMI_TARGET_PUSH_E2E==="true";
+if(pushTest&&!attentionTest)throw Error("LUMI_TARGET_PUSH_E2E requires LUMI_TARGET_ATTENTION_E2E=true");
 if (!process.env.LUMI_E2E_RUN_DIR) {
   process.env.LUMI_E2E_RUN_DIR = mkdtempSync(path.join(os.tmpdir(), "lumi-e2e-"));
   process.env.LUMI_E2E_PASSWORD_HASH = execFileSync(process.execPath, [path.join(__dirname, "scripts", "hash-password.mjs")], { input: `${e2ePassword}\n` })
@@ -47,6 +52,13 @@ if (!process.env.LUMI_E2E_RUN_DIR) {
     },
   });
   if(attentionTest)writeFileSync(path.join(process.env.LUMI_E2E_RUN_DIR,"attention-clock.json"),JSON.stringify(Date.now()),{mode:0o600});
+  if(pushTest){
+    // Below the ephemeral range and apart from the CalDAV/Gmail mock ranges.
+    process.env.LUMI_E2E_PUSH_PORT=String(32_000+randomInt(700));
+    const vapid=generateVAPIDKeys();
+    process.env.LUMI_E2E_PUSH_VAPID_PUBLIC=vapid.publicKey;
+    process.env.LUMI_E2E_PUSH_VAPID_PRIVATE=vapid.privateKey;
+  }
   // Opt-in personal acceptance: a REAL isolated target SQLite store inside the run dir (never a legacy or
   // production path), created once per run; workers inherit the settings through the environment.
   if (attentionTest || process.env.LUMI_TARGET_PERSONAL_ACCEPTANCE_E2E === "true" || process.env.LUMI_TARGET_INBOX_E2E === "true") {
@@ -141,7 +153,7 @@ export default defineConfig({
     // The webServer env below is run-wide: real-store opt-in must only run
     // these five isolated acceptance specs, never other tests.
     { name: "desktop", use: { ...devices["Desktop Chrome"], storageState: sessionFile }, dependencies: ["setup"],
-      ...(attentionTest||attentionOffTest?{testMatch:process.env.LUMI_TARGET_ATTENTION_NATIVE_E2E==="true"?/target-personal-native-bfcache\.spec\.ts/:/target-home-attention\.spec\.ts/}:personalAcceptanceTest || inboxAcceptanceTest ? { testMatch: /(?:target-personal-(?:acceptance|my-plan|search-open|create|capture-undo|bfcache|native-bfcache)|target-inbox-(?:acceptance|c3b-acceptance))\.spec\.ts/ } : {}) },
+      ...(pushTest?{testMatch:/target-push-delivery\.spec\.ts/}:attentionTest||attentionOffTest?{testMatch:process.env.LUMI_TARGET_ATTENTION_NATIVE_E2E==="true"?/target-personal-native-bfcache\.spec\.ts/:/target-home-attention\.spec\.ts/}:personalAcceptanceTest || inboxAcceptanceTest ? { testMatch: /(?:target-personal-(?:acceptance|my-plan|search-open|create|capture-undo|bfcache|native-bfcache)|target-inbox-(?:acceptance|c3b-acceptance))\.spec\.ts/ } : {}) },
   ],
   webServer: {
     command: `${process.env.E2E_SKIP_BUILD ? "" : "pnpm build && "}pnpm start --port ${port} --hostname 127.0.0.1`,
@@ -320,6 +332,15 @@ export default defineConfig({
         AI_EXECUTIVE_TARGET_STAGING_HTTP_ATTENTION_WRITE_ENABLED:"true",
         LUMI_E2E_ATTENTION_CLOCK:path.join(runDir,"attention-clock.json"),
         NODE_OPTIONS:((process.env.NODE_OPTIONS||"")+" --require="+JSON.stringify(path.join(__dirname,"e2e/attention-test-clock.cjs"))).trim(),
+      }:{}),
+      ...(pushTest?{
+        AI_EXECUTIVE_TARGET_STAGING_HTTP_NOTIFICATIONS_ENABLED:"true",
+        AI_EXECUTIVE_TARGET_STAGING_HTTP_NOTIFICATIONS_WRITE_ENABLED:"true",
+        AI_EXECUTIVE_TARGET_VAPID_PUBLIC_KEY:process.env.LUMI_E2E_PUSH_VAPID_PUBLIC,
+        AI_EXECUTIVE_TARGET_VAPID_PRIVATE_KEY:process.env.LUMI_E2E_PUSH_VAPID_PRIVATE,
+        VAPID_SUBJECT:"mailto:e2e@example.test",
+        // Honoured only with AI_EXECUTIVE_E2E=true; deploy-safe refuses LUMI_E2E_* keys.
+        LUMI_E2E_TARGET_PUSH_TEST_ORIGIN:"http://127.0.0.1:"+process.env.LUMI_E2E_PUSH_PORT,
       }:{}),
       ...(attentionOffTest?{AI_EXECUTIVE_TARGET_UI_ENABLED:"false",AI_EXECUTIVE_TARGET_STAGING_HTTP_ENABLED:"false",AI_EXECUTIVE_TARGET_STAGING_HTTP_ATTENTION_ENABLED:"false",AI_EXECUTIVE_TARGET_STAGING_HTTP_ATTENTION_WRITE_ENABLED:"false"}:{}),
       AI_EXECUTIVE_PASSWORD_HASH: passwordHash,
