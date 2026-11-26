@@ -89,16 +89,73 @@ for(const width of [390,1280]){
     await expect(panel(page)).not.toContainText(/E1 (completed|foreign|shared)/);
     await row(page,titles[0]).locator("summary").click();
     await expect(row(page,titles[0])).toContainText("Zdroj: termín úkolu");
-    await expect(row(page,titles[0])).toContainText(zone);
+    await expect(row(page,titles[0])).not.toContainText(zone);
+    await expect(row(page,titles[0]).locator("details")).not.toContainText(/Zdroj: termín úkolu:/);
     await panel(page).getByRole("button",{name:"Další upozornění"}).click();
     await expect(items(page)).toHaveCount(6);
     await expect(items(page).locator("strong")).toHaveText(titles);
     await expect(row(page,titles[4])).toHaveAttribute("data-rule","deadline_soon");
+    await expect(row(page,titles[4])).toContainText("Termín do 48 hodin");
     await expect(row(page,titles[5])).toHaveAttribute("data-rule","planned_date_passed");
     await row(page,titles[5]).locator("summary").click();
     await expect(row(page,titles[5])).toContainText("Zdroj: osobní plán");
+    // A real verified poll must keep expanded DOM, open Why and focus
+    // throughout the new pinned cursor chain, including while GET is held.
+    const summary=row(page,titles[5]).locator("summary");
+    await summary.focus();
+    const attentionPath="/api/target-staging/attention";
+    let releaseRead=()=>{},readHeld=false;
+    const readBarrier=new Promise<void>(r=>{releaseRead=r;});
+    const holdRead=async(route:Route)=>{
+      if(!readHeld){readHeld=true;await readBarrier;}
+      await route.continue().catch(()=>{});
+    };
+    const readPattern=/\/api\/target-staging\/attention\?.*$/;
+    await page.route(readPattern,holdRead);
+    try{
+      const verified=page.waitForResponse(r=>isPath(r.url(),session)&&r.status()===200);
+      await page.clock.fastForward(61_000);await verified;
+      await expect.poll(()=>readHeld).toBe(true);
+      await expect(items(page)).toHaveCount(6);
+      await expect(summary).toBeFocused();
+      await expect(row(page,titles[5]).locator("details")).toHaveAttribute("open","");
+      await expect(page.getByText("Načítám upozornění…",{exact:true})).toHaveCount(0);
+      const appended=page.waitForResponse(r=>isPath(r.url(),attentionPath)&&
+        new URL(r.url()).searchParams.has("cursor")&&r.status()===200);
+      releaseRead();await appended;
+      await expect(items(page)).toHaveCount(6);
+      await expect(summary).toBeFocused();
+      await expect(row(page,titles[5]).locator("details")).toHaveAttribute("open","");
+    }finally{releaseRead();await page.unroute(readPattern,holdRead);}
     await panel(page).getByRole("button",{name:"Méně upozornění"}).click();
     await expect(items(page)).toHaveCount(5);
+    // The picker is a local draft. No attention GET may begin until it
+    // closes; the actual session poll and overview revalidation still run.
+    const firstRow=row(page,titles[0]);
+    await firstRow.getByRole("button",{name:"Odložit",exact:true}).click();
+    const draft=firstRow.locator('input[type="datetime-local"]');
+    const drafted=localInput(Math.ceil((now+20*60_000)/60_000)*60_000);
+    await draft.fill(drafted);await draft.focus();
+    await expect(firstRow.getByRole("button",{name:"Zítra 8:00",exact:true})).toBeVisible();
+    expect(await draft.getAttribute("min")).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/);
+    expect(await draft.getAttribute("max")).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/);
+    let pickerReads=0;
+    const countRead=(request:import("@playwright/test").Request)=>{
+      if(request.method()==="GET"&&isPath(request.url(),attentionPath))pickerReads++;
+    };
+    page.on("request",countRead);
+    try{
+      await poll(page);
+      await expect(draft).toHaveValue(drafted);
+      await expect(draft).toBeFocused();
+      await expect(items(page)).toHaveCount(5);
+      expect(pickerReads).toBe(0);
+      const refreshed=page.waitForResponse(r=>isPath(r.url(),attentionPath)&&r.status()===200);
+      await firstRow.getByRole("button",{name:"Zrušit",exact:true}).click();
+      await refreshed;
+      await expect(draft).toHaveCount(0);
+      await expect(firstRow.getByRole("button",{name:"Odložit",exact:true})).toBeFocused();
+    }finally{page.off("request",countRead);}
     // Hold the acknowledged real commit across a routine session poll and
     // the bounded PATCH deadline. Only the original receipt may establish Undo.
     let release=()=>{};const barrier=new Promise<void>(r=>{release=r;});
@@ -123,18 +180,18 @@ for(const width of [390,1280]){
       expect(reply.request().postData()).toBe(original);
       expect(await reply.json()).toEqual({status:"committed"});
       await expect(row(page,titles[0])).toHaveCount(0);
-      await expect(panel(page).getByRole("button",{name:"Zpět",exact:true})).toBeVisible();
+      await expect(panel(page).getByRole("button",{name:/^Zpět: (skrytí|odložení) úkolu /})).toBeVisible();
       expect(patches).toBe(1);
       release();
     }finally{release();await page.unroute(pattern,hold);}
     // A further successful poll after acknowledgement cannot erase Undo.
     await poll(page);
-    await expect(panel(page).getByRole("button",{name:"Zpět",exact:true})).toBeVisible();
-    await panel(page).getByRole("button",{name:"Zpět",exact:true}).click();
+    await expect(panel(page).getByRole("button",{name:/^Zpět: (skrytí|odložení) úkolu /})).toBeVisible();
+    await panel(page).getByRole("button",{name:/^Zpět: (skrytí|odložení) úkolu /}).click();
     await expect(row(page,titles[0])).toBeVisible();
-    await expect(panel(page).getByText("Upozornění bylo obnoveno.")).toBeVisible();
+    await expect(page.locator(".targetHomeAttentionFeedback").getByText("Upozornění bylo obnoveno.")).toBeVisible();
     await page.clock.fastForward(8_001);
-    await expect(panel(page).getByText("Upozornění bylo obnoveno.")).toHaveCount(0);
+    await expect(page.locator(".targetHomeAttentionFeedback").getByText("Upozornění bylo obnoveno.")).toHaveCount(0);
     // Real snooze through the UI; shift the isolated server clock, then
     // re-read without altering the actual stored snooze row.
     const until=Math.ceil((now+10*60_000)/60_000)*60_000;
@@ -142,7 +199,7 @@ for(const width of [390,1280]){
     await row(page,titles[0]).locator('input[type="datetime-local"]').fill(localInput(until));
     await row(page,titles[0]).getByRole("button",{name:"Potvrdit",exact:true}).click();
     await expect(row(page,titles[0])).toHaveCount(0);
-    await expect(panel(page).getByText("Upozornění bylo upraveno.")).toBeVisible();
+    await expect(page.locator(".targetHomeAttentionFeedback").getByText("Upozornění bylo upraveno.")).toBeVisible();
     setClock(until-1);
     await page.reload();
     await expect(panel(page)).toBeVisible();
@@ -230,7 +287,7 @@ for(const width of [390,1280]){
       await expect.poll(()=>lateFinished).toBe(true);
       await expect(panel(page)).toHaveCount(0);
       for(const title of titles)await expect(page.getByText(title,{exact:true})).toHaveCount(0);
-      await expect(panel(page).getByRole("button",{name:"Zpět",exact:true})).toHaveCount(0);
+      await expect(panel(page).getByRole("button",{name:/^Zpět: (skrytí|odložení) úkolu /})).toHaveCount(0);
     }finally{releaseRevoked();await page.unroute(pattern,holdRevoked);}
     await page.reload();
     await expect(page.locator('.authCard input[type="password"]')).toBeVisible();
