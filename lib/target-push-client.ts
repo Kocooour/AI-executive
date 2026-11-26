@@ -1,5 +1,7 @@
 /** E-2: browser client of the target notification settings, devices and test push.
- * Strict response parsing; nothing is stored in browser storage. */
+ * Strict response parsing; nothing is stored in browser storage. Reads share the
+ * app's single target read queue (they spawn server read children). */
+import {targetAppFetch} from "./target-app-fetch";
 export type TargetNotificationSettings={
   timeZone:string;attentionPush:boolean;quietStart:string;quietEnd:string;
   dailyLimit:number;paused:boolean;expectedSettingsRevision:number;
@@ -28,7 +30,7 @@ function failure(status:number):TargetPushFailure {
 }
 async function call(url:string,init:RequestInit,signal?:AbortSignal):Promise<{status:number;body:unknown}|null> {
   try{
-    const response=await fetch(url,{...init,cache:"no-store",credentials:"same-origin",redirect:"error",signal});
+    const response=await targetAppFetch(url,{...init,cache:"no-store",credentials:"same-origin",redirect:"error",signal});
     let body:unknown=null;
     try{body=await response.json();}catch{body=null;}
     return {status:response.status,body};
