@@ -238,13 +238,13 @@ export default function TargetPushSettings({language="cs",onActive}:{
       {draft&&<form className="targetPushQuiet" onSubmit={e=>{e.preventDefault();
         void save({quietStart:draft.quietStart,quietEnd:draft.quietEnd,timeZone:draft.timeZone.trim()},true);}}>
         <label>{t("Tiché hodiny od","Quiet hours from")}
-          <input type="time" data-testid="target-push-quiet-start" value={draft.quietStart} required
+          <input type="time" data-testid="target-push-quiet-start" disabled={busy} value={draft.quietStart} required
             onChange={e=>{draftDirty.current=true;setDraft({...draft,quietStart:e.target.value});}}/></label>
         <label>{t("do","until")}
-          <input type="time" data-testid="target-push-quiet-end" value={draft.quietEnd} required
+          <input type="time" data-testid="target-push-quiet-end" disabled={busy} value={draft.quietEnd} required
             onChange={e=>{draftDirty.current=true;setDraft({...draft,quietEnd:e.target.value});}}/></label>
         <label>{t("Časové pásmo","Time zone")}
-          <input type="text" data-testid="target-push-zone" value={draft.timeZone} maxLength={64} required
+          <input type="text" data-testid="target-push-zone" disabled={busy} value={draft.timeZone} maxLength={64} required
             autoComplete="off" spellCheck={false} onChange={e=>{draftDirty.current=true;setDraft({...draft,timeZone:e.target.value});}}/></label>
         {zone!==draft.timeZone&&<button type="button" onClick={()=>{draftDirty.current=true;setDraft({...draft,timeZone:zone});}}>
           {t("Použít pásmo tohoto zařízení ("+zone+")","Use this device's zone ("+zone+")")}</button>}
