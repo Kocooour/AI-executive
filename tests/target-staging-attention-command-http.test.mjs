@@ -505,3 +505,36 @@ test("R2d.4k: the PATCH current-rule check uses the server-side profile zone",as
     assert.equal(state(fx,"alice","z-over","deadline_soon",dWest),undefined);
   }finally{db.close();clientIp="10.52.21.3";}
 });
+
+test("E-1 pinned Home preview predicts exactly the committed actor epoch including overdue hygiene",async()=>{
+  const fx=fixture();clientIp="10.52.21.101";
+  const db=new DatabaseSync(fx.stage.databasePath);
+  try{
+    db.prepare("INSERT INTO personal_attention_states(user_id,task_id,rule_id,occurrence_on,state,snoozed_until_ms) VALUES ('alice','p-alice','deadline_soon',?,'dismissed',NULL)").run(OCC);
+    db.prepare("INSERT INTO personal_attention_states(user_id,task_id,rule_id,occurrence_on,state,snoozed_until_ms) VALUES ('alice','p-alice','deadline_overdue',?,'snoozed',?)").run(OCC,Date.now()-60000);
+  }finally{db.close();}
+  const revision=read(fx,"SELECT revision FROM tasks WHERE id='p-alice'").revision;
+  const before=epoch(fx,"alice");
+  assert.equal((await query("p-alice","deadline_overdue",OCC,owner(),"&sourceRevision="+(revision+1))).status,409);
+  const response=await query("p-alice","deadline_overdue",OCC,owner(),"&sourceRevision="+revision);
+  const body=await response.json();
+  assert.equal(response.status,200,JSON.stringify(body));
+  assert.equal(body.lifecycle,"active");
+  assert.equal(body.expectedHideEpoch,before+3);
+  const {expectedHideEpoch,lifecycle,snoozedUntilMs,...cas}=body;
+  const c={...cas,commandId:randomUUID(),taskId:"p-alice",ruleId:"deadline_overdue",occurrenceOn:OCC,action:"dismiss",snoozedUntilMs:null};
+  const patch=await call("PATCH",c);
+  assert.equal(patch.status,200,await patch.text());
+  assert.equal(epoch(fx,"alice"),expectedHideEpoch);
+  assert.equal(state(fx,"alice","p-alice","deadline_soon"),undefined);
+  assert.equal(state(fx,"alice","p-alice").state,"dismissed");
+  assert.equal((await call("POST",c)).status,200);
+  const undo=await command("p-alice","restore");
+  assert.equal(undo.expectedAttentionEpoch,expectedHideEpoch);
+  assert.equal((await call("PATCH",undo)).status,200);
+  assert.equal(state(fx,"alice","p-alice"),undefined);
+  for(const id of ["p-bob","s-other"]){
+    const rev=read(fx,"SELECT revision FROM tasks WHERE id=?",id).revision;
+    assert.equal((await query(id,"deadline_overdue",OCC,owner(),"&sourceRevision="+rev)).status,404,id);
+  }
+});

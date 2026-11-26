@@ -7,7 +7,8 @@
  * but both branches must prove private draft fencing and fresh authorization.
  */
 import {spawn} from "node:child_process";
-import {existsSync,mkdtempSync,readFileSync} from "node:fs";
+import {existsSync,mkdtempSync,readFileSync,realpathSync} from "node:fs";
+import {DatabaseSync} from "node:sqlite";
 import path from "node:path";
 import {randomUUID} from "node:crypto";
 import {chromium,test,expect} from "@playwright/test";
@@ -15,11 +16,12 @@ import {matchingNativeBackReasons,validateNativeBackEvidence} from "./target-per
 import {stopNativeChromeAndRemoveProfile,watchNativeChromeClose} from "./native-chrome-cleanup";
 import type {NativeBackEvidence,NativeCacheNotUsedEvent} from "./target-personal-native-bfcache-gate";
 
-test.skip(process.env.LUMI_TARGET_PERSONAL_ACCEPTANCE_E2E!=="true",
+const attentionNative=process.env.LUMI_TARGET_ATTENTION_E2E==="true"&&process.env.LUMI_TARGET_ATTENTION_NATIVE_E2E==="true";
+test.skip(process.env.LUMI_TARGET_PERSONAL_ACCEPTANCE_E2E!=="true"&&!attentionNative,
   "Requires isolated personal-v1 real-store profile");
 const dir=process.env.LUMI_E2E_RUN_DIR;
 const store=JSON.parse(process.env.LUMI_E2E_TARGET_STORE||"null") as
-  {seed?:{areaTitle?:string}}|null;
+  {directory:string;ownerUserId:string;seed?:{areaTitle?:string;areaId?:string}}|null;
 const origin="http://localhost:"+Number(process.env.E2E_PORT||3100);
 const strict=process.env.LUMI_REAL_BFCACHE_E2E==="true";
 const pause=(ms:number)=>new Promise<void>(resolve=>setTimeout(resolve,ms));
@@ -196,6 +198,7 @@ function snapshotExpression(secret:string){
 }
 for(const width of [390,1280]){
   test("native Chrome actual BFCache witness "+width+"px",async()=>{
+    test.skip(attentionNative,"dedicated attention native run");
     test.setTimeout(120000);
     const {profile,chrome,closeWatch,cdp}=await nativeBrowser(width);
     let phase="before initial navigation";
@@ -539,6 +542,103 @@ for(const width of [390,1280]){
       unsubscribeNotUsed();
       cdp.close();
       await stopNativeChromeAndRemoveProfile(chrome,closeWatch,profile);
+    }
+  });
+}
+
+
+// E-1: native Chrome, real browser Back (not a synthetic pageshow), with
+// attention flags enabled only in the separate isolated test server.
+for(const width of [390,1280]){
+  test("native Chrome Home attention privacy "+width+"px",async()=>{
+    test.skip(!attentionNative,"dedicated attention native run");
+    test.setTimeout(120_000);
+    if(!dir||!store?.seed?.areaId||store.ownerUserId!=="e2e-owner"||
+      !path.basename(realpathSync(dir)).startsWith("lumi-e2e-")||
+      realpathSync(store.directory)!==path.join(realpathSync(dir),"target-store"))
+      throw Error("Native attention requires a disposable store");
+    const oldId="e1-native-old-"+width, keepId="e1-native-keep-"+width;
+    const oldTitle="E1 native stale "+width, keepTitle="E1 native current "+width;
+    const clock=Number(JSON.parse(readFileSync(path.join(dir,"attention-clock.json"),"utf8")));
+    const database=path.join(store.directory,"lumi-target.sqlite");
+    const update=(complete:boolean)=>{
+      const db=new DatabaseSync(database);
+      try{
+        db.exec("PRAGMA foreign_keys=ON; PRAGMA busy_timeout=3000");
+        if(complete){
+          expect(db.prepare("UPDATE tasks SET status='completed',completed_at_ms=? WHERE id=? AND status='open'").run(clock,oldId).changes).toBe(1);
+        }else{
+          db.prepare("UPDATE tasks SET status='completed',completed_at_ms=? WHERE id LIKE 'e1-native-%' AND status='open'").run(clock);
+          const insert=db.prepare("INSERT INTO tasks(id,area_id,title,due_on) VALUES (?,?,?,?)");
+          insert.run(oldId,store!.seed!.areaId!,oldTitle,"2020-01-01");
+          insert.run(keepId,store!.seed!.areaId!,keepTitle,"2020-01-02");
+        }
+      }finally{db.close();}
+    };
+    update(false);
+    const {profile,chrome,closeWatch,cdp}=await nativeBrowser(width);
+    let order=0,mark=Infinity,writes=0;
+    type Read={path:string;start:number;status?:number;end?:number;cached?:boolean;failed?:boolean};
+    const reads:Read[]=[],pending=new Map<string,Read>();
+    const reasons:NativeCacheNotUsedEvent[]=[];
+    const off=[
+      cdp.on("Network.requestWillBeSent",e=>{
+        const url=new URL(e.request.url);
+        if(url.origin!==origin)return;
+        if(url.pathname.startsWith("/api/target-staging/attention")&&e.request.method==="PATCH")writes++;
+        if(e.request.method!=="GET"||!["/api/target-staging/session","/api/target-staging/attention"].includes(url.pathname))return;
+        const r={path:url.pathname,start:++order};reads.push(r);pending.set(e.requestId,r);
+      }),
+      cdp.on("Network.responseReceived",e=>{
+        const r=pending.get(e.requestId);if(!r)return;
+        r.status=e.response.status;r.cached=Boolean(r.cached||e.response.fromDiskCache||e.response.fromServiceWorker||e.response.fromPrefetchCache);
+      }),
+      cdp.on("Network.requestServedFromCache",e=>{const r=pending.get(e.requestId);if(r)r.cached=true;}),
+      cdp.on("Network.loadingFinished",e=>{const r=pending.get(e.requestId);if(r){r.end=++order;pending.delete(e.requestId);}}),
+      cdp.on("Network.loadingFailed",e=>{const r=pending.get(e.requestId);if(r){r.failed=true;pending.delete(e.requestId);}}),
+      cdp.on("Page.backForwardCacheNotUsed",e=>reasons.push({frameId:e.frameId,loaderId:e.loaderId,reasons:(e.notRestoredExplanations||[]).map((x:any)=>({reason:x.reason,type:x.type}))})),
+    ];
+    const selector='[data-testid="target-home-attention"]';
+    const visible=(title:string)=>cdp.eval<boolean>("document.querySelector("+JSON.stringify(selector)+")?.textContent.includes("+JSON.stringify(title)+")===true");
+    const snapshot=()=>cdp.eval<{shows:boolean[];documentToken:string;persisted:boolean;oldVisible:boolean}>(
+      "({shows:window.__lumiNative?.shows||[],documentToken:window.__lumiNative?.docToken||'',persisted:window.__lumiNative?.shows?.includes(true)===true,oldVisible:document.querySelector("+JSON.stringify(selector)+")?.textContent.includes("+JSON.stringify(oldTitle)+")===true})");
+    try{
+      await cdp.send("Network.enable");
+      await cdp.send("Emulation.setDeviceMetricsOverride",{width,height:844,deviceScaleFactor:1,mobile:width===390});
+      await cdp.send("Page.navigate",{url:origin+"/?view=Home&scope=personal"});
+      await waitFor("initial attention rows",async()=>await visible(oldTitle)&&await visible(keepTitle));
+      await waitFor("initial browser pageshow",()=>cdp.eval<boolean>("window.__lumiNative?.shows.includes(false)===true"));
+      const before=await snapshot();
+      await cdp.eval("window.__lumiShowsBeforeLeave=window.__lumiNative.shows.length;location.assign('/robots.txt');true");
+      await waitFor("native navigation away",()=>cdp.eval<boolean>("location.pathname==='/robots.txt'"));
+      update(true);
+      const frame=(await cdp.send("Page.getFrameTree")).frameTree.frame;
+      const reasonStart=reasons.length;mark=order;
+      await cdp.eval("history.back();true");
+      await waitFor("real Back pageshow",()=>cdp.eval<boolean>("location.search.includes('view=Home')&&!!window.__lumiNative?.shows.length&&(window.__lumiShowsBeforeLeave===undefined||window.__lumiNative.shows.length>window.__lumiShowsBeforeLeave)"));
+      const after=await snapshot();
+      const returned=(await cdp.send("Page.getFrameTree")).frameTree.frame;
+      expect(returned.id).toBe(frame.id);
+      const evidence:NativeBackEvidence={
+        initialPageShowObserved:true,postBackPageShowObserved:true,persisted:after.persisted,
+        originalDocumentToken:before.documentToken,returnedDocumentToken:after.documentToken,
+        topFrameId:frame.id,returnedLoaderId:returned.loaderId,backReasonStartIndex:reasonStart,cacheNotUsed:reasons,
+      };
+      if(strict&&!after.persisted)await waitFor("matching native BFCache miss reason",async()=>matchingNativeBackReasons(evidence).length>0);
+      const branch=validateNativeBackEvidence(evidence,{strict});
+      expect(after.oldVisible,"stale attention title visible on native Back").toBe(false);
+      const fresh=await waitFor("fresh session then attention GET 200",async()=>{
+        const success=(r:Read)=>r.start>mark&&r.status===200&&r.end!==undefined&&!r.cached&&!r.failed;
+        const sessions=reads.filter(r=>r.path==="/api/target-staging/session"&&success(r));
+        const attention=reads.find(r=>r.path==="/api/target-staging/attention"&&success(r)&&sessions.some(s=>s.end!<r.start));
+        return attention||null;
+      });
+      await waitFor("fresh current attention",()=>visible(keepTitle));
+      expect(await visible(oldTitle)).toBe(false);
+      expect(writes).toBe(0);
+      await test.info().attach("native-e1-"+width+".json",{body:Buffer.from(JSON.stringify({branch,evidence,fresh,writes,checkedOutSha:process.env.LUMI_TESTED_CHECKOUT_SHA})),contentType:"application/json"});
+    }finally{
+      off.forEach(fn=>fn());cdp.close();await stopNativeChromeAndRemoveProfile(chrome,closeWatch,profile);
     }
   });
 }

@@ -21,6 +21,8 @@ export type AttentionCommandPreview={
   writeAreaId:string;
   lifecycle:AttentionCommandLifecycle;
   snoozedUntilMs:number|null;
+  /** Home-only prediction under the same actor epoch CAS. Null for hidden state. */
+  expectedHideEpoch?:number|null;
   /** Internal witnesses, never returned to the HTTP caller. */
   linearization:TargetReadLinearization;
   guard:TargetTemporalTaskLiveGuard;
@@ -37,7 +39,7 @@ const RULES=new Set<unknown>(["deadline_overdue","deadline_soon","planned_date_p
  * the full CAS state are checked on ONE already-preflighted pinned read transaction. */
 export function readAuthorizedAttentionCommandPreview(
   db:DatabaseSync,actor:string,taskId:string,ruleId:TargetAttentionLifecycleRuleId,
-  occurrenceOn:string,restoreGeneration:string,nowMs:number,
+  occurrenceOn:string,restoreGeneration:string,nowMs:number,includeHideEpoch=false,
 ):AttentionCommandPreview|null {
   try {
     if(!RULES.has(ruleId)||!validTargetDueOn(occurrenceOn)||!epoch(nowMs))return null;
@@ -81,7 +83,23 @@ export function readAuthorizedAttentionCommandPreview(
         if(row.until>nowMs){lifecycle="snoozed";snoozedUntilMs=row.until;}
       }else return null;
     }
+    let expectedHideEpoch:number|null=null;
+    if(includeHideEpoch){
+      if(access!=="private-owner"||detail.task.areaKind!=="private")return null;
+      if(lifecycle==="active"){
+        // The writer expires an existing snooze, inserts the new hidden row,
+        // and removes the actor's obsolete soon row for an overdue occurrence.
+        // All changes share the SAME epoch CAS, so the prediction is exact if
+        // that command commits, even if its transport acknowledgement is lost.
+        const soon=ruleId==="deadline_overdue"?db.prepare(
+          "SELECT 1 AS present FROM personal_attention_states WHERE user_id=? AND task_id=? AND rule_id='deadline_soon' AND occurrence_on=?"
+        ).get(actor,taskId,occurrenceOn):undefined;
+        expectedHideEpoch=epochRow.revision+(row?2:1)+(soon?1:0);
+        if(!epoch(expectedHideEpoch))return null;
+      }
+    }
     return {expectedRevision,expectedAttentionEpoch:epochRow.revision,
+      ...(includeHideEpoch?{expectedHideEpoch}:{}),
       expectedStateRevision:row?.revision??null,writeAreaId:detail.task.areaId,
       lifecycle,snoozedUntilMs,
       linearization:detail.linearization,guard:detail.guard};

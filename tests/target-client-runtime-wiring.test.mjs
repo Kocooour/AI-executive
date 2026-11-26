@@ -41,7 +41,7 @@ test("the server page mounts the provider only behind the flag and reads it per 
   // C-3b is a separate server-gated prop; a one-line JSX assertion must
   // validate its semantics without depending on an old prop adjacency.
   assert.match(page,/const targetInboxC3b=targetInbox&&\s*process\.env\.AI_EXECUTIVE_TARGET_STAGING_HTTP_C3B_ENABLED==="true"/);
-  assert.match(page,/targetData\s*\n?\s*\?\s*<TargetDataProvider><LumiAppRoot targetHomeSummary=\{Boolean\(config\)&&targetHomeSummaryEnabled\(process\.env\)\} targetInboxRead=\{targetInbox\} targetInboxC3b=\{targetInboxC3b\} targetMyPlan=\{config\?\.myPlan\} targetScopes=\{config\?\.scopes\} targetDetails=\{config\?\.details\} targetEdits=\{config\?\.edits\}/);
+  assert.match(page,/targetData\s*\n?\s*\?\s*<TargetDataProvider><LumiAppRoot targetHomeSummary=\{Boolean\(config\)&&targetHomeSummaryEnabled\(process\.env\)\} targetHomeAttention=\{Boolean\(config\)&&targetHomeAttentionEnabled\(process\.env\)\} targetInboxRead=\{targetInbox\} targetInboxC3b=\{targetInboxC3b\} targetMyPlan=\{config\?\.myPlan\} targetScopes=\{config\?\.scopes\} targetDetails=\{config\?\.details\} targetEdits=\{config\?\.edits\}/);
   assert.match(page,/targetNoteEdit=\{Boolean\(config\?\.details\.note\) && targetNoteEditUiEnabled\(process\.env\)\}/);
   assert.match(page,/targetProjectEdit=\{Boolean\(config\?\.details\.project\) && targetProjectTitleEditUiEnabled\(process\.env\)\}/);
   assert.match(page,/targetPrivateNoteAreas=\{Boolean\(config\?\.scopes\.notes\)&&targetPrivateNoteAreaUiEnabled\(process\.env\)\}/);
@@ -102,6 +102,8 @@ test("only the runtime (and its server route) reference the session endpoint; no
     "app/ui/target-data-provider.tsx","app/ui/target-data-status.tsx","app/ui/target-my-plan.tsx",
     // C-2: lazily loaded Home and Upcoming share the runtime, never legacy storage.
     "app/ui/target-overview.tsx",
+    // E-1: private task attention is mounted only under the verified target Home.
+    "app/ui/target-home-attention.tsx",
     // C-3a: lazily loaded target Inbox is an independently gated runtime consumer.
     "app/ui/target-inbox.tsx",
     // C-3b private suggestion is a gated subview, not a second runtime.

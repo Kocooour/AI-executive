@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { randomBytes, randomInt } from "node:crypto";
-import { existsSync, mkdtempSync, realpathSync } from "node:fs";
+import { existsSync, mkdtempSync, realpathSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { defineConfig, devices } from "@playwright/test";
@@ -15,6 +15,10 @@ export const e2ePassword = "browser-tests-only";
 // The runner loads this file again in every worker. Only the first load prepares the run: a
 // private directory (owner-only, unpredictable name) and credentials that exist for this run only.
 const personalOwnerUserId = "e2e-owner";
+const attentionMode=process.env.LUMI_TARGET_ATTENTION_E2E;
+const attentionTest=attentionMode==="true";
+const attentionOffTest=attentionMode==="off";
+if(attentionMode&&!attentionTest&&!attentionOffTest)throw Error("Invalid E-1 test mode");
 if (!process.env.LUMI_E2E_RUN_DIR) {
   process.env.LUMI_E2E_RUN_DIR = mkdtempSync(path.join(os.tmpdir(), "lumi-e2e-"));
   process.env.LUMI_E2E_PASSWORD_HASH = execFileSync(process.execPath, [path.join(__dirname, "scripts", "hash-password.mjs")], { input: `${e2ePassword}\n` })
@@ -42,9 +46,10 @@ if (!process.env.LUMI_E2E_RUN_DIR) {
       AI_EXECUTIVE_DATA_DIR: path.join(process.env.LUMI_E2E_RUN_DIR, "data"),
     },
   });
+  if(attentionTest)writeFileSync(path.join(process.env.LUMI_E2E_RUN_DIR,"attention-clock.json"),JSON.stringify(Date.now()),{mode:0o600});
   // Opt-in personal acceptance: a REAL isolated target SQLite store inside the run dir (never a legacy or
   // production path), created once per run; workers inherit the settings through the environment.
-  if (process.env.LUMI_TARGET_PERSONAL_ACCEPTANCE_E2E === "true" || process.env.LUMI_TARGET_INBOX_E2E === "true") {
+  if (attentionTest || process.env.LUMI_TARGET_PERSONAL_ACCEPTANCE_E2E === "true" || process.env.LUMI_TARGET_INBOX_E2E === "true") {
     process.env.LUMI_E2E_TARGET_STORE = execFileSync(process.execPath, [
       "--experimental-loader", path.join(__dirname, "scripts", "target-staging-ts-loader.mjs"),
       path.join(__dirname, "e2e", "target-personal-store-setup.mjs"), process.env.LUMI_E2E_RUN_DIR, personalOwnerUserId, "1",
@@ -104,7 +109,7 @@ const inboxAcceptanceTest = process.env.LUMI_TARGET_INBOX_E2E === "true";
 const c3bAcceptanceTest=process.env.LUMI_TARGET_INBOX_C3B_E2E==="true"&&inboxAcceptanceTest;
 // Workers legitimately inherit LUMI_E2E_RUN_DIR and LUMI_E2E_TARGET_STORE from the first load; a caller-supplied pair is
 // still validated: the store must be exactly <run dir>/target-store with a UUID restore generation and the fixed owner.
-const personalStore = (personalAcceptanceTest || inboxAcceptanceTest) ? (() => {
+const personalStore = (attentionTest || personalAcceptanceTest || inboxAcceptanceTest) ? (() => {
   const value = JSON.parse(process.env.LUMI_E2E_TARGET_STORE || "null") as { directory?: unknown; restoreGeneration?: unknown; ownerUserId?: unknown } | null;
   const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
   if (!value || typeof value.directory !== "string" || typeof value.restoreGeneration !== "string" || value.ownerUserId !== personalOwnerUserId
@@ -136,7 +141,7 @@ export default defineConfig({
     // The webServer env below is run-wide: real-store opt-in must only run
     // these five isolated acceptance specs, never other tests.
     { name: "desktop", use: { ...devices["Desktop Chrome"], storageState: sessionFile }, dependencies: ["setup"],
-      ...(personalAcceptanceTest || inboxAcceptanceTest ? { testMatch: /(?:target-personal-(?:acceptance|my-plan|search-open|create|capture-undo|bfcache|native-bfcache)|target-inbox-(?:acceptance|c3b-acceptance))\.spec\.ts/ } : {}) },
+      ...(attentionTest||attentionOffTest?{testMatch:process.env.LUMI_TARGET_ATTENTION_NATIVE_E2E==="true"?/target-personal-native-bfcache\.spec\.ts/:/target-home-attention\.spec\.ts/}:personalAcceptanceTest || inboxAcceptanceTest ? { testMatch: /(?:target-personal-(?:acceptance|my-plan|search-open|create|capture-undo|bfcache|native-bfcache)|target-inbox-(?:acceptance|c3b-acceptance))\.spec\.ts/ } : {}) },
   ],
   webServer: {
     command: `${process.env.E2E_SKIP_BUILD ? "" : "pnpm build && "}pnpm start --port ${port} --hostname 127.0.0.1`,
@@ -310,6 +315,13 @@ export default defineConfig({
         AI_EXECUTIVE_TARGET_STAGING_HTTP_C3B_ENABLED:"true",
         LUMI_TARGET_INBOX_C3B_E2E:"true",
       }:{}),
+      ...(attentionTest?{
+        AI_EXECUTIVE_TARGET_STAGING_HTTP_ATTENTION_ENABLED:"true",
+        AI_EXECUTIVE_TARGET_STAGING_HTTP_ATTENTION_WRITE_ENABLED:"true",
+        LUMI_E2E_ATTENTION_CLOCK:path.join(runDir,"attention-clock.json"),
+        NODE_OPTIONS:((process.env.NODE_OPTIONS||"")+" --require="+JSON.stringify(path.join(__dirname,"e2e/attention-test-clock.cjs"))).trim(),
+      }:{}),
+      ...(attentionOffTest?{AI_EXECUTIVE_TARGET_UI_ENABLED:"false",AI_EXECUTIVE_TARGET_STAGING_HTTP_ENABLED:"false",AI_EXECUTIVE_TARGET_STAGING_HTTP_ATTENTION_ENABLED:"false",AI_EXECUTIVE_TARGET_STAGING_HTTP_ATTENTION_WRITE_ENABLED:"false"}:{}),
       AI_EXECUTIVE_PASSWORD_HASH: passwordHash,
       AI_EXECUTIVE_SESSION_SECRET: sessionSecret,
       AI_EXECUTIVE_DATA_DIR: path.join(runDir, "data"),
@@ -326,6 +338,7 @@ export default defineConfig({
       HERMES_AI_ENABLED: "false",
       // iCloud calendar requests of the test instance go to the local mock server instead of iCloud. The server honours the
       // address only with both settings and only for an http:// loopback address (lib/caldav.ts, calDavTestOverride).
+      ...(personalAcceptanceTest?{NEXT_PUBLIC_LUMI_E2E_QUEUE_WITNESS:"1"}:{}),
       AI_EXECUTIVE_E2E: "true",
       AI_EXECUTIVE_E2E_CALDAV_URL: `http://127.0.0.1:${process.env.LUMI_E2E_CALDAV_PORT}/`,
       AI_EXECUTIVE_E2E_GMAIL_URL: `http://127.0.0.1:${process.env.LUMI_E2E_GMAIL_PORT}/`,

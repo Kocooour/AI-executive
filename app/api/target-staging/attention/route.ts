@@ -1,6 +1,7 @@
 /** R2d.5c.1: isolated default-off Attention candidates GET (read-only).
  * R2d.4k: no `timeZone` query key; the zone is the actor's server-side profile zone. */
 import {createHash} from "node:crypto";
+import {explainAttention} from "../../../../lib/target-attention-explanation";
 import path from "node:path";
 import {authenticationBinding} from "../../../../lib/auth";
 import {enforceRateLimit} from "../../../../lib/http-security";
@@ -31,10 +32,10 @@ const enabled=()=>process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_ENABLED==="true"&
  * claim of the cursor itself (see signStagingProjectHttpCursor `instantMs`). */
 function attentionCursorBinding(
   binding:string,areaFilter:AttentionAreaFilter,view:AttentionView,
-  limit:number,
+  limit:number,explain:"cs"|"en"|null,
 ):string {
   return createHash("sha256").update("lumi:r2d5:attention-http-cursor:v2\0")
-    .update(JSON.stringify([binding,areaFilter,view,limit]))
+    .update(JSON.stringify(explain===null?[binding,areaFilter,view,limit]:[binding,areaFilter,view,limit,explain]))
     .digest("base64url");
 }
 
@@ -57,11 +58,17 @@ export async function GET(request:Request):Promise<Response>{
 
   try {
     const params=new URL(request.url).searchParams;
-    const keys=["areaFilter","view","limit","cursor"];
+    const keys=["areaFilter","view","limit","cursor","explain"];
     if([...params.keys()].some(k=>!keys.includes(k))||
       keys.some(k=>params.getAll(k).length>1))return answer(400,"Invalid request");
     const areaFilter=params.get("areaFilter")??"all";
     const view=params.get("view")??"active";
+    const rawExplain=params.get("explain");
+    // With strictNullChecks disabled, the combined null/literal guard does not
+    // narrow string to the locale union. Construct the validated value explicitly.
+    if(rawExplain!==null&&rawExplain!=="cs"&&rawExplain!=="en")return answer(400,"Invalid request");
+    const explain:"cs"|"en"|null=rawExplain==="cs"?"cs":rawExplain==="en"?"en":null;
+    if(explain!==null&&(areaFilter!=="personal"||view!=="active"))return answer(400,"Invalid request");
     if(!["all","personal","shared"].includes(areaFilter)||
       !["active","hidden"].includes(view))
       return answer(400,"Invalid request");
@@ -83,7 +90,7 @@ export async function GET(request:Request):Promise<Response>{
     const context={
       ...identityBinding,
       authenticationBinding:attentionCursorBinding(identityBinding.authenticationBinding,
-        filter,selected,limit),
+        filter,selected,limit,explain),
       stagingDirectory,restoreGeneration:expectedRestoreGeneration,
       sessionSecret:process.env.AI_EXECUTIVE_SESSION_SECRET||"",
     };
@@ -138,6 +145,8 @@ export async function GET(request:Request):Promise<Response>{
       view:page.view,timeZone:page.timeZone,evaluationDate:page.evaluationDate,
       soonThroughDate:page.soonThroughDate,evaluatedAtMs:page.evaluatedAtMs,
       attentionEpoch:page.attentionEpoch,
+      ...(explain===null?{}:{explanationLanguage:explain,explanations:page.items.map(item=>
+        explainAttention(item,page.evaluatedAtMs,page.timeZone,explain))}),
     },{headers});
   }catch(error){
     logStagingFailure("target-staging/attention","route_exception",error);

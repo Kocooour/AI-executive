@@ -42,20 +42,26 @@ export async function GET(request:Request):Promise<Response> {
   try {
     const query=new URL(request.url).searchParams;
     const keys=["taskId","ruleId","occurrenceOn"];
+    const optional=["sourceRevision"];
     const ruleId=query.get("ruleId"),occurrenceOn=query.get("occurrenceOn");
-    if([...query.keys()].some(k=>!keys.includes(k))||
+    if([...query.keys()].some(k=>!keys.includes(k)&&!optional.includes(k))||
+        optional.some(k=>query.getAll(k).length>1)||
         keys.some(k=>query.getAll(k).length!==1)||
         !attentionCommandHttpTaskId(query.get("taskId"))||
         ruleId===null||!RULES.includes(ruleId)||
         occurrenceOn===null||!validTargetDueOn(occurrenceOn))
       return refuse(400,"Invalid request");
     const taskId=query.get("taskId") as string;
+    const rawSource=query.get("sourceRevision");
+    const sourceRevision=rawSource===null?null:Number(rawSource);
+    if(rawSource!==null&&(!/^(0|[1-9][0-9]*)$/.test(rawSource)||
+      !Number.isSafeInteger(sourceRevision)))return refuse(400,"Invalid request");
     const limited=enforceRateLimit(request,"target-staging-attention-command-preview",60,600000);
     if(limited)return Response.json({error:"Too many requests"},{
       status:429,headers:{...headers,"retry-after":String(limited.retryAfter)},
     });
     const result=await readStagingAttentionCommandPreviewInChild(
-      {...base,...stagingChildSessionConfig(identity)},taskId,ruleId,occurrenceOn);
+      {...base,...stagingChildSessionConfig(identity)},taskId,ruleId,occurrenceOn,sourceRevision!==null);
     const released=result?.ok===true
       ? verifyAttentionCommandPreviewLive(request,identity,base,result.preview)
       : verifyStagingIdentityBeforeRelease(request,identity,base);
@@ -64,6 +70,10 @@ export async function GET(request:Request):Promise<Response> {
     if(released==="stale"||result?.ok===false)return refuse(404,"Not found");
     if(!result)return refuse(503,"Staging unavailable");
     const p=result.preview;
+    // Home binds its displayed private task revision to this pinned preview.
+    // A fresh preview must not silently authorize a newer or shared task.
+    if(sourceRevision!==null&&(p.linearization.areas[0]?.access!=="private-owner"||
+      p.guard.taskRevision!==sourceRevision))return refuse(409,"Revision conflict");
     // Never expose the actor, Area witness, task detail, title or live guard.
     return Response.json({
       expectedRevision:p.expectedRevision,
@@ -71,6 +81,7 @@ export async function GET(request:Request):Promise<Response> {
       expectedStateRevision:p.expectedStateRevision,
       writeAreaId:p.writeAreaId,restoreGeneration:base.expectedRestoreGeneration,
       lifecycle:p.lifecycle,snoozedUntilMs:p.snoozedUntilMs,
+      ...(sourceRevision===null?{}:{expectedHideEpoch:p.expectedHideEpoch}),
     },{headers});
   }catch(error){
     logStagingFailure("target-staging/attention-command-preview","route_exception",error);

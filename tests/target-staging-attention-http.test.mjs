@@ -496,3 +496,28 @@ test("R2d.4k: missing or invalid profile zone fails closed over HTTP",async()=>{
   assert.equal(res.status,503);
   assert.ok(!(await res.text()).includes("Bob one"));
 });
+
+test("E-1 server-authored Home explanations are private and cursor-bound to locale",async()=>{
+  const fx=fixture();
+  const bob=login(fx,"bob");
+  const params={areaFilter:"personal",view:"active",limit:1,explain:"cs"};
+  const first=await get(q(params),bob);
+  const data=await first.json();
+  assert.equal(first.status,200,JSON.stringify(data));
+  assert.equal(data.explanationLanguage,"cs");
+  assert.equal(data.explanations.length,1);
+  assert.equal(data.explanations[0].attentionKey,data.items[0].attentionKey);
+  assert.match(data.explanations[0].why,/Vyhodnoceno:/);
+  assert.doesNotMatch(data.explanations[0].why,/[A-Z][a-z]+\/[A-Z]|\bUTC\b/);
+  assert.doesNotMatch(JSON.stringify(data.explanations),/Bob one|Alice secret/);
+  assert.equal(data.hasMore,true);
+  const next=await get(q({...params,cursor:data.nextCursor}),bob);
+  const nextData=await next.json();
+  assert.equal(next.status,200,JSON.stringify(nextData));
+  assert.equal(nextData.evaluatedAtMs,data.evaluatedAtMs);
+  assert.equal(nextData.explanations[0].attentionKey,nextData.items[0].attentionKey);
+  const wrong=await get(q({...params,explain:"en",cursor:data.nextCursor}),bob);
+  assert.equal(wrong.status,400);
+  for(const invalid of [{...params,areaFilter:"all"},{...params,view:"hidden"},{...params,explain:"xx"}])
+    assert.equal((await get(q(invalid),bob)).status,400);
+});

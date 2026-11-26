@@ -1,7 +1,7 @@
 import { LumiAppRoot } from "./ui/lumi-app-root";
 import { TargetDataProvider } from "./ui/target-data-provider";
 import { targetUiEnabled } from "../lib/target-staging-session-generation";
-import { targetDataNeeded, targetUiConfig, targetHomeSummaryEnabled, targetInboxUiEnabled } from "../lib/target-ui-config";
+import { targetDataNeeded, targetUiConfig, targetHomeSummaryEnabled, targetHomeAttentionEnabled, targetInboxUiEnabled } from "../lib/target-ui-config";
 import {targetMainTitleSearchEnabled} from "../lib/target-main-title-search-ui";
 import {targetProjectTitleEditUiEnabled} from "../lib/target-project-title-edit-ui-gate";
 import { targetNoteEditUiEnabled } from "../lib/target-note-edit-ui-gate";
@@ -33,6 +33,6 @@ export default function Page() {
     process.env.AI_EXECUTIVE_HUMANWIKI_SOURCE_WITNESS_UI_ENABLED === "true" &&
     process.env.AI_EXECUTIVE_HUMANWIKI_SOURCE_WITNESS_STATUS_ENABLED === "true";
   return targetData
-    ? <TargetDataProvider><LumiAppRoot targetHomeSummary={Boolean(config)&&targetHomeSummaryEnabled(process.env)} targetInboxRead={targetInbox} targetInboxC3b={targetInboxC3b} targetMyPlan={config?.myPlan} targetScopes={config?.scopes} targetDetails={config?.details} targetEdits={config?.edits} targetCreates={config?.creates} targetNoteEdit={Boolean(config?.details.note) && targetNoteEditUiEnabled(process.env)} targetProjectEdit={Boolean(config?.details.project) && targetProjectTitleEditUiEnabled(process.env)} targetPrivateNoteAreas={Boolean(config?.scopes.notes)&&targetPrivateNoteAreaUiEnabled(process.env)} targetPrivateNoteCreate={Boolean(config?.scopes.notes)&&targetPrivateNoteCreateUiEnabled(process.env)} targetPrivateTaskCreate={Boolean(config?.scopes.notes&&config?.myPlan.enabled&&config?.details.task)&&targetPrivateTaskCreateUiEnabled(process.env)} targetSearch={targetSearch} humanWikiSourceStatusEnabled={humanWikiSourceStatusEnabled} /></TargetDataProvider>
+    ? <TargetDataProvider><LumiAppRoot targetHomeSummary={Boolean(config)&&targetHomeSummaryEnabled(process.env)} targetHomeAttention={Boolean(config)&&targetHomeAttentionEnabled(process.env)} targetInboxRead={targetInbox} targetInboxC3b={targetInboxC3b} targetMyPlan={config?.myPlan} targetScopes={config?.scopes} targetDetails={config?.details} targetEdits={config?.edits} targetCreates={config?.creates} targetNoteEdit={Boolean(config?.details.note) && targetNoteEditUiEnabled(process.env)} targetProjectEdit={Boolean(config?.details.project) && targetProjectTitleEditUiEnabled(process.env)} targetPrivateNoteAreas={Boolean(config?.scopes.notes)&&targetPrivateNoteAreaUiEnabled(process.env)} targetPrivateNoteCreate={Boolean(config?.scopes.notes)&&targetPrivateNoteCreateUiEnabled(process.env)} targetPrivateTaskCreate={Boolean(config?.scopes.notes&&config?.myPlan.enabled&&config?.details.task)&&targetPrivateTaskCreateUiEnabled(process.env)} targetSearch={targetSearch} humanWikiSourceStatusEnabled={humanWikiSourceStatusEnabled} /></TargetDataProvider>
     : <LumiAppRoot humanWikiSourceStatusEnabled={humanWikiSourceStatusEnabled} />;
 }

@@ -747,14 +747,14 @@ export function readPreflightedPersonalWhenReceipt(
  * the task policy witness, attention epoch, task revision and the raw state row. */
 export function readPreflightedAttentionCommandPreview(
   store:TargetStagingReadStore,access:TargetStagingReadCredential,taskId:string,
-  ruleId:TargetAttentionLifecycleRuleId,occurrenceOn:string,nowMs:number,
+  ruleId:TargetAttentionLifecycleRuleId,occurrenceOn:string,nowMs:number,includeHideEpoch=false,
 ):AttentionCommandPreview|null {
   return withPreflightedStore(store,()=>null,(db,preflight)=>
     inReadSnapshot(db,()=>{
       if(!preflight(db))return null;
       const actor=verifiedActor(db,access);
       return actor?readAuthorizedAttentionCommandPreview(
-        db,actor,taskId,ruleId,occurrenceOn,store.expectedRestoreGeneration,nowMs):null;
+        db,actor,taskId,ruleId,occurrenceOn,store.expectedRestoreGeneration,nowMs,includeHideEpoch):null;
     },()=>null));
 }
 

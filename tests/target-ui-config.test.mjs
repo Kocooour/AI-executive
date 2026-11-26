@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import {test} from "node:test";
-import {targetDataNeeded,targetUiConfig,TARGET_UI_DETAILS_FLAGS,TARGET_UI_MY_PLAN_FLAGS,TARGET_UI_SCOPES_FLAGS} from "../lib/target-ui-config.ts";
+import {targetDataNeeded,targetUiConfig,targetHomeAttentionEnabled,TARGET_UI_DETAILS_FLAGS,TARGET_UI_MY_PLAN_FLAGS,TARGET_UI_SCOPES_FLAGS} from "../lib/target-ui-config.ts";
 
 const T="true";
 const base={
@@ -174,4 +174,15 @@ test("R3-FE-4a: details are no provider consumer of their own (they stay inert w
   assert.equal(mounts({...base,...detailsFlag}),true);
   assert.equal(mounts(scopesOnly),false);
   assert.equal(targetDataNeeded(null),false);
+});
+
+test("E-1 Home attention requires complete Home and existing attention route gates",()=>{
+  assert.equal(targetHomeAttentionEnabled({}),false);
+  const full={...base,AI_EXECUTIVE_TARGET_STAGING_HTTP_HOME_ENABLED:T,
+    AI_EXECUTIVE_TARGET_STAGING_HTTP_WRITE_ENABLED:T,
+    AI_EXECUTIVE_TARGET_STAGING_HTTP_ATTENTION_ENABLED:T,
+    AI_EXECUTIVE_TARGET_STAGING_HTTP_ATTENTION_WRITE_ENABLED:T};
+  assert.equal(targetHomeAttentionEnabled(full),true);
+  for(const key of Object.keys(full))
+    assert.equal(targetHomeAttentionEnabled({...full,[key]:"false"}),false,key);
 });

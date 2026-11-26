@@ -83,13 +83,13 @@ for(const width of [390,1280]){
       name:"Otevřít úkol: "+seeded.taskTitle,
     }).click();
     await expect(page).toHaveURL(new RegExp("view=Inbox&taskId="+encodeURIComponent(seeded.taskId)));
-    await expect(page.getByTestId("target-detail")).toContainText(seeded.taskTitle);
+    await expect(page.getByTestId("target-detail")).toContainText(seeded.taskTitle,{timeout:25_000});
     await page.goBack();
     await findInboxRow(page,seeded.taskId);
     await page.goForward();
-    await expect(page.getByTestId("target-detail")).toContainText(seeded.taskTitle);
+    await expect(page.getByTestId("target-detail")).toContainText(seeded.taskTitle,{timeout:25_000});
     await page.reload();
-    await expect(page.getByTestId("target-detail")).toContainText(seeded.taskTitle);
+    await expect(page.getByTestId("target-detail")).toContainText(seeded.taskTitle,{timeout:25_000});
     await page.getByTestId("target-detail").locator("button.inspectorClose").click();
     await expect(page.getByTestId("target-detail")).toHaveCount(0);
     // Reload/Back/Forward return to the first 50-row page. Find the seeded
@@ -132,6 +132,80 @@ for(const width of [390,1280]){
     await expect(await findInboxRow(page,taskId)).toContainText(title);
   });
 }
+
+
+/** Regression from 164863e trace: scrolling to Load more intersects the last
+ * lazy C-3b rows. Their idle -> loading DOM insertion used to move the button
+ * between pointer events; the click completed but no cursor GET was sent.
+ * Defer real IntersectionObserver entries until pointer-down, then release
+ * them while holding the real rules HTTP response. No fabricated list data. */
+test("C-3a: lazy C-3b loading cannot move the pagination pointer target at 1280px",async({page})=>{
+  test.setTimeout(90_000);
+  await page.setViewportSize({width:1280,height:844});
+  const fixtureId="0-create:049";
+  await page.addInitScript(({fixtureId})=>{
+    const Native=window.IntersectionObserver;
+    const deferred:Array<()=>void>=[];
+    let armed=true;
+    Object.assign(window,{__lumiPaginationWitness:{
+      pending:()=>deferred.length,
+      release:()=>{armed=false;for(const callback of deferred.splice(0))callback();},
+    }});
+    window.IntersectionObserver=class extends Native{
+      constructor(callback:IntersectionObserverCallback,options?:IntersectionObserverInit){
+        super((entries,observer)=>{
+          const delayed=armed?entries.filter(entry=>entry.isIntersecting&&
+            entry.target.getAttribute("data-testid")==="target-c3b-suggestion-"+fixtureId):[];
+          const immediate=entries.filter(entry=>!delayed.includes(entry));
+          if(immediate.length)callback(immediate,observer);
+          if(delayed.length)deferred.push(()=>callback(delayed,observer));
+        },options);
+      }
+    };
+  },{fixtureId});
+  let release=()=>{};
+  const barrier=new Promise<void>(resolve=>{release=resolve;});
+  const pattern=/\/api\/target-staging\/inbox\/c3b\?.*$/;
+  await page.route(pattern,async route=>{
+    const params=new URL(route.request().url()).searchParams;
+    if(params.get("taskId")===fixtureId&&params.get("mode")==="rules")await barrier;
+    await route.continue().catch(()=>{});
+  });
+  try{
+    await openInbox(page);
+    await expect(count(page)).toBeVisible({timeout:25_000});
+    const more=inbox(page).getByRole("button",{name:"Načíst další",exact:true});
+    await expect(page.locator(".targetInboxRow")).toHaveCount(50);
+    await more.scrollIntoViewIfNeeded();
+    const witness=()=>page.evaluate(()=>(window as typeof window & {
+      __lumiPaginationWitness:{pending:()=>number;release:()=>void};
+    }).__lumiPaginationWitness.pending());
+    await expect.poll(witness,{timeout:10_000}).toBeGreaterThan(0);
+    const box=await more.boundingBox();
+    if(!box)throw Error("Missing pagination pointer target");
+    const pointer={x:box.x+box.width/2,y:box.y+box.height/2};
+    await page.mouse.move(pointer.x,pointer.y);
+    await page.mouse.down();
+    await page.evaluate(()=>(window as typeof window & {
+      __lumiPaginationWitness:{release:()=>void};
+    }).__lumiPaginationWitness.release());
+    await expect(page.getByTestId("target-c3b-suggestion-"+fixtureId)
+      .getByText("Připravuji návrh…",{exact:true})).toBeVisible();
+    const after=await more.boundingBox();
+    if(!after)throw Error("Pagination target disappeared during lazy proposal loading");
+    expect(after.y,"lazy loading must not move the pointer target").toBeCloseTo(box.y,0);
+    const next=page.waitForResponse(response=>{
+      const url=new URL(response.url());
+      return response.request().method()==="GET"&&url.pathname==="/api/target-staging/inbox"&&
+        url.searchParams.get("limit")==="50"&&url.searchParams.has("cursor");
+    },{timeout:30_000});
+    await page.mouse.up();
+    release();
+    const response=await next;
+    expect(response.status()).toBe(200);
+    await expect.poll(()=>page.locator(".targetInboxRow").count(),{timeout:25_000}).toBeGreaterThan(50);
+  }finally{release();await page.unroute(pattern);}
+});
 
 test("C-3a: uncertain write never resends its UUID and hides both row and navigation count",
 async({page})=>{

@@ -1445,13 +1445,13 @@ export class TargetStagingSessionAuthority {
   /** R2d.5c.2: one pinned snapshot with the actor's Attention CAS inputs. */
   previewAttentionCommand(
     actorUserId:string,taskId:string,ruleId:TargetAttentionLifecycleRuleId,
-    occurrenceOn:string,nowMs:number,
+    occurrenceOn:string,nowMs:number,includeHideEpoch=false,
   ):AttentionCommandPreview|null {
     if(this.#closed)return null;
     try {
       const credential=this.#oneShotReadCredential(actorUserId);
       return credential?readPreflightedAttentionCommandPreview(
-        this.#store,credential,taskId,ruleId,occurrenceOn,nowMs):null;
+        this.#store,credential,taskId,ruleId,occurrenceOn,nowMs,includeHideEpoch):null;
     }catch{return null;}
   }
 

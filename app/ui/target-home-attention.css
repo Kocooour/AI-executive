@@ -1,0 +1,14 @@
+
+.targetHomeAttention{min-width:0;width:100%;max-width:900px}
+.targetHomeAttentionReason{margin:.3rem 0;font-size:.9rem;font-weight:550;overflow-wrap:anywhere}
+.targetHomeAttentionActions{display:flex;flex-wrap:wrap;align-items:center;gap:.45rem;margin-top:.5rem;min-width:0}
+.targetHomeAttention button:not(.stagingMyPlanOpen){min-height:44px;max-width:100%;white-space:normal;overflow-wrap:anywhere}
+.targetHomeAttentionActions label{display:flex;flex-direction:column;gap:.3rem;font-size:.85rem;min-width:0;max-width:100%}
+.targetHomeAttentionActions input{min-width:0;max-width:100%;min-height:44px}
+.targetHomeAttention button:focus-visible,.targetHomeAttention input:focus-visible,.targetHomeAttention h2:focus-visible{outline:2px solid var(--v1-accent,#6051ac);outline-offset:3px}
+.targetHomeAttentionMarker{border-color:var(--text-muted,#737373)}
+.targetHomeAttention [data-rule="deadline_overdue"] .targetHomeAttentionMarker{border-color:var(--v1-danger,#dc2626)}
+.targetHomeAttention [data-rule="deadline_soon"] .targetHomeAttentionMarker{border-color:var(--v1-warning,#d97706)}
+.targetHomeAttentionFeedback{margin:.5rem 0;max-width:900px}
+.targetHomeAttentionFeedback:empty{position:absolute;width:1px;height:1px;margin:0;padding:0;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
+.targetHomeAttentionFeedback:focus-visible{outline:2px solid var(--v1-accent,#6051ac);outline-offset:3px}

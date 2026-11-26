@@ -5,6 +5,7 @@ import {useTargetGeneration,useTargetRuntime} from "./target-data-provider";
 import {useTargetTick,useTargetWake} from "./use-target-revalidation";
 import {useTargetScope} from "./target-scope-state";
 import {TargetDataStatus} from "./target-data-status";
+import {TargetHomeAttention} from "./target-home-attention";
 import {openTargetDetail} from "./target-detail-state";
 import {detailIdOk} from "../../lib/target-detail-route";
 import {targetOverviewGate} from "../../lib/target-my-plan-embed";
@@ -242,10 +243,11 @@ function TargetOverviewRead({kind,language,generation,onRefusal,openable}:{
     </section>
   </section>;
 }
-export default function TargetOverview({kind,language="cs",taskDetail=false}:{
-  kind:Kind;language?:Language;taskDetail?:boolean;
+export default function TargetOverview({kind,language="cs",taskDetail=false,attentionEnabled=false}:{
+  kind:Kind;language?:Language;taskDetail?:boolean;attentionEnabled?:boolean;
 }){
   const runtime=useTargetRuntime(),generation=useTargetGeneration();
+  const scope=useTargetScope();
   const subscribe=useMemo(
     ()=>(notify:()=>void)=>runtime?runtime.subscribeOutcome(notify):()=>{},[runtime]);
   const outcome=useSyncExternalStore(
@@ -279,6 +281,14 @@ export default function TargetOverview({kind,language="cs",taskDetail=false}:{
         failure={gate.kind==="signed_out"||gate.kind==="refused"?"signed-out":"unavailable"}
         onAction={retry}/>}
   </div>;
-  return <TargetOverviewRead key={kind+":"+gate.generation} kind={kind}
-    language={language} generation={gate.generation} openable={taskDetail} onRefusal={refusal}/>;
+  // Independent readers share the verified runtime gate, not the overview's
+  // transient loading state. Ordinary polls must never destroy an in-flight
+  // attention receipt or its Undo witness. Scope and actor changes still remount.
+  return <>
+    {kind==="home"&&attentionEnabled&&scope!=="shared"&&<TargetHomeAttention
+      key={gate.generation+":"+scope} generation={gate.generation} language={language}
+      openable={taskDetail} onRefusal={refusal}/>}
+    <TargetOverviewRead key={kind+":"+gate.generation} kind={kind}
+      language={language} generation={gate.generation} openable={taskDetail} onRefusal={refusal}/>
+  </>;
 }

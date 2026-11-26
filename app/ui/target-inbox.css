@@ -22,9 +22,12 @@
 .targetInboxDetailLink:focus-visible{outline:2px solid currentColor;outline-offset:3px;border-radius:3px}
 
 /* C-3b: one compact proposal/Why/Accept row, with real 390px wrapping. */
-.targetInboxSuggestion{width:100%;min-width:0;min-height:1px;display:flex;flex-direction:column;
-  /* A zero-height lazy placeholder never intersects and cannot load a proposal. */
+.targetInboxSuggestion{width:100%;min-width:0;min-height:40px;display:flex;flex-direction:column;
+  /* Reserve the ordinary rules heading from the very first render, including
+     offscreen idle rows. Scrolling to Load more starts IntersectionObserver
+     previews; inserting their loading lines must not move a pointer target. */
   gap:.35rem;font-size:.9rem}
+.targetInboxSuggestion.targetInboxSuggestionEmpty{min-height:0}
 .targetInboxSuggestionHeading{display:flex;align-items:center;gap:.45rem;
   flex-wrap:wrap;min-width:0}
 .targetInboxSuggestionHeading>span{flex:1;min-width:8rem;overflow-wrap:anywhere}
@@ -33,6 +36,9 @@
 .targetInboxSuggestionWhy{font-size:.82rem;color:var(--text-secondary,#666);
   margin:.2rem 0;overflow-wrap:anywhere}
 @media(max-width:480px){
+  /* A mobile rules heading wraps its summary above the action buttons. */
+  .targetInboxSuggestion{min-height:calc(44px + 1.5em + .45rem)}
+  .targetInboxSuggestion.targetInboxSuggestionEmpty{min-height:0}
   .targetInboxRowText{flex-basis:100%}
   .targetInboxSuggestionHeading>span{flex-basis:100%}
   .targetInboxSuggestionHeading button:last-child{margin-left:auto}

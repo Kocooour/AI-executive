@@ -1758,7 +1758,7 @@ export type StagingAttentionCommandPreviewResult=
   | {ok:true;preview:AttentionCommandPreview}
   | {ok:false;reason:"inaccessible"};
 export function parseStagingAttentionCommandPreview(
-  value:unknown,taskId:string,
+  value:unknown,taskId:string,includeHideEpoch=false,
 ):StagingAttentionCommandPreviewResult|null {
   if(typeof taskId!=="string"||!value||typeof value!=="object"||Array.isArray(value))
     return null;
@@ -1766,7 +1766,8 @@ export function parseStagingAttentionCommandPreview(
   if(Object.keys(v).sort().join(",")==="ok,reason"&&v.ok===false&&v.reason==="inaccessible")
     return {ok:false,reason:"inaccessible"};
   if(v.ok!==true||Object.keys(v).sort().join(",")!==
-    "expectedAttentionEpoch,expectedRevision,expectedStateRevision,guard,lifecycle,linearization,ok,snoozedUntilMs,writeAreaId"||
+    (includeHideEpoch?"expectedAttentionEpoch,expectedHideEpoch,expectedRevision,expectedStateRevision,guard,lifecycle,linearization,ok,snoozedUntilMs,writeAreaId":
+      "expectedAttentionEpoch,expectedRevision,expectedStateRevision,guard,lifecycle,linearization,ok,snoozedUntilMs,writeAreaId")||
     typeof v.expectedRevision!=="string"||!REVISION.test(v.expectedRevision)||
     !Number.isSafeInteger(v.expectedAttentionEpoch)||(v.expectedAttentionEpoch as number)<0||
     !(v.expectedStateRevision===null||
@@ -1789,6 +1790,11 @@ export function parseStagingAttentionCommandPreview(
     new Map([[v.writeAreaId,a.areaKind]]));
   if(!linearization||linearization.areas.length!==1)return null;
   const access=linearization.areas[0].access;
+  if(includeHideEpoch&&(access!=="private-owner"||a.areaKind!=="private"||
+    (v.lifecycle==="active"?(!Number.isSafeInteger(v.expectedHideEpoch)||
+      (v.expectedHideEpoch as number)<(v.expectedAttentionEpoch as number)+(v.expectedStateRevision===null?1:2)||
+      (v.expectedHideEpoch as number)>(v.expectedAttentionEpoch as number)+(v.expectedStateRevision===null?2:3)):
+      v.expectedHideEpoch!==null)))return null;
   if(access!=="private-owner"&&access!=="editor"&&access!=="admin")return null;
   const g=v.guard as Record<string,unknown>;
   if(Object.keys(g).sort().join(",")!=="areaId,parentRevision,projectId,taskId,taskRevision"||
@@ -1800,6 +1806,7 @@ export function parseStagingAttentionCommandPreview(
   return {ok:true,preview:{
     expectedRevision:v.expectedRevision,
     expectedAttentionEpoch:v.expectedAttentionEpoch as number,
+    ...(includeHideEpoch?{expectedHideEpoch:v.expectedHideEpoch as number|null}:{}),
     expectedStateRevision:v.expectedStateRevision as number|null,
     writeAreaId:v.writeAreaId,lifecycle:v.lifecycle,
     snoozedUntilMs:v.snoozedUntilMs as number|null,
@@ -1811,11 +1818,11 @@ export function parseStagingAttentionCommandPreview(
   }};
 }
 export async function readStagingAttentionCommandPreviewInChild(
-  config:StagingPersonalReadConfig,taskId:string,ruleId:string,occurrenceOn:string,
+  config:StagingPersonalReadConfig,taskId:string,ruleId:string,occurrenceOn:string,includeHideEpoch=false,
 ):Promise<StagingAttentionCommandPreviewResult|null> {
   const payload=await runChild(config,"target-staging-attention-command-preview-child.mjs",
-    [taskId,ruleId,occurrenceOn]);
-  const result=parseStagingAttentionCommandPreview(payload,taskId);
+    [taskId,ruleId,occurrenceOn,...(includeHideEpoch?["home"]:[])]);
+  const result=parseStagingAttentionCommandPreview(payload,taskId,includeHideEpoch);
   if(payload!==null&&!result)logStagingFailure("attention_command_preview","invalid_child_dto");
   return result;
 }
