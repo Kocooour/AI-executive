@@ -189,9 +189,9 @@ for(const width of [390,1280]){
     await expect(panel(page).getByRole("button",{name:/^Zpět: (skrytí|odložení) úkolu /})).toBeVisible();
     await panel(page).getByRole("button",{name:/^Zpět: (skrytí|odložení) úkolu /}).click();
     await expect(row(page,titles[0])).toBeVisible();
-    await expect(page.locator(".targetHomeAttentionFeedback").getByText("Upozornění bylo obnoveno.")).toBeVisible();
+    await expect(page.locator(".targetHomeAttentionFeedback")).toHaveText("Upozornění bylo obnoveno.");
     await page.clock.fastForward(8_001);
-    await expect(page.locator(".targetHomeAttentionFeedback").getByText("Upozornění bylo obnoveno.")).toHaveCount(0);
+    await expect(page.locator(".targetHomeAttentionFeedback")).toHaveText("");
     // Real snooze through the UI; shift the isolated server clock, then
     // re-read without altering the actual stored snooze row.
     const until=Math.ceil((now+10*60_000)/60_000)*60_000;
@@ -199,7 +199,7 @@ for(const width of [390,1280]){
     await row(page,titles[0]).locator('input[type="datetime-local"]').fill(localInput(until));
     await row(page,titles[0]).getByRole("button",{name:"Potvrdit",exact:true}).click();
     await expect(row(page,titles[0])).toHaveCount(0);
-    await expect(page.locator(".targetHomeAttentionFeedback").getByText("Upozornění bylo upraveno.")).toBeVisible();
+    await expect(page.locator(".targetHomeAttentionFeedback")).toHaveText("Upozornění bylo upraveno.");
     setClock(until-1);
     await page.reload();
     await expect(panel(page)).toBeVisible();
@@ -255,8 +255,26 @@ for(const width of [390,1280]){
       await poll(page);
       await expect(row(page,titles[3])).toHaveCount(0);
       await expect(row(page,titles[2]).getByRole("button",{name:"Skrýt",exact:true})).toBeEnabled();
+      await expect(page.locator(".targetHomeAttentionFeedback"))
+        .toHaveText("Nepodařilo se spojit, zkuste to znovu.");
       expect(unexpectedPatch).toBe(0);
     }finally{page.off("request",countPatch);await page.unroute(previewPattern,holdPreview);}
+    // The final candidate disappears without losing the action's focus.
+    // The same live region was mounted before the write and stays mounted
+    // after the rows are removed. The contextual Undo remains actionable.
+    completeConcurrent(2);completeConcurrent(5);
+    await poll(page);
+    await expect(items(page)).toHaveCount(1,{timeout:25_000});
+    const feedback=page.locator(".targetHomeAttentionFeedback");
+    await feedback.evaluate(el=>el.setAttribute("data-live-witness","original"));
+    await row(page,titles[4]).getByRole("button",{name:"Skrýt",exact:true}).click();
+    await expect(items(page)).toHaveCount(0,{timeout:25_000});
+    const lastUndo=panel(page).getByRole("button",{name:"Zpět: skrytí úkolu "+titles[4],exact:true});
+    await expect(lastUndo).toBeFocused();
+    await expect(feedback).toHaveAttribute("data-live-witness","original");
+    await expect(feedback).toHaveText("Upozornění bylo upraveno.");
+    await lastUndo.click();
+    await expect(row(page,titles[4])).toBeVisible({timeout:25_000});
     // Keep a real acknowledged command outstanding while revoking the
     // current session. The mounted panel must disappear BEFORE a page reload;
     // releasing that old response must not resurrect private rows or Undo.
