@@ -62,13 +62,15 @@ export function acquireTargetPushLock(directory:string,nowMs=Date.now()):TargetP
       try{
         const seen=statSync(file);
         if(nowMs-seen.mtimeMs<TARGET_PUSH_LOCK_STALE_MS)return null;
+        const seenToken=readFileSync(file,"utf8");
         // A crashed pass left its lock. Take it over atomically: move it aside
-        // first, and only if what moved is that same stale file (inode) delete
-        // it. A concurrent taker that already replaced it gets its lock back.
+        // first, and delete it only if what moved is that same stale lock. Inode
+        // numbers are reused at once (ext4), so the unique token and the age are
+        // compared; a concurrent taker's fresh lock is put back.
         const aside=file+".stale-"+String(process.pid)+"-"+Math.random().toString(36).slice(2);
         renameSync(file,aside);
         const moved=statSync(aside);
-        if(moved.ino!==seen.ino||moved.dev!==seen.dev){
+        if(readFileSync(aside,"utf8")!==seenToken||nowMs-moved.mtimeMs<TARGET_PUSH_LOCK_STALE_MS){
           try{linkSync(aside,file);}catch{/* another holder exists already */}
           unlinkSync(aside);
           return null;
