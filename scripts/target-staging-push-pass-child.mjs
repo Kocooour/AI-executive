@@ -20,13 +20,15 @@ try {
         .some(name=>process.env[name]!=="true") ||
       !directory || !path.isAbsolute(directory) || !generation)
     throw new Error("unavailable");
-  const vapid=targetVapidConfig(process.env);
-  if (!vapid) throw new Error("unavailable");
   // At most 4096 devices of at most ~2.3 KiB each.
   const request=await readTitleCommand(process.stdin,12*1024*1024);
   if (!request||typeof request!=="object"||!Array.isArray(request.subscriptions)||
-      Object.keys(request).join(",")!=="subscriptions"||request.subscriptions.length>4096)
+      Object.keys(request).sort().join(",")!=="deliver,subscriptions"||typeof request.deliver!=="boolean"||
+      request.subscriptions.length>4096||(!request.deliver&&request.subscriptions.length!==0))
     throw new Error("invalid");
+  // Prune-only (no VAPID identity yet): report the live devices, send nothing.
+  const vapid=request.deliver?targetVapidConfig(process.env):null;
+  if (request.deliver&&!vapid) throw new Error("unavailable");
   const secrets=new Map();
   for (const row of request.subscriptions) {
     if (!row||typeof row!=="object") continue;
@@ -40,12 +42,13 @@ try {
     stagingDirectory:directory,expectedRestoreGeneration:generation,
   });
   try {
-    const sender=createTargetWebPushSender({vapid,env:process.env,
+    const sender=vapid&&createTargetWebPushSender({vapid,env:process.env,
       subscriptionFor:(userId,targetId)=>{
         const hash=authority.livePushEndpointHash(userId,targetId);
         return hash?secrets.get(hash)??null:null;
       }});
-    const summary=await authority.runAttentionPushPass(Date.now(),sender);
+    const summary=vapid?await authority.runAttentionPushPass(Date.now(),sender)
+      :{users:0,sent:0,held:{quiet_hours:0,daily_limit:0,disabled:0}};
     const liveHashes=authority.allLivePushEndpointHashes();
     process.stdout.write(JSON.stringify({ok:true,summary,liveHashes}));
   } finally { authority.close(); }

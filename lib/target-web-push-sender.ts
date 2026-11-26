@@ -83,12 +83,12 @@ export const defaultTargetPushTransport:TargetPushTransport=request=>new Promise
     let size=0;
     response.on("data",(chunk:Buffer)=>{
       size+=chunk.length;
-      if(size>MAX_RESPONSE_BYTES)req.destroy(new Error("response too large"));
+      if(size>MAX_RESPONSE_BYTES)req.destroy(new Error());
     });
     response.on("end",()=>resolve(response.statusCode??0));
     response.on("error",reject);
   });
-  req.on("timeout",()=>req.destroy(new Error("timeout")));
+  req.on("timeout",()=>req.destroy(new Error()));
   req.on("error",reject);
   if(request.body)req.write(request.body);
   req.end();
@@ -123,7 +123,8 @@ export async function sendTargetWebPush(
       const resolved=await (options.resolve??defaultResolver)(url.hostname);
       // Every answer must be public: a mixed answer could be steered to a private one.
       if(!resolved.length||resolved.some(r=>!publicPushAddress(r.address)))return "failed";
-      ({address,family}=resolved[0]);
+      // Prefer IPv4: a host without an IPv6 route would otherwise fail every send.
+      ({address,family}=resolved.find(r=>r.family===4)??resolved[0]);
     }
     const details=webpush.generateRequestDetails(
       {endpoint:subscription.endpoint,keys:{p256dh:subscription.p256dh,auth:subscription.auth}},

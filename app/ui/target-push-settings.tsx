@@ -6,12 +6,12 @@
 import {useCallback,useEffect,useRef,useState} from "react";
 import "./target-push-settings.css";
 import {base64UrlToBytes,browserSubscription,readTargetNotificationSettings,readTargetPushConfig,
-  registerTargetPushDevice,revokeTargetPushDevice,sendTargetPushTest,subscribedWithKey,
+  readTargetPushDeviceStatus,registerTargetPushDevice,revokeTargetPushDevice,sendTargetPushTest,subscribedWithKey,
   writeTargetNotificationSettings,type TargetNotificationSettings,type TargetPushFailure}
   from "../../lib/target-push-client";
 
 type Device=
-  |"checking"|"unsupported"|"insecure"|"server_unavailable"|"denied"|"not_registered"|"registered";
+  |"checking"|"unsupported"|"insecure"|"server_unavailable"|"denied"|"not_registered"|"registered"|"unknown";
 type View=
   |{kind:"loading"}|{kind:"hidden"}|{kind:"error"}
   |{kind:"ready";settings:TargetNotificationSettings;publicKey:string|null;device:Device;thisTarget:string|null};
@@ -21,6 +21,11 @@ const browserZone=():string=>{
 };
 const supported=():boolean=>typeof window!=="undefined"&&"serviceWorker" in navigator&&
   "PushManager" in window&&"Notification" in window;
+/** The service worker may never become ready (failed registration): bound the wait. */
+async function workerReady(ms=5000):Promise<ServiceWorkerRegistration> {
+  return Promise.race([navigator.serviceWorker.ready,
+    new Promise<never>((_,reject)=>setTimeout(()=>reject(new Error()),ms))]);
+}
 
 export default function TargetPushSettings({language="cs",onActive}:{
   language?:"cs"|"en";onActive?:(active:boolean)=>void;
@@ -29,8 +34,13 @@ export default function TargetPushSettings({language="cs",onActive}:{
   const t=(c:string,e:string)=>cs?c:e;
   const [view,setView]=useState<View>({kind:"loading"});
   const [busy,setBusy]=useState(false);
+  // A ref, not only state: two clicks before a re-render must not start two actions.
+  const busyRef=useRef(false);
   const [notice,setNotice]=useState("");
+  const noticeRef=useRef<HTMLParagraphElement|null>(null);
   const [draft,setDraft]=useState<{quietStart:string;quietEnd:string;timeZone:string}|null>(null);
+  // Unsaved quiet-hours edits survive any other action's reload.
+  const draftDirty=useRef(false);
   const onActiveRef=useRef(onActive);
   onActiveRef.current=onActive;
   const failureText=(reason:TargetPushFailure)=>reason==="stale"
@@ -38,6 +48,7 @@ export default function TargetPushSettings({language="cs",onActive}:{
       "Settings changed meanwhile. The current state was reloaded; please try again.")
     :reason==="limited"?t("Příliš mnoho pokusů. Zkuste to za chvíli.","Too many attempts. Try again shortly.")
     :reason==="unauthorized"?t("Přihlášení vypršelo.","Your session ended.")
+    :reason==="invalid"?t("Čas nebo časové pásmo není platné (např. Europe/Prague).","The time or time zone is not valid (e.g. Europe/Prague).")
     :t("Akci se nepodařilo dokončit.","The action could not be completed.");
 
   const load=useCallback(async(signal?:AbortSignal)=>{
@@ -54,23 +65,21 @@ export default function TargetPushSettings({language="cs",onActive}:{
     else if(Notification.permission==="denied")device="denied";
     else if(Notification.permission==="granted"){
       try{
-        const registration=await navigator.serviceWorker.ready;
+        const registration=await workerReady();
         const existing=await registration.pushManager.getSubscription();
         const plain=browserSubscription(existing);
         if(existing&&plain&&subscribedWithKey(existing,publicKey)){
-          // Confirms (idempotently) that this browser is still the actor's own live device.
-          const confirmed=await registerTargetPushDevice(settings.value,plain);
-          if(confirmed.ok){device="registered";thisTarget=confirmed.value;}
+          // Read-only: opening Settings never registers a device.
+          const status=await readTargetPushDeviceStatus(plain);
+          if(status.ok===false)device="unknown";
+          else if(status.value){device="registered";thisTarget=status.value;}
         }
-      }catch{device="not_registered";}
+      }catch{device="unknown";}
     }
     if(signal?.aborted)return;
-    // A confirm moves nothing, but re-read the CAS inputs after any device call.
-    const fresh=device==="registered"?await readTargetNotificationSettings(signal):settings;
-    if(signal?.aborted)return;
-    if(fresh.ok===false){setView({kind:"error"});return;}
-    setView({kind:"ready",settings:fresh.value,publicKey,device,thisTarget});
-    setDraft({quietStart:fresh.value.quietStart,quietEnd:fresh.value.quietEnd,timeZone:fresh.value.timeZone});
+    setView({kind:"ready",settings:settings.value,publicKey,device,thisTarget});
+    if(!draftDirty.current)
+      setDraft({quietStart:settings.value.quietStart,quietEnd:settings.value.quietEnd,timeZone:settings.value.timeZone});
   },[]);
 
   useEffect(()=>{
@@ -87,13 +96,21 @@ export default function TargetPushSettings({language="cs",onActive}:{
 
   const {settings,publicKey,device,thisTarget}=view;
   const run=async(action:()=>Promise<string|null>)=>{
-    if(busy)return;
-    setBusy(true);setNotice("");
-    try{
-      const message=await action();
-      await load();
-      if(message)setNotice(message);
-    }finally{setBusy(false);}
+    if(busyRef.current)return;
+    busyRef.current=true;setBusy(true);setNotice("");
+    let message:string|null;
+    try{message=await action();}
+    catch{
+      // A refused permission, a failed subscribe/unsubscribe or a dead service worker.
+      message=t("Akci se v tomto prohlížeči nepodařilo dokončit.","The browser could not complete the action.");
+    }
+    try{await load();}catch{setView({kind:"error"});}
+    busyRef.current=false;setBusy(false);
+    if(message){
+      setNotice(message);
+      // The clicked control may be gone (enable <-> test/disable): keep focus on the outcome.
+      window.setTimeout(()=>noticeRef.current?.focus(),0);
+    }
   };
   const save=(next:Partial<Pick<TargetNotificationSettings,"timeZone"|"attentionPush"|"quietStart"|"quietEnd"|"paused">>)=>
     run(async()=>{
@@ -106,7 +123,7 @@ export default function TargetPushSettings({language="cs",onActive}:{
     if(!publicKey||!supported())return t("Tento prohlížeč upozornění nepodporuje.","This browser does not support notifications.");
     const permission=await Notification.requestPermission();
     if(permission!=="granted")return t("Oznámení nejsou v prohlížeči povolená.","Notifications are not allowed in this browser.");
-    const registration=await navigator.serviceWorker.ready;
+    const registration=await workerReady();
     let subscription=await registration.pushManager.getSubscription();
     // A subscription for another key (e.g. the older reminders) cannot be reused:
     // replace it, which also stops the older pushes on this device.
@@ -138,7 +155,7 @@ export default function TargetPushSettings({language="cs",onActive}:{
     return t("Upozornění jsou na tomto zařízení zapnutá.","Notifications are on for this device.");
   });
   const disableDevice=()=>run(async()=>{
-    const registration=await navigator.serviceWorker.ready;
+    const registration=await workerReady();
     const subscription=await registration.pushManager.getSubscription();
     if(thisTarget){
       const r=await revokeTargetPushDevice(settings,thisTarget);
@@ -152,16 +169,16 @@ export default function TargetPushSettings({language="cs",onActive}:{
     return r.ok===false?failureText(r.reason):t("Zařízení bylo odebráno.","The device was removed.");
   });
   const test=()=>run(async()=>{
-    const registration=await navigator.serviceWorker.ready;
+    const registration=await workerReady();
     const plain=browserSubscription(await registration.pushManager.getSubscription());
     if(!plain)return t("Toto zařízení není přihlášené.","This device is not registered.");
-    const r=await sendTargetPushTest(plain);
+    const r=await sendTargetPushTest(plain,language);
     if(r.ok===false)return r.reason==="not_found"
       ?t("Toto zařízení není přihlášené.","This device is not registered."):failureText(r.reason);
     return r.value.result==="sent"
       ?t("Testovací oznámení bylo předáno službě oznámení.","The test notification was handed to the push service.")
       :r.value.result==="gone"
-        ?t("Služba oznámení zařízení už nezná. Zapněte upozornění znovu.","The push service no longer knows this device. Turn notifications on again.")
+        ?t("Služba oznámení zařízení už nezná, proto bylo odebráno. Zapněte upozornění znovu.","The push service no longer knows this device, so it was removed. Turn notifications on again.")
         :t("Testovací oznámení se nepodařilo doručit.","The test notification could not be delivered.");
   });
 
@@ -173,6 +190,7 @@ export default function TargetPushSettings({language="cs",onActive}:{
     denied:t("Oznámení jsou v prohlížeči zakázaná. Povolte je v nastavení zařízení.","Notifications are blocked in this browser. Allow them in the device settings."),
     not_registered:t("Toto zařízení zatím upozornění nedostává.","This device does not receive notifications yet."),
     registered:t("Toto zařízení dostává upozornění.","This device receives notifications."),
+    unknown:t("Stav tohoto zařízení teď nejde ověřit.","This device's state cannot be checked right now."),
   };
   const zone=browserZone();
   return <section className="targetPushSettings" data-testid="target-push-settings" aria-labelledby="target-push-heading">
@@ -213,17 +231,18 @@ export default function TargetPushSettings({language="cs",onActive}:{
         <small id="target-push-urgent-note">{t("Zatím není k dispozici.","Not available yet.")}</small>
       </label>
       {draft&&<form className="targetPushQuiet" onSubmit={e=>{e.preventDefault();
+        draftDirty.current=false;
         void save({quietStart:draft.quietStart,quietEnd:draft.quietEnd,timeZone:draft.timeZone.trim()});}}>
         <label>{t("Tiché hodiny od","Quiet hours from")}
           <input type="time" data-testid="target-push-quiet-start" value={draft.quietStart} required
-            onChange={e=>setDraft({...draft,quietStart:e.target.value})}/></label>
+            onChange={e=>{draftDirty.current=true;setDraft({...draft,quietStart:e.target.value});}}/></label>
         <label>{t("do","until")}
           <input type="time" data-testid="target-push-quiet-end" value={draft.quietEnd} required
-            onChange={e=>setDraft({...draft,quietEnd:e.target.value})}/></label>
+            onChange={e=>{draftDirty.current=true;setDraft({...draft,quietEnd:e.target.value});}}/></label>
         <label>{t("Časové pásmo","Time zone")}
           <input type="text" data-testid="target-push-zone" value={draft.timeZone} maxLength={64} required
-            autoComplete="off" spellCheck={false} onChange={e=>setDraft({...draft,timeZone:e.target.value})}/></label>
-        {zone!==draft.timeZone&&<button type="button" onClick={()=>setDraft({...draft,timeZone:zone})}>
+            autoComplete="off" spellCheck={false} onChange={e=>{draftDirty.current=true;setDraft({...draft,timeZone:e.target.value});}}/></label>
+        {zone!==draft.timeZone&&<button type="button" onClick={()=>{draftDirty.current=true;setDraft({...draft,timeZone:zone});}}>
           {t("Použít pásmo tohoto zařízení ("+zone+")","Use this device's zone ("+zone+")")}</button>}
         <button type="submit" disabled={busy}>{t("Uložit","Save")}</button>
       </form>}
@@ -237,6 +256,6 @@ export default function TargetPushSettings({language="cs",onActive}:{
           <button type="button" disabled={busy} onClick={()=>void removeDevice(id)}
             aria-label={t("Odebrat zařízení ","Remove device ")+(index+1)}>{t("Odebrat","Remove")}</button>
         </li>)}</ul>}
-    <p role="status" aria-live="polite" data-testid="target-push-notice">{notice}</p>
+    <p role="status" aria-live="polite" data-testid="target-push-notice" ref={noticeRef} tabIndex={-1}>{notice}</p>
   </section>;
 }

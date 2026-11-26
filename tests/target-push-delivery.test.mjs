@@ -31,7 +31,8 @@ const {publicPushAddress,sendTargetWebPush,createTargetWebPushSender}=await impo
 const vaultLib=await import("../lib/target-push-subscription-vault.ts");
 const {acquireTargetPushLock,runTargetPushSchedulerTick,targetPushOwnsAttention,targetPushDeliveryConfigured,
   TARGET_PUSH_LOCK_FILENAME,TARGET_PUSH_LOCK_STALE_MS}=await import("../lib/target-push-scheduler.ts");
-const {parseTargetPushPassChildResult,parseTargetPushTestChildResult,runTargetPushPassInChild}=
+const {parseTargetPushPassChildResult,parseTargetPushTestChildResult,parseTargetPushStatusChildResult,
+  runTargetPushPassInChild}=
   await import("../lib/target-push-process.ts");
 const {bootstrapIsolatedTargetStore}=await import("../lib/target-store-bootstrap.ts");
 const {TargetStagingSessionAuthority}=await import("../lib/target-staging-session-authority.ts");
@@ -147,6 +148,12 @@ test("the sender encrypts, pins the checked address and maps push service status
       transport:transportFor(status)}),result,String(status));
   assert.equal(await sendTargetWebPush(subscription,PAYLOAD,{vapid,env:{},resolve:publicResolver,
     transport:async()=>{throw new Error("ECONNRESET");}}),"failed");
+  // Among public answers IPv4 is preferred (a host without an IPv6 route still delivers).
+  const pinned=[];
+  await sendTargetWebPush(subscription,PAYLOAD,{vapid,env:{},
+    resolve:async()=>[{address:"2a00:1450:4001:82a::200a",family:6},{address:"142.250.74.10",family:4}],
+    transport:async r=>{pinned.push(r.address);return 201;}});
+  assert.deepEqual(pinned,["142.250.74.10"]);
 });
 
 test("the sender contacts nothing for a private, mixed or empty DNS answer, a foreign host or a huge payload",async()=>{
@@ -253,6 +260,15 @@ test("a scheduler tick hands the vault to one pass and prunes secrets of devices
   assert.deepEqual(handed.rows.map(r=>r.endpointHash).sort(),[sha(ep("gone")),sha(ep("live"))].sort());
   assert.deepEqual(vaultLib.listTargetPushSubscriptions(db).map(r=>r.endpointHash),[sha(ep("live"))]);
   assert.equal(existsSync(path.join(dir,TARGET_PUSH_LOCK_FILENAME)),false,"lock released");
+  // Flags on but no VAPID keys yet: a prune-only pass that is handed no secret.
+  let prune=null;
+  const noKeys={...deps,env:configuredEnv({AI_EXECUTIVE_TARGET_VAPID_PRIVATE_KEY:""}),
+    runPass:async(store,rows,deliver)=>{prune={rows,deliver};return {summary:{...summary,sent:0},liveHashes:[]};}};
+  vaultLib.upsertTargetPushSubscription(db,sha(ep("removed")),{endpoint:ep("removed"),...KEYS},1);
+  const pruned=await runTargetPushSchedulerTick(noKeys);
+  assert.equal(pruned.state,"done");
+  assert.deepEqual(prune,{rows:[],deliver:false});
+  assert.equal(vaultLib.listTargetPushSubscriptions(db).length,0,"secrets of devices that are no longer live are pruned");
   // Not configured: nothing runs. Locked by another process: nothing runs.
   let ran=0;
   const counting={...deps,runPass:async()=>{ran++;return {summary,liveHashes:[]};}};
@@ -283,6 +299,16 @@ test("child replies are parsed strictly",()=>{
   const id="pt_"+"a".repeat(32);
   assert.deepEqual(parseTargetPushTestChildResult({ok:true,result:"sent",targetId:id}),{ok:true,result:"sent",targetId:id});
   assert.deepEqual(parseTargetPushTestChildResult({ok:false,reason:"not_found"}),{ok:false,reason:"not_found"});
+  assert.deepEqual(parseTargetPushTestChildResult({ok:true,result:"gone",targetId:id,revoked:true}),
+    {ok:true,result:"gone",targetId:id,revoked:true});
+  assert.equal(parseTargetPushTestChildResult({ok:true,result:"sent",targetId:id,revoked:true}),null,
+    "only a gone result can revoke");
+  assert.deepEqual(parseTargetPushStatusChildResult({ok:true,status:"registered",targetId:id}),
+    {ok:true,status:"registered",targetId:id});
+  assert.deepEqual(parseTargetPushStatusChildResult({ok:true,status:"not_registered"}),{ok:true,status:"not_registered"});
+  for(const bad of [{ok:true,status:"registered"},{ok:true,status:"not_registered",targetId:id},
+    {ok:false,reason:"not_found"},{ok:true,status:"maybe"}])
+    assert.equal(parseTargetPushStatusChildResult(bad),null,JSON.stringify(bad));
   for(const bad of [{ok:true,result:"maybe",targetId:id},{ok:true,result:"sent",targetId:"x"},
     {ok:false,reason:"other"},{ok:true,result:"sent",targetId:id,endpoint:"x"}])
     assert.equal(parseTargetPushTestChildResult(bad),null);
@@ -366,6 +392,11 @@ test("the real pass child: baseline first, then exactly one encrypted message pe
     const before=fake.received.length;
     const third=await runTargetPushPassInChild(store,vault);
     assert.equal(third.summary.sent,0);
+    assert.equal(fake.received.length,before);
+    // Prune-only (no VAPID): sends nothing, still reports the live devices.
+    const pruneOnly=await runTargetPushPassInChild(store,[],false);
+    assert.equal(pruneOnly.summary.sent,0);
+    assert.deepEqual(pruneOnly.liveHashes,[devices.phone.row.endpointHash]);
     assert.equal(fake.received.length,before);
     // A device without a secret is retried later, never revoked.
     put("call","Zavolat");

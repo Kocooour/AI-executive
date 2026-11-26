@@ -1,5 +1,9 @@
-/** E-2: one content-free test notification to the ACTOR's own live device.
+/** E-2: the ACTOR's own device, by the browser's current subscription.
+ *  - mode "status": read-only; is this endpoint the actor's live device?
+ *  - mode "test": one content-free test notification to that device; a push
+ *    service answer of gone (404/410) revokes the device, exactly like the pass.
  * The device must already be the actor's live target in the verified store. */
+import {randomUUID} from "node:crypto";
 import path from "node:path";
 import {TargetStagingSessionAuthority} from "../lib/target-staging-session-authority.ts";
 import {targetPushEndpointHash,targetPushSubscription} from "../lib/target-push-endpoint.ts";
@@ -12,6 +16,10 @@ const directory=process.env.AI_EXECUTIVE_TARGET_STAGING_DIRECTORY;
 const generation=process.env.AI_EXECUTIVE_TARGET_STAGING_RESTORE_GENERATION;
 const owner=process.env.AI_EXECUTIVE_TARGET_STAGING_OWNER_USER_ID;
 const reply=value=>process.stdout.write(JSON.stringify(value));
+const MESSAGE={
+  cs:"Testovací oznámení: upozornění na tomto zařízení fungují.",
+  en:"Test notification: alerts work on this device.",
+};
 try {
   if (process.argv.length!==2 ||
       ["AI_EXECUTIVE_TARGET_STAGING_HTTP_ENABLED",
@@ -23,7 +31,8 @@ try {
     throw new Error("unavailable");
   const request=await readTitleCommand(process.stdin,8*1024);
   if (!request||typeof request!=="object"||
-      Object.keys(request).sort().join(",")!=="auth,endpoint,endpointHash,p256dh")
+      Object.keys(request).sort().join(",")!=="auth,endpoint,endpointHash,language,mode,p256dh"||
+      !["status","test"].includes(request.mode)||!["cs","en"].includes(request.language))
     throw new Error("invalid");
   const subscription=targetPushSubscription(
     {endpoint:request.endpoint,keys:{p256dh:request.p256dh,auth:request.auth}},process.env);
@@ -38,17 +47,30 @@ try {
       stagingDirectory:directory,expectedRestoreGeneration:generation,ownerUserId:owner,
     });
     if (!identity) reply({ok:false,reason:"session_revoked"});
-    else if (!vapid) reply({ok:false,reason:"unavailable"});
     else {
       const targetId=authority.ownLivePushTarget(identity.actor,request.endpointHash);
-      if (!targetId) reply({ok:false,reason:"not_found"});
+      if (request.mode==="status")
+        reply(targetId?{ok:true,status:"registered",targetId}:{ok:true,status:"not_registered"});
+      else if (!vapid) reply({ok:false,reason:"unavailable"});
+      else if (!targetId) reply({ok:false,reason:"not_found"});
       else {
         // No task, title or any other personal content.
         const result=await sendTargetWebPush(subscription,{
-          title:"Lumi",body:"Testovací oznámení: upozornění na tomto zařízení fungují.",
-          url:"/?view=Settings",tag:"lumi-push-test",
+          title:"Lumi",body:MESSAGE[request.language],url:"/?view=Settings",tag:"lumi-push-test",
         },{vapid,env:process.env});
-        reply({ok:true,result,targetId});
+        let revoked=false;
+        if (result==="gone") {
+          // The push service no longer knows this device: revoke it like the pass does.
+          const issued=authority.issueWritable(identity.actor);
+          const settings=authority.readNotificationSettings(identity.actor);
+          if (issued&&settings) {
+            const r=authority.changePushTarget(issued.sessionToken,{commandId:randomUUID(),
+              action:"revoke",targetId,expectedNotificationEpoch:settings.notificationEpoch,
+              restoreGeneration:generation},identity.sessionTokenHash);
+            revoked=r.ok===true;
+          }
+        }
+        reply(revoked?{ok:true,result,targetId,revoked:true}:{ok:true,result,targetId});
       }
     }
   } finally { authority.close(); }

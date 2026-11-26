@@ -1,6 +1,7 @@
 /** E-2: one content-free test notification to the actor's OWN live device. The
  * browser sends its current PushSubscription; the child confirms in the verified
- * store that its endpoint hash is the actor's live target before sending. */
+ * store that its endpoint hash is the actor's live target before sending. A push
+ * service answer of gone revokes the device, as in the scheduled pass. */
 import {HttpInputError,enforceRateLimit,readJsonBody,requireTargetSameOrigin}
   from "../../../../../lib/http-security";
 import {logStagingFailure} from "../../../../../lib/target-staging-failure-log";
@@ -44,14 +45,15 @@ export async function POST(request:Request):Promise<Response> {
     });
     const body=await readJsonBody<unknown>(request,4*1024,{strictUtf8:true});
     const x=body&&typeof body==="object"&&!Array.isArray(body)?body as Record<string,unknown>:null;
-    if(!x||Object.keys(x).join(",")!=="subscription")return refuse(400,"Invalid request");
+    if(!x||Object.keys(x).sort().join(",")!=="language,subscription"||
+      (x.language!=="cs"&&x.language!=="en"))return refuse(400,"Invalid request");
     const subscription=targetPushSubscription(x.subscription);
     if(!subscription)return refuse(400,"Invalid request");
     const before=verifyStagingIdentityBeforeRelease(request,identity,base);
     if(before!=="ok")return stagingIdentityRefusal(before);
     if(!notificationsHttpUnchanged(base,true))return refuse(503,"Staging unavailable");
     const result=await sendTargetPushTestInChild({...base,...stagingChildSessionConfig(identity)},
-      {...subscription,endpointHash:targetPushEndpointHash(subscription.endpoint)});
+      {...subscription,endpointHash:targetPushEndpointHash(subscription.endpoint)},x.language);
     const after=verifyStagingIdentityBeforeRelease(request,identity,base);
     if(after!=="ok")return stagingIdentityRefusal(after);
     if(result?.ok===false&&result.reason==="session_revoked")
@@ -59,7 +61,9 @@ export async function POST(request:Request):Promise<Response> {
     if(!notificationsHttpUnchanged(base,true)||!result)return refuse(503,"Staging unavailable");
     if(result.ok===false)
       return result.reason==="not_found"?refuse(404,"Not found"):refuse(503,"Push unavailable");
-    return Response.json({ok:true,result:result.result,targetId:result.targetId},{headers});
+    // Gone: the device was revoked; the client shows it as not registered.
+    return Response.json({ok:true,result:result.result,targetId:result.targetId,
+      ...(result.revoked?{revoked:true}:{})},{headers});
   }catch(error){
     if(error instanceof HttpInputError)return refuse(error.status,error.message);
     logStagingFailure("target-staging/notification-test","route_exception",error);

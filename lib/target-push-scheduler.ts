@@ -7,7 +7,7 @@
  * A stale lock (older than any possible pass) is recovered. The pass itself is
  * crash-safe: deliveries are claimed `pending` per device before sending, so a
  * restart never sends a duplicate (lib/target-attention-push-pass.ts). */
-import {closeSync,openSync,readFileSync,statSync,unlinkSync,writeSync} from "node:fs";
+import {closeSync,linkSync,openSync,readFileSync,renameSync,statSync,unlinkSync,writeSync} from "node:fs";
 import path from "node:path";
 import {resolveDataDirectory} from "./data-dir";
 import {TARGET_PUSH_PASS_CHILD_TIMEOUT_MS,runTargetPushPassInChild,targetPushFlagsEnabled}
@@ -60,9 +60,20 @@ export function acquireTargetPushLock(directory:string,nowMs=Date.now()):TargetP
     }catch(error){
       if((error as NodeJS.ErrnoException).code!=="EEXIST")return null;
       try{
-        if(nowMs-statSync(file).mtimeMs<TARGET_PUSH_LOCK_STALE_MS)return null;
-        // A crashed pass left its lock: no pass can still be running.
-        unlinkSync(file);
+        const seen=statSync(file);
+        if(nowMs-seen.mtimeMs<TARGET_PUSH_LOCK_STALE_MS)return null;
+        // A crashed pass left its lock. Take it over atomically: move it aside
+        // first, and only if what moved is that same stale file (inode) delete
+        // it. A concurrent taker that already replaced it gets its lock back.
+        const aside=file+".stale-"+String(process.pid)+"-"+Math.random().toString(36).slice(2);
+        renameSync(file,aside);
+        const moved=statSync(aside);
+        if(moved.ino!==seen.ino||moved.dev!==seen.dev){
+          try{linkSync(aside,file);}catch{/* another holder exists already */}
+          unlinkSync(aside);
+          return null;
+        }
+        unlinkSync(aside);
       }catch{return null;}
     }
   }
@@ -86,7 +97,9 @@ export type TargetPushTickResult=
 /** One scheduled tick. Never throws and never logs device data. */
 export async function runTargetPushSchedulerTick(deps:TargetPushTickDeps={}):Promise<TargetPushTickResult> {
   const env=deps.env??process.env;
-  if(!targetPushDeliveryConfigured(env))return {state:"off"};
+  // Flags off: nothing runs. Flags on without VAPID keys: a prune-only pass.
+  if(!targetPushOwnsAttention(env))return {state:"off"};
+  const deliver=targetVapidConfig(env)!==null;
   if(tickRunning)return {state:"busy"};
   tickRunning=true;
   let lock:TargetPushLock|null=null;
@@ -97,7 +110,7 @@ export async function runTargetPushSchedulerTick(deps:TargetPushTickDeps={}):Pro
     const database=deps.database??(await import("./server-store")).getDatabase;
     const db=database();
     const result=await (deps.runPass??runTargetPushPassInChild)(targetPushStore(env)!,
-      listTargetPushSubscriptions(db));
+      deliver?listTargetPushSubscriptions(db):[],deliver);
     if(!result)return {state:"failed"};
     const pruned=result.liveHashes
       ? pruneTargetPushSubscriptions(db,new Set(result.liveHashes),(deps.now??Date.now)()):0;

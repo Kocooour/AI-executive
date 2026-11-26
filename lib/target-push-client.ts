@@ -15,6 +15,7 @@ const SETTINGS="/api/target-staging/notifications/settings";
 const TARGETS="/api/target-staging/notifications/targets";
 const CONFIG="/api/target-staging/notifications/push-config";
 const TEST="/api/target-staging/notifications/test";
+const STATUS="/api/target-staging/notifications/device-status";
 const TARGET_ID=/^pt_[0-9a-f]{32}$/;
 const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const HHMM=/^([01]\d|2[0-3]):[0-5]\d$/;
@@ -112,15 +113,29 @@ export async function revokeTargetPushDevice(
 }
 
 export async function sendTargetPushTest(
-  subscription:BrowserSubscription,
-):Promise<TargetPushResult<{result:"sent"|"failed"|"gone";targetId:string}>> {
-  const r=await call(TEST,write("POST",{subscription:{endpoint:subscription.endpoint,
+  subscription:BrowserSubscription,language:"cs"|"en",
+):Promise<TargetPushResult<{result:"sent"|"failed"|"gone";targetId:string;revoked:boolean}>> {
+  const r=await call(TEST,write("POST",{language,subscription:{endpoint:subscription.endpoint,
     keys:{p256dh:subscription.keys.p256dh,auth:subscription.keys.auth}}}));
   if(!r)return {ok:false,reason:"unavailable"};
   const b=r.body as Record<string,unknown>|null;
   if(r.status===200&&b&&["sent","failed","gone"].includes(b.result as string)&&
     typeof b.targetId==="string"&&TARGET_ID.test(b.targetId))
-    return {ok:true,value:{result:b.result as "sent"|"failed"|"gone",targetId:b.targetId}};
+    return {ok:true,value:{result:b.result as "sent"|"failed"|"gone",targetId:b.targetId,revoked:b.revoked===true}};
+  return {ok:false,reason:r.status===200?"unavailable":failure(r.status)};
+}
+
+/** Read-only: this browser subscription's own live device ID, or null. */
+export async function readTargetPushDeviceStatus(
+  subscription:BrowserSubscription,
+):Promise<TargetPushResult<string|null>> {
+  const r=await call(STATUS,write("POST",{subscription:{endpoint:subscription.endpoint,
+    keys:{p256dh:subscription.keys.p256dh,auth:subscription.keys.auth}}}));
+  if(!r)return {ok:false,reason:"unavailable"};
+  const b=r.body as Record<string,unknown>|null;
+  if(r.status===200&&b&&b.registered===false&&Object.keys(b).length===1)return {ok:true,value:null};
+  if(r.status===200&&b&&b.registered===true&&typeof b.targetId==="string"&&TARGET_ID.test(b.targetId))
+    return {ok:true,value:b.targetId};
   return {ok:false,reason:r.status===200?"unavailable":failure(r.status)};
 }
 
@@ -151,17 +166,16 @@ export function base64UrlToBytes(value:string):Uint8Array<ArrayBuffer> {
   return out;
 }
 
-/** E-2: on sign-out, stop task alerts on THIS device. Unsubscribing the browser's
- * target push subscription ends delivery at the push service itself; the next
- * pass then sees 404/410 and revokes the device. Best effort, bounded, never throws. */
-export async function silenceTargetPushOnThisDevice(timeoutMs=3000):Promise<void> {
+/** E-2: on sign-out, end Web Push on THIS device before the session ends. The
+ * browser subscription is unsubscribed at once (no network read first): the push
+ * service then answers 404/410 and the next pass revokes the device, and no
+ * notification with a task title can reach a signed-out device. Bounded, never throws. */
+export async function silenceTargetPushOnThisDevice(timeoutMs=5000):Promise<void> {
   if(typeof window==="undefined"||!("serviceWorker" in navigator)||!("PushManager" in window))return;
   const work=(async()=>{
-    const config=await readTargetPushConfig();
-    if(config.ok===false||!config.value.publicKey)return;
     const registration=await navigator.serviceWorker.getRegistration();
     const subscription=await registration?.pushManager.getSubscription();
-    if(subscription&&subscribedWithKey(subscription,config.value.publicKey))await subscription.unsubscribe();
+    if(subscription)await subscription.unsubscribe();
   })().catch(()=>undefined);
   await Promise.race([work,new Promise<void>(resolve=>setTimeout(resolve,timeoutMs))]);
 }

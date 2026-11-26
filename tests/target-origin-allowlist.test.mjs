@@ -99,7 +99,10 @@ test("all target write routes use the shared target Origin guard (direct or dele
     assert.match(readFileSync(path.join(targetRoutes,route),"utf8"),
       /requireTargetSameOrigin\(request\)/);
   }
-  assert.equal(direct,29);
+  // E-2 adds the authenticated push test and read-only device-status POSTs.
+  for(const route of ["notifications/test/route.ts","notifications/device-status/route.ts"])
+    assert.match(readFileSync(path.join(targetRoutes,route),"utf8"),/requireTargetSameOrigin\(request\)/);
+  assert.equal(direct,31);
   assert.equal(delegated,17);
   assert.match(readFileSync(path.join(libs,"target-inbox-c3b-http.ts"),"utf8"),
     /requireTargetSameOrigin\(request\)/,

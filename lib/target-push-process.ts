@@ -108,37 +108,64 @@ export function parseTargetPushPassChildResult(value:unknown):TargetPushPassChil
     liveHashes:live as string[]|null};
 }
 
-/** One scheduled, identity-bound attention push pass over the whole target store. */
+/** One scheduled, identity-bound attention push pass over the whole target store.
+ * With deliver=false (no VAPID identity yet) the child sends nothing and only
+ * reports the live devices, so secrets of removed devices are still pruned. */
 export async function runTargetPushPassInChild(
   store:{stagingDirectory:string;expectedRestoreGeneration:string},
-  subscriptions:readonly TargetPushVaultRow[],
+  subscriptions:readonly TargetPushVaultRow[],deliver=true,
 ):Promise<TargetPushPassChildResult|null> {
-  const input=JSON.stringify({subscriptions:subscriptions.map(s=>({
-    endpointHash:s.endpointHash,endpoint:s.endpoint,p256dh:s.p256dh,auth:s.auth}))});
+  const input=JSON.stringify({deliver,subscriptions:deliver?subscriptions.map(s=>({
+    endpointHash:s.endpointHash,endpoint:s.endpoint,p256dh:s.p256dh,auth:s.auth})):[]});
   return parseTargetPushPassChildResult(await runChild("target-staging-push-pass-child.mjs",
     childEnv(store),input,TARGET_PUSH_PASS_CHILD_TIMEOUT_MS));
 }
 
 export type TargetPushTestChildResult=
-  |{ok:true;result:"sent"|"failed"|"gone";targetId:string}
+  |{ok:true;result:"sent"|"failed"|"gone";targetId:string;revoked?:true}
   |{ok:false;reason:"not_found"|"unavailable"|"session_revoked"};
+export type TargetPushStatusChildResult=
+  |{ok:true;status:"registered";targetId:string}|{ok:true;status:"not_registered"}
+  |{ok:false;reason:"session_revoked"};
 export function parseTargetPushTestChildResult(value:unknown):TargetPushTestChildResult|null {
   if(!value||typeof value!=="object"||Array.isArray(value))return null;
   const v=value as Record<string,unknown>;
   const keys=Object.keys(v).sort().join(",");
-  if(v.ok===true&&keys==="ok,result,targetId"&&["sent","failed","gone"].includes(v.result as string)&&
+  if(v.ok===true&&(keys==="ok,result,targetId"||(keys==="ok,result,revoked,targetId"&&v.revoked===true&&v.result==="gone"))&&
+    ["sent","failed","gone"].includes(v.result as string)&&
     typeof v.targetId==="string"&&TARGET_ID.test(v.targetId))
-    return {ok:true,result:v.result as "sent"|"failed"|"gone",targetId:v.targetId};
+    return {ok:true,result:v.result as "sent"|"failed"|"gone",targetId:v.targetId,...(v.revoked===true?{revoked:true as const}:{})};
   if(v.ok===false&&keys==="ok,reason"&&["not_found","unavailable","session_revoked"].includes(v.reason as string))
     return {ok:false,reason:v.reason as "not_found"|"unavailable"|"session_revoked"};
   return null;
 }
+export function parseTargetPushStatusChildResult(value:unknown):TargetPushStatusChildResult|null {
+  if(!value||typeof value!=="object"||Array.isArray(value))return null;
+  const v=value as Record<string,unknown>;
+  const keys=Object.keys(v).sort().join(",");
+  if(v.ok===true&&v.status==="registered"&&keys==="ok,status,targetId"&&typeof v.targetId==="string"&&
+    TARGET_ID.test(v.targetId))return {ok:true,status:"registered",targetId:v.targetId};
+  if(v.ok===true&&v.status==="not_registered"&&keys==="ok,status")return {ok:true,status:"not_registered"};
+  if(v.ok===false&&v.reason==="session_revoked"&&keys==="ok,reason")return {ok:false,reason:"session_revoked"};
+  return null;
+}
 
-/** One content-free test message to the ACTOR's own live device. */
+type DeviceConfig=StagingPersonalReadConfig&{sessionTokenHash?:string};
+type DeviceSubscription=TargetPushSubscription&{endpointHash:string};
+const deviceInput=(mode:"status"|"test",s:DeviceSubscription,language:"cs"|"en")=>JSON.stringify({
+  mode,language,endpointHash:s.endpointHash,endpoint:s.endpoint,p256dh:s.p256dh,auth:s.auth});
+
+/** One content-free test message to the ACTOR's own live device (gone revokes it). */
 export async function sendTargetPushTestInChild(
-  config:StagingPersonalReadConfig&{sessionTokenHash?:string},
-  subscription:TargetPushSubscription&{endpointHash:string},
+  config:DeviceConfig,subscription:DeviceSubscription,language:"cs"|"en"="cs",
 ):Promise<TargetPushTestChildResult|null> {
   return parseTargetPushTestChildResult(await runChild("target-staging-push-test-child.mjs",
-    childEnv(config),JSON.stringify(subscription),TARGET_PUSH_TEST_CHILD_TIMEOUT_MS));
+    childEnv(config),deviceInput("test",subscription,language),TARGET_PUSH_TEST_CHILD_TIMEOUT_MS));
+}
+/** Read-only: is this browser subscription the actor's own live device? */
+export async function readTargetPushDeviceStatusInChild(
+  config:DeviceConfig,subscription:DeviceSubscription,
+):Promise<TargetPushStatusChildResult|null> {
+  return parseTargetPushStatusChildResult(await runChild("target-staging-push-test-child.mjs",
+    childEnv(config),deviceInput("status",subscription,"cs"),TARGET_PUSH_TEST_CHILD_TIMEOUT_MS));
 }

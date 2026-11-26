@@ -36,6 +36,7 @@ const durable=await import("../lib/target-staging-durable-session.ts");
 const {createSessionToken,sessionCookieName}=await import("./support/owner-session-test-cookie.mjs");
 const {GET,PATCH}=await import("../app/api/target-staging/notifications/settings/route.ts");
 const {POST}=await import("../app/api/target-staging/notifications/targets/route.ts");
+const {POST:STATUS}=await import("../app/api/target-staging/notifications/device-status/route.ts");
 const {parseStagingNotificationSettings,readStagingNotificationSettingsInChild}=
   await import("../lib/target-staging-read-process.ts");
 const {parseNotificationSettingsWriteReply,parseNotificationTargetWriteReply}=
@@ -101,6 +102,7 @@ function send(handler,url,body,cookie=owner(),options={}){
 }
 const patch=(body,cookie,options)=>send(PATCH,settingsUrl,body,cookie,options);
 const post=(body,cookie,options)=>send(POST,targetsUrl,body,cookie,options);
+const status=(body,cookie,options)=>send(STATUS,origin+"/api/target-staging/notifications/device-status",body,cookie,options);
 const SETTINGS_KEYS=["attentionPush","dailyLimit","expectedNotificationEpoch",
   "expectedSettingsRevision","paused","quietEnd","quietStart","restoreGeneration",
   "targets","timeZone"];
@@ -548,4 +550,36 @@ test("spoofed X-Forwarded-For prefixes cannot escape the per-client PATCH limit"
   // A different proxied client is still served independently.
   assert.notEqual((await getSettings(owner(),"",{ip:"10.99.0.4"})).status,429);
   assert.equal(mutable(fx),before);
+});
+
+test("E-2 device-status is read-only and actor-bound; a register replay after revoke stores no secret",async()=>{
+  const fx=fixture(),bob=login(fx,"bob");
+  const ep=endpoint("status");
+  const sub={endpoint:ep,keys:KEYS};
+  assert.deepEqual(await (await status({subscription:sub})).json(),{registered:false});
+  const c=await registerCommand(ep);
+  const id=(await (await post(c)).json()).targetId;
+  const before=mutable(fx),vaultBefore=JSON.stringify(vault());
+  const own=await status({subscription:sub});
+  assert.equal(own.status,200);
+  assert.equal(own.headers.get("cache-control"),"no-store");
+  assert.deepEqual(await own.json(),{registered:true,targetId:id});
+  // Another identity learns nothing about alice's device.
+  assert.deepEqual(await (await status({subscription:sub},bob)).json(),{registered:false});
+  assert.equal(mutable(fx),before,"no target-store write");
+  assert.equal(JSON.stringify(vault()),vaultBefore,"no vault write");
+  for(const body of [{},{subscription:{endpoint:"https://push.example.test/x",keys:KEYS}},
+    {subscription:sub,extra:1},{subscription:{endpoint:ep}}])
+    assert.equal((await status(body)).status,400,JSON.stringify(body).slice(0,60));
+  assert.equal((await status({subscription:sub},owner(),{origin:"https://evil.test"})).status,403);
+  assert.equal((await status({subscription:sub},owner(),{protocol:null})).status,400);
+  // Revoke, forget the secret, then replay the identical register: no live
+  // device is named and no secret is stored again.
+  assert.equal((await post(await revokeCommand(id))).status,200);
+  const db=new DatabaseSync(path.join(legacy,"store.sqlite"));
+  try{db.prepare("DELETE FROM target_push_subscriptions WHERE endpoint_hash=?").run(sha(ep));}finally{db.close();}
+  const replay=await post(c);
+  assert.equal(replay.status,404);
+  assert.equal(vault().some(r=>r.h===sha(ep)),false);
+  assert.deepEqual(await (await status({subscription:sub})).json(),{registered:false});
 });

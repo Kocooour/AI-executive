@@ -177,6 +177,16 @@ for(const width of [390,1280]){
     expect(testMessages).toHaveLength(1);
     expect(testMessages[0]).toEqual({title:"Lumi",body:"Testovací oznámení: upozornění na tomto zařízení fungují.",
       url:"/?view=Settings",tag:"lumi-push-test"});
+    // The push service forgets the device: the test result says so, the device
+    // is removed server-side, and the panel truthfully offers to turn it on again.
+    statusFor.set(new URL(endpointOf("ui"+width)).pathname,410);
+    await panel.getByTestId("target-push-test").click();
+    await expect(panel.getByTestId("target-push-notice")).toHaveText(
+      "Služba oznámení zařízení už nezná, proto bylo odebráno. Zapněte upozornění znovu.");
+    await expect(panel.getByTestId("target-push-notice")).toBeFocused();
+    await expect(panel.getByTestId("target-push-device-state")).toHaveText("Toto zařízení zatím upozornění nedostává.");
+    await panel.getByTestId("target-push-enable").click();
+    await expect(panel.getByTestId("target-push-device-state")).toHaveText("Toto zařízení dostává upozornění.");
     // No horizontal scroll at this width.
     expect(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth)).toBe(true);
     // A reload re-confirms the device from the server; nothing comes from browser storage.
@@ -257,7 +267,20 @@ test("delivery: baseline, exactly one private message, daily limit, quiet hours,
     try{return (JSON.parse(decryptWebPush(r.body,browserKeys)) as {tag:string}).tag==="attention-"+crash;}catch{return false;}
   });
   expect(crashed).toHaveLength(1);
-  // 6. Sign-out stops delivery to this device: the subscription ends at the push
+  // 6. Turning alerts off sends nothing; turning them on again starts from a
+  //    fresh baseline instead of announcing what happened meanwhile.
+  setClock(pragueAt(13,1));
+  await panel.getByTestId("target-push-attention").click();
+  await expect(panel.getByTestId("target-push-attention")).not.toBeChecked();
+  const whileOff=delivered(device).length;
+  overdueTask("Při vypnutých upozorněních");
+  await tick();await tick();
+  expect(delivered(device)).toHaveLength(whileOff);
+  await panel.getByTestId("target-push-attention").click();
+  await expect(panel.getByTestId("target-push-attention")).toBeChecked();
+  await tick();await tick();
+  expect(delivered(device)).toHaveLength(whileOff);
+  // 7. Sign-out stops delivery to this device: the subscription ends at the push
   //    service, the next pass gets 410 and revokes the device in the store.
   await settingsSections(page).filter({hasText:"Přístup"}).click();
   await page.getByRole("button",{name:"Odhlásit se"}).click();

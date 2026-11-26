@@ -584,17 +584,21 @@ unavailable and Home attention keeps working.
 public key stops receiving alerts: remove the old devices in Settings → Notifications
 and turn alerts on again on each device.
 
-**Rollback.** Remove the two lines (or turn the notification flags off again) and
-restart: no pass runs and nothing is sent. Device secrets live only in
-`target_push_subscriptions` of `/var/lib/ai-executive/store.sqlite`; they are
-excluded from every backup and export and are pruned automatically once a device
-is no longer live, so no manual cleanup is required.
+**Rollback.** Remove the two lines and restart: nothing is sent, and while the
+notification flags stay on a prune-only pass still removes the secrets of devices
+that are no longer live. Turning the notification flags off stops every pass;
+the remaining device secrets (at most 4096 rows in `target_push_subscriptions` of
+`/var/lib/ai-executive/store.sqlite`) are never in a backup or export and are
+pruned once the flags are on again. To remove them at once, stop the service and
+run as root: `sudo -u ai-executive sqlite3 /var/lib/ai-executive/store.sqlite "DELETE FROM target_push_subscriptions;"`
+(devices then need to be turned on again in Settings).
 
 **What changes when it is active.** One scheduled pass every five minutes (bounded
 child, exclusive lock `/var/lib/ai-executive/target-push-pass.lock`; a lock older
 than five minutes from a crashed pass is recovered). The legacy attention push
 stays silent while the target notification flags are on (no double alerts);
-legacy reminders are unchanged. The 5 legacy push subscriptions are not migrated:
+legacy reminders are unchanged. Signing out ends Web Push on that device (target
+and legacy subscriptions alike), so a signed-out device shows no task titles. The 5 legacy push subscriptions are not migrated:
 devices are registered again from Settings. Browser-test switches
 (`AI_EXECUTIVE_E2E*`, `LUMI_E2E_*`, e.g. the fake push origin) are refused in the
 production EnvironmentFile by `deploy-safe.sh`.

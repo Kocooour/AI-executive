@@ -252,7 +252,9 @@ export function writePreflightedPushTarget(
         if(prior.value!==digest)return {ok:false,reason:"idempotency_conflict"};
         // Replay: only this actor's own row can be named; nothing else leaks.
         const own=command.action==="register"
-          ? db.prepare("SELECT target_id AS id FROM personal_push_targets WHERE user_id=? AND endpoint_hash=?")
+          // A since-revoked device is not live: the replay names none (and the
+          // route then stores no secret for it).
+          ? db.prepare("SELECT target_id AS id FROM personal_push_targets WHERE user_id=? AND endpoint_hash=? AND revoked_at_ms IS NULL")
               .get(actor,command.endpointHash) as {id:string}|undefined
           : {id:command.targetId};
         return {ok:true,replayed:true,targetId:own?.id??null};
