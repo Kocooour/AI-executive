@@ -151,4 +151,4 @@ bez titulků a ID.
 ## Co zbývá
 
 - **R2d.5d.3:** HTTP pro nastavení a cíle (ve výchozím stavu vypnuté).
-- Skutečný web-push klient, import subscription a plánovač až při R4 cutoveru.
+- ~~Skutečný web-push klient, import subscription a plánovač~~ — dodáno v E-2 (milník E, [#505](https://github.com/Kocooour/AI-executive/issues/505)): odesílač s allowlistem push služeb a kontrolou DNS, tajné údaje zařízení v `target_push_subscriptions` aplikační SQLite (ne v cílovém úložišti), plánovač se zámkem; bez importu legacy subscriptions (rozhodnutí vlastníka). Aktivace je E-3. Viz [ARCHITECTURE](ARCHITECTURE.md).

@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { type DurableContextItem, type Language, type ThemeMode } from "../types";
 import { views } from "../navigation";
 import type { LumiApp } from "../use-lumi-app";
@@ -8,6 +8,7 @@ import { pluralText } from "../../../lib/plural";
 import { ICloudCalendarSettings } from "./icloud-calendar-settings";
 import { GmailAccountsSettings } from "./gmail-settings";
 import InboxAIConsentSettings from "../target-inbox-ai-consent-settings";
+import TargetPushSettings from "../target-push-settings";
 
 const settingsTabLabels: Record<string, string> = {
   general: "settingsGeneral", workspace: "workspace", access: "access", notifications: "settingsNotifications",
@@ -15,6 +16,8 @@ const settingsTabLabels: Record<string, string> = {
 };
 
 export function SettingsView({ app }: { app: LumiApp }) {
+  // E-2: while target task alerts are on, the legacy attention switch would do nothing.
+  const [targetPushActive, setTargetPushActive] = useState(false);
   const {
     setSettingsSection,
     settingsSection: requestedSection,
@@ -346,6 +349,9 @@ export function SettingsView({ app }: { app: LumiApp }) {
                 </section>
               )}
               <section hidden={settingsSection !== "notifications"}>
+                <TargetPushSettings language={language} onActive={setTargetPushActive} />
+              </section>
+              <section hidden={settingsSection !== "notifications"}>
                 <div className="sectionHeading">
                   <div>
                     <h2>{tr("reminders")}</h2>
@@ -375,7 +381,7 @@ export function SettingsView({ app }: { app: LumiApp }) {
                       />
                       {tr("scheduledReminders")}
                     </label>
-                    <label className="preferenceToggle">
+                    {!targetPushActive && <label className="preferenceToggle">
                       <input
                         type="checkbox"
                         checked={notificationState.preferences.attentionPush !== false}
@@ -386,7 +392,7 @@ export function SettingsView({ app }: { app: LumiApp }) {
                         })}
                       />
                       <span>{tr("attentionPush")}<small>{tr("attentionPushInfo")}</small></span>
-                    </label>
+                    </label>}
                     <label>
                       {tr("timezone")}
                       <input

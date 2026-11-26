@@ -2,6 +2,7 @@ import type { AttentionItem } from "./attention";
 import { activeWorkspaces, reconcileWorkspace, withAttentionTransaction } from "./attention-service";
 import { getNotificationPreferences, listPushTargets, sendPushToTarget, type PushTargetResult } from "./notifications";
 import { getDatabase, readSnapshot } from "./server-store";
+import { targetPushOwnsAttention } from "./target-push-scheduler";
 
 // Proactive push for attention items: one message when a task's deadline newly becomes "soon" or
 // overdue. Only tasks are announced, never projects (owner decision 2026-10-07). It never writes to tasks, respects snooze and dismiss, and stays silent during quiet hours.
@@ -90,7 +91,9 @@ export async function processAttentionNotifications(now = Date.now(), sender: At
 async function runPass(now: number, sender: AttentionPushSender) {
   const preferences = getNotificationPreferences();
   const database = getDatabase();
-  if (!preferences.enabled || !preferences.attentionPush) {
+  // E-2: once target push owns attention notifications, the legacy pass stays silent so a task is never
+  // announced twice. Its baseline is forgotten like a disabled switch.
+  if (targetPushOwnsAttention() || !preferences.enabled || !preferences.attentionPush) {
     // Turning the feature back on starts from a fresh baseline instead of announcing the backlog.
     database.prepare("DELETE FROM notification_deliveries WHERE delivery_key = ?").run(BASELINE_KEY);
     return { state: "disabled" as const, sent: 0 };

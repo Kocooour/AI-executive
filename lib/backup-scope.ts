@@ -22,6 +22,8 @@ export const includedTables = [
 export const excludedKeptTables = [
   "passkey_credentials", "passkey_challenges", "push_subscriptions", "notification_deliveries",
   "security_events", "security_alerts", "schema_migrations", "metadata",
+  // E-2 target push device secrets: like push_subscriptions, device credentials rather than owner data.
+  "target_push_subscriptions",
 ] as const;
 
 // Removed from a backup file although they are excluded, except `schema_migrations`: the file needs the list of

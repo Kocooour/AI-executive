@@ -12,6 +12,12 @@ on:
       - "e2e/target-personal-acceptance.spec.ts"
       - "e2e/target-home-attention.spec.ts"
       - "e2e/attention-test-clock.cjs"
+      - "e2e/target-push-delivery.spec.ts"
+      - "e2e/target-push-tick.mjs"
+      - "tests/support/web-push-decrypt.mjs"
+      - "app/ui/views/settings-view.tsx"
+      - "lib/attention-notifications.ts"
+      - "lib/schedulers.ts"
       - "e2e/target-personal-bfcache.spec.ts"
       - "e2e/target-personal-native-bfcache.spec.ts"
       - "e2e/target-personal-native-bfcache-gate.ts"
@@ -138,6 +144,15 @@ jobs:
         run: |
           set -o pipefail
           pnpm exec playwright test e2e/target-personal-native-bfcache.spec.ts --project=desktop --output=test-results/e1-native-bfcache 2>&1 | tee -a "$RUNNER_TEMP/lumi-personal-browser.log"
+      - name: E-2 target push through the real scheduler to a loopback fake push service (390/1280)
+        if: ${{ !cancelled() && steps.build.outcome == 'success' && steps.chromium.outcome == 'success' }}
+        env:
+          LUMI_TARGET_PERSONAL_ACCEPTANCE_E2E: "false"
+          LUMI_TARGET_ATTENTION_E2E: "true"
+          LUMI_TARGET_PUSH_E2E: "true"
+        run: |
+          set -o pipefail
+          pnpm exec playwright test e2e/target-push-delivery.spec.ts --project=desktop --output=test-results/e2-push 2>&1 | tee -a "$RUNNER_TEMP/lumi-personal-browser.log"
       - name: No My Plan child-page unavailability in real-store server logs
         if: always()
         run: |

@@ -93,6 +93,8 @@ export const TARGET_PERSONAL_V1_NOT_SETTINGS:readonly {readonly name:string;read
   {name:"AI_EXECUTIVE_TARGET_STAGING_INBOX_PROOF_KEY",reason:"Child-only Inbox command proof key derived from AI_EXECUTIVE_SESSION_SECRET; never operator-configured or an application session signing secret."},
   {name:"AI_EXECUTIVE_TARGET_STAGING_PROJECT_TITLE_PROOF_KEY",reason:"Child-only key derived from AI_EXECUTIVE_SESSION_SECRET; not set by operators."},
   {name:"AI_EXECUTIVE_TARGET_STAGING_NOTE_SYNC_SECRET",reason:"Belongs to the excluded note-sync feature."},
+  {name:"AI_EXECUTIVE_TARGET_VAPID_PUBLIC_KEY",reason:"E-2 target push identity of the still-excluded notifications feature; optional, owner-approved at E-3 activation, push is reported unavailable without it."},
+  {name:"AI_EXECUTIVE_TARGET_VAPID_PRIVATE_KEY",reason:"Secret half of the E-2 target push identity (root-owned EnvironmentFile only); same activation rule as its public key."},
 ];
 
 /** Whole families that are never part of the profile (not AI_EXECUTIVE_TARGET_*). */

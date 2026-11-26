@@ -232,3 +232,26 @@ test("finishing a partial delivery waits for the morning and does not use the da
   await push.processAttentionNotifications(at("2026-10-19T06:05:00Z"), devices.send); // 08:05
   assert.deepEqual(statusOf("late-retry"), ["sent/1/"]);
 });
+
+test("E-2: once target push owns attention, the legacy pass sends nothing and forgets its baseline", async () => {
+  if (!store.readSnapshot().entities.some((entity) => entity.type === "workspace")) add({ id: "workspace:personal", type: "workspace", title: "Personal", status: "active", workspaceId: "personal", properties: {}, createdAt: 1, updatedAt: 1 });
+  await freshBaseline(DAY10);
+  add(task("target-owned", "2026-10-06"));
+  const flags = ["AI_EXECUTIVE_TARGET_STAGING_HTTP_ENABLED", "AI_EXECUTIVE_TARGET_STAGING_HTTP_WRITE_ENABLED",
+    "AI_EXECUTIVE_TARGET_STAGING_HTTP_NOTIFICATIONS_ENABLED", "AI_EXECUTIVE_TARGET_STAGING_HTTP_NOTIFICATIONS_WRITE_ENABLED"];
+  const env = { ...Object.fromEntries(flags.map((flag) => [flag, "true"])),
+    AI_EXECUTIVE_TARGET_STAGING_DIRECTORY: path.join(dataDir, "target"),
+    AI_EXECUTIVE_TARGET_STAGING_RESTORE_GENERATION: "8e6c6a7e-6d2b-4f39-9a51-6f0a3f7e2b10" };
+  const saved = Object.fromEntries(Object.keys(env).map((key) => [key, process.env[key]]));
+  Object.assign(process.env, env);
+  try {
+    const silent = sender();
+    assert.deepEqual(await push.processAttentionNotifications(DAY10 + 300_000, silent.send), { state: "disabled", sent: 0 });
+    assert.equal(silent.calls.length, 0, "no double announcement next to target push");
+    assert.equal(deliveries().includes("baseline:(marker)"), false, "baseline forgotten like a disabled switch");
+  } finally {
+    for (const [key, value] of Object.entries(saved)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; }
+  }
+  // Without the target flags the legacy pass starts again from a fresh baseline.
+  assert.deepEqual(await push.processAttentionNotifications(DAY10 + 360_000, sender().send), { state: "baseline", sent: 0 });
+});

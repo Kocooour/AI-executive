@@ -54,6 +54,7 @@ import { useBackups } from "./hooks/use-backups";
 import { usePasskeys } from "./hooks/use-passkeys";
 import { useSignIn } from "./hooks/use-sign-in";
 import { useNotifications } from "./hooks/use-notifications";
+import { silenceTargetPushOnThisDevice } from "../../lib/target-push-client";
 import { useAppBadge } from "./hooks/use-app-badge";
 import { useSync } from "./hooks/use-sync";
 import { localizeServerError } from "../../lib/server-errors";
@@ -1846,7 +1847,12 @@ export function useLumiApp(options: { targetDetails?: boolean; targetUnified?: b
         // From here nothing may be edited and no pull or sync still in flight may write data back.
         block: () => { signedOut.current = true; document.body.inert = true; },
         unblock: () => { signedOut.current = false; document.body.inert = false; },
-        endSession: () => fetch("/api/auth/logout", { method: "POST", signal: AbortSignal.timeout(10_000) }).then((response) => (response.ok ? "ok" : "failed") as "ok" | "failed", () => "offline" as const),
+        // E-2: at the commit point (after every confirmation), while the session is still valid, so no task
+        // alert reaches a signed-out device; a cancelled sign-out never touches push (bounded, best effort).
+        endSession: async () => {
+          await silenceTargetPushOnThisDevice();
+          return fetch("/api/auth/logout", { method: "POST", signal: AbortSignal.timeout(10_000) }).then((response) => (response.ok ? "ok" : "failed") as "ok" | "failed", () => "offline" as const);
+        },
         // If the wipe cannot finish now it stays marked and is completed when the page starts again.
         wipe: () => clearLocalData(),
       });
