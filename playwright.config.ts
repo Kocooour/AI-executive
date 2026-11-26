@@ -338,6 +338,7 @@ export default defineConfig({
       HERMES_AI_ENABLED: "false",
       // iCloud calendar requests of the test instance go to the local mock server instead of iCloud. The server honours the
       // address only with both settings and only for an http:// loopback address (lib/caldav.ts, calDavTestOverride).
+      ...(personalAcceptanceTest?{NEXT_PUBLIC_LUMI_E2E_QUEUE_WITNESS:"1"}:{}),
       AI_EXECUTIVE_E2E: "true",
       AI_EXECUTIVE_E2E_CALDAV_URL: `http://127.0.0.1:${process.env.LUMI_E2E_CALDAV_PORT}/`,
       AI_EXECUTIVE_E2E_GMAIL_URL: `http://127.0.0.1:${process.env.LUMI_E2E_GMAIL_PORT}/`,
