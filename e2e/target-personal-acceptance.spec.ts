@@ -808,6 +808,52 @@ for(const width of [390,1280]){
     test.setTimeout(90_000);
     if(!store?.seed?.areaTitle)throw Error("Missing isolated personal Area fixture");
     await page.setViewportSize({width,height:844});
+    // Chromium can report ERR_ABORTED after a complete 200 response has
+    // already been consumed through getReader()/releaseLock(). Observe the
+    // application's actual native reader, without cloning, substituting or
+    // consuming any extra body. This is independent of the CDP terminal event.
+    await page.addInitScript(()=>{
+      type BodyWitness={status:number|null;eof:boolean;bytes:number;
+        aborted:boolean;readError:boolean;fetchError:boolean};
+      const reads:BodyWitness[]=[];
+      Object.assign(window,{__lumiAreaBodyWitness:reads});
+      const nativeFetch=window.fetch.bind(window);
+      window.fetch=async(input,init)=>{
+        const raw=typeof input==="string"?input:input instanceof URL?input.href:input.url;
+        if(new URL(raw,location.href).pathname!=="/api/target-staging/notes/create-targets")
+          return nativeFetch(input,init);
+        const signal=init?.signal??(input instanceof Request?input.signal:null);
+        const witness:BodyWitness={status:null,eof:false,bytes:0,aborted:false,readError:false,fetchError:false};
+        reads.push(witness);
+        const onAbort=()=>{witness.aborted=true;};
+        if(signal?.aborted)onAbort();
+        signal?.addEventListener("abort",onAbort,{once:true});
+        try{
+          const response=await nativeFetch(input,init);
+          witness.status=response.status;
+          if(response.body){
+            const body=response.body;
+            const getReader=body.getReader.bind(body);
+            // The production bounded JSON reader uses the default reader.
+            // Keep its original stream, reader, read results and errors.
+            Object.defineProperty(body,"getReader",{configurable:true,value:()=>{
+              const reader=getReader();
+              const read=reader.read.bind(reader);
+              reader.read=async()=>{
+                try{
+                  const chunk=await read();
+                  if(chunk.done)witness.eof=true;
+                  else witness.bytes+=chunk.value.byteLength;
+                  return chunk;
+                }catch(error){witness.readError=true;throw error;}
+              };
+              return reader;
+            }});
+          }
+          return response;
+        }catch(error){witness.fetchError=true;throw error;}
+      };
+    });
     const cdp=await page.context().newCDPSession(page);
     await cdp.send("Network.enable");
     type NetworkRead={
@@ -939,12 +985,31 @@ for(const width of [390,1280]){
       const fresh=events.filter(e=>e.path===areaPath&&e.order>original.order);
       expect(fresh,"exactly one automatic replacement Area GET").toHaveLength(1);
       const replacement=fresh[0];
-      await expect.poll(()=>replacement.finished,{timeout:10000})
+      await expect.poll(()=>replacement.finished??replacement.failed,{timeout:10000})
         .not.toBeUndefined();
       expect(replacement.status).toBe(200);
-      expect(replacement.failed).toBeUndefined();
       expect(replacement.disk).toBe(false);
       expect(replacement.serviceWorker).toBe(false);
+      const bodyReads=await page.evaluate(()=>(window as typeof window & {
+        __lumiAreaBodyWitness:Array<{status:number|null;eof:boolean;bytes:number;
+          aborted:boolean;readError:boolean;fetchError:boolean}>;
+      }).__lumiAreaBodyWitness);
+      expect(bodyReads,"exactly the cancelled original and a replacement native fetch").toHaveLength(2);
+      expect(bodyReads[0]).toMatchObject({aborted:true,eof:false});
+      expect(bodyReads[1],"replacement must consume the entire real 200 body without abort or read error")
+        .toMatchObject({status:200,eof:true,aborted:false,readError:false,fetchError:false});
+      expect(bodyReads[1].bytes).toBeGreaterThan(0);
+      // Do not interpret an arbitrary failed transfer as success. The only
+      // tolerated CDP discrepancy is ERR_ABORTED after headers, independently
+      // corroborated by native EOF, no AbortSignal/error and the validated UI.
+      if(replacement.failed!==undefined){
+        expect(replacement.finished).toBeUndefined();
+        expect(replacement.reason).toBe("net::ERR_ABORTED");
+      }else expect(replacement.finished).not.toBeUndefined();
+      await test.info().attach("area-body-witness-"+width+".json",{
+        body:Buffer.from(JSON.stringify({original,replacement,bodyReads})),
+        contentType:"application/json",
+      });
       const badge=events.filter(e=>e.path===inboxPath&&e.order>wakeMark);
       expect(badge.length,"Inbox resumes automatically during the same wake").toBeGreaterThan(0);
       await expect.poll(()=>badge.some(e=>e.status===200&&e.finished!==undefined&&e.failed===undefined),
