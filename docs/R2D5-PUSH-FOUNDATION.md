@@ -94,5 +94,6 @@ mohou být jeden v tichém okně a druhý ne. Klíč oznámení na pásmu nezáv
 Živě ACL-ověřený claim (transakce se čtením aktuálních kandidátů, baseline,
 claim `pending`, počítání limitu), odeslání přes **injektovaný sender**,
 zápis výsledku per zařízení a HTTP pro správu nastavení a targetů — dál ve
-výchozím stavu vypnuté. Skutečné web-push napojení a import subscription
-přijde až při R4 cutoveru.
+výchozím stavu vypnuté. Skutečné web-push napojení dodalo E-2 (bez importu
+legacy subscriptions); endpoint a klíče zařízení zůstávají mimo staging, v
+tabulce `target_push_subscriptions` aplikační SQLite.

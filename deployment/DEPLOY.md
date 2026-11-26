@@ -561,3 +561,43 @@ sudo systemctl start ai-executive
 ověření. Nové UI v `personal-v1` Archiv nenabízí; profil `off` zůstává.
 Přijaté riziko: starý offline prohlížeč může testovací data znovu odeslat;
 v takovém případě opakuj postup po zastavení služby.
+
+## E-2 — target task alerts (Web Push), activated only in E-3
+
+E-2 ships default-off code; nothing changes on the server until E-3 moves the
+notification flags into `personal-v1` **and** the owner approves the keys below.
+
+**Dedicated VAPID keys (one-time, owner-approved env change).** Target push never
+reuses the legacy keys stored in the old database and never generates keys at
+runtime. Append them as root without printing them (the EnvironmentFile stays
+root-owned 0600):
+
+```bash
+sudo sh -c 'umask 077; cd /opt/ai-executive && node -e "const k=require(\"web-push\").generateVAPIDKeys();process.stdout.write(\"AI_EXECUTIVE_TARGET_VAPID_PUBLIC_KEY=\"+k.publicKey+\"\\nAI_EXECUTIVE_TARGET_VAPID_PRIVATE_KEY=\"+k.privateKey+\"\\n\")" >> /etc/ai-executive/ai-executive.env'
+```
+
+`VAPID_SUBJECT` must stay a public `https://` origin or a `mailto:` address
+(Apple rejects other subjects). Without valid keys Settings shows push as
+unavailable and Home attention keeps working.
+
+**Rotation.** Replace both lines and restart. Every device subscribed with the old
+public key stops receiving alerts: remove the old devices in Settings → Notifications
+and turn alerts on again on each device.
+
+**Rollback.** Remove the two lines (or turn the notification flags off again) and
+restart: no pass runs and nothing is sent. Device secrets live only in
+`target_push_subscriptions` of `/var/lib/ai-executive/store.sqlite`; they are
+excluded from every backup and export and are pruned automatically once a device
+is no longer live, so no manual cleanup is required.
+
+**What changes when it is active.** One scheduled pass every five minutes (bounded
+child, exclusive lock `/var/lib/ai-executive/target-push-pass.lock`; a lock older
+than five minutes from a crashed pass is recovered). The legacy attention push
+stays silent while the target notification flags are on (no double alerts);
+legacy reminders are unchanged. The 5 legacy push subscriptions are not migrated:
+devices are registered again from Settings. Browser-test switches
+(`AI_EXECUTIVE_E2E*`, `LUMI_E2E_*`, e.g. the fake push origin) are refused in the
+production EnvironmentFile by `deploy-safe.sh`.
+
+After deploy, the owner checks on iPhone (installed PWA) and Mac: turn alerts on
+for the device, send the test notification, and confirm the device list.

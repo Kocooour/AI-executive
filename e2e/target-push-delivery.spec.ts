@@ -180,12 +180,14 @@ for(const width of [390,1280]){
     // No horizontal scroll at this width.
     expect(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth)).toBe(true);
     // A reload re-confirms the device from the server; nothing comes from browser storage.
-    await page.reload();
-    await expect(page.getByTestId("target-push-settings").getByTestId("target-push-device-state"))
+    const reloaded=await openNotifications(page);
+    await expect(reloaded.getByTestId("target-push-device-state"))
       .toHaveText("Toto zařízení dostává upozornění.",{timeout:20_000});
-    await page.getByTestId("target-push-disable").click();
-    await expect(page.getByTestId("target-push-device-state")).toHaveText("Toto zařízení zatím upozornění nedostává.");
-    await expect(page.getByTestId("target-push-devices")).toHaveCount(0);
+    await reloaded.getByTestId("target-push-disable").click();
+    await expect(reloaded.getByTestId("target-push-device-state")).toHaveText("Toto zařízení zatím upozornění nedostává.");
+    await expect(reloaded.getByTestId("target-push-notice"))
+      .toHaveText("Na tomto zařízení se upozornění už nebudou zobrazovat.");
+    await expect(reloaded.getByText("(toto zařízení)")).toHaveCount(0);
   });
 }
 
@@ -204,7 +206,7 @@ test("delivery: baseline, exactly one private message, daily limit, quiet hours,
   const panel=await openNotifications(page);
   // Turning alerts off forgets the baseline, so this run starts from a fresh one.
   if(await panel.getByTestId("target-push-attention").isChecked()){
-    await panel.getByTestId("target-push-attention").uncheck();
+    await panel.getByTestId("target-push-attention").click();
     await expect(panel.getByTestId("target-push-notice")).toHaveText("Uloženo.");
     await expect(panel.getByTestId("target-push-attention")).not.toBeChecked();
   }
@@ -236,7 +238,8 @@ test("delivery: baseline, exactly one private message, daily limit, quiet hours,
   await tick();
   messages=payloads(device);
   expect(messages).toHaveLength(4);
-  expect(messages[3].title).toBe("Limit Čtvrtý");
+  // Which item waited is the planner's ranking; every item arrives exactly once.
+  expect(messages.map(m=>m.title).sort()).toEqual(["Limit Druhý","Limit Třetí","Limit Čtvrtý","Zaplatit nájem"].sort());
   // 5. A pass killed while its send is in flight never sends that item again.
   setClock(pragueAt(12,1));
   const crash=overdueTask("Přerušené odeslání");

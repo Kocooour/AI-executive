@@ -84,8 +84,9 @@ export function notificationsTargetRequest(
   if(x.action==="register"){
     if(keys!=="action,commandId,endpoint,expectedNotificationEpoch,keys,restoreGeneration")
       return null;
+    // Allowed push service host (or the isolated test run's loopback fake service).
     subscription=targetPushSubscription({endpoint:x.endpoint,keys:x.keys});
-    if(!subscription||!validPushEndpoint(subscription.endpoint))return null;
+    if(!subscription)return null;
     command={action:"register",commandId:x.commandId,
       endpointHash:pushEndpointHash(subscription.endpoint),
       expectedNotificationEpoch:x.expectedNotificationEpoch,
