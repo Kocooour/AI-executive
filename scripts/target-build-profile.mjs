@@ -36,11 +36,12 @@ function checkBuild() {
 if (action === "--build") {
   // Next automatically reads local dotenv files even with an explicit process env.
   // Refuse a conflicting local build flag, rather than letting .env override off.
-  // No Lumi NEXT_PUBLIC_* (e.g. an E2E-only witness) may come from a checkout dotenv.
+  // No Lumi NEXT_PUBLIC_* (e.g. an E2E-only witness) may come from a checkout dotenv,
+  // in either the KEY=value or the dotenv KEY: value form.
   for (const name of [".env", ".env.local", ".env.production", ".env.production.local"]) {
     const file = path.join(app, name);
     if (existsSync(file) &&
-        /^\s*(?:export\s+)?NEXT_PUBLIC_LUMI_[A-Z0-9_]*\s*=/m
+        /^\s*(?:export\s+)?NEXT_PUBLIC_LUMI_[A-Z0-9_]*\s*[=:]/m
           .test(readFileSync(file, "utf8"))) {
       throw new Error("checkout dotenv attempts to control the compile-time v1 shell");
     }

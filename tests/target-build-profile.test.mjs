@@ -99,11 +99,14 @@ test("an inherited E2E-only public flag never reaches a production build", t => 
 
 test("a checkout dotenv cannot inject any Lumi public build flag", t => {
   const { root, capture, call } = sandbox(t);
-  writeFileSync(path.join(root, ".env.local"), "NEXT_PUBLIC_LUMI_E2E_QUEUE_WITNESS=1\n");
-  const result = call("--build", "personal-v1");
-  assert.notEqual(result.status, 0);
-  assert.match(result.stderr, /dotenv attempts to control/);
-  assert.throws(() => readFileSync(capture, "utf8"), { code: "ENOENT" });
+  for (const line of ["NEXT_PUBLIC_LUMI_E2E_QUEUE_WITNESS=1",
+    "export NEXT_PUBLIC_LUMI_E2E_QUEUE_WITNESS = 1", "NEXT_PUBLIC_LUMI_DESIGN_V1_PREVIEW: 1"]) {
+    writeFileSync(path.join(root, ".env.local"), line + "\n");
+    const result = call("--build", "personal-v1");
+    assert.notEqual(result.status, 0, line);
+    assert.match(result.stderr, /dotenv attempts to control/, line);
+    assert.throws(() => readFileSync(capture, "utf8"), { code: "ENOENT" }, line);
+  }
 });
 
 test("target capture remains gated by the compiled v1 shell, not profile flags alone", () => {
