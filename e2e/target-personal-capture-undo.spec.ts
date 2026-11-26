@@ -76,15 +76,35 @@ for(const width of [390,1280]){
     const id=await capture(page,width,title);
     const notice=page.getByTestId("target-private-task-created");
     await expect(notice.getByTestId("target-private-task-undo")).toBeEnabled();
-    // Change the task after creation: completion moves its revision.
+    // Completion changes the task revision. Row absence alone is not a
+    // commit witness: the plan also conceals its rows while revalidating.
+    const completion=page.waitForResponse(response=>
+      response.request().method()==="PATCH"&&
+      new URL(response.url()).pathname==="/api/target-staging/task-temporal/status"&&
+      response.request().postDataJSON()?.taskId===id,{timeout:35_000});
     await page.getByRole("button",{name:"Dokončit úkol: "+title}).click();
+    const completed=await completion;
+    await expect(page.getByRole("status").filter({hasText:"Dokončení potvrzeno."}),
+      "Completion PATCH HTTP "+completed.status()).toBeVisible({timeout:35_000});
+    await expect(page.getByRole("button",{name:"Vrátit dokončení (Undo)"})).toBeEnabled();
     await expect(page.locator('[data-detail-row="task:'+id+'"]')).toHaveCount(0);
+    // Observe the actual fresh read made by creation Undo, not a mocked
+    // response or a permissive assertion accepting an unrelated refusal.
+    const preview=page.waitForResponse(response=>{
+      const url=new URL(response.url());
+      return response.request().method()==="GET"&&
+        url.pathname==="/api/target-staging/task-temporal/detail"&&url.searchParams.get("taskId")===id;
+    },{timeout:20_000});
     await notice.getByTestId("target-private-task-undo").click();
+    const seen=await preview;
+    expect(seen.status(),"Creation Undo must read the completed task").toBe(200);
+    expect((await seen.json()).task).toMatchObject({id,status:"completed"});
     await expect(notice.getByTestId("target-private-task-undo-result"))
-      .toContainText("Úkol se mezitím změnil");
+      .toContainText("Úkol se mezitím změnil",{timeout:20_000});
     expect(writes.filter(p=>p.endsWith("/tasks/"+id+"/delete"))).toHaveLength(0);
     // The completed task still exists and its own completion Undo still works.
     await page.getByRole("button",{name:"Vrátit dokončení (Undo)"}).click();
-    await expect(page.locator('[data-detail-row="task:'+id+'"]')).toHaveCount(1);
+    await expect(page.getByRole("status").filter({hasText:"Obnovení potvrzeno."})).toBeVisible({timeout:35_000});
+    await expect(page.locator('[data-detail-row="task:'+id+'"]')).toHaveCount(1,{timeout:25_000});
   });
 }
