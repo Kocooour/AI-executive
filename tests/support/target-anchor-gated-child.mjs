@@ -177,12 +177,15 @@ if (mode === "crash-before-confirm-revoke") {
 let result = { ok: true };
 let done = 0;
 for (let i = 0; i < Number(rounds) && result.ok; i++, done++) {
-  // "unavailable" is a pre-commit refusal (e.g. another writer's SQLite journal exists right now):
-  // retry like an operator would. Any other failure ends the run and is reported.
+  // "unavailable" is a pre-commit refusal (e.g. another writer's SQLite journal exists right now)
+  // and "write_failed" includes the documented bounded lock wait (a holder longer than the
+  // writer's 200 ms busy timeout, common on a loaded CI runner): both are retryable, so retry
+  // like an operator would. A persistent failure still ends the run and is reported; the parent
+  // keeps verifying the chain, so a retried write may never leave an abort or a duplicate.
   for (let attempt = 0; attempt < 200; attempt++) {
     result = durable.issueDurableTargetStagingSession(
       { stagingDirectory: directory, expectedRestoreGeneration: generation }, "alice", 60);
-    if (result.ok || result.reason !== "unavailable") break;
+    if (result.ok || (result.reason !== "unavailable" && result.reason !== "write_failed")) break;
     wait(5);
   }
 }
