@@ -36,6 +36,19 @@ export function queuedTargetFetch(fetchImpl:typeof fetch=fetch):typeof fetch{
           reject(abortError(signal));
         };
         waiting.push(waiter);
+        // Test-build-only, passive observation of actual admission contention.
+        // Never publish URLs, IDs, headers, payloads or a mutation hook.
+        if(process.env.NEXT_PUBLIC_LUMI_E2E_QUEUE_WITNESS==="1"&&typeof window!=="undefined"){
+          try{
+            const raw=input instanceof Request?input.url:String(input);
+            const url=new URL(raw,window.location.href);
+            if(url.origin===window.location.origin){
+              const name=url.pathname==="/api/target-staging/notes/create-targets"?"area":
+                url.pathname==="/api/target-staging/inbox"?"inbox":null;
+              if(name)performance.mark("lumi-e2e:queue-wait:"+name);
+            }
+          }catch{/* instrumentation must never affect queue admission */}
+        }
         signal?.addEventListener("abort",onAbort,{once:true});
       });
     }else active++;
