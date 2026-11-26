@@ -160,8 +160,17 @@ for(const width of [390,1280]){
     await row(page,titles[1]).getByRole("button",{name:"Otevřít úkol "+titles[1]}).click();
     const detail=page.getByTestId("target-detail");
     await expect(detail).toBeVisible();
+    const completion=page.waitForResponse(r=>
+      isPath(r.url(),"/api/target-staging/task-temporal/status")&&
+      r.request().method()==="PATCH"&&r.request().postDataJSON()?.taskId==="e1:"+width+":1",
+      {timeout:35_000});
     await detail.getByTestId("target-detail-edit-status-toggle").click();
-    await expect(detail.getByTestId("target-detail-edit-status")).toContainText("Stav úkolu je uložen.");
+    const completed=await completion;
+    // Record the actual HTTP outcome; the detail controller allows 30 seconds
+    // for its guarded write/receipt. Require confirmed UI state, never pending.
+    await expect(detail.getByTestId("target-detail-edit-status"),
+      "Completion PATCH HTTP "+completed.status()).toContainText("Stav úkolu je uložen.",{timeout:35_000});
+    await expect(detail.getByText("Dokončeno",{exact:true})).toBeVisible({timeout:25_000});
     // The same inspector control is labelled Zpět on mobile and Zavřít on desktop.
     // Match the actual responsive control, not the desktop-only label.
     await detail.locator("button.inspectorClose").click({timeout:10_000});
