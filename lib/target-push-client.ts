@@ -166,16 +166,31 @@ export function base64UrlToBytes(value:string):Uint8Array<ArrayBuffer> {
   return out;
 }
 
-/** E-2: on sign-out, end Web Push on THIS device before the session ends. The
- * browser subscription is unsubscribed at once (no network read first): the push
- * service then answers 404/410 and the next pass revokes the device, and no
- * notification with a task title can reach a signed-out device. Bounded, never throws. */
+/** E-2: on sign-out (at the commit point, session still valid), end Web Push on THIS
+ * device once target task alerts are active. Until then (routes off: 404) nothing
+ * changes. When active, or when that cannot be checked in time, the browser
+ * subscription is unsubscribed (privacy first): the push service then answers
+ * 404/410 and the next pass revokes the device, so no task title reaches a
+ * signed-out device. A legacy reminder subscription is also removed on the server
+ * first, so its device count stays truthful. Bounded, never throws. */
 export async function silenceTargetPushOnThisDevice(timeoutMs=5000):Promise<void> {
   if(typeof window==="undefined"||!("serviceWorker" in navigator)||!("PushManager" in window))return;
   const work=(async()=>{
     const registration=await navigator.serviceWorker.getRegistration();
     const subscription=await registration?.pushManager.getSubscription();
-    if(subscription)await subscription.unsubscribe();
+    if(!subscription)return;
+    const controller=new AbortController();
+    const timer=setTimeout(()=>controller.abort(),Math.max(500,timeoutMs-2000));
+    const config=await readTargetPushConfig(controller.signal).finally(()=>clearTimeout(timer));
+    if(config.ok===false&&config.reason==="disabled")return;
+    if(config.ok===true&&!(config.value.publicKey&&subscribedWithKey(subscription,config.value.publicKey))){
+      // The older reminders' subscription: deregister it on the server too.
+      await fetch("/api/notifications",{method:"POST",credentials:"same-origin",
+        headers:{"content-type":"application/json"},
+        body:JSON.stringify({action:"unsubscribe",endpoint:subscription.endpoint}),
+        signal:AbortSignal.timeout(1500)}).catch(()=>undefined);
+    }
+    await subscription.unsubscribe();
   })().catch(()=>undefined);
   await Promise.race([work,new Promise<void>(resolve=>setTimeout(resolve,timeoutMs))]);
 }

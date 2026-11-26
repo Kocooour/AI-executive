@@ -46,7 +46,8 @@ export async function startSchedulers() {
   }
   if (!scheduler.__aiExecutiveTargetPushScheduler) {
     // E-2: target attention push (identity-bound pass in a bounded child). Off unless the notification
-    // flags, the target store and the VAPID keys are all configured; never logs device data.
+    // flags and the target store are configured; without VAPID keys it only prunes secrets of devices that
+    // are no longer live. Never logs device data.
     const targetPushTick = () => runTargetPushSchedulerTick()
       .then((tick) => { if (tick.state === "failed") console.error("Target push scheduler failed"); })
       .catch(() => console.error("Target push scheduler failed"));

@@ -112,12 +112,15 @@ export default function TargetPushSettings({language="cs",onActive}:{
       window.setTimeout(()=>noticeRef.current?.focus(),0);
     }
   };
-  const save=(next:Partial<Pick<TargetNotificationSettings,"timeZone"|"attentionPush"|"quietStart"|"quietEnd"|"paused">>)=>
+  const save=(next:Partial<Pick<TargetNotificationSettings,"timeZone"|"attentionPush"|"quietStart"|"quietEnd"|"paused">>,quiet=false)=>
     run(async()=>{
       const r=await writeTargetNotificationSettings(settings,{timeZone:settings.timeZone,
         attentionPush:settings.attentionPush,quietStart:settings.quietStart,quietEnd:settings.quietEnd,
         paused:settings.paused,...next});
-      return r.ok===false?failureText(r.reason):t("Uloženo.","Saved.");
+      if(r.ok===false)return failureText(r.reason);
+      // Only a saved quiet-hours form may be replaced by the server values.
+      if(quiet)draftDirty.current=false;
+      return t("Uloženo.","Saved.");
     });
   const enableDevice=()=>run(async()=>{
     if(!publicKey||!supported())return t("Tento prohlížeč upozornění nepodporuje.","This browser does not support notifications.");
@@ -178,7 +181,9 @@ export default function TargetPushSettings({language="cs",onActive}:{
     return r.value.result==="sent"
       ?t("Testovací oznámení bylo předáno službě oznámení.","The test notification was handed to the push service.")
       :r.value.result==="gone"
-        ?t("Služba oznámení zařízení už nezná, proto bylo odebráno. Zapněte upozornění znovu.","The push service no longer knows this device, so it was removed. Turn notifications on again.")
+        ?(r.value.revoked
+          ?t("Služba oznámení zařízení už nezná, proto bylo odebráno. Zapněte upozornění znovu.","The push service no longer knows this device, so it was removed. Turn notifications on again.")
+          :t("Služba oznámení zařízení už nezná. Odeberte ho v seznamu a zapněte upozornění znovu.","The push service no longer knows this device. Remove it from the list and turn notifications on again."))
         :t("Testovací oznámení se nepodařilo doručit.","The test notification could not be delivered.");
   });
 
@@ -231,8 +236,7 @@ export default function TargetPushSettings({language="cs",onActive}:{
         <small id="target-push-urgent-note">{t("Zatím není k dispozici.","Not available yet.")}</small>
       </label>
       {draft&&<form className="targetPushQuiet" onSubmit={e=>{e.preventDefault();
-        draftDirty.current=false;
-        void save({quietStart:draft.quietStart,quietEnd:draft.quietEnd,timeZone:draft.timeZone.trim()});}}>
+        void save({quietStart:draft.quietStart,quietEnd:draft.quietEnd,timeZone:draft.timeZone.trim()},true);}}>
         <label>{t("Tiché hodiny od","Quiet hours from")}
           <input type="time" data-testid="target-push-quiet-start" value={draft.quietStart} required
             onChange={e=>{draftDirty.current=true;setDraft({...draft,quietStart:e.target.value});}}/></label>

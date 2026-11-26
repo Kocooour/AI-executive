@@ -597,8 +597,9 @@ run as root: `sudo -u ai-executive sqlite3 /var/lib/ai-executive/store.sqlite "D
 child, exclusive lock `/var/lib/ai-executive/target-push-pass.lock`; a lock older
 than five minutes from a crashed pass is recovered). The legacy attention push
 stays silent while the target notification flags are on (no double alerts);
-legacy reminders are unchanged. Signing out ends Web Push on that device (target
-and legacy subscriptions alike), so a signed-out device shows no task titles. The 5 legacy push subscriptions are not migrated:
+legacy reminders are otherwise unchanged. Once active, signing out ends Web Push
+on that device (target and legacy subscriptions alike), so a signed-out device
+shows no task titles; before E-3 activation sign-out behaves exactly as today. The 5 legacy push subscriptions are not migrated:
 devices are registered again from Settings. Browser-test switches
 (`AI_EXECUTIVE_E2E*`, `LUMI_E2E_*`, e.g. the fake push origin) are refused in the
 production EnvironmentFile by `deploy-safe.sh`.
