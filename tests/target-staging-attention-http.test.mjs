@@ -508,7 +508,7 @@ test("E-1 server-authored Home explanations are private and cursor-bound to loca
   assert.equal(data.explanations.length,1);
   assert.equal(data.explanations[0].attentionKey,data.items[0].attentionKey);
   assert.match(data.explanations[0].why,/Vyhodnoceno:/);
-  assert.match(data.explanations[0].why,/UTC/);
+  assert.doesNotMatch(data.explanations[0].why,/[A-Z][a-z]+\/[A-Z]|\bUTC\b/);
   assert.doesNotMatch(JSON.stringify(data.explanations),/Bob one|Alice secret/);
   assert.equal(data.hasMore,true);
   const next=await get(q({...params,cursor:data.nextCursor}),bob);
