@@ -27,6 +27,7 @@
      offscreen idle rows. Scrolling to Load more starts IntersectionObserver
      previews; inserting their loading lines must not move a pointer target. */
   gap:.35rem;font-size:.9rem}
+.targetInboxSuggestion.targetInboxSuggestionEmpty{min-height:0}
 .targetInboxSuggestionHeading{display:flex;align-items:center;gap:.45rem;
   flex-wrap:wrap;min-width:0}
 .targetInboxSuggestionHeading>span{flex:1;min-width:8rem;overflow-wrap:anywhere}
@@ -37,6 +38,7 @@
 @media(max-width:480px){
   /* A mobile rules heading wraps its summary above the action buttons. */
   .targetInboxSuggestion{min-height:calc(44px + 1.5em + .45rem)}
+  .targetInboxSuggestion.targetInboxSuggestionEmpty{min-height:0}
   .targetInboxRowText{flex-basis:100%}
   .targetInboxSuggestionHeading>span{flex-basis:100%}
   .targetInboxSuggestionHeading button:last-child{margin-left:auto}

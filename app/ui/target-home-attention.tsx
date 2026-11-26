@@ -212,7 +212,12 @@ export function TargetHomeAttention({language,openable,onRefusal,generation}:{
       const result=await changeHomeAttention({item,attentionEpoch:state.page.attentionEpoch},
         action,until,controller.signal,targetAppFetch,command=>{committed=command;});
       if(controller.signal.aborted||!live())return;
-      if(result.status==="ok"){setUndo(committed?{witness:committed,title:item.title,action}:null);setNotice(t.changed);}
+      if(result.status==="ok"){
+        // The write committed: drop the row now so its actions cannot be used
+        // again on a stale epoch while the authoritative re-read is pending.
+        setState(current=>current.kind!=="ready"?current:{kind:"ready",page:{...current.page,
+          items:current.page.items.filter(x=>x.attentionKey!==item.attentionKey)}});
+        setUndo(committed?{witness:committed,title:item.title,action}:null);setNotice(t.changed);}
       else{setNotice(result.status==="uncertain"?t.uncertain:result.status==="unavailable"?t.unavailable:t.conflict);
         if(result.status==="unauthorized")onRefusal();}
       closePicker();focusPending.current=true;refreshPending.current=true;

@@ -163,8 +163,24 @@ for(const width of [390,1280]){
     });
     const morningWrite=page.waitForResponse(r=>isPath(r.url(),"/api/target-staging/attention/command")&&
       r.request().method()==="PATCH"&&r.status()===200);
-    await firstRow.getByRole("button",{name:"Zítra 8:00",exact:true}).click();
-    expect((await morningWrite).request().postDataJSON().snoozedUntilMs).toBe(morning);
+    // Hold the post-commit re-read: the committed row must leave at once, so
+    // its actions cannot be reused on a stale epoch while the read is pending.
+    let releaseReRead=()=>{};const readGate=new Promise<void>(r=>{releaseReRead=r;});
+    let heldReads=0;
+    const holdReRead=async(route:Route)=>{
+      if(route.request().method()==="GET"&&isPath(route.request().url(),attentionPath)){
+        heldReads++;await readGate;
+      }
+      await route.continue().catch(()=>{});
+    };
+    await page.route(readPattern,holdReRead);
+    try{
+      await firstRow.getByRole("button",{name:"Zítra 8:00",exact:true}).click();
+      expect((await morningWrite).request().postDataJSON().snoozedUntilMs).toBe(morning);
+      await expect(firstRow).toHaveCount(0);
+      await expect.poll(()=>heldReads).toBeGreaterThan(0);
+      await expect(firstRow).toHaveCount(0);
+    }finally{releaseReRead();await page.unroute(readPattern,holdReRead);}
     await expect(firstRow).toHaveCount(0,{timeout:25_000});
     await panel(page).getByRole("button",{name:"Zpět: odložení úkolu "+titles[0],exact:true}).click();
     await expect(firstRow).toBeVisible({timeout:25_000});

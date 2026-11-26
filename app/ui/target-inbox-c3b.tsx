@@ -234,8 +234,13 @@ export default function TargetInboxC3b({item,restoreGeneration,
     ?(moving?placement+" · ":"")+
       speak("Naplánovat na ","Schedule for ")+localized
     :placement;
-  return <div ref={root} className="targetInboxSuggestion"
-      data-testid={"target-c3b-suggestion-"+item.id}>
+  // Reserve the heading height only while a proposal can still appear. A row
+  // whose suggestions are off renders nothing and must not leave a blank gap.
+  // `disabled` is deliberately not used: it toggles for every row at once and
+  // collapsing idle rows would move Load more under the pointer again.
+  const empty=status==="off";
+  return <div ref={root} className={"targetInboxSuggestion"+(empty?" targetInboxSuggestionEmpty":"")}
+      data-testid={"target-c3b-suggestion-"+item.id} data-status={status}>
     {status==="ready"&&suggestion&&<>
       <div className="targetInboxSuggestionHeading">
         <span>{summary}</span>
