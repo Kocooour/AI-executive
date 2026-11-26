@@ -70,7 +70,7 @@ export function TargetHomeAttention({language,openable,onRefusal,generation}:{
   const [custom,setCustom]=useState("");
   const heading=useRef<HTMLHeadingElement>(null);
   const sectionRef=useRef<HTMLElement>(null),feedbackRef=useRef<HTMLParagraphElement>(null);
-  const undoRef=useRef<HTMLButtonElement>(null);
+  const undoRef=useRef<HTMLButtonElement>(null),retryRef=useRef<HTMLButtonElement>(null);
   const focusedBeforeSwap=useRef<Element|null>(null);
   const actionRef=useRef<AbortController|null>(null);
   const readRef=useRef<AbortController|null>(null);
@@ -159,15 +159,20 @@ export function TargetHomeAttention({language,openable,onRefusal,generation}:{
   useEffect(()=>()=>{readRef.current?.abort();actionRef.current?.abort();},[]);
   useEffect(()=>{
     if(state.kind==="loading")return;
-    const removed=focusedBeforeSwap.current;focusedBeforeSwap.current=null;
+    const previous=focusedBeforeSwap.current;focusedBeforeSwap.current=null;
     const active=document.activeElement;
-    const lost=removed!==null&&!removed.isConnected&&active===document.body;
+    const lost=previous!==null&&active===document.body;
+    // A keyed row can move without being destroyed; browsers may still
+    // blur the moved node. Restore that exact element, not its heading.
+    if(!focusPending.current&&lost&&previous instanceof HTMLElement&&previous.isConnected){
+      previous.focus();return;
+    }
     if(focusPending.current||lost){
       focusPending.current=false;
       // Do not steal focus from an unrelated control reached meanwhile.
       if(lost||active===document.body||sectionRef.current?.contains(active)){
         const empty=state.kind==="ready"&&!state.page.items.length;
-        (empty&&undoRef.current?undoRef.current:heading.current||feedbackRef.current)?.focus();
+        (empty&&undoRef.current?undoRef.current:heading.current||retryRef.current||feedbackRef.current)?.focus();
       }
     }
   },[state]);
@@ -235,7 +240,7 @@ export function TargetHomeAttention({language,openable,onRefusal,generation}:{
   const panel=()=>{
   if(state.kind==="loading")return <p role="status">{t.loading}</p>;
   if(state.kind==="error")return <section role="status"><p>{t.error}</p>
-    <button type="button" onClick={reload}>{t.retry}</button></section>;
+    <button ref={retryRef} type="button" onClick={reload}>{t.retry}</button></section>;
   const {page}=state;
   if(page.explanationLanguage!==language||!page.explanations)return <p role="status">{t.loading}</p>;
   if(!page.items.length&&!undo)return null;
