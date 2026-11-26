@@ -203,10 +203,17 @@ for(const width of [390,1280]){
       await row(page,titles[0]).getByRole("button",{name:"Skrýt",exact:true}).click();
       await expect.poll(()=>committed).toBe(true);
       const receipt=page.waitForResponse(r=>isPath(r.url(),"/api/target-staging/attention/command/receipt")&&r.status()===200);
+      // Ticks are deferred while the command settles, so the next page GET is
+      // the authoritative post-commit re-read. The row leaves before it lands;
+      // wait for it so the next fake-clock jump cannot expire it mid-flight.
+      const reread=page.waitForResponse(r=>isPath(r.url(),attentionPath)&&
+        r.request().method()==="GET"&&r.status()===200);
       await poll(page);
       const reply=await receipt;
       expect(reply.request().postData()).toBe(original);
       expect(await reply.json()).toEqual({status:"committed"});
+      await expect(row(page,titles[0])).toHaveCount(0);
+      await reread;
       await expect(row(page,titles[0])).toHaveCount(0);
       await expect(panel(page).getByRole("button",{name:/^Zpět: (skrytí|odložení) úkolu /})).toBeVisible();
       expect(patches).toBe(1);
