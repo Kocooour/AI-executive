@@ -77,6 +77,8 @@ function sandbox(scenario) {
     offenvtelemetry: "NEXT_TELEMETRY_DISABLED",
     offenvpublic: "NEXT_PUBLIC_LUMI_DESIGN_V1_PREVIEW",
     targetenvpublic: "NEXT_PUBLIC_LUMI_DESIGN_V1_PREVIEW",
+    targetenvtestpush: "LUMI_E2E_TARGET_PUSH_TEST_ORIGIN",
+    targetenvtestmarker: "AI_EXECUTIVE_E2E",
   })[scenario];
   if (overriddenKey) {
     const value = overriddenKey === "AI_EXECUTIVE_DATA_DIR"
@@ -772,8 +774,8 @@ for (const scenario of [
   });
 }
 
-for (const scenario of ["offenvpublic", "targetenvpublic"]) {
-  scenarioCase(scenario + ": root-owned NEXT_PUBLIC is rejected before stop", r => {
+for (const scenario of ["offenvpublic", "targetenvpublic", "targetenvtestpush", "targetenvtestmarker"]) {
+  scenarioCase(scenario + ": root-owned NEXT_PUBLIC or browser-test switch is rejected before stop", r => {
     assert.notEqual(r.status, 0);
     assert.match(r.output, /neoverene zdroje prostredi systemd/);
     assert.equal(r.events.includes("stop"), false);

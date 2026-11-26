@@ -120,13 +120,21 @@ async function settingsCommand(cookie=owner(),patchValues={}){
     expectedNotificationEpoch:s.expectedNotificationEpoch,
     restoreGeneration:s.restoreGeneration,...patchValues};
 }
-const endpoint=n=>"https://push.example.test/send/synthetic-subscription-token-"+n;
+// E-2: only an allowed push service host is registrable, with the browser's keys.
+const endpoint=n=>"https://fcm.googleapis.com/fcm/send/synthetic-subscription-token-"+n;
+const KEYS={p256dh:Buffer.concat([Buffer.from([4]),Buffer.alloc(64,7)]).toString("base64url"),
+  auth:Buffer.alloc(16,9).toString("base64url")};
 async function registerCommand(ep,cookie=owner()){
   const s=await settings(cookie);
-  return {commandId:randomUUID(),action:"register",endpoint:ep,
+  return {commandId:randomUUID(),action:"register",endpoint:ep,keys:KEYS,
     expectedNotificationEpoch:s.expectedNotificationEpoch,
     restoreGeneration:s.restoreGeneration};
 }
+const vault=()=>{
+  const db=new DatabaseSync(path.join(legacy,"store.sqlite"));
+  try{return db.prepare("SELECT endpoint_hash AS h,endpoint,p256dh,auth FROM target_push_subscriptions ORDER BY h").all();}
+  finally{db.close();}
+};
 async function revokeCommand(targetId,cookie=owner()){
   const s=await settings(cookie);
   return {commandId:randomUUID(),action:"revoke",targetId,
@@ -272,7 +280,7 @@ test("turning push off drops the actor's baseline marker; pause keeps it",async(
   assert.equal(marker(),0,"disable forgets the baseline");
 });
 
-test("POST register hashes the endpoint; the raw endpoint exists nowhere; replay and re-register are idempotent",async()=>{
+test("POST register hashes the endpoint for the target store; the secret lives only in the app vault; replay and re-register are idempotent",async()=>{
   const fx=fixture();
   const ep=endpoint("one");
   const c=await registerCommand(ep);
@@ -298,6 +306,9 @@ test("POST register hashes the endpoint; the raw endpoint exists nowhere; replay
   assert.equal(store.includes(Buffer.from(ep).toString("base64")),false);
   assert.equal(logs.some(l=>l.includes("synthetic-subscription-token")),false);
   assert.equal(read(fx,"SELECT revision FROM personal_notification_epochs WHERE user_id='alice'").revision,1);
+  // E-2: the device secret is kept only in the app-database vault, under the same hash.
+  assert.deepEqual(vault().filter(r=>r.h===sha(ep)).map(r=>({...r})),
+    [{h:sha(ep),endpoint:ep,p256dh:KEYS.p256dh,auth:KEYS.auth}]);
   // Same command: replay returns the same own ID.
   const replay=await post(c);
   assert.deepEqual(await replay.json(),{ok:true,replayed:true,targetId:body.targetId});
@@ -320,8 +331,10 @@ test("a foreign-owned endpoint is an indistinguishable 404 and transfers nothing
   assert.equal(first.status,200);
   const bobId=(await first.json()).targetId;
   const before=mutable(fx);
+  const vaultBefore=JSON.stringify(vault());
   const foreign=await post(await registerCommand(ep));
   assert.equal(foreign.status,404);
+  assert.equal(JSON.stringify(vault()),vaultBefore,"a refused register never touches the vault");
   const unknownRevoke=await post(await revokeCommand("pt_"+"0".repeat(32)));
   assert.equal(unknownRevoke.status,404);
   assert.deepEqual(await foreign.json(),await unknownRevoke.json());
@@ -362,9 +375,14 @@ test("invalid endpoints, malformed bodies, CSRF, protocol, size and query are re
   const fx=fixture();
   const c=await registerCommand(endpoint("valid"));
   const before=mutable(fx);
-  const longPath="https://push.example.test/"+"a".repeat(2048);
+  const longPath="https://fcm.googleapis.com/"+"a".repeat(2048);
   for(const bad of [
-    "http://push.example.test/x","javascript:alert(1)","ftp://push.example.test/x",
+    // E-2: any host other than an allowed push service, other port or IP literal.
+    "https://push.example.test/x","https://fcm.googleapis.com.evil.test/x",
+    "https://evil.test/fcm.googleapis.com/x","https://fcm.googleapis.com:8443/x",
+    "https://127.0.0.1/x","https://[::1]/x","https://fcm.googleapis.com/",
+    "http://127.0.0.1:9/lumi-e2e-push/x",
+    "http://fcm.googleapis.com/x","javascript:alert(1)","ftp://fcm.googleapis.com/x",
     "https://user:pass@push.example.test/x","https://user@push.example.test/x",
     "https://push.example.test/x#frag","https://push.example.test/x#",longPath,
     "","not a url","https://","HTTPS://Push.Example.Test/x","https://push.example.test",
@@ -379,6 +397,11 @@ test("invalid endpoints, malformed bodies, CSRF, protocol, size and query are re
     {...c,targetId:"pt_"+"0".repeat(32)},
     {commandId:c.commandId,action:"register",expectedNotificationEpoch:0,
       restoreGeneration:c.restoreGeneration},
+    // E-2: the browser keys are mandatory and strictly shaped.
+    {...c,keys:undefined},{...c,keys:{p256dh:KEYS.p256dh}},{...c,keys:{...KEYS,extra:"x"}},
+    {...c,keys:{...KEYS,p256dh:Buffer.alloc(65,5).toString("base64url")}},
+    {...c,keys:{...KEYS,auth:Buffer.alloc(15,1).toString("base64url")}},
+    {...c,keys:{...KEYS,auth:KEYS.auth+"="}},{...c,keys:"x"},
     {...c,action:"other"},{...c,action:undefined},{...c,commandId:"x"},
     {...c,expectedNotificationEpoch:-1},{...c,restoreGeneration:"x"},
     {commandId:c.commandId,action:"revoke",endpoint:endpoint("x"),

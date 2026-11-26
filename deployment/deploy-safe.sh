@@ -51,11 +51,13 @@ ENV_BASELINE_SHA=""
 die() { echo "STOP: $*" >&2; exit 1; }
 
 # Verify the active EnvironmentFile and disallow overriding fixed unit keys.
+# Browser-test-only switches (AI_EXECUTIVE_E2E*, LUMI_E2E_*, e.g. the E-2 fake
+# push origin) can never be enabled on the production server.
 verify_loaded_environment_sources() {
   local files
   files="$(systemctl show "$SERVICE" -p EnvironmentFiles --value)" || return 1
   [ "$files" = "$ENVFILE (ignore_errors=no)" ] || return 1
-  if LC_ALL=C grep -Eq '^[[:space:]]*(export[[:space:]]+)?(NODE_ENV|PORT|NEXT_TELEMETRY_DISABLED|AI_EXECUTIVE_DATA_DIR|NEXT_PUBLIC_[A-Za-z0-9_]+)[[:space:]]*=' "$ENVFILE"; then
+  if LC_ALL=C grep -Eq '^[[:space:]]*(export[[:space:]]+)?(NODE_ENV|PORT|NEXT_TELEMETRY_DISABLED|AI_EXECUTIVE_DATA_DIR|NEXT_PUBLIC_[A-Za-z0-9_]+|AI_EXECUTIVE_E2E[A-Za-z0-9_]*|LUMI_E2E_[A-Za-z0-9_]+)[[:space:]]*[=:]' "$ENVFILE"; then
     return 1
   else
     [ "$?" -eq 1 ]

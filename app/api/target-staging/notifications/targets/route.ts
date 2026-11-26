@@ -1,5 +1,7 @@
 /** R2d.5d.3: default-off staging-only register/revoke of the actor's OWN push device.
- * The browser endpoint is hashed HERE; only the SHA-256 reaches a child or the store. */
+ * The browser endpoint is hashed HERE; only the SHA-256 reaches a child or the store.
+ * E-2: the device secret (endpoint + keys) goes to the app-database vault, and only
+ * after the target store confirmed the actor's own live device (new or unchanged). */
 import {HttpInputError,enforceRateLimit,readJsonBody,requireTargetSameOrigin}
   from "../../../../../lib/http-security";
 import {logStagingFailure} from "../../../../../lib/target-staging-failure-log";
@@ -10,13 +12,16 @@ import {
 } from "../../../../../lib/target-staging-http-identity";
 import {
   notificationsWriteHttpEnabled,notificationsHttpConfig,notificationsHttpUnchanged,
-  notificationsHttpAnswer,notificationsTargetCommand,
+  notificationsHttpAnswer,notificationsTargetRequest,
 } from "../../../../../lib/target-staging-notifications-http";
 import {writeNotificationTargetInChild}
   from "../../../../../lib/target-staging-notifications-process";
 import {
   targetProtocolRefusal,legacySnapshotRefusal,resyncRequiredResponse,
 } from "../../../../../lib/target-staging-write-contract";
+import {getDatabase} from "../../../../../lib/server-store";
+import {upsertTargetPushSubscription} from "../../../../../lib/target-push-subscription-vault";
+import type {TargetPushSubscription} from "../../../../../lib/target-push-endpoint";
 
 export const runtime="nodejs";
 export const dynamic="force-dynamic";
@@ -46,8 +51,15 @@ export async function POST(request:Request):Promise<Response> {
     const body=await readJsonBody<unknown>(request,8*1024,{strictUtf8:true});
     const legacy=legacySnapshotRefusal(body);
     if(legacy)return legacy;
-    const command=notificationsTargetCommand(body);
-    if(!command)return refuse(400,"Invalid request");
+    const parsed=notificationsTargetRequest(body);
+    if(!parsed)return refuse(400,"Invalid request");
+    const {command,subscription}=parsed;
+    // Stored only for the actor's own confirmed live device; never echoed or logged.
+    const keep=(secret:TargetPushSubscription|null):boolean=>{
+      if(command.action!=="register"||!secret)return true;
+      try{return upsertTargetPushSubscription(getDatabase(),command.endpointHash,secret);}
+      catch{return false;}
+    };
     const before=verifyStagingIdentityBeforeRelease(request,identity,base);
     if(before!=="ok")return stagingIdentityRefusal(before);
     if(!notificationsHttpUnchanged(base,true))return refuse(503,"Staging unavailable");
@@ -68,8 +80,10 @@ export async function POST(request:Request):Promise<Response> {
       return refuse(503,"Staging unavailable");
     if(result.ok===false){
       // Own live endpoint registered again: idempotent, returns the same own ID.
-      if(result.reason==="unchanged"&&command.action==="register")
+      if(result.reason==="unchanged"&&command.action==="register"){
+        if(!keep(subscription))return refuse(503,"Staging unavailable");
         return Response.json({ok:true,unchanged:true,targetId:result.targetId},{headers});
+      }
       if(result.reason==="unavailable")return refuse(404,"Not found");
       if(result.reason==="invalid_request")return refuse(400,"Invalid request");
       if(result.reason==="resync_required")return resyncRequiredResponse();
@@ -80,6 +94,8 @@ export async function POST(request:Request):Promise<Response> {
     if(command.action==="revoke")
       return Response.json(result.replayed?{ok:true,replayed:true}:{ok:true},{headers});
     if(result.targetId===null)return refuse(404,"Not found");
+    // A lost vault write is retried by the client: the same register is idempotent.
+    if(!keep(subscription))return refuse(503,"Staging unavailable");
     return Response.json(result.replayed
       ?{ok:true,replayed:true,targetId:result.targetId}
       :{ok:true,targetId:result.targetId},{headers});

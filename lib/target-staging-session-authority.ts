@@ -146,7 +146,8 @@ import {writePreflightedAttentionLifecycle,validTargetStagingAttentionLifecycleC
 } from "./target-attention-lifecycle-writer";
 import {writePreflightedNotificationSettings,validTargetStagingNotificationSettingsCommand,
   writePreflightedPushTarget,validTargetStagingPushTargetCommand,
-  readNotificationSettingsInSnapshot,
+  readNotificationSettingsInSnapshot,readLivePushEndpointHashInSnapshot,
+  readAllLivePushEndpointHashesInSnapshot,readOwnLivePushTargetInSnapshot,
   type TargetStagingNotificationSettingsCommand,type TargetStagingNotificationSettingsResult,
   type TargetStagingPushTargetCommand,type TargetStagingPushTargetResult,
   type TargetNotificationSettingsView,
@@ -1425,6 +1426,37 @@ export class TargetStagingSessionAuthority {
       return credential?readPreflightedStoreSnapshot(this.#store,db=>
         verifiedActor(db,credential)===actorUserId
           ? readNotificationSettingsInSnapshot(db,actorUserId):null):null;
+    }catch{return null;}
+  }
+
+  /** E-2: endpoint hash of the user's own live device, read for delivery only.
+   * The user was selected by the pass from the verified store, never by a caller. */
+  livePushEndpointHash(userId:string,targetId:string):string|null {
+    if(this.#closed)return null;
+    try {
+      const credential=this.#oneShotReadCredential(userId);
+      return credential?readPreflightedStoreSnapshot(this.#store,db=>
+        verifiedActor(db,credential)===userId
+          ? readLivePushEndpointHashInSnapshot(db,userId,targetId):null):null;
+    }catch{return null;}
+  }
+
+  /** E-2: hashes of all live devices (no user, no target ID), for vault pruning. */
+  allLivePushEndpointHashes():string[]|null {
+    if(this.#closed)return null;
+    try {
+      return readPreflightedStoreSnapshot(this.#store,db=>readAllLivePushEndpointHashesInSnapshot(db));
+    }catch{return null;}
+  }
+
+  /** E-2: the actor's OWN live target for an endpoint hash (test notification). */
+  ownLivePushTarget(actorUserId:string,endpointHash:string):string|null {
+    if(this.#closed)return null;
+    try {
+      const credential=this.#oneShotReadCredential(actorUserId);
+      return credential?readPreflightedStoreSnapshot(this.#store,db=>
+        verifiedActor(db,credential)===actorUserId
+          ? readOwnLivePushTargetInSnapshot(db,actorUserId,endpointHash):null):null;
     }catch{return null;}
   }
 

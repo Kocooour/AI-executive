@@ -24,7 +24,7 @@ Date.now=fixed;
 const spawn=cp.spawn;
 cp.spawn=function(file,args,options){
   if(Array.isArray(args)&&args.some(a=>typeof a==="string"&&
-    /[/\\]target-staging-attention(?:-command-(?:preview|write|receipt))?-child\.mjs$/.test(a))&&
+    /[/\\]target-staging-(?:attention(?:-command-(?:preview|write|receipt))?|push-(?:pass|test))-child\.mjs$/.test(a))&&
     options?.env?.AI_EXECUTIVE_TARGET_STAGING_DIRECTORY===path.join(path.dirname(clock),"target-store")&&
     options.env.AI_EXECUTIVE_DATA_DIR===data){
     options={...options,env:{...options.env,AI_EXECUTIVE_E2E:"true",

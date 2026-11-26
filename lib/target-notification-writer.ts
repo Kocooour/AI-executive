@@ -344,3 +344,32 @@ export function readNotificationSettingsInSnapshot(
     quietEnd:row.qe,dailyLimit:row.lim,paused:row.paused===1,
     settingsRevision:row.revision,notificationEpoch:e.revision,targetIds:ids};
 }
+
+/** E-2: the endpoint hash of ONE live device of ONE user (for the transport only). */
+export function readLivePushEndpointHashInSnapshot(
+  db:import("node:sqlite").DatabaseSync,userId:string,targetId:string,
+):string|null {
+  if(!TARGET_ID.test(targetId))return null;
+  const row=db.prepare(
+    "SELECT endpoint_hash AS h FROM personal_push_targets WHERE user_id=? AND target_id=? AND revoked_at_ms IS NULL"
+  ).get(userId,targetId) as {h:string}|undefined;
+  return row&&HASH.test(row.h)?row.h:null;
+}
+/** E-2: the hashes of every live device (the vault prunes secrets of any other). */
+export function readAllLivePushEndpointHashesInSnapshot(
+  db:import("node:sqlite").DatabaseSync,
+):string[] {
+  return (db.prepare(
+    "SELECT endpoint_hash AS h FROM personal_push_targets WHERE revoked_at_ms IS NULL ORDER BY endpoint_hash LIMIT 4096"
+  ).all() as {h:string}[]).map(r=>r.h).filter(h=>HASH.test(h));
+}
+/** E-2: the actor's own live target holding this endpoint hash, or null. */
+export function readOwnLivePushTargetInSnapshot(
+  db:import("node:sqlite").DatabaseSync,actor:string,endpointHash:string,
+):string|null {
+  if(!HASH.test(endpointHash))return null;
+  const row=db.prepare(
+    "SELECT target_id AS id FROM personal_push_targets WHERE user_id=? AND endpoint_hash=? AND revoked_at_ms IS NULL"
+  ).get(actor,endpointHash) as {id:string}|undefined;
+  return row&&TARGET_ID.test(row.id)?row.id:null;
+}

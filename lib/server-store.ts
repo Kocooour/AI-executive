@@ -164,6 +164,16 @@ export function applySchema(database: DatabaseSync) {
       created_at INTEGER NOT NULL,
       last_seen_at INTEGER NOT NULL
     );
+    -- E-2: target push device secrets (endpoint and Web Push keys), keyed by the SHA-256 of the endpoint that
+    -- the canonical target store keeps. Device credentials, not owner data: never in a backup, export or log.
+    -- Values are validated by lib/target-push-subscription-vault.ts before every write.
+    CREATE TABLE IF NOT EXISTS target_push_subscriptions (
+      endpoint_hash TEXT PRIMARY KEY,
+      endpoint TEXT NOT NULL,
+      p256dh TEXT NOT NULL,
+      auth TEXT NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
     CREATE TABLE IF NOT EXISTS notification_deliveries (
       delivery_key TEXT PRIMARY KEY,
       entity_id TEXT NOT NULL,

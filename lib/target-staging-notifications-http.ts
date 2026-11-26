@@ -7,6 +7,7 @@ import {verifyStagingReadBeforeRelease} from "./target-staging-http-identity";
 import type {
   TargetStagingNotificationSettingsCommand,TargetStagingPushTargetCommand,
 } from "./target-notification-writer";
+import {targetPushSubscription,type TargetPushSubscription} from "./target-push-endpoint";
 import {
   validTargetStagingNotificationSettingsCommand,validTargetStagingPushTargetCommand,
 } from "./target-notification-writer";
@@ -68,19 +69,25 @@ export function validPushEndpoint(value:unknown):value is string {
 export const pushEndpointHash=(endpoint:string):string=>
   createHash("sha256").update(endpoint,"utf8").digest("hex");
 
-/** Public body -> writer command. The raw endpoint is hashed here and goes no further. */
-export function notificationsTargetCommand(
+/** Public body -> writer command (+ the device secret for a register). The
+ * endpoint is hashed here; only the hash reaches the child and the target store.
+ * E-2: a register carries the browser's PushSubscription keys and must name an
+ * allowed push service; the secret is kept in the app-database vault only after
+ * the target store accepted the actor's own device. */
+export function notificationsTargetRequest(
   value:unknown,
-):TargetStagingPushTargetCommand|null {
+):{command:TargetStagingPushTargetCommand;subscription:TargetPushSubscription|null}|null {
   if(!value||typeof value!=="object"||Array.isArray(value))return null;
   const x=value as Record<string,unknown>;
   const keys=Object.keys(x).sort().join(",");
-  let command:unknown;
+  let command:unknown,subscription:TargetPushSubscription|null=null;
   if(x.action==="register"){
-    if(keys!=="action,commandId,endpoint,expectedNotificationEpoch,restoreGeneration"||
-      !validPushEndpoint(x.endpoint))return null;
+    if(keys!=="action,commandId,endpoint,expectedNotificationEpoch,keys,restoreGeneration")
+      return null;
+    subscription=targetPushSubscription({endpoint:x.endpoint,keys:x.keys});
+    if(!subscription||!validPushEndpoint(subscription.endpoint))return null;
     command={action:"register",commandId:x.commandId,
-      endpointHash:pushEndpointHash(x.endpoint),
+      endpointHash:pushEndpointHash(subscription.endpoint),
       expectedNotificationEpoch:x.expectedNotificationEpoch,
       restoreGeneration:x.restoreGeneration};
   }else if(x.action==="revoke"){
@@ -88,7 +95,11 @@ export function notificationsTargetCommand(
       return null;
     command=x;
   }else return null;
-  return validTargetStagingPushTargetCommand(command)?command:null;
+  return validTargetStagingPushTargetCommand(command)?{command,subscription}:null;
+}
+/** Writer command only (see notificationsTargetRequest). */
+export function notificationsTargetCommand(value:unknown):TargetStagingPushTargetCommand|null {
+  return notificationsTargetRequest(value)?.command??null;
 }
 
 /** Live release guard: session plus the actor's notification epoch. */
