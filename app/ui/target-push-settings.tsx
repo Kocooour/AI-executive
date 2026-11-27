@@ -201,7 +201,9 @@ export default function TargetPushSettings({language="cs",onActive}:{
     server_unavailable:t("Odesílání upozornění na serveru zatím není nastavené.","Sending notifications is not set up on the server yet."),
     denied:t("Oznámení jsou v prohlížeči zakázaná. Povolte je v nastavení zařízení.","Notifications are blocked in this browser. Allow them in the device settings."),
     not_registered:t("Toto zařízení zatím upozornění nedostává.","This device does not receive notifications yet."),
-    registered:t("Toto zařízení dostává upozornění.","This device receives notifications."),
+    registered:!settings.attentionPush?t("Zařízení je přihlášené, upozornění na úkoly jsou vypnutá.","Device registered; task alerts are off."):
+      settings.paused?t("Zařízení je přihlášené, upozornění jsou pozastavená.","Device registered; alerts are paused."):
+      t("Toto zařízení dostává upozornění.","This device receives notifications."),
     unknown:t("Stav tohoto zařízení teď nejde ověřit.","This device's state cannot be checked right now."),
   };
   const zone=browserZone();
@@ -216,9 +218,11 @@ export default function TargetPushSettings({language="cs",onActive}:{
         {deviceText[device]}</span>
     </div>
     <div className="notificationActions">
-      {device!=="registered"&&<button type="button" className="primaryAction" data-testid="target-push-enable"
+      {(device!=="registered"||!settings.attentionPush)&&<button type="button" className="primaryAction" data-testid="target-push-enable"
         disabled={busy||device==="unsupported"||device==="insecure"||device==="server_unavailable"}
-        onClick={()=>void enableDevice()}>{t("Zapnout na tomto zařízení","Turn on for this device")}</button>}
+        onClick={()=>void enableDevice()}>{device==="registered"
+          ?t("Dokončit zapnutí upozornění","Finish enabling alerts")
+          :t("Zapnout na tomto zařízení","Turn on for this device")}</button>}
       {device==="registered"&&<>
         <button type="button" data-testid="target-push-test" disabled={busy} onClick={()=>void test()}>
           {t("Poslat testovací oznámení","Send a test notification")}</button>
