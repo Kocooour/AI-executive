@@ -29,8 +29,12 @@ odesílá jen s platnými samostatnými klíči; legacy reminders se nemění.
 Před odhlášením E-3 ověří serverový stav konkrétního endpointu a případně
 revokuje jeho target s aktuální epochou. Nedostupný read model není důkaz
 neexistence zařízení. Neověřený výsledek odhlášení zablokuje; ostatní
-registrace zůstávají platné. Odpojení prohlížeče je po potvrzení revokace
-best effort; již předaná push zpráva není odvolatelná.
+registrace zůstávají platné. Odesílač po DNS a šifrování ještě synchronně
+ověřuje stejný živý target bez dalšího await před zahájením transportu.
+Vypršení časového limitu zruší pokus přes AbortSignal, takže opožděné DNS
+již nemůže spustit transport. Kontrola a vnější síťový požadavek nejsou
+jednou atomickou transakcí; již zahájené odesílání není zaručeně odvolatelné.
+Odpojení prohlížeče je po potvrzení revokace best effort.
 Bez nové migrace, služby či oprávnění. Přesné příznaky a release brány viz
 [DEPLOY.md](../deployment/DEPLOY.md); produkční deploy a klíče jsou oddělené
 schválené kroky vlastníka.
