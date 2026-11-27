@@ -247,7 +247,8 @@ for(const width of [390,1280]){
     test.setTimeout(300_000);
     const now=pragueAt(10);
     setClock(now);
-    await page.clock.setFixedTime(new Date(now));
+    // Install first so the real runtime poll can be driven deterministically.
+    await page.clock.install({time:new Date(now)});
     await page.setViewportSize({width,height:844});
     const viewer=store().seed.revokeProjects[String(width)];
     const viewerId="f1:viewer:"+width,viewerTitle="F-1 viewer "+width;
@@ -345,8 +346,79 @@ for(const width of [390,1280]){
       await expect(dueInput).toBeEnabled();
       return reply.request().postDataJSON() as Record<string,unknown>;
     };
-    await saveDue(day(now+6*DAY),null);
-    const command=await saveDue(deadline,day(now+6*DAY));
+    const firstDeadline=day(now+9*DAY);
+    await saveDue(firstDeadline,null);
+    // Pause only the real ACL read (never fake its response), then drive the
+    // real 60s runtime tick. The edit subtree must disappear while checking.
+    const recheckDetail=async()=>{
+      let release!:()=>void;
+      const gate=new Promise<void>(resolve=>{release=resolve;});
+      await page.route(url=>url.pathname===duePath&&url.searchParams.get("taskId")===id,
+        async route=>{await gate;await route.continue();},{times:1});
+      try{
+        await page.clock.fastForward(61_000);
+        await expect(detail.getByTestId("target-detail-edit-checking")).toBeVisible({timeout:25_000});
+        await expect(whenInput).toHaveCount(0);
+        await expect(dueInput).toHaveCount(0);
+      }finally{release();}
+      await expect(whenInput).toBeVisible({timeout:30_000});
+      await expect(dueInput).toBeVisible({timeout:30_000});
+    };
+    const externalDeadline=(value:string)=>{
+      const d=db();
+      try{expect(d.prepare("UPDATE tasks SET due_on=? WHERE id=?").run(value,id).changes).toBe(1);}
+      finally{d.close();}
+    };
+    // A draft and an open confirmation survive an unchanged passive refresh.
+    const draftAfter=day(now+10*DAY),dueDraft=day(now+11*DAY);
+    await dueInput.fill(dueDraft);
+    await whenInput.fill(draftAfter);
+    await whenInput.locator("..").getByRole("button",{name:"Uložit",exact:true}).click();
+    await expect(whenInput.locator("..").getByRole("alert")).toBeVisible();
+    await recheckDetail();
+    await expect(whenInput).toHaveValue(draftAfter);
+    await expect(dueInput).toHaveValue(dueDraft);
+    await expect(whenInput.locator("..").getByRole("alert")).toBeVisible();
+    // A genuinely changed deadline invalidates both drafts and confirmation.
+    const changedDeadline=day(now+8*DAY);
+    externalDeadline(changedDeadline);
+    await recheckDetail();
+    await expect(dueInput).toHaveAttribute("data-confirmed-date",changedDeadline);
+    await expect(dueInput).toHaveValue(changedDeadline);
+    await expect(whenInput).toHaveValue(future);
+    await expect(whenInput.locator("..").getByRole("alert")).toHaveCount(0);
+    await expect(whenInput.locator("..").getByRole("status")).toContainText("Datum se mezitím změnilo");
+
+    // Both UI paths must refuse to send a When PATCH if the deadline changes
+    // from equal to earlier just before the fresh authorized command preview.
+    const whenPath="/api/target-staging/task-temporal/personal-when/command";
+    let whenPatches=0;
+    page.on("request",r=>{if(new URL(r.url()).pathname===whenPath&&r.method()==="PATCH")whenPatches++;});
+    const shortenDuringPreview=async(value:string)=>{
+      await page.route(url=>url.pathname===whenPath&&url.searchParams.get("taskId")===id,
+        async route=>{externalDeadline(value);await route.continue();},{times:1});
+    };
+    const detailRaceDeadline=day(now+7*DAY);
+    await whenInput.fill(changedDeadline);
+    await shortenDuringPreview(detailRaceDeadline);
+    await whenInput.locator("..").getByRole("button",{name:"Uložit",exact:true}).click();
+    await expect(detail.getByTestId("target-detail-edit-alert")).toContainText("Položka se mezitím změnila jinde",{timeout:30_000});
+    await expect(dueInput).toHaveAttribute("data-confirmed-date",detailRaceDeadline,{timeout:30_000});
+    await expect(whenInput).toHaveAttribute("data-confirmed-date",future);
+    expect(whenPatches).toBe(0);
+    // Reload My Plan, pin the future date and repeat with the task's row.
+    await page.goto("/?view=MyPlanPreview&scope=personal");
+    await dateInput.fill(future);
+    await expect(planWhen).toHaveAttribute("data-confirmed-date",future);
+    const planRaceDeadline=day(now+6*DAY);
+    await planWhen.fill(detailRaceDeadline);
+    await shortenDuringPreview(planRaceDeadline);
+    await plan.getByRole("button",{name:"Uložit den: "+title,exact:true}).click();
+    await expect(plan.getByRole("alert")).toContainText("Osobní plán nebo úkol se mezitím změnil",{timeout:30_000});
+    await expect(planWhen).toHaveAttribute("data-confirmed-date",future);
+    expect(whenPatches).toBe(0);
+    await row.click();
+    const command=await saveDue(deadline,planRaceDeadline);
     // Explicit When after the deadline requires a second action. Cancel must
     // leave the canonical date unchanged, then confirm and Undo the change.
     await expect(whenInput).toHaveAttribute("data-confirmed-date",future);
