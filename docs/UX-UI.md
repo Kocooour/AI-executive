@@ -23,7 +23,11 @@ Skrýt a Zpět. Oznámení na úkol po klepnutí otevře detail v Mém plánu; c
 nebo nepřístupný úkol se nesmí zobrazit. Nastavení → Oznámení: explicitní
 „Zapnout na tomto zařízení“, testovací oznámení a seznam zařízení s odebráním.
 První zapnutí při nedotčeném výchozím UTC uloží časové pásmo prohlížeče a
-oznámí to uživateli; později uložené pásmo zůstává beze změny. Tiché hodiny,
+oznámí to uživateli; později uložené pásmo zůstává beze změny. Pokud se
+registrace podaří, ale nastavení selže, panel zobrazí registrované zařízení
+s vypnutými upozorněními a umožní dokončit zapnutí bez dalšího zařízení.
+Pokud server nepotvrdí odebrání aktuální registrace, odhlášení se nedokončí.
+Tiché hodiny,
 pauza a vypnutí jednotlivého zařízení jsou samostatné volby. Bez VAPID
 klíčů je odesílání zřetelně nedostupné; nelze slibovat skutečné doručení
 jen na základě úspěšného předání push službě. Naléhavá výjimka zůstává
