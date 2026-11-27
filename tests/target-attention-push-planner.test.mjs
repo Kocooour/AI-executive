@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import {test} from "node:test";
+import {detailRouteFromSearch} from "../lib/target-detail-route.ts";
 const {planTargetAttentionPushes,targetAttentionDeliveryKey,targetAttentionPushPayload,inTargetQuietHours}=
   await import("../lib/target-attention-push-planner.ts");
 
@@ -109,8 +110,11 @@ test("delivery key is stable, zone-independent and identity-only",()=>{
 });
 
 test("payload uses only the candidate's own data",()=>{
-  const p=targetAttentionPushPayload(cand("t 1/x","deadline_overdue",{title:"  Zavolat   notáři  ",relevantOn:"2026-11-01"}));
-  assert.deepEqual(p,{title:"Zavolat notáři",body:"Termín 1. 11. uplynul.",url:"/?task=t%201%2Fx",tag:"attention-t 1/x"});
+  const p=targetAttentionPushPayload(cand("t 1+č","deadline_overdue",{title:"  Zavolat   notáři  ",relevantOn:"2026-11-01"}));
+  assert.deepEqual(p,{title:"Zavolat notáři",body:"Termín 1. 11. uplynul.",url:"/?view=MyPlanPreview&taskId=t+1%2B%C4%8D",tag:"attention-t 1+č"});
+  assert.deepEqual(detailRouteFromSearch(new URL(p.url,"https://lumi.example").search),
+    {kind:"task",id:"t 1+č",view:"MyPlanPreview"});
+  assert.equal(targetAttentionPushPayload(cand("invalid/id")),null);
   const soon=targetAttentionPushPayload(cand("t2","deadline_soon",{relevantOn:"2026-12-24"}));
   assert.equal(soon.body,"Termín 24. 12. je do 48 hodin.");
   const long=targetAttentionPushPayload(cand("t3","deadline_overdue",{title:"😀".repeat(100)}));
