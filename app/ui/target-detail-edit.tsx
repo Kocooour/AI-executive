@@ -377,7 +377,9 @@ export function TaskEdits({api,task,expectedRevision}:{
   if(capability==="checking"||capability==="off")
     return <p className="targetDetailMuted" role="status" data-testid="target-detail-edit-checking">{copy.checking}</p>;
   if(capability==="readonly")
-    return <p className="targetDetailMuted" data-testid="target-detail-edit-readonly">{copy.readOnly}</p>;
+    return <div className="targetDetailMuted" data-testid="target-detail-edit-readonly">
+      <p>{copy.readOnly}</p>{api.flags.taskDueOn&&<small>{copy.dueEditable}</small>}
+    </div>;
   const off=busy(state)||!online;
   const when=flags.taskWhen&&(task.areaKind==="private"||task.assignedToMe===true);
   const today=localMyPlanDate();

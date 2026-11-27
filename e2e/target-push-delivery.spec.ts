@@ -302,6 +302,21 @@ for(const width of [390,1280]){
     await expect(row).toHaveCount(0);
     await dateInput.fill(future);
     await expect(plan.getByRole("region",{name:"Do vybraného dne včetně"}).locator('[data-detail-row="task:'+id+'"]')).toBeVisible();
+    // Explicit date controls also work on the pinned day. Shortcuts stay
+    // relative to the real current day, never to the selected date.
+    const planWhen=plan.getByLabel("Vybrat den: "+title,{exact:true});
+    await expect(planWhen).toHaveValue(future);
+    await planWhen.fill(day(now+4*DAY));
+    await planWhen.locator("..").getByRole("button",{name:"Uložit den"}).click();
+    await expect(planWhen).toHaveValue(day(now+4*DAY));
+    await plan.getByRole("button",{name:"Vrátit osobní plán (Undo)"}).click();
+    await expect(planWhen).toHaveValue(future);
+    await planWhen.locator("..").getByRole("button",{name:"Odebrat Kdy"}).click();
+    await expect(plan.getByRole("region",{name:"Bez data"}).locator('[data-detail-row="task:'+id+'"]')).toBeVisible();
+    await plan.getByRole("button",{name:"Vrátit osobní plán (Undo)"}).click();
+    await expect(plan.getByRole("region",{name:"Do vybraného dne včetně"}).locator('[data-detail-row="task:'+id+'"]')).toBeVisible();
+    await expect(planWhen).toHaveValue(future);
+    expect(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth)).toBe(true);
     await row.click();
     await expect(detail).toContainText(title);
     const duePath="/api/target-staging/task-temporal/due-on";
@@ -313,19 +328,25 @@ for(const width of [390,1280]){
       const reply=await pending;
       expect(reply.status()).toBe(200);
       expect(reply.request().postDataJSON().dueOn).toBe(date);
-      await expect(detail.getByTestId("target-detail-edit-status")).toContainText("Termín");
+      await expect(detail.getByTestId("target-detail-edit-status")).toHaveText("Termín je uložen.");
       await expect(dueInput).toHaveValue(date);
       return reply.request().postDataJSON() as Record<string,unknown>;
     };
     await saveDue(day(now+6*DAY));
     const command=await saveDue(deadline);
+    await page.goto("/?view=MyPlanPreview&scope=personal");
+    await expect(page.getByRole("region",{name:/^Zítra/}).locator('[data-detail-row="task:'+id+'"]')).toBeVisible();
+    await expect(row.locator("xpath=ancestor::li[1]").getByText(/^Termín: /)).toBeVisible();
+    await row.click();
+    await expect(dueInput).toHaveValue(deadline);
     await page.goto("/?view=Home&scope=personal");
-    const homeRow=page.locator("[data-rule]").filter({hasText:title});
+    const homeRow=page.getByTestId("target-home-attention-item").filter({hasText:title});
     await expect(homeRow).toHaveAttribute("data-rule","deadline_soon",{timeout:30_000});
     await tick();await tick();
     const messages=()=>payloads(device).filter(p=>p.tag==="attention-"+id);
     expect(messages()).toHaveLength(1);
     expect(messages()[0].title).toBe(title);
+    expect(messages()[0].body).toMatch(/Termín/);
     await page.goto(messages()[0].url);
     await expect(detail).toContainText(title,{timeout:25_000});
 
@@ -345,7 +366,9 @@ for(const width of [390,1280]){
     expect(removed.status()).toBe(200);
     expect(removed.request().postDataJSON().dueOn).toBeNull();
     await expect(dueInput).toHaveValue("");
+    const attentionRead=page.waitForResponse(r=>new URL(r.url()).pathname==="/api/target-staging/attention"&&r.status()===200);
     await page.goto("/?view=Home&scope=personal");
+    await attentionRead;
     await expect(homeRow).toHaveCount(0);
     await tick();await tick();
     expect(messages()).toHaveLength(2);
