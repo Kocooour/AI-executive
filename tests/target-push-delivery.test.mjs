@@ -178,6 +178,78 @@ test("the sender contacts nothing for a private, mixed or empty DNS answer, a fo
   assert.equal(calls,0);
 });
 
+// Exercise the real transport adapter with a real, actor-bound device lookup.
+test("revocation during DNS preparation fences the transport, while another live device still sends",async()=>{
+  const stage=bootstrapIsolatedTargetStore({stagingDirectory:path.join(root,randomUUID()),ownerUserId:"alice"});
+  const authority=new TargetStagingSessionAuthority({stagingDirectory:stage.directory,
+    expectedRestoreGeneration:stage.restoreGeneration});
+  authorities.push(authority);
+  const subscriptions=new Map();
+  const ids=[];
+  const token=authority.issueWritable("alice").sessionToken;
+  for(const name of ["first","second"]){
+    const browser=syntheticBrowserKeys();
+    const subscription={endpoint:"https://fcm.googleapis.com/fcm/send/"+name,...browser.keys};
+    const hash=targetPushEndpointHash(subscription.endpoint);
+    const settings=authority.readNotificationSettings("alice");
+    const result=authority.changePushTarget(token,{commandId:randomUUID(),action:"register",
+      endpointHash:hash,expectedNotificationEpoch:settings.notificationEpoch,
+      restoreGeneration:stage.restoreGeneration});
+    assert.equal(result.ok,true,JSON.stringify(result));
+    subscriptions.set(hash,subscription);ids.push(result.targetId);
+  }
+  let enter,release;
+  const entered=new Promise(resolve=>{enter=resolve;});
+  const gated=new Promise(resolve=>{release=resolve;});
+  let calls=0;
+  const sender=createTargetWebPushSender({vapid,env:{},
+    subscriptionFor:(userId,targetId)=>{
+      const hash=authority.livePushEndpointHash(userId,targetId);
+      return hash?subscriptions.get(hash)??null:null;
+    },
+    resolve:async()=>{enter();await gated;return publicResolver();},
+    transport:async()=>{calls++;return 201;}
+  });
+  const pending=sender.sendTo("alice",ids[0],PAYLOAD);
+  await entered;
+  const settings=authority.readNotificationSettings("alice");
+  assert.equal(authority.changePushTarget(token,{commandId:randomUUID(),action:"revoke",
+    targetId:ids[0],expectedNotificationEpoch:settings.notificationEpoch,
+    restoreGeneration:stage.restoreGeneration}).ok,true);
+  release();
+  assert.equal(await pending,"failed");
+  assert.equal(calls,0,"revoked during DNS: no network request");
+  assert.equal(await sender.sendTo("alice",ids[1],PAYLOAD),"sent");
+  assert.equal(calls,1,"other device remains live");
+});
+
+test("cancelled or timed-out preparation can never start a late transport",async()=>{
+  const subscription={endpoint:"https://fcm.googleapis.com/fcm/send/slow",...syntheticBrowserKeys().keys};
+  let enter,release;
+  const entered=new Promise(resolve=>{enter=resolve;});
+  const gated=new Promise(resolve=>{release=resolve;});
+  let calls=0;
+  const sender=createTargetWebPushSender({vapid,env:{},subscriptionFor:()=>subscription,
+    resolve:async()=>{enter();await gated;return publicResolver();},
+    transport:async()=>{calls++;return 201;}});
+  const {sendTargetPushWithTimeout}=await import("../lib/target-attention-push-pass.ts");
+  let attempt;
+  let observedSignal;
+  const timed=sendTargetPushWithTimeout(signal=>{
+    observedSignal=signal;
+    return attempt=sender.sendTo("alice","pt_"+"1".repeat(32),PAYLOAD,signal);
+  },25);
+  await entered;
+  assert.equal(await timed,"timeout");
+  assert.equal(observedSignal.aborted,true);
+  release();
+  assert.equal(await attempt,"failed");
+  assert.equal(calls,0,"late DNS cannot start transport");
+  const controller=new AbortController();controller.abort();
+  assert.equal(await sender.sendTo("alice","pt_"+"1".repeat(32),PAYLOAD,controller.signal),"failed");
+  assert.equal(calls,0);
+});
+
 function memoryVault(){
   const db=new DatabaseSync(":memory:");
   db.exec("CREATE TABLE target_push_subscriptions (endpoint_hash TEXT PRIMARY KEY, endpoint TEXT NOT NULL, p256dh TEXT NOT NULL, auth TEXT NOT NULL, updated_at INTEGER NOT NULL)");
