@@ -1704,12 +1704,13 @@ export function parseStagingPersonalWhenPreview(
   if(Object.keys(v).sort().join(",")==="ok,reason"&&v.ok===false&&v.reason==="inaccessible")
     return {ok:false,reason:"inaccessible"};
   if(v.ok!==true||Object.keys(v).sort().join(",")!==
-    "expectedPlanRevision,expectedPrivateEpoch,expectedRevision,guard,linearization,ok,whenOn,writeAreaId"||
+    "dueOn,expectedPlanRevision,expectedPrivateEpoch,expectedRevision,guard,linearization,ok,whenOn,writeAreaId"||
     typeof v.expectedRevision!=="string"||!REVISION.test(v.expectedRevision)||
     !Number.isSafeInteger(v.expectedPrivateEpoch)||(v.expectedPrivateEpoch as number)<0||
     !(v.expectedPlanRevision===null||
       (Number.isSafeInteger(v.expectedPlanRevision)&&(v.expectedPlanRevision as number)>=0))||
     !(v.whenOn===null||temporalCalendarOrdinal(v.whenOn)!==null)||
+    !(v.dueOn===null||temporalCalendarOrdinal(v.dueOn)!==null)||
     (v.expectedPlanRevision===null)!==(v.whenOn===null)||
     typeof v.writeAreaId!=="string"||!v.writeAreaId||!v.guard||
     typeof v.guard!=="object"||Array.isArray(v.guard)||!v.linearization||
@@ -1735,7 +1736,7 @@ export function parseStagingPersonalWhenPreview(
     expectedRevision:v.expectedRevision,
     expectedPrivateEpoch:v.expectedPrivateEpoch as number,
     expectedPlanRevision:v.expectedPlanRevision as number|null,
-    whenOn:v.whenOn as string|null,writeAreaId:v.writeAreaId,
+    whenOn:v.whenOn as string|null,dueOn:v.dueOn as string|null,writeAreaId:v.writeAreaId,
     linearization,guard:{
       taskId,projectId:g.projectId as string|null,areaId:v.writeAreaId,
       taskRevision:g.taskRevision as number,

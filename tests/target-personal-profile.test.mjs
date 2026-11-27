@@ -142,7 +142,7 @@ test("the profile switches every myPlan/scopes/details/edits field on",()=>{
   assert.deepEqual(config.myPlan,{enabled:true,statusWrite:true,whenWrite:true});
   assert.deepEqual(config.scopes,{enabled:true,projects:true,notes:true});
   assert.deepEqual(config.details,{task:true,project:true,note:true});
-  assert.deepEqual(config.edits,{taskTitle:true,taskStatus:true,taskWhen:true,taskDelete:true,noteEdit:true,noteDelete:true});
+  assert.deepEqual(config.edits,{taskTitle:true,taskStatus:true,taskWhen:true,taskDueOn:true,taskDelete:true,noteEdit:true,noteDelete:true});
   assert.deepEqual(config.creates,{projects:true,projectTasks:true});
 });
 

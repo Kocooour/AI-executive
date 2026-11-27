@@ -152,7 +152,20 @@ jobs:
           LUMI_TARGET_PUSH_E2E: "true"
         run: |
           set -o pipefail
-          pnpm exec playwright test e2e/target-push-delivery.spec.ts --project=desktop --output=test-results/e2-push 2>&1 | tee -a "$RUNNER_TEMP/lumi-personal-browser.log"
+          # E-2 advances the fixed clock across several days, including session
+          # revocation. Keep its original timeline independent of F-1.
+          pnpm exec playwright test e2e/target-push-delivery.spec.ts --grep-invert 'F-1:' --project=desktop --output=test-results/e2-push 2>&1 | tee -a "$RUNNER_TEMP/lumi-personal-browser.log"
+      - name: F-1 planning and deadline through real SQLite and loopback push (390/1280)
+        if: ${{ !cancelled() && steps.build.outcome == 'success' && steps.chromium.outcome == 'success' }}
+        env:
+          LUMI_TARGET_PERSONAL_ACCEPTANCE_E2E: "false"
+          LUMI_TARGET_ATTENTION_E2E: "true"
+          LUMI_TARGET_PUSH_E2E: "true"
+        run: |
+          set -o pipefail
+          # A new Playwright invocation provisions a fresh isolated store, clock,
+          # session and push keys. Do not accumulate F-1's simulated days in E-2.
+          pnpm exec playwright test e2e/target-push-delivery.spec.ts --grep 'F-1:' --project=desktop --output=test-results/f1-planning 2>&1 | tee -a "$RUNNER_TEMP/lumi-personal-browser.log"
       - name: No My Plan child-page unavailability in real-store server logs
         if: always()
         run: |

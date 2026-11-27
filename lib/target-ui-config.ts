@@ -86,11 +86,11 @@ export const TARGET_UI_EDIT_NOTE_FLAGS=[
   "AI_EXECUTIVE_TARGET_STAGING_HTTP_NOTES_WRITE_ENABLED",
 ] as const;
 export type TargetUiEdits={
-  taskTitle:boolean;taskStatus:boolean;taskWhen:boolean;taskDelete:boolean;
+  taskTitle:boolean;taskStatus:boolean;taskWhen:boolean;taskDueOn?:boolean;taskDelete:boolean;
   noteEdit:boolean;noteDelete:boolean;
 };
 export const NO_TARGET_UI_EDITS:TargetUiEdits={
-  taskTitle:false,taskStatus:false,taskWhen:false,taskDelete:false,noteEdit:false,noteDelete:false,
+  taskTitle:false,taskStatus:false,taskWhen:false,taskDueOn:false,taskDelete:false,noteEdit:false,noteDelete:false,
 };
 export const anyTargetUiEdit=(edits:TargetUiEdits|undefined):boolean=>
   edits!==undefined&&Object.values(edits).some(Boolean);
@@ -131,6 +131,7 @@ export function targetUiConfig(env:TargetUiEnv):TargetUiConfig|null {
     taskTitle:taskContext,
     taskStatus:taskContext,
     taskWhen:edits&&detailTask&&all(TARGET_UI_EDIT_WHEN_FLAGS),
+    taskDueOn:edits&&detailTask&&env["AI_EXECUTIVE_TARGET_STAGING_HTTP_TEMPORAL_DUE_ON_WRITE_ENABLED"]==="true",
     taskDelete:taskContext,
     noteEdit:noteWrite,
     noteDelete:noteWrite,

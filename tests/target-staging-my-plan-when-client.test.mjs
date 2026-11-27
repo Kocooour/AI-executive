@@ -248,3 +248,30 @@ test("transport is only accessed behind server-gated staging UI and never persis
   assert.match(code,/method:"GET",credentials:"same-origin",cache:"no-store"/);
   assert.match(code,/method:"PATCH"\|"POST"/);
 });
+
+// The existing authorized When preview provides the deadline as a header.
+// Independent flag configurations need no request to the deadline writer.
+test("explicit When checks the observed deadline using one pinned preview, without due-on writes",async()=>{
+  for(const [name,header,expectedDueOn,reason] of [
+    ["same deadline","2026-11-08","2026-11-08",null],
+    ["no deadline","none",null,null],
+    ["shortened deadline","2026-11-06","2026-11-08","stale"],
+    ["new deadline","2026-11-06",null,"stale"],
+    ["removed deadline","none","2026-11-08","stale"],
+    ["missing witness",null,"2026-11-08","invalid-response"],
+    ["invalid witness","2026-02-29","2026-11-08","invalid-response"],
+  ]){
+    const requests=[];
+    const prepared=await prepareMyPlanWhen({...input,expectedDueOn},async(url,options)=>{
+      requests.push([new URL("https://example.test"+url).pathname,options.method]);
+      return Response.json(preview,{headers:{"cache-control":"no-store",...(header===null?{}:{"x-lumi-task-due-on":header})}});
+    });
+    if(reason===null)assert.deepEqual(prepared,{ok:true,command,previousWhenOn:null},name);
+    else assert.deepEqual(prepared,{ok:false,reason},name);
+    assert.deepEqual(requests,[["/api/target-staging/task-temporal/personal-when/command","GET"]]);
+  }
+  const gone=await prepareMyPlanWhen({...input,expectedDueOn:null},async()=>failure(401));
+  assert.deepEqual(gone,{ok:false,reason:"signed-out"});
+  const cleared=await prepareMyPlanWhen({...input,whenOn:null,expectedDueOn:null},async()=>good({...preview,whenOn:"2026-11-07"}));
+  assert.equal(cleared.ok,true);
+});

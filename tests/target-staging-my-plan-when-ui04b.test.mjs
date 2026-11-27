@@ -76,6 +76,11 @@ test("UI-04b: human-readable 44px actions are gated per task/Area",()=>{
   assert.match(copySource(),/Naplánovat osobně na dnešek: /);
   assert.match(copySource(),/Naplánovat osobně na zítřek: /);
   assert.match(ui,/canWhen=\{canWhen\}/);
+  assert.match(ui,/canWhenDate=\{canWhenDate\}/);
+  assert.match(ui,/const canWhenDate=whenWriteEnabled&&!anyPending&&date!==null/);
+  assert.match(ui,/onChange=\{target=>onWhen\(task,target,true\)\}/);
+  assert.match(ui,/actionContext=\{task.title\}/);
+  assert.match(ui,/deadlineWarning=\{\{dueOn:task.dueOn/);
   assert.match(css,/stagingMyPlanWhenControls button\s*\{[\s\S]*?min-height:44px/);
 });
 

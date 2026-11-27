@@ -4,6 +4,7 @@
  * Status controls require an independent SERVER opt-in. No offline queue,
  * optimistic status, persistent task cache or production UI integration. */
 import {useEffect,useRef,useState} from "react";
+import {TargetDateControls} from "./target-date-controls";
 import {detailIdOk} from "../../lib/target-detail-route";
 import {
   appendMyPlanSlice,fetchMyPlanSlice,localMyPlanDate,validMyPlanDate,
@@ -22,7 +23,7 @@ import {canRetryUncertainMyPlanRead} from "../../lib/target-staging-my-plan-stat
 import {myPlanToolbarChangeBlocked} from "../../lib/target-staging-my-plan-toolbar-lock";
 import {supersedesCrossFamilyUndo} from "../../lib/target-staging-my-plan-cross-family-undo";
 import {
-  myPlanWhenTarget,prepareMyPlanWhen,dispatchMyPlanWhen,checkMyPlanWhenReceipt,
+  myPlanWhenTarget,validMyPlanWhenDate,prepareMyPlanWhen,dispatchMyPlanWhen,checkMyPlanWhenReceipt,
   type MyPlanWhenCommand,type MyPlanWhenFailure,
 } from "../../lib/target-staging-my-plan-when-client";
 import {
@@ -70,13 +71,13 @@ const nextHumanDate=(day:string,locale="cs-CZ")=>{
   return humanDate(following.toISOString().slice(0,10),locale);
 };
 
-function PlanDay({label,tasks,date,canComplete,onComplete,canWhen,onWhen,copy,onOpenTask,openLabel}:{
+function PlanDay({label,tasks,date,canComplete,onComplete,canWhen,canWhenDate,onWhen,copy,onOpenTask,openLabel}:{
   copy:MyPlanCopy;label:string;tasks:MyPlanSliceTask[];date:string;
   /** R3-FE-4a: embedded only; the title then opens the authorized task detail. */
   onOpenTask?:(taskId:string,opener:HTMLElement)=>void;
   openLabel?:(title:string)=>string;
   canComplete:boolean;onComplete:(task:MyPlanSliceTask)=>void;
-  canWhen:boolean;onWhen:(task:MyPlanSliceTask,whenOn:string)=>void;
+  canWhen:boolean;canWhenDate:boolean;onWhen:(task:MyPlanSliceTask,whenOn:string|null,explicitDate?:boolean)=>void;
 }){
   const areas=new Map<string,{kind:"private"|"shared";tasks:MyPlanSliceTask[]}>();
   for(const task of tasks){
@@ -125,6 +126,13 @@ function PlanDay({label,tasks,date,canComplete,onComplete,canWhen,onWhen,copy,on
                             {choice==="today"?copy.whenToday:copy.whenTomorrow}
                           </button>:null;
                     })}
+                  </div>}
+                  {canWhenDate&&<div className="stagingMyPlanWhenControls">
+                    <TargetDateControls key={task.taskId+":"+task.whenOn+":"+task.dueOn} value={task.whenOn}
+                      label={copy.whenDate(task.title)} save={copy.whenSave} remove={copy.whenRemove}
+                      actionContext={task.title}
+                      deadlineWarning={{dueOn:task.dueOn,message:copy.whenAfterDeadline,confirm:copy.whenConfirmAfterDeadline,cancel:copy.whenCancelAfterDeadline}}
+                      onChange={target=>onWhen(task,target,true)}/>
                   </div>}
                 </div>
               </li>)}</ul>
@@ -494,7 +502,7 @@ export function TargetStagingMyPlanPreview({
    * An uncertain command blocks BOTH mutation families until original receipt.
    * The same privacy generation guards status and personal-plan operations. */
   async function changeWhen(
-    task:{taskId:string;areaId:string},target:string|null,undo=false,
+    task:{taskId:string;areaId:string;dueOn?:string|null},target:string|null,undo=false,explicitDate=false,
   ){
     if(!whenWriteEnabled||statusOperation.current||whenOperation.current||
       action.kind==="pending"||action.kind==="checking"||
@@ -524,12 +532,10 @@ export function TargetStagingMyPlanPreview({
       const row=[...state.page.today.tasks,...state.page.tomorrow.tasks,
         ...state.page.undated.tasks].find(
         item=>item.taskId===task.taskId&&item.areaId===task.areaId);
-      const today=date?myPlanWhenTarget(date,"today"):null;
-      const tomorrow=date?myPlanWhenTarget(date,"tomorrow"):null;
       // "Dnes/Zítra" is never silently relative to a pinned historical day.
-      if(!followToday||date!==localMyPlanDate()||
-        !row||target===null||target!==today&&target!==tomorrow||
-        row.whenOn===target)return;
+      if((!explicitDate&&(!followToday||date!==localMyPlanDate()))||
+        !row||!validMyPlanWhenDate(target)||
+        row.whenOn===target||(explicitDate&&task.dueOn===undefined))return;
     }
     const op:WhenOperation={
       controller:new AbortController(),privacyEpoch:privacyEpoch.current,command:null,
@@ -575,6 +581,7 @@ export function TargetStagingMyPlanPreview({
     }else{
       const prepared=await prepareMyPlanWhen({
         taskId:task.taskId,areaId:task.areaId,whenOn:target,
+        ...(explicitDate?{expectedDueOn:task.dueOn}:{}),
         signal:op.controller.signal,
       },targetAppFetch);
       if(whenOperation.current!==op)return;
@@ -816,6 +823,7 @@ export function TargetStagingMyPlanPreview({
   const canComplete=statusWriteEnabled&&!anyPending;
   const canWhen=whenWriteEnabled&&!anyPending&&
     followToday&&date!==null&&date===localMyPlanDate();
+  const canWhenDate=whenWriteEnabled&&!anyPending&&date!==null;
   async function more(){
     if(statusOperation.current||whenOperation.current||anyPending||
       moreInFlight.current||state.status!=="ready"||
@@ -987,18 +995,18 @@ export function TargetStagingMyPlanPreview({
       <PlanDay copy={copy} label={followToday?copy.dayTodayAndEarlier:copy.dayUpToSelected}
         date={date} tasks={state.page.today.tasks}
         canComplete={canComplete} onComplete={task=>{void changeStatus(task,"completed");}}
-        canWhen={canWhen} onWhen={(task,on)=>{void changeWhen(task,on);}}
+        canWhen={canWhen} canWhenDate={canWhenDate} onWhen={(task,on,explicitDate)=>{void changeWhen(task,on,false,explicitDate);}}
         onOpenTask={embedded?onOpenTask:undefined} openLabel={openTaskLabel}/>
       <PlanDay copy={copy} label={(followToday?copy.dayTomorrowPrefix:copy.dayNextPrefix)+
         nextHumanDate(date,copy.locale)}
         date={date} tasks={state.page.tomorrow.tasks}
         canComplete={canComplete} onComplete={task=>{void changeStatus(task,"completed");}}
-        canWhen={canWhen} onWhen={(task,on)=>{void changeWhen(task,on);}}
+        canWhen={canWhen} canWhenDate={canWhenDate} onWhen={(task,on,explicitDate)=>{void changeWhen(task,on,false,explicitDate);}}
         onOpenTask={embedded?onOpenTask:undefined} openLabel={openTaskLabel}/>
       <PlanDay copy={copy} label={copy.dayUndated}
         date={date} tasks={state.page.undated.tasks}
         canComplete={canComplete} onComplete={task=>{void changeStatus(task,"completed");}}
-        canWhen={canWhen} onWhen={(task,on)=>{void changeWhen(task,on);}}
+        canWhen={canWhen} canWhenDate={canWhenDate} onWhen={(task,on,explicitDate)=>{void changeWhen(task,on,false,explicitDate);}}
         onOpenTask={embedded?onOpenTask:undefined} openLabel={openTaskLabel}/>
       {state.page.hasMore&&
         <button disabled={moreBusy||anyPending} type="button" onClick={()=>{void more();}}>

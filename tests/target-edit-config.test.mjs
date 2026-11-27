@@ -19,7 +19,8 @@ const editsOn={...base,AI_EXECUTIVE_TARGET_UI_EDITS_ENABLED:T,AI_EXECUTIVE_TARGE
 const task={AI_EXECUTIVE_TARGET_STAGING_HTTP_TEMPORAL_WRITE_ENABLED:T};
 const when={AI_EXECUTIVE_TARGET_STAGING_HTTP_PERSONAL_WHEN_ENABLED:T,AI_EXECUTIVE_TARGET_STAGING_HTTP_PERSONAL_WHEN_WRITE_ENABLED:T};
 const note={AI_EXECUTIVE_TARGET_STAGING_HTTP_NOTES_WRITE_ENABLED:T};
-const all={...editsOn,...task,...when,...note};
+const due={AI_EXECUTIVE_TARGET_STAGING_HTTP_TEMPORAL_DUE_ON_WRITE_ENABLED:T};
+const all={...editsOn,...task,...when,...note,...due};
 
 test("edits are off by default and with only the read flags: identical to R3-FE-4a",()=>{
   assert.deepEqual(targetUiConfig(base).edits,NO_TARGET_UI_EDITS);
@@ -41,7 +42,7 @@ test("every edit needs the new UI flag, the details flag and the base write flag
 });
 
 test("full flag set enables every control",()=>{
-  assert.deepEqual(targetUiConfig(all).edits,{taskTitle:true,taskStatus:true,taskWhen:true,taskDelete:true,noteEdit:true,noteDelete:true});
+  assert.deepEqual(targetUiConfig(all).edits,{taskTitle:true,taskStatus:true,taskWhen:true,taskDueOn:true,taskDelete:true,noteEdit:true,noteDelete:true});
 });
 
 test("matrix: each family needs exactly its own server flags; a missing one removes only that control",()=>{
@@ -50,25 +51,27 @@ test("matrix: each family needs exactly its own server flags; a missing one remo
     // TEMPORAL_ENABLED is also the task-detail flag, so without it no task edit exists at all.
     const detailGone=name==="AI_EXECUTIVE_TARGET_STAGING_HTTP_TEMPORAL_ENABLED";
     assert.deepEqual(targetUiConfig(env).edits,
-      {taskTitle:false,taskStatus:false,taskWhen:!detailGone,taskDelete:false,noteEdit:true,noteDelete:true},name);
+      {taskTitle:false,taskStatus:false,taskWhen:!detailGone,taskDueOn:!detailGone,taskDelete:false,noteEdit:true,noteDelete:true},name);
   }
   for(const name of TARGET_UI_EDIT_WHEN_FLAGS){
     const env={...all};delete env[name];
     assert.deepEqual(targetUiConfig(env).edits,
-      {taskTitle:true,taskStatus:true,taskWhen:false,taskDelete:true,noteEdit:true,noteDelete:true},name);
+      {taskTitle:true,taskStatus:true,taskWhen:false,taskDueOn:true,taskDelete:true,noteEdit:true,noteDelete:true},name);
   }
+  assert.deepEqual(targetUiConfig({...all,[Object.keys(due)[0]]:"false"}).edits,
+    {taskTitle:true,taskStatus:true,taskWhen:true,taskDueOn:false,taskDelete:true,noteEdit:true,noteDelete:true});
   for(const name of TARGET_UI_EDIT_NOTE_FLAGS){
     const env={...all};delete env[name];
     assert.deepEqual(targetUiConfig(env).edits,
-      {taskTitle:true,taskStatus:true,taskWhen:true,taskDelete:true,noteEdit:false,noteDelete:false},name);
+      {taskTitle:true,taskStatus:true,taskWhen:true,taskDueOn:true,taskDelete:true,noteEdit:false,noteDelete:false},name);
   }
 });
 
 test("the detail kind flags still gate: no task detail -> no task edits, no note detail -> no note edits",()=>{
   const noTask={...all};delete noTask.AI_EXECUTIVE_TARGET_STAGING_HTTP_TEMPORAL_ENABLED;
-  assert.deepEqual(targetUiConfig(noTask).edits,{taskTitle:false,taskStatus:false,taskWhen:false,taskDelete:false,noteEdit:true,noteDelete:true});
+  assert.deepEqual(targetUiConfig(noTask).edits,{taskTitle:false,taskStatus:false,taskWhen:false,taskDueOn:false,taskDelete:false,noteEdit:true,noteDelete:true});
   const noNote={...all};delete noNote.AI_EXECUTIVE_TARGET_STAGING_HTTP_NOTES_ENABLED;
-  assert.deepEqual(targetUiConfig(noNote).edits,{taskTitle:true,taskStatus:true,taskWhen:true,taskDelete:true,noteEdit:false,noteDelete:false});
+  assert.deepEqual(targetUiConfig(noNote).edits,{taskTitle:true,taskStatus:true,taskWhen:true,taskDueOn:true,taskDelete:true,noteEdit:false,noteDelete:false});
 });
 
 test("copy tables: identical key sets, every write kind has a message in both languages",()=>{
@@ -77,7 +80,7 @@ test("copy tables: identical key sets, every write kind has a message in both la
   assert.deepEqual(walk(editCopy.cs).sort(),walk(editCopy.en).sort());
   for(const language of ["cs","en"]){
     const c=editCopy[language];
-    for(const kind of ["taskTitle","taskStatus","taskWhen","taskDelete","noteEdit","noteDelete"]){
+    for(const kind of ["taskTitle","taskStatus","taskWhen","taskDueOn","taskDelete","noteEdit","noteDelete"]){
       assert.ok(c.pending[kind].length>0&&c.committed[kind].length>0,language+kind);
     }
     for(const kind of ["taskTitle","taskStatus","taskWhen"])assert.ok(c.undone[kind].length>0);

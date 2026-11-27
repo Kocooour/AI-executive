@@ -21,6 +21,16 @@ export type EditCopy={
   whenGroup:string;
   whenToday:string;
   whenTomorrow:string;
+  whenDate:string;
+  whenRemove:string;
+  whenAfterDeadline:string;
+  whenConfirmAfterDeadline:string;
+  whenCancelAfterDeadline:string;
+  dateDraftChanged:string;
+  dueGroup:string;
+  dueDate:string;
+  dueRemove:string;
+  dueEditable:string;
   deleteTask:string;
   deleteNote:string;
   confirmDeleteTask:(title:string)=>string;
@@ -71,6 +81,12 @@ export const editCopy:Record<DetailLanguage,EditCopy>={
     whenGroup:"Kdy to udělám",
     whenToday:"Dnes",
     whenTomorrow:"Zítra",
+    whenDate:"Vybrat den",whenRemove:"Odebrat Kdy",
+    whenAfterDeadline:"Vybraný den je po termínu úkolu. Chcete jej přesto naplánovat?",
+    whenConfirmAfterDeadline:"Naplánovat po termínu",whenCancelAfterDeadline:"Zrušit potvrzení",
+    dateDraftChanged:"Datum se mezitím změnilo. Zkontrolujte aktuální hodnotu a vyberte den znovu.",
+    dueGroup:"Termín",dueDate:"Datum termínu",dueRemove:"Odebrat termín",
+    dueEditable:"Termín může upravit vlastník nebo člen Oblasti s právem úprav.",
     deleteTask:"Smazat úkol",
     deleteNote:"Smazat poznámku",
     confirmDeleteTask:title=>`Smazat úkol „${title}“? Tuto změnu nelze vrátit zpět.`,
@@ -84,15 +100,15 @@ export const editCopy:Record<DetailLanguage,EditCopy>={
     bodyTooLong:"Text je příliš dlouhý.",
     unchanged:"Nic se nezměnilo.",
     pending:kinds({
-      taskTitle:"Ukládám název…",taskStatus:"Ukládám stav úkolu…",taskWhen:"Ukládám, kdy úkol uděláte…",
+      taskTitle:"Ukládám název…",taskStatus:"Ukládám stav úkolu…",taskWhen:"Ukládám, kdy úkol uděláte…",taskDueOn:"Ukládám termín…",
       taskDelete:"Mažu úkol…",noteEdit:"Ukládám poznámku…",noteDelete:"Mažu poznámku…",
     }),
     committed:kinds({
-      taskTitle:"Název je uložen.",taskStatus:"Stav úkolu je uložen.",taskWhen:"Termín „Kdy“ je uložen.",
+      taskTitle:"Název je uložen.",taskStatus:"Stav úkolu je uložen.",taskWhen:"Termín „Kdy“ je uložen.",taskDueOn:"Termín je uložen.",
       taskDelete:"Úkol je smazán.",noteEdit:"Poznámka je uložena.",noteDelete:"Poznámka je smazána.",
     }),
     undone:kinds({
-      taskTitle:"Původní název je vrácen.",taskStatus:"Úkol je znovu otevřen.",taskWhen:"Původní „Kdy“ je vráceno.",
+      taskTitle:"Původní název je vrácen.",taskStatus:"Úkol je znovu otevřen.",taskWhen:"Původní „Kdy“ je vráceno.",taskDueOn:"",
       taskDelete:"",noteEdit:"",noteDelete:"",
     }),
     conflict:"Položka se mezitím změnila jinde. Načetli jsme aktuální obsah a nic jsme nepřepsali.",
@@ -131,6 +147,12 @@ export const editCopy:Record<DetailLanguage,EditCopy>={
     whenGroup:"When I will do it",
     whenToday:"Today",
     whenTomorrow:"Tomorrow",
+    whenDate:"Choose a day",whenRemove:"Remove When",
+    whenAfterDeadline:"The selected day is after the deadline. Do you still want to plan it?",
+    whenConfirmAfterDeadline:"Plan after deadline",whenCancelAfterDeadline:"Cancel confirmation",
+    dateDraftChanged:"The date changed meanwhile. Review the current value and choose a day again.",
+    dueGroup:"Deadline",dueDate:"Deadline date",dueRemove:"Remove deadline",
+    dueEditable:"The owner or an Area member with edit permission can change the deadline.",
     deleteTask:"Delete task",
     deleteNote:"Delete note",
     confirmDeleteTask:title=>`Delete task “${title}”? This cannot be undone.`,
@@ -144,15 +166,15 @@ export const editCopy:Record<DetailLanguage,EditCopy>={
     bodyTooLong:"The text is too long.",
     unchanged:"Nothing changed.",
     pending:kinds({
-      taskTitle:"Saving the title…",taskStatus:"Saving the task status…",taskWhen:"Saving when you will do the task…",
+      taskTitle:"Saving the title…",taskStatus:"Saving the task status…",taskWhen:"Saving when you will do the task…",taskDueOn:"Saving the deadline…",
       taskDelete:"Deleting the task…",noteEdit:"Saving the note…",noteDelete:"Deleting the note…",
     }),
     committed:kinds({
-      taskTitle:"The title is saved.",taskStatus:"The task status is saved.",taskWhen:"“When” is saved.",
+      taskTitle:"The title is saved.",taskStatus:"The task status is saved.",taskWhen:"“When” is saved.",taskDueOn:"The deadline is saved.",
       taskDelete:"The task is deleted.",noteEdit:"The note is saved.",noteDelete:"The note is deleted.",
     }),
     undone:kinds({
-      taskTitle:"The previous title is back.",taskStatus:"The task is open again.",taskWhen:"The previous “When” is back.",
+      taskTitle:"The previous title is back.",taskStatus:"The task is open again.",taskWhen:"The previous “When” is back.",taskDueOn:"",
       taskDelete:"",noteEdit:"",noteDelete:"",
     }),
     conflict:"The item changed elsewhere in the meantime. We loaded the current content and overwrote nothing.",

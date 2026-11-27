@@ -21,7 +21,7 @@ const zone="Europe/Prague",DAY=86_400_000,HOUR=3_600_000;
 const day=(ms:number)=>new Intl.DateTimeFormat("sv-SE",{timeZone:zone,dateStyle:"short"}).format(ms);
 const run=()=>realpathSync(process.env.LUMI_E2E_RUN_DIR!);
 const store=()=>JSON.parse(process.env.LUMI_E2E_TARGET_STORE!) as
-  {directory:string;restoreGeneration:string;ownerUserId:string;seed:{areaId:string}};
+  {directory:string;restoreGeneration:string;ownerUserId:string;seed:{areaId:string;areaTitle:string;revokeProjects:Record<string,{areaId:string;adminId:string}>}};
 const browserKeys=syntheticBrowserKeys();
 
 type Received={path:string;status:number;headers:http.IncomingHttpHeaders;body:Buffer};
@@ -237,6 +237,266 @@ for(const width of [390,1280]){
     await expect(reloaded.getByTestId("target-push-notice"))
       .toHaveText("Na tomto zařízení se upozornění už nebudou zobrazovat.");
     await expect(reloaded.getByText("(toto zařízení)")).toHaveCount(0);
+  });
+}
+
+// F-1: all personal planning and deadline mutations of the new task use the
+// actual application UI, never direct SQL. Only unrelated fixture rows are reset.
+for(const width of [390,1280]){
+  test("F-1: Quick Capture, arbitrary When, deadline, Home and push at "+width+"px",async({page})=>{
+    test.setTimeout(300_000);
+    const now=pragueAt(10);
+    setClock(now);
+    // Install first so the real runtime poll can be driven deterministically.
+    await page.clock.install({time:new Date(now)});
+    await page.setViewportSize({width,height:844});
+    const viewer=store().seed.revokeProjects[String(width)];
+    const viewerId="f1:viewer:"+width,viewerTitle="F-1 viewer "+width;
+    const otherTitle="F-1 další úkol "+width;
+    const d=db();
+    try{
+      d.prepare("UPDATE personal_notification_settings SET time_zone=? WHERE user_id=?").run(zone,store().ownerUserId);
+      d.prepare("UPDATE tasks SET status='completed',completed_at_ms=? WHERE status='open'").run(now);
+      d.prepare("UPDATE area_members SET role='viewer' WHERE area_id=? AND user_id=?").run(viewer.areaId,store().ownerUserId);
+      d.prepare("INSERT INTO tasks(id,area_id,title,due_on,assignee_user_id) VALUES (?,?,?,?,?)")
+        .run(viewerId,viewer.areaId,viewerTitle,null,null);
+      d.prepare("INSERT INTO tasks(id,area_id,title,due_on,assignee_user_id) VALUES (?,?,?,?,?)")
+        .run("f1:other:"+width,store().seed.areaId,otherTitle,null,null);
+    }finally{d.close();}
+    const label="f1"+width,device=endpointOf(label);
+    await stubPush(page,label);
+    const settings=await openNotifications(page);
+    if(await settings.getByTestId("target-push-attention").isChecked()){
+      await settings.getByTestId("target-push-attention").click();
+      await expect(settings.getByTestId("target-push-notice")).toHaveText("Uloženo.");
+      await expect(settings.getByTestId("target-push-attention")).not.toBeChecked();
+    }
+    await settings.getByTestId("target-push-enable").click();
+    await expect(settings.getByTestId("target-push-attention")).toBeChecked();
+    await expect(settings.getByTestId("target-push-device-state")).toHaveText("Toto zařízení dostává upozornění.");
+    await tick();
+    expect(payloads(device)).toHaveLength(0);
+
+    const title="F-1 termín "+width, future=day(now+5*DAY), deadline=day(now+DAY);
+    await page.goto("/?view=MyPlanPreview&scope=personal");
+    const plan=page.getByTestId("target-my-plan"),detail=page.getByTestId("target-detail");
+    await expect(plan).toBeVisible();
+    await page.locator('[data-target-private-capture-fab="'+(width===390?"mobile":"desktop")+'"]').click();
+    await page.getByTestId("target-capture-task-kind").click();
+    await page.getByTestId("target-private-task-area").selectOption({label:store().seed.areaTitle});
+    await page.getByTestId("target-private-task-form").getByRole("textbox",{name:"Název úkolu"}).fill(title);
+    const created=page.waitForResponse(r=>new URL(r.url()).pathname==="/api/target-staging/tasks"&&r.request().method()==="POST");
+    await page.getByTestId("target-private-task-save").click();
+    const response=await created;
+    expect(response.status()).toBe(201);
+    const id=response.request().postDataJSON().taskId as string;
+    expect(id).toMatch(/^[0-9a-f-]{36}$/);
+    await page.getByTestId("target-private-task-open").click();
+    await expect(detail).toContainText(title);
+    const whenInput=detail.getByTestId("target-detail-edit-when-date");
+    await whenInput.fill(future);
+    await whenInput.locator("..").getByRole("button",{name:"Uložit",exact:true}).click();
+    await expect(detail.getByTestId("target-detail-edit-status")).toContainText("Termín „Kdy“ je uložen.");
+    await page.goto("/?view=MyPlanPreview&scope=personal");
+    const row=page.locator('[data-detail-row="task:'+id+'"]');
+    await expect(plan).toBeVisible();
+    const dateInput=plan.getByLabel("Den",{exact:true});
+    await dateInput.fill(day(now+3*DAY));
+    await expect(plan.getByRole("region",{name:"Do vybraného dne včetně"})).toBeVisible();
+    await expect(row).toHaveCount(0);
+    await dateInput.fill(future);
+    await expect(plan.getByRole("region",{name:"Do vybraného dne včetně"}).locator('[data-detail-row="task:'+id+'"]')).toBeVisible();
+    // Explicit date controls also work on the pinned day. Shortcuts stay
+    // relative to the real current day, never to the selected date.
+    const planWhen=plan.getByLabel("Vybrat den: "+title,{exact:true});
+    await expect(planWhen).toHaveValue(future);
+    await expect(plan.getByRole("button",{name:"Uložit den: "+title,exact:true})).toHaveCount(1);
+    await expect(plan.getByRole("button",{name:"Uložit den: "+otherTitle,exact:true})).toHaveCount(1);
+    await planWhen.fill(day(now+4*DAY));
+    await planWhen.locator("..").getByRole("button",{name:"Uložit den: "+title,exact:true}).click();
+    await expect(planWhen).toHaveAttribute("data-confirmed-date",day(now+4*DAY));
+    await expect(planWhen).toHaveValue(day(now+4*DAY));
+    await plan.getByRole("button",{name:"Vrátit osobní plán (Undo)"}).click();
+    await expect(planWhen).toHaveAttribute("data-confirmed-date",future);
+    await expect(planWhen).toHaveValue(future);
+    await planWhen.locator("..").getByRole("button",{name:"Odebrat Kdy: "+title,exact:true}).click();
+    await expect(plan.getByRole("region",{name:"Bez data"}).locator('[data-detail-row="task:'+id+'"]')).toBeVisible();
+    await plan.getByRole("button",{name:"Vrátit osobní plán (Undo)"}).click();
+    await expect(plan.getByRole("region",{name:"Do vybraného dne včetně"}).locator('[data-detail-row="task:'+id+'"]')).toBeVisible();
+    await expect(planWhen).toHaveValue(future);
+    expect(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth)).toBe(true);
+    await row.click();
+    await expect(detail).toContainText(title);
+    const duePath="/api/target-staging/task-temporal/due-on";
+    const dueInput=detail.getByTestId("target-detail-edit-due-date");
+    const saveDue=async(date:string,previous:string|null)=>{
+      // A local draft is not proof of a server refresh. Wait for the actual
+      // authorized input bound to the previous confirmed server snapshot.
+      await expect(dueInput).toHaveAttribute("data-confirmed-date",previous??"",{timeout:30_000});
+      await expect(dueInput).toBeEnabled();
+      await dueInput.fill(date);
+      const pending=page.waitForResponse(r=>new URL(r.url()).pathname===duePath&&r.request().method()==="PATCH",{timeout:30_000});
+      await dueInput.locator("..").getByRole("button",{name:"Uložit",exact:true}).click();
+      const reply=await pending;
+      expect(reply.status()).toBe(200);
+      expect(reply.request().postDataJSON().dueOn).toBe(date);
+      await expect(detail.getByTestId("target-detail-edit-status")).toHaveText("Termín je uložen.");
+      await expect(dueInput).toHaveAttribute("data-confirmed-date",date,{timeout:30_000});
+      await expect(dueInput).toHaveValue(date);
+      await expect(dueInput).toBeEnabled();
+      return reply.request().postDataJSON() as Record<string,unknown>;
+    };
+    const firstDeadline=day(now+9*DAY);
+    await saveDue(firstDeadline,null);
+    // Pause only the real ACL read (never fake its response), then drive the
+    // real 60s runtime tick. The edit subtree must disappear while checking.
+    const recheckDetail=async()=>{
+      let release!:()=>void;
+      const gate=new Promise<void>(resolve=>{release=resolve;});
+      await page.route(url=>url.pathname===duePath&&url.searchParams.get("taskId")===id,
+        async route=>{await gate;await route.continue();},{times:1});
+      try{
+        await page.clock.fastForward(61_000);
+        await expect(detail.getByTestId("target-detail-edit-checking")).toBeVisible({timeout:25_000});
+        await expect(whenInput).toHaveCount(0);
+        await expect(dueInput).toHaveCount(0);
+      }finally{release();}
+      await expect(whenInput).toBeVisible({timeout:30_000});
+      await expect(dueInput).toBeVisible({timeout:30_000});
+    };
+    const externalDeadline=(value:string)=>{
+      const d=db();
+      try{expect(d.prepare("UPDATE tasks SET due_on=? WHERE id=?").run(value,id).changes).toBe(1);}
+      finally{d.close();}
+    };
+    // A draft and an open confirmation survive an unchanged passive refresh.
+    const draftAfter=day(now+10*DAY),dueDraft=day(now+11*DAY);
+    await dueInput.fill(dueDraft);
+    await whenInput.fill(draftAfter);
+    await whenInput.locator("..").getByRole("button",{name:"Uložit",exact:true}).click();
+    await expect(whenInput.locator("..").getByRole("alert")).toBeVisible();
+    await recheckDetail();
+    await expect(whenInput).toHaveValue(draftAfter);
+    await expect(dueInput).toHaveValue(dueDraft);
+    await expect(whenInput.locator("..").getByRole("alert")).toBeVisible();
+    // A genuinely changed deadline invalidates both drafts and confirmation.
+    const changedDeadline=day(now+8*DAY);
+    externalDeadline(changedDeadline);
+    await recheckDetail();
+    await expect(dueInput).toHaveAttribute("data-confirmed-date",changedDeadline);
+    await expect(dueInput).toHaveValue(changedDeadline);
+    await expect(whenInput).toHaveValue(future);
+    await expect(whenInput.locator("..").getByRole("alert")).toHaveCount(0);
+    await expect(whenInput.locator("..").getByRole("status")).toContainText("Datum se mezitím změnilo");
+
+    // Both UI paths must refuse to send a When PATCH if the deadline changes
+    // from equal to earlier just before the fresh authorized command preview.
+    const whenPath="/api/target-staging/task-temporal/personal-when/command";
+    let whenPatches=0;
+    page.on("request",r=>{if(new URL(r.url()).pathname===whenPath&&r.method()==="PATCH")whenPatches++;});
+    const shortenDuringPreview=async(value:string)=>{
+      await page.route(url=>url.pathname===whenPath&&url.searchParams.get("taskId")===id,
+        async route=>{externalDeadline(value);await route.continue();},{times:1});
+    };
+    const detailRaceDeadline=day(now+7*DAY);
+    await whenInput.fill(changedDeadline);
+    await shortenDuringPreview(detailRaceDeadline);
+    await whenInput.locator("..").getByRole("button",{name:"Uložit",exact:true}).click();
+    await expect(detail.getByTestId("target-detail-edit-alert")).toContainText("Položka se mezitím změnila jinde",{timeout:30_000});
+    await expect(dueInput).toHaveAttribute("data-confirmed-date",detailRaceDeadline,{timeout:30_000});
+    await expect(whenInput).toHaveAttribute("data-confirmed-date",future);
+    expect(whenPatches).toBe(0);
+    // Reload My Plan, pin the future date and repeat with the task's row.
+    await page.goto("/?view=MyPlanPreview&scope=personal");
+    await dateInput.fill(future);
+    await expect(planWhen).toHaveAttribute("data-confirmed-date",future);
+    const planRaceDeadline=day(now+6*DAY);
+    await planWhen.fill(detailRaceDeadline);
+    await shortenDuringPreview(planRaceDeadline);
+    await plan.getByRole("button",{name:"Uložit den: "+title,exact:true}).click();
+    await expect(plan.getByRole("alert")).toContainText("Osobní plán nebo úkol se mezitím změnil",{timeout:30_000});
+    await expect(planWhen).toHaveAttribute("data-confirmed-date",future);
+    expect(whenPatches).toBe(0);
+    await row.click();
+    const command=await saveDue(deadline,planRaceDeadline);
+    // Explicit When after the deadline requires a second action. Cancel must
+    // leave the canonical date unchanged, then confirm and Undo the change.
+    await expect(whenInput).toHaveAttribute("data-confirmed-date",future);
+    const after=day(now+7*DAY);
+    await whenInput.fill(after);
+    await whenInput.locator("..").getByRole("button",{name:"Uložit",exact:true}).click();
+    await expect(whenInput.locator("..").getByRole("alert")).toContainText("Vybraný den je po termínu");
+    await whenInput.locator("..").getByRole("button",{name:"Zrušit potvrzení",exact:true}).click();
+    await expect(whenInput).toHaveAttribute("data-confirmed-date",future);
+    await whenInput.locator("..").getByRole("button",{name:"Uložit",exact:true}).click();
+    await whenInput.locator("..").getByRole("button",{name:"Naplánovat po termínu",exact:true}).click();
+    await expect(whenInput).toHaveAttribute("data-confirmed-date",after,{timeout:30_000});
+    await detail.getByRole("button",{name:"Vrátit zpět",exact:true}).click();
+    await expect(whenInput).toHaveAttribute("data-confirmed-date",future,{timeout:30_000});
+    await page.goto("/?view=MyPlanPreview&scope=personal");
+    await expect(page.getByRole("region",{name:/^Zítra/}).locator('[data-detail-row="task:'+id+'"]')).toBeVisible();
+    await expect(row.locator("xpath=ancestor::li[1]").getByText(/^Termín: /)).toBeVisible();
+    const laterPlan=plan.getByLabel("Vybrat den: "+title,{exact:true});
+    await laterPlan.fill(after);
+    await plan.getByRole("button",{name:"Uložit den: "+title,exact:true}).click();
+    await expect(laterPlan.locator("..").getByRole("alert")).toContainText("Vybraný den je po termínu");
+    await plan.getByRole("button",{name:"Naplánovat po termínu: "+title,exact:true}).click();
+    await expect(laterPlan).toHaveAttribute("data-confirmed-date",after,{timeout:30_000});
+    await plan.getByRole("button",{name:"Vrátit osobní plán (Undo)"}).click();
+    await expect(laterPlan).toHaveAttribute("data-confirmed-date",future,{timeout:30_000});
+    await row.click();
+    await expect(dueInput).toHaveValue(deadline);
+    await page.goto("/?view=Home&scope=personal");
+    const homeRow=page.getByTestId("target-home-attention-item").filter({hasText:title});
+    await expect(homeRow).toHaveAttribute("data-rule","deadline_soon",{timeout:30_000});
+    await tick();await tick();
+    const messages=()=>payloads(device).filter(p=>p.tag==="attention-"+id);
+    expect(messages()).toHaveLength(1);
+    expect(messages()[0].title).toBe(title);
+    expect(messages()[0].body).toMatch(/Termín/);
+    await page.goto(messages()[0].url);
+    await expect(detail).toContainText(title,{timeout:25_000});
+
+    const past=pragueAt(10,2);
+    setClock(past);
+    await page.clock.setFixedTime(new Date(past));
+    await page.goto("/?view=Home&scope=personal");
+    await expect(homeRow).toHaveAttribute("data-rule","deadline_overdue",{timeout:30_000});
+    await tick();await tick();
+    expect(messages()).toHaveLength(2);
+    expect(messages()[1].body).toMatch(/uplynul/);
+    await page.goto(messages()[1].url);
+    await expect(detail).toContainText(title,{timeout:25_000});
+    const removal=page.waitForResponse(r=>new URL(r.url()).pathname===duePath&&r.request().method()==="PATCH");
+    await dueInput.locator("..").getByRole("button",{name:"Odebrat termín"}).click();
+    const removed=await removal;
+    expect(removed.status()).toBe(200);
+    expect(removed.request().postDataJSON().dueOn).toBeNull();
+    await expect(dueInput).toHaveAttribute("data-confirmed-date","",{timeout:30_000});
+    await expect(dueInput).toHaveValue("");
+    const attentionRead=page.waitForResponse(r=>new URL(r.url()).pathname==="/api/target-staging/attention"&&r.status()===200);
+    await page.goto("/?view=Home&scope=personal");
+    await attentionRead;
+    await expect(homeRow).toHaveCount(0);
+    await tick();await tick();
+    expect(messages()).toHaveLength(2);
+    expect(payloads(device)).toHaveLength(2);
+
+    // Viewer can read the shared task but cannot write a deadline, even
+    // when bypassing the UI with a forged command from a genuine owner write.
+    await page.goto("/?view=MyPlanPreview&taskId="+encodeURIComponent(viewerId));
+    await expect(detail).toContainText(viewerTitle,{timeout:25_000});
+    await expect(detail.getByTestId("target-detail-edit-readonly")).toBeVisible();
+    await expect(dueInput).toHaveCount(0);
+    const denied=await page.request.get(duePath+"?taskId="+encodeURIComponent(viewerId));
+    expect(denied.status()).toBe(404);
+    const forged=await page.request.patch(duePath,{headers:{
+      origin:new URL(page.url()).origin,"x-lumi-target-protocol":"1"
+    },data:{...command,taskId:viewerId,writeAreaId:viewer.areaId,commandId:crypto.randomUUID()}});
+    expect(forged.status()).toBe(404);
+    const again=await openNotifications(page);
+    await again.getByTestId("target-push-disable").click();
+    await expect(again.getByTestId("target-push-device-state")).toHaveText("Toto zařízení zatím upozornění nedostává.");
   });
 }
 

@@ -99,9 +99,12 @@ const writeOptions=(command:MyPlanWhenCommand,method:"PATCH"|"POST",
 export async function prepareMyPlanWhen(params:{
   taskId:string;areaId:string;whenOn:string|null;
   commandId?:string;signal?:AbortSignal;
+  /** Explicit date UI only: deadline the user saw when selecting/confirming. */
+  expectedDueOn?:string|null;
 },fetchImpl:typeof fetch=targetAppFetch):Promise<MyPlanWhenPreparation>{
   if(!validStatusTaskId(params.taskId)||typeof params.areaId!=="string"||
     !area.test(params.areaId)||!validMyPlanWhenDate(params.whenOn)||
+    (params.expectedDueOn!==undefined&&!validMyPlanWhenDate(params.expectedDueOn))||
     (params.commandId!==undefined&&!uuid.test(params.commandId)))
     return {ok:false,reason:"invalid-request"};
   if(params.signal?.aborted)return {ok:false,reason:"aborted"};
@@ -130,6 +133,16 @@ export async function prepareMyPlanWhen(params:{
       !uuid.test(data.restoreGeneration))
       return {ok:false,reason:"invalid-response"};
     if(data.whenOn===params.whenOn)return {ok:false,reason:"unchanged"};
+    if(params.expectedDueOn!==undefined&&params.whenOn!==null){
+      // The authorized When preflight returns the deadline with the SAME CAS.
+      // No deadline-write flag, second read or new mutation field is required.
+      // Fail closed on missing/malformed witness; CAS catches later changes.
+      const observed=response.headers.get("x-lumi-task-due-on");
+      const due=observed==="none"?null:observed;
+      if(observed===null||!validMyPlanWhenDate(due))
+        return {ok:false,reason:"invalid-response"};
+      if(due!==params.expectedDueOn)return {ok:false,reason:"stale"};
+    }
     const command:MyPlanWhenCommand={
       commandId:params.commandId??crypto.randomUUID(),
       taskId:params.taskId,whenOn:params.whenOn,

@@ -62,7 +62,7 @@ export function parsePersonalWhenAtomicReceiptReply(
     return null;
   const preview=v.preview as Record<string,unknown>;
   if(Object.keys(preview).sort().join(",")!==
-    "expectedPlanRevision,expectedPrivateEpoch,expectedRevision,guard,linearization,whenOn,writeAreaId")
+    "dueOn,expectedPlanRevision,expectedPrivateEpoch,expectedRevision,guard,linearization,whenOn,writeAreaId")
     return null;
   const parsed=parseStagingPersonalWhenPreview({ok:true,...preview},taskId);
   if(!parsed||parsed.ok!==true)return null;

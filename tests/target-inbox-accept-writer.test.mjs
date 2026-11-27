@@ -200,14 +200,17 @@ test("C-3b canonical v27: Accept move + Process is one pinned command; Undo reve
   assert.equal(audit.includes("Připravit rekonstrukce"),false);
 });
 
-test("C-3b canonical v27: personal Today + project + triage, Undo restores date with monotonic revision",()=>{
+for(const [timeZone,expectedDay] of [["UTC","2026-11-27"],["Europe/Prague","2026-11-28"]])
+test("C-3b canonical v27: personal Today + project + triage, Undo restores date with monotonic revision ("+timeZone+")",t=>{
+  t.mock.method(Date,"now",()=>Date.parse("2026-11-27T23:30:00Z"));
   const fx=fixture();
+  fx.db.prepare("UPDATE personal_notification_settings SET time_zone=? WHERE user_id=?").run(timeZone,"alice");
   fx.db.prepare("UPDATE tasks SET title='Připravit rekonstrukce dnes' WHERE id='captured'").run();
   const original=row(fx);
   const originalPlan=fx.db.prepare("SELECT when_on,revision FROM personal_task_plans WHERE user_id='alice' AND task_id='captured'").get();
   const originalEpoch=fx.db.prepare("SELECT revision FROM personal_plan_epochs WHERE user_id='alice'").get().revision;
   const cmd=prepare(fx,{today:true});
-  assert.equal(cmd.displayedChanges.whenOn,inboxLocalDate(Date.now(),"Europe/Prague"));
+  assert.equal(cmd.displayedChanges.whenOn,expectedDay);
   assert.deepEqual(fx.authority.changeInboxSuggestedAction(fx.token,{
     mode:"accept",command:cmd,key:fx.key,sessionTokenHash:fx.sessionHash,
   }),{ok:true});

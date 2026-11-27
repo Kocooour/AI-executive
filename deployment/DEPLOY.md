@@ -653,3 +653,16 @@ After deploy, the owner checks on iPhone (installed PWA) and Mac:
 
 The urgent quiet-hours exception remains unavailable (follow-up #513);
 project attention and migration of legacy subscriptions are out of scope.
+
+
+## F-1 — target task planning and date-only deadline
+
+Before the first F-1 deploy, add (or replace the existing false assignment) exactly once in the root-owned `/etc/ai-executive/ai-executive.env`:
+
+```dotenv
+AI_EXECUTIVE_TARGET_STAGING_HTTP_TEMPORAL_DUE_ON_WRITE_ENABLED=true
+```
+
+This completes the updated personal-v1 profile. The previous profile is partial and deploy-safe refuses it before stopping the service. No schema migration, new service, or new VAPID keys are required. The existing detail-edit and HTTP gates remain mandatory; the server preflight and write ACL still decide who can edit deadlines. A shared deadline is visible to authorized Area readers. Personal When remains actor-private.
+
+Run the exact-SHA release gates above before deploying. F-1 acceptance (#518) includes the isolated browser test at 390/1280 and the owner iPhone/Mac check; do not mark F-1 or E complete on a green unit suite alone.
