@@ -26,6 +26,11 @@ E-2 vault `target_push_subscriptions` v aplikační SQLite zůstává mimo
 backup/export; target schéma zůstává v27. Existující plánovač přebírá
 legacy task attention i bez VAPID (žádné duplicitní upozornění), ale
 odesílá jen s platnými samostatnými klíči; legacy reminders se nemění.
+Před odhlášením E-3 ověří serverový stav konkrétního endpointu a případně
+revokuje jeho target s aktuální epochou. Nedostupný read model není důkaz
+neexistence zařízení. Neověřený výsledek odhlášení zablokuje; ostatní
+registrace zůstávají platné. Odpojení prohlížeče je po potvrzení revokace
+best effort; již předaná push zpráva není odvolatelná.
 Bez nové migrace, služby či oprávnění. Přesné příznaky a release brány viz
 [DEPLOY.md](../deployment/DEPLOY.md); produkční deploy a klíče jsou oddělené
 schválené kroky vlastníka.
