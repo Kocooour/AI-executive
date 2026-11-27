@@ -138,7 +138,7 @@ export type WriteInput=
   /** `baseTitle` is the title the user started from (and the one an Undo restores). */
   |{kind:"taskTitle";taskId:string;areaId:string;title:string;baseTitle:string}
   |{kind:"taskStatus";taskId:string;areaId:string;status:"open"|"completed"}
-  |{kind:"taskWhen";taskId:string;areaId:string;whenOn:string|null}
+  |{kind:"taskWhen";taskId:string;areaId:string;whenOn:string|null;expectedDueOn?:string|null}
   |{kind:"taskDueOn";taskId:string;areaId:string;dueOn:string|null;baseDueOn:string|null}
   |{kind:"taskDelete";taskId:string;areaId:string;base:TaskPreview;baseRevision:string}
   |{kind:"noteEdit";noteId:string;areaId:string;title:string;body:string;baseTitle:string;baseBody:string}
@@ -273,7 +273,7 @@ function fromStatusDispatch(
 
 async function runTaskWhen(input:Extract<WriteInput,{kind:"taskWhen"}>,d:Deps):Promise<Outcome>{
   const prepared=await prepareMyPlanWhen(
-    {taskId:input.taskId,areaId:input.areaId,whenOn:input.whenOn,signal:d.signal},d.fetch);
+    {taskId:input.taskId,areaId:input.areaId,whenOn:input.whenOn,expectedDueOn:input.expectedDueOn,signal:d.signal},d.fetch);
   if(prepared.ok===false)return outcomeForFailure(
     prepared.reason==="stale"?"conflict":prepared.reason as EditFailure|"unchanged");
   const {command,previousWhenOn}=prepared;

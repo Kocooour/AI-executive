@@ -18,7 +18,7 @@ import {
 import {localMyPlanDate} from "../../lib/target-staging-my-plan-client";
 import {myPlanWhenTarget,prepareMyPlanWhen} from "../../lib/target-staging-my-plan-when-client";
 import {prepareTaskDueOn} from "../../lib/target-staging-task-due-on-client";
-import {TargetDateControls} from "./target-date-controls";
+import {TargetDateControls,useRetainedDateDraft} from "./target-date-controls";
 import {editCopy,type EditCopy} from "../../lib/target-edit-copy";
 import {useTargetScope} from "./target-scope-state";
 import {useTargetGeneration,useTargetRuntime} from "./target-data-provider";
@@ -371,6 +371,17 @@ export function TaskEdits({api,task,expectedRevision}:{
   api:DetailEditApi;task:TaskPreview;expectedRevision:string|null;
 }){
   const {copy,capability,abilities,state,online}=api;
+  // The edit owner stays mounted through benign ACL rechecks. A new identity,
+  // scope, task or Area can never inherit a prior date draft.
+  const generation=useTargetGeneration(),scope=useTargetScope();
+  const identity=JSON.stringify([generation,scope,task.id,task.areaId]);
+  const checking=capability==="checking";
+  const whenDraft=useRetainedDateDraft({identity,
+    snapshot:JSON.stringify([abilities.whenOn,task.dueOn]),value:abilities.whenOn,
+    allowed:checking?null:capability==="writable"&&api.flags.taskWhen&&abilities.when});
+  const dueDraft=useRetainedDateDraft({identity,
+    snapshot:JSON.stringify([task.dueOn]),value:task.dueOn,
+    allowed:checking?null:capability==="writable"&&api.flags.taskDueOn===true&&abilities.dueOn});
   const flags={
     ...api.flags,
     taskTitle:api.flags.taskTitle&&abilities.context,taskStatus:api.flags.taskStatus&&abilities.context,
@@ -407,15 +418,15 @@ export function TaskEdits({api,task,expectedRevision}:{
       {whenButton("today",copy.whenToday)}{whenButton("tomorrow",copy.whenTomorrow)}
       <TargetDateControls key={task.id+":"+abilities.whenOn+":"+task.dueOn} value={abilities.whenOn}
         label={copy.whenDate} save={copy.save} remove={copy.whenRemove} disabled={off}
-        testId="target-detail-edit-when-date"
+        testId="target-detail-edit-when-date" retained={whenDraft} changedNotice={copy.dateDraftChanged}
         deadlineWarning={{dueOn:task.dueOn,message:copy.whenAfterDeadline,confirm:copy.whenConfirmAfterDeadline,cancel:copy.whenCancelAfterDeadline}}
-        onChange={whenOn=>api.run({kind:"taskWhen",taskId:task.id,areaId:task.areaId,whenOn})}/>
+        onChange={whenOn=>api.run({kind:"taskWhen",taskId:task.id,areaId:task.areaId,whenOn,expectedDueOn:task.dueOn})}/>
     </div>}
     {flags.taskDueOn&&<div className="targetDetailEditRow" role="group" aria-label={copy.dueGroup}>
       <span className="targetDetailEditLabel">{copy.dueGroup}:</span>
       <TargetDateControls key={task.id+":"+task.dueOn} value={task.dueOn}
         label={copy.dueDate} save={copy.save} remove={copy.dueRemove} disabled={off}
-        testId="target-detail-edit-due-date"
+        testId="target-detail-edit-due-date" retained={dueDraft} changedNotice={copy.dateDraftChanged}
         onChange={dueOn=>api.run({kind:"taskDueOn",taskId:task.id,areaId:task.areaId,dueOn,baseDueOn:task.dueOn})}/>
       <small>{copy.dueEditable}</small>
     </div>}

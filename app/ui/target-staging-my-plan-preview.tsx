@@ -502,7 +502,7 @@ export function TargetStagingMyPlanPreview({
    * An uncertain command blocks BOTH mutation families until original receipt.
    * The same privacy generation guards status and personal-plan operations. */
   async function changeWhen(
-    task:{taskId:string;areaId:string},target:string|null,undo=false,explicitDate=false,
+    task:{taskId:string;areaId:string;dueOn?:string|null},target:string|null,undo=false,explicitDate=false,
   ){
     if(!whenWriteEnabled||statusOperation.current||whenOperation.current||
       action.kind==="pending"||action.kind==="checking"||
@@ -535,7 +535,7 @@ export function TargetStagingMyPlanPreview({
       // "Dnes/Zítra" is never silently relative to a pinned historical day.
       if((!explicitDate&&(!followToday||date!==localMyPlanDate()))||
         !row||!validMyPlanWhenDate(target)||
-        row.whenOn===target)return;
+        row.whenOn===target||(explicitDate&&task.dueOn===undefined))return;
     }
     const op:WhenOperation={
       controller:new AbortController(),privacyEpoch:privacyEpoch.current,command:null,
@@ -581,6 +581,7 @@ export function TargetStagingMyPlanPreview({
     }else{
       const prepared=await prepareMyPlanWhen({
         taskId:task.taskId,areaId:task.areaId,whenOn:target,
+        ...(explicitDate?{expectedDueOn:task.dueOn}:{}),
         signal:op.controller.signal,
       },targetAppFetch);
       if(whenOperation.current!==op)return;
