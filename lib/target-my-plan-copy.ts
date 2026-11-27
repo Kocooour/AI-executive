@@ -27,6 +27,9 @@ export type MyPlanCopy={
   whenTomorrowAria:(title:string)=>string;
   whenToday:string;
   whenTomorrow:string;
+  whenDate:(title:string)=>string;
+  whenSave:string;
+  whenRemove:string;
   regionLabel:string;
   eyebrow:string;
   heading:string;
@@ -123,6 +126,7 @@ const cs:MyPlanCopy={
   whenTomorrowAria:title=>"Naplánovat osobně na zítřek: "+title,
   whenToday:"Kdy: Dnes",
   whenTomorrow:"Kdy: Zítra",
+  whenDate:title=>"Vybrat den: "+title,whenSave:"Uložit den",whenRemove:"Odebrat Kdy",
   regionLabel:"Serverový Můj plán",
   eyebrow:"Lumi · osobní plán",
   heading:"Můj plán",
@@ -219,6 +223,7 @@ const en:MyPlanCopy={
   whenTomorrowAria:title=>"Plan for me tomorrow: "+title,
   whenToday:"When: Today",
   whenTomorrow:"When: Tomorrow",
+  whenDate:title=>"Choose day: "+title,whenSave:"Save day",whenRemove:"Remove When",
   regionLabel:"My Plan from the server",
   eyebrow:"Lumi · personal plan",
   heading:"My Plan",

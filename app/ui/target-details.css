@@ -89,3 +89,8 @@
 .targetNoteEdit textarea{resize:vertical;max-height:50vh;}
 .targetNoteEditActions{display:flex;gap:8px;flex-wrap:wrap;}
 .targetNoteEdit [role="alert"]{color:var(--muted,#5f5f62);}
+
+.targetDateControls{display:flex;flex-wrap:wrap;gap:8px;align-items:center;min-width:0;max-width:100%;}
+.targetDateControls input{box-sizing:border-box;min-width:0;max-width:100%;min-height:44px;font:inherit;color:inherit;background:transparent;border:1px solid currentColor;border-radius:8px;padding:6px;}
+.targetDateControls input:focus-visible{outline:2px solid currentColor;outline-offset:2px;}
+.targetDateControls button{min-height:44px;}

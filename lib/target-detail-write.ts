@@ -23,6 +23,7 @@ import {
   dispatchMyPlanWhen,checkMyPlanWhenReceipt,prepareMyPlanWhen,
   type MyPlanWhenCommand,
 } from "./target-staging-my-plan-when-client";
+import {prepareTaskDueOn,dispatchTaskDueOn,checkTaskDueOnReceipt} from "./target-staging-task-due-on-client";
 import {prepareConfirmedWhenUndo} from "./target-staging-my-plan-when-undo";
 import {readStagingTaskPreview,type TaskPreview} from "./target-staging-task-preview-client";
 import {readStagingNotePreview,type NotePreview} from "./target-staging-note-preview-client";
@@ -34,7 +35,7 @@ import {
   type EditFailure,type EditReceipt,
 } from "./target-staging-edit-clients";
 
-export type WriteKind="taskTitle"|"taskStatus"|"taskWhen"|"taskDelete"|"noteEdit"|"noteDelete";
+export type WriteKind="taskTitle"|"taskStatus"|"taskWhen"|"taskDueOn"|"taskDelete"|"noteEdit"|"noteDelete";
 export type WriteFailure="invalid"|"forbidden"|"unavailable"|"rate-limited"|"invalid-response";
 
 export type WriteState=
@@ -138,6 +139,7 @@ export type WriteInput=
   |{kind:"taskTitle";taskId:string;areaId:string;title:string;baseTitle:string}
   |{kind:"taskStatus";taskId:string;areaId:string;status:"open"|"completed"}
   |{kind:"taskWhen";taskId:string;areaId:string;whenOn:string|null}
+  |{kind:"taskDueOn";taskId:string;areaId:string;dueOn:string|null;baseDueOn:string|null}
   |{kind:"taskDelete";taskId:string;areaId:string;base:TaskPreview;baseRevision:string}
   |{kind:"noteEdit";noteId:string;areaId:string;title:string;body:string;baseTitle:string;baseBody:string}
   |{kind:"noteDelete";noteId:string;areaId:string;base:NotePreview};
@@ -294,6 +296,22 @@ async function whenReceipt(command:MyPlanWhenCommand,f:typeof fetch,signal:Abort
     ?{kind:"unknown",reason:r.reason==="stale"?"conflict":r.reason==="unchanged"?"invalid-request":r.reason as EditFailure}:r;
 }
 
+/** Deadline is shared. Do not silently overwrite a date changed since the detail was read. */
+async function runTaskDueOn(input:Extract<WriteInput,{kind:"taskDueOn"}>,d:Deps):Promise<Outcome>{
+  const prepared=await prepareTaskDueOn(
+    {taskId:input.taskId,areaId:input.areaId,dueOn:input.dueOn,signal:d.signal},d.fetch);
+  if(prepared.ok===false)return outcomeForFailure(prepared.reason);
+  if(prepared.previousDueOn!==input.baseDueOn)return {t:"conflict"};
+  const {command}=prepared;
+  d.hooks.onDispatch(async signal=>{
+    const receipt=await checkTaskDueOnReceipt(command,d.fetch,signal);
+    return receipt.kind==="unknown"
+      ?{result:receipt.reason==="signed-out"?"signed-out":"unknown"}
+      :{result:receipt.kind};
+  });
+  return fromStatusDispatch(await dispatchTaskDueOn(command,d.fetch,d.signal));
+}
+
 /** Delete has no server Undo: it must refer to the exact authorized snapshot the user confirmed.
  * The fresh server CAS guards changes between this read and the final mutation. */
 export const sameDeleteSnapshot=(current:TaskPreview|NotePreview,base:TaskPreview|NotePreview):boolean=>
@@ -351,6 +369,7 @@ export function executeWrite(input:WriteInput,d:Deps):Promise<Outcome>{
     case "taskTitle":return runTaskTitle(input,d);
     case "taskStatus":return runTaskStatus(input,d);
     case "taskWhen":return runTaskWhen(input,d);
+    case "taskDueOn":return runTaskDueOn(input,d);
     case "taskDelete":return runTaskDelete(input,d);
     case "noteEdit":return runNoteEdit(input,d);
     case "noteDelete":return runNoteDelete(input,d);

@@ -4,6 +4,7 @@
  * Status controls require an independent SERVER opt-in. No offline queue,
  * optimistic status, persistent task cache or production UI integration. */
 import {useEffect,useRef,useState} from "react";
+import {TargetDateControls} from "./target-date-controls";
 import {detailIdOk} from "../../lib/target-detail-route";
 import {
   appendMyPlanSlice,fetchMyPlanSlice,localMyPlanDate,validMyPlanDate,
@@ -22,7 +23,7 @@ import {canRetryUncertainMyPlanRead} from "../../lib/target-staging-my-plan-stat
 import {myPlanToolbarChangeBlocked} from "../../lib/target-staging-my-plan-toolbar-lock";
 import {supersedesCrossFamilyUndo} from "../../lib/target-staging-my-plan-cross-family-undo";
 import {
-  myPlanWhenTarget,prepareMyPlanWhen,dispatchMyPlanWhen,checkMyPlanWhenReceipt,
+  myPlanWhenTarget,validMyPlanWhenDate,prepareMyPlanWhen,dispatchMyPlanWhen,checkMyPlanWhenReceipt,
   type MyPlanWhenCommand,type MyPlanWhenFailure,
 } from "../../lib/target-staging-my-plan-when-client";
 import {
@@ -76,7 +77,7 @@ function PlanDay({label,tasks,date,canComplete,onComplete,canWhen,onWhen,copy,on
   onOpenTask?:(taskId:string,opener:HTMLElement)=>void;
   openLabel?:(title:string)=>string;
   canComplete:boolean;onComplete:(task:MyPlanSliceTask)=>void;
-  canWhen:boolean;onWhen:(task:MyPlanSliceTask,whenOn:string)=>void;
+  canWhen:boolean;onWhen:(task:MyPlanSliceTask,whenOn:string|null)=>void;
 }){
   const areas=new Map<string,{kind:"private"|"shared";tasks:MyPlanSliceTask[]}>();
   for(const task of tasks){
@@ -125,6 +126,9 @@ function PlanDay({label,tasks,date,canComplete,onComplete,canWhen,onWhen,copy,on
                             {choice==="today"?copy.whenToday:copy.whenTomorrow}
                           </button>:null;
                     })}
+                    <TargetDateControls key={task.taskId+":"+task.whenOn} value={task.whenOn}
+                      label={copy.whenDate(task.title)} save={copy.whenSave} remove={copy.whenRemove}
+                      onChange={target=>onWhen(task,target)}/>
                   </div>}
                 </div>
               </li>)}</ul>
@@ -524,11 +528,9 @@ export function TargetStagingMyPlanPreview({
       const row=[...state.page.today.tasks,...state.page.tomorrow.tasks,
         ...state.page.undated.tasks].find(
         item=>item.taskId===task.taskId&&item.areaId===task.areaId);
-      const today=date?myPlanWhenTarget(date,"today"):null;
-      const tomorrow=date?myPlanWhenTarget(date,"tomorrow"):null;
       // "Dnes/Zítra" is never silently relative to a pinned historical day.
       if(!followToday||date!==localMyPlanDate()||
-        !row||target===null||target!==today&&target!==tomorrow||
+        !row||!validMyPlanWhenDate(target)||
         row.whenOn===target)return;
     }
     const op:WhenOperation={

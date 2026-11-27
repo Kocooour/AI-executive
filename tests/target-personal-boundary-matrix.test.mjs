@@ -96,9 +96,6 @@ const disabledRoutes = new Map([
   ["GET projects/[projectId]/relations", "AI_EXECUTIVE_TARGET_STAGING_HTTP_RELATIONS_ENABLED"],
   ["GET relations/backlinks", "AI_EXECUTIVE_TARGET_STAGING_HTTP_RELATIONS_ENABLED"],
   ["GET task-index/global", "AI_EXECUTIVE_TARGET_STAGING_HTTP_GLOBAL_TASKS_ENABLED"],
-  ["GET task-temporal/due-on", "AI_EXECUTIVE_TARGET_STAGING_HTTP_TEMPORAL_DUE_ON_WRITE_ENABLED"],
-  ["PATCH task-temporal/due-on", "AI_EXECUTIVE_TARGET_STAGING_HTTP_TEMPORAL_DUE_ON_WRITE_ENABLED"],
-  ["POST task-temporal/due-on/receipt", "AI_EXECUTIVE_TARGET_STAGING_HTTP_TEMPORAL_DUE_ON_WRITE_ENABLED"],
   ["GET task-temporal/due-window", "AI_EXECUTIVE_TARGET_STAGING_HTTP_TEMPORAL_DUE_WINDOWS_ENABLED"],
 ]);
 function excludedFlag(route, method) {

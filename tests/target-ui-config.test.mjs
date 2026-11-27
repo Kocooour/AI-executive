@@ -24,7 +24,7 @@ const whenWrite={
 const off={enabled:false,statusWrite:false,whenWrite:false};
 const off3={enabled:false,projects:false,notes:false};
 const det0={task:false,project:false,note:false};
-const ed0={taskTitle:false,taskStatus:false,taskWhen:false,taskDelete:false,noteEdit:false,noteDelete:false};
+const ed0={taskTitle:false,taskStatus:false,taskWhen:false,taskDueOn:false,taskDelete:false,noteEdit:false,noteDelete:false};
 const cr0={projects:false,projectTasks:false};
 
 test("default env: target UI off, no config at all",()=>{

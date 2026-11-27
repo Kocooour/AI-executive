@@ -17,6 +17,8 @@ import {
 } from "../../lib/target-staging-edit-clients";
 import {localMyPlanDate} from "../../lib/target-staging-my-plan-client";
 import {myPlanWhenTarget,prepareMyPlanWhen} from "../../lib/target-staging-my-plan-when-client";
+import {prepareTaskDueOn} from "../../lib/target-staging-task-due-on-client";
+import {TargetDateControls} from "./target-date-controls";
 import {editCopy,type EditCopy} from "../../lib/target-edit-copy";
 import {useTargetScope} from "./target-scope-state";
 import {useTargetGeneration,useTargetRuntime} from "./target-data-provider";
@@ -30,8 +32,8 @@ import type {NotePreview} from "../../lib/target-staging-note-preview-client";
 
 export type Capability="off"|"checking"|"writable"|"readonly";
 /** Which write families the SERVER currently accepts for the shown item (read-only preflights). */
-export type Abilities={context:boolean;when:boolean;/** The actor's current personal date, when the server reported it. */whenOn:string|null};
-const NO_ABILITIES:Abilities={context:false,when:false,whenOn:null};
+export type Abilities={context:boolean;when:boolean;dueOn:boolean;/** The actor's current personal date, when the server reported it. */whenOn:string|null};
+const NO_ABILITIES:Abilities={context:false,when:false,dueOn:false,whenOn:null};
 export type EditDraft={
   mode:null|"title"|"note";title:string;body:string;
   /** What the edit started from; a save is refused as a conflict if the item no longer matches it. */
@@ -67,7 +69,7 @@ const subscribeOnline=(notify:()=>void)=>{
 /** The edit kinds that exist for this content kind at all (flags only; the server still decides). */
 export function kindHasEdits(kind:TargetDetailContent["kind"]|"task"|"note"|"project",flags:TargetUiEdits|undefined):boolean{
   if(!flags)return false;
-  if(kind==="task")return flags.taskTitle||flags.taskStatus||flags.taskWhen||flags.taskDelete;
+  if(kind==="task")return flags.taskTitle||flags.taskStatus||flags.taskWhen||flags.taskDueOn===true||flags.taskDelete;
   if(kind==="note")return flags.noteEdit||flags.noteDelete;
   return false;
 }
@@ -148,15 +150,18 @@ export function useDetailEdits(params:{
     }
     const abort=new AbortController();
     setVerifiedContent(null);setAbilities(NO_ABILITIES);setCapability("checking");
-    const probes:Promise<{context:boolean;when:boolean;signedOut:boolean;whenOn:string|null}>[]=[];
+    const probes:Promise<{context:boolean;when:boolean;dueOn:boolean;signedOut:boolean;whenOn:string|null}>[]=[];
     const signal=abort.signal;
-    const outcome=(kind:"context"|"when",whenOn:string|null=null)=>(r:{ok:boolean;reason?:string})=>({
-      context:kind==="context"&&r.ok,when:kind==="when"&&r.ok,signedOut:r.reason==="signed-out",whenOn,
+    const outcome=(kind:"context"|"when"|"dueOn",whenOn:string|null=null)=>(r:{ok:boolean;reason?:string})=>({
+      context:kind==="context"&&r.ok,when:kind==="when"&&r.ok,dueOn:kind==="dueOn"&&r.ok,signedOut:r.reason==="signed-out",whenOn,
     });
     if(content.kind==="task"){
       const task=content.task;
       if(flags.taskTitle||flags.taskStatus||flags.taskDelete)
         probes.push(readTaskWriteContext(task.id,task.areaId,routed,signal).then(outcome("context")));
+      if(flags.taskDueOn)
+        probes.push(prepareTaskDueOn({taskId:task.id,areaId:task.areaId,dueOn:task.dueOn,signal},routed)
+          .then(r=>outcome("dueOn")(r.ok===false?{ok:r.reason==="unchanged",reason:r.reason}:{ok:true})));
       if(flags.taskWhen&&(task.areaKind==="private"||task.assignedToMe===true))
         probes.push(prepareMyPlanWhen({taskId:task.id,areaId:task.areaId,whenOn:"2000-01-01",signal},routed)
           .then(r=>outcome("when",r.ok===true?r.previousWhenOn:null)(
@@ -165,15 +170,15 @@ export function useDetailEdits(params:{
     void Promise.all(probes).then(results=>{
       if(signal.aborted)return;
       if(results.some(r=>r.signedOut))live.current.onRefusal();
-      const next={context:results.some(r=>r.context),when:results.some(r=>r.when),
+      const next={context:results.some(r=>r.context),when:results.some(r=>r.when),dueOn:results.some(r=>r.dueOn),
         whenOn:results.find(r=>r.when)?.whenOn??null};
       setAbilities(next);
-      setCapability(next.context||next.when?"writable":"readonly");
+      setCapability(next.context||next.when||next.dueOn?"writable":"readonly");
       setVerifiedContent(content);
     }).catch(()=>{if(!signal.aborted){setAbilities(NO_ABILITIES);setCapability("readonly");setVerifiedContent(content);}});
     return ()=>abort.abort();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  },[enabled,content,routed,flags.taskTitle,flags.taskStatus,flags.taskDelete,flags.taskWhen]);
+  },[enabled,content,routed,flags.taskTitle,flags.taskStatus,flags.taskDelete,flags.taskWhen,flags.taskDueOn]);
 
   // Conflict: reload the authorized detail (the user's text stays visible in the draft);
   // commit of a title/note edit closes the editor.
@@ -198,7 +203,7 @@ export function useDetailEdits(params:{
   return enabled?api:null;
 }
 const NO_EDITS:TargetUiEdits={
-  taskTitle:false,taskStatus:false,taskWhen:false,taskDelete:false,noteEdit:false,noteDelete:false,
+  taskTitle:false,taskStatus:false,taskWhen:false,taskDueOn:false,taskDelete:false,noteEdit:false,noteDelete:false,
 };
 
 const busy=(state:WriteState)=>state.kind==="pending"||state.kind==="uncertain";
@@ -365,6 +370,7 @@ export function TaskEdits({api,task,expectedRevision}:{
     ...api.flags,
     taskTitle:api.flags.taskTitle&&abilities.context,taskStatus:api.flags.taskStatus&&abilities.context,
     taskDelete:api.flags.taskDelete&&abilities.context,taskWhen:api.flags.taskWhen&&abilities.when,
+    taskDueOn:api.flags.taskDueOn&&abilities.dueOn,
   };
   if(api.deleted)
     return <DeletedNotice api={api} text={copy.deletedTask}/>;
@@ -392,6 +398,18 @@ export function TaskEdits({api,task,expectedRevision}:{
     {when&&<div className="targetDetailEditRow" role="group" aria-label={copy.whenGroup}>
       <span className="targetDetailEditLabel" aria-hidden="true">{copy.whenGroup}:</span>
       {whenButton("today",copy.whenToday)}{whenButton("tomorrow",copy.whenTomorrow)}
+      <TargetDateControls key={task.id+":"+abilities.whenOn} value={abilities.whenOn}
+        label={copy.whenDate} save={copy.save} remove={copy.whenRemove} disabled={off}
+        testId="target-detail-edit-when-date"
+        onChange={whenOn=>api.run({kind:"taskWhen",taskId:task.id,areaId:task.areaId,whenOn})}/>
+    </div>}
+    {flags.taskDueOn&&<div className="targetDetailEditRow" role="group" aria-label={copy.dueGroup}>
+      <span className="targetDetailEditLabel">{copy.dueGroup}:</span>
+      <TargetDateControls key={task.id+":"+task.dueOn} value={task.dueOn}
+        label={copy.dueDate} save={copy.save} remove={copy.dueRemove} disabled={off}
+        testId="target-detail-edit-due-date"
+        onChange={dueOn=>api.run({kind:"taskDueOn",taskId:task.id,areaId:task.areaId,dueOn,baseDueOn:task.dueOn})}/>
+      <small>{copy.dueEditable}</small>
     </div>}
     <ConflictKept api={api} kind="title" current={{title:task.title,body:""}}/>
     {flags.taskDelete&&expectedRevision!==null&&<DeleteControl api={api} label={copy.deleteTask}
