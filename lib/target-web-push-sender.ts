@@ -56,13 +56,14 @@ export function publicPushAddress(address:string):boolean {
 export type TargetPushResolver=(hostname:string)=>Promise<{address:string;family:number}[]>;
 export type TargetPushTransport=(request:{
   url:URL;address:string;family:number;method:string;
-  headers:Record<string,string|number>;body:Buffer|null;timeoutMs:number;
+  headers:Record<string,string|number>;body:Buffer|null;timeoutMs:number;signal?:AbortSignal;
 })=>Promise<number>;
 
 const defaultResolver:TargetPushResolver=hostname=>dnsLookup(hostname,{all:true,verbatim:true});
 
 /** One request to a pre-checked address; resolves with the HTTP status. */
 export const defaultTargetPushTransport:TargetPushTransport=request=>new Promise((resolve,reject)=>{
+  if(request.signal?.aborted){reject(new Error("cancelled"));return;}
   const secure=request.url.protocol==="https:";
   const options:https.RequestOptions={
     method:request.method,
@@ -78,6 +79,7 @@ export const defaultTargetPushTransport:TargetPushTransport=request=>new Promise
       else callback(null,request.address,request.family);
     }) as unknown as https.RequestOptions["lookup"],
     timeout:request.timeoutMs,
+    ...(request.signal?{signal:request.signal}:{}),
   };
   const req=(secure?https:http).request(options,response=>{
     let size=0;
@@ -96,8 +98,9 @@ export const defaultTargetPushTransport:TargetPushTransport=request=>new Promise
 
 export interface TargetWebPushSenderOptions {
   readonly vapid:TargetVapidConfig;
-  /** The device secret of the user's OWN live target, or null. */
-  readonly subscriptionFor:(userId:string,targetId:string)=>TargetPushSubscription|null|Promise<TargetPushSubscription|null>;
+  /** Fresh, synchronous lookup of the user's OWN live target, or null.
+   * Called again immediately before transport, after asynchronous DNS. */
+  readonly subscriptionFor:(userId:string,targetId:string)=>TargetPushSubscription|null;
   readonly env?:TargetPushEnv;
   readonly resolve?:TargetPushResolver;
   readonly transport?:TargetPushTransport;
@@ -107,11 +110,15 @@ export interface TargetWebPushSenderOptions {
 /** Encrypt and deliver one payload to one subscription. Never throws. */
 export async function sendTargetWebPush(
   subscription:TargetPushSubscription,payload:TargetPushPayload,
-  options:Omit<TargetWebPushSenderOptions,"subscriptionFor">,
+  options:Omit<TargetWebPushSenderOptions,"subscriptionFor">&{
+    signal?:AbortSignal;
+    /** Synchronous final authorization fence, after DNS and encryption. */
+    beforeTransport?:()=>boolean;
+  },
 ):Promise<TargetPushSendResult> {
   const env=options.env??process.env;
   try{
-    if(!allowedTargetPushEndpoint(subscription.endpoint,env))return "failed";
+    if(options.signal?.aborted||!allowedTargetPushEndpoint(subscription.endpoint,env))return "failed";
     const body=JSON.stringify({title:payload.title,body:payload.body,url:payload.url,tag:payload.tag});
     if(Buffer.byteLength(body,"utf8")>TARGET_PUSH_MAX_PAYLOAD_BYTES)return "failed";
     const url=new URL(subscription.endpoint);
@@ -121,6 +128,7 @@ export async function sendTargetWebPush(
       address="127.0.0.1";family=4;
     }else{
       const resolved=await (options.resolve??defaultResolver)(url.hostname);
+      if(options.signal?.aborted)return "failed";
       // Every answer must be public: a mixed answer could be steered to a private one.
       if(!resolved.length||resolved.some(r=>!publicPushAddress(r.address)))return "failed";
       // Prefer IPv4: a host without an IPv6 route would otherwise fail every send.
@@ -137,10 +145,14 @@ export async function sendTargetWebPush(
     const headers:Record<string,string|number>={};
     for(const [name,value] of Object.entries(details.headers??{}))
       if(typeof value==="string"||typeof value==="number")headers[name]=value;
+    // No await between the fresh authorization check and transport start.
+    // Once transport has started, an external service may already have the message.
+    if(options.signal?.aborted||options.beforeTransport?.()===false||options.signal?.aborted)return "failed";
     const status=await (options.transport??defaultTargetPushTransport)({
       url,address,family,method:details.method,headers,
       body:details.body?Buffer.from(details.body):null,
       timeoutMs:options.timeoutMs??TARGET_PUSH_REQUEST_TIMEOUT_MS,
+      ...(options.signal?{signal:options.signal}:{}),
     });
     if(status>=200&&status<300)return "sent";
     if(status===404||status===410)return "gone";
@@ -153,12 +165,19 @@ export async function sendTargetWebPush(
 /** TargetPushSender for the identity-bound attention pass. */
 export function createTargetWebPushSender(options:TargetWebPushSenderOptions):TargetPushSender {
   return {
-    async sendTo(userId,targetId,payload){
+    async sendTo(userId,targetId,payload,signal){
+      if(signal?.aborted)return "failed";
       let subscription:TargetPushSubscription|null;
-      try{subscription=await options.subscriptionFor(userId,targetId);}catch{return "failed";}
+      try{subscription=options.subscriptionFor(userId,targetId);}catch{return "failed";}
       // No secret (yet): retry later rather than revoking a device the user just added.
       if(!subscription)return "failed";
-      return sendTargetWebPush(subscription,payload,options);
+      const initial={...subscription};
+      return sendTargetWebPush(initial,payload,{...options,...(signal?{signal}:{}),
+        beforeTransport:()=>{
+          const fresh=options.subscriptionFor(userId,targetId);
+          return fresh!==null&&fresh.endpoint===initial.endpoint&&
+            fresh.p256dh===initial.p256dh&&fresh.auth===initial.auth;
+        }});
     },
   };
 }
