@@ -128,8 +128,10 @@ function PlanDay({label,tasks,date,canComplete,onComplete,canWhen,canWhenDate,on
                     })}
                   </div>}
                   {canWhenDate&&<div className="stagingMyPlanWhenControls">
-                    <TargetDateControls key={task.taskId+":"+task.whenOn} value={task.whenOn}
+                    <TargetDateControls key={task.taskId+":"+task.whenOn+":"+task.dueOn} value={task.whenOn}
                       label={copy.whenDate(task.title)} save={copy.whenSave} remove={copy.whenRemove}
+                      actionContext={task.title}
+                      deadlineWarning={{dueOn:task.dueOn,message:copy.whenAfterDeadline,confirm:copy.whenConfirmAfterDeadline,cancel:copy.whenCancelAfterDeadline}}
                       onChange={target=>onWhen(task,target,true)}/>
                   </div>}
                 </div>

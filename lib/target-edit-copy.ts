@@ -23,6 +23,9 @@ export type EditCopy={
   whenTomorrow:string;
   whenDate:string;
   whenRemove:string;
+  whenAfterDeadline:string;
+  whenConfirmAfterDeadline:string;
+  whenCancelAfterDeadline:string;
   dueGroup:string;
   dueDate:string;
   dueRemove:string;
@@ -78,6 +81,8 @@ export const editCopy:Record<DetailLanguage,EditCopy>={
     whenToday:"Dnes",
     whenTomorrow:"Zítra",
     whenDate:"Vybrat den",whenRemove:"Odebrat Kdy",
+    whenAfterDeadline:"Vybraný den je po termínu úkolu. Chcete jej přesto naplánovat?",
+    whenConfirmAfterDeadline:"Naplánovat po termínu",whenCancelAfterDeadline:"Zrušit potvrzení",
     dueGroup:"Termín",dueDate:"Datum termínu",dueRemove:"Odebrat termín",
     dueEditable:"Termín může upravit vlastník nebo člen Oblasti s právem úprav.",
     deleteTask:"Smazat úkol",
@@ -141,6 +146,8 @@ export const editCopy:Record<DetailLanguage,EditCopy>={
     whenToday:"Today",
     whenTomorrow:"Tomorrow",
     whenDate:"Choose a day",whenRemove:"Remove When",
+    whenAfterDeadline:"The selected day is after the deadline. Do you still want to plan it?",
+    whenConfirmAfterDeadline:"Plan after deadline",whenCancelAfterDeadline:"Cancel confirmation",
     dueGroup:"Deadline",dueDate:"Deadline date",dueRemove:"Remove deadline",
     dueEditable:"The owner or an Area member with edit permission can change the deadline.",
     deleteTask:"Delete task",

@@ -104,7 +104,12 @@ export function useDetailEdits(params:{
       const current=live.current;
       // The open detail is queued FIRST (the user is looking at it); the lists follow.
       if(info.deleted)current.onDeleted();
-      else current.revalidate();
+      else {
+        // A committed deadline must not leave the old editable snapshot live
+        // while the authoritative detail and its ACL probes are reloaded.
+        if(info.write==="taskDueOn")setVerifiedContent(null);
+        current.revalidate();
+      }
       emitTargetChange({
         kind:current.route.kind==="note"?"note":"task",id:current.route.id,
         change:info.deleted?"deleted":"updated",
@@ -400,9 +405,10 @@ export function TaskEdits({api,task,expectedRevision}:{
     {when&&<div className="targetDetailEditRow" role="group" aria-label={copy.whenGroup}>
       <span className="targetDetailEditLabel" aria-hidden="true">{copy.whenGroup}:</span>
       {whenButton("today",copy.whenToday)}{whenButton("tomorrow",copy.whenTomorrow)}
-      <TargetDateControls key={task.id+":"+abilities.whenOn} value={abilities.whenOn}
+      <TargetDateControls key={task.id+":"+abilities.whenOn+":"+task.dueOn} value={abilities.whenOn}
         label={copy.whenDate} save={copy.save} remove={copy.whenRemove} disabled={off}
         testId="target-detail-edit-when-date"
+        deadlineWarning={{dueOn:task.dueOn,message:copy.whenAfterDeadline,confirm:copy.whenConfirmAfterDeadline,cancel:copy.whenCancelAfterDeadline}}
         onChange={whenOn=>api.run({kind:"taskWhen",taskId:task.id,areaId:task.areaId,whenOn})}/>
     </div>}
     {flags.taskDueOn&&<div className="targetDetailEditRow" role="group" aria-label={copy.dueGroup}>

@@ -251,6 +251,7 @@ for(const width of [390,1280]){
     await page.setViewportSize({width,height:844});
     const viewer=store().seed.revokeProjects[String(width)];
     const viewerId="f1:viewer:"+width,viewerTitle="F-1 viewer "+width;
+    const otherTitle="F-1 další úkol "+width;
     const d=db();
     try{
       d.prepare("UPDATE personal_notification_settings SET time_zone=? WHERE user_id=?").run(zone,store().ownerUserId);
@@ -258,6 +259,8 @@ for(const width of [390,1280]){
       d.prepare("UPDATE area_members SET role='viewer' WHERE area_id=? AND user_id=?").run(viewer.areaId,store().ownerUserId);
       d.prepare("INSERT INTO tasks(id,area_id,title,due_on,assignee_user_id) VALUES (?,?,?,?,?)")
         .run(viewerId,viewer.areaId,viewerTitle,null,null);
+      d.prepare("INSERT INTO tasks(id,area_id,title,due_on,assignee_user_id) VALUES (?,?,?,?,?)")
+        .run("f1:other:"+width,store().seed.areaId,otherTitle,null,null);
     }finally{d.close();}
     const label="f1"+width,device=endpointOf(label);
     await stubPush(page,label);
@@ -306,12 +309,14 @@ for(const width of [390,1280]){
     // relative to the real current day, never to the selected date.
     const planWhen=plan.getByLabel("Vybrat den: "+title,{exact:true});
     await expect(planWhen).toHaveValue(future);
+    await expect(plan.getByRole("button",{name:"Uložit den: "+title,exact:true})).toHaveCount(1);
+    await expect(plan.getByRole("button",{name:"Uložit den: "+otherTitle,exact:true})).toHaveCount(1);
     await planWhen.fill(day(now+4*DAY));
-    await planWhen.locator("..").getByRole("button",{name:"Uložit den"}).click();
+    await planWhen.locator("..").getByRole("button",{name:"Uložit den: "+title,exact:true}).click();
     await expect(planWhen).toHaveValue(day(now+4*DAY));
     await plan.getByRole("button",{name:"Vrátit osobní plán (Undo)"}).click();
     await expect(planWhen).toHaveValue(future);
-    await planWhen.locator("..").getByRole("button",{name:"Odebrat Kdy"}).click();
+    await planWhen.locator("..").getByRole("button",{name:"Odebrat Kdy: "+title,exact:true}).click();
     await expect(plan.getByRole("region",{name:"Bez data"}).locator('[data-detail-row="task:'+id+'"]')).toBeVisible();
     await plan.getByRole("button",{name:"Vrátit osobní plán (Undo)"}).click();
     await expect(plan.getByRole("region",{name:"Do vybraného dne včetně"}).locator('[data-detail-row="task:'+id+'"]')).toBeVisible();
@@ -321,22 +326,50 @@ for(const width of [390,1280]){
     await expect(detail).toContainText(title);
     const duePath="/api/target-staging/task-temporal/due-on";
     const dueInput=detail.getByTestId("target-detail-edit-due-date");
-    const saveDue=async(date:string)=>{
+    const saveDue=async(date:string,previous:string|null)=>{
+      // A local draft is not proof of a server refresh. Wait for the actual
+      // authorized input bound to the previous confirmed server snapshot.
+      await expect(dueInput).toHaveAttribute("data-confirmed-date",previous??"",{timeout:30_000});
+      await expect(dueInput).toBeEnabled();
       await dueInput.fill(date);
-      const pending=page.waitForResponse(r=>new URL(r.url()).pathname===duePath&&r.request().method()==="PATCH");
+      const pending=page.waitForResponse(r=>new URL(r.url()).pathname===duePath&&r.request().method()==="PATCH",{timeout:30_000});
       await dueInput.locator("..").getByRole("button",{name:"Uložit",exact:true}).click();
       const reply=await pending;
       expect(reply.status()).toBe(200);
       expect(reply.request().postDataJSON().dueOn).toBe(date);
       await expect(detail.getByTestId("target-detail-edit-status")).toHaveText("Termín je uložen.");
+      await expect(dueInput).toHaveAttribute("data-confirmed-date",date,{timeout:30_000});
       await expect(dueInput).toHaveValue(date);
+      await expect(dueInput).toBeEnabled();
       return reply.request().postDataJSON() as Record<string,unknown>;
     };
-    await saveDue(day(now+6*DAY));
-    const command=await saveDue(deadline);
+    await saveDue(day(now+6*DAY),null);
+    const command=await saveDue(deadline,day(now+6*DAY));
+    // Explicit When after the deadline requires a second action. Cancel must
+    // leave the canonical date unchanged, then confirm and Undo the change.
+    await expect(whenInput).toHaveAttribute("data-confirmed-date",future);
+    const after=day(now+7*DAY);
+    await whenInput.fill(after);
+    await whenInput.locator("..").getByRole("button",{name:"Uložit",exact:true}).click();
+    await expect(whenInput.locator("..").getByRole("alert")).toContainText("Vybraný den je po termínu");
+    await whenInput.locator("..").getByRole("button",{name:"Zrušit potvrzení",exact:true}).click();
+    await expect(whenInput).toHaveAttribute("data-confirmed-date",future);
+    await whenInput.locator("..").getByRole("button",{name:"Uložit",exact:true}).click();
+    await whenInput.locator("..").getByRole("button",{name:"Naplánovat po termínu",exact:true}).click();
+    await expect(whenInput).toHaveAttribute("data-confirmed-date",after,{timeout:30_000});
+    await detail.getByRole("button",{name:"Vrátit zpět",exact:true}).click();
+    await expect(whenInput).toHaveAttribute("data-confirmed-date",future,{timeout:30_000});
     await page.goto("/?view=MyPlanPreview&scope=personal");
     await expect(page.getByRole("region",{name:/^Zítra/}).locator('[data-detail-row="task:'+id+'"]')).toBeVisible();
     await expect(row.locator("xpath=ancestor::li[1]").getByText(/^Termín: /)).toBeVisible();
+    const laterPlan=plan.getByLabel("Vybrat den: "+title,{exact:true});
+    await laterPlan.fill(after);
+    await plan.getByRole("button",{name:"Uložit den: "+title,exact:true}).click();
+    await expect(laterPlan.locator("..").getByRole("alert")).toContainText("Vybraný den je po termínu");
+    await plan.getByRole("button",{name:"Naplánovat po termínu: "+title,exact:true}).click();
+    await expect(laterPlan).toHaveAttribute("data-confirmed-date",after,{timeout:30_000});
+    await plan.getByRole("button",{name:"Vrátit osobní plán (Undo)"}).click();
+    await expect(laterPlan).toHaveAttribute("data-confirmed-date",future,{timeout:30_000});
     await row.click();
     await expect(dueInput).toHaveValue(deadline);
     await page.goto("/?view=Home&scope=personal");
@@ -365,6 +398,7 @@ for(const width of [390,1280]){
     const removed=await removal;
     expect(removed.status()).toBe(200);
     expect(removed.request().postDataJSON().dueOn).toBeNull();
+    await expect(dueInput).toHaveAttribute("data-confirmed-date","",{timeout:30_000});
     await expect(dueInput).toHaveValue("");
     const attentionRead=page.waitForResponse(r=>new URL(r.url()).pathname==="/api/target-staging/attention"&&r.status()===200);
     await page.goto("/?view=Home&scope=personal");
