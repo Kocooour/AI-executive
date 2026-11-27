@@ -162,12 +162,16 @@ for(const width of [390,1280]){
     await expect(panel.getByTestId("target-push-device-state")).toHaveText("Toto zařízení zatím upozornění nedostává.");
     // The legacy attention switch is hidden while target alerts own them.
     await expect(page.getByText("Upozornit na urgentní termíny",{exact:true})).toHaveCount(0);
+    await expect(panel.getByTestId("target-push-zone")).toHaveValue(width===390?"UTC":zone);
     const register=page.waitForResponse(r=>new URL(r.url()).pathname==="/api/target-staging/notifications/targets"&&
       r.request().method()==="POST");
     await panel.getByTestId("target-push-enable").click();
     expect((await register).status()).toBe(200);
     await expect(panel.getByTestId("target-push-device-state")).toHaveText("Toto zařízení dostává upozornění.");
-    await expect(panel.getByTestId("target-push-notice")).toHaveText("Upozornění jsou na tomto zařízení zapnutá.");
+    await expect(panel.getByTestId("target-push-notice")).toHaveText(width===390
+      ?"Upozornění jsou na tomto zařízení zapnutá. Časové pásmo bylo nastaveno podle tohoto zařízení (Europe/Prague)."
+      :"Upozornění jsou na tomto zařízení zapnutá.");
+    await expect(panel.getByTestId("target-push-zone")).toHaveValue(zone);
     await expect(panel.getByTestId("target-push-attention")).toBeChecked();
     await expect(panel.getByTestId("target-push-devices")).toContainText("(toto zařízení)");
     // Content-free test notification, decrypted on the fake service.
@@ -177,6 +181,12 @@ for(const width of [390,1280]){
     expect(testMessages).toHaveLength(1);
     expect(testMessages[0]).toEqual({title:"Lumi",body:"Testovací oznámení: upozornění na tomto zařízení fungují.",
       url:"/?view=Settings",tag:"lumi-push-test"});
+    // A deliberate later choice of UTC must survive another device enable.
+    if(width===390){
+      await panel.getByTestId("target-push-zone").fill("UTC");
+      await panel.getByRole("button",{name:"Uložit",exact:true}).click();
+      await expect(panel.getByTestId("target-push-notice")).toHaveText("Uloženo.");
+    }
     // The push service forgets the device: the test result says so, the device
     // is removed server-side, and the panel truthfully offers to turn it on again.
     statusFor.set(new URL(endpointOf("ui"+width)).pathname,410);
@@ -187,6 +197,13 @@ for(const width of [390,1280]){
     await expect(panel.getByTestId("target-push-device-state")).toHaveText("Toto zařízení zatím upozornění nedostává.");
     await panel.getByTestId("target-push-enable").click();
     await expect(panel.getByTestId("target-push-device-state")).toHaveText("Toto zařízení dostává upozornění.");
+    await expect(panel.getByTestId("target-push-notice")).toHaveText("Upozornění jsou na tomto zařízení zapnutá.");
+    await expect(panel.getByTestId("target-push-zone")).toHaveValue(width===390?"UTC":zone);
+    if(width===390){
+      await panel.getByTestId("target-push-zone").fill(zone);
+      await panel.getByRole("button",{name:"Uložit",exact:true}).click();
+      await expect(panel.getByTestId("target-push-notice")).toHaveText("Uloženo.");
+    }
     // No horizontal scroll at this width.
     expect(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth)).toBe(true);
     // A reload re-confirms the device from the server; nothing comes from browser storage.
@@ -234,7 +251,11 @@ test("delivery: baseline, exactly one private message, daily limit, quiet hours,
   let messages=payloads(device);
   expect(messages).toHaveLength(1);
   expect(messages[0]).toEqual({title:"Zaplatit nájem",body:expect.stringMatching(/^Termín \d+\. \d+\. uplynul\.$/),
-    url:"/?task="+encodeURIComponent(rent),tag:"attention-"+rent});
+    url:"/?view=MyPlanPreview&taskId="+encodeURIComponent(rent),tag:"attention-"+rent});
+  // Follow the URL from the actual decrypted push.
+  await page.goto(messages[0].url);
+  await expect(page.getByTestId("target-detail")).toContainText("Zaplatit nájem",{timeout:25_000});
+  await openNotifications(page);
   expect(JSON.stringify(messages)).not.toContain("Starý dluh");
   // 3. At most three routine messages per rolling 24 h: the fourth waits.
   for(const title of ["Druhý","Třetí","Čtvrtý"])overdueTask("Limit "+title);
