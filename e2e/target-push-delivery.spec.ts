@@ -21,7 +21,7 @@ const zone="Europe/Prague",DAY=86_400_000,HOUR=3_600_000;
 const day=(ms:number)=>new Intl.DateTimeFormat("sv-SE",{timeZone:zone,dateStyle:"short"}).format(ms);
 const run=()=>realpathSync(process.env.LUMI_E2E_RUN_DIR!);
 const store=()=>JSON.parse(process.env.LUMI_E2E_TARGET_STORE!) as
-  {directory:string;restoreGeneration:string;ownerUserId:string;seed:{areaId:string}};
+  {directory:string;restoreGeneration:string;ownerUserId:string;seed:{areaId:string;areaTitle:string;revokeProjects:Record<string,{areaId:string;adminId:string}>}};
 const browserKeys=syntheticBrowserKeys();
 
 type Received={path:string;status:number;headers:http.IncomingHttpHeaders;body:Buffer};
@@ -237,6 +237,135 @@ for(const width of [390,1280]){
     await expect(reloaded.getByTestId("target-push-notice"))
       .toHaveText("Na tomto zařízení se upozornění už nebudou zobrazovat.");
     await expect(reloaded.getByText("(toto zařízení)")).toHaveCount(0);
+  });
+}
+
+// F-1: all personal planning and deadline mutations of the new task use the
+// actual application UI, never direct SQL. Only unrelated fixture rows are reset.
+for(const width of [390,1280]){
+  test("F-1: Quick Capture, arbitrary When, deadline, Home and push at "+width+"px",async({page})=>{
+    test.setTimeout(300_000);
+    const now=pragueAt(10);
+    setClock(now);
+    await page.clock.setFixedTime(new Date(now));
+    await page.setViewportSize({width,height:844});
+    const viewer=store().seed.revokeProjects[String(width)];
+    const viewerId="f1:viewer:"+width,viewerTitle="F-1 viewer "+width;
+    const d=db();
+    try{
+      d.prepare("UPDATE personal_notification_settings SET time_zone=? WHERE user_id=?").run(zone,store().ownerUserId);
+      d.prepare("UPDATE tasks SET status='completed',completed_at_ms=? WHERE status='open'").run(now);
+      d.prepare("UPDATE area_members SET role='viewer' WHERE area_id=? AND user_id=?").run(viewer.areaId,store().ownerUserId);
+      d.prepare("INSERT INTO tasks(id,area_id,title,due_on,assignee_user_id) VALUES (?,?,?,?,?)")
+        .run(viewerId,viewer.areaId,viewerTitle,null,null);
+    }finally{d.close();}
+    const label="f1"+width,device=endpointOf(label);
+    await stubPush(page,label);
+    const settings=await openNotifications(page);
+    if(await settings.getByTestId("target-push-attention").isChecked()){
+      await settings.getByTestId("target-push-attention").click();
+      await expect(settings.getByTestId("target-push-notice")).toHaveText("Uloženo.");
+      await expect(settings.getByTestId("target-push-attention")).not.toBeChecked();
+    }
+    await settings.getByTestId("target-push-enable").click();
+    await expect(settings.getByTestId("target-push-attention")).toBeChecked();
+    await expect(settings.getByTestId("target-push-device-state")).toHaveText("Toto zařízení dostává upozornění.");
+    await tick();
+    expect(payloads(device)).toHaveLength(0);
+
+    const title="F-1 termín "+width, future=day(now+5*DAY), deadline=day(now+DAY);
+    await page.goto("/?view=MyPlanPreview&scope=personal");
+    const plan=page.getByTestId("target-my-plan"),detail=page.getByTestId("target-detail");
+    await expect(plan).toBeVisible();
+    await page.locator('[data-target-private-capture-fab="'+(width===390?"mobile":"desktop")+'"]').click();
+    await page.getByTestId("target-capture-task-kind").click();
+    await page.getByTestId("target-private-task-area").selectOption({label:store().seed.areaTitle});
+    await page.getByTestId("target-private-task-form").getByRole("textbox",{name:"Název úkolu"}).fill(title);
+    const created=page.waitForResponse(r=>new URL(r.url()).pathname==="/api/target-staging/tasks"&&r.request().method()==="POST");
+    await page.getByTestId("target-private-task-save").click();
+    const response=await created;
+    expect(response.status()).toBe(201);
+    const id=response.request().postDataJSON().taskId as string;
+    expect(id).toMatch(/^[0-9a-f-]{36}$/);
+    await page.getByTestId("target-private-task-open").click();
+    await expect(detail).toContainText(title);
+    const whenInput=detail.getByTestId("target-detail-edit-when-date");
+    await whenInput.fill(future);
+    await whenInput.locator("..").getByRole("button",{name:"Uložit",exact:true}).click();
+    await expect(detail.getByTestId("target-detail-edit-status")).toContainText("Termín „Kdy“ je uložen.");
+    await page.goto("/?view=MyPlanPreview&scope=personal");
+    const row=page.locator('[data-detail-row="task:'+id+'"]');
+    await expect(plan).toBeVisible();
+    const dateInput=plan.getByLabel("Den",{exact:true});
+    await dateInput.fill(day(now+3*DAY));
+    await expect(plan.getByRole("region",{name:"Do vybraného dne včetně"})).toBeVisible();
+    await expect(row).toHaveCount(0);
+    await dateInput.fill(future);
+    await expect(plan.getByRole("region",{name:"Do vybraného dne včetně"}).locator('[data-detail-row="task:'+id+'"]')).toBeVisible();
+    await row.click();
+    await expect(detail).toContainText(title);
+    const duePath="/api/target-staging/task-temporal/due-on";
+    const dueInput=detail.getByTestId("target-detail-edit-due-date");
+    const saveDue=async(date:string)=>{
+      await dueInput.fill(date);
+      const pending=page.waitForResponse(r=>new URL(r.url()).pathname===duePath&&r.request().method()==="PATCH");
+      await dueInput.locator("..").getByRole("button",{name:"Uložit",exact:true}).click();
+      const reply=await pending;
+      expect(reply.status()).toBe(200);
+      expect(reply.request().postDataJSON().dueOn).toBe(date);
+      await expect(detail.getByTestId("target-detail-edit-status")).toContainText("Termín");
+      await expect(dueInput).toHaveValue(date);
+      return reply.request().postDataJSON() as Record<string,unknown>;
+    };
+    await saveDue(day(now+6*DAY));
+    const command=await saveDue(deadline);
+    await page.goto("/?view=Home&scope=personal");
+    const homeRow=page.locator("[data-rule]").filter({hasText:title});
+    await expect(homeRow).toHaveAttribute("data-rule","deadline_soon",{timeout:30_000});
+    await tick();await tick();
+    const messages=()=>payloads(device).filter(p=>p.tag==="attention-"+id);
+    expect(messages()).toHaveLength(1);
+    expect(messages()[0].title).toBe(title);
+    await page.goto(messages()[0].url);
+    await expect(detail).toContainText(title,{timeout:25_000});
+
+    const past=pragueAt(10,2);
+    setClock(past);
+    await page.clock.setFixedTime(new Date(past));
+    await page.goto("/?view=Home&scope=personal");
+    await expect(homeRow).toHaveAttribute("data-rule","deadline_overdue",{timeout:30_000});
+    await tick();await tick();
+    expect(messages()).toHaveLength(2);
+    expect(messages()[1].body).toMatch(/uplynul/);
+    await page.goto(messages()[1].url);
+    await expect(detail).toContainText(title,{timeout:25_000});
+    const removal=page.waitForResponse(r=>new URL(r.url()).pathname===duePath&&r.request().method()==="PATCH");
+    await dueInput.locator("..").getByRole("button",{name:"Odebrat termín"}).click();
+    const removed=await removal;
+    expect(removed.status()).toBe(200);
+    expect(removed.request().postDataJSON().dueOn).toBeNull();
+    await expect(dueInput).toHaveValue("");
+    await page.goto("/?view=Home&scope=personal");
+    await expect(homeRow).toHaveCount(0);
+    await tick();await tick();
+    expect(messages()).toHaveLength(2);
+    expect(payloads(device)).toHaveLength(2);
+
+    // Viewer can read the shared task but cannot write a deadline, even
+    // when bypassing the UI with a forged command from a genuine owner write.
+    await page.goto("/?view=MyPlanPreview&taskId="+encodeURIComponent(viewerId));
+    await expect(detail).toContainText(viewerTitle,{timeout:25_000});
+    await expect(detail.getByTestId("target-detail-edit-readonly")).toBeVisible();
+    await expect(dueInput).toHaveCount(0);
+    const denied=await page.request.get(duePath+"?taskId="+encodeURIComponent(viewerId));
+    expect(denied.status()).toBe(404);
+    const forged=await page.request.patch(duePath,{headers:{
+      origin:new URL(page.url()).origin,"x-lumi-target-protocol":"1"
+    },data:{...command,taskId:viewerId,writeAreaId:viewer.areaId,commandId:crypto.randomUUID()}});
+    expect(forged.status()).toBe(404);
+    const again=await openNotifications(page);
+    await again.getByTestId("target-push-disable").click();
+    await expect(again.getByTestId("target-push-device-state")).toHaveText("Toto zařízení zatím upozornění nedostává.");
   });
 }
 

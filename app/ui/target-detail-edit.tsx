@@ -164,7 +164,7 @@ export function useDetailEdits(params:{
           .then(r=>outcome("dueOn")(r.ok===false?{ok:r.reason==="unchanged",reason:r.reason}:{ok:true})));
       if(flags.taskWhen&&(task.areaKind==="private"||task.assignedToMe===true))
         probes.push(prepareMyPlanWhen({taskId:task.id,areaId:task.areaId,whenOn:"2000-01-01",signal},routed)
-          .then(r=>outcome("when",r.ok===true?r.previousWhenOn:null)(
+          .then(r=>outcome("when",r.ok===true?r.previousWhenOn:r.reason==="unchanged"?"2000-01-01":null)(
             r.ok===false?{ok:r.reason==="unchanged",reason:r.reason}:{ok:true})));
     }else probes.push(readNoteWriteContext(content.note.id,content.note.areaId,routed,signal).then(outcome("context")));
     void Promise.all(probes).then(results=>{
