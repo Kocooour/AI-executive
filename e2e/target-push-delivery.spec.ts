@@ -313,8 +313,10 @@ for(const width of [390,1280]){
     await expect(plan.getByRole("button",{name:"Uložit den: "+otherTitle,exact:true})).toHaveCount(1);
     await planWhen.fill(day(now+4*DAY));
     await planWhen.locator("..").getByRole("button",{name:"Uložit den: "+title,exact:true}).click();
+    await expect(planWhen).toHaveAttribute("data-confirmed-date",day(now+4*DAY));
     await expect(planWhen).toHaveValue(day(now+4*DAY));
     await plan.getByRole("button",{name:"Vrátit osobní plán (Undo)"}).click();
+    await expect(planWhen).toHaveAttribute("data-confirmed-date",future);
     await expect(planWhen).toHaveValue(future);
     await planWhen.locator("..").getByRole("button",{name:"Odebrat Kdy: "+title,exact:true}).click();
     await expect(plan.getByRole("region",{name:"Bez data"}).locator('[data-detail-row="task:'+id+'"]')).toBeVisible();

@@ -16,7 +16,7 @@ export function TargetDateControls({value,label,save,remove,disabled=false,onCha
   const valid=draft!==""&&validMyPlanWhenDate(draft)&&draft!==value;
   const afterDeadline=valid&&deadlineWarning?.dueOn!=null&&draft>deadlineWarning.dueOn;
   const actionName=(name:string)=>actionContext?name+": "+actionContext:name;
-  return <div className="targetDateControls" role="group" aria-label={label}>
+  return <div className="targetDateControls">
     <input type="date" aria-label={label} data-testid={testId}
       data-confirmed-date={value??""}
       value={draft} min="0001-01-01" max="9999-12-31" disabled={disabled}
