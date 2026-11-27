@@ -7,7 +7,7 @@ import {TARGET_PERSONAL_V1_PROFILE,TARGET_PERSONAL_V1_EXCLUDED,
   TARGET_PERSONAL_V1_EXCLUDED_PREFIXES,TARGET_PERSONAL_V1_REQUIRED_SETTINGS,
   TARGET_PERSONAL_V1_NOT_SETTINGS,targetPersonalV1Env}
   from "../lib/target-personal-profile.ts";
-import {targetUiConfig,targetHomeSummaryEnabled,targetInboxUiEnabled} from "../lib/target-ui-config.ts";
+import {targetUiConfig,targetHomeSummaryEnabled,targetHomeAttentionEnabled,targetInboxUiEnabled} from "../lib/target-ui-config.ts";
 import {targetMainTitleSearchEnabled} from "../lib/target-main-title-search-ui.ts";
 import {targetPrivateNoteAreaUiEnabled} from "../lib/target-private-note-area-ui-gate.ts";
 import {targetPrivateNoteCreateUiEnabled} from "../lib/target-private-note-create-ui-gate.ts";
@@ -16,6 +16,9 @@ import {targetPrivateProjectCreateUiEnabled,targetProjectTaskCreateUiEnabled}
   from "../lib/target-private-structure-create-ui-gate.ts";
 import {targetProjectTitleEditUiEnabled} from "../lib/target-project-title-edit-ui-gate.ts";
 import {targetNoteEditUiEnabled} from "../lib/target-note-edit-ui-gate.ts";
+
+import {targetPushFlagsEnabled} from "../lib/target-push-process.ts";
+import {targetPushOwnsAttention,targetPushDeliveryConfigured} from "../lib/target-push-scheduler.ts";
 
 const root=path.resolve(import.meta.dirname,"..");
 // Every tracked source that can read the environment: lib/, app/, scripts/, services/, instrumentation.ts,
@@ -130,7 +133,7 @@ test("every boolean target flag in the tracked sources is classified exactly onc
   assert.ok(!excluded.some(flag=>profile.has(flag)));
   for(const flag of excluded)
     assert.ok(/CLIENT_PREVIEW|INDEX_DETAIL_LINKS|ATTENTION|NOTIF|NOTE_SYNC|RELATIONS|HOME|INBOX|C3B|GLOBAL_|DUE_|PROJECTS_CREATE|PROJECT_TASKS_CREATE/.test(flag),flag);
-  for(const flag of profile)assert.ok(!/CLIENT_PREVIEW|INDEX_DETAIL_LINKS|ATTENTION|NOTIF|NOTE_SYNC|HUMANWIKI/.test(flag),flag);
+  for(const flag of profile)assert.ok(!/CLIENT_PREVIEW|INDEX_DETAIL_LINKS|NOTE_SYNC|HUMANWIKI/.test(flag),flag);
 });
 
 test("the profile switches every myPlan/scopes/details/edits field on",()=>{
@@ -163,7 +166,7 @@ test("removing any single profile flag turns at least one gate or route off (no 
     targetPrivateNoteAreaUiEnabled(e),targetPrivateNoteCreateUiEnabled(e),
     targetPrivateTaskCreateUiEnabled(e),targetPrivateProjectCreateUiEnabled(e),
     targetProjectTaskCreateUiEnabled(e),targetProjectTitleEditUiEnabled(e),targetNoteEditUiEnabled(e),
-    targetHomeSummaryEnabled(e),targetInboxUiEnabled(e),
+    targetHomeSummaryEnabled(e),targetInboxUiEnabled(e),targetHomeAttentionEnabled(e),targetPushFlagsEnabled(e),
     e.AI_EXECUTIVE_TARGET_STAGING_HTTP_C3B_ENABLED==="true" &&
       targetInboxUiEnabled(e)]);
   const base=gates(env);
@@ -171,4 +174,30 @@ test("removing any single profile flag turns at least one gate or route off (no 
     const reduced={...env};delete reduced[flag];
     assert.notEqual(gates(reduced),base,flag+" has no effect on any UI gate");
   }
+});
+
+
+test("E-3: only task attention and notifications are added; VAPID remains optional",()=>{
+  const added=[
+  "AI_EXECUTIVE_TARGET_STAGING_HTTP_ATTENTION_ENABLED",
+  "AI_EXECUTIVE_TARGET_STAGING_HTTP_ATTENTION_WRITE_ENABLED",
+  "AI_EXECUTIVE_TARGET_STAGING_HTTP_NOTIFICATIONS_ENABLED",
+  "AI_EXECUTIVE_TARGET_STAGING_HTTP_NOTIFICATIONS_WRITE_ENABLED"
+];
+  assert.deepEqual(TARGET_PERSONAL_V1_PROFILE.filter(flag=>/ATTENTION|NOTIFICATIONS/.test(flag)),added);
+  assert.ok(added.every(flag=>!excluded.includes(flag)));
+  const before={...env};for(const flag of added)delete before[flag];
+  assert.deepEqual(targetUiConfig(before),targetUiConfig(env));
+  assert.equal(targetInboxUiEnabled(before),targetInboxUiEnabled(env));
+  assert.equal(targetHomeSummaryEnabled(before),targetHomeSummaryEnabled(env));
+  assert.equal(targetHomeAttentionEnabled(before),false);
+  assert.equal(targetHomeAttentionEnabled(env),true);
+  assert.equal(targetPushFlagsEnabled(before),false);
+  assert.equal(targetPushFlagsEnabled(env),true);
+  const bound={...env,AI_EXECUTIVE_TARGET_STAGING_DIRECTORY:"/isolated-target",
+    AI_EXECUTIVE_TARGET_STAGING_RESTORE_GENERATION:"b1e6d193-0ea5-4db4-b0c6-31971c3709ed"};
+  assert.equal(targetPushOwnsAttention(bound),true,"legacy attention stays silent even without VAPID");
+  assert.equal(targetPushDeliveryConfigured(bound),false,"missing VAPID does not stop Home");
+  assert.equal(targetHomeAttentionEnabled({}),false);
+  assert.equal(targetPushOwnsAttention({}),false);
 });
