@@ -1449,15 +1449,20 @@ export class TargetStagingSessionAuthority {
     }catch{return null;}
   }
 
-  /** E-2: the actor's OWN live target for an endpoint hash (test notification). */
-  ownLivePushTarget(actorUserId:string,endpointHash:string):string|null {
-    if(this.#closed)return null;
+  /** E-3: distinguish proven absence from unavailable/auth failure. */
+  ownLivePushTargetStatus(actorUserId:string,endpointHash:string):{targetId:string|null}|null {
+    if(this.#closed||!/^[a-f0-9]{64}$/.test(endpointHash))return null;
     try {
       const credential=this.#oneShotReadCredential(actorUserId);
       return credential?readPreflightedStoreSnapshot(this.#store,db=>
         verifiedActor(db,credential)===actorUserId
-          ? readOwnLivePushTargetInSnapshot(db,actorUserId,endpointHash):null):null;
+          ? {targetId:readOwnLivePushTargetInSnapshot(db,actorUserId,endpointHash)}:null):null;
     }catch{return null;}
+  }
+
+  /** Compatibility for existing internal callers; never use for absence proof. */
+  ownLivePushTarget(actorUserId:string,endpointHash:string):string|null {
+    return this.ownLivePushTargetStatus(actorUserId,endpointHash)?.targetId??null;
   }
 
   /** R2d.5d.2: one identity-bound Attention push pass with an INJECTED sender.
