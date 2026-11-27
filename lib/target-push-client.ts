@@ -104,12 +104,13 @@ export async function registerTargetPushDevice(
 }
 
 export async function revokeTargetPushDevice(
-  s:TargetNotificationSettings,targetId:string,
+  s:TargetNotificationSettings,targetId:string,signal?:AbortSignal,
 ):Promise<TargetPushResult<null>> {
   const r=await call(TARGETS,write("POST",{commandId:crypto.randomUUID(),action:"revoke",targetId,
-    expectedNotificationEpoch:s.expectedNotificationEpoch,restoreGeneration:s.restoreGeneration}));
+    expectedNotificationEpoch:s.expectedNotificationEpoch,restoreGeneration:s.restoreGeneration}),signal);
   if(!r)return {ok:false,reason:"unavailable"};
-  return r.status===200?{ok:true,value:null}:{ok:false,reason:failure(r.status)};
+  const body=r.body as Record<string,unknown>|null;
+  return r.status===200&&body?.ok===true?{ok:true,value:null}:{ok:false,reason:failure(r.status)};
 }
 
 export async function sendTargetPushTest(
@@ -127,10 +128,10 @@ export async function sendTargetPushTest(
 
 /** Read-only: this browser subscription's own live device ID, or null. */
 export async function readTargetPushDeviceStatus(
-  subscription:BrowserSubscription,
+  subscription:BrowserSubscription,signal?:AbortSignal,
 ):Promise<TargetPushResult<string|null>> {
   const r=await call(STATUS,write("POST",{subscription:{endpoint:subscription.endpoint,
-    keys:{p256dh:subscription.keys.p256dh,auth:subscription.keys.auth}}}));
+    keys:{p256dh:subscription.keys.p256dh,auth:subscription.keys.auth}}}),signal);
   if(!r)return {ok:false,reason:"unavailable"};
   const b=r.body as Record<string,unknown>|null;
   if(r.status===200&&b&&b.registered===false&&Object.keys(b).length===1)return {ok:true,value:null};
@@ -166,31 +167,57 @@ export function base64UrlToBytes(value:string):Uint8Array<ArrayBuffer> {
   return out;
 }
 
-/** E-2: on sign-out (at the commit point, session still valid), end Web Push on THIS
- * device once target task alerts are active. Until then (routes off: 404) nothing
- * changes. When active, or when that cannot be checked in time, the browser
- * subscription is unsubscribed (privacy first): the push service then answers
- * 404/410 and the next pass revokes the device, so no task title reaches a
- * signed-out device. A legacy reminder subscription is also removed on the server
- * first, so its device count stays truthful. Bounded, never throws. */
-export async function silenceTargetPushOnThisDevice(timeoutMs=5000):Promise<void> {
-  if(typeof window==="undefined"||!("serviceWorker" in navigator)||!("PushManager" in window))return;
+/** E-3: before committing logout, prove that the current subscription is no
+ * longer a live target on the server. Browser unsubscribe alone is not proof.
+ * Resolve false on an unverified outcome; the caller must keep the session.
+ * The check works without VAPID keys and does not revoke other devices. */
+export async function silenceTargetPushOnThisDevice(timeoutMs=30_000):Promise<boolean> {
+  if(typeof window==="undefined"||!("serviceWorker" in navigator)||!("PushManager" in window))return true;
+  const controller=new AbortController();
+  const signal=controller.signal;
+  let timer:ReturnType<typeof setTimeout>|undefined;
+  let safe=false;
   const work=(async()=>{
     const registration=await navigator.serviceWorker.getRegistration();
     const subscription=await registration?.pushManager.getSubscription();
-    if(!subscription)return;
-    const controller=new AbortController();
-    const timer=setTimeout(()=>controller.abort(),Math.max(500,timeoutMs-2000));
-    const config=await readTargetPushConfig(controller.signal).finally(()=>clearTimeout(timer));
-    if(config.ok===false&&config.reason==="disabled")return;
-    if(config.ok===true&&!(config.value.publicKey&&subscribedWithKey(subscription,config.value.publicKey))){
-      // The older reminders' subscription: deregister it on the server too.
+    if(signal.aborted)return false;
+    if(!subscription)return true;
+    const config=await readTargetPushConfig(signal);
+    if(signal.aborted)return false;
+    if(config.ok===false)return config.reason==="disabled";
+    const plain=browserSubscription(subscription);
+    if(!plain)return false;
+    // Do not infer identity from the VAPID key: keys may have been rotated or
+    // removed. The actor-bound endpoint lookup works even without VAPID.
+    for(let attempt=0;attempt<3;attempt++){
+      if(signal.aborted)return false;
+      const status=await readTargetPushDeviceStatus(plain,signal);
+      if(status.ok===false||signal.aborted)return false;
+      if(status.value===null){safe=true;break;}
+      if(attempt===2)return false; // last read is confirmation only
+      const settings=await readTargetNotificationSettings(signal);
+      if(settings.ok===false||signal.aborted)return false;
+      if(!settings.value.targets.includes(status.value))continue;
+      const revoked=await revokeTargetPushDevice(settings.value,status.value,signal);
+      if(revoked.ok){safe=true;break;}
+      // Stale epoch or uncertain receipt: read the actual live state again.
+    }
+    if(!safe)return false;
+    // Target delivery is now fenced server-side. Cleanup of the browser and
+    // older reminders is best effort, bounded independently of that proof.
+    if(!config.value.publicKey||!subscribedWithKey(subscription,config.value.publicKey)){
       await fetch("/api/notifications",{method:"POST",credentials:"same-origin",
         headers:{"content-type":"application/json"},
         body:JSON.stringify({action:"unsubscribe",endpoint:subscription.endpoint}),
         signal:AbortSignal.timeout(1500)}).catch(()=>undefined);
     }
-    await subscription.unsubscribe();
-  })().catch(()=>undefined);
-  await Promise.race([work,new Promise<void>(resolve=>setTimeout(resolve,timeoutMs))]);
+    await Promise.race([Promise.resolve().then(()=>subscription.unsubscribe()).catch(()=>false),
+      new Promise<void>(resolve=>setTimeout(resolve,1500))]);
+    return true;
+  })().catch(()=>safe);
+  try{
+    return await Promise.race([work,new Promise<boolean>(resolve=>{
+      timer=setTimeout(()=>{controller.abort();resolve(safe);},timeoutMs);
+    })]);
+  }finally{if(timer!==undefined)clearTimeout(timer);controller.abort();}
 }
