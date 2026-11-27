@@ -128,6 +128,8 @@ async function stubPush(page:Page,label:string){
       toJSON:()=>({endpoint,expirationTime:null,keys}),
       getKey:()=>null,
       unsubscribe:async()=>{
+        // A browser/push service may reject unsubscribe while the endpoint stays live.
+        if(sessionStorage.getItem("__lumiRejectUnsubscribe")==="1")throw Error("synthetic unsubscribe failure");
         if(saved.endpoint===endpoint){saved.endpoint=null;save();
           await (window as unknown as {__lumiPushUnsubscribed:(e:string)=>Promise<void>}).__lumiPushUnsubscribed(endpoint);}
         return true;
@@ -163,10 +165,30 @@ for(const width of [390,1280]){
     // The legacy attention switch is hidden while target alerts own them.
     await expect(page.getByText("Upozornit na urgentní termíny",{exact:true})).toHaveCount(0);
     await expect(panel.getByTestId("target-push-zone")).toHaveValue(width===390?"UTC":zone);
+    // Interrupt the settings write after successful device registration.
+    // Reload must show the partial state and offer an idempotent retry.
+    const settingsPath="**/api/target-staging/notifications/settings";
+    if(width===390)await page.route(settingsPath,async route=>{
+      if(route.request().method()==="PATCH")await route.fulfill({status:503,contentType:"application/json",body:'{"error":"unavailable"}'});
+      else await route.continue();
+    });
     const register=page.waitForResponse(r=>new URL(r.url()).pathname==="/api/target-staging/notifications/targets"&&
       r.request().method()==="POST");
     await panel.getByTestId("target-push-enable").click();
     expect((await register).status()).toBe(200);
+    if(width===390){
+      await expect(panel.getByTestId("target-push-notice")).toHaveText("Akci se nepodařilo dokončit.");
+      await expect(panel.getByTestId("target-push-device-state")).toHaveText("Zařízení je přihlášené, upozornění na úkoly jsou vypnutá.");
+      await page.unroute(settingsPath);
+      await openNotifications(page);
+      await expect(panel.getByTestId("target-push-enable")).toHaveText("Dokončit zapnutí upozornění");
+      await expect(panel.getByTestId("target-push-attention")).not.toBeChecked();
+      await expect(panel.getByTestId("target-push-zone")).toHaveValue("UTC");
+      const retry=page.waitForResponse(r=>new URL(r.url()).pathname==="/api/target-staging/notifications/targets"&&r.request().method()==="POST");
+      await panel.getByTestId("target-push-enable").click();
+      expect(await (await retry).json()).toMatchObject({ok:true,unchanged:true});
+      await expect(panel.getByTestId("target-push-devices").locator("li")).toHaveCount(1);
+    }
     await expect(panel.getByTestId("target-push-device-state")).toHaveText("Toto zařízení dostává upozornění.");
     await expect(panel.getByTestId("target-push-notice")).toHaveText(width===390
       ?"Upozornění jsou na tomto zařízení zapnutá. Časové pásmo bylo nastaveno podle tohoto zařízení (Europe/Prague)."
@@ -301,22 +323,52 @@ test("delivery: baseline, exactly one private message, daily limit, quiet hours,
   await expect(panel.getByTestId("target-push-attention")).toBeChecked();
   await tick();await tick();
   expect(delivered(device)).toHaveLength(whileOff);
-  // 7. Sign-out stops delivery to this device: the subscription ends at the push
-  //    service, the next pass gets 410 and revokes the device in the store.
+  // 7. Another registered device must survive logout of this one.
+  const second=await page.context().newPage();
+  await stubPush(second,"second");
+  const secondPanel=await openNotifications(second);
+  await secondPanel.getByTestId("target-push-enable").click();
+  await expect(secondPanel.getByTestId("target-push-notice")).toHaveText("Upozornění jsou na tomto zařízení zapnutá.");
+  await expect(secondPanel.getByTestId("target-push-devices").locator("li")).toHaveCount(2);
+  const otherDevice=endpointOf("second");
+  await second.close();
+  // Refuse to end the owner session when the server cannot confirm revocation.
+  const targetsPath="**/api/target-staging/notifications/targets";
+  let refused=0;
+  await page.route(targetsPath,async route=>{
+    if(route.request().method()==="POST"&&route.request().postDataJSON()?.action==="revoke"){
+      refused++;
+      await route.fulfill({status:503,contentType:"application/json",body:'{"error":"unavailable"}'});
+    }else await route.continue();
+  });
+  let logoutRequests=0;
+  page.on("request",r=>{if(new URL(r.url()).pathname==="/api/auth/logout")logoutRequests++;});
   await settingsSections(page).filter({hasText:"Přístup"}).click();
   await page.getByRole("button",{name:"Odhlásit se"}).click();
-  await expect(page.locator(".authCard")).toBeVisible({timeout:30_000});
-  await expect.poll(()=>statusFor.get(new URL(device).pathname)).toBe(410);
-  setClock(pragueAt(14,1));
-  const afterLogout=delivered(device).length;
-  overdueTask("Po odhlášení");
-  await tick();await tick();
-  expect(delivered(device)).toHaveLength(afterLogout);
+  await expect.poll(()=>refused,{timeout:35_000}).toBe(2);
+  await expect(page.getByRole("button",{name:"Odhlásit se"})).toBeEnabled({timeout:35_000});
+  expect(logoutRequests).toBe(0);
+  await expect(page.locator(".authCard")).toHaveCount(0);
+  await page.unroute(targetsPath);
+  // Even if unsubscribe throws and the push service still accepts messages,
+  // confirmed server revocation must stop delivery to THIS device.
+  await page.evaluate(()=>sessionStorage.setItem("__lumiRejectUnsubscribe","1"));
+  await page.getByRole("button",{name:"Odhlásit se"}).click();
+  await expect(page.locator(".authCard")).toBeVisible({timeout:45_000});
+  expect(statusFor.get(new URL(device).pathname)).not.toBe(410);
+  expect(logoutRequests).toBe(1);
   const live=db();
   try{
     expect((live.prepare("SELECT COUNT(*) AS n FROM personal_push_targets WHERE user_id=? AND revoked_at_ms IS NULL")
-      .get(store().ownerUserId) as {n:number}).n).toBe(0);
+      .get(store().ownerUserId) as {n:number}).n).toBe(1);
   }finally{live.close();}
+  setClock(pragueAt(14,2));
+  const afterLogout=delivered(device).length;
+  const beforeOther=delivered(otherDevice).length;
+  const newTask=overdueTask("Po odhlášení");
+  await tick();await tick();
+  expect(delivered(device)).toHaveLength(afterLogout);
+  expect(payloads(otherDevice).slice(beforeOther).map(p=>p.tag)).toContain("attention-"+newTask);
   // Leave a valid owner session for any later scenario of this run.
   await signIn(page);
   await expect(page.locator(".appShell")).toBeVisible();
