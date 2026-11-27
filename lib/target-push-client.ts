@@ -186,7 +186,18 @@ export async function silenceTargetPushOnThisDevice(timeoutMs=10_000):Promise<bo
     if(!subscription)return true;
     const config=await readTargetPushConfig(signal);
     if(signal.aborted)return false;
-    if(config.ok===false)return config.reason==="disabled";
+    if(config.ok===false){
+      if(config.reason!=="disabled")return false;
+      // Target alerts are off here (e.g. a rollback): no target device can be
+      // revoked, but a signed-out browser must not keep any push subscription.
+      await fetch("/api/notifications",{method:"POST",credentials:"same-origin",
+        headers:{"content-type":"application/json"},
+        body:JSON.stringify({action:"unsubscribe",endpoint:subscription.endpoint}),
+        signal:AbortSignal.any([signal,AbortSignal.timeout(1500)])}).catch(()=>undefined);
+      await Promise.race([Promise.resolve().then(()=>subscription.unsubscribe()).catch(()=>false),
+        new Promise<void>(resolve=>setTimeout(resolve,1500))]);
+      return true;
+    }
     const plain=browserSubscription(subscription);
     if(!plain)return false;
     // Do not infer identity from the VAPID key: keys may have been rotated or
@@ -211,7 +222,8 @@ export async function silenceTargetPushOnThisDevice(timeoutMs=10_000):Promise<bo
       await fetch("/api/notifications",{method:"POST",credentials:"same-origin",
         headers:{"content-type":"application/json"},
         body:JSON.stringify({action:"unsubscribe",endpoint:subscription.endpoint}),
-        signal:AbortSignal.timeout(1500)}).catch(()=>undefined);
+        // Also bound by the overall deadline: never runs on after sign-out moved on.
+        signal:AbortSignal.any([signal,AbortSignal.timeout(1500)])}).catch(()=>undefined);
     }
     await Promise.race([Promise.resolve().then(()=>subscription.unsubscribe()).catch(()=>false),
       new Promise<void>(resolve=>setTimeout(resolve,1500))]);

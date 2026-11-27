@@ -153,7 +153,10 @@ export function TargetHomeAttention({language,openable,onRefusal,generation}:{
           if(controller.signal.aborted)finish();
         });
         if(controller.signal.aborted||!live()||!runtime)break;
-        if(await runtime.refresh()!=="ok"||controller.signal.aborted||!live())break;
+        const verified=await runtime.refresh();
+        // A signed-out session is a refusal, not a transient failure.
+        if(verified==="signed_out"){result={status:"unauthorized"};break;}
+        if(verified!=="ok"||controller.signal.aborted||!live())break;
         result=await readHomeAttention(controller.signal,targetAppFetch,language);
       }
       // Rebuild the expanded extent from one fresh pinned cursor chain;
