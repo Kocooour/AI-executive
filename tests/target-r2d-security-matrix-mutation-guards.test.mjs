@@ -16,6 +16,18 @@ import os from "node:os";
 import path from "node:path";
 import {DatabaseSync} from "node:sqlite";
 import {test} from "node:test";
+import {detailRouteFromSearch} from "../lib/target-detail-route.ts";
+
+// Assert the navigation contract before testing the authorization set.
+function pushedTaskId(url){
+  const address=new URL(url,"https://lumi.invalid");
+  assert.equal(address.origin,"https://lumi.invalid");
+  assert.equal(address.pathname,"/");
+  const detail=detailRouteFromSearch(address.search);
+  assert.equal(detail?.kind,"task");
+  assert.equal(detail.view,"MyPlanPreview");
+  return detail.id;
+}
 
 const envNames=["NODE_ENV","AI_EXECUTIVE_DATA_DIR","AI_EXECUTIVE_AUTH_ENABLED"];
 const savedEnv=Object.fromEntries(envNames.map(k=>[k,process.env[k]]));
@@ -193,7 +205,7 @@ test("G2. a change during the pass (access lost, completed, dismissed, push disa
     },
   };
   const sender={async sendTo(userId,targetId,payload){
-    const taskId=payload.url.replace("/?task=","");
+    const taskId=pushedTaskId(payload.url);
     sent.push({userId,targetId,taskId});
     // the FIRST send of a scenario task changes the world; the remaining device must not be served
     if(world[taskId]&&!fired.has(taskId)&&!(taskId==="t_g_scn_s2"&&fired.has("t_g_scn_st"))){
