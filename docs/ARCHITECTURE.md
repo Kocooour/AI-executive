@@ -12,6 +12,24 @@
 - **Privacy-first:** cílové Osobní a Sdílené jsou oddělené hranicí oprávnění odvozenou z Oblasti, `Vše` je serverově autorizované čtení nad oběma prostory a `Můj plán` je samostatný osobní pracovní pohled; citlivé či neověřené claims nejsou automatickým důkazem ani povoleným kontextem pro agenty.
 - Stav implementace je důsledně oddělen od **target specification** v níže uvedených oddílech. Při rozporu UI návrhu s oprávněními a integritou dat platí přísnější bezpečnostní kontrakt.
 
+### E-3 — aktivace cílové task attention a push
+
+`TARGET_PERSONAL_V1_PROFILE` nově vyžaduje čtyři existující HTTP příznaky
+Attention a Notifications (read + write); `off` zůstává legacy. Home i
+Settings čtou actor-private data; všechny zápisy nadále vynucují živou relaci,
+Origin, revizi a autorizační hranici. Push payload používá stejnou typed
+detail route jako Home (`searchForDetail`, MyPlanPreview/taskId), neuděluje
+oprávnění a není alternativou k serverové ACL. Neotevíratelné ID se neplánuje.
+První zapnutí při revizi nastavení 0 a výchozím UTC uloží zónu prohlížeče
+přes stávající revizně chráněný PATCH; pozdější zapnutí volbu nemění.
+E-2 vault `target_push_subscriptions` v aplikační SQLite zůstává mimo
+backup/export; target schéma zůstává v27. Existující plánovač přebírá
+legacy task attention i bez VAPID (žádné duplicitní upozornění), ale
+odesílá jen s platnými samostatnými klíči; legacy reminders se nemění.
+Bez nové migrace, služby či oprávnění. Přesné příznaky a release brány viz
+[DEPLOY.md](../deployment/DEPLOY.md); produkční deploy a klíče jsou oddělené
+schválené kroky vlastníka.
+
 ## Mapování dokumentů a implementace
 
 | Oblast | Dokument s produktovým pravidlem | Implementační oblast v tomto dokumentu |
