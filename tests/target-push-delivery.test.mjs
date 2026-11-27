@@ -124,7 +124,7 @@ test("VAPID: dedicated, consistent keys and a public subject are required",()=>{
 });
 
 const vapid={publicKey:VAPID.publicKey,privateKey:VAPID.privateKey,subject:"https://lumi.example.test"};
-const PAYLOAD={title:"Zaplatit nájem",body:"Termín 1. 11. uplynul.",url:"/?task=t1",tag:"attention-t1"};
+const PAYLOAD={title:"Zaplatit nájem",body:"Termín 1. 11. uplynul.",url:"/?view=MyPlanPreview&taskId=t1",tag:"attention-t1"};
 const publicResolver=async()=>[{address:"142.250.74.10",family:4}];
 
 test("the sender encrypts, pins the checked address and maps push service statuses",async()=>{
@@ -382,7 +382,7 @@ test("the real pass child: baseline first, then exactly one encrypted message pe
     const payload=JSON.parse(decryptWebPush(toPhone[0].body,devices.phone.browser));
     assert.deepEqual(Object.keys(payload).sort(),["body","tag","title","url"]);
     assert.equal(payload.title,"Zaplatit nájem");
-    assert.equal(payload.url,"/?task=rent");
+    assert.equal(payload.url,"/?view=MyPlanPreview&taskId=rent");
     assert.equal(JSON.stringify(payload).includes("Starý dluh"),false);
     // 410 from the push service revokes that device in the target store.
     assert.notEqual(db.prepare("SELECT revoked_at_ms AS r FROM personal_push_targets WHERE target_id=?")
