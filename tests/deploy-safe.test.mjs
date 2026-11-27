@@ -56,6 +56,12 @@ function sandbox(scenario) {
     }
     if (scenario === "targetc3bmissingflag")
       delete all.AI_EXECUTIVE_TARGET_STAGING_HTTP_C3B_ENABLED;
+    if (scenario === "targete3missingflags") {
+      delete all.AI_EXECUTIVE_TARGET_STAGING_HTTP_ATTENTION_ENABLED;
+      delete all.AI_EXECUTIVE_TARGET_STAGING_HTTP_ATTENTION_WRITE_ENABLED;
+      delete all.AI_EXECUTIVE_TARGET_STAGING_HTTP_NOTIFICATIONS_ENABLED;
+      delete all.AI_EXECUTIVE_TARGET_STAGING_HTTP_NOTIFICATIONS_WRITE_ENABLED;
+    }
     writeFileSync(envfile, [
       ...Object.entries(all).map(([key, value]) => key + "=" + value),
       "AI_EXECUTIVE_TARGET_STAGING_DIRECTORY=" + targetDirectory,
@@ -1305,5 +1311,18 @@ test("C-3b pre-existing ungranted fence may not be silently granted", {timeout:6
     assert.equal(result.service,"inactive");
     assert.equal(result.events.includes("c3b-first-grant"),false);
     assert.equal(readFileSync(file,"utf8"),"preexisting placeholder");
+  }finally{f.cleanup();}
+});
+
+
+test("E-3: previous personal-v1 env without attention/notification flags fails before stop", {timeout:60000},()=>{
+  const f=sandbox("targete3missingflags");
+  try{
+    const result=f.execute();
+    assert.notEqual(result.status,0);
+    assert.match(result.output,/neplatny nebo castecny profil/);
+    assert.equal(result.service,"active");
+    assert.equal(result.events.includes("stop"),false);
+    assert.deepEqual(result.backups,[]);
   }finally{f.cleanup();}
 });
