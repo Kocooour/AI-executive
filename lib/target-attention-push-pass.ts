@@ -38,7 +38,7 @@ export type TargetPushSendResult="sent"|"failed"|"gone";
 export interface TargetPushPayload{title:string;body:string;url:string;tag:string}
 /** Injected transport. Called only for the recipient's own live target. */
 export interface TargetPushSender{
-  sendTo(userId:string,targetId:string,payload:TargetPushPayload):Promise<TargetPushSendResult>;
+  sendTo(userId:string,targetId:string,payload:TargetPushPayload,signal?:AbortSignal):Promise<TargetPushSendResult>;
 }
 export interface TargetAttentionPushPassSummary{
   users:number;sent:number;
@@ -53,10 +53,18 @@ export const TARGET_PUSH_PASS_STALE_PENDING_MS=15*60_000;
 export const TARGET_PUSH_PASS_MAX_USERS=256;
 /** A send that does not settle in time counts as failed (retried later, at most 3x). */
 export const TARGET_PUSH_SEND_TIMEOUT_MS=30_000;
-function withTimeout<T>(promise:Promise<T>,ms:number):Promise<T|"timeout"> {
+/** Cancel the sender before reporting a timed-out attempt. A resolver that
+ * finishes later must never be able to start transport for that attempt. */
+export function sendTargetPushWithTimeout(
+  send:(signal:AbortSignal)=>Promise<TargetPushSendResult>,ms=TARGET_PUSH_SEND_TIMEOUT_MS,
+):Promise<TargetPushSendResult|"timeout"> {
+  const controller=new AbortController();
   let timer:ReturnType<typeof setTimeout>|undefined;
-  const timeout=new Promise<"timeout">(resolve=>{timer=setTimeout(()=>resolve("timeout"),ms);});
-  return Promise.race([Promise.resolve(promise),timeout]).finally(()=>{if(timer)clearTimeout(timer);});
+  const timeout=new Promise<"timeout">(resolve=>{
+    timer=setTimeout(()=>{controller.abort();resolve("timeout");},ms);
+  });
+  const pending=Promise.resolve().then(()=>send(controller.signal));
+  return Promise.race([pending,timeout]).finally(()=>{if(timer!==undefined)clearTimeout(timer);});
 }
 export const TARGET_PUSH_PASS_MAX_CANDIDATES=500;
 const PAGE=100;
@@ -497,7 +505,7 @@ async function deliver(store:TargetStagingReadStore,sender:TargetPushSender,user
     let result:TargetPushSendResult;
     try{
       // A hung push service must not wedge the single-flight pass forever.
-      const r=await withTimeout(sender.sendTo(user,target,{...payload}),TARGET_PUSH_SEND_TIMEOUT_MS);
+      const r=await sendTargetPushWithTimeout(signal=>sender.sendTo(user,target,{...payload},signal));
       result=r==="sent"||r==="gone"?r:"failed";
     }catch{result="failed";}
     const finished=at();
