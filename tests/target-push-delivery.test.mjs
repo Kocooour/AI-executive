@@ -250,6 +250,53 @@ test("cancelled or timed-out preparation can never start a late transport",async
   assert.equal(calls,0);
 });
 
+test("logout remains bounded when browser unsubscribe hangs after confirmed server revocation",async()=>{
+  const {silenceTargetPushOnThisDevice}=await import("../lib/target-push-client.ts");
+  const targetId="pt_"+"1".repeat(32),other="pt_"+"2".repeat(32);
+  const keyBytes=Buffer.alloc(65,1),publicKey=keyBytes.toString("base64url");
+  const endpoint="https://fcm.googleapis.com/fcm/send/hanging";
+  const subscription={endpoint,keys:syntheticBrowserKeys().keys};
+  const calls=[];
+  const browserSubscription={
+    options:{applicationServerKey:Uint8Array.from(keyBytes).buffer},
+    toJSON:()=>subscription,
+    unsubscribe:()=>{calls.push("unsubscribe");return new Promise(()=>{});}
+  };
+  const globals={
+    window:{PushManager:function(){}},
+    navigator:{serviceWorker:{getRegistration:async()=>({pushManager:{
+      getSubscription:async()=>browserSubscription}})}},
+    fetch:async(url,init)=>{
+      const route=String(url).split("/").pop();
+      calls.push(route);
+      if(route==="push-config")return Response.json({available:true,publicKey});
+      if(route==="device-status")return Response.json({registered:true,targetId});
+      if(route==="settings")return Response.json({
+        timeZone:"Europe/Prague",attentionPush:true,quietStart:"22:00",quietEnd:"08:00",
+        dailyLimit:3,paused:false,expectedSettingsRevision:1,expectedNotificationEpoch:2,
+        restoreGeneration:randomUUID(),targets:[targetId,other]});
+      if(route==="targets"){
+        const body=JSON.parse(init.body);
+        assert.equal(body.action,"revoke");
+        assert.equal(body.targetId,targetId);
+        assert.equal(body.expectedNotificationEpoch,2);
+        return Response.json({ok:true});
+      }
+      throw Error("unexpected request");
+    }
+  };
+  const descriptors=new Map(Object.keys(globals).map(key=>[key,Object.getOwnPropertyDescriptor(globalThis,key)]));
+  try{
+    for(const [key,value] of Object.entries(globals))
+      Object.defineProperty(globalThis,key,{configurable:true,writable:true,value});
+    assert.equal(await silenceTargetPushOnThisDevice(5000),true);
+    assert.deepEqual(calls,["push-config","device-status","settings","targets","unsubscribe"]);
+  }finally{
+    for(const [key,descriptor] of descriptors)
+      if(descriptor)Object.defineProperty(globalThis,key,descriptor);else delete globalThis[key];
+  }
+});
+
 function memoryVault(){
   const db=new DatabaseSync(":memory:");
   db.exec("CREATE TABLE target_push_subscriptions (endpoint_hash TEXT PRIMARY KEY, endpoint TEXT NOT NULL, p256dh TEXT NOT NULL, auth TEXT NOT NULL, updated_at INTEGER NOT NULL)");
