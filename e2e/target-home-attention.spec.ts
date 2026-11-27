@@ -371,6 +371,8 @@ for(const width of [390,1280]){
     await expect(page.locator(".appShell")).toBeVisible();
     await expect(panel(page)).toHaveCount(0);
     expect((await page.request.get("/api/target-staging/attention")).status()).toBe(404);
+    expect((await page.request.get("/api/target-staging/notifications/settings")).status()).toBe(404);
+    expect((await page.request.get("/api/target-staging/notifications/push-config")).status()).toBe(404);
     await page.reload();
     await expect(page.locator(".appShell")).toBeVisible();
     await expect(panel(page)).toHaveCount(0);
