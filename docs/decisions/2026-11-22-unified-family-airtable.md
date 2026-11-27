@@ -90,7 +90,7 @@ Počty jsou snapshot, nikoliv trvalá kapacita. U `Rodina` přibydou nové zázn
 
 **Fáze C — Lumi jako kanonický archiv:** migrace `Rodina` a **samostatně, pokud bude rozhodnuto, i rekonstrukce**. Nevyžadovat současný cutover obou zdrojů. Nová Lumi spravuje originály, metadata, UUID a vazby; Airtable se postupně odpojuje. Historické zdroje nikdy neodstraňovat jen kvůli dokončenému exportu.
 
-**Bezpečnost:** veřejná GitHub dokumentace neobsahuje citlivé údaje, API tokeny ani binární přílohy. iCloud slouží jako příchozí schránka, ne záloha. API token není v mobilní Zkratce. Externí AI nad obsahem je default-off; rodinný přístup přes Lumi je vázaný na budoucí R5 a zdrojové autorizace, nikoli na fakt, že Airtable má společné pojmenování. Soukromé historické dokumenty se nesmějí bez souhlasu automaticky publikovat.
+**Bezpečnost:** veřejná GitHub dokumentace neobsahuje citlivé údaje, API tokeny ani binární přílohy. Sdílená iCloud složka `Příchozí` slouží jen jako transport, nikoli záloha. Podle schváleného cíle (2026-11-27) bude **oddělená nesdílená složka iCloud Drive** sloužit pro šifrované a verzované obnovitelné zálohy, jen pokud bude stačit kapacita. V etapě Airtable se zálohuje úplný export včetně binárních originálů, nikoli pouze odkazy; podrobnosti a akceptace DOC-15–17 viz [rodinný archiv](2026-11-22-family-document-archive.md). API token není v mobilní Zkratce. Externí AI nad obsahem je default-off; rodinný přístup přes Lumi je vázaný na budoucí R5 a zdrojové autorizace, nikoli na fakt, že Airtable má společné pojmenování. Soukromé historické dokumenty se nesmějí bez souhlasu automaticky publikovat.
 
 ## 6. Akceptace
 
