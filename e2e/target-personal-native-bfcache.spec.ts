@@ -578,7 +578,7 @@ for(const width of [390,1280]){
     update(false);
     const {profile,chrome,closeWatch,cdp}=await nativeBrowser(width);
     let order=0,mark=Infinity,writes=0;
-    type Read={path:string;start:number;status?:number;end?:number;cached?:boolean;failed?:boolean};
+    type Read={path:string;start:number;startedAt:number;status?:number;end?:number;endedAt?:number;cached?:boolean;failed?:boolean;failureReason?:string};
     const reads:Read[]=[],pending=new Map<string,Read>();
     const reasons:NativeCacheNotUsedEvent[]=[];
     const off=[
@@ -587,15 +587,15 @@ for(const width of [390,1280]){
         if(url.origin!==origin)return;
         if(url.pathname.startsWith("/api/target-staging/attention")&&e.request.method==="PATCH")writes++;
         if(e.request.method!=="GET"||!["/api/target-staging/session","/api/target-staging/attention"].includes(url.pathname))return;
-        const r={path:url.pathname,start:++order};reads.push(r);pending.set(e.requestId,r);
+        const r={path:url.pathname,start:++order,startedAt:Number(e.timestamp)};reads.push(r);pending.set(e.requestId,r);
       }),
       cdp.on("Network.responseReceived",e=>{
         const r=pending.get(e.requestId);if(!r)return;
         r.status=e.response.status;r.cached=Boolean(r.cached||e.response.fromDiskCache||e.response.fromServiceWorker||e.response.fromPrefetchCache);
       }),
       cdp.on("Network.requestServedFromCache",e=>{const r=pending.get(e.requestId);if(r)r.cached=true;}),
-      cdp.on("Network.loadingFinished",e=>{const r=pending.get(e.requestId);if(r){r.end=++order;pending.delete(e.requestId);}}),
-      cdp.on("Network.loadingFailed",e=>{const r=pending.get(e.requestId);if(r){r.failed=true;pending.delete(e.requestId);}}),
+      cdp.on("Network.loadingFinished",e=>{const r=pending.get(e.requestId);if(r){r.end=++order;r.endedAt=Number(e.timestamp);pending.delete(e.requestId);}}),
+      cdp.on("Network.loadingFailed",e=>{const r=pending.get(e.requestId);if(r){r.failed=true;r.failureReason=e.errorText;pending.delete(e.requestId);}}),
       cdp.on("Page.backForwardCacheNotUsed",e=>reasons.push({frameId:e.frameId,loaderId:e.loaderId,reasons:(e.notRestoredExplanations||[]).map((x:any)=>({reason:x.reason,type:x.type}))})),
     ];
     const selector='[data-testid="target-home-attention"]';
@@ -628,15 +628,27 @@ for(const width of [390,1280]){
       const branch=validateNativeBackEvidence(evidence,{strict});
       expect(after.oldVisible,"stale attention title visible on native Back").toBe(false);
       const fresh=await waitFor("fresh session then attention GET 200",async()=>{
-        const success=(r:Read)=>r.start>mark&&r.status===200&&r.end!==undefined&&!r.cached&&!r.failed;
+        // Use the network events' monotonic timestamps rather than their
+        // delivery order over CDP. Both requests must still be fully completed,
+        // uncached HTTP 200s started after the native Back boundary.
+        const success=(r:Read)=>r.start>mark&&r.status===200&&r.end!==undefined&&
+          Number.isFinite(r.startedAt)&&Number.isFinite(r.endedAt)&&!r.cached&&!r.failed;
         const sessions=reads.filter(r=>r.path==="/api/target-staging/session"&&success(r));
-        const attention=reads.find(r=>r.path==="/api/target-staging/attention"&&success(r)&&sessions.some(s=>s.end!<r.start));
+        const attention=reads.find(r=>r.path==="/api/target-staging/attention"&&success(r)&&
+          sessions.some(s=>s.endedAt!<=r.startedAt));
         return attention||null;
       });
       await waitFor("fresh current attention",()=>visible(keepTitle));
       expect(await visible(oldTitle)).toBe(false);
       expect(writes).toBe(0);
       await test.info().attach("native-e1-"+width+".json",{body:Buffer.from(JSON.stringify({branch,evidence,fresh,writes,checkedOutSha:process.env.LUMI_TESTED_CHECKOUT_SHA})),contentType:"application/json"});
+    }catch(error){
+      // Record only metadata, never request bodies, cookies or task titles.
+      const evidence={width,mark,reads,writes,checkedOutSha:process.env.LUMI_TESTED_CHECKOUT_SHA};
+      console.log("NATIVE_E1_BACK_FAILURE "+JSON.stringify(evidence));
+      await test.info().attach("native-e1-failure-"+width+".json",{
+        body:Buffer.from(JSON.stringify(evidence)),contentType:"application/json"});
+      throw error;
     }finally{
       off.forEach(fn=>fn());cdp.close();await stopNativeChromeAndRemoveProfile(chrome,closeWatch,profile);
     }
