@@ -87,7 +87,7 @@ export const announceableTargetAttentionCandidate = (c: AttentionCandidate): boo
 const announceable = (c: AttentionCandidate) =>
   !!c && c.subjectType === "task" && c.lifecycle === "active" &&
   (TARGET_ATTENTION_PUSH_RULES as readonly string[]).includes(c.ruleId) &&
-  typeof c.taskId === "string" && c.taskId.length > 0 &&
+  detailIdOk(c.taskId) &&
   isDate(c.relevantOn) &&
   Number.isFinite(c.relevantAt) && Number.isFinite(c.severity);
 
@@ -145,7 +145,7 @@ export const targetAttentionWindowStartMs = (nowMs: number) => nowMs - DAY;
 export function targetAttentionPushPayload(candidate: AttentionCandidate):
   { title: string; body: string; url: string; tag: string } | null {
   // A notification must name a detail the main app can actually open.
-  if (!announceable(candidate) || !detailIdOk(candidate.taskId)) return null;
+  if (!announceable(candidate)) return null;
   const when = new Intl.DateTimeFormat("cs-CZ", { timeZone: "UTC", day: "numeric", month: "numeric" })
     .format(new Date(`${candidate.relevantOn}T12:00:00Z`));
   const characters = Array.from(String(candidate.title || "").trim().replace(/\s+/g, " ")); // by code point
