@@ -2,6 +2,7 @@
  * Titles/ids live in memory only and are discarded on identity changes.
  * The GET result is a UI hint, NEVER a write authorization grant. */
 import {targetAppFetch} from "./target-app-fetch";
+import {markTargetE2eRead,targetE2eReadHeaders,targetE2eReadWitness} from "./target-e2e-read-witness";
 import {
   MAX_SCOPED_READ_AREAS, MAX_PRIVATE_NOTE_AREA_CATALOG_BYTES,
 } from "./target-staging-read-limits";
@@ -67,10 +68,11 @@ export async function loadPrivateNoteAreaChoices(
   signal:AbortSignal,fetchImpl:typeof fetch=targetAppFetch,
 ):Promise<PrivateNoteAreaRead>{
   if(signal.aborted)return {ok:false,reason:"aborted"};
+  const witness=targetE2eReadWitness();
   try{
     const response=await fetchImpl("/api/target-staging/notes/create-targets",{
       method:"GET",credentials:"same-origin",cache:"no-store",
-      redirect:"error",headers:{accept:"application/json"},signal,
+      redirect:"error",headers:{accept:"application/json",...targetE2eReadHeaders(witness)},signal,
     });
     if(signal.aborted)return {ok:false,reason:"aborted"};
     if(response.status===401||response.status===403)return {ok:false,reason:"signed-out"};
@@ -82,6 +84,7 @@ export async function loadPrivateNoteAreaChoices(
         .some(s=>s.trim().toLowerCase()==="no-store"))
       return {ok:false,reason:"invalid-response"};
     const areas=parsePrivateNoteAreaChoices(await readBounded(response,signal));
+    if(areas)markTargetE2eRead("area-parsed",witness);
     return areas?{ok:true,areas}:{ok:false,reason:"invalid-response"};
   }catch{
     return {ok:false,reason:signal.aborted?"aborted":"unavailable"};
