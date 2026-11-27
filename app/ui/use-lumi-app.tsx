@@ -236,6 +236,8 @@ export function useLumiApp(options: { targetDetails?: boolean; targetUnified?: b
     [messages, setMessages] = useState<AssistantMessage[]>([]);
   // A workspace change invalidates both visible conversation content and replies still in flight.
   const assistantRequestVersion = useRef(0);
+  // E-3: whether this sign-out attempt already turned off this device's task alerts.
+  const pushSilencedOnSignOut = useRef(false);
   const { items, relations, unsent, heldBack, heldReasons, syncStatus, setSyncStatus, serverRevision, syncQueue, localDataVersion, signedOut, pendingKey,
     deletedKey, revivedKey, pendingDeletedIds, pendingRevivedIds, load, applySnapshot, replaceLocalWithServer, restoreGeneration, restoredSinceKnown, adoptServerCopy, finishInterruptedOwnerAdoption, showRestoredNotice, restoredNotice, dismissRestoredNotice, putSnapshot, syncToServer,
     pullFromServer, tabId, captureMarkers, clearSentMarkers,
@@ -1800,6 +1802,7 @@ export function useLumiApp(options: { targetDetails?: boolean; targetUnified?: b
   // the session cookie cannot be cleared from here.
   async function logout() {
     if (logoutBusy) return;
+    pushSilencedOnSignOut.current = false;
     // Never end the server session before confirming this browser can perform
     // a serialized local purge. Otherwise a Web-Locks-less browser would claim
     // sign-out succeeded while leaving private data accessible on the device.
@@ -1852,10 +1855,15 @@ export function useLumiApp(options: { targetDetails?: boolean; targetUnified?: b
         // only unsubscribes locally and shows a one-shot notice; the next pass revokes the device on 404/410.
         // Other devices are not revoked.
         endSession: async () => {
-          if (!(await silenceTargetPushOnThisDevice())) {
-            try { sessionStorage.setItem(pushSignOutUnverifiedNoticeKey, "1"); } catch { /* optional notice */ }
-          }
-          return fetch("/api/auth/logout", { method: "POST", signal: AbortSignal.timeout(10_000) }).then((response) => (response.ok ? "ok" : "failed") as "ok" | "failed", () => "offline" as const);
+          const pushProven = await silenceTargetPushOnThisDevice();
+          pushSilencedOnSignOut.current = true;
+          const ended = await fetch("/api/auth/logout", { method: "POST", signal: AbortSignal.timeout(10_000) }).then((response) => (response.ok ? "ok" : "failed") as "ok" | "failed", () => "offline" as const);
+          // The notice belongs to THIS completed sign-out only; never leave a stale one behind.
+          try {
+            if (ended === "ok" && !pushProven) sessionStorage.setItem(pushSignOutUnverifiedNoticeKey, "1");
+            else sessionStorage.removeItem(pushSignOutUnverifiedNoticeKey);
+          } catch { /* optional notice */ }
+          return ended;
         },
         // If the wipe cannot finish now it stays marked and is completed when the page starts again.
         wipe: () => clearLocalData(),
@@ -1871,7 +1879,9 @@ export function useLumiApp(options: { targetDetails?: boolean; targetUnified?: b
           return;
         }
         postToTabs({ type: "sign-out-cancelled", from: tabId.current });
-        setLogoutError(tr(result === "writing" ? "signOutBusy" : result === "offline" ? "signOutOffline" : result === "kept" ? "signOutKept" : "signOutFailed"));
+        setLogoutError(tr(result === "writing" ? "signOutBusy" : result === "offline" ? "signOutOffline" : result === "kept" ? "signOutKept" : "signOutFailed")
+          // E-3: the device's task alerts were already turned off before the logout call failed.
+          + (pushSilencedOnSignOut.current ? " " + tr("signOutPushOff") : ""));
         return;
       }
       leaving = true;

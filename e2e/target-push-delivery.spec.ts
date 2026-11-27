@@ -181,7 +181,7 @@ for(const width of [390,1280]){
       await expect(panel.getByTestId("target-push-device-state")).toHaveText("Zařízení je přihlášené, upozornění na úkoly jsou vypnutá.");
       await page.unroute(settingsPath);
       await openNotifications(page);
-      await expect(panel.getByTestId("target-push-enable")).toHaveText("Dokončit zapnutí upozornění");
+      await expect(panel.getByTestId("target-push-enable")).toHaveText("Zapnout upozornění");
       await expect(panel.getByTestId("target-push-attention")).not.toBeChecked();
       await expect(panel.getByTestId("target-push-zone")).toHaveValue("UTC");
       const retry=page.waitForResponse(r=>new URL(r.url()).pathname==="/api/target-staging/notifications/targets"&&r.request().method()==="POST");

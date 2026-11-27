@@ -221,7 +221,7 @@ export default function TargetPushSettings({language="cs",onActive}:{
       {(device!=="registered"||!settings.attentionPush)&&<button type="button" className="primaryAction" data-testid="target-push-enable"
         disabled={busy||device==="unsupported"||device==="insecure"||device==="server_unavailable"}
         onClick={()=>void enableDevice()}>{device==="registered"
-          ?t("Dokončit zapnutí upozornění","Finish enabling alerts")
+          ?t("Zapnout upozornění","Turn on alerts")
           :t("Zapnout na tomto zařízení","Turn on for this device")}</button>}
       {device==="registered"&&<>
         <button type="button" data-testid="target-push-test" disabled={busy} onClick={()=>void test()}>

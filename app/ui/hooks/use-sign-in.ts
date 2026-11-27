@@ -74,6 +74,8 @@ export function useSignIn({ tr, language, answerConfirm, isSignedOut, showsOffli
     try {
       if (sessionStorage.getItem(incompleteSignOutNoticeKey) === "1") {
         sessionStorage.removeItem(incompleteSignOutNoticeKey);
+        // One notice per sign-out: the more important one wins, the other is not kept for later.
+        sessionStorage.removeItem(pushSignOutUnverifiedNoticeKey);
         setAuthNotice(tr("signOutFailed"));
         return;
       }
