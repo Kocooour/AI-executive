@@ -420,6 +420,10 @@ export async function fetchAttentionPage(
   const query=new URLSearchParams({areaFilter,view,limit:String(limit)});
   if(cursor!==undefined)query.set("cursor",cursor);
   if(explain!==undefined)query.set("explain",explain);
+  if(process.env.NEXT_PUBLIC_LUMI_E2E_QUEUE_WITNESS==="1"&&typeof window!=="undefined"&&
+    areaFilter==="personal"&&view==="active"){
+    try{performance.mark("lumi-e2e:attention-start");}catch{/* passive test witness */}
+  }
   let response:Response;
   try{
     const received=await fetchUntilAbort(
@@ -438,6 +442,10 @@ export async function fetchAttentionPage(
     const raw=await boundedJson(response,MAX_PAGE_BYTES,signal);
     if(signal?.aborted)return {status:"aborted"};
     const page=parseAttentionPage(raw,{areaFilter,view,limit,explain});
+    if(page&&process.env.NEXT_PUBLIC_LUMI_E2E_QUEUE_WITNESS==="1"&&typeof window!=="undefined"&&
+      areaFilter==="personal"&&view==="active"){
+      try{performance.mark("lumi-e2e:attention-parsed");}catch{/* passive test witness */}
+    }
     return page?{status:"ok",page}:{status:"invalid_response"};
   }catch{return {status:signal?.aborted?"aborted":"invalid_response"};}
 }

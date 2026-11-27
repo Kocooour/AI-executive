@@ -250,6 +250,11 @@ export function createTargetClientRuntime(config:TargetClientRuntimeConfig={}){
       const generation=await readGeneration(response,own.signal);
       if(disposed||bumps!==localBumps||own.signal.aborted)return "unavailable";
       if(generation===null){outcome("unavailable");return "unavailable";}
+      // Test-build-only proof of a fully parsed, strict no-store session body.
+      // It carries no generation, actor or response data.
+      if(process.env.NEXT_PUBLIC_LUMI_E2E_QUEUE_WITNESS==="1"&&typeof window!=="undefined"){
+        try{performance.mark("lumi-e2e:session-parsed");}catch{/* passive test witness */}
+      }
       set(generation,false);
       outcome("ok");
       return "ok";

@@ -82,6 +82,9 @@ export async function loadPrivateNoteAreaChoices(
         .some(s=>s.trim().toLowerCase()==="no-store"))
       return {ok:false,reason:"invalid-response"};
     const areas=parsePrivateNoteAreaChoices(await readBounded(response,signal));
+    if(areas&&process.env.NEXT_PUBLIC_LUMI_E2E_QUEUE_WITNESS==="1"&&typeof window!=="undefined"){
+      try{performance.mark("lumi-e2e:area-parsed");}catch{/* passive test witness */}
+    }
     return areas?{ok:true,areas}:{ok:false,reason:"invalid-response"};
   }catch{
     return {ok:false,reason:signal.aborted?"aborted":"unavailable"};
