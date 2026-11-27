@@ -79,8 +79,31 @@ for(const width of [390,1280]){
     await page.setViewportSize({width,height:844});
     await page.clock.install({time:new Date(now)});
     const firstRead=page.waitForResponse(r=>isPath(r.url(),"/api/target-staging/attention")&&r.status()===200);
+    // A single transient child failure on fresh Home must recover through
+    // a new real session verification and a real attention read, not cached rows.
+    const startupPath=/\/api\/target-staging\/attention\?.*$/;
+    let refused=false,verifiedAfterRefusal=false,retriedAfterVerification=false;
+    const witness=(response:import("@playwright/test").Response)=>{
+      if(refused&&isPath(response.url(),session)&&response.status()===200)verifiedAfterRefusal=true;
+    };
+    const transient=async(route:Route)=>{
+      if(!refused){
+        refused=true;
+        await route.fulfill({status:503,contentType:"application/json",
+          headers:{"cache-control":"no-store"},body:JSON.stringify({error:"Staging unavailable"})});
+        return;
+      }
+      retriedAfterVerification=verifiedAfterRefusal;
+      await route.continue();
+    };
+    if(width===390){page.on("response",witness);await page.route(startupPath,transient);}
     await page.goto("/?view=Home&scope=personal");
     const first=await (await firstRead).json();
+    if(width===390){
+      await page.unroute(startupPath,transient);page.off("response",witness);
+      expect(refused).toBe(true);
+      expect(retriedAfterVerification).toBe(true);
+    }
     expect(first.evaluatedAtMs).toBe(now);
     expect(first.timeZone).toBe(zone);
     await expect(panel(page)).toBeVisible({timeout:30_000});
