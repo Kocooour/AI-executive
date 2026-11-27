@@ -16,6 +16,20 @@ Uživatel na Home vidí název, krátký důvod a smysluplnou další akci. Př�
 
 Ověření: na Home, Inboxu, Today, Calendar, Projects a v detailu úkolu nejsou technické údaje ani po rozbalení; uživatel přesto pozná důvod a čerstvost doporučení, jeho zdroj, aktuální rozsah, stav synchronizace při problému a dopad schvalované změny. Schválené schéma rozložení a příklady: [Jednoduché hlavní obrazovky](proposals/2026-11-jednoduche-obrazovky.md); při výkladu platí tato specifikace a ostatní produktové a bezpečnostní kontrakty.
 
+### E-3 — upozornění na úkoly v osobním profilu
+
+Home: „Vyžaduje pozornost“, nejvýše pět vlastních úkolů, důvod, Proč?, Odložit,
+Skrýt a Zpět. Oznámení na úkol po klepnutí otevře detail v Mém plánu; chybějící
+nebo nepřístupný úkol se nesmí zobrazit. Nastavení → Oznámení: explicitní
+„Zapnout na tomto zařízení“, testovací oznámení a seznam zařízení s odebráním.
+První zapnutí při nedotčeném výchozím UTC uloží časové pásmo prohlížeče a
+oznámí to uživateli; později uložené pásmo zůstává beze změny. Tiché hodiny,
+pauza a vypnutí jednotlivého zařízení jsou samostatné volby. Bez VAPID
+klíčů je odesílání zřetelně nedostupné; nelze slibovat skutečné doručení
+jen na základě úspěšného předání push službě. Naléhavá výjimka zůstává
+„Zatím není k dispozici“ (#513). Ověření 390/1280 px a následně iPhone PWA/Mac
+podle [DEPLOY.md](../deployment/DEPLOY.md); nejde o potvrzení produkčního deploye.
+
 ## Index obrazovek a propojení na produktové požadavky
 
 | ID | Cílová obrazovka / plocha | Priorita | Funkční požadavky |
