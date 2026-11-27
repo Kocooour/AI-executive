@@ -29,6 +29,20 @@
 | **LUMI-FR-013** | Můj plán, dva prostory, Oblasti určující oprávnění a bezpečná víceuživatelská spolupráce | Schválený cíl 2026-10-23; víceuživatelské sdílení dosud nedodáno | Home, Inbox, Today, Projects, scope switcher |
 | **LUMI-FR-014** | HumanWiki: soukromý bootstrap znalostí, provenance, review, průběžné učení a právo opravy/odstranění | Cílový požadavek 2026-11-08; import a obsahová synchronizace nejsou implementované | Kontext, Global search, Chat, Import/review |
 
+### Milník E — rozsah prvního osobního upozorňování (#505)
+
+E-3 připravuje aktivaci ve schváleném single-owner profilu `personal-v1`; produkční
+ověření zatím není dokončeno. Home ukazuje nejvýše pět vysvětlitelných upozornění
+na vlastní úkoly (po termínu, termín do 48 hodin, propadlé Kdy), s odložením,
+skrytím a Undo. Push oznamuje pouze termíny, po prvním zapnutí zaznamená výchozí
+stav bez rozesílání starých upozornění; nejvýše tři rutinní oznámení za klouzavých
+24 h ve výchozím nastavení, mimo tiché hodiny 22:00–08:00 v uloženém pásmu.
+Klepnutí otevírá autorizovaný detail úkolu. Odesílání vyžaduje schválené VAPID
+klíče a registraci zařízení; bez klíčů zůstává Home dostupné.
+Projektová pravidla, urgentní výjimka z tichých hodin ([#513](https://github.com/Kocooour/AI-executive/issues/513)),
+digest a migrace legacy zařízení nejsou součástí E-3. Cílové širší požadavky
+níže zůstávají platné.
+
 ## Záměr, uživatel a hranice produktu
 
 Lumi je **osobní asistent konkrétního člověka**: pamatuje si jeho závazky, vyhodnocuje to, čemu má věnovat pozornost, pomáhá plánovat a připravuje bezpečné kroky. Produktový úspěch není počet vytvořených karet, nýbrž méně přehlédnutých závazků a méně ručního třídění při zachované kontrole uživatele. Lumi **není** podnikový BI cockpit, systém sledování lidí ani autonomní nástroj na neodsouhlasené odesílání zpráv či kalendářové změny.

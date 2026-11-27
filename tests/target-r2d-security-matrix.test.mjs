@@ -6,6 +6,18 @@ import os from "node:os";
 import path from "node:path";
 import {DatabaseSync} from "node:sqlite";
 import {test} from "node:test";
+import {detailRouteFromSearch} from "../lib/target-detail-route.ts";
+
+// Assert the navigation contract before testing the authorization set.
+function pushedTaskId(url){
+  const address=new URL(url,"https://lumi.invalid");
+  assert.equal(address.origin,"https://lumi.invalid");
+  assert.equal(address.pathname,"/");
+  const detail=detailRouteFromSearch(address.search);
+  assert.equal(detail?.kind,"task");
+  assert.equal(detail.view,"MyPlanPreview");
+  return detail.id;
+}
 
 const envNames=["NODE_ENV","AI_EXECUTIVE_DATA_DIR","AI_EXECUTIVE_AUTH_ENABLED",
   "AI_EXECUTIVE_PASSWORD_HASH","AI_EXECUTIVE_SESSION_SECRET",
@@ -313,7 +325,7 @@ const recordingSender=()=>{
 };
 const pushedTasks=sender=>{
   const by={};
-  for(const c of sender.calls)(by[c.userId]??=new Set()).add(c.payload.url.replace("/?task=",""));
+  for(const c of sender.calls)(by[c.userId]??=new Set()).add(pushedTaskId(c.payload.url));
   return Object.fromEntries(Object.entries(by).map(([u,set])=>[u,[...set].sort()]));
 };
 function addTask(fx,t){
@@ -401,7 +413,7 @@ test("1. no foreign private data in any channel for any actor (actor x channel t
   // Pushes: every delivery went to the recipient's own device, for the recipient's own work only.
   assert.ok(fx.sender.calls.length>0);
   for(const c of fx.sender.calls){
-    const t=c.payload.url.replace("/?task=","");
+    const t=pushedTaskId(c.payload.url);
     assert.equal(c.targetId,fx.devices[c.userId],`push for ${t} went to a device of ${c.userId}`);
     assert.ok(allowedTokens(fx,c.userId).has(t),`push to ${c.userId} names a task it cannot read: ${t}`);
     assert.deepEqual(foundTokens(fx,JSON.stringify(c.payload)).filter(x=>!allowedTokens(fx,c.userId).has(x)),[]);
@@ -929,7 +941,7 @@ async function deliver(fx,label){
   await fx.authority.runAttentionPushPass(NOW,sender);
   const m=current(fx);
   for(const c of sender.calls){
-    const t=c.payload.url.replace("/?task=","");
+    const t=pushedTaskId(c.payload.url);
     assert.ok(m.mine(c.userId).some(x=>x.id===t&&x.status==="open"),`[${label}] push of ${t} to ${c.userId}, who no longer has it as open work`);
     assert.equal(c.targetId,fx.devices[c.userId]);
   }

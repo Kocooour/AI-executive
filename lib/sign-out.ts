@@ -5,6 +5,8 @@
 export type SignOutResult = "signed-out" | "writing" | "offline" | "kept" | "failed";
 // Carries no user content; one-shot warning on the next safe sign-in screen.
 export const incompleteSignOutNoticeKey = "ai-executive-incomplete-signout";
+/** E-3: one-shot notice after a sign-out whose target push revocation was not confirmed. */
+export const pushSignOutUnverifiedNoticeKey = "ai-executive-push-signout-unverified";
 export const failedSignOutNeedsReload = (result: SignOutResult, inputBlocked: boolean) =>
   result === "failed" && inputBlocked;
 

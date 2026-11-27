@@ -90,19 +90,9 @@ function routes(dir = directory) {
 // release gate has been reviewed and explicitly classified.
 const disabledRoutes = new Map([
   // C-3b is enabled in personal-v1 and must obey 401/403 like all handlers.
-  ["GET attention", "AI_EXECUTIVE_TARGET_STAGING_HTTP_ATTENTION_ENABLED"],
-  ["GET attention/command", "AI_EXECUTIVE_TARGET_STAGING_HTTP_ATTENTION_ENABLED"],
-  ["PATCH attention/command", "AI_EXECUTIVE_TARGET_STAGING_HTTP_ATTENTION_ENABLED"],
-  ["POST attention/command/receipt", "AI_EXECUTIVE_TARGET_STAGING_HTTP_ATTENTION_ENABLED"],
   ["GET global-index", "AI_EXECUTIVE_TARGET_STAGING_HTTP_GLOBAL_COMBINED_ENABLED"],
   ["GET note-sync", "AI_EXECUTIVE_TARGET_STAGING_HTTP_NOTE_SYNC_ENABLED"],
   ["GET note-sync-session", "AI_EXECUTIVE_TARGET_STAGING_HTTP_NOTE_SYNC_ENABLED"],
-  ["GET notifications/settings", "AI_EXECUTIVE_TARGET_STAGING_HTTP_NOTIFICATIONS_ENABLED"],
-  ["PATCH notifications/settings", "AI_EXECUTIVE_TARGET_STAGING_HTTP_NOTIFICATIONS_ENABLED"],
-  ["POST notifications/targets", "AI_EXECUTIVE_TARGET_STAGING_HTTP_NOTIFICATIONS_ENABLED"],
-  ["GET notifications/push-config", "AI_EXECUTIVE_TARGET_STAGING_HTTP_NOTIFICATIONS_ENABLED"],
-  ["POST notifications/test", "AI_EXECUTIVE_TARGET_STAGING_HTTP_NOTIFICATIONS_ENABLED"],
-  ["POST notifications/device-status", "AI_EXECUTIVE_TARGET_STAGING_HTTP_NOTIFICATIONS_ENABLED"],
   ["GET projects/[projectId]/relations", "AI_EXECUTIVE_TARGET_STAGING_HTTP_RELATIONS_ENABLED"],
   ["GET relations/backlinks", "AI_EXECUTIVE_TARGET_STAGING_HTTP_RELATIONS_ENABLED"],
   ["GET task-index/global", "AI_EXECUTIVE_TARGET_STAGING_HTTP_GLOBAL_TASKS_ENABLED"],
@@ -210,6 +200,15 @@ test("every discovered target-staging handler respects the exact first-release s
       }
       if (!on) { excluded++; continue; }
       enabled++;
+      // The newly activated families are still fail-closed when their flags are off.
+      if (/^(?:attention(?:\/|$)|notifications\/)/.test(relative)) {
+        const familyFlags = relative.startsWith("attention") ?
+          ["AI_EXECUTIVE_TARGET_STAGING_HTTP_ATTENTION_ENABLED","AI_EXECUTIVE_TARGET_STAGING_HTTP_ATTENTION_WRITE_ENABLED"] :
+          ["AI_EXECUTIVE_TARGET_STAGING_HTTP_NOTIFICATIONS_ENABLED","AI_EXECUTIVE_TARGET_STAGING_HTTP_NOTIFICATIONS_WRITE_ENABLED"];
+        for (const name of familyFlags) delete process.env[name];
+        try { await runHandler(mod[method], context, method, relative, "family-off", bobCookie, host, 404, true); }
+        finally { for (const name of familyFlags) process.env[name] = "true"; }
+      }
       // Bob has a valid live session, but no access to Alice's private object.
       if (method === "GET" && /\[(?:areaId|taskId|noteId|projectId)\]/.test(relative))
         await runHandler(mod[method], context, method, relative, "foreign-owner",
@@ -225,7 +224,7 @@ test("every discovered target-staging handler respects the exact first-release s
   }
   assert.deepEqual([...disabledRoutes.keys()].filter(key => !discovered.has(key)), [],
     "stale explicit disabled-route entries");
-  assert.ok(enabled > 20 && excluded > 10 && writes > 10,
+  assert.ok(enabled > 20 && excluded === disabledRoutes.size && writes > 10,
     JSON.stringify({ enabled, excluded, writes }));
   assert.deepEqual(failures, [], failures.join("\n"));
 });

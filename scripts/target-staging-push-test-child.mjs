@@ -48,7 +48,10 @@ try {
     });
     if (!identity) reply({ok:false,reason:"session_revoked"});
     else {
-      const targetId=authority.ownLivePushTarget(identity.actor,request.endpointHash);
+      const status=authority.ownLivePushTargetStatus(identity.actor,request.endpointHash);
+      // A failed preflight or authorization is not proof of device absence.
+      if(!status)throw new Error("unavailable");
+      const targetId=status.targetId;
       if (request.mode==="status")
         reply(targetId?{ok:true,status:"registered",targetId}:{ok:true,status:"not_registered"});
       else if (!vapid) reply({ok:false,reason:"unavailable"});

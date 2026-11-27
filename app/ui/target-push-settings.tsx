@@ -147,15 +147,22 @@ export default function TargetPushSettings({language="cs",onActive}:{
       r=await registerTargetPushDevice(fresh.value,plain);
     }
     if(r.ok===false)return failureText(r.reason);
-    if(!settings.attentionPush){
-      const fresh=await readTargetNotificationSettings();
-      if(fresh.ok){
-        const w=await writeTargetNotificationSettings(fresh.value,{timeZone:fresh.value.timeZone,attentionPush:true,
-          quietStart:fresh.value.quietStart,quietEnd:fresh.value.quietEnd,paused:fresh.value.paused});
-        if(w.ok===false)return failureText(w.reason);
-      }
+    // Registration changes the notification epoch, not the settings revision.
+    // Read again so the write cannot overwrite another device's explicit choice.
+    const fresh=await readTargetNotificationSettings();
+    if(fresh.ok===false)return failureText(fresh.reason);
+    // Revision zero identifies the untouched UTC default, not an intentionally
+    // selected UTC zone. After the first settings write, never auto-change it.
+    const deviceZone=browserZone();
+    const adoptZone=fresh.value.expectedSettingsRevision===0&&fresh.value.timeZone==="UTC"&&deviceZone!=="UTC";
+    if(!fresh.value.attentionPush||adoptZone){
+      const w=await writeTargetNotificationSettings(fresh.value,{timeZone:adoptZone?deviceZone:fresh.value.timeZone,attentionPush:true,
+        quietStart:fresh.value.quietStart,quietEnd:fresh.value.quietEnd,paused:fresh.value.paused});
+      if(w.ok===false)return failureText(w.reason);
     }
-    return t("Upozornění jsou na tomto zařízení zapnutá.","Notifications are on for this device.");
+    const enabled=t("Upozornění jsou na tomto zařízení zapnutá.","Notifications are on for this device.");
+    return adoptZone?enabled+" "+t("Časové pásmo bylo nastaveno podle tohoto zařízení ("+deviceZone+").",
+      "Time zone was set from this device ("+deviceZone+")."):enabled;
   });
   const disableDevice=()=>run(async()=>{
     const registration=await workerReady();
@@ -194,7 +201,9 @@ export default function TargetPushSettings({language="cs",onActive}:{
     server_unavailable:t("Odesílání upozornění na serveru zatím není nastavené.","Sending notifications is not set up on the server yet."),
     denied:t("Oznámení jsou v prohlížeči zakázaná. Povolte je v nastavení zařízení.","Notifications are blocked in this browser. Allow them in the device settings."),
     not_registered:t("Toto zařízení zatím upozornění nedostává.","This device does not receive notifications yet."),
-    registered:t("Toto zařízení dostává upozornění.","This device receives notifications."),
+    registered:!settings.attentionPush?t("Zařízení je přihlášené, upozornění na úkoly jsou vypnutá.","Device registered; task alerts are off."):
+      settings.paused?t("Zařízení je přihlášené, upozornění jsou pozastavená.","Device registered; alerts are paused."):
+      t("Toto zařízení dostává upozornění.","This device receives notifications."),
     unknown:t("Stav tohoto zařízení teď nejde ověřit.","This device's state cannot be checked right now."),
   };
   const zone=browserZone();
@@ -209,9 +218,11 @@ export default function TargetPushSettings({language="cs",onActive}:{
         {deviceText[device]}</span>
     </div>
     <div className="notificationActions">
-      {device!=="registered"&&<button type="button" className="primaryAction" data-testid="target-push-enable"
+      {(device!=="registered"||!settings.attentionPush)&&<button type="button" className="primaryAction" data-testid="target-push-enable"
         disabled={busy||device==="unsupported"||device==="insecure"||device==="server_unavailable"}
-        onClick={()=>void enableDevice()}>{t("Zapnout na tomto zařízení","Turn on for this device")}</button>}
+        onClick={()=>void enableDevice()}>{device==="registered"
+          ?t("Zapnout upozornění","Turn on alerts")
+          :t("Zapnout na tomto zařízení","Turn on for this device")}</button>}
       {device==="registered"&&<>
         <button type="button" data-testid="target-push-test" disabled={busy} onClick={()=>void test()}>
           {t("Poslat testovací oznámení","Send a test notification")}</button>

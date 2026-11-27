@@ -21,6 +21,7 @@
  * the caller's job: record the current candidates as `baseline` and send nothing.
  */
 import { createHash } from "node:crypto";
+import { detailIdOk, searchForDetail } from "./target-detail-route";
 import type { AttentionCandidate, AttentionRuleId } from "./target-attention-read-model";
 
 export const TARGET_ATTENTION_PUSH_RULES = ["deadline_overdue", "deadline_soon"] as const;
@@ -86,7 +87,7 @@ export const announceableTargetAttentionCandidate = (c: AttentionCandidate): boo
 const announceable = (c: AttentionCandidate) =>
   !!c && c.subjectType === "task" && c.lifecycle === "active" &&
   (TARGET_ATTENTION_PUSH_RULES as readonly string[]).includes(c.ruleId) &&
-  typeof c.taskId === "string" && c.taskId.length > 0 &&
+  detailIdOk(c.taskId) &&
   isDate(c.relevantOn) &&
   Number.isFinite(c.relevantAt) && Number.isFinite(c.severity);
 
@@ -143,6 +144,7 @@ export const targetAttentionWindowStartMs = (nowMs: number) => nowMs - DAY;
  */
 export function targetAttentionPushPayload(candidate: AttentionCandidate):
   { title: string; body: string; url: string; tag: string } | null {
+  // A notification must name a detail the main app can actually open.
   if (!announceable(candidate)) return null;
   const when = new Intl.DateTimeFormat("cs-CZ", { timeZone: "UTC", day: "numeric", month: "numeric" })
     .format(new Date(`${candidate.relevantOn}T12:00:00Z`));
@@ -151,7 +153,7 @@ export function targetAttentionPushPayload(candidate: AttentionCandidate):
   return {
     title: characters.length > 80 ? `${characters.slice(0, 79).join("").trimEnd()}…` : characters.join(""),
     body: rule === "deadline_overdue" ? `Termín ${when} uplynul.` : `Termín ${when} je do 48 hodin.`,
-    url: `/?task=${encodeURIComponent(candidate.taskId)}`,
+    url: "/" + searchForDetail({kind:"task",id:candidate.taskId,view:"MyPlanPreview"},"all"),
     tag: `attention-${candidate.taskId}`,
   };
 }

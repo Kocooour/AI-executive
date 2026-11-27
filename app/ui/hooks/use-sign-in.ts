@@ -5,7 +5,7 @@ import { fetchClientAuthStatus } from "../../../lib/client-auth-status";
 import { failWhileOffline, watchSession } from "../../../lib/session-watch";
 import { clearSignedOut } from "../../../lib/local-data";
 import { announceSignedIn } from "../../../lib/target-auth-signal";
-import { incompleteSignOutNoticeKey } from "../../../lib/sign-out";
+import { incompleteSignOutNoticeKey, pushSignOutUnverifiedNoticeKey } from "../../../lib/sign-out";
 import { localizeServerError } from "../../../lib/server-errors";
 
 // Signing in: the access check on start, sign-in with the password or a passkey, and returning to
@@ -72,9 +72,17 @@ export function useSignIn({ tr, language, answerConfirm, isSignedOut, showsOffli
   useEffect(() => {
     if (authState !== "required") return;
     try {
-      if (sessionStorage.getItem(incompleteSignOutNoticeKey) !== "1") return;
-      sessionStorage.removeItem(incompleteSignOutNoticeKey);
-      setAuthNotice(tr("signOutFailed"));
+      if (sessionStorage.getItem(incompleteSignOutNoticeKey) === "1") {
+        sessionStorage.removeItem(incompleteSignOutNoticeKey);
+        // One notice per sign-out: the more important one wins, the other is not kept for later.
+        sessionStorage.removeItem(pushSignOutUnverifiedNoticeKey);
+        setAuthNotice(tr("signOutFailed"));
+        return;
+      }
+      // E-3: signed out, but the server did not confirm this device's removal from task alerts.
+      if (sessionStorage.getItem(pushSignOutUnverifiedNoticeKey) !== "1") return;
+      sessionStorage.removeItem(pushSignOutUnverifiedNoticeKey);
+      setAuthNotice(tr("signOutPushUnverified"));
     } catch { /* optional one-shot notice, no impact on local recovery */ }
   }, [authState, language]);
   // `quiet`: a check in the background keeps the screen as it is until there is an answer.

@@ -10,8 +10,11 @@
  * (task title/status/When/delete, note edit/delete, project title incl. reauth recovery),
  * main title search, private note Areas chooser + private note create, private task create,
  * C-3a Inbox and C-3b suggestions (first-deploy consent grant requires the
- * separate fence and owner-approved, verified deploy-safe.sh migration). */
+ * separate fence and owner-approved, verified deploy-safe.sh migration),
+ * E-3 task attention and notification settings/push (VAPID optional). */
 export const TARGET_PERSONAL_V1_PROFILE=[
+  "AI_EXECUTIVE_TARGET_STAGING_HTTP_ATTENTION_ENABLED",
+  "AI_EXECUTIVE_TARGET_STAGING_HTTP_ATTENTION_WRITE_ENABLED",
   "AI_EXECUTIVE_TARGET_STAGING_HTTP_C3B_ENABLED",
   "AI_EXECUTIVE_TARGET_STAGING_HTTP_ENABLED",
   "AI_EXECUTIVE_TARGET_STAGING_HTTP_GLOBAL_NOTES_ENABLED",
@@ -24,6 +27,8 @@ export const TARGET_PERSONAL_V1_PROFILE=[
   "AI_EXECUTIVE_TARGET_STAGING_HTTP_NOTES_CREATE_ENABLED",
   "AI_EXECUTIVE_TARGET_STAGING_HTTP_NOTES_ENABLED",
   "AI_EXECUTIVE_TARGET_STAGING_HTTP_NOTES_WRITE_ENABLED",
+  "AI_EXECUTIVE_TARGET_STAGING_HTTP_NOTIFICATIONS_ENABLED",
+  "AI_EXECUTIVE_TARGET_STAGING_HTTP_NOTIFICATIONS_WRITE_ENABLED",
   "AI_EXECUTIVE_TARGET_STAGING_HTTP_PERSONAL_WHEN_ENABLED",
   "AI_EXECUTIVE_TARGET_STAGING_HTTP_PERSONAL_WHEN_WRITE_ENABLED",
   "AI_EXECUTIVE_TARGET_STAGING_HTTP_PRIVATE_NOTE_AREAS_ENABLED",
@@ -57,14 +62,10 @@ export const TARGET_PERSONAL_V1_PROFILE=[
 /** Flags deliberately NOT part of the profile, each with the reason. */
 export const TARGET_PERSONAL_V1_EXCLUDED:readonly {readonly flag:string;readonly reason:string}[]=[
   {flag:"AI_EXECUTIVE_TARGET_STAGING_GLOBAL_INDEX_CLIENT_PREVIEW_ENABLED",reason:"Client preview page, not the main app."},
-  {flag:"AI_EXECUTIVE_TARGET_STAGING_HTTP_ATTENTION_ENABLED",reason:"Attention is out of scope for the personal daily loop."},
-  {flag:"AI_EXECUTIVE_TARGET_STAGING_HTTP_ATTENTION_WRITE_ENABLED",reason:"Attention lifecycle writes are out of scope."},
   {flag:"AI_EXECUTIVE_TARGET_STAGING_HTTP_GLOBAL_COMBINED_ENABLED",reason:"Combined index feeds only the preview page; the main app uses per-kind indexes."},
   {flag:"AI_EXECUTIVE_TARGET_STAGING_HTTP_GLOBAL_TASKS_ENABLED",reason:"Task index is not consumed by the main app UI; tasks come from My Plan."},
 
   {flag:"AI_EXECUTIVE_TARGET_STAGING_HTTP_NOTE_SYNC_ENABLED",reason:"Offline note sync is not part of the server-rendered daily loop."},
-  {flag:"AI_EXECUTIVE_TARGET_STAGING_HTTP_NOTIFICATIONS_ENABLED",reason:"Notifications/push are out of scope."},
-  {flag:"AI_EXECUTIVE_TARGET_STAGING_HTTP_NOTIFICATIONS_WRITE_ENABLED",reason:"Notification settings writes are out of scope."},
   {flag:"AI_EXECUTIVE_TARGET_STAGING_HTTP_RELATIONS_ENABLED",reason:"Relations/backlinks are not used by the listed UI."},
   {flag:"AI_EXECUTIVE_TARGET_STAGING_HTTP_TEMPORAL_DUE_ON_WRITE_ENABLED",reason:"Shared deadline writes; the loop uses the actor-private When."},
   {flag:"AI_EXECUTIVE_TARGET_STAGING_HTTP_TEMPORAL_DUE_WINDOWS_ENABLED",reason:"Due-window reads are not consumed by the listed UI."},
@@ -93,7 +94,7 @@ export const TARGET_PERSONAL_V1_NOT_SETTINGS:readonly {readonly name:string;read
   {name:"AI_EXECUTIVE_TARGET_STAGING_INBOX_PROOF_KEY",reason:"Child-only Inbox command proof key derived from AI_EXECUTIVE_SESSION_SECRET; never operator-configured or an application session signing secret."},
   {name:"AI_EXECUTIVE_TARGET_STAGING_PROJECT_TITLE_PROOF_KEY",reason:"Child-only key derived from AI_EXECUTIVE_SESSION_SECRET; not set by operators."},
   {name:"AI_EXECUTIVE_TARGET_STAGING_NOTE_SYNC_SECRET",reason:"Belongs to the excluded note-sync feature."},
-  {name:"AI_EXECUTIVE_TARGET_VAPID_PUBLIC_KEY",reason:"E-2 target push identity of the still-excluded notifications feature; optional, owner-approved at E-3 activation, push is reported unavailable without it."},
+  {name:"AI_EXECUTIVE_TARGET_VAPID_PUBLIC_KEY",reason:"Optional target push identity; owner-approved separately from E-3 profile activation, push is reported unavailable without it."},
   {name:"AI_EXECUTIVE_TARGET_VAPID_PRIVATE_KEY",reason:"Secret half of the E-2 target push identity (root-owned EnvironmentFile only); same activation rule as its public key."},
 ];
 

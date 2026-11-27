@@ -328,14 +328,11 @@ export default defineConfig({
         LUMI_TARGET_INBOX_C3B_E2E:"true",
       }:{}),
       ...(attentionTest?{
-        AI_EXECUTIVE_TARGET_STAGING_HTTP_ATTENTION_ENABLED:"true",
-        AI_EXECUTIVE_TARGET_STAGING_HTTP_ATTENTION_WRITE_ENABLED:"true",
+        // E-3: the four feature flags come exclusively from personal-v1 above.
         LUMI_E2E_ATTENTION_CLOCK:path.join(runDir,"attention-clock.json"),
         NODE_OPTIONS:((process.env.NODE_OPTIONS||"")+" --require="+JSON.stringify(path.join(__dirname,"e2e/attention-test-clock.cjs"))).trim(),
       }:{}),
       ...(pushTest?{
-        AI_EXECUTIVE_TARGET_STAGING_HTTP_NOTIFICATIONS_ENABLED:"true",
-        AI_EXECUTIVE_TARGET_STAGING_HTTP_NOTIFICATIONS_WRITE_ENABLED:"true",
         AI_EXECUTIVE_TARGET_VAPID_PUBLIC_KEY:process.env.LUMI_E2E_PUSH_VAPID_PUBLIC,
         AI_EXECUTIVE_TARGET_VAPID_PRIVATE_KEY:process.env.LUMI_E2E_PUSH_VAPID_PRIVATE,
         VAPID_SUBJECT:"mailto:e2e@example.test",

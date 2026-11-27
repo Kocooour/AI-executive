@@ -3,6 +3,7 @@
  * no local persistence, no legacy fallback, no project inference. */
 import {useCallback,useEffect,useRef,useState} from "react";
 import {useTargetWake,useTargetTick} from "./use-target-revalidation";
+import {wakeRetryDelay} from "../../lib/target-wake";
 import {useTargetRuntime} from "./target-data-provider";
 import {openTargetDetail} from "./target-detail-state";
 import {targetAppFetch} from "../../lib/target-app-fetch";
@@ -139,6 +140,25 @@ export function TargetHomeAttention({language,openable,onRefusal,generation}:{
     };
     void (async()=>{
       let result=await readHomeAttention(controller.signal,targetAppFetch,language);
+      // A fresh mount or a concealed wake can briefly encounter a busy
+      // read child. Keep content concealed and re-verify the session before
+      // each bounded retry. Never retry a refusal or a mutation.
+      for(let attempt=0;before.state.kind==="loading"&&result.status==="unavailable";attempt++){
+        const delay=wakeRetryDelay(result.status,attempt);
+        if(delay===null||controller.signal.aborted||!live())break;
+        await new Promise<void>(resolve=>{
+          const finish=()=>{clearTimeout(timer);controller.signal.removeEventListener("abort",finish);resolve();};
+          const timer=setTimeout(finish,delay);
+          controller.signal.addEventListener("abort",finish,{once:true});
+          if(controller.signal.aborted)finish();
+        });
+        if(controller.signal.aborted||!live()||!runtime)break;
+        const verified=await runtime.refresh();
+        // A signed-out session is a refusal, not a transient failure.
+        if(verified==="signed_out"){result={status:"unauthorized"};break;}
+        if(verified!=="ok"||controller.signal.aborted||!live())break;
+        result=await readHomeAttention(controller.signal,targetAppFetch,language);
+      }
       // Rebuild the expanded extent from one fresh pinned cursor chain;
       // never combine new first-page data with a stale appended page.
       while(!controller.signal.aborted&&result.status==="ok"&&

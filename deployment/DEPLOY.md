@@ -562,10 +562,38 @@ ověření. Nové UI v `personal-v1` Archiv nenabízí; profil `off` zůstává.
 Přijaté riziko: starý offline prohlížeč může testovací data znovu odeslat;
 v takovém případě opakuj postup po zastavení služby.
 
-## E-2 — target task alerts (Web Push), activated only in E-3
+## E-3 — target task attention and Web Push in personal-v1
 
-E-2 ships default-off code; nothing changes on the server until E-3 moves the
-notification flags into `personal-v1` **and** the owner approves the keys below.
+**Operator env change BEFORE the first E-3 deploy:** set these four lines exactly once
+in the root-owned `/etc/ai-executive/ai-executive.env` (replace any existing false
+assignment; do not append duplicate keys), alongside the complete `personal-v1` profile:
+
+```dotenv
+AI_EXECUTIVE_TARGET_STAGING_HTTP_ATTENTION_ENABLED=true
+AI_EXECUTIVE_TARGET_STAGING_HTTP_ATTENTION_WRITE_ENABLED=true
+AI_EXECUTIVE_TARGET_STAGING_HTTP_NOTIFICATIONS_ENABLED=true
+AI_EXECUTIVE_TARGET_STAGING_HTTP_NOTIFICATIONS_WRITE_ENABLED=true
+```
+
+The previous profile is now partial and the reviewed `deploy-safe.sh` refuses it
+before service stop. No new target schema upgrade or service unit is needed:
+E-2's subscription vault is in the app database, created at startup.
+The PR does not edit the production EnvironmentFile. VAPID remains optional:
+without keys Home attention and settings work, legacy attention remains silent,
+and target push is unavailable. The owner must explicitly approve key creation separately.
+
+**Release gates:** after merge, run both against the exact 40-character main SHA:
+
+```bash
+gh workflow run browser-e2e.yml --ref main -f target_sha="$TARGET_SHA"
+gh workflow run r3-personal-acceptance-browser.yml --ref main -f target_sha="$TARGET_SHA"
+```
+
+Verify both succeeded and recorded the exact checkout SHA, including E-1 and
+E-2/E-3 steps. If main moves, repeat both. Use the pinned-target launcher at the
+top of this document. Do not mark milestone E done until the owner checks below.
+A partial personal-v1 profile is not a valid rollback; use the complete reviewed
+off profile if a full return to legacy is required.
 
 **Dedicated VAPID keys (one-time, owner-approved env change).** Target push never
 reuses the legacy keys stored in the old database and never generates keys at
@@ -597,12 +625,31 @@ run as root: `sudo -u ai-executive sqlite3 /var/lib/ai-executive/store.sqlite "D
 child, exclusive lock `/var/lib/ai-executive/target-push-pass.lock`; a lock older
 than five minutes from a crashed pass is recovered). The legacy attention push
 stays silent while the target notification flags are on (no double alerts);
-legacy reminders are otherwise unchanged. Once active, signing out ends Web Push
-on that device (target and legacy subscriptions alike), so a signed-out device
-shows no task titles; before E-3 activation sign-out behaves exactly as today. The 5 legacy push subscriptions are not migrated:
+legacy reminders are otherwise unchanged. Once active, sign-out first proves the current device is absent or revokes
+its target registration on the server while still authenticated (at most 10 s).
+Sign-out always completes (owner decision 2026-11-27): if revocation is not
+confirmed, the browser subscription is still ended locally, the sign-in screen
+shows a one-shot notice, and the next pass revokes the device on 404/410; a device
+still listed can be removed in Settings → Notifications on another device. Other
+target devices remain registered. Browser unsubscribe and
+legacy subscription cleanup are bounded best effort after target revocation;
+already handed-off push messages cannot be recalled. Before E-3 activation
+sign-out retains legacy behavior. The 5 legacy push subscriptions are not migrated:
 devices are registered again from Settings. Browser-test switches
 (`AI_EXECUTIVE_E2E*`, `LUMI_E2E_*`, e.g. the fake push origin) are refused in the
 production EnvironmentFile by `deploy-safe.sh`.
 
-After deploy, the owner checks on iPhone (installed PWA) and Mac: turn alerts on
-for the device, send the test notification, and confirm the device list.
+After deploy, the owner checks on iPhone (installed PWA) and Mac:
+1. Home shows real overdue tasks under Vyžaduje pozornost; Proč?, Odložit and
+   Skrýt with Undo work.
+2. Settings → Notifications → turn on for this device. The initial untouched UTC
+   default adopts the device zone (Europe/Prague); later enables preserve saved
+   settings. Send the test notification and verify the device list.
+3. Create a new overdue task after baseline; outside quiet hours and within the
+   daily limit, at most one alert arrives within five minutes and tapping it opens
+   that task.
+4. Sign out on one device; verify it receives no more alerts and the other device
+   still receives alerts. Record the owner result on #505.
+
+The urgent quiet-hours exception remains unavailable (follow-up #513);
+project attention and migration of legacy subscriptions are out of scope.

@@ -128,6 +128,8 @@ async function stubPush(page:Page,label:string){
       toJSON:()=>({endpoint,expirationTime:null,keys}),
       getKey:()=>null,
       unsubscribe:async()=>{
+        // A browser/push service may reject unsubscribe while the endpoint stays live.
+        if(sessionStorage.getItem("__lumiRejectUnsubscribe")==="1")throw Error("synthetic unsubscribe failure");
         if(saved.endpoint===endpoint){saved.endpoint=null;save();
           await (window as unknown as {__lumiPushUnsubscribed:(e:string)=>Promise<void>}).__lumiPushUnsubscribed(endpoint);}
         return true;
@@ -162,12 +164,36 @@ for(const width of [390,1280]){
     await expect(panel.getByTestId("target-push-device-state")).toHaveText("Toto zařízení zatím upozornění nedostává.");
     // The legacy attention switch is hidden while target alerts own them.
     await expect(page.getByText("Upozornit na urgentní termíny",{exact:true})).toHaveCount(0);
+    await expect(panel.getByTestId("target-push-zone")).toHaveValue(width===390?"UTC":zone);
+    // Interrupt the settings write after successful device registration.
+    // Reload must show the partial state and offer an idempotent retry.
+    const settingsPath="**/api/target-staging/notifications/settings";
+    if(width===390)await page.route(settingsPath,async route=>{
+      if(route.request().method()==="PATCH")await route.fulfill({status:503,contentType:"application/json",body:'{"error":"unavailable"}'});
+      else await route.continue();
+    });
     const register=page.waitForResponse(r=>new URL(r.url()).pathname==="/api/target-staging/notifications/targets"&&
       r.request().method()==="POST");
     await panel.getByTestId("target-push-enable").click();
     expect((await register).status()).toBe(200);
+    if(width===390){
+      await expect(panel.getByTestId("target-push-notice")).toHaveText("Akci se nepodařilo dokončit.");
+      await expect(panel.getByTestId("target-push-device-state")).toHaveText("Zařízení je přihlášené, upozornění na úkoly jsou vypnutá.");
+      await page.unroute(settingsPath);
+      await openNotifications(page);
+      await expect(panel.getByTestId("target-push-enable")).toHaveText("Zapnout upozornění");
+      await expect(panel.getByTestId("target-push-attention")).not.toBeChecked();
+      await expect(panel.getByTestId("target-push-zone")).toHaveValue("UTC");
+      const retry=page.waitForResponse(r=>new URL(r.url()).pathname==="/api/target-staging/notifications/targets"&&r.request().method()==="POST");
+      await panel.getByTestId("target-push-enable").click();
+      expect(await (await retry).json()).toMatchObject({ok:true,unchanged:true});
+      await expect(panel.getByTestId("target-push-devices").locator("li")).toHaveCount(1);
+    }
     await expect(panel.getByTestId("target-push-device-state")).toHaveText("Toto zařízení dostává upozornění.");
-    await expect(panel.getByTestId("target-push-notice")).toHaveText("Upozornění jsou na tomto zařízení zapnutá.");
+    await expect(panel.getByTestId("target-push-notice")).toHaveText(width===390
+      ?"Upozornění jsou na tomto zařízení zapnutá. Časové pásmo bylo nastaveno podle tohoto zařízení (Europe/Prague)."
+      :"Upozornění jsou na tomto zařízení zapnutá.");
+    await expect(panel.getByTestId("target-push-zone")).toHaveValue(zone);
     await expect(panel.getByTestId("target-push-attention")).toBeChecked();
     await expect(panel.getByTestId("target-push-devices")).toContainText("(toto zařízení)");
     // Content-free test notification, decrypted on the fake service.
@@ -177,6 +203,12 @@ for(const width of [390,1280]){
     expect(testMessages).toHaveLength(1);
     expect(testMessages[0]).toEqual({title:"Lumi",body:"Testovací oznámení: upozornění na tomto zařízení fungují.",
       url:"/?view=Settings",tag:"lumi-push-test"});
+    // A deliberate later choice of UTC must survive another device enable.
+    if(width===390){
+      await panel.getByTestId("target-push-zone").fill("UTC");
+      await panel.getByRole("button",{name:"Uložit",exact:true}).click();
+      await expect(panel.getByTestId("target-push-notice")).toHaveText("Uloženo.");
+    }
     // The push service forgets the device: the test result says so, the device
     // is removed server-side, and the panel truthfully offers to turn it on again.
     statusFor.set(new URL(endpointOf("ui"+width)).pathname,410);
@@ -187,6 +219,13 @@ for(const width of [390,1280]){
     await expect(panel.getByTestId("target-push-device-state")).toHaveText("Toto zařízení zatím upozornění nedostává.");
     await panel.getByTestId("target-push-enable").click();
     await expect(panel.getByTestId("target-push-device-state")).toHaveText("Toto zařízení dostává upozornění.");
+    await expect(panel.getByTestId("target-push-notice")).toHaveText("Upozornění jsou na tomto zařízení zapnutá.");
+    await expect(panel.getByTestId("target-push-zone")).toHaveValue(width===390?"UTC":zone);
+    if(width===390){
+      await panel.getByTestId("target-push-zone").fill(zone);
+      await panel.getByRole("button",{name:"Uložit",exact:true}).click();
+      await expect(panel.getByTestId("target-push-notice")).toHaveText("Uloženo.");
+    }
     // No horizontal scroll at this width.
     expect(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth)).toBe(true);
     // A reload re-confirms the device from the server; nothing comes from browser storage.
@@ -234,7 +273,11 @@ test("delivery: baseline, exactly one private message, daily limit, quiet hours,
   let messages=payloads(device);
   expect(messages).toHaveLength(1);
   expect(messages[0]).toEqual({title:"Zaplatit nájem",body:expect.stringMatching(/^Termín \d+\. \d+\. uplynul\.$/),
-    url:"/?task="+encodeURIComponent(rent),tag:"attention-"+rent});
+    url:"/?view=MyPlanPreview&taskId="+encodeURIComponent(rent),tag:"attention-"+rent});
+  // Follow the URL from the actual decrypted push.
+  await page.goto(messages[0].url);
+  await expect(page.getByTestId("target-detail")).toContainText("Zaplatit nájem",{timeout:25_000});
+  await openNotifications(page);
   expect(JSON.stringify(messages)).not.toContain("Starý dluh");
   // 3. At most three routine messages per rolling 24 h: the fourth waits.
   for(const title of ["Druhý","Třetí","Čtvrtý"])overdueTask("Limit "+title);
@@ -280,22 +323,75 @@ test("delivery: baseline, exactly one private message, daily limit, quiet hours,
   await expect(panel.getByTestId("target-push-attention")).toBeChecked();
   await tick();await tick();
   expect(delivered(device)).toHaveLength(whileOff);
-  // 7. Sign-out stops delivery to this device: the subscription ends at the push
-  //    service, the next pass gets 410 and revokes the device in the store.
+  // 7. Another registered device must survive logout of this one.
+  const second=await page.context().newPage();
+  await stubPush(second,"second");
+  const secondPanel=await openNotifications(second);
+  await secondPanel.getByTestId("target-push-enable").click();
+  await expect(secondPanel.getByTestId("target-push-notice")).toHaveText("Upozornění jsou na tomto zařízení zapnutá.");
+  await expect(secondPanel.getByTestId("target-push-devices").locator("li")).toHaveCount(2);
+  const otherDevice=endpointOf("second");
+  await second.close();
+  const liveTargets=()=>{
+    const live=db();
+    try{return (live.prepare("SELECT COUNT(*) AS n FROM personal_push_targets WHERE user_id=? AND revoked_at_ms IS NULL")
+      .get(store().ownerUserId) as {n:number}).n;}finally{live.close();}
+  };
+  let logoutRequests=0;
+  page.on("request",r=>{if(new URL(r.url()).pathname==="/api/auth/logout")logoutRequests++;});
+  // A) The server cannot confirm revocation: sign-out still completes (owner
+  //    decision 2026-11-27) with a one-shot notice. The browser subscription is
+  //    ended, so the next pass gets 410 and revokes this device; the other stays.
+  const targetsPath="**/api/target-staging/notifications/targets";
+  let refused=0;
+  await page.route(targetsPath,async route=>{
+    if(route.request().method()==="POST"&&route.request().postDataJSON()?.action==="revoke"){
+      refused++;
+      await route.fulfill({status:503,contentType:"application/json",body:'{"error":"unavailable"}'});
+    }else await route.continue();
+  });
   await settingsSections(page).filter({hasText:"Přístup"}).click();
   await page.getByRole("button",{name:"Odhlásit se"}).click();
   await expect(page.locator(".authCard")).toBeVisible({timeout:30_000});
-  await expect.poll(()=>statusFor.get(new URL(device).pathname)).toBe(410);
-  setClock(pragueAt(14,1));
-  const afterLogout=delivered(device).length;
-  overdueTask("Po odhlášení");
+  await expect(page.locator(".authCard .authNotice")).toHaveText(
+    "Jste odhlášeni. Nepodařilo se ověřit, že toto zařízení bylo odebráno z upozornění na úkoly. Pokud je v seznamu dál, odeberte ho v Nastavení → Oznámení na jiném zařízení.");
+  expect(refused).toBeGreaterThan(0);
+  expect(logoutRequests).toBe(1);
+  await page.unroute(targetsPath);
+  expect(statusFor.get(new URL(device).pathname)).toBe(410);
+  expect(liveTargets()).toBe(2);
+  setClock(pragueAt(14,2));
+  let afterLogout=delivered(device).length;
+  let beforeOther=delivered(otherDevice).length;
+  let newTask=overdueTask("Po odhlášení bez potvrzení");
   await tick();await tick();
   expect(delivered(device)).toHaveLength(afterLogout);
-  const live=db();
-  try{
-    expect((live.prepare("SELECT COUNT(*) AS n FROM personal_push_targets WHERE user_id=? AND revoked_at_ms IS NULL")
-      .get(store().ownerUserId) as {n:number}).n).toBe(0);
-  }finally{live.close();}
+  expect(payloads(otherDevice).slice(beforeOther).map(p=>p.tag)).toContain("attention-"+newTask);
+  expect(liveTargets()).toBe(1);
+  // B) Sign in again, turn this device on again, and sign out with a confirmed
+  //    server revocation even though the browser refuses to unsubscribe.
+  await signIn(page);
+  await expect(page.locator(".appShell")).toBeVisible();
+  const again=await openNotifications(page);
+  await again.getByTestId("target-push-enable").click();
+  await expect(again.getByTestId("target-push-device-state")).toHaveText("Toto zařízení dostává upozornění.");
+  const reenabled=endpointOf("main",2);
+  expect(liveTargets()).toBe(2);
+  await page.evaluate(()=>sessionStorage.setItem("__lumiRejectUnsubscribe","1"));
+  await settingsSections(page).filter({hasText:"Přístup"}).click();
+  await page.getByRole("button",{name:"Odhlásit se"}).click();
+  await expect(page.locator(".authCard")).toBeVisible({timeout:30_000});
+  await expect(page.locator(".authCard .authNotice")).toHaveCount(0);
+  expect(logoutRequests).toBe(2);
+  expect(statusFor.get(new URL(reenabled).pathname)).not.toBe(410);
+  expect(liveTargets()).toBe(1);
+  setClock(pragueAt(16,2));
+  afterLogout=delivered(reenabled).length;
+  beforeOther=delivered(otherDevice).length;
+  newTask=overdueTask("Po odhlášení");
+  await tick();await tick();
+  expect(delivered(reenabled)).toHaveLength(afterLogout);
+  expect(payloads(otherDevice).slice(beforeOther).map(p=>p.tag)).toContain("attention-"+newTask);
   // Leave a valid owner session for any later scenario of this run.
   await signIn(page);
   await expect(page.locator(".appShell")).toBeVisible();

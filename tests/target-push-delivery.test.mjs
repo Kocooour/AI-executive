@@ -124,7 +124,7 @@ test("VAPID: dedicated, consistent keys and a public subject are required",()=>{
 });
 
 const vapid={publicKey:VAPID.publicKey,privateKey:VAPID.privateKey,subject:"https://lumi.example.test"};
-const PAYLOAD={title:"Zaplatit nájem",body:"Termín 1. 11. uplynul.",url:"/?task=t1",tag:"attention-t1"};
+const PAYLOAD={title:"Zaplatit nájem",body:"Termín 1. 11. uplynul.",url:"/?view=MyPlanPreview&taskId=t1",tag:"attention-t1"};
 const publicResolver=async()=>[{address:"142.250.74.10",family:4}];
 
 test("the sender encrypts, pins the checked address and maps push service statuses",async()=>{
@@ -176,6 +176,125 @@ test("the sender contacts nothing for a private, mixed or empty DNS answer, a fo
     subscriptionFor:()=>null});
   assert.equal(await sender.sendTo("alice","pt_"+"0".repeat(32),PAYLOAD),"failed");
   assert.equal(calls,0);
+});
+
+// Exercise the real transport adapter with a real, actor-bound device lookup.
+test("revocation during DNS preparation fences the transport, while another live device still sends",async()=>{
+  const stage=bootstrapIsolatedTargetStore({stagingDirectory:path.join(root,randomUUID()),ownerUserId:"alice"});
+  const authority=new TargetStagingSessionAuthority({stagingDirectory:stage.directory,
+    expectedRestoreGeneration:stage.restoreGeneration});
+  authorities.push(authority);
+  const subscriptions=new Map();
+  const ids=[];
+  const token=authority.issueWritable("alice").sessionToken;
+  for(const name of ["first","second"]){
+    const browser=syntheticBrowserKeys();
+    const subscription={endpoint:"https://fcm.googleapis.com/fcm/send/"+name,...browser.keys};
+    const hash=targetPushEndpointHash(subscription.endpoint);
+    const settings=authority.readNotificationSettings("alice");
+    const result=authority.changePushTarget(token,{commandId:randomUUID(),action:"register",
+      endpointHash:hash,expectedNotificationEpoch:settings.notificationEpoch,
+      restoreGeneration:stage.restoreGeneration});
+    assert.equal(result.ok,true,JSON.stringify(result));
+    subscriptions.set(hash,subscription);ids.push(result.targetId);
+  }
+  let enter,release;
+  const entered=new Promise(resolve=>{enter=resolve;});
+  const gated=new Promise(resolve=>{release=resolve;});
+  let calls=0;
+  const sender=createTargetWebPushSender({vapid,env:{},
+    subscriptionFor:(userId,targetId)=>{
+      const hash=authority.livePushEndpointHash(userId,targetId);
+      return hash?subscriptions.get(hash)??null:null;
+    },
+    resolve:async()=>{enter();await gated;return publicResolver();},
+    transport:async()=>{calls++;return 201;}
+  });
+  const pending=sender.sendTo("alice",ids[0],PAYLOAD);
+  await entered;
+  const settings=authority.readNotificationSettings("alice");
+  assert.equal(authority.changePushTarget(token,{commandId:randomUUID(),action:"revoke",
+    targetId:ids[0],expectedNotificationEpoch:settings.notificationEpoch,
+    restoreGeneration:stage.restoreGeneration}).ok,true);
+  release();
+  assert.equal(await pending,"failed");
+  assert.equal(calls,0,"revoked during DNS: no network request");
+  assert.equal(await sender.sendTo("alice",ids[1],PAYLOAD),"sent");
+  assert.equal(calls,1,"other device remains live");
+});
+
+test("cancelled or timed-out preparation can never start a late transport",async()=>{
+  const subscription={endpoint:"https://fcm.googleapis.com/fcm/send/slow",...syntheticBrowserKeys().keys};
+  let enter,release;
+  const entered=new Promise(resolve=>{enter=resolve;});
+  const gated=new Promise(resolve=>{release=resolve;});
+  let calls=0;
+  const sender=createTargetWebPushSender({vapid,env:{},subscriptionFor:()=>subscription,
+    resolve:async()=>{enter();await gated;return publicResolver();},
+    transport:async()=>{calls++;return 201;}});
+  const {sendTargetPushWithTimeout}=await import("../lib/target-attention-push-pass.ts");
+  let attempt;
+  let observedSignal;
+  const timed=sendTargetPushWithTimeout(signal=>{
+    observedSignal=signal;
+    return attempt=sender.sendTo("alice","pt_"+"1".repeat(32),PAYLOAD,signal);
+  },25);
+  await entered;
+  assert.equal(await timed,"timeout");
+  assert.equal(observedSignal.aborted,true);
+  release();
+  assert.equal(await attempt,"failed");
+  assert.equal(calls,0,"late DNS cannot start transport");
+  const controller=new AbortController();controller.abort();
+  assert.equal(await sender.sendTo("alice","pt_"+"1".repeat(32),PAYLOAD,controller.signal),"failed");
+  assert.equal(calls,0);
+});
+
+test("logout remains bounded when browser unsubscribe hangs after confirmed server revocation",async()=>{
+  const {silenceTargetPushOnThisDevice}=await import("../lib/target-push-client.ts");
+  const targetId="pt_"+"1".repeat(32),other="pt_"+"2".repeat(32);
+  const keyBytes=Buffer.alloc(65,1),publicKey=keyBytes.toString("base64url");
+  const endpoint="https://fcm.googleapis.com/fcm/send/hanging";
+  const subscription={endpoint,keys:syntheticBrowserKeys().keys};
+  const calls=[];
+  const browserSubscription={
+    options:{applicationServerKey:Uint8Array.from(keyBytes).buffer},
+    toJSON:()=>subscription,
+    unsubscribe:()=>{calls.push("unsubscribe");return new Promise(()=>{});}
+  };
+  const globals={
+    window:{PushManager:function(){}},
+    navigator:{serviceWorker:{getRegistration:async()=>({pushManager:{
+      getSubscription:async()=>browserSubscription}})}},
+    fetch:async(url,init)=>{
+      const route=String(url).split("/").pop();
+      calls.push(route);
+      if(route==="push-config")return Response.json({available:true,publicKey});
+      if(route==="device-status")return Response.json({registered:true,targetId});
+      if(route==="settings")return Response.json({
+        timeZone:"Europe/Prague",attentionPush:true,quietStart:"22:00",quietEnd:"08:00",
+        dailyLimit:3,paused:false,expectedSettingsRevision:1,expectedNotificationEpoch:2,
+        restoreGeneration:randomUUID(),targets:[targetId,other]});
+      if(route==="targets"){
+        const body=JSON.parse(init.body);
+        assert.equal(body.action,"revoke");
+        assert.equal(body.targetId,targetId);
+        assert.equal(body.expectedNotificationEpoch,2);
+        return Response.json({ok:true});
+      }
+      throw Error("unexpected request");
+    }
+  };
+  const descriptors=new Map(Object.keys(globals).map(key=>[key,Object.getOwnPropertyDescriptor(globalThis,key)]));
+  try{
+    for(const [key,value] of Object.entries(globals))
+      Object.defineProperty(globalThis,key,{configurable:true,writable:true,value});
+    assert.equal(await silenceTargetPushOnThisDevice(5000),true);
+    assert.deepEqual(calls,["push-config","device-status","settings","targets","unsubscribe"]);
+  }finally{
+    for(const [key,descriptor] of descriptors)
+      if(descriptor)Object.defineProperty(globalThis,key,descriptor);else delete globalThis[key];
+  }
 });
 
 function memoryVault(){
@@ -382,7 +501,7 @@ test("the real pass child: baseline first, then exactly one encrypted message pe
     const payload=JSON.parse(decryptWebPush(toPhone[0].body,devices.phone.browser));
     assert.deepEqual(Object.keys(payload).sort(),["body","tag","title","url"]);
     assert.equal(payload.title,"Zaplatit nájem");
-    assert.equal(payload.url,"/?task=rent");
+    assert.equal(payload.url,"/?view=MyPlanPreview&taskId=rent");
     assert.equal(JSON.stringify(payload).includes("Starý dluh"),false);
     // 410 from the push service revokes that device in the target store.
     assert.notEqual(db.prepare("SELECT revoked_at_ms AS r FROM personal_push_targets WHERE target_id=?")
@@ -404,7 +523,14 @@ test("the real pass child: baseline first, then exactly one encrypted message pe
     assert.equal(fake.received.length,before);
     assert.equal(db.prepare("SELECT revoked_at_ms AS r FROM personal_push_targets WHERE target_id=?")
       .get(devices.phone.targetId).r,null);
+    // A verified absence is a different result from an unavailable authority.
+    assert.deepEqual(authority.ownLivePushTargetStatus("alice",devices.phone.row.endpointHash),
+      {targetId:devices.phone.targetId});
+    assert.deepEqual(authority.ownLivePushTargetStatus("alice",devices.old.row.endpointHash),{targetId:null});
+    assert.equal(authority.ownLivePushTargetStatus("missing-actor",devices.phone.row.endpointHash),null);
     db.close();
+    authority.close();
+    assert.equal(authority.ownLivePushTargetStatus("alice",devices.phone.row.endpointHash),null);
   }finally{
     for(const k of [...FLAGS,"AI_EXECUTIVE_E2E","LUMI_E2E_TARGET_PUSH_TEST_ORIGIN"])delete process.env[k];
     await new Promise(r=>fake.server.close(r));

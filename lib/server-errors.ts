@@ -153,6 +153,8 @@ export const developerOnly: ReadonlySet<string> = new Set([
   // Export download cancellation closes a Node/Web stream after owner logout.
   // This exception is internal to the stream and is never returned as a UI JSON error.
   "Owner session revoked during export",
+  // The target Web Push transport catches cancellation and returns a content-free failure.
+  "cancelled",
   // H1-real.0 deny-only POST route intentionally has no client/UI consumer.
   // A generic 404 conceals the otherwise nonexistent import capability.
   "Not found",

@@ -12,6 +12,35 @@
 - **Privacy-first:** cílové Osobní a Sdílené jsou oddělené hranicí oprávnění odvozenou z Oblasti, `Vše` je serverově autorizované čtení nad oběma prostory a `Můj plán` je samostatný osobní pracovní pohled; citlivé či neověřené claims nejsou automatickým důkazem ani povoleným kontextem pro agenty.
 - Stav implementace je důsledně oddělen od **target specification** v níže uvedených oddílech. Při rozporu UI návrhu s oprávněními a integritou dat platí přísnější bezpečnostní kontrakt.
 
+### E-3 — aktivace cílové task attention a push
+
+`TARGET_PERSONAL_V1_PROFILE` nově vyžaduje čtyři existující HTTP příznaky
+Attention a Notifications (read + write); `off` zůstává legacy. Home i
+Settings čtou actor-private data; všechny zápisy nadále vynucují živou relaci,
+Origin, revizi a autorizační hranici. Push payload používá stejnou typed
+detail route jako Home (`searchForDetail`, MyPlanPreview/taskId), neuděluje
+oprávnění a není alternativou k serverové ACL. Neotevíratelné ID se neplánuje.
+První zapnutí při revizi nastavení 0 a výchozím UTC uloží zónu prohlížeče
+přes stávající revizně chráněný PATCH; pozdější zapnutí volbu nemění.
+E-2 vault `target_push_subscriptions` v aplikační SQLite zůstává mimo
+backup/export; target schéma zůstává v27. Existující plánovač přebírá
+legacy task attention i bez VAPID (žádné duplicitní upozornění), ale
+odesílá jen s platnými samostatnými klíči; legacy reminders se nemění.
+Před odhlášením E-3 ověří serverový stav konkrétního endpointu a případně
+revokuje jeho target s aktuální epochou. Nedostupný read model není důkaz
+neexistence zařízení. Odhlášení se vždy dokončí (rozhodnutí vlastníka 2026-11-27):
+při neověřeném výsledku (nejvýše 10 s) se prohlížeč z push odhlásí aspoň lokálně,
+přihlašovací obrazovka to jednorázově oznámí a další průchod zařízení při 404/410
+revokuje; ostatní registrace zůstávají platné. Odesílač po DNS a šifrování ještě synchronně
+ověřuje stejný živý target bez dalšího await před zahájením transportu.
+Vypršení časového limitu zruší pokus přes AbortSignal, takže opožděné DNS
+již nemůže spustit transport. Kontrola a vnější síťový požadavek nejsou
+jednou atomickou transakcí; již zahájené odesílání není zaručeně odvolatelné.
+Odpojení prohlížeče je po potvrzení revokace best effort.
+Bez nové migrace, služby či oprávnění. Přesné příznaky a release brány viz
+[DEPLOY.md](../deployment/DEPLOY.md); produkční deploy a klíče jsou oddělené
+schválené kroky vlastníka.
+
 ## Mapování dokumentů a implementace
 
 | Oblast | Dokument s produktovým pravidlem | Implementační oblast v tomto dokumentu |
