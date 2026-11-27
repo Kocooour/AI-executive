@@ -81,28 +81,30 @@ test("test-build session proof appears only after a complete valid body",async()
   const previousFlag=process.env.NEXT_PUBLIC_LUMI_E2E_QUEUE_WITNESS;
   const hadWindow=Object.hasOwn(globalThis,"window");
   const previousWindow=globalThis.window;
-  const mark="lumi-e2e:session-parsed";
+  const mark="lumi-e2e:session-parsed:";
   process.env.NEXT_PUBLIC_LUMI_E2E_QUEUE_WITNESS="1";
   globalThis.window={};
-  performance.clearMarks(mark);
+  const proofs=()=>performance.getEntriesByType("mark").filter(x=>x.name.startsWith(mark));
   let closeBody;
   const body=new ReadableStream({start(controller){
     controller.enqueue(new TextEncoder().encode(JSON.stringify({generation:G1})));
     closeBody=()=>controller.close();
   }});
-  const {runtime}=setup([new Response(body,{headers:{
+  const {runtime,calls}=setup([new Response(body,{headers:{
     "content-type":"application/json","cache-control":"no-store"}})]);
   try{
     await settle();
     assert.equal(runtime.known(),false,"receiving all bytes without EOF is not proof");
-    assert.equal(performance.getEntriesByName(mark).length,0);
+    assert.equal(proofs().length,0);
+    const id=calls[0].init.headers["x-lumi-e2e-read-id"];
+    assert.match(id,/^[a-f0-9-]{36}$/);
     closeBody();
     await settle();
     assert.equal(runtime.known(),true);
-    assert.equal(performance.getEntriesByName(mark).length,1);
+    assert.deepEqual(proofs().map(x=>x.name),[mark+id]);
   }finally{
     runtime.dispose();
-    performance.clearMarks(mark);
+    for(const proof of proofs())performance.clearMarks(proof.name);
     if(previousFlag===undefined)delete process.env.NEXT_PUBLIC_LUMI_E2E_QUEUE_WITNESS;
     else process.env.NEXT_PUBLIC_LUMI_E2E_QUEUE_WITNESS=previousFlag;
     if(hadWindow)globalThis.window=previousWindow;

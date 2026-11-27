@@ -6,6 +6,7 @@
  * module never retries, never persists, never logs payloads, and every failure
  * result is content-free. No component imports it yet. */
 export type AttentionAreaFilter="all"|"personal"|"shared";
+import {markTargetE2eRead,targetE2eReadHeaders,targetE2eReadWitness} from "./target-e2e-read-witness";
 export type AttentionView="active"|"hidden";
 export type AttentionRuleId="deadline_overdue"|"deadline_soon"|"planned_date_passed";
 export type AttentionLifecycle="active"|"snoozed"|"dismissed";
@@ -417,17 +418,17 @@ export async function fetchAttentionPage(
     (cursor!==undefined&&!validCursor(cursor))||
     (explain!==undefined&&(!["cs","en"].includes(explain)||areaFilter!=="personal"||view!=="active")))return {status:"invalid"};
   if(signal?.aborted)return {status:"aborted"};
+  const witness=areaFilter==="personal"&&view==="active"?targetE2eReadWitness():null;
   const query=new URLSearchParams({areaFilter,view,limit:String(limit)});
   if(cursor!==undefined)query.set("cursor",cursor);
   if(explain!==undefined)query.set("explain",explain);
-  if(process.env.NEXT_PUBLIC_LUMI_E2E_QUEUE_WITNESS==="1"&&typeof window!=="undefined"&&
-    areaFilter==="personal"&&view==="active"){
-    try{performance.mark("lumi-e2e:attention-start");}catch{/* passive test witness */}
-  }
+  markTargetE2eRead("attention-start",witness);
   let response:Response;
   try{
     const received=await fetchUntilAbort(
-      ()=>fetchImpl(PAGE_URL+"?"+query,readInit(signal)),signal);
+      ()=>fetchImpl(PAGE_URL+"?"+query,{
+        ...readInit(signal),headers:{accept:"application/json",...targetE2eReadHeaders(witness)},
+      }),signal);
     if(received===null)return {status:"aborted"};
     response=received;
   }catch{return {status:signal?.aborted?"aborted":"unavailable"};}
@@ -442,10 +443,7 @@ export async function fetchAttentionPage(
     const raw=await boundedJson(response,MAX_PAGE_BYTES,signal);
     if(signal?.aborted)return {status:"aborted"};
     const page=parseAttentionPage(raw,{areaFilter,view,limit,explain});
-    if(page&&process.env.NEXT_PUBLIC_LUMI_E2E_QUEUE_WITNESS==="1"&&typeof window!=="undefined"&&
-      areaFilter==="personal"&&view==="active"){
-      try{performance.mark("lumi-e2e:attention-parsed");}catch{/* passive test witness */}
-    }
+    if(page)markTargetE2eRead("attention-parsed",witness);
     return page?{status:"ok",page}:{status:"invalid_response"};
   }catch{return {status:signal?.aborted?"aborted":"invalid_response"};}
 }

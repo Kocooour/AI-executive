@@ -43,6 +43,7 @@ export type TargetClientRuntimeConfig={
 };
 export const TARGET_SESSION_ENDPOINT="/api/target-staging/session";
 import {TARGET_SIGNED_IN_EVENT,TARGET_SIGNED_IN_MESSAGE} from "./target-auth-signal";
+import {markTargetE2eRead,targetE2eReadHeaders,targetE2eReadWitness} from "./target-e2e-read-witness";
 export const TARGET_SESSION_CHANNEL="ai-executive-session";
 const GENERATION=/^[A-Za-z0-9_-]{43}$/;
 const MAX_BODY_BYTES=1024;
@@ -207,6 +208,7 @@ export function createTargetClientRuntime(config:TargetClientRuntimeConfig={}){
   async function run():Promise<TargetRuntimeRefreshResult> {
     const bumps=localBumps;
     const own=new AbortController();
+    const witness=targetE2eReadWitness();
     controller=own;
     let timer:unknown;
     const timeout=new Promise<TargetRuntimeRefreshResult>(resolve=>{
@@ -223,7 +225,7 @@ export function createTargetClientRuntime(config:TargetClientRuntimeConfig={}){
     try{
       const response=await fetchImpl(TARGET_SESSION_ENDPOINT,{
         method:"GET",credentials:"same-origin",cache:"no-store",redirect:"error",
-        headers:{accept:"application/json"},signal:own.signal,
+        headers:{accept:"application/json",...targetE2eReadHeaders(witness)},signal:own.signal,
       });
       // A sign-out/refusal observed meanwhile outranks this older answer.
       if(disposed||bumps!==localBumps||own.signal.aborted)return "unavailable";
@@ -252,9 +254,7 @@ export function createTargetClientRuntime(config:TargetClientRuntimeConfig={}){
       if(generation===null){outcome("unavailable");return "unavailable";}
       // Test-build-only proof of a fully parsed, strict no-store session body.
       // It carries no generation, actor or response data.
-      if(process.env.NEXT_PUBLIC_LUMI_E2E_QUEUE_WITNESS==="1"&&typeof window!=="undefined"){
-        try{performance.mark("lumi-e2e:session-parsed");}catch{/* passive test witness */}
-      }
+      markTargetE2eRead("session-parsed",witness);
       set(generation,false);
       outcome("ok");
       return "ok";

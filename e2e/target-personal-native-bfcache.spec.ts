@@ -223,6 +223,7 @@ for(const width of [390,1280]){
     // before navigation: wake requests can race a post-Back CDP snapshot.
     type NativeRead={
       requestId:string;path:string;method:string;requestOrder:number;startedWallMs:number;
+      witness:string|null;
       responseOrder?:number;status?:number;finishedOrder?:number;
       failed?:boolean;failureReason?:string;cancelled?:boolean;
       fromServiceWorker?:boolean;fromDiskCache?:boolean;
@@ -242,15 +243,19 @@ for(const width of [390,1280]){
       "/api/target-staging/notes/create-targets",
     ]);
     const unsubscribeRequest=cdp.on("Network.requestWillBeSent",event=>{
-      const e=event as {requestId:string;wallTime:number;request:{url:string;method:string}};
+      const e=event as {requestId:string;wallTime:number;request:{
+        url:string;method:string;headers:Record<string,string>}};
       const url=new URL(e.request.url);
       if(url.origin!==origin)return;
       if(e.request.method==="POST"&&url.pathname==="/api/target-staging/tasks")
         taskCreatePosts.push({phase,path:url.pathname});
       if(!targetReadPaths.has(url.pathname))return;
+      const witness=Object.entries(e.request.headers).find(([name])=>
+        name.toLowerCase()==="x-lumi-e2e-read-id")?.[1]??null;
       const read:NativeRead={requestId:e.requestId,path:url.pathname,
         method:e.request.method,requestOrder:++networkOrder,
-        startedWallMs:e.wallTime*1000};
+        startedWallMs:e.wallTime*1000,
+        witness:witness&&/^[a-f0-9-]{36}$/.test(witness)?witness:null};
       reads.push(read);
       pendingReads.set(e.requestId,read);
     });
@@ -500,14 +505,17 @@ for(const width of [390,1280]){
         // CDP can report ERR_ABORTED after the app parsed the full strict Area
         // catalog. Require that app-level proof from the direct uncached 200.
         const areaRead=await waitFor("new parsed authorized private Area GET",async()=>{
-          const parsed=await cdp.eval<number[]>(
-            "performance.getEntriesByName('lumi-e2e:area-parsed').map(x=>performance.timeOrigin+x.startTime)");
+          const parsed=await cdp.eval<{name:string;at:number}[]>(
+            "performance.getEntriesByType('mark').filter(x=>x.name.startsWith('lumi-e2e:area-parsed:'))"+
+            ".map(x=>({name:x.name,at:performance.timeOrigin+x.startTime}))");
           return reads.find(read=>backReadMark!==null&&read.requestOrder>backReadMark&&
             read.path==="/api/target-staging/notes/create-targets"&&
             read.method==="GET"&&read.status===200&&
             read.fromServiceWorker===false&&read.fromDiskCache===false&&
             read.fromPrefetchCache===false&&read.cacheServed!==true&&
-            parsed.some(at=>at>=read.startedWallMs))||null;
+            read.witness!==null&&parsed.some(proof=>
+              proof.name==="lumi-e2e:area-parsed:"+read.witness&&
+              proof.at>=read.startedWallMs))||null;
         });
         expect(session.finishedOrder,"Session authorization must precede private Area access")
           .toBeLessThan(areaRead.requestOrder);
@@ -589,7 +597,9 @@ for(const width of [390,1280]){
     update(false);
     const {profile,chrome,closeWatch,cdp}=await nativeBrowser(width);
     let order=0,mark=Infinity,writes=0;
-    type Read={path:string;start:number;startedAt:number;startedWallMs:number;status?:number;end?:number;endedAt?:number;cached?:boolean;failed?:boolean;failureReason?:string};
+    type Read={path:string;start:number;startedAt:number;startedWallMs:number;
+      witness:string|null;status?:number;end?:number;endedAt?:number;
+      cached?:boolean;failed?:boolean;failureReason?:string};
     const reads:Read[]=[],pending=new Map<string,Read>();
     const reasons:NativeCacheNotUsedEvent[]=[];
     const off=[
@@ -598,8 +608,12 @@ for(const width of [390,1280]){
         if(url.origin!==origin)return;
         if(url.pathname.startsWith("/api/target-staging/attention")&&e.request.method==="PATCH")writes++;
         if(e.request.method!=="GET"||!["/api/target-staging/session","/api/target-staging/attention"].includes(url.pathname))return;
+        const witness=Object.entries(e.request.headers as Record<string,string>)
+          .find(([name])=>name.toLowerCase()==="x-lumi-e2e-read-id")?.[1]??null;
         const r={path:url.pathname,start:++order,startedAt:Number(e.timestamp),
-          startedWallMs:Number(e.wallTime)*1000};reads.push(r);pending.set(e.requestId,r);
+          startedWallMs:Number(e.wallTime)*1000,
+          witness:witness&&/^[a-f0-9-]{36}$/.test(witness)?witness:null};
+        reads.push(r);pending.set(e.requestId,r);
       }),
       cdp.on("Network.responseReceived",e=>{
         const r=pending.get(e.requestId);if(!r)return;
@@ -655,12 +669,13 @@ for(const width of [390,1280]){
           r.start>mark&&r.status===200&&!r.cached);
         const attention=reads.find(r=>r.path==="/api/target-staging/attention"&&
           r.start>mark&&r.status===200&&!r.cached&&
-          proofs.some(start=>start.name==="lumi-e2e:attention-start"&&
+          r.witness!==null&&proofs.some(start=>
+            start.name==="lumi-e2e:attention-start:"+r.witness&&
             start.epochMs<=r.startedWallMs&&
-            proofs.some(done=>done.name==="lumi-e2e:attention-parsed"&&
+            proofs.some(done=>done.name==="lumi-e2e:attention-parsed:"+r.witness&&
               done.epochMs>=r.startedWallMs&&done.epochMs>=start.epochMs)&&
-            sessions.some(s=>proofs.some(verified=>
-              verified.name==="lumi-e2e:session-parsed"&&
+            sessions.some(s=>s.witness!==null&&proofs.some(verified=>
+              verified.name==="lumi-e2e:session-parsed:"+s.witness&&
               verified.epochMs>=s.startedWallMs&&verified.epochMs<=start.epochMs))));
         return attention||null;
       });
