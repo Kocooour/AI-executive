@@ -3,7 +3,6 @@
  * actor, assignment, Area ACL, private epoch, restore and atomic writes. */
 import {targetAppFetch} from "./target-app-fetch";
 import {validStatusTaskId} from "./target-staging-my-plan-status-client";
-import {readTaskDueOnContext} from "./target-staging-task-due-on-client";
 
 export type MyPlanWhenFailure="signed-out"|"stale"|"unavailable"|
   "invalid-response"|"invalid-request"|"offline"|"aborted"|"unchanged";
@@ -135,14 +134,14 @@ export async function prepareMyPlanWhen(params:{
       return {ok:false,reason:"invalid-response"};
     if(data.whenOn===params.whenOn)return {ok:false,reason:"unchanged"};
     if(params.expectedDueOn!==undefined&&params.whenOn!==null){
-      // Both authorized reads must agree on the task CAS and restore generation.
-      // A deadline change before or between these reads is stale; a later change
-      // is rejected by the existing When writer CAS. No new mutation fields.
-      const due=await readTaskDueOnContext(params,fetchImpl);
-      if(due.ok===false)return due;
-      if(params.signal?.aborted)return {ok:false,reason:"aborted"};
-      if(due.dueOn!==params.expectedDueOn||due.expectedRevision!==data.expectedRevision||
-        due.restoreGeneration!==data.restoreGeneration)return {ok:false,reason:"stale"};
+      // The authorized When preflight returns the deadline with the SAME CAS.
+      // No deadline-write flag, second read or new mutation field is required.
+      // Fail closed on missing/malformed witness; CAS catches later changes.
+      const observed=response.headers.get("x-lumi-task-due-on");
+      const due=observed==="none"?null:observed;
+      if(observed===null||!validMyPlanWhenDate(due))
+        return {ok:false,reason:"invalid-response"};
+      if(due!==params.expectedDueOn)return {ok:false,reason:"stale"};
     }
     const command:MyPlanWhenCommand={
       commandId:params.commandId??crypto.randomUUID(),

@@ -35,6 +35,8 @@ const durable=await import("../lib/target-staging-durable-session.ts");
 const {createSessionToken,sessionCookieName}=await import("./support/owner-session-test-cookie.mjs");
 const {GET,PATCH}=await import("../app/api/target-staging/task-temporal/personal-when/command/route.ts");
 const {POST}=await import("../app/api/target-staging/task-temporal/personal-when/command/receipt/route.ts");
+const {prepareMyPlanWhen}=await import("../lib/target-staging-my-plan-when-client.ts");
+const {GET:GET_DUE_ON}=await import("../app/api/target-staging/task-temporal/due-on/route.ts");
 const {
   parsePersonalWhenWriteReply,parsePersonalWhenReceiptReply,
   readPersonalWhenAtomicReceiptInChild,parsePersonalWhenAtomicReceiptReply,
@@ -123,6 +125,7 @@ async function preview(taskId,cookie=owner()){
     "expectedPlanRevision","expectedPrivateEpoch","expectedRevision",
     "restoreGeneration","whenOn","writeAreaId",
   ]);
+  assert.equal(response.headers.get("x-lumi-task-due-on"),taskId==="p-alice"?"2027-12-31":"none");
   assert.match(result.expectedRevision,/^[a-f0-9]{64}$/);
   assert.ok(Number.isSafeInteger(result.expectedPrivateEpoch));
   return result;
@@ -161,6 +164,52 @@ test("all four flags independently default off, auth and malformed selectors fai
   }
   assert.equal((await query("unknown")).status,404);
   assert.equal((await preview("p-alice")).whenOn,null);
+});
+
+test("F-1 explicit When works without deadline-write flag; changed deadline fails closed",async()=>{
+  const fx=fixture(),cookie=owner();
+  const flag="AI_EXECUTIVE_TARGET_STAGING_HTTP_TEMPORAL_DUE_ON_WRITE_ENABLED";
+  const temporal="AI_EXECUTIVE_TARGET_STAGING_HTTP_TEMPORAL_ENABLED";
+  const previous=process.env[flag],previousTemporal=process.env[temporal];
+  process.env[flag]="false";process.env[temporal]="true";
+  try{
+    const dueResponse=await GET_DUE_ON(new Request("http://localhost:3001/api/target-staging/task-temporal/due-on?taskId=p-alice",{headers:{cookie}}));
+    assert.equal(dueResponse.status,404);
+    const requests=[];
+    const fetchPreview=async(url,init)=>{
+      requests.push([new URL(url,base).pathname,init.method]);
+      assert.equal(new URL(url,base).pathname,new URL(base).pathname);
+      assert.equal(init.method,"GET");
+      return GET(new Request(new URL(url,base),{headers:{cookie,"x-forwarded-for":"10.28.21.3"}}));
+    };
+    const input={taskId:"p-alice",areaId:fx.stage.unassignedAreaId,
+      whenOn:"2027-12-30",expectedDueOn:"2027-12-31"};
+    const first=await prepareMyPlanWhen(input,fetchPreview);
+    assert.equal(first.ok,true,JSON.stringify(first));
+    assert.deepEqual(await (await call("PATCH",first.command,cookie)).json(),{ok:true});
+    assert.equal(plan(fx,"alice","p-alice").whenOn,input.whenOn);
+    assert.deepEqual(requests,[[new URL(base).pathname,"GET"]]);
+    // The pinned preview becomes stale if the deadline changes after it.
+    const next=await prepareMyPlanWhen({...input,whenOn:"2027-12-29"},fetchPreview);
+    assert.equal(next.ok,true,JSON.stringify(next));
+    const db=new DatabaseSync(fx.stage.databasePath);
+    try{db.prepare("UPDATE tasks SET due_on=? WHERE id='p-alice'").run("2027-12-28");}
+    finally{db.close();}
+    assert.equal((await call("PATCH",next.command,cookie)).status,409);
+    assert.deepEqual(await prepareMyPlanWhen({...input,whenOn:"2027-12-29"},fetchPreview),
+      {ok:false,reason:"stale"});
+    const fresh=await prepareMyPlanWhen({...input,whenOn:"2027-12-29",expectedDueOn:"2027-12-28"},fetchPreview);
+    assert.equal(fresh.ok,true,JSON.stringify(fresh));
+    assert.deepEqual(await (await call("PATCH",fresh.command,cookie)).json(),{ok:true});
+    assert.equal(plan(fx,"alice","p-alice").whenOn,"2027-12-29");
+    assert.equal(read(fx,"SELECT due_on AS dueOn FROM tasks WHERE id='p-alice'").dueOn,"2027-12-28");
+    const denied=await query("p-alice",login(fx,"bob"));
+    assert.equal(denied.status,404);
+    assert.equal(denied.headers.get("x-lumi-task-due-on"),null);
+  }finally{
+    if(previous===undefined)delete process.env[flag];else process.env[flag]=previous;
+    if(previousTemporal===undefined)delete process.env[temporal];else process.env[temporal]=previousTemporal;
+  }
 });
 
 test("private set/update/clear, replay and receipt preserve shared dueOn/task revision",async()=>{
@@ -349,7 +398,7 @@ test("Unicode task ID, durable-session revocation and server-only live epoch gua
 
 test("child DTO parser rejects injected actor, private plan and invalid witness",()=>{
   const base={ok:true,expectedRevision:"a".repeat(64),expectedPrivateEpoch:0,
-    expectedPlanRevision:null,whenOn:null,writeAreaId:"area",
+    expectedPlanRevision:null,whenOn:null,dueOn:null,writeAreaId:"area",
     linearization:{actorUserId:"alice",areas:[{
       areaId:"area",areaKind:"private",access:"private-owner",policyRevision:0,
     }]},
@@ -360,6 +409,8 @@ test("child DTO parser rejects injected actor, private plan and invalid witness"
     {...base,actorUserId:"alice"},
     {...base,expectedPrivateEpoch:-1},
     {...base,whenOn:"2026-02-29"},
+    {...base,dueOn:"2026-02-29"},
+    {...base,dueOn:undefined},
     {...base,expectedPlanRevision:0},
     {...base,guard:{...base.guard,taskId:"foreign"}},
     {...base,linearization:{...base.linearization,areas:[{

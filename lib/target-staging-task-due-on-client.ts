@@ -72,12 +72,15 @@ const writeOptions=(command:TaskDueOnCommand,method:"PATCH"|"POST",
   body:JSON.stringify(command),signal,
 });
 
-/** Read-only deadline context; its task CAS binds the date to one authorized snapshot. */
-export async function readTaskDueOnContext(params:{taskId:string;areaId:string;signal?:AbortSignal},
-  fetchImpl:typeof fetch=targetAppFetch):Promise<
-  {ok:true;dueOn:string|null;expectedRevision:string;writeAreaId:string;restoreGeneration:string}|
-  {ok:false;reason:TaskDueOnFailure}>{
-  if(!validStatusTaskId(params.taskId)||typeof params.areaId!=="string"||!area.test(params.areaId))
+/** A NEW actor-authorized, same-snapshot preview for each intentional change.
+ * This is a stale-page safeguard, not an authorization token. */
+export async function prepareTaskDueOn(params:{
+  taskId:string;areaId:string;dueOn:string|null;
+  commandId?:string;signal?:AbortSignal;
+},fetchImpl:typeof fetch=targetAppFetch):Promise<TaskDueOnPreparation>{
+  if(!validStatusTaskId(params.taskId)||typeof params.areaId!=="string"||
+    !area.test(params.areaId)||!validTaskDueOnDate(params.dueOn)||
+    (params.commandId!==undefined&&!uuid.test(params.commandId)))
     return {ok:false,reason:"invalid-request"};
   if(params.signal?.aborted)return {ok:false,reason:"aborted"};
   let response:Response;
@@ -102,21 +105,7 @@ export async function readTaskDueOnContext(params:{taskId:string;areaId:string;s
       typeof data.restoreGeneration!=="string"||
       !uuid.test(data.restoreGeneration))
       return {ok:false,reason:"invalid-response"};
-    return {ok:true,dueOn:data.dueOn,expectedRevision:data.expectedRevision,
-      writeAreaId:data.writeAreaId,restoreGeneration:data.restoreGeneration};
-  }catch{return {ok:false,reason:params.signal?.aborted?"aborted":"invalid-response"};}
-}
-
-/** A NEW actor-authorized, same-snapshot preview for each intentional change. */
-export async function prepareTaskDueOn(params:{taskId:string;areaId:string;dueOn:string|null;
-  commandId?:string;signal?:AbortSignal},fetchImpl:typeof fetch=targetAppFetch):Promise<TaskDueOnPreparation>{
-  if(!validTaskDueOnDate(params.dueOn)||(params.commandId!==undefined&&!uuid.test(params.commandId)))
-    return {ok:false,reason:"invalid-request"};
-  const data=await readTaskDueOnContext(params,fetchImpl);
-  if(data.ok===false)return data;
-  if(params.signal?.aborted)return {ok:false,reason:"aborted"};
-  if(data.dueOn===params.dueOn)return {ok:false,reason:"unchanged"};
-  try{
+    if(data.dueOn===params.dueOn)return {ok:false,reason:"unchanged"};
     const command:TaskDueOnCommand={
       commandId:params.commandId??crypto.randomUUID(),
       taskId:params.taskId,dueOn:params.dueOn,

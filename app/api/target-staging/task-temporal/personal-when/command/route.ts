@@ -65,7 +65,11 @@ export async function GET(request:Request):Promise<Response> {
       expectedPlanRevision:p.expectedPlanRevision,
       whenOn:p.whenOn,writeAreaId:p.writeAreaId,
       restoreGeneration:base.expectedRestoreGeneration,
-    },{headers});
+    },{headers:{...headers,
+      // Same pinned read as expectedRevision. Keep the existing six-field
+      // JSON preview and eight-field mutation/receipt contract unchanged.
+      "x-lumi-task-due-on":p.dueOn??"none",
+    }});
   }catch(error){
     logStagingFailure("target-staging/personal-when-command-preview","route_exception",error);
     return refuse(503,"Staging unavailable");

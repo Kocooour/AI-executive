@@ -13,6 +13,8 @@ export type PersonalWhenCommandPreview={
   expectedPrivateEpoch:number;
   expectedPlanRevision:number|null;
   whenOn:string|null;
+  /** Shared deadline from the same authorized task snapshot as the CAS. */
+  dueOn:string|null;
   writeAreaId:string;
   /** Internal witness, never returned to the HTTP caller. */
   linearization:TargetReadLinearization;
@@ -48,7 +50,7 @@ export function readAuthorizedPersonalWhenCommandPreview(
         !validTargetDueOn(plan.whenOn)))return null;
     return {expectedRevision,expectedPrivateEpoch:row.revision,
       expectedPlanRevision:plan?.revision??null,whenOn:plan?.whenOn??null,
-      writeAreaId:detail.task.areaId,
+      dueOn:detail.task.dueOn,writeAreaId:detail.task.areaId,
       linearization:detail.linearization,guard:detail.guard};
   }catch{return null;}
 }
