@@ -26,7 +26,9 @@ První zapnutí při nedotčeném výchozím UTC uloží časové pásmo prohlí
 oznámí to uživateli; později uložené pásmo zůstává beze změny. Pokud se
 registrace podaří, ale nastavení selže, panel zobrazí registrované zařízení
 s vypnutými upozorněními a umožní dokončit zapnutí bez dalšího zařízení.
-Pokud server nepotvrdí odebrání aktuální registrace, odhlášení se nedokončí.
+Odhlášení se dokončí vždy; pokud server do 10 s nepotvrdí odebrání aktuální registrace,
+přihlašovací obrazovka jednou oznámí, že zařízení může být v seznamu dál a lze ho odebrat
+v Nastavení → Oznámení na jiném zařízení.
 Tiché hodiny,
 pauza a vypnutí jednotlivého zařízení jsou samostatné volby. Bez VAPID
 klíčů je odesílání zřetelně nedostupné; nelze slibovat skutečné doručení

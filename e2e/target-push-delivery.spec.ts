@@ -332,7 +332,16 @@ test("delivery: baseline, exactly one private message, daily limit, quiet hours,
   await expect(secondPanel.getByTestId("target-push-devices").locator("li")).toHaveCount(2);
   const otherDevice=endpointOf("second");
   await second.close();
-  // Refuse to end the owner session when the server cannot confirm revocation.
+  const liveTargets=()=>{
+    const live=db();
+    try{return (live.prepare("SELECT COUNT(*) AS n FROM personal_push_targets WHERE user_id=? AND revoked_at_ms IS NULL")
+      .get(store().ownerUserId) as {n:number}).n;}finally{live.close();}
+  };
+  let logoutRequests=0;
+  page.on("request",r=>{if(new URL(r.url()).pathname==="/api/auth/logout")logoutRequests++;});
+  // A) The server cannot confirm revocation: sign-out still completes (owner
+  //    decision 2026-11-27) with a one-shot notice. The browser subscription is
+  //    ended, so the next pass gets 410 and revokes this device; the other stays.
   const targetsPath="**/api/target-staging/notifications/targets";
   let refused=0;
   await page.route(targetsPath,async route=>{
@@ -341,33 +350,47 @@ test("delivery: baseline, exactly one private message, daily limit, quiet hours,
       await route.fulfill({status:503,contentType:"application/json",body:'{"error":"unavailable"}'});
     }else await route.continue();
   });
-  let logoutRequests=0;
-  page.on("request",r=>{if(new URL(r.url()).pathname==="/api/auth/logout")logoutRequests++;});
   await settingsSections(page).filter({hasText:"Přístup"}).click();
   await page.getByRole("button",{name:"Odhlásit se"}).click();
-  await expect.poll(()=>refused,{timeout:35_000}).toBe(2);
-  await expect(page.getByRole("button",{name:"Odhlásit se"})).toBeEnabled({timeout:35_000});
-  expect(logoutRequests).toBe(0);
-  await expect(page.locator(".authCard")).toHaveCount(0);
-  await page.unroute(targetsPath);
-  // Even if unsubscribe throws and the push service still accepts messages,
-  // confirmed server revocation must stop delivery to THIS device.
-  await page.evaluate(()=>sessionStorage.setItem("__lumiRejectUnsubscribe","1"));
-  await page.getByRole("button",{name:"Odhlásit se"}).click();
-  await expect(page.locator(".authCard")).toBeVisible({timeout:45_000});
-  expect(statusFor.get(new URL(device).pathname)).not.toBe(410);
+  await expect(page.locator(".authCard")).toBeVisible({timeout:30_000});
+  await expect(page.locator(".authCard .authNotice")).toHaveText(
+    "Jste odhlášeni. Nepodařilo se ověřit, že toto zařízení bylo odebráno z upozornění na úkoly. Pokud je v seznamu dál, odeberte ho v Nastavení → Oznámení na jiném zařízení.");
+  expect(refused).toBeGreaterThan(0);
   expect(logoutRequests).toBe(1);
-  const live=db();
-  try{
-    expect((live.prepare("SELECT COUNT(*) AS n FROM personal_push_targets WHERE user_id=? AND revoked_at_ms IS NULL")
-      .get(store().ownerUserId) as {n:number}).n).toBe(1);
-  }finally{live.close();}
+  await page.unroute(targetsPath);
+  expect(statusFor.get(new URL(device).pathname)).toBe(410);
+  expect(liveTargets()).toBe(2);
   setClock(pragueAt(14,2));
-  const afterLogout=delivered(device).length;
-  const beforeOther=delivered(otherDevice).length;
-  const newTask=overdueTask("Po odhlášení");
+  let afterLogout=delivered(device).length;
+  let beforeOther=delivered(otherDevice).length;
+  let newTask=overdueTask("Po odhlášení bez potvrzení");
   await tick();await tick();
   expect(delivered(device)).toHaveLength(afterLogout);
+  expect(payloads(otherDevice).slice(beforeOther).map(p=>p.tag)).toContain("attention-"+newTask);
+  expect(liveTargets()).toBe(1);
+  // B) Sign in again, turn this device on again, and sign out with a confirmed
+  //    server revocation even though the browser refuses to unsubscribe.
+  await signIn(page);
+  await expect(page.locator(".appShell")).toBeVisible();
+  const again=await openNotifications(page);
+  await again.getByTestId("target-push-enable").click();
+  await expect(again.getByTestId("target-push-device-state")).toHaveText("Toto zařízení dostává upozornění.");
+  const reenabled=endpointOf("main",2);
+  expect(liveTargets()).toBe(2);
+  await page.evaluate(()=>sessionStorage.setItem("__lumiRejectUnsubscribe","1"));
+  await settingsSections(page).filter({hasText:"Přístup"}).click();
+  await page.getByRole("button",{name:"Odhlásit se"}).click();
+  await expect(page.locator(".authCard")).toBeVisible({timeout:30_000});
+  await expect(page.locator(".authCard .authNotice")).toHaveCount(0);
+  expect(logoutRequests).toBe(2);
+  expect(statusFor.get(new URL(reenabled).pathname)).not.toBe(410);
+  expect(liveTargets()).toBe(1);
+  setClock(pragueAt(16,2));
+  afterLogout=delivered(reenabled).length;
+  beforeOther=delivered(otherDevice).length;
+  newTask=overdueTask("Po odhlášení");
+  await tick();await tick();
+  expect(delivered(reenabled)).toHaveLength(afterLogout);
   expect(payloads(otherDevice).slice(beforeOther).map(p=>p.tag)).toContain("attention-"+newTask);
   // Leave a valid owner session for any later scenario of this run.
   await signIn(page);

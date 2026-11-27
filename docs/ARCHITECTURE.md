@@ -28,8 +28,10 @@ legacy task attention i bez VAPID (žádné duplicitní upozornění), ale
 odesílá jen s platnými samostatnými klíči; legacy reminders se nemění.
 Před odhlášením E-3 ověří serverový stav konkrétního endpointu a případně
 revokuje jeho target s aktuální epochou. Nedostupný read model není důkaz
-neexistence zařízení. Neověřený výsledek odhlášení zablokuje; ostatní
-registrace zůstávají platné. Odesílač po DNS a šifrování ještě synchronně
+neexistence zařízení. Odhlášení se vždy dokončí (rozhodnutí vlastníka 2026-11-27):
+při neověřeném výsledku (nejvýše 10 s) se prohlížeč z push odhlásí aspoň lokálně,
+přihlašovací obrazovka to jednorázově oznámí a další průchod zařízení při 404/410
+revokuje; ostatní registrace zůstávají platné. Odesílač po DNS a šifrování ještě synchronně
 ověřuje stejný živý target bez dalšího await před zahájením transportu.
 Vypršení časového limitu zruší pokus přes AbortSignal, takže opožděné DNS
 již nemůže spustit transport. Kontrola a vnější síťový požadavek nejsou

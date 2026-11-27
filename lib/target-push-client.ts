@@ -167,11 +167,13 @@ export function base64UrlToBytes(value:string):Uint8Array<ArrayBuffer> {
   return out;
 }
 
-/** E-3: before committing logout, prove that the current subscription is no
- * longer a live target on the server. Browser unsubscribe alone is not proof.
- * Resolve false on an unverified outcome; the caller must keep the session.
- * The check works without VAPID keys and does not revoke other devices. */
-export async function silenceTargetPushOnThisDevice(timeoutMs=30_000):Promise<boolean> {
+/** E-3: at the sign-out commit point (session still valid), remove THIS device
+ * from target task alerts on the server and prove it: the actor-bound endpoint
+ * lookup must report it absent. Browser unsubscribe alone is not proof, but sign-out
+ * never waits on this (owner decision 2026-11-27): on an unverified outcome the
+ * browser subscription is still unsubscribed (best effort) and false is returned so
+ * the caller can show a notice. Works without VAPID; never revokes other devices. */
+export async function silenceTargetPushOnThisDevice(timeoutMs=10_000):Promise<boolean> {
   if(typeof window==="undefined"||!("serviceWorker" in navigator)||!("PushManager" in window))return true;
   const controller=new AbortController();
   const signal=controller.signal;
@@ -215,9 +217,20 @@ export async function silenceTargetPushOnThisDevice(timeoutMs=30_000):Promise<bo
       new Promise<void>(resolve=>setTimeout(resolve,1500))]);
     return true;
   })().catch(()=>safe);
+  let proven:boolean;
   try{
-    return await Promise.race([work,new Promise<boolean>(resolve=>{
+    proven=await Promise.race([work,new Promise<boolean>(resolve=>{
       timer=setTimeout(()=>{controller.abort();resolve(safe);},timeoutMs);
     })]);
   }finally{if(timer!==undefined)clearTimeout(timer);controller.abort();}
+  if(!proven){
+    // Unverified: still end delivery at the push service if the browser allows it.
+    // The next scheduled pass then revokes the device on 404/410.
+    await Promise.race([(async()=>{
+      const registration=await navigator.serviceWorker.getRegistration();
+      const subscription=await registration?.pushManager.getSubscription();
+      if(subscription)await subscription.unsubscribe();
+    })().catch(()=>undefined),new Promise<void>(resolve=>setTimeout(resolve,1500))]);
+  }
+  return proven;
 }

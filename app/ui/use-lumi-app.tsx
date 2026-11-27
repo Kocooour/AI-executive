@@ -5,7 +5,7 @@ import { captureDestinationKey, captureNeedsShareConsent, initialCaptureWorkspac
 import { areaKindOf, assignFallbackArea, dropTaskAreaLinks, taskIsInProject } from "../../lib/area-write-client";
 import { db, ensureDefaultWorkspace, migratePropertyRelations, personalWorkspaceId, readLocalWithBase, replaceSyncBase, seed, type Entity, type EntityType, type Relation } from "../../lib/db";
 import { clearLocalData, finishInterruptedWipe, hasUnsentChanges, markSignedIn, restoreGenerationKey, signedInKey, signedOutKey } from "../../lib/local-data";
-import { failedSignOutNeedsReload, incompleteSignOutNoticeKey, runSignOut } from "../../lib/sign-out";
+import { failedSignOutNeedsReload, incompleteSignOutNoticeKey, pushSignOutUnverifiedNoticeKey, runSignOut } from "../../lib/sign-out";
 import { dropNotesDraft, keepNotesDraft, keptNotesDrafts, leftoverDraftAction, settleNotesDraft, type KeptNotesDraft } from "../../lib/notes-drafts";
 import { addressUpdate, scopeFromSearch, searchForTarget, searchForView, searchWithScope, searchWithoutScope, targetFromSearch, viewExitFromProject, viewFromSearch } from "../../lib/view-url";
 import { resolveLegacyProjectLink } from "../../lib/legacy-project-deep-link";
@@ -1847,11 +1847,14 @@ export function useLumiApp(options: { targetDetails?: boolean; targetUnified?: b
         // From here nothing may be edited and no pull or sync still in flight may write data back.
         block: () => { signedOut.current = true; document.body.inert = true; },
         unblock: () => { signedOut.current = false; document.body.inert = false; },
-        // E-3: at the commit point, while the session is still valid, prove
-        // server-side revocation of this device before ending the session.
-        // On uncertainty stay signed in; other devices are not revoked.
+        // E-3 (owner decision 2026-11-27): at the commit point, while the session is still valid, revoke this
+        // device's task alerts on the server (bounded). Sign-out always completes: an unconfirmed revocation
+        // only unsubscribes locally and shows a one-shot notice; the next pass revokes the device on 404/410.
+        // Other devices are not revoked.
         endSession: async () => {
-          if (!(await silenceTargetPushOnThisDevice())) return "failed";
+          if (!(await silenceTargetPushOnThisDevice())) {
+            try { sessionStorage.setItem(pushSignOutUnverifiedNoticeKey, "1"); } catch { /* optional notice */ }
+          }
           return fetch("/api/auth/logout", { method: "POST", signal: AbortSignal.timeout(10_000) }).then((response) => (response.ok ? "ok" : "failed") as "ok" | "failed", () => "offline" as const);
         },
         // If the wipe cannot finish now it stays marked and is completed when the page starts again.

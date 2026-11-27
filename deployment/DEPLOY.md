@@ -626,9 +626,12 @@ child, exclusive lock `/var/lib/ai-executive/target-push-pass.lock`; a lock olde
 than five minutes from a crashed pass is recovered). The legacy attention push
 stays silent while the target notification flags are on (no double alerts);
 legacy reminders are otherwise unchanged. Once active, sign-out first proves the current device is absent or revokes
-its target registration on the server while still authenticated. An unavailable
-store or unconfirmed revocation blocks sign-out; retry when the server is
-reachable. Other target devices remain registered. Browser unsubscribe and
+its target registration on the server while still authenticated (at most 10 s).
+Sign-out always completes (owner decision 2026-11-27): if revocation is not
+confirmed, the browser subscription is still ended locally, the sign-in screen
+shows a one-shot notice, and the next pass revokes the device on 404/410; a device
+still listed can be removed in Settings → Notifications on another device. Other
+target devices remain registered. Browser unsubscribe and
 legacy subscription cleanup are bounded best effort after target revocation;
 already handed-off push messages cannot be recalled. Before E-3 activation
 sign-out retains legacy behavior. The 5 legacy push subscriptions are not migrated:
