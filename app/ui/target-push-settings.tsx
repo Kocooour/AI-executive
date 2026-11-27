@@ -147,15 +147,22 @@ export default function TargetPushSettings({language="cs",onActive}:{
       r=await registerTargetPushDevice(fresh.value,plain);
     }
     if(r.ok===false)return failureText(r.reason);
-    if(!settings.attentionPush){
-      const fresh=await readTargetNotificationSettings();
-      if(fresh.ok){
-        const w=await writeTargetNotificationSettings(fresh.value,{timeZone:fresh.value.timeZone,attentionPush:true,
-          quietStart:fresh.value.quietStart,quietEnd:fresh.value.quietEnd,paused:fresh.value.paused});
-        if(w.ok===false)return failureText(w.reason);
-      }
+    // Registration changes the notification epoch, not the settings revision.
+    // Read again so the write cannot overwrite another device's explicit choice.
+    const fresh=await readTargetNotificationSettings();
+    if(fresh.ok===false)return failureText(fresh.reason);
+    // Revision zero identifies the untouched UTC default, not an intentionally
+    // selected UTC zone. After the first settings write, never auto-change it.
+    const deviceZone=browserZone();
+    const adoptZone=fresh.value.expectedSettingsRevision===0&&fresh.value.timeZone==="UTC"&&deviceZone!=="UTC";
+    if(!fresh.value.attentionPush||adoptZone){
+      const w=await writeTargetNotificationSettings(fresh.value,{timeZone:adoptZone?deviceZone:fresh.value.timeZone,attentionPush:true,
+        quietStart:fresh.value.quietStart,quietEnd:fresh.value.quietEnd,paused:fresh.value.paused});
+      if(w.ok===false)return failureText(w.reason);
     }
-    return t("Upozornění jsou na tomto zařízení zapnutá.","Notifications are on for this device.");
+    const enabled=t("Upozornění jsou na tomto zařízení zapnutá.","Notifications are on for this device.");
+    return adoptZone?enabled+" "+t("Časové pásmo bylo nastaveno podle tohoto zařízení ("+deviceZone+").",
+      "Time zone was set from this device ("+deviceZone+")."):enabled;
   });
   const disableDevice=()=>run(async()=>{
     const registration=await workerReady();
