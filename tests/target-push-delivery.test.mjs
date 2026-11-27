@@ -404,7 +404,14 @@ test("the real pass child: baseline first, then exactly one encrypted message pe
     assert.equal(fake.received.length,before);
     assert.equal(db.prepare("SELECT revoked_at_ms AS r FROM personal_push_targets WHERE target_id=?")
       .get(devices.phone.targetId).r,null);
+    // A verified absence is a different result from an unavailable authority.
+    assert.deepEqual(authority.ownLivePushTargetStatus("alice",devices.phone.row.endpointHash),
+      {targetId:devices.phone.targetId});
+    assert.deepEqual(authority.ownLivePushTargetStatus("alice",devices.old.row.endpointHash),{targetId:null});
+    assert.equal(authority.ownLivePushTargetStatus("missing-actor",devices.phone.row.endpointHash),null);
     db.close();
+    authority.close();
+    assert.equal(authority.ownLivePushTargetStatus("alice",devices.phone.row.endpointHash),null);
   }finally{
     for(const k of [...FLAGS,"AI_EXECUTIVE_E2E","LUMI_E2E_TARGET_PUSH_TEST_ORIGIN"])delete process.env[k];
     await new Promise(r=>fake.server.close(r));
