@@ -157,20 +157,26 @@ function phase1(store:TargetStagingReadStore,user:string,view:TargetNotification
       .get(user) as {revision:number}|undefined;
     if(!att||att.revision!==attentionEpoch)return {kind:"skip"};
     let changes=0;
-    // Only durable failed sends are safe to retry after a crash. A reserved
-    // target may have been in flight and is therefore abandoned on recovery;
-    // committed sent timestamps still count against the rolling 24h limit.
-    const stale=db.prepare(`SELECT delivery_key AS k FROM personal_attention_deliveries
-      WHERE user_id=? AND status='pending' AND last_attempt_at_ms<?`)
-      .all(user,nowMs-TARGET_PUSH_PASS_STALE_PENDING_MS) as {k:string}[];
-    for(const {k} of stale){
+    // A crash can also interrupt a retry of an already partially delivered
+    // occurrence. Its write-once sent time still counts against the daily
+    // limit. Ordinary partial deliveries without an in-flight device need
+    // no crash recovery; the existing retry planner handles them.
+    const stale=db.prepare(`SELECT d.delivery_key AS k,d.status,d.sent_at_ms AS sentAt
+      FROM personal_attention_deliveries d
+      WHERE d.user_id=? AND d.last_attempt_at_ms<? AND
+      (d.status='pending' OR (d.status='partial' AND EXISTS (
+        SELECT 1 FROM personal_attention_device_deliveries x
+        WHERE x.user_id=d.user_id AND x.delivery_key=d.delivery_key AND x.status='inflight')))`)
+      .all(user,nowMs-TARGET_PUSH_PASS_STALE_PENDING_MS) as
+        {k:string;status:"pending"|"partial";sentAt:number|null}[];
+    for(const {k,status,sentAt:priorSentAt} of stale){
       const devices=db.prepare(`SELECT x.status,x.attempts,
         x.last_attempt_at_ms AS at,(t.revoked_at_ms IS NULL) AS live
         FROM personal_attention_device_deliveries x JOIN personal_push_targets t
         ON t.user_id=x.user_id AND t.target_id=x.target_id
         WHERE x.user_id=? AND x.delivery_key=?`)
         .all(user,k) as {status:string;attempts:number;at:number;live:number}[];
-      const sentAt=devices.filter(d=>d.status==="sent")
+      const sentAt=priorSentAt??devices.filter(d=>d.status==="sent")
         .reduce<number|null>((at,d)=>at===null?d.at:Math.min(at,d.at),null);
       const retryable=devices.some(d=>d.live===1&&(d.status==="reserved"||
         (d.status==="failed"&&d.attempts<MAX)));
@@ -184,8 +190,8 @@ function phase1(store:TargetStagingReadStore,user:string,view:TargetNotification
         (retryable||attempted)?"failed":"undelivered";
       const change=db.prepare(`UPDATE personal_attention_deliveries SET status=?,
         sent_at_ms=?,last_attempt_at_ms=max(last_attempt_at_ms,?)
-        WHERE user_id=? AND delivery_key=? AND status='pending'`)
-        .run(result,sentAt,nowMs,user,k).changes;
+        WHERE user_id=? AND delivery_key=? AND status=?`)
+        .run(result,sentAt,nowMs,user,k,status).changes;
       if(change!==1)return null;
       changes++;
     }

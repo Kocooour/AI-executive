@@ -695,6 +695,60 @@ test("review #331: stale in-flight device is abandoned, not duplicate-sent",asyn
   ok(fx);
 });
 
+// A partial parent has already committed its first successful notification.
+// Its interrupted retry is ambiguous only for the in-flight device.
+for(const extraReserved of [false,true]){
+  test("crash during partial retry: "+(extraReserved?"resume only untouched reservation":"settle ambiguous device without resend"),async()=>{
+    const fx=fixture();
+    task(fx,"alice","baseline");
+    const sent=register(fx,"alice","first"),inflight=register(fx,"alice","second");
+    const reserved=extraReserved?register(fx,"alice","third"):null;
+    enable(fx,"alice",{dailyLimit:1});await run(fx,sender(),NOW-HOUR,()=>NOW-HOUR);
+    const id=task(fx,"alice","interrupted partial retry","2026-11-02");
+    const key=targetAttentionDeliveryKey("deadline_overdue",id,"2026-11-02");
+    const originalSentAt=NOW-HOUR;
+    const lastAttempt=NOW-20*60_000;
+    fx.db.prepare(`INSERT INTO personal_attention_deliveries
+      (user_id,delivery_key,task_id,rule_id,occurrence_on,status,attempts,last_attempt_at_ms,sent_at_ms)
+      VALUES ('alice',?,?,'deadline_overdue','2026-11-02','partial',2,?,?)`)
+      .run(key,id,lastAttempt,originalSentAt);
+    const insertDevice=fx.db.prepare(`INSERT INTO personal_attention_device_deliveries
+      (user_id,delivery_key,target_id,status,attempts,last_attempt_at_ms)
+      VALUES ('alice',?,?,?,?,?)`);
+    // Parent sent_at is write-once; it may differ from the device timestamp.
+    insertDevice.run(key,sent,"sent",1,originalSentAt-1000);
+    insertDevice.run(key,inflight,"inflight",1,lastAttempt);
+    if(reserved)insertDevice.run(key,reserved,"reserved",0,lastAttempt);
+    const fresh=task(fx,"alice","new occurrence held by daily limit","2026-11-02");
+    ok(fx);
+    const s=sender();
+    if(!extraReserved){
+      // A fresh in-flight marker must not be recovered prematurely.
+      const stillActive=lastAttempt+5*60_000;
+      await run(fx,s,stillActive,()=>stillActive);
+      assert.equal(s.calls.length,0);
+      assert.equal(rows(fx,"alice").find(r=>r.task_id===id).status,"partial");
+      assert.equal(devices(fx,"alice").find(r=>r.target_id===inflight).status,"inflight");
+    }
+    const result=await run(fx,s,NOW,()=>NOW);
+    assert.deepEqual(s.calls.map(c=>c.targetId),reserved?[reserved]:[],
+      "only original untouched targets may resume; unknown and sent never repeat");
+    const parent=rows(fx,"alice").find(r=>r.task_id===id);
+    assert.equal(parent.status,"sent");
+    assert.equal(parent.sent_at_ms,originalSentAt,"preserve the first committed send time");
+    assert.equal(devices(fx,"alice").find(r=>r.target_id===inflight).status,"unknown");
+    assert.equal(devices(fx,"alice").find(r=>r.target_id===inflight).attempts,1);
+    assert.equal(devices(fx,"alice").find(r=>r.target_id===sent).status,"sent");
+    if(reserved)assert.equal(devices(fx,"alice").find(r=>r.target_id===reserved).status,"sent");
+    assert.equal(result.held.daily_limit,1);
+    assert.equal(result.sent,0,"partial recovery is not a new announcement");
+    assert.equal(rows(fx,"alice").some(r=>r.task_id===fresh),false);
+    await run(fx,s,NOW+HOUR,()=>NOW+HOUR);
+    assert.deepEqual(s.calls.map(c=>c.targetId),reserved?[reserved]:[]);
+    ok(fx);
+  });
+}
+
 test("review #331: dismiss during a delivery does not revive reserved targets after restore",async()=>{
   const fx=fixture();
   task(fx,"alice","baseline");register(fx,"alice","d1");register(fx,"alice","d2");
