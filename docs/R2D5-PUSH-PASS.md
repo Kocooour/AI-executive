@@ -55,7 +55,7 @@ neexportovaným klíčem. Jeden průchod najednou na proces (druhý vrací
    500; změna epochy/revize mezi stránkami uživatele pro tento průchod vynechá).
 2. **Jedna pinned write transakce na uživatele:** znovu ověří, že se nastavení
    (pásmo, okno, limit, revize, epoch) ani attention epoch od čtení nezměnily;
-   obnoví osiřelé `pending` starší než 15 min podle trvalých výsledků zařízení: již odeslané označí `sent` nebo `partial` s původním časem odeslání; potvrzeně neúspěšné výsledky zachovají retry do 3 pokusů jako `failed`. Pouze cíle se zapsaným začátkem odesílání (`inflight`), jejichž výsledek pád přerušil, přejdou do `unknown`; dosud neoslovené `reserved` cíle zůstávají bezpečně opakovatelné. Bez potvrzeného výsledku a bez opakovatelného cíle je doručení `undelivered`; pak
+   obnoví osiřelé `pending` a `partial` s rozpracovaným zařízením starší než 15 min podle trvalých výsledků zařízení (u `partial` zachová původní write-once `sent_at`): již odeslané označí `sent` nebo `partial` s původním časem odeslání; potvrzeně neúspěšné výsledky zachovají retry do 3 pokusů jako `failed`. Pouze cíle se zapsaným začátkem odesílání (`inflight`), jejichž výsledek pád přerušil, přejdou do `unknown`; dosud neoslovené `reserved` cíle zůstávají bezpečně opakovatelné. Bez potvrzeného výsledku a bez opakovatelného cíle je doručení `undelivered`; pak
    - **baseline** (chybí značka): všichni aktuální oznámitelní kandidáti se zapíšou
      jako `baseline`, zapíše se značka, nic se neodešle;
    - jinak `handled` (vše kromě `failed` s alespoň jedním původním živým `reserved` cílem nebo `failed` cílem s méně než 3 skutečnými pokusy), `sentInLast24h`
@@ -106,7 +106,7 @@ bez titulků a ID.
   dva uživatelé ve stejném okamžiku se mohou lišit.
 - Push nikdy nejde viewerovi, nepřiřazenému, jinému řešiteli ani odebranému
   členovi; snooze/dismiss nikdy nepošle.
-- Restart: osiřelý `pending` (>15 min) se zapsaným `sent` přejde na `sent`/`partial` se skutečným časem odeslání (24h limit). Potvrzené `failed` cíle zůstávají opakovatelné (max. 3 skutečně zahájené pokusy na zařízení); `inflight` cíle bez zapsaného výsledku přejdou do `unknown` a neopakují se; `reserved` cíle se mohou po restartu dokončit **i po více než třech pádech před prvním odesláním**. Parent `attempts` sleduje nejvyšší počet skutečně zahájených pokusů zařízení, nikoli počet claimů. Parent je `undelivered` jen bez doručení a bez opakovatelného cíle. Čerstvý `pending` zůstává rozpracovaný.
+- Restart: osiřelý `pending` (>15 min) se zapsaným `sent` přejde na `sent`/`partial` se skutečným časem odeslání (24h limit). Potvrzené `failed` cíle zůstávají opakovatelné (max. 3 skutečně zahájené pokusy na zařízení); `inflight` cíle bez zapsaného výsledku přejdou do `unknown` a neopakují se; `reserved` cíle se mohou po restartu dokončit **i po více než třech pádech před prvním odesláním**. Parent `attempts` sleduje nejvyšší počet skutečně zahájených pokusů zařízení, nikoli počet claimů. Parent je `undelivered` jen bez doručení a bez opakovatelného cíle. Čerstvý `pending` zůstává rozpracovaný. Stejná obnova uzavře osiřelé `inflight` zařízení při opakování `partial`; původní `sent_at` se nezmění, bezpečné rezervace zůstávají opakovatelné a čerstvá rozpracovaná zařízení se neobnovují předčasně.
 - Výjimka jednoho uživatele ani sender, který vyhodí chybu (= `failed`),
   neukončí průchod ostatních.
 
